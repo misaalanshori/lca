@@ -1,0 +1,36 @@
+[package]
+name = "lca-tools"
+description = "Built-in tools behind a swappable backend trait (ADR-0013)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+lca-protocol = { path = "../lca-protocol" }
+lca-permissions = { path = "../lca-permissions" }
+tokio.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# Dependency justification (SRDD closed list + review): `regex` powers the
+# built-in grep tool. Writing a correct regex engine is a multi-year project
+# (the same argument ADR-0001 makes for not writing a runtime), and grep
+# without regex is a materially worse tool for a coding agent. Footprint:
+# regex-automata, aho-corasick, memchr, memchr2 — no transitive C code.
+regex = "1"
+
+[target.'cfg(windows)'.dependencies]
+# Dependency justification: Job Objects for process-tree termination on
+# Windows (docs/platform-notes.md requires them; taskkill /T alone leaves
+# orphans when handles are inherited). Already in the lock file at this
+# version as a Wasmtime transitive dependency, so the transitive footprint
+# of the workspace does not change.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_Security",
+] }
+
+[lints]
+workspace = true
