@@ -1,0 +1,39 @@
+package lca:ext@0.1.0;
+
+/// The `command` world: a slash command.
+world command {
+  export command-spec;
+  export invoke;
+}
+
+interface command-spec {
+  use types.{extra-pair};
+
+  record spec {
+    /// Command name without the slash.
+    name: string,
+    /// Argument hint shown in the input editor.
+    hint: string,
+    /// Completion behavior: `none`, `file`, or `list`.
+    completion: string,
+    extras: list<extra-pair>,
+  }
+
+  get-spec: func() -> spec;
+}
+
+interface invoke {
+  /// What the command asks the input editor to do.
+  variant effect {
+    /// Insert text into the input editor.
+    insert-text(string),
+    /// Submit a prompt to the agent.
+    submit-prompt(string),
+    /// Show a widget (Phase6 renders it through the `ui` world).
+    show-widget(string),
+    /// Do nothing.
+    none,
+  }
+
+  run: func(argument: string) -> effect;
+}

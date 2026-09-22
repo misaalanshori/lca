@@ -1,0 +1,19 @@
+[package]
+name = "lca-ext-abi"
+description = "The contract crate: the lca:ext WIT package and generated bindings. Published separately so extension authors can depend on it without the agent."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+wasmtime = { workspace = true, optional = true, features = ["cranelift"] }
+
+[features]
+default = []
+# Host-side bindings for the binary; extension authors don't need this.
+host = ["dep:wasmtime"]
+
+[lints]
+workspace = true

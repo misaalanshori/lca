@@ -1,0 +1,31 @@
+package lca:ext@0.1.0;
+
+/// The `tool` world: register one callable tool with the model.
+world tool {
+  export tool-schema;
+  export execute;
+}
+
+interface tool-schema {
+  use types.{extra-pair};
+
+  /// What the model sees when choosing a tool.
+  record schema {
+    name: string,
+    description: string,
+    /// JSON Schema for the arguments, as JSON text.
+    parameters: string,
+    extras: list<extra-pair>,
+  }
+
+  /// The tool this extension registers. Names form one namespace with the
+  /// built-ins; a collision disables the later registration (FR-EXT-11).
+  get-schema: func() -> schema;
+}
+
+interface execute {
+  use types.{tool-call, tool-result};
+
+  /// Run one call. The host validates arguments against the schema first.
+  run: func(call: tool-call) -> tool-result;
+}

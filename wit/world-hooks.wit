@@ -1,0 +1,54 @@
+package lca:ext@0.1.0;
+
+/// The `hooks` world. Hook points are fixed at `pre-turn`, `pre-tool-use`,
+/// `post-tool-use`, `post-turn-end`, `attention-required`, and
+/// `session-close` (docs/abi-versioning.md punch list). Only the pre-tool
+/// hook carries a verdict; every other point observes (FR-CORE-10).
+world hooks {
+  export hook-pre-turn;
+  export hook-pre-tool-use;
+  export hook-post-tool-use;
+  export hook-post-turn-end;
+  export hook-attention-required;
+  export hook-session-close;
+}
+
+interface hook-pre-turn {
+  /// Observe a turn about to start; the host continues either way.
+  on-pre-turn: func();
+}
+
+interface hook-pre-tool-use {
+  use types.{tool-call};
+
+  /// The pre-tool verdict: allow, deny with a reason the model sees, or
+  /// replace the call. A replaced call passes through the permission layer
+  /// like any other call and is not fed back through the hooks
+  /// (FR-CORE-10).
+  variant action {
+    allow,
+    deny(string),
+    replace(tool-call),
+  }
+
+  on-pre-tool-use: func(call: tool-call) -> action;
+}
+
+interface hook-post-tool-use {
+  use types.{tool-call, tool-result};
+
+  on-post-tool-use: func(call: tool-call, outcome: tool-result);
+}
+
+interface hook-post-turn-end {
+  /// `ok` or `error`, matching the headless turn-end vocabulary.
+  on-post-turn-end: func(status: string);
+}
+
+interface hook-attention-required {
+  on-attention-required: func(reason: string);
+}
+
+interface hook-session-close {
+  on-session-close: func();
+}

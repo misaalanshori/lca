@@ -40,6 +40,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sha2 = "0.10"
 ipnet = "2"
 toml = "0.8"
+wasmtime = { version = "49.0.0", default-features = false, features = [
+    "component-model",
+    "async",
+    "std",
+    "runtime",
+    "parallel-compilation",
+] }
 proptest = "1"
 
 [workspace.lints.rust]

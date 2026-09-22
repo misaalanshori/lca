@@ -29,7 +29,7 @@ jobs:
       - name: rustfmt
         run: cargo fmt --check
       - name: clippy (warnings denied)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: docs (warnings denied)
         env:
           RUSTDOCFLAGS: -D warnings

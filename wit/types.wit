@@ -1,0 +1,85 @@
+package lca:ext@0.1.0;
+
+/// Types shared by every world. Every record that crosses the ABI carries
+/// a reserved `extras` map so non-structural data can travel without a
+/// version bump (docs/abi-versioning.md).
+interface types {
+  /// One key-value pair reserved for non-structural additions; WIT has no
+  /// map type, so every `extras` field is a list of these.
+  record extra-pair {
+    key: string,
+    value: string,
+  }
+
+  /// A tool call the model requested, as handed to the `tool` world.
+  record tool-call {
+    /// Provider-side call identifier; results reference it.
+    call-id: string,
+    /// Tool name.
+    name: string,
+    /// Argument string (JSON object text), accumulated host-side.
+    arguments: string,
+    /// Reserved map.
+    extras: list<extra-pair>,
+  }
+
+  /// The outcome of one tool call.
+  record tool-result {
+    /// Call this answers.
+    call-id: string,
+    /// `ok`, `error`, `denied`, or `timeout` (docs/headless.md vocabulary).
+    status: string,
+    /// Text handed to the model, when there is no attachment.
+    content: option<string>,
+    /// Whether the content was truncated by the configured size limit.
+    truncated: bool,
+    /// Reserved map.
+    extras: list<extra-pair>,
+  }
+
+  /// A message crossing into an extension (compaction, context-transform,
+  /// provider).
+  record message {
+    /// `system`, `user`, `assistant`, or `tool`.
+    role: string,
+    /// Concatenated text content.
+    content: string,
+    /// Tool calls this message carries, for assistant messages.
+    tool-calls: list<tool-call>,
+    /// `tool_call_id` this message answers, for tool messages.
+    tool-call-id: option<string>,
+    /// Reserved map.
+    extras: list<extra-pair>,
+  }
+
+  /// Token usage and cost for one completion (`usage` stream event,
+  /// `compaction` records, `completion` capability responses).
+  record usage {
+    /// Billed input tokens not served from cache.
+    input: u64,
+    /// Output tokens.
+    output: u64,
+    /// Input tokens served from the prompt cache.
+    cache-read: u64,
+    /// Input tokens written to the prompt cache this call.
+    cache-write: u64,
+    /// Input tokens written to the extended (one-hour) cache tier.
+    cache-write-1h: u64,
+    /// Cost in USD as reported or computed by the provider extension.
+    cost: f64,
+    /// Reserved map.
+    extras: list<extra-pair>,
+  }
+
+  /// One session record handed to the `compaction` world.
+  record session-record {
+    /// The log's `t` tag: user, assistant, tool-call, tool-result, ...
+    kind: string,
+    /// Record identifier, sortable by creation order.
+    id: string,
+    /// JSON-serialized record body, shaped by `kind`.
+    body: string,
+    /// Reserved map.
+    extras: list<extra-pair>,
+  }
+}
