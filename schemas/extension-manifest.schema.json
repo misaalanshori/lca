@@ -1,0 +1,328 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lca.example/schemas/extension-manifest/0.1.json",
+  "title": "LCA extension manifest",
+  "description": "Schema for the parsed form of extension.toml. The manifest is written in TOML and validated against this schema after parsing. Version 0.1, targets ABI 0.1.",
+  "type": "object",
+  "required": ["name", "version", "abi", "worlds"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Extension identity. Must match the credential namespace when the credentials capability is used. Lowercase letters, digits, and hyphens.",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+      "minLength": 2,
+      "maxLength": 64
+    },
+    "version": {
+      "type": "string",
+      "description": "Semantic version of this extension release.",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
+    },
+    "abi": {
+      "type": "string",
+      "description": "The ABI line this extension targets, as major.minor. The host loads the current minor version and the one before it.",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"
+    },
+    "worlds": {
+      "type": "array",
+      "description": "The WIT worlds this component implements. The host verifies that the component exports each one.",
+      "items": {
+        "type": "string",
+        "enum": ["provider", "tool", "command", "hooks", "ui", "compaction", "context-transform"]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "description": {
+      "type": "string",
+      "description": "One sentence shown in the extension list and at install time.",
+      "maxLength": 200
+    },
+    "license": {
+      "type": "string",
+      "description": "SPDX license expression."
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri",
+      "description": "Project page. Shown at install time so a user can inspect the source."
+    },
+    "source": {
+      "type": "string",
+      "format": "uri",
+      "description": "Source repository. Shown at install time."
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Every capability the extension needs. A capability absent here is absent from the import table at runtime.",
+      "additionalProperties": false,
+      "properties": {
+        "net": { "$ref": "#/$defs/netCapability" },
+        "net-local": { "$ref": "#/$defs/netLocalCapability" },
+        "fs": { "$ref": "#/$defs/fsCapability" },
+        "credentials": { "$ref": "#/$defs/credentialsCapability" },
+        "oauth": { "$ref": "#/$defs/oauthCapability" },
+        "process": { "$ref": "#/$defs/processCapability" },
+        "pty": { "$ref": "#/$defs/ptyCapability" },
+        "ui": { "$ref": "#/$defs/uiCapability" },
+        "completion": { "$ref": "#/$defs/completionCapability" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "description": "Optional resource hints. The host clamps each value to its own maximum and may ignore a request that exceeds it.",
+      "additionalProperties": false,
+      "properties": {
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 512,
+          "default": 64,
+          "description": "Linear memory ceiling for one instance."
+        },
+        "fuel_per_call": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 1000000000,
+          "default": 10000000,
+          "description": "Execution budget for a single call. Exceeding it cancels the call."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hostPattern": {
+      "type": "string",
+      "description": "An exact hostname, or a wildcard pattern with a leading '*.' matching one or more labels. A bare '*' is rejected.",
+      "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$",
+      "maxLength": 253
+    },
+    "fsMode": {
+      "type": "string",
+      "enum": ["read", "read-write"]
+    },
+    "netCapability": {
+      "type": "object",
+      "description": "Outbound HTTPS to named hosts. Port 443 only. The extension never touches a socket. The host resolves every hostname and refuses a connection whose resolved address falls in a loopback or private-use range, even if the hostname pattern matched, to prevent DNS rebinding. See ADR-0011.",
+      "required": ["hosts"],
+      "additionalProperties": false,
+      "properties": {
+        "hosts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/hostPattern" },
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true
+        }
+      }
+    },
+    "localAddressPattern": {
+      "type": "string",
+      "description": "A literal loopback or private-use IPv4/IPv6 address, a CIDR range within those blocks, or an mDNS-style '.local' hostname. Whether a given CIDR actually falls within the loopback or private-use blocks is a numeric range check the host performs at install time; this schema's pattern only constrains the lexical shape and cannot itself reject an out-of-range CIDR such as 8.8.8.0/24.",
+      "examples": ["127.0.0.1", "192.168.0.0/16", "10.0.0.0/8", "*.local"],
+      "maxLength": 64
+    },
+    "netLocalCapability": {
+      "type": "object",
+      "description": "HTTP or HTTPS, any port, to loopback or private-network addresses. Separate from net because the risk shape, pattern syntax, and port/scheme rules differ. Reaches beyond the local machine to other devices on the network. See ADR-0011.",
+      "required": ["addresses"],
+      "additionalProperties": false,
+      "properties": {
+        "addresses": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/localAddressPattern" },
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true
+        }
+      }
+    },
+    "fsCapability": {
+      "type": "object",
+      "description": "Access to named filesystem scopes. Scope names are validated against the host vocabulary rather than a fixed enum in the ABI, so new scopes are additive. Unknown names are rejected at install time with the list of names this host supports.",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "workspace": { "$ref": "#/$defs/fsMode" },
+        "private": { "$ref": "#/$defs/fsMode" },
+        "home-config": { "$ref": "#/$defs/fsMode" },
+        "temp": { "$ref": "#/$defs/fsMode" }
+      }
+    },
+    "credentialsCapability": {
+      "type": "object",
+      "description": "Read and write access to one namespace. The namespace must equal the extension name; there is no cross-namespace access. Whether the namespace actually matches the extension's own name is a string-equality check the host performs at install time, the same class of limitation as the net-local CIDR check above: this schema validates the namespace's shape, not that it matches this particular manifest's name field, since a plain JSON Schema cannot compare one field's value against another's.",
+      "required": ["namespace"],
+      "additionalProperties": false,
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+        }
+      }
+    },
+    "oauthCapability": {
+      "type": "object",
+      "description": "The loopback authorization flow. The host binds the port and parses the callback. Token exchange needs the net capability as well.",
+      "additionalProperties": false,
+      "properties": {
+        "redirect_path": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9._~\\-/]*$",
+          "default": "/callback"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 600,
+          "default": 300
+        }
+      }
+    },
+    "processCapability": {
+      "type": "object",
+      "description": "The right to ask the host to run a command. Every command still passes through the user approval prompt.",
+      "required": ["reason"],
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string",
+          "description": "Shown verbatim at install time. A bare capability name gives the user nothing to evaluate.",
+          "minLength": 10,
+          "maxLength": 200
+        }
+      }
+    },
+    "ptyCapability": {
+      "type": "object",
+      "description": "Allocation of a pseudo-terminal for an interactively spawned program, distinct from process's plain pipe-backed streams. See ADR-0016.",
+      "required": ["reason"],
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string",
+          "description": "Shown verbatim at install time.",
+          "minLength": 10,
+          "maxLength": 200
+        }
+      }
+    },
+    "completionCapability": {
+      "type": "object",
+      "description": "The right to ask the host for a response from the currently active provider. Added in 1.0 by ADR-0015. The extension never calls another extension directly; the host mediates. See ADR-0008 for why extension-to-extension calls are unsupported.",
+      "required": ["reason"],
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string",
+          "description": "Shown verbatim at install time.",
+          "minLength": 10,
+          "maxLength": 200
+        }
+      }
+    },
+    "uiCapability": {
+      "type": "object",
+      "description": "The right to render in named regions. Rendering returns a widget tree; the host draws it.",
+      "required": ["regions"],
+      "additionalProperties": false,
+      "properties": {
+        "regions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["status-line", "footer", "panel", "modal"]
+          },
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "capabilities": {
+            "type": "object",
+            "required": ["oauth"]
+          }
+        },
+        "required": ["capabilities"]
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "required": ["net"]
+          }
+        },
+        "$comment": "An oauth flow needs net to exchange the code for a token. Declaring oauth without net is a manifest error, not a runtime surprise."
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "worlds": {
+            "contains": { "const": "provider" }
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          { "properties": { "capabilities": { "required": ["net"] } }, "required": ["capabilities"] },
+          { "properties": { "capabilities": { "required": ["net-local"] } }, "required": ["capabilities"] }
+        ],
+        "$comment": "A provider world reaches a model API, which is net for a hosted vendor or net-local for a local server such as LM Studio or Ollama; a provider extension with neither cannot function. Requiring net specifically would wrongly reject a local-only provider, which is why this is net-or-net-local rather than net alone."
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "worlds": {
+            "contains": { "const": "ui" }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "required": ["ui"]
+          }
+        },
+        "required": ["capabilities"],
+        "$comment": "Implementing the ui world without the ui capability means the render export is never called."
+      }
+    }
+  ],
+  "examples": [
+    {
+      "name": "example-provider",
+      "version": "0.3.1",
+      "abi": "0.1",
+      "worlds": ["provider", "command"],
+      "description": "Model provider for Example Cloud.",
+      "license": "Apache-2.0",
+      "source": "https://github.com/example/lca-example-provider",
+      "capabilities": {
+        "net": { "hosts": ["api.example.com"] },
+        "oauth": { "redirect_path": "/callback" },
+        "credentials": { "namespace": "example-provider" }
+      },
+      "limits": { "memory_mb": 32 }
+    },
+    {
+      "name": "task-tracker",
+      "version": "1.0.0",
+      "abi": "0.1",
+      "worlds": ["tool", "hooks", "ui"],
+      "description": "Tracks open tasks across a session and shows them in a panel.",
+      "license": "MIT",
+      "capabilities": {
+        "fs": { "workspace": "read", "private": "read-write" },
+        "ui": { "regions": ["status-line", "panel"] }
+      }
+    }
+  ]
+}
