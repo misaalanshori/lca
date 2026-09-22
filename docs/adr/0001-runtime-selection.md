@@ -1,6 +1,6 @@
 # ADR-0001: WebAssembly runtime selection
 
-Status: proposed. Phase 0 confirms or overturns it.
+Status: accepted. Phase 0 measured the numbers and confirmed it; evidence in `docs/phase0-report.md`.
 
 Date: 2026-09-20.
 

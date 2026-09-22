@@ -1,0 +1,11 @@
+[workspace]
+members = ["guest", "host"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+debug = false
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
