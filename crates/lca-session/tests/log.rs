@@ -478,3 +478,30 @@ fn export_carries_meta_records_and_no_extra_state() {
         assert!(value.get(key).is_none(), "{key} never exported");
     }
 }
+
+// Session lookup by id for resume/fork/export; a missing or foreign session
+// is an error the CLI maps to exit code 6 (docs/headless.md).
+#[test]
+fn looks_up_a_session_by_id_within_the_project() {
+    let store = store("lookup");
+    let project = scratch("lookup-project");
+    let session = store.create_session(&project, "mine").expect("create");
+    let found = store.session(&project, session.id()).expect("found");
+    assert_eq!(found.id(), session.id());
+    let err = store
+        .session(&project, "no-such-session")
+        .expect_err("missing");
+    assert!(err.to_string().contains("no-such-session"), "{err}");
+}
+
+// rename updates the title where a reader looks: meta.json and the index.
+#[test]
+fn renaming_updates_meta_and_the_index() {
+    let store = store("rename");
+    let project = scratch("rename-project");
+    let session = store.create_session(&project, "old title").expect("create");
+    store.rename(&session, "new title").expect("rename");
+    assert_eq!(store.meta(&session).expect("meta").title, "new title");
+    let listed = store.list_sessions(&project).expect("list");
+    assert_eq!(listed[0].title, "new title");
+}

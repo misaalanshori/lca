@@ -82,6 +82,12 @@ pub enum Error {
         /// The vanished session.
         session: String,
     },
+    /// The named session does not exist in this project (exit code 6).
+    #[error("session {id} is missing, malformed, or belongs to another project")]
+    UnknownSession {
+        /// The id that was sought.
+        id: String,
+    },
     /// A fork chain loops back on itself.
     #[error("fork cycle detected at session {session}")]
     ForkCycle {

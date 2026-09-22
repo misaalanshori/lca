@@ -74,18 +74,7 @@ fn arb_record(n: u32) -> impl Strategy<Value = Record> {
 }
 
 fn arb_log() -> impl Strategy<Value = Vec<Record>> {
-    let start = Record::SessionStart {
-        v: FORMAT_VERSION,
-        ts: 0,
-        agent_version: "0.1.0".into(),
-        abi_version: "0.1".into(),
-        working_dir: "/w".into(),
-    };
-    proptest::collection::vec(arb_record(1), 0..12).prop_map(move |mut rest| {
-        let mut all = vec![start.clone()];
-        all.append(&mut rest);
-        all
-    })
+    proptest::collection::vec(arb_record(1), 0..12)
 }
 
 proptest! {
@@ -98,11 +87,6 @@ proptest! {
         let store = SessionStore::new(dir.clone());
         let project = dir.join("project");
         std::fs::create_dir_all(&project).expect("mkdir");
-        // The store writes its own session-start; drop ours.
-        let mut records = records;
-        if matches!(records.first(), Some(Record::SessionStart { .. })) {
-            records.remove(0);
-        }
         let session = store.create_session(&project, "prop").expect("create");
         for record in &records {
             store.append(&session, record.clone()).expect("append");
@@ -115,8 +99,9 @@ proptest! {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // Truncating the log at any byte offset yields the longest valid prefix,
-    // never a failure: the recovery behavior of docs/session-log-format.md.
+    // Truncating the log at any byte offset yields a valid prefix of the
+    // original sequence, never a failure: the recovery behavior of
+    // docs/session-log-format.md.
     #[test]
     fn truncation_at_any_offset_yields_the_valid_prefix(offset in 0usize..4096) {
         let dir = scratch("truncate");
@@ -134,23 +119,27 @@ proptest! {
             }).expect("append");
         }
         let full = std::fs::read(session.log_path()).expect("read log");
+        // The untruncated log defines the exact expected sequence.
+        let expected: Vec<_> = store.read(&session).expect("read").records;
+
         let cut = offset.min(full.len());
         std::fs::write(session.log_path(), &full[..cut]).expect("truncate");
 
         let read = store.read(&session).expect("read must never fail");
-        // Records are one line each: a byte cut always lands on some prefix
-        // of whole lines plus possibly a partial final line, which is
-        // discarded. Every loaded record must parse as valid JSON.
-        for record in &read.records {
-            let json = serde_json::to_string(record).expect("serialize");
-            prop_assert!(serde_json::from_str::<serde_json::Value>(&json).is_ok());
+        // Truncation only ever loses records from the end: the survivors
+        // must equal the original prefix record for record.
+        prop_assert!(read.records.len() <= expected.len());
+        for (loaded, original) in read.records.iter().zip(expected.iter()) {
+            prop_assert_eq!(loaded, original);
         }
-        // A cut mid-log either truncates or (rarely, landing exactly on a
-        // line boundary) reads cleanly.
-        if cut < full.len() {
-            let lines_before = full[..cut].iter().filter(|&&b| b == b'\n').count();
-            prop_assert!(read.records.len() <= lines_before);
-            prop_assert!(read.truncated || read.records.len() == lines_before);
+        // A cut landing exactly after a closing brace but before its
+        // newline still yields one valid extra record.
+        let lines_before = full[..cut].iter().filter(|&&b| b == b'\n').count();
+        prop_assert!(read.records.len() <= lines_before + 1);
+        if cut < full.len() && !read.truncated {
+            // Nothing was reported lost, so every newline-terminated line
+            // plus at most one newline-free valid record was consumed.
+            prop_assert!(read.records.len() >= lines_before);
         }
         std::fs::remove_dir_all(&dir).ok();
     }

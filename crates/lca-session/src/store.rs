@@ -230,6 +230,27 @@ impl SessionStore {
         self.read_with(session, mode)
     }
 
+    /// Look one session up by id inside this project. Errors when the id is
+    /// unknown (the CLI maps this to exit code 6, `docs/headless.md`).
+    pub fn session(&self, project_dir: &Path, id: &str) -> Result<Session> {
+        let dir = self.project_dir(project_dir).join(id);
+        if !dir.join("meta.json").is_file() {
+            return Err(crate::Error::UnknownSession { id: id.to_string() });
+        }
+        Ok(Session::new(id.to_string(), dir))
+    }
+
+    /// Rename a session: `meta.json` atomically, then the index cache.
+    pub fn rename(&self, session: &Session, title: &str) -> Result<()> {
+        let mut meta = self.meta(session)?;
+        meta.title = title.to_string();
+        write_atomic(&session.meta_path(), &serde_json::to_vec_pretty(&meta)?)?;
+        if let Some(project_dir) = session.dir().parent() {
+            self.rebuild_index_from_key(project_dir)?;
+        }
+        Ok(())
+    }
+
     /// Session metadata (`meta.json`).
     pub fn meta(&self, session: &Session) -> Result<SessionMeta> {
         let text = std::fs::read_to_string(session.meta_path())?;
