@@ -36,42 +36,52 @@ pub fn fake_usage(input: u64, output: u64, cache_read: u64, cache_write: u64) ->
     }
 }
 
+/// One step of a scripted turn: an event, or a pause before the next step.
+#[derive(Debug, Clone)]
+pub enum Step {
+    /// A stream event.
+    Event(StreamEvent),
+    /// Sleep before continuing, so cancellation tests can land mid-stream.
+    Pause(std::time::Duration),
+}
+
 /// Builds one scripted turn. Usage is mandatory (testing plan section 3).
 #[derive(Debug, Default)]
 pub struct TurnBuilder {
-    events: Vec<StreamEvent>,
+    events: Vec<Step>,
     usage: Option<Usage>,
 }
 
 impl TurnBuilder {
     /// Append a text delta.
     pub fn text(mut self, text: &str) -> Self {
-        self.events.push(StreamEvent::TextDelta {
+        self.events.push(Step::Event(StreamEvent::TextDelta {
             delta: text.to_string(),
-        });
+        }));
         self
     }
 
     /// Append a reasoning delta.
     pub fn reasoning(mut self, text: &str) -> Self {
-        self.events.push(StreamEvent::ReasoningDelta {
+        self.events.push(Step::Event(StreamEvent::ReasoningDelta {
             delta: text.to_string(),
-        });
+        }));
         self
     }
 
     /// A complete tool call: start, one argument fragment, end.
     pub fn tool_call(mut self, name: &str, arguments: &str) -> Self {
         let call_id = format!("call-{}", self.events.len());
-        self.events.push(StreamEvent::ToolCallStart {
+        self.events.push(Step::Event(StreamEvent::ToolCallStart {
             call_id: call_id.clone(),
             name: name.to_string(),
-        });
-        self.events.push(StreamEvent::ToolCallArgDelta {
+        }));
+        self.events.push(Step::Event(StreamEvent::ToolCallArgDelta {
             call_id: call_id.clone(),
             delta: arguments.to_string(),
-        });
-        self.events.push(StreamEvent::ToolCallEnd { call_id });
+        }));
+        self.events
+            .push(Step::Event(StreamEvent::ToolCallEnd { call_id }));
         self
     }
 
@@ -79,37 +89,44 @@ impl TurnBuilder {
     /// (`docs/flows.md`).
     pub fn open_tool_call(mut self, name: &str, arguments_prefix: &str) -> Self {
         let call_id = format!("call-{}", self.events.len());
-        self.events.push(StreamEvent::ToolCallStart {
+        self.events.push(Step::Event(StreamEvent::ToolCallStart {
             call_id: call_id.clone(),
             name: name.to_string(),
-        });
-        self.events.push(StreamEvent::ToolCallArgDelta {
+        }));
+        self.events.push(Step::Event(StreamEvent::ToolCallArgDelta {
             call_id,
             delta: arguments_prefix.to_string(),
-        });
+        }));
         self
     }
 
     /// An error event, retryable or not (FR-CORE-6 needs both).
     pub fn error(mut self, message: &str, retryable: bool) -> Self {
-        self.events.push(StreamEvent::Error {
+        self.events.push(Step::Event(StreamEvent::Error {
             message: message.to_string(),
             retryable,
-        });
+        }));
         self
     }
 
     /// A capability denial: a vendor event plus a non-retryable error, the
     /// shape an extension-mediated provider reports.
     pub fn capability_denied(mut self, capability: &str, target: &str) -> Self {
-        self.events.push(StreamEvent::VendorEvent {
+        self.events.push(Step::Event(StreamEvent::VendorEvent {
             kind: "capability-denied".to_string(),
             payload: serde_json::json!({ "capability": capability, "target": target }),
-        });
-        self.events.push(StreamEvent::Error {
+        }));
+        self.events.push(Step::Event(StreamEvent::Error {
             message: format!("capability {capability} denied for {target}"),
             retryable: false,
-        });
+        }));
+        self
+    }
+
+    /// Pause before the next step: makes mid-stream cancellation testable.
+    pub fn pause(mut self, millis: u64) -> Self {
+        self.events
+            .push(Step::Pause(std::time::Duration::from_millis(millis)));
         self
     }
 
@@ -119,7 +136,7 @@ impl TurnBuilder {
         self
     }
 
-    fn finish(self) -> (Vec<StreamEvent>, Option<Usage>) {
+    fn finish(self) -> (Vec<Step>, Option<Usage>) {
         (self.events, self.usage)
     }
 }
@@ -127,7 +144,7 @@ impl TurnBuilder {
 /// Assembles a provider from scripted turns.
 #[derive(Debug, Default)]
 pub struct FakeBuilder {
-    turns: Vec<(Vec<StreamEvent>, Option<Usage>)>,
+    turns: Vec<(Vec<Step>, Option<Usage>)>,
 }
 
 impl FakeBuilder {
@@ -146,27 +163,34 @@ impl FakeBuilder {
             .map(|(index, (mut events, usage))| {
                 let usage = usage
                     .unwrap_or_else(|| panic!("turn {index} is missing a mandatory usage record"));
-                events.push(StreamEvent::Usage { usage });
+                events.push(Step::Event(StreamEvent::Usage { usage }));
                 events
             })
             .collect::<Vec<_>>();
         FakeProvider {
             turns: Mutex::new(VecDeque::from(turns)),
             call_count: std::sync::atomic::AtomicUsize::new(0),
+            last_request: Mutex::new(None),
         }
     }
 }
 
 /// A deterministic provider: scripted turns, no network, no credentials.
 pub struct FakeProvider {
-    turns: Mutex<VecDeque<Vec<StreamEvent>>>,
+    turns: Mutex<VecDeque<Vec<Step>>>,
     call_count: std::sync::atomic::AtomicUsize,
+    last_request: Mutex<Option<CompletionRequest>>,
 }
 
 impl FakeProvider {
     /// Start scripting.
     pub fn builder() -> FakeBuilder {
         FakeBuilder::default()
+    }
+
+    /// The last request the core handed this provider (FR-CACHE-5 checks).
+    pub fn last_request(&self) -> Option<CompletionRequest> {
+        self.last_request.lock().expect("request lock").clone()
     }
 
     /// How many completion calls happened, including exhausted ones.
@@ -214,26 +238,32 @@ impl Provider for FakeProvider {
 
     fn stream(
         &self,
-        _request: CompletionRequest,
+        request: CompletionRequest,
         tx: EventSender,
     ) -> lca_provider::BoxFuture<Result<(), ProviderError>> {
         self.call_count
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *self.last_request.lock().expect("request lock") = Some(request);
         let events = self
             .turns
             .lock()
             .expect("turn lock")
             .pop_front()
             .unwrap_or_else(|| {
-                vec![StreamEvent::Error {
+                vec![Step::Event(StreamEvent::Error {
                     message: "no more scripted responses queued".to_string(),
                     retryable: false,
-                }]
+                })]
             });
         Box::pin(async move {
-            for event in events {
-                if tx.send(event).await.is_err() {
-                    return Ok(()); // host stopped listening: cancellation
+            for step in events {
+                match step {
+                    Step::Pause(duration) => tokio::time::sleep(duration).await,
+                    Step::Event(event) => {
+                        if tx.send(event).await.is_err() {
+                            return Ok(()); // host stopped listening: cancellation
+                        }
+                    }
                 }
             }
             Ok(())

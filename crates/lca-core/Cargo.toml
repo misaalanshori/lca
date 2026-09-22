@@ -1,0 +1,25 @@
+[package]
+name = "lca-core"
+description = "The agent loop, dispatch, and compaction/context-transform dispatch."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+lca-protocol = { path = "../lca-protocol" }
+lca-session = { path = "../lca-session" }
+lca-provider = { path = "../lca-provider" }
+lca-tools = { path = "../lca-tools" }
+lca-permissions = { path = "../lca-permissions" }
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+lca-testkit = { path = "../lca-testkit" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

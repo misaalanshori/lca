@@ -130,6 +130,11 @@ impl ToolExecutor {
         }
     }
 
+    /// The workspace root this executor serves.
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+
     /// The tool specs handed to the model (FR-TOOL-1).
     pub fn specs() -> Vec<ToolSpec> {
         let spec =

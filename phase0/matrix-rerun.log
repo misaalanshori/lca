@@ -413,3 +413,134 @@ aarch64-apple-darwin OK (295s)
    Compiling wasmtime-internal-unwinder v49.0.0
    Compiling icu_normalizer v2.3.0
    Compiling windows-sys v0.59.0
+   Compiling rayon-core v1.13.0
+   Compiling itertools v0.14.0
+error: failed to run custom build command for `wasmtime-internal-fiber v49.0.0`
+
+Caused by:
+  process didn't exit successfully: `/home/debian/projects/lca/phase0/target/release/build/wasmtime-internal-fiber-20741bcba6ed8210/build-script-build` (exit status: 1)
+  --- stdout
+  cargo:rustc-check-cfg=cfg(asan)
+  cargo:rerun-if-changed=src/windows.c
+  cargo:rerun-if-env-changed=CC_FORCE_DISABLE
+  CC_FORCE_DISABLE = None
+  cargo:rerun-if-env-changed=VCINSTALLDIR
+  VCINSTALLDIR = None
+  cargo:rerun-if-env-changed=CC_x86_64-pc-windows-msvc
+  CC_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_x86_64_pc_windows_msvc
+  CC_x86_64_pc_windows_msvc = Some(clang-cl)
+  cargo:rerun-if-env-changed=CC_KNOWN_WRAPPER_CUSTOM
+  CC_KNOWN_WRAPPER_CUSTOM = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CFLAGS
+  CFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CFLAGS
+  TARGET_CFLAGS = None
+  cargo:rerun-if-env-changed=CFLAGS_x86_64_pc_windows_msvc
+  CFLAGS_x86_64_pc_windows_msvc = Some(--target=x86_64-pc-windows-msvc -Wno-unused-command-line-argument -fuse-ld=lld-link /imsvc /home/debian/.cache/cargo-xwin/xwin/crt/include /imsvc /home/debian/.cache/cargo-xwin/xwin/sdk/include/ucrt /imsvc /home/debian/.cache/cargo-xwin/xwin/sdk/include/um /imsvc /home/debian/.cache/cargo-xwin/xwin/sdk/include/shared /imsvc /home/debian/.cache/cargo-xwin/xwin/sdk/include/winrt )
+  cargo:rerun-if-env-changed=CC_SHELL_ESCAPED_FLAGS
+  CC_SHELL_ESCAPED_FLAGS = None
+  cargo:rerun-if-env-changed=CFLAGS_x86_64-pc-windows-msvc
+  CFLAGS_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=AR_x86_64-pc-windows-msvc
+  AR_x86_64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=AR_x86_64_pc_windows_msvc
+  AR_x86_64_pc_windows_msvc = Some(llvm-lib)
+  cargo:rerun-if-env-changed=CC_KNOWN_WRAPPER_CUSTOM
+  CC_KNOWN_WRAPPER_CUSTOM = None
+  cargo:rerun-if-env-changed=ARFLAGS
+  ARFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_ARFLAGS
+  TARGET_ARFLAGS = None
+  cargo:rerun-if-env-changed=ARFLAGS_x86_64_pc_windows_msvc
+  ARFLAGS_x86_64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=ARFLAGS_x86_64-pc-windows-msvc
+  ARFLAGS_x86_64-pc-windows-msvc = None
+
+  --- stderr
+
+
+  error occurred in cc-rs: failed to find tool "llvm-lib": No such file or directory (os error 2)
+
+
+warning: build failed, waiting for other jobs to finish...
+x86_64-pc-windows-msvc FAIL rc=101
+=== aarch64-pc-windows-msvc ===
+   Compiling windows_aarch64_msvc v0.52.6
+   Compiling pin-project-lite v0.2.17
+   Compiling either v1.18.0
+   Compiling rayon-core v1.13.0
+   Compiling wasmtime-internal-unwinder v49.0.0
+   Compiling crossbeam-deque v0.8.8
+   Compiling windows-targets v0.52.6
+   Compiling icu_properties_data v2.3.0
+   Compiling icu_normalizer_data v2.3.0
+   Compiling windows_aarch64_msvc v0.53.1
+   Compiling futures-core v0.3.34
+   Compiling futures-sink v0.3.34
+   Compiling once_cell v1.21.4
+   Compiling io-lifetimes v2.0.4
+   Compiling libc v0.2.189
+   Compiling wasmtime-internal-cranelift v49.0.0
+   Compiling io-lifetimes v3.0.1
+   Compiling itertools v0.14.0
+   Compiling windows-targets v0.53.5
+   Compiling wasmtime-internal-fiber v49.0.0
+   Compiling icu_normalizer v2.3.0
+error: failed to run custom build command for `wasmtime-internal-fiber v49.0.0`
+
+Caused by:
+  process didn't exit successfully: `/home/debian/projects/lca/phase0/target/release/build/wasmtime-internal-fiber-20741bcba6ed8210/build-script-build` (exit status: 1)
+  --- stdout
+  cargo:rustc-check-cfg=cfg(asan)
+  cargo:rerun-if-changed=src/windows.c
+  cargo:rerun-if-env-changed=CC_FORCE_DISABLE
+  CC_FORCE_DISABLE = None
+  cargo:rerun-if-env-changed=VCINSTALLDIR
+  VCINSTALLDIR = None
+  cargo:rerun-if-env-changed=CC_aarch64-pc-windows-msvc
+  CC_aarch64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=CC_aarch64_pc_windows_msvc
+  CC_aarch64_pc_windows_msvc = Some(clang-cl)
+  cargo:rerun-if-env-changed=CC_KNOWN_WRAPPER_CUSTOM
+  CC_KNOWN_WRAPPER_CUSTOM = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CFLAGS
+  CFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CFLAGS
+  TARGET_CFLAGS = None
+  cargo:rerun-if-env-changed=CFLAGS_aarch64_pc_windows_msvc
+  CFLAGS_aarch64_pc_windows_msvc = Some(--target=aarch64-pc-windows-msvc -Wno-unused-command-line-argument -fuse-ld=lld-link /imsvc /home/debian/.cache/cargo-xwin/xwin/crt/include /imsvc /home/debian/.cache/cargo-xwin/xwin/sdk/include/ucrt /imsvc /home/debian/.cache/cargo-xwin/xwin/sdk/include/um /imsvc /home/debian/.cache/cargo-xwin/xwin/sdk/include/shared /imsvc /home/debian/.cache/cargo-xwin/xwin/sdk/include/winrt )
+  cargo:rerun-if-env-changed=CC_SHELL_ESCAPED_FLAGS
+  CC_SHELL_ESCAPED_FLAGS = None
+  cargo:rerun-if-env-changed=CFLAGS_aarch64-pc-windows-msvc
+  CFLAGS_aarch64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=AR_aarch64-pc-windows-msvc
+  AR_aarch64-pc-windows-msvc = None
+  cargo:rerun-if-env-changed=AR_aarch64_pc_windows_msvc
+  AR_aarch64_pc_windows_msvc = Some(llvm-lib)
+  cargo:rerun-if-env-changed=CC_KNOWN_WRAPPER_CUSTOM
+  CC_KNOWN_WRAPPER_CUSTOM = None
+  cargo:rerun-if-env-changed=ARFLAGS
+  ARFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_ARFLAGS
+  TARGET_ARFLAGS = None
+  cargo:rerun-if-env-changed=ARFLAGS_aarch64_pc_windows_msvc
+  ARFLAGS_aarch64_pc_windows_msvc = None
+  cargo:rerun-if-env-changed=ARFLAGS_aarch64-pc-windows-msvc
+  ARFLAGS_aarch64-pc-windows-msvc = None
+
+  --- stderr
+
+
+  error occurred in cc-rs: failed to find tool "llvm-lib": No such file or directory (os error 2)
+
+
+warning: build failed, waiting for other jobs to finish...
+aarch64-pc-windows-msvc FAIL rc=101
+rerun done

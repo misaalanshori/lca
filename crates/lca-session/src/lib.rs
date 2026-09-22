@@ -41,6 +41,17 @@ pub fn default_data_dir() -> PathBuf {
     }
 }
 
+/// A fresh record identifier: sortable by creation order, unique within the
+/// process. The core loop stamps user and assistant records with these.
+pub fn new_record_id() -> String {
+    ids::record_id(ids::now_ms())
+}
+
+/// Milliseconds since the Unix epoch, for record timestamps.
+pub fn now_ms() -> u64 {
+    ids::now_ms()
+}
+
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
