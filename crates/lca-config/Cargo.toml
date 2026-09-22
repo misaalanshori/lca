@@ -1,0 +1,17 @@
+[package]
+name = "lca-config"
+description = "Reads and merges configuration from flags, environment, project file, user file, and defaults."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+toml.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true

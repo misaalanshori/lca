@@ -16,7 +16,6 @@ wasmtime = { version = "49.0.0", default-features = false, features = [
     "async",
     "std",
     "runtime",
-    "cache",
     "parallel-compilation",
 ] }
 wasmtime-wasi = { version = "49.0.0", default-features = false, features = ["p2"] }

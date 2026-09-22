@@ -1,0 +1,15 @@
+[package]
+name = "lca-protocol"
+description = "Shared data types: messages, tool calls, stream events, session records. No I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
