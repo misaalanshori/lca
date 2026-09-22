@@ -372,7 +372,7 @@ FR-PERM-3. IF an extension calls a host import for a capability that its manifes
 
 FR-PERM-4. WHEN an extension makes an outbound request, the host SHALL compare the target host and port against the granted patterns.
 
-FR-PERM-5. IF the target host does not match a granted pattern, THEN the host SHALL deny the request and record the denial.
+FR-PERM-5. IF the target host and port do not match a granted pattern, THEN the host SHALL deny the request and record the denial.
 
 FR-PERM-6. The host SHALL restrict each extension to its own credential namespace.
 
