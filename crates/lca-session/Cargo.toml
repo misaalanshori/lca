@@ -1,0 +1,20 @@
+[package]
+name = "lca-session"
+description = "Session storage: the append-only log, forking, resume, export, durable compaction records."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+lca-protocol = { path = "../lca-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
