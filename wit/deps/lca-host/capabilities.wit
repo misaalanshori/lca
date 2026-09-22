@@ -1,0 +1,78 @@
+package lca:host@0.1.0;
+
+/// The `fs` capability: named scopes, never paths in the manifest
+/// (ADR-0005). Every refusal is one of these cases so the host can record
+/// attempts distinctly (capability catalog).
+interface fs {
+  variant error {
+    /// The operation left the scope, entered the state directory, or the
+    /// grant's mode refuses it (FR-PERM-12).
+    permission(string),
+    /// The scope is not in this extension's granted set (NFR-13).
+    not-granted(string),
+    not-found(string),
+    io(string),
+    invalid(string),
+  }
+
+  record file-info {
+    is-dir: bool,
+    len: u64,
+  }
+
+  read: func(scope: string, path: string) -> result<list<u8>, error>;
+  write: func(scope: string, path: string, bytes: list<u8>) -> result<_, error>;
+  list: func(scope: string, path: string) -> result<list<string>, error>;
+  stat: func(scope: string, path: string) -> result<file-info, error>;
+}
+
+/// The `process` capability: ask the host to run a program (argv, no
+/// shell) in a directory the extension can already see. Every command
+/// still passes the user's approval prompt (capability catalog).
+interface process {
+  variant error {
+    permission(string),
+    not-found(string),
+    io(string),
+    invalid(string),
+  }
+
+  /// Spawn with pipes for stdin, stdout, and stderr; the numeric handle
+  /// names those three streams in the host's table until closed.
+  spawn: func(program: string, args: list<string>, cwd-scope: string)
+    -> result<u32, error>;
+  read-stdout: func(handle: u32, max: u64) -> result<option<list<u8>>, error>;
+  read-stderr: func(handle: u32, max: u64) -> result<option<list<u8>>, error>;
+  write-stdin: func(handle: u32, bytes: list<u8>) -> result<u64, error>;
+  /// Block until the child exits; returns its exit code (128+signal when
+  /// signalled).
+  wait: func(handle: u32) -> result<s32, error>;
+  /// Kill the whole process tree and release the handle.
+  kill: func(handle: u32) -> result<_, error>;
+}
+
+/// The `pty` capability (ADR-0016): allocate a pseudo-terminal host-side
+/// so an interactively spawned program sees a real terminal; output and
+/// keystrokes flow through the host, never raw terminal bytes from the
+/// extension.
+interface pty {
+  variant error {
+    permission(string),
+    not-found(string),
+    io(string),
+    invalid(string),
+  }
+
+  spawn: func(
+    program: string,
+    args: list<string>,
+    cwd-scope: string,
+    rows: u16,
+    cols: u16,
+  ) -> result<u32, error>;
+  read: func(handle: u32, max: u64) -> result<option<list<u8>>, error>;
+  write: func(handle: u32, bytes: list<u8>) -> result<u64, error>;
+  resize: func(handle: u32, rows: u16, cols: u16) -> result<_, error>;
+  wait: func(handle: u32) -> result<s32, error>;
+  kill: func(handle: u32) -> result<_, error>;
+}
