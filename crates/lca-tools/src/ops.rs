@@ -281,6 +281,12 @@ mod windows {
         handle: HANDLE,
     }
 
+    // SAFETY: an owned Windows kernel handle. It is only used through the
+    // Job Object API (assign, terminate, close), all of which are safe to
+    // call from any thread; the handle is closed exactly once in `Drop`.
+    // This lets the execution future stay `Send` across await points.
+    unsafe impl Send for Job {}
+
     impl Job {
         pub fn new() -> Option<Job> {
             // SAFETY: no preconditions for CreateJobObjectW with null names.
@@ -314,7 +320,7 @@ mod windows {
             let ok = unsafe { AssignProcessToJobObject(self.handle, process) };
             // SAFETY: `process` came from OpenProcess and is not used after.
             unsafe { CloseHandle(process) };
-            ok
+            ok != 0
         }
 
         pub fn kill(&self) {

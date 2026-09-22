@@ -64,3 +64,17 @@ Options, in order:
 Subsequent phases continue building against the Linux-green suite; no
 later phase may claim the Phase 1 exit test passed until option1 or2 is
 resolved above.
+
+Additional platform evidence gathered locally (does not substitute for
+the missing pipeline runs):
+
+- The whole workspace compiles for `x86_64-pc-windows-msvc` under
+  `cargo xwin check` (this caught two real `cfg(windows)` defects in the
+  Job Object code: a BOOL/i32 return mismatch and a non-`Send` handle
+  held across an await; both fixed with the safety note the exemption
+  requires).
+- Release binaries built for `x86_64-unknown-linux-musl` (verified fully
+  static: "not a dynamic executable"), `aarch64-unknown-linux-musl`
+  (ELF machine183/AArch64,4.6 MB), `x86_64-apple-darwin` (5.0 MB), and
+  `aarch64-apple-darwin` (4.3 MB), all through `cargo-zigbuild` with
+  zig0.16.0.
