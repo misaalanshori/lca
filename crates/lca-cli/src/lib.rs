@@ -414,6 +414,78 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
     exit_code(&outcome, prompt_impl.needed_approval, class.as_deref())
 }
 
+/// What a parsed command line asks for. Split out so the dispatch rule
+/// itself is testable without a terminal.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Route {
+    /// One headless turn (FR-CORE-3).
+    Headless {
+        /// The prompt.
+        prompt: String,
+    },
+    /// The interactive interface in the working directory (FR-CORE-2).
+    Interactive {
+        /// The session to resume, when the subcommand names one.
+        resume: Option<String>,
+    },
+    /// The merged-configuration printout (FR-CFG-2).
+    Config,
+    /// The session listing (FR-SESS-2).
+    ResumeList,
+    /// Fork at a message (FR-SESS-3).
+    Fork {
+        /// Parent session id.
+        session: String,
+        /// Record id to fork at.
+        message: String,
+    },
+    /// Rename a session.
+    Rename {
+        /// Session id.
+        session: String,
+        /// New title.
+        title: String,
+    },
+    /// Export a session (FR-SESS-7).
+    Export {
+        /// Session id.
+        session: String,
+        /// Keep audit records.
+        audit: bool,
+    },
+}
+
+/// Resolve a parsed command line to a route.
+pub fn route(cli: &Cli) -> Route {
+    match &cli.command {
+        None => match &cli.prompt {
+            Some(prompt) => Route::Headless {
+                prompt: prompt.clone(),
+            },
+            None => Route::Interactive { resume: None },
+        },
+        Some(Command::Config) => Route::Config,
+        Some(Command::Resume { id }) => match id {
+            None => Route::ResumeList,
+            Some(id) => Route::Interactive {
+                resume: Some(id.clone()),
+            },
+        },
+        Some(Command::Fork { session, message }) => Route::Fork {
+            session: session.clone(),
+            message: message.clone(),
+        },
+        Some(Command::Rename { session, title }) => Route::Rename {
+            session: session.clone(),
+            title: title.clone(),
+        },
+        Some(Command::Export { session, audit }) => Route::Export {
+            session: session.clone(),
+            audit: *audit,
+        },
+    }
+}
+
 /// Dispatch a parsed command line; returns the process exit code.
 pub async fn run(cli: Cli) -> i32 {
     let cwd = match std::env::current_dir() {
@@ -423,19 +495,14 @@ pub async fn run(cli: Cli) -> i32 {
             return exit::INTERNAL;
         }
     };
-    match cli.command {
-        None => match cli.prompt {
-            Some(prompt) => headless(&prompt, cli.json, &cwd).await,
-            None => interactive(&cwd, None),
-        },
-        Some(Command::Config) => config_command(&cwd),
-        Some(Command::Resume { id }) => match id {
-            None => resume_list(&cwd),
-            Some(id) => interactive(&cwd, Some(&id)),
-        },
-        Some(Command::Fork { session, message }) => fork_command(&cwd, &session, &message),
-        Some(Command::Rename { session, title }) => rename_command(&cwd, &session, &title),
-        Some(Command::Export { session, audit }) => export_command(&cwd, &session, audit),
+    match route(&cli) {
+        Route::Headless { prompt } => headless(&prompt, cli.json, &cwd).await,
+        Route::Interactive { resume } => interactive(&cwd, resume.as_deref()),
+        Route::Config => config_command(&cwd),
+        Route::ResumeList => resume_list(&cwd),
+        Route::Fork { session, message } => fork_command(&cwd, &session, &message),
+        Route::Rename { session, title } => rename_command(&cwd, &session, &title),
+        Route::Export { session, audit } => export_command(&cwd, &session, audit),
     }
 }
 

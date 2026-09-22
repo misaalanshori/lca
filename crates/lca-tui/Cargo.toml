@@ -1,0 +1,21 @@
+[package]
+name = "lca-tui"
+description = "Terminal renderer, widget model, input editor, and event loop."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+lca-protocol = { path = "../lca-protocol" }
+lca-core = { path = "../lca-core" }
+lca-permissions = { path = "../lca-permissions" }
+lca-tools = { path = "../lca-tools" }
+lca-config = { path = "../lca-config" }
+ratatui.workspace = true
+crossterm.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true
