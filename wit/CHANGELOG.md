@@ -14,7 +14,9 @@ The initial surface, ahead of the Phase 8 freeze at 1.0.
   `pre-turn`, `pre-tool-use`, `post-tool-use`, `post-turn-end`,
   `attention-required`, `session-close`.
 - The `types` interface: `tool-call`, `tool-result`, `message`, `usage`
-  (with `cache-read`, `cache-write`, `cache-write-1h`, and `cost`), and
+  (with `cache-read`, `cache-write`, `cache-write-hour` — the WIT spelling
+  of the JSON `cache_write_1h`, since a WIT identifier may not start a
+  segment with a digit — and `cost`), and
   `session-record`. Every record carries a reserved `extras` list of
   key-value pairs; WIT has no map type, so the SRDD's "map of string
   pairs" is realized as `list<extra-pair>`.

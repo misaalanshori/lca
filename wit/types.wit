@@ -64,7 +64,7 @@ interface types {
     /// Input tokens written to the prompt cache this call.
     cache-write: u64,
     /// Input tokens written to the extended (one-hour) cache tier.
-    cache-write-1h: u64,
+    cache-write-hour: u64,
     /// Cost in USD as reported or computed by the provider extension.
     cost: f64,
     /// Reserved map.

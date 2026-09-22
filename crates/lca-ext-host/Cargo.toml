@@ -1,0 +1,21 @@
+[package]
+name = "lca-ext-host"
+description = "Embeds the WASM runtime, instantiates components, wires host imports, enforces capabilities, and applies resource limits."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+lca-protocol = { path = "../lca-protocol" }
+lca-ext-abi = { path = "../lca-ext-abi", features = ["host"] }
+wasmtime.workspace = true
+wasmtime-wasi = { version = "49.0.0", default-features = false, features = ["p2"] }
+toml.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

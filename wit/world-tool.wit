@@ -2,6 +2,7 @@ package lca:ext@0.1.0;
 
 /// The `tool` world: register one callable tool with the model.
 world tool {
+  import lca:host/log@0.1.0;
   export tool-schema;
   export execute;
 }

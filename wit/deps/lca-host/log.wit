@@ -1,4 +1,4 @@
-package lca:ext@0.1.0;
+package lca:host@0.1.0;
 
 /// Always granted, never declared in a manifest (capability catalog).
 /// Messages go to diagnostic output under the extension's identity, are
