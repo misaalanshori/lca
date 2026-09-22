@@ -587,7 +587,29 @@ async fn passes_the_stable_prefix_on_every_completion_call() {
     let _ = h.provider.name();
 }
 
-// FR-PROV-2's data path: the model picker reads the provider's models.
+// Verifies: FR-PROV-1 (the core contains no vendor-specific model logic:
+// no vendor endpoints, model families, or wire formats appear in it; the
+// provider name it defaults to is configuration, not logic)
+#[test]
+fn core_has_no_vendor_specific_model_logic() {
+    let source = include_str!("../src/lib.rs").to_lowercase();
+    for vendor_signal in [
+        "api.openai.com",
+        "anthropic",
+        "gpt-4",
+        "claude-",
+        "chatgpt",
+        "generativelanguage",
+    ] {
+        assert!(
+            !source.contains(vendor_signal),
+            "vendor signal `{vendor_signal}` in lca-core"
+        );
+    }
+}
+
+// Verifies: FR-PROV-2 (where a provider extension is enabled, its models
+// are listed for the picker)
 #[test]
 fn model_listings_flow_from_the_provider() {
     let provider = FakeProvider::builder()

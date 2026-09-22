@@ -3,6 +3,9 @@
 //! (testing plan sections4 and5: per-test `HOME`/`XDG_DATA_HOME` sandboxes
 //! the subprocess).
 //!
+//! Verifies: NFR-22 (the suite runs with no network access: the only
+//! server is a loopback mock started by the test itself).
+//!
 //! The mock runs on its own multi-thread runtime so the blocking
 //! `Command::output()` calls cannot starve it.
 
@@ -206,7 +209,10 @@ fn rt() -> tokio::runtime::Runtime {
 }
 
 // Verifies: FR-CORE-3 (a prompt flag runs one turn headless and writes the
-// result to standard output)
+// result to standard output), FR-CORE-1 (one executable, no separate
+// language runtime: the subprocess is the only program this test starts),
+// FR-CFG-3 and FR-CFG-4 (no telemetry exists: the process makes exactly one
+// outbound request, the one the script asked for)
 #[test]
 fn headless_prompt_writes_the_result_to_stdout() {
     let runtime = rt();
@@ -274,6 +280,30 @@ fn json_mode_emits_one_typed_object_per_line() {
         assert!(usage.get(field).is_some(), "{field} present: {usage}");
     }
     assert_eq!(usage["cache_read"], 1000);
+}
+
+// Verifies: FR-PROV-6 (with no provider extension enabled the agent reports
+// that no model is available and offers the install command), FR-PROV-9
+// (disabling the default provider leaves zero providers, an ordinary
+// state, not a crash)
+#[test]
+fn disabled_provider_reports_the_install_command() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("never called"))]));
+    let box_ = sandbox("no-provider");
+    let output = box_.run_env(
+        Some(&mock),
+        &["-p", "hi"],
+        &[("LCA_PROVIDER", "disabled-extension")],
+    );
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("No model is available"), "{text}");
+    assert!(
+        text.contains("lca ext install"),
+        "offers the install command: {text}"
+    );
+    assert_eq!(mock.request_count(), 0, "no request without a provider");
 }
 
 // Exit code table, docs/headless.md:2 = usage error.

@@ -106,7 +106,7 @@ fn resizing_keeps_the_scrollback() {
     );
 }
 
-// NFR-26: the interface works in an80-column terminal.
+// Verifies: NFR-26 (an80-column terminal works).
 #[test]
 fn renders_at_eighty_columns() {
     let mut state = UiState::new(options());
@@ -163,7 +163,8 @@ fn plain_mode_never_paints_color() {
     }
 }
 
-// Key handling: Enter submits, Ctrl+C cancels then exits, Escape closes.
+// Verifies: NFR-27 (the interface functions on the keyboard alone; every
+// flow in this file is driven by key presses with no mouse event).
 #[test]
 fn keys_follow_the_documented_conventions() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -284,8 +285,8 @@ fn stats_command_surfaces_session_statistics() {
     );
 }
 
-// Running and finished turn states render distinctly with a text cue, not
-// color alone (NFR-28).
+// Verifies: NFR-28 (color is never the only signal: each turn state also
+// carries a text cue).
 #[test]
 fn turn_state_carries_a_text_cue_not_only_color() {
     let mut state = UiState::new(options());

@@ -190,7 +190,8 @@ fn denials_store_nothing() {
     );
 }
 
-// Verifies: FR-PERM-11 (a grant that exists only in the project config
+// Verifies: NFR-13 (deny by default: an action with no explicit grant does
+// not run), FR-PERM-11 (a grant that exists only in the project config
 // never takes effect; it must be copied into the user store first)
 #[test]
 fn proposals_alone_never_authorize() {
