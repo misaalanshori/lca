@@ -1,0 +1,42 @@
+[package]
+name = "lca-cli"
+description = "The lca binary: argument parsing, headless mode, and wiring."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+default = ["bundled-openai-compat"]
+# ADR-0013: the default provider ships enabled; users can disable it.
+bundled-openai-compat = ["dep:openai-compatible"]
+
+[dependencies]
+lca-protocol = { path = "../lca-protocol" }
+lca-config = { path = "../lca-config" }
+lca-session = { path = "../lca-session" }
+lca-permissions = { path = "../lca-permissions" }
+lca-provider = { path = "../lca-provider" }
+lca-tools = { path = "../lca-tools" }
+lca-core = { path = "../lca-core" }
+openai-compatible = { path = "../../extensions/openai-compatible", optional = true }
+tokio.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+tokio.workspace = true
+
+[[bin]]
+name = "lca"
+path = "src/main.rs"
+
+[lints]
+workspace = true
