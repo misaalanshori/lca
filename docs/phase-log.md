@@ -87,3 +87,41 @@ tip that had been pushed minutes earlier with an amended version (missing
 "never force-push, never rewrite history" rule. No PR or second developer
 existed to disrupt, but the rule is absolute: fixes to already-pushed
 commits land as follow-up commits from here on.
+
+## Phase 2 — the extension host: IN PROGRESS
+
+Landed so far, each commit green:
+
+- The `lca:ext` WIT package: shared types (every ABI-crossing record
+  carries `extras`, realized as `list<extra-pair>` since WIT has no map
+  type), worlds `tool`, `command`, `hooks` with the six fixed hook points
+  and the allow/deny/replace verdict, and the always-granted
+  `lca:host/log` import under a separate `lca:host` package (host imports
+  live in `wit/deps/lca-host/`, matching the `lca:host/*` spelling the
+  SRDD fixes). `wasm-tools` parses the package; `wit-bindgen` and
+  `wasmtime::component::bindgen` both consume it.
+- `lca-ext-abi`: ABI_VERSION0.1 and host bindings per world behind an
+  optional wasmtime feature; `wit/CHANGELOG.md` started.
+- `lca-ext-host`: manifest identity + ABI-window checks (FR-EXT-8),
+  link-time capability failure (deny by default), per-call stores with
+  fuel (FR-EXT-4), memory ceiling (FR-EXT-5), an epoch deadline the host
+  controls (FR-CONC-1), trap isolation that disables only the offending
+  extension (FR-EXT-3), and truncated always-granted logging
+  (FR-EXT-10). Eight tests against a committed conformance fixture.
+- `extensions/conformance` begun (tool-world slice, mode-dispatching
+  probe), built to `wasm32-wasip2` and committed under `fixtures/` so
+  tests run offline.
+
+WIT gotchas worth remembering: WIT identifiers may not start a segment
+with a digit (the usage record's `cache_write_1h` becomes
+`cache-write-hour` in WIT; JSON surfaces keep `cache_write_1h`), `use`
+statements live inside worlds and interfaces rather than at file top
+level, and `result` is a keyword.
+
+Remaining for the Phase 2 exit test: `lca-ext-native` and the core
+dispatch table (FR-EXT-6, FR-EXT-7, FR-EXT-9, FR-EXT-11), the pre-tool
+hook seam in the loop (FR-CORE-10), the `fs`/`process`/`pty`
+capabilities with their conformance cases (FR-PERM-12 and friends), the
+full conformance extension diffed across native and WASM modes, one
+built-in behavior moved onto the extension path, and the NFR-4, NFR-5,
+and NFR-29 measurements.
