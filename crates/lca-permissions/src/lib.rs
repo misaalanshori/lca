@@ -89,7 +89,7 @@ impl ProposalDiff {
 
 /// The approval prompts. The TUI implements this with modals; headless mode
 /// implements it by denying (exit code 4, `docs/headless.md`).
-pub trait PermissionPrompt {
+pub trait PermissionPrompt: Send {
     /// Ask about one action.
     fn ask(&mut self, action: &Action) -> Decision;
     /// Show the proposal difference; true applies the new set.
@@ -688,6 +688,17 @@ fn canonicalize_deepest(path: &Path) -> PathBuf {
                 }
                 return out;
             }
+        }
+    }
+}
+
+impl From<ScopeViolation> for lca_protocol::CapabilityError {
+    fn from(violation: ScopeViolation) -> lca_protocol::CapabilityError {
+        match violation.kind {
+            ScopeViolationKind::NotGranted | ScopeViolationKind::UnknownScope => {
+                lca_protocol::CapabilityError::NotGranted(violation.to_string())
+            }
+            _ => lca_protocol::CapabilityError::Permission(violation.to_string()),
         }
     }
 }

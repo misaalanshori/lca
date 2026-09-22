@@ -8,7 +8,9 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+lca-permissions = { path = "../lca-permissions" }
 lca-protocol = { path = "../lca-protocol" }
+lca-tools = { path = "../lca-tools" }
 lca-ext-abi = { path = "../lca-ext-abi", features = ["host"] }
 wasmtime.workspace = true
 wasmtime-wasi = { version = "49.0.0", default-features = false, features = ["p2"] }

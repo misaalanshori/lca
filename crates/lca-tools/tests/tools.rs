@@ -635,3 +635,81 @@ async fn cancellation_stops_a_running_command() {
         "cancelled command is not success"
     );
 }
+
+// The shared direct-spawn engine behind the `process` capability: argv
+// execution with no shell, whole-tree lifetime (the same identity
+// FR-TOOL-5 kills on timeout).
+#[test]
+fn direct_spawn_runs_a_program_without_a_shell() {
+    let ws = scratch("direct-spawn");
+    #[cfg(unix)]
+    let mut child = lca_tools::spawn_direct("echo", &["hello-direct".into()], &ws).expect("spawn");
+    #[cfg(windows)]
+    let mut child = lca_tools::spawn_direct(
+        "cmd",
+        &["/C".into(), "echo".into(), "hello-direct".into()],
+        &ws,
+    )
+    .expect("spawn");
+
+    let mut stdout = child.stdout().expect("piped");
+    let mut out = String::new();
+    std::io::Read::read_to_string(&mut stdout, &mut out).expect("read");
+    assert!(out.contains("hello-direct"), "got {out:?}");
+    let code = child.wait().expect("wait");
+    assert_eq!(code, 0);
+    child.kill_tree(); // idempotent cleanup
+}
+
+// The `pty` capability's engine (ADR-0016): a program spawned under a
+// pseudo-terminal sees a real terminal and its output reaches the reader.
+#[test]
+fn pty_spawn_delivers_program_output_and_exit_code() {
+    let ws = scratch("pty-spawn");
+    let mut pty = if cfg!(unix) {
+        lca_tools::PtyChild::spawn("echo", &["hello-pty".into()], &ws, 24, 80).expect("spawn")
+    } else {
+        lca_tools::PtyChild::spawn(
+            "cmd",
+            &["/C".into(), "echo".into(), "hello-pty".into()],
+            &ws,
+            24,
+            80,
+        )
+        .expect("spawn")
+    };
+    let mut out = String::new();
+    // Read until the session closes; echo is short-lived.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while out.len() < 64 && std::time::Instant::now() < deadline {
+        if let Some(chunk) = pty.read(1024).expect("read") {
+            out.push_str(&String::from_utf8_lossy(&chunk));
+        } else {
+            break;
+        }
+    }
+    assert!(out.contains("hello-pty"), "terminal output: {out:?}");
+    let code = pty.wait().expect("wait");
+    assert_eq!(code, 0, "output was {out:?}");
+}
+
+// Interactive echo: what we write reaches the program, what it writes
+// reaches us (the keystroke-forwarding contract of the catalog).
+#[cfg(unix)]
+#[test]
+fn pty_forwards_keystrokes_both_ways() {
+    let ws = scratch("pty-keys");
+    let mut pty = lca_tools::PtyChild::spawn("cat", &[], &ws, 24, 80).expect("spawn");
+    pty.write(b"round-trip\n").expect("write");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut out = String::new();
+    while !out.contains("round-trip") && std::time::Instant::now() < deadline {
+        if let Some(chunk) = pty.read(1024).expect("read") {
+            out.push_str(&String::from_utf8_lossy(&chunk));
+        } else {
+            break;
+        }
+    }
+    assert!(out.contains("round-trip"), "got {out:?}");
+    pty.kill();
+}

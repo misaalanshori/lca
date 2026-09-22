@@ -1,7 +1,10 @@
 //! Extension host tests: the FR-EXT behaviors the host itself owns, run
 //! against the committed conformance fixture (`tool` world slice).
 
-use lca_ext_host::{CallError, ExtHost, ExtensionLimits, LoadError, Manifest};
+use std::sync::{Arc, Mutex};
+
+use lca_ext_host::{CallError, ExtHost, ExtensionLimits, HostEnvironment, LoadError, Manifest};
+use lca_permissions::{Decision, GrantStore, PermissionPrompt, ProposalDiff, ScopeRoots};
 use lca_protocol::{ToolCall, ToolResultStatus};
 
 fn fixture() -> &'static [u8] {
@@ -10,6 +13,41 @@ fn fixture() -> &'static [u8] {
 
 fn manifest() -> &'static str {
     include_str!("../../../extensions/conformance/extension.toml")
+}
+
+struct AllowPrompt;
+
+impl PermissionPrompt for AllowPrompt {
+    fn ask(&mut self, _action: &lca_permissions::Action) -> Decision {
+        Decision::Always
+    }
+    fn review_proposals(&mut self, _diff: &ProposalDiff) -> bool {
+        false
+    }
+}
+
+/// A fresh environment per test: isolated scope roots and grant store.
+fn env(tag: &str) -> Arc<HostEnvironment> {
+    let root = std::env::temp_dir().join(format!("lca-host-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for dir in ["workspace", "private", "config", "data", "tmp"] {
+        std::fs::create_dir_all(root.join(dir)).expect("mkdir");
+    }
+    Arc::new(HostEnvironment {
+        roots: ScopeRoots {
+            workspace: root.join("workspace"),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        },
+        prompt: Arc::new(Mutex::new(AllowPrompt)),
+        grant_store: Arc::new(Mutex::new(
+            GrantStore::open(&root.join("grants.json")).expect("grant store"),
+        )),
+        project: root.join("workspace"),
+        proposals: None,
+    })
 }
 
 fn limits() -> ExtensionLimits {
@@ -34,7 +72,7 @@ fn call(mode: &str) -> ToolCall {
 // instantiated it).
 #[test]
 fn loads_a_tool_world_component_and_calls_it() {
-    let mut host = ExtHost::new(limits());
+    let mut host = ExtHost::new(limits(), env("h1"));
     let extension = host.load(fixture(), manifest()).expect("loads");
     let schema = extension.schema().expect("schema");
     assert_eq!(schema.name, "conformance");
@@ -53,7 +91,7 @@ fn loads_a_tool_world_component_and_calls_it() {
 // reports the failure, and the host continues).
 #[test]
 fn a_trapping_call_disables_the_extension_and_the_host_survives() {
-    let mut host = ExtHost::new(limits());
+    let mut host = ExtHost::new(limits(), env("h2"));
     let extension = host.load(fixture(), manifest()).expect("loads");
 
     let err = extension.execute(&call("trap")).expect_err("traps");
@@ -77,10 +115,13 @@ fn a_trapping_call_disables_the_extension_and_the_host_survives() {
 // returns an error to the caller).
 #[test]
 fn fuel_budget_cancels_a_spinning_call() {
-    let mut host = ExtHost::new(ExtensionLimits {
-        fuel_per_call: 2_000_000,
-        ..limits()
-    });
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            fuel_per_call: 2_000_000,
+            ..limits()
+        },
+        env("h3"),
+    );
     let extension = host.load(fixture(), manifest()).expect("loads");
     let started = std::time::Instant::now();
     let err = extension
@@ -97,10 +138,13 @@ fn fuel_budget_cancels_a_spinning_call() {
 // independent of its fuel budget).
 #[test]
 fn epoch_interrupt_cancels_a_running_call() {
-    let mut host = ExtHost::new(ExtensionLimits {
-        fuel_per_call: u64::MAX,
-        ..limits()
-    });
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            fuel_per_call: u64::MAX,
+            ..limits()
+        },
+        env("h4"),
+    );
     let extension = host.load(fixture(), manifest()).expect("loads");
 
     let engine = host.engine().clone();
@@ -122,10 +166,13 @@ fn epoch_interrupt_cancels_a_running_call() {
 // disables the extension).
 #[test]
 fn memory_limit_stops_a_hungry_instance() {
-    let mut host = ExtHost::new(ExtensionLimits {
-        memory_bytes: 8 * 1024 * 1024,
-        ..limits()
-    });
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            memory_bytes: 8 * 1024 * 1024,
+            ..limits()
+        },
+        env("h5"),
+    );
     let extension = host.load(fixture(), manifest()).expect("loads");
     let err = extension
         .execute(&call("alloc"))
@@ -144,10 +191,13 @@ fn memory_limit_stops_a_hungry_instance() {
 // before reaching diagnostic output).
 #[test]
 fn long_log_messages_truncate_at_the_configured_limit() {
-    let mut host = ExtHost::new(ExtensionLimits {
-        log_limit_bytes: 1000,
-        ..limits()
-    });
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            log_limit_bytes: 1000,
+            ..limits()
+        },
+        env("h6"),
+    );
     let extension = host.load(fixture(), manifest()).expect("loads");
     extension.execute(&call("log")).expect("logs and succeeds");
     let logs = extension.captured_logs();
@@ -171,7 +221,7 @@ fn long_log_messages_truncate_at_the_configured_limit() {
 // else, so the session continues).
 #[test]
 fn abi_outside_the_window_fails_that_load_only() {
-    let mut host = ExtHost::new(limits());
+    let mut host = ExtHost::new(limits(), env("h7"));
     let unsupported = r#"
 name = "too-new"
 version = "1.0.0"

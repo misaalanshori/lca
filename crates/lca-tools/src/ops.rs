@@ -264,7 +264,7 @@ fn kill_group(pgid: u32) {
 
 #[cfg(windows)]
 #[allow(unsafe_code)] // documented crate exemption: Job Object handles
-mod windows {
+pub(crate) mod windows_job {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -279,6 +279,15 @@ mod windows {
     /// orphan outlives a timeout or cancellation (docs/platform-notes.md).
     pub struct Job {
         handle: HANDLE,
+    }
+
+    impl Job {
+        /// Join `pid` to a fresh kill-on-close job; `None` when the OS
+        /// refuses (the caller must not spawn a tree it cannot kill).
+        pub(crate) fn attach(pid: u32) -> Option<Job> {
+            let job = Job::new()?;
+            if job.assign(pid) { Some(job) } else { None }
+        }
     }
 
     // SAFETY: an owned Windows kernel handle. It is only used through the
@@ -365,7 +374,7 @@ async fn platform_exec(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     let mut child = cmd.spawn()?;
-    let job = windows::Job::new();
+    let job = windows_job::Job::new();
     if let (Some(job), Some(pid)) = (job.as_ref(), child.id()) {
         job.assign(pid);
     }

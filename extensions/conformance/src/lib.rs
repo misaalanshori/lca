@@ -1,85 +1,610 @@
-//! Conformance extension, `tool` world slice (Phase 2). Later phases add
-//! the remaining worlds as the WIT grows.
+//! The ABI conformance extension (NFR-25), `tool` world.
 //!
-//! One component covers every host-path case by dispatching on the call's
-//! `mode` argument:
+//! One mode-dispatching probe covers every host path, and the dispatch
+//! itself is shared code: the WASM guest and the native twin both run
+//! [`run_shared`] against a [`Cap`] implementation, so their results are
+//! identical by construction — the property the Phase 2 exit test diffs.
 //!
-//! - `ok` (default): behave normally.
-//! - `trap`: panic inside the call (FR-EXT-3's input).
-//! - `loop`: spin forever (fuel FR-EXT-4 and epoch FR-CONC-1 input).
-//! - `log`: emit one very long log line (FR-EXT-10's input).
-//! - `alloc`: allocate far past a small memory ceiling (FR-EXT-5's input).
+//! Guest-only modes (`trap`, `loop`, `log`, `alloc`) exercise the host's
+//! trap/fuel/memory/log handling (FR-EXT-3/4/5/10) and have no native
+//! twin: a native panic would take the process with it.
+//!
+//! # Unsafe-code exemption
+//!
+//! Generated `wit-bindgen` export shims are `unsafe extern "f"` items;
+//! the three world modules below carry the allowance (and nothing else in
+//! this crate does). Review: phase 2 review.
 
-wit_bindgen::generate!({
-    path: "../../wit",
-    world: "tool",
-    with: {
-        "lca:host/log@0.1.0": generate,
-    },
-});
+#![deny(unsafe_code)]
 
-use exports::lca::ext::execute::{Guest as ExecuteGuest, ToolResult};
-use exports::lca::ext::tool_schema::{Guest as SchemaGuest, Schema};
-use lca::ext::types::ToolCall;
+#[cfg(not(target_arch = "wasm32"))]
+use lca_protocol::ToolCall;
+use lca_protocol::{CapabilityError, ToolResult, ToolResultStatus};
 
-struct Component;
-
-fn mode(arguments: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(arguments)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("mode")
-                .and_then(|m| m.as_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "ok".to_string())
+/// The capability surface a delivery mode provides to the probe.
+pub trait Cap {
+    /// Read a file inside a granted scope.
+    fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, CapabilityError>;
+    /// List a directory inside a granted scope.
+    fn fs_list(&self, scope: &str, path: &str) -> Result<Vec<String>, CapabilityError>;
+    /// Spawn a program in a granted scope.
+    fn process_spawn(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: &str,
+    ) -> Result<u32, CapabilityError>;
+    /// Read stdout until EOF.
+    fn process_read_stdout(
+        &self,
+        handle: u32,
+        max: usize,
+    ) -> Result<Option<Vec<u8>>, CapabilityError>;
+    /// Wait for exit.
+    fn process_wait(&self, handle: u32) -> Result<i32, CapabilityError>;
+    /// Release the handle.
+    fn process_kill(&self, handle: u32) -> Result<(), CapabilityError>;
+    /// Spawn on a pseudo-terminal.
+    fn pty_spawn(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<u32, CapabilityError>;
+    /// Read terminal bytes until EOF.
+    fn pty_read(&self, handle: u32, max: usize) -> Result<Option<Vec<u8>>, CapabilityError>;
+    /// Wait for exit.
+    fn pty_wait(&self, handle: u32) -> Result<i32, CapabilityError>;
+    /// Release the handle.
+    fn pty_kill(&self, handle: u32) -> Result<(), CapabilityError>;
 }
 
-fn result(call_id: &str, status: &str, content: &str) -> ToolResult {
+/// What a mode produced: success plus the deterministic text both modes
+/// must agree on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModeOutcome {
+    /// Whether the probe succeeded.
+    pub ok: bool,
+    /// The text handed back to the model.
+    pub text: String,
+}
+
+fn fail(err: CapabilityError) -> ModeOutcome {
+    ModeOutcome {
+        ok: false,
+        text: err.text(),
+    }
+}
+
+/// The tool schema, identical in both modes.
+pub fn schema_json() -> (String, String, String) {
+    (
+        "conformance".to_string(),
+        "ABI conformance probe: dispatches on the mode argument.".to_string(),
+        r#"{"type":"object","properties":{"mode":{"type":"string"}}"#.to_string(),
+    )
+}
+
+/// Parse the `mode` argument; anything absent means `ok`.
+pub fn mode_and_args(arguments: &str) -> (String, serde_json::Value) {
+    let value = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
+    let mode = value
+        .get("mode")
+        .and_then(|m| m.as_str())
+        .unwrap_or("ok")
+        .to_string();
+    (mode, value)
+}
+
+fn string_list(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The delivery-independent probe logic. `ok`/`fs-read`/`fs-list`/
+/// `spawn`/`pty` run here in both modes; anything else is the caller's
+/// to handle (guest-only modes).
+pub fn run_shared(cap: &dyn Cap, mode: &str, args: &serde_json::Value) -> ModeOutcome {
+    match mode {
+        "ok" => ModeOutcome {
+            ok: true,
+            text: "conformance ok".to_string(),
+        },
+        "fs-read" => {
+            let (Some(scope), Some(path)) = (
+                args.get("scope").and_then(|v| v.as_str()),
+                args.get("path").and_then(|v| v.as_str()),
+            ) else {
+                return fail(CapabilityError::Invalid(
+                    "fs-read needs scope and path".to_string(),
+                ));
+            };
+            match cap.fs_read(scope, path) {
+                Ok(bytes) => ModeOutcome {
+                    ok: true,
+                    text: format!("fs: {}", String::from_utf8_lossy(&bytes)),
+                },
+                Err(err) => fail(err),
+            }
+        }
+        "fs-list" => {
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("workspace");
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            match cap.fs_list(scope, path) {
+                Ok(names) => ModeOutcome {
+                    ok: true,
+                    text: format!("list: {}", names.join(",")),
+                },
+                Err(err) => fail(err),
+            }
+        }
+        "spawn" => {
+            let (Some(program), Some(cwd)) = (
+                args.get("program").and_then(|v| v.as_str()),
+                args.get("cwd").and_then(|v| v.as_str()),
+            ) else {
+                return fail(CapabilityError::Invalid(
+                    "spawn needs program and cwd".to_string(),
+                ));
+            };
+            let program_args = string_list(args.get("args"));
+            let handle = match cap.process_spawn(program, &program_args, cwd) {
+                Ok(handle) => handle,
+                Err(err) => return fail(err),
+            };
+            let mut output = Vec::new();
+            loop {
+                match cap.process_read_stdout(handle, 4096) {
+                    Ok(Some(chunk)) => output.extend_from_slice(&chunk),
+                    Ok(None) => break,
+                    Err(err) => {
+                        let _ = cap.process_kill(handle);
+                        return fail(err);
+                    }
+                }
+            }
+            let code = cap.process_wait(handle).unwrap_or(-1);
+            let _ = cap.process_kill(handle);
+            ModeOutcome {
+                ok: code == 0,
+                text: format!("exit {code} {}", String::from_utf8_lossy(&output).trim()),
+            }
+        }
+        "pty" => {
+            let (Some(program), Some(cwd)) = (
+                args.get("program").and_then(|v| v.as_str()),
+                args.get("cwd").and_then(|v| v.as_str()),
+            ) else {
+                return fail(CapabilityError::Invalid(
+                    "pty needs program and cwd".to_string(),
+                ));
+            };
+            let rows = args.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+            let cols = args.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+            let program_args = string_list(args.get("args"));
+            let handle = match cap.pty_spawn(program, &program_args, cwd, rows, cols) {
+                Ok(handle) => handle,
+                Err(err) => return fail(err),
+            };
+            let mut output = Vec::new();
+            loop {
+                match cap.pty_read(handle, 4096) {
+                    Ok(Some(chunk)) => output.extend_from_slice(&chunk),
+                    Ok(None) => break,
+                    Err(err) => {
+                        let _ = cap.pty_kill(handle);
+                        return fail(err);
+                    }
+                }
+            }
+            let code = cap.pty_wait(handle).unwrap_or(-1);
+            let _ = cap.pty_kill(handle);
+            ModeOutcome {
+                ok: code == 0,
+                text: format!("exit {code} {}", String::from_utf8_lossy(&output).trim()),
+            }
+        }
+        _ => ModeOutcome {
+            ok: false,
+            text: format!("unknown mode {mode}"),
+        },
+    }
+}
+
+/// Build a protocol result from an outcome (the native path).
+pub fn outcome_to_result(call_id: &str, outcome: ModeOutcome) -> ToolResult {
     ToolResult {
         call_id: call_id.to_string(),
-        status: status.to_string(),
-        content: Some(content.to_string()),
+        status: if outcome.ok {
+            ToolResultStatus::Ok
+        } else {
+            ToolResultStatus::Error
+        },
+        content: outcome.text,
         truncated: false,
-        extras: vec![],
+        extras: Default::default(),
     }
 }
 
-impl SchemaGuest for Component {
-    fn get_schema() -> Schema {
-        Schema {
-            name: "conformance".to_string(),
-            description: "ABI conformance probe: dispatches on the mode argument.".to_string(),
-            parameters: r#"{"type":"object","properties":{"mode":{"type":"string"}}}"#.to_string(),
-            extras: vec![],
+// ---------------------------------------------------------------------------
+// Native delivery mode (compiled into the host, unsandboxed, labeled so)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    use super::*;
+    use lca_tools::Capabilities;
+    use std::sync::Arc;
+
+    /// The native twin of the guest's `Cap`: it calls the same
+    /// [`Capabilities`] engine the WASM host's imports call.
+    pub struct NativeCap(pub Arc<Capabilities>);
+
+    impl Cap for NativeCap {
+        fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, CapabilityError> {
+            self.0.fs_read(scope, path)
+        }
+        fn fs_list(&self, scope: &str, path: &str) -> Result<Vec<String>, CapabilityError> {
+            self.0.fs_list(scope, path)
+        }
+        fn process_spawn(
+            &self,
+            program: &str,
+            args: &[String],
+            cwd: &str,
+        ) -> Result<u32, CapabilityError> {
+            self.0.process_spawn(program, args, cwd)
+        }
+        fn process_read_stdout(
+            &self,
+            handle: u32,
+            max: usize,
+        ) -> Result<Option<Vec<u8>>, CapabilityError> {
+            self.0.process_read_stdout(handle, max)
+        }
+        fn process_wait(&self, handle: u32) -> Result<i32, CapabilityError> {
+            self.0.process_wait(handle)
+        }
+        fn process_kill(&self, handle: u32) -> Result<(), CapabilityError> {
+            self.0.process_kill(handle)
+        }
+        fn pty_spawn(
+            &self,
+            program: &str,
+            args: &[String],
+            cwd: &str,
+            rows: u16,
+            cols: u16,
+        ) -> Result<u32, CapabilityError> {
+            self.0.pty_spawn(program, args, cwd, rows, cols)
+        }
+        fn pty_read(&self, handle: u32, max: usize) -> Result<Option<Vec<u8>>, CapabilityError> {
+            self.0.pty_read(handle, max)
+        }
+        fn pty_wait(&self, handle: u32) -> Result<i32, CapabilityError> {
+            self.0.pty_wait(handle)
+        }
+        fn pty_kill(&self, handle: u32) -> Result<(), CapabilityError> {
+            self.0.pty_kill(handle)
+        }
+    }
+
+    /// The native-linked conformance extension: same schema, same shared
+    /// dispatch, same capability engine (FR-EXT-6).
+    pub struct NativeConformance {
+        cap: Arc<Capabilities>,
+    }
+
+    impl NativeConformance {
+        /// Wrap the extension's capability engine.
+        pub fn new(cap: Arc<Capabilities>) -> NativeConformance {
+            NativeConformance { cap }
+        }
+
+        /// The tool schema (identical to the guest's).
+        pub fn schema(&self) -> lca_protocol::ToolSpec {
+            let (name, description, parameters) = schema_json();
+            lca_protocol::ToolSpec {
+                name,
+                description,
+                parameters: serde_json::from_str(&parameters).expect("schema is json"),
+                extras: Default::default(),
+            }
+        }
+
+        /// Execute one call through the shared dispatch. Guest-only modes
+        /// report unknown here; the conformance diff never uses them.
+        pub fn execute(&self, call: &ToolCall) -> ToolResult {
+            let (mode, args) = mode_and_args(&call.arguments);
+            let outcome = run_shared(&NativeCap(self.cap.clone()), &mode, &args);
+            outcome_to_result(&call.call_id, outcome)
         }
     }
 }
 
-impl ExecuteGuest for Component {
-    fn run(call: ToolCall) -> ToolResult {
-        match mode(&call.arguments).as_str() {
-            "trap" => panic!("conformance trap requested"),
-            "loop" => loop {
-                std::hint::spin_loop();
-            },
-            "log" => {
-                lca::host::log::info(&"x".repeat(50_000));
-                result(&call.call_id, "ok", "logged")
+#[cfg(not(target_arch = "wasm32"))]
+pub use native::{NativeCap, NativeConformance};
+
+// ---------------------------------------------------------------------------
+// WASM delivery mode
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// WASM delivery mode: one component exporting every world
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod tool_world {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "tool",
+        export_macro_name: "export_tool",
+        with: {
+            "lca:host/log@0.1.0": generate,
+            "lca:host/fs@0.1.0": generate,
+            "lca:host/process@0.1.0": generate,
+            "lca:host/pty@0.1.0": generate,
+        },
+    });
+
+    use lca::ext::types::ToolCall;
+    use lca::host::{fs, process, pty};
+
+    use crate::{Cap, ModeOutcome, mode_and_args, run_shared, schema_json};
+    use exports::lca::ext::execute::Guest as ExecuteTrait;
+    use exports::lca::ext::execute::ToolResult as WasmResult;
+    use exports::lca::ext::tool_schema::{Guest as SchemaGuest, Schema};
+    use lca::host::log;
+
+    fn map_fs(err: fs::Error) -> crate::CapabilityError {
+        use crate::CapabilityError as E;
+        match err {
+            fs::Error::Permission(d) => E::Permission(d),
+            fs::Error::NotGranted(d) => E::NotGranted(d),
+            fs::Error::NotFound(d) => E::NotFound(d),
+            fs::Error::Io(d) => E::Io(d),
+            fs::Error::Invalid(d) => E::Invalid(d),
+        }
+    }
+
+    fn map_process(err: process::Error) -> crate::CapabilityError {
+        use crate::CapabilityError as E;
+        match err {
+            process::Error::Permission(d) => E::Permission(d),
+            process::Error::NotGranted(d) => E::NotGranted(d),
+            process::Error::NotFound(d) => E::NotFound(d),
+            process::Error::Io(d) => E::Io(d),
+            process::Error::Invalid(d) => E::Invalid(d),
+        }
+    }
+
+    fn map_pty(err: pty::Error) -> crate::CapabilityError {
+        use crate::CapabilityError as E;
+        match err {
+            pty::Error::Permission(d) => E::Permission(d),
+            pty::Error::NotGranted(d) => E::NotGranted(d),
+            pty::Error::NotFound(d) => E::NotFound(d),
+            pty::Error::Io(d) => E::Io(d),
+            pty::Error::Invalid(d) => E::Invalid(d),
+        }
+    }
+
+    /// The guest's capability view: host imports behind every call.
+    struct GuestCap;
+
+    impl Cap for GuestCap {
+        fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, crate::CapabilityError> {
+            fs::read(scope, path).map_err(map_fs)
+        }
+        fn fs_list(&self, scope: &str, path: &str) -> Result<Vec<String>, crate::CapabilityError> {
+            fs::list_entries(scope, path).map_err(map_fs)
+        }
+        fn process_spawn(
+            &self,
+            program: &str,
+            args: &[String],
+            cwd: &str,
+        ) -> Result<u32, crate::CapabilityError> {
+            process::spawn(program, args, cwd).map_err(map_process)
+        }
+        fn process_read_stdout(
+            &self,
+            handle: u32,
+            max: usize,
+        ) -> Result<Option<Vec<u8>>, crate::CapabilityError> {
+            process::read_stdout(handle, max as u64).map_err(map_process)
+        }
+        fn process_wait(&self, handle: u32) -> Result<i32, crate::CapabilityError> {
+            process::wait(handle).map_err(map_process)
+        }
+        fn process_kill(&self, handle: u32) -> Result<(), crate::CapabilityError> {
+            process::kill(handle).map_err(map_process)
+        }
+        fn pty_spawn(
+            &self,
+            program: &str,
+            args: &[String],
+            cwd: &str,
+            rows: u16,
+            cols: u16,
+        ) -> Result<u32, crate::CapabilityError> {
+            pty::spawn(program, args, cwd, rows, cols).map_err(map_pty)
+        }
+        fn pty_read(
+            &self,
+            handle: u32,
+            max: usize,
+        ) -> Result<Option<Vec<u8>>, crate::CapabilityError> {
+            pty::read(handle, max as u64).map_err(map_pty)
+        }
+        fn pty_wait(&self, handle: u32) -> Result<i32, crate::CapabilityError> {
+            pty::wait(handle).map_err(map_pty)
+        }
+        fn pty_kill(&self, handle: u32) -> Result<(), crate::CapabilityError> {
+            pty::kill(handle).map_err(map_pty)
+        }
+    }
+
+    pub struct ToolComponent;
+
+    impl SchemaGuest for ToolComponent {
+        fn get_schema() -> Schema {
+            let (name, description, parameters) = schema_json();
+            Schema {
+                name,
+                description,
+                parameters,
+                extras: Vec::new(),
             }
-            "alloc" => {
-                let mut hog: Vec<Vec<u8>> = Vec::new();
-                for i in 0..64u64 {
-                    let mut block = vec![0u8; 4 * 1024 * 1024];
-                    block[0] = i as u8;
-                    hog.push(block);
+        }
+    }
+
+    impl ExecuteTrait for ToolComponent {
+        fn run(call: ToolCall) -> WasmResult {
+            let (mode, args) = mode_and_args(&call.arguments);
+            let outcome = match mode.as_str() {
+                "trap" => panic!("conformance trap requested"),
+                "loop" => loop {
+                    std::hint::spin_loop();
+                },
+                "log" => {
+                    log::info(&"x".repeat(50_000));
+                    ModeOutcome {
+                        ok: true,
+                        text: "logged".to_string(),
+                    }
                 }
-                result(&call.call_id, "ok", "allocated")
+                "alloc" => {
+                    let mut hog: Vec<Vec<u8>> = Vec::new();
+                    for i in 0..64u64 {
+                        let mut block = vec![0u8; 4 * 1024 * 1024];
+                        block[0] = i as u8;
+                        hog.push(block);
+                    }
+                    ModeOutcome {
+                        ok: true,
+                        text: "allocated".to_string(),
+                    }
+                }
+                _ => run_shared(&GuestCap, &mode, &args),
+            };
+            WasmResult {
+                call_id: call.call_id,
+                status: if outcome.ok { "ok" } else { "error" }.to_string(),
+                content: Some(outcome.text),
+                truncated: false,
+                extras: Vec::new(),
             }
-            _ => result(&call.call_id, "ok", "conformance ok"),
         }
     }
+
+    export_tool!(ToolComponent);
 }
 
-export!(Component);
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod command_world {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "command",
+        export_macro_name: "export_command",
+    });
+
+    use exports::lca::ext::command_spec::{Guest as SpecGuest, Spec};
+    use exports::lca::ext::invoke::{Effect, Guest as InvokeGuest};
+
+    pub struct CommandComponent;
+
+    impl SpecGuest for CommandComponent {
+        fn get_spec() -> Spec {
+            Spec {
+                name: "probe".to_string(),
+                hint: "conformance command probe".to_string(),
+                completion: "none".to_string(),
+                extras: Vec::new(),
+            }
+        }
+    }
+
+    impl InvokeGuest for CommandComponent {
+        fn run(argument: String) -> Effect {
+            if argument == "submit" {
+                Effect::SubmitPrompt("conformance submitted".to_string())
+            } else if let Some(text) = argument.strip_prefix("insert:") {
+                Effect::InsertText(text.to_string())
+            } else {
+                Effect::None
+            }
+        }
+    }
+
+    export_command!(CommandComponent);
+}
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod hooks_world {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "hooks",
+        export_macro_name: "export_hooks",
+    });
+
+    use exports::lca::ext::hook_attention_required::Guest as AttentionGuest;
+    use exports::lca::ext::hook_post_tool_use::{
+        Guest as PostToolGuest, ToolCall as PostCall, ToolResult as PostResult,
+    };
+    use exports::lca::ext::hook_post_turn_end::Guest as PostTurnGuest;
+    use exports::lca::ext::hook_pre_tool_use::{Action, Guest as PreToolGuest, ToolCall};
+    use exports::lca::ext::hook_pre_turn::Guest as PreTurnGuest;
+    use exports::lca::ext::hook_session_close::Guest as CloseGuest;
+
+    pub struct HooksComponent;
+
+    impl PreTurnGuest for HooksComponent {
+        fn on_pre_turn() {}
+    }
+
+    impl PreToolGuest for HooksComponent {
+        fn on_pre_tool_use(call: ToolCall) -> Action {
+            // The probe's policy surface: the tool name carries the
+            // verdict so both delivery modes agree without configuration.
+            if call.name.starts_with("probe-deny") {
+                Action::Deny("conformance policy denied this tool".to_string())
+            } else {
+                Action::Allow
+            }
+        }
+    }
+
+    impl PostToolGuest for HooksComponent {
+        fn on_post_tool_use(_call: PostCall, _outcome: PostResult) {}
+    }
+
+    impl PostTurnGuest for HooksComponent {
+        fn on_post_turn_end(_status: String) {}
+    }
+
+    impl AttentionGuest for HooksComponent {
+        fn on_attention_required(_reason: String) {}
+    }
+
+    impl CloseGuest for HooksComponent {
+        fn on_session_close() {}
+    }
+
+    export_hooks!(HooksComponent);
+}

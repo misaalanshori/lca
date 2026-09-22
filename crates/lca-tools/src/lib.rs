@@ -8,9 +8,15 @@
 
 #![deny(unsafe_code)]
 
+mod capabilities;
 mod ops;
+mod process;
+mod pty;
 
+pub use capabilities::{Capabilities, CapabilityGrants, Denial};
 pub use ops::{Entry, ExecOutcome, NativeOps, Stat, ToolOps};
+pub use process::{TreeChild, read_up_to, spawn_direct, write_all};
+pub use pty::PtyChild;
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};

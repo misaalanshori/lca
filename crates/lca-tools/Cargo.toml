@@ -20,6 +20,14 @@ thiserror.workspace = true
 # regex-automata, aho-corasick, memchr, memchr2 — no transitive C code.
 regex = "1"
 
+[target.'cfg(unix)'.dependencies]
+# Dependency justification (SRDD closed list + review): `libc` exposes the
+# POSIX pty and ioctl APIs (posix_openpt, ioctl TIOCGPTN/TIOCSPTLCK/
+# TIOCSWINSZ) that pseudo-terminal allocation needs; std has no pty API and
+# hand-rolling raw syscalls would be more unsafe code, not less. Zero
+# transitive dependencies.
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 # Dependency justification: Job Objects for process-tree termination on
 # Windows (docs/platform-notes.md requires them; taskkill /T alone leaves
@@ -30,6 +38,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_JobObjects",
     "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+    "Win32_System_Pipes",
 ] }
 
 [lints]

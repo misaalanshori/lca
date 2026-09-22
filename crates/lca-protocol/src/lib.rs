@@ -6,12 +6,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod capability;
 pub mod message;
 pub mod record;
 pub mod stream;
 pub mod tool;
 pub mod usage;
 
+pub use capability::CapabilityError;
 pub use message::{ChatMessage, ContentBlock, MessageRole};
 pub use record::{FORMAT_VERSION, PermissionDecision, Record, ToolSource};
 pub use stream::StreamEvent;

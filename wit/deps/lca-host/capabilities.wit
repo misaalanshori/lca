@@ -22,7 +22,9 @@ interface fs {
 
   read: func(scope: string, path: string) -> result<list<u8>, error>;
   write: func(scope: string, path: string, bytes: list<u8>) -> result<_, error>;
-  list: func(scope: string, path: string) -> result<list<string>, error>;
+  // The catalog's "list" function: `list` is a WIT keyword, so the
+  // exported name is list-entries.
+  list-entries: func(scope: string, path: string) -> result<list<string>, error>;
   stat: func(scope: string, path: string) -> result<file-info, error>;
 }
 
@@ -32,6 +34,8 @@ interface fs {
 interface process {
   variant error {
     permission(string),
+    /// The capability is not in this extension's granted set (NFR-13).
+    not-granted(string),
     not-found(string),
     io(string),
     invalid(string),
@@ -58,6 +62,8 @@ interface process {
 interface pty {
   variant error {
     permission(string),
+    /// The capability is not in this extension's granted set (NFR-13).
+    not-granted(string),
     not-found(string),
     io(string),
     invalid(string),

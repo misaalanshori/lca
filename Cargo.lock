@@ -313,6 +313,8 @@ dependencies = [
 name = "conformance"
 version = "0.1.0"
 dependencies = [
+ "lca-protocol",
+ "lca-tools",
  "serde_json",
  "wit-bindgen 0.41.0",
 ]
@@ -1307,7 +1309,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "lca-ext-abi",
+ "lca-permissions",
  "lca-protocol",
+ "lca-tools",
  "serde_json",
  "thiserror",
  "toml",
@@ -1319,6 +1323,7 @@ dependencies = [
 name = "lca-permissions"
 version = "0.1.0"
 dependencies = [
+ "lca-protocol",
  "proptest",
  "serde",
  "serde_json",
@@ -1371,6 +1376,7 @@ version = "0.1.0"
 dependencies = [
  "lca-permissions",
  "lca-protocol",
+ "libc",
  "regex",
  "serde_json",
  "thiserror",
