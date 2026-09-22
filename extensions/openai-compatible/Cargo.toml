@@ -1,0 +1,21 @@
+[package]
+name = "openai-compatible"
+description = "Default provider: any OpenAI-compatible chat completions endpoint (native-linked by default, ADR-0013)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+lca-protocol = { path = "../../crates/lca-protocol" }
+lca-provider = { path = "../../crates/lca-provider" }
+tokio.workspace = true
+serde_json.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+hyper-rustls.workspace = true
+
+[lints]
+workspace = true

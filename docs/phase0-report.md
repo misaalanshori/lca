@@ -100,7 +100,25 @@ decisions, not ABI cost, will dominate.
 `phase0/matrix.sh` builds the spike host for every release target and records
 the result. Raw log: `phase0/matrix.log` (gitignored; summary here).
 
-MATRIX_RESULTS_PLACEHOLDER
+First run (with the since-removed `wasmtime` `cache` feature present):
+
+| Target | Result |
+|---|---|
+| `x86_64-unknown-linux-musl` | OK (315 s), plain rustc with `musl-gcc` from `musl-tools` |
+| `aarch64-unknown-linux-musl` | FAIL: `zstd-sys` C build under the zig CC shim |
+| `x86_64-apple-darwin` | FAIL: same `zstd-sys` cause |
+| `aarch64-apple-darwin` | FAIL: same `zstd-sys` cause |
+| `x86_64-pc-windows-msvc` | FAIL: `zstd-sys` under `cargo-xwin`'s clang-cl |
+| `aarch64-pc-windows-msvc` | FAIL: same |
+
+What each target needs, measured:
+
+- **`x86_64-unknown-linux-musl`**: `musl-tools` only; `cargo build --target x86_64-unknown-linux-musl` works with no extra configuration.
+- **`aarch64-unknown-linux-musl`**: `cargo-zigbuild` with zig0.16.0 as cross linker; no per-target C compiler needed once `zstd-sys` is out of the tree. OK in436 s.
+- **macOS (both)**: `cargo-zigbuild` + zig, nothing else; signing and notarization still require a macOS runner per the release policy. OK in310 s and295 s.
+- **Windows MSVC (both)**: `cargo-xwin` plus `llvm-lib` on `PATH` (the `llvm` apt package); clang-cl and the MSVC headers come from `cargo-xwin`'s cache. OK after that.
+
+Two findings worth keeping: the `zstd-sys` failures were caused by an unnecessary dependency edge (the spike enabled Wasmtime's `cache` feature, which ADR-0001's per-digest precompilation replaces), and dropping it removed the whole C-toolchain problem from five of six targets; and `cargo-xwin` needs `llvm-lib` installed explicitly, which the rerun log documents. **All six native targets build the spike host.**
 
 ## Backend decision
 
