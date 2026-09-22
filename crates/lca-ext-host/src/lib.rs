@@ -472,7 +472,10 @@ pub struct ExtHost {
 /// through the same calls).
 pub struct WasmExtension {
     name: String,
-    pre: ToolPre<HostState>,
+    worlds: Vec<String>,
+    tool: Option<ToolPre<HostState>>,
+    command: Option<lca_ext_abi::host::command::CommandPre<HostState>>,
+    hooks: Option<lca_ext_abi::host::hooks::HooksPre<HostState>>,
     limits: ExtensionLimits,
     enabled: Arc<AtomicBool>,
     logs: Arc<Mutex<Vec<String>>>,
@@ -540,11 +543,37 @@ impl ExtHost {
         let pre = linker
             .instantiate_pre(&component)
             .map_err(|err| LoadError::Link(err.to_string()))?;
-        let pre = ToolPre::new(pre).map_err(|err| LoadError::Link(err.to_string()))?;
+        let tool = manifest
+            .worlds
+            .iter()
+            .any(|world| world == "tool")
+            .then(|| ToolPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string())))
+            .transpose()?;
+        let command = manifest
+            .worlds
+            .iter()
+            .any(|world| world == "command")
+            .then(|| {
+                lca_ext_abi::host::command::CommandPre::new(pre.clone())
+                    .map_err(|err| LoadError::Link(err.to_string()))
+            })
+            .transpose()?;
+        let hooks = manifest
+            .worlds
+            .iter()
+            .any(|world| world == "hooks")
+            .then(|| {
+                lca_ext_abi::host::hooks::HooksPre::new(pre)
+                    .map_err(|err| LoadError::Link(err.to_string()))
+            })
+            .transpose()?;
 
         Ok(WasmExtension {
             name: manifest.name,
-            pre,
+            worlds: manifest.worlds.clone(),
+            tool,
+            command,
+            hooks,
             limits: self.limits.clone(),
             enabled: Arc::new(AtomicBool::new(true)),
             logs: Arc::new(Mutex::new(Vec::new())),
@@ -637,7 +666,7 @@ impl WasmExtension {
         })
     }
 
-    fn instantiate(&self) -> Result<(Store<HostState>, Tool), CallError> {
+    fn store(&self) -> Result<Store<HostState>, CallError> {
         if !self.is_enabled() {
             return Err(CallError::Disabled);
         }
@@ -646,7 +675,7 @@ impl WasmExtension {
         let log_limit = self.limits.log_limit_bytes;
         let memory = self.limits.memory_bytes;
         let mut store = Store::new(
-            self.pre.engine(),
+            self.engine(),
             HostState {
                 wasi,
                 table: ResourceTable::new(),
@@ -665,8 +694,27 @@ impl WasmExtension {
         store
             .set_fuel(self.limits.fuel_per_call)
             .map_err(|err| CallError::InvalidArguments(err.to_string()))?;
-        let instance = self
-            .pre
+        Ok(store)
+    }
+
+    /// The engine behind this component (cancellation increments its
+    /// epoch, ADR-0014).
+    fn engine(&self) -> &Engine {
+        self.tool
+            .as_ref()
+            .map(|pre| pre.engine())
+            .or_else(|| self.command.as_ref().map(|pre| pre.engine()))
+            .or_else(|| self.hooks.as_ref().map(|pre| pre.engine()))
+            .expect("at least one world is implemented")
+    }
+
+    fn instantiate(&self) -> Result<(Store<HostState>, Tool), CallError> {
+        let pre = self
+            .tool
+            .as_ref()
+            .ok_or_else(|| CallError::InvalidArguments("no tool world".into()))?;
+        let mut store = self.store()?;
+        let instance = pre
             .instantiate(&mut store)
             .map_err(|err| self.classify(err))?;
         Ok((store, instance))
@@ -700,5 +748,245 @@ impl WasmExtension {
         }
         self.disable();
         CallError::Trap(text)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One dispatch interface for both delivery modes (ADR-0019, FR-EXT-6)
+// ---------------------------------------------------------------------------
+
+use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};
+use lca_protocol::{
+    CommandEffect, CommandSpec as DispatchCommandSpec, DispatchError, HookAction,
+    PostToolObservation,
+};
+
+fn to_dispatch(call_err: CallError, extension: &str) -> DispatchError {
+    match call_err {
+        CallError::Disabled => DispatchError::Disabled,
+        other => DispatchError::Failed(format!("{extension}: {other}")),
+    }
+}
+
+impl ExtensionDispatch for WasmExtension {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn delivery(&self) -> DeliveryMode {
+        DeliveryMode::Wasm
+    }
+
+    fn worlds(&self) -> Vec<World> {
+        self.worlds
+            .iter()
+            .filter_map(|world| match world.as_str() {
+                "tool" => Some(World::Tool),
+                "command" => Some(World::Command),
+                "hooks" => Some(World::Hooks),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn tool_specs(&self) -> Result<Vec<ToolSpec>, DispatchError> {
+        if !self.worlds().contains(&World::Tool) {
+            return Err(DispatchError::MissingWorld {
+                extension: self.name.clone(),
+                world: "tool",
+            });
+        }
+        self.schema()
+            .map(|spec| vec![spec])
+            .map_err(|err| to_dispatch(err, &self.name))
+    }
+
+    fn execute_tool(&self, call: &ToolCall) -> Result<lca_protocol::ToolResult, DispatchError> {
+        if !self.worlds().contains(&World::Tool) {
+            return Err(DispatchError::MissingWorld {
+                extension: self.name.clone(),
+                world: "tool",
+            });
+        }
+        self.execute(call)
+            .map_err(|err| to_dispatch(err, &self.name))
+    }
+
+    fn command_specs(&self) -> Result<Vec<DispatchCommandSpec>, DispatchError> {
+        let Some(pre) = self.command.as_ref() else {
+            return Err(DispatchError::MissingWorld {
+                extension: self.name.clone(),
+                world: "command",
+            });
+        };
+        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
+        let instance = pre
+            .instantiate(&mut store)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+        let spec = instance
+            .lca_ext_command_spec()
+            .call_get_spec(&mut store)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+        Ok(vec![DispatchCommandSpec {
+            name: spec.name,
+            hint: spec.hint,
+            completion: spec.completion,
+            extras: spec
+                .extras
+                .into_iter()
+                .map(|pair| (pair.key, pair.value))
+                .collect(),
+        }])
+    }
+
+    fn invoke_command(&self, _name: &str, argument: &str) -> Result<CommandEffect, DispatchError> {
+        let Some(pre) = self.command.as_ref() else {
+            return Err(DispatchError::MissingWorld {
+                extension: self.name.clone(),
+                world: "command",
+            });
+        };
+        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
+        let instance = pre
+            .instantiate(&mut store)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+        let effect = instance
+            .lca_ext_invoke()
+            .call_run(&mut store, argument)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+        use lca_ext_abi::host::command::exports::lca::ext::invoke::Effect;
+        Ok(match effect {
+            Effect::InsertText(text) => CommandEffect::InsertText(text),
+            Effect::SubmitPrompt(text) => CommandEffect::SubmitPrompt(text),
+            Effect::ShowWidget(text) => CommandEffect::ShowWidget(text),
+            Effect::None => CommandEffect::None,
+        })
+    }
+
+    fn on_pre_turn(&self) -> Result<(), DispatchError> {
+        let Some(pre) = self.hooks.as_ref() else {
+            return Ok(());
+        };
+        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
+        let instance = pre
+            .instantiate(&mut store)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+        instance
+            .lca_ext_hook_pre_turn()
+            .call_on_pre_turn(&mut store)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))
+    }
+
+    fn on_pre_tool_use(&self, call: &ToolCall) -> Result<HookAction, DispatchError> {
+        let Some(pre) = self.hooks.as_ref() else {
+            return Ok(HookAction::Allow);
+        };
+        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
+        let instance = pre
+            .instantiate(&mut store)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+        let action = instance
+            .lca_ext_hook_pre_tool_use()
+            .call_on_pre_tool_use(
+                &mut store,
+                &lca_ext_abi::host::hooks::exports::lca::ext::hook_pre_tool_use::ToolCall {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                    extras: Vec::new(),
+                },
+            )
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+        use lca_ext_abi::host::hooks::exports::lca::ext::hook_pre_tool_use::Action;
+        Ok(match action {
+            Action::Allow => HookAction::Allow,
+            Action::Deny(reason) => HookAction::Deny(reason),
+            Action::Replace(replacement) => HookAction::Replace(ToolCall {
+                call_id: replacement.call_id,
+                name: replacement.name,
+                arguments: replacement.arguments,
+            }),
+        })
+    }
+
+    fn on_post_tool_use(&self, observation: &PostToolObservation) -> Result<(), DispatchError> {
+        let Some(pre) = self.hooks.as_ref() else {
+            return Ok(());
+        };
+        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
+        let instance = pre
+            .instantiate(&mut store)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+        instance
+            .lca_ext_hook_post_tool_use()
+            .call_on_post_tool_use(
+                &mut store,
+                &lca_ext_abi::host::hooks::exports::lca::ext::hook_post_tool_use::ToolCall {
+                    call_id: observation.call.call_id.clone(),
+                    name: observation.call.name.clone(),
+                    arguments: observation.call.arguments.clone(),
+                    extras: Vec::new(),
+                },
+                &lca_ext_abi::host::hooks::exports::lca::ext::hook_post_tool_use::ToolResult {
+                    call_id: observation.result.call_id.clone(),
+                    status: match observation.result.status {
+                        ToolResultStatus::Ok => "ok".to_string(),
+                        ToolResultStatus::Error => "error".to_string(),
+                        ToolResultStatus::Denied => "denied".to_string(),
+                        ToolResultStatus::Timeout => "timeout".to_string(),
+                    },
+                    content: Some(observation.result.content.clone()),
+                    truncated: observation.result.truncated,
+                    extras: Vec::new(),
+                },
+            )
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))
+    }
+
+    fn on_post_turn_end(&self, status: &str) -> Result<(), DispatchError> {
+        let Some(pre) = self.hooks.as_ref() else {
+            return Ok(());
+        };
+        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
+        let instance = pre
+            .instantiate(&mut store)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+        instance
+            .lca_ext_hook_post_turn_end()
+            .call_on_post_turn_end(&mut store, status)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))
+    }
+
+    fn on_attention_required(&self, reason: &str) -> Result<(), DispatchError> {
+        let Some(pre) = self.hooks.as_ref() else {
+            return Ok(());
+        };
+        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
+        let instance = pre
+            .instantiate(&mut store)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+        instance
+            .lca_ext_hook_attention_required()
+            .call_on_attention_required(&mut store, reason)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))
+    }
+
+    fn on_session_close(&self) -> Result<(), DispatchError> {
+        let Some(pre) = self.hooks.as_ref() else {
+            return Ok(());
+        };
+        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
+        let instance = pre
+            .instantiate(&mut store)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+        instance
+            .lca_ext_hook_session_close()
+            .call_on_session_close(&mut store)
+            .map_err(|err| to_dispatch(self.classify(err), &self.name))
+    }
+
+    fn interrupt(&self) {
+        // FR-CONC-1: epoch interruption, independent of the fuel budget.
+        self.engine().increment_epoch();
     }
 }

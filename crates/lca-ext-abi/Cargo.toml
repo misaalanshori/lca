@@ -8,6 +8,7 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+lca-protocol = { path = "../lca-protocol" }
 wasmtime = { workspace = true, optional = true, features = ["cranelift"] }
 
 [features]

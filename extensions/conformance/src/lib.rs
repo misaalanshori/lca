@@ -223,6 +223,40 @@ pub fn run_shared(cap: &dyn Cap, mode: &str, args: &serde_json::Value) -> ModeOu
     }
 }
 
+/// The pre-tool policy both modes run: tool names carry the verdict so
+/// a native and a wasm build agree without configuration.
+pub fn pre_tool_action(name: &str) -> lca_protocol::HookAction {
+    use lca_protocol::HookAction;
+    if name.starts_with("probe-deny") {
+        HookAction::Deny("conformance policy denied this tool".to_string())
+    } else {
+        HookAction::Allow
+    }
+}
+
+/// The command leaf both modes register (`<extension>.probe` once the
+/// host namespaces it).
+pub fn command_leaf() -> lca_protocol::CommandSpec {
+    lca_protocol::CommandSpec {
+        name: "probe".to_string(),
+        hint: "conformance command probe".to_string(),
+        completion: "none".to_string(),
+        extras: Default::default(),
+    }
+}
+
+/// The command effect both modes produce.
+pub fn invoke_command(argument: &str) -> lca_protocol::CommandEffect {
+    use lca_protocol::CommandEffect;
+    if argument == "submit" {
+        CommandEffect::SubmitPrompt("conformance submitted".to_string())
+    } else if let Some(text) = argument.strip_prefix("insert:") {
+        CommandEffect::InsertText(text.to_string())
+    } else {
+        CommandEffect::None
+    }
+}
+
 /// Build a protocol result from an outcome (the native path).
 pub fn outcome_to_result(call_id: &str, outcome: ModeOutcome) -> ToolResult {
     ToolResult {
@@ -330,6 +364,56 @@ mod native {
             let (mode, args) = mode_and_args(&call.arguments);
             let outcome = run_shared(&NativeCap(self.cap.clone()), &mode, &args);
             outcome_to_result(&call.call_id, outcome)
+        }
+    }
+
+    impl lca_ext_abi::ExtensionDispatch for NativeConformance {
+        fn name(&self) -> &str {
+            "conformance"
+        }
+
+        fn delivery(&self) -> lca_ext_abi::DeliveryMode {
+            lca_ext_abi::DeliveryMode::Native
+        }
+
+        fn worlds(&self) -> Vec<lca_ext_abi::World> {
+            vec![
+                lca_ext_abi::World::Tool,
+                lca_ext_abi::World::Command,
+                lca_ext_abi::World::Hooks,
+            ]
+        }
+
+        fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {
+            Ok(vec![self.schema()])
+        }
+
+        fn execute_tool(
+            &self,
+            call: &ToolCall,
+        ) -> Result<lca_protocol::ToolResult, lca_protocol::DispatchError> {
+            Ok(self.execute(call))
+        }
+
+        fn command_specs(
+            &self,
+        ) -> Result<Vec<lca_protocol::CommandSpec>, lca_protocol::DispatchError> {
+            Ok(vec![command_leaf()])
+        }
+
+        fn invoke_command(
+            &self,
+            _name: &str,
+            argument: &str,
+        ) -> Result<lca_protocol::CommandEffect, lca_protocol::DispatchError> {
+            Ok(invoke_command(argument))
+        }
+
+        fn on_pre_tool_use(
+            &self,
+            call: &ToolCall,
+        ) -> Result<lca_protocol::HookAction, lca_protocol::DispatchError> {
+            Ok(pre_tool_action(&call.name))
         }
     }
 }
@@ -530,10 +614,11 @@ mod command_world {
 
     impl SpecGuest for CommandComponent {
         fn get_spec() -> Spec {
+            let leaf = crate::command_leaf();
             Spec {
-                name: "probe".to_string(),
-                hint: "conformance command probe".to_string(),
-                completion: "none".to_string(),
+                name: leaf.name,
+                hint: leaf.hint,
+                completion: leaf.completion,
                 extras: Vec::new(),
             }
         }
@@ -541,12 +626,11 @@ mod command_world {
 
     impl InvokeGuest for CommandComponent {
         fn run(argument: String) -> Effect {
-            if argument == "submit" {
-                Effect::SubmitPrompt("conformance submitted".to_string())
-            } else if let Some(text) = argument.strip_prefix("insert:") {
-                Effect::InsertText(text.to_string())
-            } else {
-                Effect::None
+            match crate::invoke_command(&argument) {
+                lca_protocol::CommandEffect::InsertText(text) => Effect::InsertText(text),
+                lca_protocol::CommandEffect::SubmitPrompt(text) => Effect::SubmitPrompt(text),
+                lca_protocol::CommandEffect::ShowWidget(text) => Effect::ShowWidget(text),
+                lca_protocol::CommandEffect::None => Effect::None,
             }
         }
     }
@@ -580,12 +664,17 @@ mod hooks_world {
 
     impl PreToolGuest for HooksComponent {
         fn on_pre_tool_use(call: ToolCall) -> Action {
-            // The probe's policy surface: the tool name carries the
-            // verdict so both delivery modes agree without configuration.
-            if call.name.starts_with("probe-deny") {
-                Action::Deny("conformance policy denied this tool".to_string())
-            } else {
-                Action::Allow
+            // One policy source (crate::pre_tool_action), mapped to the
+            // WIT variant: the native twin runs the identical decision.
+            match crate::pre_tool_action(&call.name) {
+                lca_protocol::HookAction::Allow => Action::Allow,
+                lca_protocol::HookAction::Deny(reason) => Action::Deny(reason),
+                lca_protocol::HookAction::Replace(replacement) => Action::Replace(ToolCall {
+                    call_id: replacement.call_id,
+                    name: replacement.name,
+                    arguments: replacement.arguments,
+                    extras: Vec::new(),
+                }),
             }
         }
     }
