@@ -1,0 +1,17 @@
+[package]
+name = "lca-provider"
+description = "Provider trait, streaming types, and the host-side tool-call accumulator. Implements no vendor."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+lca-protocol = { path = "../lca-protocol" }
+tokio.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

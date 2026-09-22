@@ -123,3 +123,5 @@
    Compiling cranelift-native v0.136.0
    Compiling cranelift-frontend v0.136.0
    Compiling wasmtime-wasi-io v49.0.0
+   Compiling wasmtime-wasi v49.0.0
+   Compiling host v0.1.0 (/home/debian/projects/lca/phase0/host)
