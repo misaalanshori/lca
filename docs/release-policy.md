@@ -140,4 +140,4 @@ The web build publishes as an npm package containing the transpiled module and i
 
 The agent checks for a newer version at most once per day, in the background, and never blocks startup on it. It reports a newer version in the status line and does not install anything.
 
-The check can be disabled with a configuration option, and it is disabled by default in headless mode, because a CI run should make no network request the user did not ask for.
+The check is on by default in interactive mode and is the only outbound request the agent makes without the user asking for one (FR-CFG-6). It can be disabled with a configuration option, and it is disabled by default in headless mode, because a CI run should make no network request the user did not ask for.

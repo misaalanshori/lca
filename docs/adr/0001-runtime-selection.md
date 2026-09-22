@@ -36,6 +36,8 @@ The project tracks Wasmtime security advisories. A sandbox escape in the runtime
 
 The build has two backend paths to test. The conformance extension runs under both, and the pipeline checks that results match. A difference between backends is a defect.
 
+Precompilation is per digest: installing or updating an extension compiles its component to a cached ahead-of-time artifact keyed by that digest, stored under the extension tree, and ordinary loads execute the cached artifact; a digest change discards it. Phase 0 measures whether ahead-of-time-by-default beats just-in-time for the instantiation budget in NFR-4.
+
 Pulley makes the web target simpler than it would otherwise be, but it is not the mechanism used there. The web build transpiles components to ES modules and runs them on the host engine as peers, which needs no embedded runtime at all. Pulley covers native targets without a Cranelift backend.
 
 ## Revisit conditions

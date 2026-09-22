@@ -22,7 +22,7 @@ Design-complete, pre-implementation. Every decision here has been written down a
 
 ## Reading order
 
-Start with `docs/lca-srdd.md`, which is the top-level requirements and architecture document and the index for everything else. From there: `docs/adr/` holds eighteen architecture decision records, one per real design choice with alternatives considered; `docs/capabilities.md` is the normative reference for every capability an extension can hold; `docs/testing-plan.md` specifies how this gets built test-first; `docs/glossary.md` disambiguates the terms that get overloaded across this many documents; `docs/platform-notes.md` has the specific, easy-to-get-wrong behavior per operating system; and `docs/providers/` documents each first-party model provider individually.
+Start with `docs/lca-srdd.md`, which is the top-level requirements and architecture document and the index for everything else. From there: `docs/adr/` holds eighteen architecture decision records, one per real design choice with alternatives considered; `docs/capabilities.md` is the normative reference for every capability an extension can hold; `docs/testing-plan.md` specifies how this gets built test-first; `docs/glossary.md` disambiguates the terms that get overloaded across this many documents; `docs/platform-notes.md` has the specific, easy-to-get-wrong behavior per operating system; `docs/configuration.md` and `docs/headless.md` are the configuration key reference and the scripting contract; and `docs/providers/` documents each first-party model provider individually.
 
 ## If you are the agent implementing this
 

@@ -16,7 +16,7 @@ Add `login`, `logout`, and `usage` as defined, optional exports on the `provider
 
 The host builds two things from these exports with no extra work by the extension author. A generic top-level `/login` lists every installed provider by name and calls the chosen one's `login` export; `/logout` and `/usage` behave the same way against the active provider. And the host automatically namespaces the same three exports under the extension's own name, so `/antigravity.usage` and `/codex.usage` exist without either author writing a prefix, and without risk of two providers colliding on a command both happened to call `usage`.
 
-This is additive to the `provider` world and lands before the ABI freeze in Phase 8, alongside the other pre-freeze punch list items.
+This lands before the ABI freeze in Phase 8, alongside the other pre-freeze punch list items. It is technically a breaking change to the `provider` world under the versioning policy's table, made deliberately before the freeze when a rebuild costs nothing; the policy's optional-export rule now states the constraint this pattern carries.
 
 ## Alternatives considered
 
@@ -26,7 +26,7 @@ A separate `identity` world, distinct from `provider`, carrying only login, logo
 
 ## Consequences
 
-The `provider` world's WIT surface grows by three functions, all optional in the sense that a provider without an OAuth login or a meaningful usage endpoint returns "not supported" rather than needing a stub that does nothing. Existing provider extensions built before this change need a rebuild to gain the generic dispatch behavior, same as any other additive ABI change; they are not broken by it, since new functions are additive per the versioning policy.
+The `provider` world's WIT surface grows by three functions, all optional in the sense that a provider without an OAuth login or a meaningful usage endpoint returns "not supported" rather than needing a stub that does nothing. Existing provider extensions built before this change need a rebuild to satisfy the expanded world and to gain the generic dispatch behavior. Before the freeze this costs a rebuild and nothing more; after 1.0, adding a function to a world is breaking like any other, and an optional function added then would need its own opt-in world per the versioning policy.
 
 The command auto-namespacing needs a defined rule for what happens when an extension's own name would collide with a built-in command namespace. The host resolves this by reserving no such collisions in practice, since extension names are validated as a distinct identifier space from built-in command names, but the rule should be stated explicitly rather than left implicit.
 

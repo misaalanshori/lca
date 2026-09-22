@@ -22,7 +22,7 @@ Adopt pi's measurement approach directly, and add one architectural piece pi doe
 
 **The cache boundary**, which is new: when the host assembles the resolved message list for a turn, per the context-assembly flow in `docs/flows.md`, it already knows exactly where the stable region ends, since that is the same boundary compaction's own durable record marks. The host passes this boundary to the provider extension alongside the message list on the `stream-completion` call, as a count of leading messages considered stable. A provider extension uses it, where its vendor has an explicit cache-control mechanism, to place the marker at the right position; a provider without one, including a local server with no cache concept at all, ignores it safely, since it is advisory.
 
-Where a `context-transform` extension's output differs from its input within that stable region, the host does not reject the turn. It records the divergence as an extension event, the same category `docs/threat-model.md` already uses for a capability denial, and narrows the boundary it reports to the provider for that turn to end just before the divergence, so the request still goes out correctly, just without a cache marker over the part that changed. This follows pi's own posture: measure and surface, don't block. A transform extension that does this repeatedly is a visible, diagnosable problem, not a silent one, and not a hard failure either.
+Where a `context-transform` extension's output differs from its input within that stable region, amended before implementation to compare against the previous turn's stable content rather than the turn's own input, see Consequences, the host does not reject the turn. It records the divergence as an extension event, the same category `docs/threat-model.md` already uses for a capability denial, and narrows the boundary it reports to the provider for that turn to end just before the divergence, so the request still goes out correctly, just without a cache marker over the part that changed. This follows pi's own posture: measure and surface, don't block. A transform extension that does this repeatedly is a visible, diagnosable problem, not a silent one, and not a hard failure either.
 
 ## Alternatives considered
 
@@ -41,6 +41,8 @@ The `provider` world's `usage` event and the `stream-completion` call both gain 
 The cache-waste figures are worth surfacing to the user directly, the way pi does, through the existing session stats and cost reporting rather than a new command.
 
 Every provider profile under `docs/providers/` that talks to a real hosted vendor should say plainly whether and how it uses the boundary hint; a local server with no cache concept says so too, so the absence reads as expected rather than as an oversight.
+
+**Divergence is measured cross-turn.** The comparison is against what was actually sent on the previous turn, not against the turn's own input. A transform that deterministically rewrites stable content identically every turn is cache-stable in fact, and the cross-turn measure records one divergence and then settles instead of narrowing every turn. A transform whose output drifts turn to turn keeps the boundary narrowed, which is the honest outcome: those requests really do bust the cache. The first divergence narrows the boundary to end before the earliest differing message.
 
 ## Revisit conditions
 

@@ -52,7 +52,7 @@ A rejection from any transform in the chain ends the turn before a provider is e
 
 A compaction extension that summarizes well typically holds the `completion` capability to ask the host for a model response; a purely mechanical strategy, dropping the oldest turns or keeping only errored tool results, needs no such capability.
 
-The message-count boundary between the compacted prefix and the dynamic suffix, computed at the top of this flow, travels with the request as the cache-boundary hint on the provider call. If a transform in the chain touches content inside that boundary, the host narrows what it reports for this turn rather than failing it, and records the divergence; see ADR-0017 and the cache behavior section of `docs/testing-plan.md`.
+The message-count boundary between the compacted prefix and the dynamic suffix, computed at the top of this flow, travels with the request as the cache-boundary hint on the provider call. If a transform in the chain changes content inside that boundary relative to the previous turn's request, the host narrows what it reports for this turn rather than failing it, and records the divergence; see ADR-0017 and the cache behavior section of `docs/testing-plan.md`.
 
 ## A turn with a tool call
 
@@ -125,7 +125,7 @@ The permission check runs after the hook, not before. A hook that denies a call 
 
 Cancellation can arrive at any point. The core aborts the in-flight provider call, writes whatever records are complete, and returns to the prompt. A tool already running is stopped through its own cancellation path, and a shell child process is killed.
 
-The loop between tool result and the next completion is where a turn spends most of its wall clock time in practice, and it is bounded by a configured maximum iteration count to stop a model from looping on a failing tool.
+The loop between tool result and the next completion is where a turn spends most of its wall clock time in practice, and it is bounded by a configured maximum iteration count to stop a model from looping on a failing tool (FR-CORE-9).
 
 ## Extension instantiation and capability resolution
 
@@ -201,7 +201,7 @@ sequenceDiagram
     Listener-->>Host: port
     Host-->>Ext: redirect_url, flow handle
     Ext->>Ext: build authorization URL with challenge and redirect_url
-    Ext->>Host: open_url(authorization_url)
+    Ext->>Host: oauth.open(authorization_url)
     Host->>Browser: open
     Browser->>IdP: authorization request
     User->>IdP: signs in and approves

@@ -51,7 +51,7 @@ The `v` field is per record, not per file. A file written across a format upgrad
 
 `user` holds one user message. Fields: `id`, `content`, and optional `attachments` as a list of hashes.
 
-`assistant` holds one model message. Fields: `id`, `content`, optional `reasoning`, `model`, `provider`, and `usage` with input tokens, output tokens, and cost.
+`assistant` holds one model message. Fields: `id`, `content`, optional `reasoning`, `model`, `provider`, and `usage` with input tokens, output tokens, cache-read, cache-write, and extended-cache-write tokens, and cost.
 
 `tool-call` holds one call the model requested. Fields: `id`, `call_id`, `name`, `arguments` as a JSON string, and `source` naming whether the tool is built in or comes from an extension.
 
@@ -61,7 +61,7 @@ The `v` field is per record, not per file. A file written across a format upgrad
 
 `extension-event` records a load, a disable, a trap, or a capability denial. Fields: `extension`, `event`, and `detail`.
 
-`compaction` marks a compaction. Fields: `replaced_from` and `replaced_to` as record identifiers, `summary` as the replacement content, and `strategy` naming the built-in compactor or the extension that ran.
+`compaction` marks a compaction. Fields: `replaced_from` and `replaced_to` as record identifiers, `summary` as the replacement content, `strategy` naming the extension that ran, and optional `usage` with the input, output, and cost of the summarization call when the strategy asked the model for one.
 
 `fork-point` appears in a forked session and names the parent session and the record identifier the fork was taken at.
 
@@ -109,7 +109,7 @@ A reader loads records until it hits one it cannot parse. It keeps everything be
 
 This matches the requirement already in the design: IF a session log contains a record that fails to parse, THEN the agent SHALL load the records before the failure and report a truncated session.
 
-A record with an unknown `t` value is skipped rather than treated as corrupt. This lets a newer agent write record types an older one ignores, which is what makes format version 1 extensible without a version bump for every addition.
+A record with an unknown `t` value is skipped rather than treated as corrupt. This lets a newer agent write record types an older one ignores, which is what makes format version 1 extensible without a version bump for every addition. A record with a known `t` but unknown fields is read with those fields ignored, so new data can join an existing record type without a version bump.
 
 A record with a `v` higher than the reader understands is skipped with a warning.
 

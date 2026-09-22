@@ -87,7 +87,7 @@ Not fully stopped. `net-local`'s consent text says plainly that the grant reache
 
 ### One extension reads another's tokens
 
-Stopped by namespace isolation. A credential namespace must equal the extension name, enforced at manifest validation. There is no cross-namespace read at any level, and the `fs` capability cannot reach the credential store because the store lives outside every scope.
+Stopped by namespace isolation. A credential namespace must equal the extension name, enforced at manifest validation. There is no cross-namespace read at any level, and the `fs` capability cannot reach the credential store because the store lives in the agent's own state directory, which the host excludes from every `fs` resolution.
 
 ### A malicious extension writes a backdoor into source
 
@@ -126,6 +126,12 @@ Injected text tells the model to read a secret and include it in a request to an
 Partly stopped. A built-in tool that makes network requests is subject to the permission layer, and a command with a URL shows the URL in the prompt. An extension-provided fetch tool is subject to the extension's own `net` allow list.
 
 Not stopped: an injected instruction to write a secret into a file the attacker can later read, in a repository the attacker has access to. Version control review is the defense.
+
+### A completion-holding extension is steered by injected content
+
+An extension holding `completion` and `process` or `fs` reads attacker-controlled content, a tool result or a file, feeds it to the active provider, and acts on the response, turning the model into an interpreter for injected instructions the user never sees.
+
+Partly stopped. Whatever the extension does with the response still passes through the capability boundary: `process` commands still hit the approval prompt, `net` calls are still allow-listed, and `fs` writes still show up in the user's version control diff. Not stopped: the extension using model output to choose which approved action to take, and a broad pre-approved command pattern turns that choice into real execution. This is the shape of access that made `completion` a meaningfully different capability in ADR-0015, and it is why the Phase 8 review gives `completion` specific attention. The mitigations are consent clarity on the `reason` string and the standing rule against broad pre-approved patterns.
 
 ### A malicious project file escalates permissions
 
@@ -177,7 +183,7 @@ Exfiltration to an approved host. A provider extension can send arbitrary data t
 
 Broad pre-approved command patterns. The grant store lets a user approve a pattern wide enough to cover anything. Interface friction is the only current defense.
 
-Broad `net-local` range grants. A CIDR grant reaches every device in that range, not only the one the user had in mind, on whatever network the user happens to be connected to at the time. Consent text names this; nothing narrows the grant below the range the user approved.
+Broad `net-local` range grants. A CIDR grant reaches every device in that range, not only the one the user had in mind, on whatever network the user happens to be connected to at the time, including a tailnet. Consent text names this; nothing narrows the grant below the range the user approved.
 
 No signature verification at first install. Digest pinning protects everything after the first resolution. Signing needs key distribution that 0.1 does not have. This is the most likely addition after 1.0.
 

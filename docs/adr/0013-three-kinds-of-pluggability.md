@@ -40,7 +40,7 @@ Every new feature proposal should be placed into one of the three categories exp
 | Read, write, shell tools | Build-time backend, native and web-delegated |
 | Skills-handling | Runtime extension, native-linked by default |
 | Compaction | Runtime extension, native-linked by default |
-| Context transforms | Runtime extension, none bundled by default |
+| Context transforms | Runtime extension; skills-handling is one and ships bundled, no others by default |
 | OpenAI-compatible provider | Runtime extension, native-linked by default |
 | Antigravity, Codex providers | Runtime extension, WASM only by default |
 | MCP-bridging, external tool wrapping | Runtime extension |

@@ -22,7 +22,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 |---|---|---|---|
 | 0001 | WebAssembly runtime selection | Proposed | Phase 0 |
 | 0002 | Crate decomposition | Accepted | Phase 1 |
-| 0003 | Declarative widget tree for extension rendering | Accepted | Phase 5 |
+| 0003 | Declarative widget tree for extension rendering | Accepted | Phase 6 |
 | 0004 | Typed event stream for the provider world | Accepted | Phase 3 |
 | 0005 | Named filesystem scopes | Accepted | Phase 2 |
 | 0006 | Split permission store | Accepted | Phase 1 |

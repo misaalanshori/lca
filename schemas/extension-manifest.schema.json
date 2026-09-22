@@ -94,8 +94,8 @@
   "$defs": {
     "hostPattern": {
       "type": "string",
-      "description": "An exact hostname, or a wildcard pattern with a leading '*.' matching one or more labels. A bare '*' is rejected.",
-      "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$",
+      "description": "An exact hostname, or a wildcard pattern with a leading '*.' matching one or more labels. A bare '*' is rejected. An optional ':port' suffix pins a non-default port; without one the grant is port 443 only. A wildcard pattern with a port is rejected at install time.",
+      "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}(:[0-9]{1,5})?$",
       "maxLength": 253
     },
     "fsMode": {
@@ -104,7 +104,7 @@
     },
     "netCapability": {
       "type": "object",
-      "description": "Outbound HTTPS to named hosts. Port 443 only. The extension never touches a socket. The host resolves every hostname and refuses a connection whose resolved address falls in a loopback or private-use range, even if the hostname pattern matched, to prevent DNS rebinding. See ADR-0011.",
+      "description": "Outbound HTTPS to named hosts, port 443 unless a pattern pins another port. The extension never touches a socket. The host resolves every hostname and refuses a connection whose resolved address falls in one of the local ranges the capability catalog lists, loopback, private-use, link-local, unique-local, carrier-grade NAT, even if the hostname pattern matched, to prevent DNS rebinding. See ADR-0011.",
       "required": ["hosts"],
       "additionalProperties": false,
       "properties": {
@@ -119,13 +119,13 @@
     },
     "localAddressPattern": {
       "type": "string",
-      "description": "A literal loopback or private-use IPv4/IPv6 address, a CIDR range within those blocks, or an mDNS-style '.local' hostname. Whether a given CIDR actually falls within the loopback or private-use blocks is a numeric range check the host performs at install time; this schema's pattern only constrains the lexical shape and cannot itself reject an out-of-range CIDR such as 8.8.8.0/24.",
-      "examples": ["127.0.0.1", "192.168.0.0/16", "10.0.0.0/8", "*.local"],
+      "description": "A literal loopback, private-use, link-local, unique-local, or carrier-grade NAT IPv4/IPv6 address, a CIDR range within those blocks, 'localhost', or an mDNS-style '.local' hostname. Whether a given CIDR actually falls within those blocks is a numeric range check the host performs at install time; this schema's pattern only constrains the lexical shape and cannot itself reject an out-of-range CIDR such as 8.8.8.0/24. IPv4-mapped IPv6 addresses are normalized to IPv4 before range checks.",
+      "examples": ["127.0.0.1", "192.168.0.0/16", "10.0.0.0/8", "100.64.0.0/10", "localhost", "*.local"],
       "maxLength": 64
     },
     "netLocalCapability": {
       "type": "object",
-      "description": "HTTP or HTTPS, any port, to loopback or private-network addresses. Separate from net because the risk shape, pattern syntax, and port/scheme rules differ. Reaches beyond the local machine to other devices on the network. See ADR-0011.",
+      "description": "HTTP or HTTPS, any port, to loopback, private-use, link-local, unique-local, or carrier-grade NAT (tailnet) addresses. Separate from net because the risk shape, pattern syntax, and port/scheme rules differ. Reaches beyond the local machine to other devices on the network and the tailnet. See ADR-0011.",
       "required": ["addresses"],
       "additionalProperties": false,
       "properties": {
@@ -140,7 +140,7 @@
     },
     "fsCapability": {
       "type": "object",
-      "description": "Access to named filesystem scopes. Scope names are validated against the host vocabulary rather than a fixed enum in the ABI, so new scopes are additive. Unknown names are rejected at install time with the list of names this host supports.",
+      "description": "Access to named filesystem scopes. Scope names are validated against the host vocabulary rather than a fixed enum in the ABI, so new scopes are additive. Unknown names are rejected at install time with the list of names this host supports. Resolution never reaches the agent's own state directory (sessions, extension tree, credential store).",
       "minProperties": 1,
       "additionalProperties": false,
       "properties": {

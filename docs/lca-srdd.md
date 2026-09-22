@@ -8,7 +8,7 @@ The project name in this document is LCA. The binary is `lca` and the crates use
 
 This document sets the requirements and the architecture. Eighteen decisions that support it are written up separately as architecture decision records under `docs/adr/`, numbered 0001 through 0018, covering runtime selection, crate decomposition, the widget tree, the provider stream shape, filesystem scopes, the permission store split, the decision against an out-of-process runner, extension composition, the extension update path, distribution beyond OCI, local network access, provider identity operations, the three kinds of pluggability, the async execution model, compaction and context transform, the pty capability, prompt cache preservation and measurement, and web-embedded extension hosting. Where this document and an ADR could drift, the ADR is the more current statement of the reasoning; this document is the more current statement of the requirement itself.
 
-Eleven further documents fill in detail this one only summarizes: the capability catalog at `docs/capabilities.md`, the extension authoring guide at `docs/extension-authoring.md`, the ABI versioning policy at `docs/abi-versioning.md`, the session log format at `docs/session-log-format.md`, the runtime flows as diagrams at `docs/flows.md`, the threat model at `docs/threat-model.md`, the release and versioning policy at `docs/release-policy.md`, the software testing plan at `docs/testing-plan.md`, per-platform implementation notes at `docs/platform-notes.md`, a glossary of project-specific terminology at `docs/glossary.md`, and the provenance of what this design takes from Pi and fx at `docs/inspiration.md`. First-party provider extensions are documented individually under `docs/providers/`. The extension manifest schema is at `schemas/extension-manifest.schema.json` and is the normative validation source; the manifest examples in this document are illustrative.
+Thirteen further documents fill in detail this one only summarizes: the capability catalog at `docs/capabilities.md`, the extension authoring guide at `docs/extension-authoring.md`, the ABI versioning policy at `docs/abi-versioning.md`, the session log format at `docs/session-log-format.md`, the runtime flows as diagrams at `docs/flows.md`, the threat model at `docs/threat-model.md`, the release and versioning policy at `docs/release-policy.md`, the software testing plan at `docs/testing-plan.md`, per-platform implementation notes at `docs/platform-notes.md`, the configuration key reference at `docs/configuration.md`, the headless and scripting contract at `docs/headless.md`, a glossary of project-specific terminology at `docs/glossary.md`, and the provenance of what this design takes from Pi and fx at `docs/inspiration.md`. First-party provider extensions are documented individually under `docs/providers/`. The extension manifest schema is at `schemas/extension-manifest.schema.json` and is the normative validation source; the manifest examples in this document are illustrative.
 
 ## What this is
 
@@ -70,7 +70,7 @@ The repository is one Cargo workspace. Each crate has one job and depends downwa
 
 `lca-protocol` holds the shared data types: messages, tool calls, tool results, stream events, session records. Every other crate speaks these types. It has no I/O.
 
-`lca-session` owns session storage, the append-only log, forking, resume, export, and compaction. It depends on `lca-protocol`.
+`lca-session` owns session storage, the append-only log, forking, resume, export, and the durable compaction records. It depends on `lca-protocol`.
 
 `lca-tools` implements the built-in tools. It depends on `lca-protocol` and on the permission interface from `lca-permissions`.
 
@@ -90,6 +90,8 @@ First-party extensions, including the default OpenAI-compatible provider and ski
 
 `lca-tui` is the terminal renderer, the widget model, the input editor, and the event loop.
 
+`lca-core` holds the agent loop, the dispatch table, and the compaction and context-transform dispatch. It sits above the domain and platform crates, and only `lca-sdk` and `lca-cli` depend on it.
+
 `lca-sdk` is the embedding API for host applications, native and WASM.
 
 `lca-testkit` holds the fake provider, the test harness, and shared fixtures. It is a dev dependency everywhere.
@@ -102,13 +104,15 @@ First-party extensions, including the default OpenAI-compatible provider and ski
 
 The loop is small enough to describe in a paragraph. The user submits input. The session appends a user message. The core asks the active provider to stream a completion. Stream events arrive and update the render state. When the model asks for a tool call, the core resolves the tool by name, checks permissions, runs it, appends the result, and continues the turn. When the model stops without a tool call, the turn ends. Hooks fire at defined points around each step.
 
-Hook points are: before a turn starts, before a tool call runs, after a tool call returns, after a turn ends, when the agent needs user attention, and when the session is about to close. Each hook can observe, and the pre-tool hook can also deny or rewrite a call.
+Hook points are `pre-turn`, `pre-tool-use`, `post-tool-use`, `post-turn-end`, `attention-required`, and `session-close`: before a turn starts, before a tool call runs, after a tool call returns, after a turn ends, when the agent needs user attention, and when the session is about to close. Each hook can observe, and the pre-tool hook can also deny or rewrite a call; a rewritten call passes through the permission layer like any other call and is not fed back through the hooks.
 
 ### Extension model
 
 An extension implements one or more WIT worlds. The worlds are `provider`, `tool`, `command`, `hooks`, `ui`, `compaction`, and `context-transform`. A single extension may implement several. A provider extension that also adds a slash command and a tool is normal; a compaction extension typically also implements `command`, for a manual trigger, which needs no special mechanism since worlds already compose freely.
 
 Both delivery modes produce the same runtime behavior through one dispatch interface. The core holds a list of extension handles. A handle is either a native handle that calls a Rust trait object directly, or a WASM handle that calls into a component instance through generated bindings. Call sites in the core do not branch on the mode.
+
+Tool and command names each form one namespace. Built-in names are reserved. Where an extension collides with a built-in name or with a name an already-enabled extension registered, the earlier or built-in registration wins, the later one is disabled for the session, and the collision is reported (FR-EXT-11).
 
 Native mode is for first-party extensions that ship with the binary. It has no marshaling cost and no sandbox. Because it has no sandbox, the agent labels native extensions as unsandboxed in the extension list, and the manifest capability display says so plainly. A native extension still calls only through the WIT-defined interface. This rule is a code review rule, not a compiler rule, and it keeps the two modes interchangeable.
 
@@ -128,11 +132,11 @@ The web build does not nest one WASM engine inside another. A JavaScript host al
 
 Capabilities are named grants attached to an extension instance. The first release defines these:
 
-`net` grants outbound HTTPS to a list of host patterns. The extension calls a host import, not a socket. The host checks the target against the granted patterns, resolves the hostname, and refuses to connect if the resolved address falls in a loopback or private-use range even when the pattern matched, to prevent DNS rebinding from reaching a local address under cover of an ordinary-looking public hostname. See ADR-0011. A manifest cannot declare a bare wildcard covering every host; a provider whose actual host isn't known until the user configures it, such as one speaking to an arbitrary OpenAI-compatible endpoint, gets that specific host added as an ad hoc grant at the point of configuration instead, the same mechanism `fs` uses beyond its own fixed vocabulary. See ADR-0005 and the capability catalog.
+`net` grants outbound HTTPS to a list of host patterns, each of which may pin a non-default port. The extension calls a host import, not a socket. The host checks the target against the granted patterns, resolves the hostname, and refuses to connect if the resolved address falls in a loopback, private-use, link-local, unique-local, or carrier-grade NAT range even when the pattern matched, to prevent DNS rebinding from reaching a local address under cover of an ordinary-looking public hostname; the canonical range list is in `docs/capabilities.md`. See ADR-0011. A manifest cannot declare a bare wildcard covering every host; a provider whose actual host isn't known until the user configures it, such as one speaking to an arbitrary OpenAI-compatible endpoint, gets that specific host added as an ad hoc grant at the point of configuration instead, the same mechanism `fs` uses beyond its own fixed vocabulary. See ADR-0005 and the capability catalog.
 
-`net-local` grants HTTP or HTTPS, any port, to a loopback address, a private-use address range, or an mDNS `.local` hostname. Separate from `net` because the risk shape, the port and scheme rules, and the pattern syntax all differ, and because it reaches other devices on the user's network, not only the machine the agent runs on. See ADR-0011 and the capability catalog.
+`net-local` grants HTTP or HTTPS, any port, to `localhost` or a loopback address, a private-use, link-local, unique-local, or carrier-grade NAT (tailnet) range, or an mDNS `.local` hostname. Separate from `net` because the risk shape, the port and scheme rules, and the pattern syntax all differ, and because it reaches other devices on the user's network, not only the machine the agent runs on. See ADR-0011 and the capability catalog.
 
-`fs` grants read or write access to one or more named scopes: `workspace`, `private`, `home-config`, or `temp`. The manifest names a scope and a mode; it never carries a path. The host resolves each name to a real path and passes a preopened directory handle, and it refuses any resolution that leaves the scope, including through a parent traversal or a symbolic link. A user can attach an additional ad hoc path grant outside the vocabulary at install time or later; the manifest cannot request one. See the capability catalog and ADR-0005 for the full scope table and the reasoning against a two-scope design.
+`fs` grants read or write access to one or more named scopes: `workspace`, `private`, `home-config`, or `temp`. The manifest names a scope and a mode; it never carries a path. The host resolves each name to a real path and passes a preopened directory handle, and it refuses any resolution that leaves the scope, including through a parent traversal or a symbolic link. The host also refuses any resolution that enters the agent's own state directory, where sessions, the extension tree, and the credential store live, under every scope and every ad hoc grant; this is what keeps credential isolation true even on platforms whose configuration directory also holds application data. A user can attach an additional ad hoc path grant outside the vocabulary at install time or later; the manifest cannot request one. See the capability catalog and ADR-0005 for the full scope table and the reasoning against a two-scope design.
 
 `oauth` grants the loopback authorization flow. The extension asks the host to start a listener and gets back a redirect URL. The host runs the listener, receives the callback, and returns the parsed parameters. The extension never binds a port.
 
@@ -160,11 +164,11 @@ Sessions live under the user data directory, grouped by project path hash. Each 
 
 Append-only storage makes fork and resume cheap, and makes corruption recoverable. The agent never rewrites a record in place. Compaction writes a marker and a summary record, and leaves the original records on disk. The full record schema, the framing rules, and the recovery behavior for a truncated file are specified in `docs/session-log-format.md`.
 
-Installed extensions live under the same user data directory, in a separate tree keyed by extension name. Each entry holds the component bytes named by their content digest, the parsed manifest, and the approved capability set. A single lockfile at the top of that tree records, per extension, the resolved digest, the source reference it was resolved from, and the hash of the approved capability set that `lca ext update` compares against before it prompts. This is the state `lca-registry` reads and writes; it is distinct from the session log and from the permission store described below.
+Installed extensions live under the same user data directory, in a separate tree keyed by extension name. Each entry holds the component bytes named by their content digest, the parsed manifest, and the approved capability set. A single lockfile at the top of that tree records, per extension, the resolved digest, the source reference it was resolved from, and the hash of the approved capability set that `lca ext update` compares against before it prompts. This is the state `lca-registry` reads and writes; it is distinct from the session log and from the permission store described below. The hash covers the manifest-declared grant set only; ad hoc grants live in the user grant store and persist across updates.
 
 ### Terminal rendering
 
-The TUI does not let extensions write escape sequences. An extension returns a widget tree built from a small vocabulary: text spans with semantic color roles, boxes, rows, columns, a spinner, and a progress indicator. The host lays out and draws the tree.
+The TUI does not let extensions write escape sequences. An extension returns a widget tree built from a small vocabulary: text spans with semantic color roles, images, boxes, rows, columns, a spinner, a progress bar, and a key-value list. The host lays out and draws the tree. An image widget carries a media type and image bytes; the host persists anything large as a session attachment and records the reference.
 
 This costs flexibility. It buys two things. Extensions cannot inject escape sequences to spoof output or hide text. The renderer can change without breaking extensions.
 
@@ -172,7 +176,7 @@ This costs flexibility. It buys two things. Extensions cannot inject escape sequ
 
 ### Extension ABI
 
-The ABI is a WIT package, `lca:ext`, versioned with semver. The package is published as an OCI artifact and as a crate. Below is the shape of each world. The final `.wit` files live in `wit/` and are the normative source.
+The ABI is a WIT package, `lca:ext`, versioned with semver. The package is published as an OCI artifact and as a crate. Below is the shape of each world. The final `.wit` files live in `wit/` and are the normative source. Every record type that crosses the boundary, messages, usage, tool calls, and tool results, carries a reserved `extras` map of string pairs, so non-structural data can be added without breaking the ABI.
 
 The `tool` world exports a schema function and an execute function. Schema returns a name, a description, and a JSON schema for the parameters. Execute takes a call and returns a result that carries text, structured content, or an error.
 
@@ -180,13 +184,13 @@ The `command` world exports a spec function and an invoke function. Spec returns
 
 The `hooks` world exports one function per hook point. The pre-tool hook returns an action: allow, deny with a reason, or replace the call.
 
-The `provider` world exports model listing, a completion call that returns a stream resource, the authentication functions, and `login`, `logout`, and `usage`, each optional and each returning a defined not-supported result when a provider has none. Promoting these three to world-level exports, rather than leaving them as ad hoc commands each author names differently, is what lets the host build a generic `/login` picker across every installed provider and a `/usage` that follows whichever one is active, alongside an automatically namespaced per-provider form such as `/antigravity.usage`. See ADR-0012. The completion call carries, alongside the message list, a count of leading messages the host considers the stable, cacheable prefix, computed from the most recent compaction record; a provider extension uses this to place a vendor-specific cache marker where one exists, and ignores it safely where one doesn't. See ADR-0017. Streaming uses a resource with a blocking read that returns the next event or end of stream. The host drives it from an async task. The `usage` stream event carries `cache_read`, `cache_write`, and `cache_write_1h` token counts alongside the ordinary input and output counts, since cache accounting is what makes the cache behavior testing in `docs/testing-plan.md` possible at all.
+The `provider` world exports model listing, a completion call that returns a stream resource, the authentication functions, and `login`, `logout`, and `usage`, each always exported and each returning a defined not-supported result when a provider has none. Promoting these three to world-level exports, rather than leaving them as ad hoc commands each author names differently, is what lets the host build a generic `/login` picker across every installed provider and a `/usage` that follows whichever one is active, alongside an automatically namespaced per-provider form such as `/antigravity.usage`. See ADR-0012. The completion call carries, alongside the message list, a count of leading messages the host considers the stable, cacheable prefix, computed from the most recent compaction record; a provider extension uses this to place a vendor-specific cache marker where one exists, and ignores it safely where one doesn't. See ADR-0017. Streaming uses a resource with a read function that returns the next event or end of stream; the host drives it from an async task without dedicating an operating system thread to a call, and the Phase 0 spike validates the polling shape. The `usage` stream event carries `cache_read`, `cache_write`, and `cache_write_1h` token counts alongside the ordinary input and output counts, and the turn's cost, since cache accounting is what makes the cache behavior testing in `docs/testing-plan.md` possible at all.
 
 The `ui` world exports a render function that returns a widget tree for a named region, and an event handler that takes a user interaction and returns an effect.
 
 The `compaction` world exports a single function that takes a candidate range of session records and returns a summary. The host calls it when configured usage crosses a threshold or the user runs a manual compact command, and writes the result as a durable record in the session log; every later read reuses it without recomputing anything. This is also where the cache boundary described above resets. See ADR-0015 and ADR-0017.
 
-The `context-transform` world exports a single function that takes the resolved message list about to be sent to the model and returns either a transformed list or a rejection. The host chains every enabled transform extension in order on every turn; nothing it returns is written to the session log. A rejection ends the turn with that reason surfaced, the same shape a hook denial uses. Where a transform's output differs from its input inside the stable cache boundary, the host narrows the boundary it reports to the provider for that turn and records the divergence as an extension event rather than rejecting the turn. See ADR-0015 and ADR-0017.
+The `context-transform` world exports a single function that takes the resolved message list about to be sent to the model and returns either a transformed list or a rejection. The host chains every enabled transform extension in order on every turn; nothing it returns is written to the session log. A rejection ends the turn with that reason surfaced, the same shape a hook denial uses. Where a turn's post-transform content inside the stable cache boundary differs from what was sent to the provider on the previous turn, the host narrows the boundary it reports for that turn to end before the earliest differing message, records the divergence as an extension event, and does not reject the turn; a transform whose output has settled narrows nothing further. See ADR-0015 and ADR-0017.
 
 Host imports are grouped by capability and match the capability names above: `lca:host/net`, `lca:host/net-local`, `lca:host/fs`, `lca:host/oauth`, `lca:host/credentials`, `lca:host/ui`, `lca:host/process`, `lca:host/pty`, `lca:host/completion`, plus `lca:host/log` which is always granted.
 
@@ -228,13 +232,13 @@ addresses = ["127.0.0.1", "192.168.0.0/16", "*.local"]
 
 ### Command line
 
-`lca` with no arguments opens the interactive TUI in the current directory. `lca -p "prompt"` runs one turn headless and prints the result. `lca resume` lists sessions and reopens one. `lca ext list`, `lca ext install <ref>`, `lca ext update <name>`, `lca ext remove <name>`, and `lca ext info <name>` manage extensions. `lca ext update --all` updates every installed extension. `lca config` prints the merged configuration and its sources. `lca --version` prints the version, the ABI version, and the build target.
+`lca` with no arguments opens the interactive TUI in the current directory. `lca -p "prompt"` runs one turn headless and prints the result. `lca resume` lists sessions and reopens one. `lca fork <session> <message>`, `lca rename <session> <title>`, and `lca export <session> [--audit]` fork at a message, rename, and export a session. `lca ext list`, `lca ext install <ref>`, `lca ext update <name>`, `lca ext remove <name>`, and `lca ext info <name>` manage extensions. `lca ext update --all` updates every installed extension. `lca config` prints the merged configuration and its sources. `lca --version` prints the agent version, the ABI version, the crate version, and the build target.
 
-Headless mode supports `--json` for machine-readable output: one JSON object per line, each with a type field.
+Headless mode supports `--json` for machine-readable output: one JSON object per line, each with a type field. The envelope shape and the exit-code table are in `docs/headless.md`.
 
 ### Configuration
 
-Configuration is TOML. Sources merge in this precedence order, highest first: command line flags, environment variables, the project file at `.lca/config.toml`, the user file in the platform config directory, and built-in defaults.
+Configuration is TOML. Sources merge in this precedence order, highest first: command line flags, environment variables, the project file at `.lca/config.toml`, the user file in the platform config directory, and built-in defaults. The key reference, with types, defaults, and environment-variable names, is in `docs/configuration.md`.
 
 The project file is trusted only after the user marks the project as trusted. An untrusted project file cannot enable extensions or change permission defaults.
 
@@ -246,7 +250,7 @@ For JavaScript hosts, the build produces an ES module through jco transpilation.
 
 ### User interface
 
-The interactive screen has four regions. The scrollback shows the conversation. The active area shows the streaming response and running tool calls. The status line shows the model, the context use, the session cost, and any extension-provided segments. The input editor sits at the bottom with multi-line support, history, file path completion, and slash command completion.
+The interactive screen has four regions. The scrollback shows the conversation. The active area shows the streaming response and running tool calls. The status line shows the model, the context use, the session cost, and any extension-provided segments. The input editor sits at the bottom with multi-line support, history, file path completion, and slash command completion. Built-in slash commands are `/login`, `/logout`, `/usage`, `/model`, `/compact`, and `/stats`; an extension's own commands are namespaced under its extension name, and the provider identity commands also appear there automatically.
 
 Keyboard control follows terminal conventions. Enter submits. Shift+Enter inserts a newline. Ctrl+C cancels the running turn and does not exit. A second Ctrl+C on an idle prompt exits. Escape closes a modal or clears the input.
 
@@ -272,7 +276,11 @@ FR-CORE-6. IF a provider call fails with a retryable transport error, THEN the a
 
 FR-CORE-7. IF a provider call fails after the retry limit, THEN the agent SHALL show the error, keep the session open, and return control to the user.
 
-FR-CORE-8. The agent SHALL record the token count and the cost of each turn, including cache-read and cache-write token counts separately from ordinary input and output tokens when the active provider reports them.
+FR-CORE-8. The agent SHALL record the token count and the cost of each turn, including cache-read, cache-write, and extended-cache-write token counts separately from ordinary input and output tokens when the active provider reports them.
+
+FR-CORE-9. IF a turn exceeds the configured maximum tool-call iteration count, THEN the agent SHALL end the turn with an iteration-limit error and return control to the user.
+
+FR-CORE-10. The pre-tool hook SHALL run before the permission check, and a hook denial SHALL end the call without a user prompt.
 
 ### Session management
 
@@ -288,11 +296,13 @@ FR-SESS-5. The agent SHALL perform compaction exclusively through a `compaction`
 
 FR-SESS-6. IF a session log contains a record that fails to parse, THEN the agent SHALL load the records before the failure and report a truncated session.
 
+FR-SESS-7. WHEN the user runs the export command, the agent SHALL produce the export specified in `docs/session-log-format.md`, including redaction and the stripping of `permission` and `extension-event` records unless an audit flag is passed.
+
 ### Compaction and context transformation
 
 FR-CTX-1. The agent SHALL write a `compaction` extension's result as a durable session record and SHALL reuse it on later reads without invoking the extension again until usage next crosses the threshold.
 
-FR-CTX-2. The agent SHALL apply every enabled `context-transform` extension to the resolved message list, in a defined order, before every provider call.
+FR-CTX-2. The agent SHALL apply every enabled `context-transform` extension to the resolved message list, in installation order, before every provider call.
 
 FR-CTX-3. IF a `context-transform` extension returns a rejection, THEN the agent SHALL end the turn and surface the rejection reason without calling the provider.
 
@@ -310,7 +320,7 @@ FR-CACHE-4. WHERE a provider has never reported cache activity within a scan, th
 
 FR-CACHE-5. The agent SHALL pass the current stable-prefix boundary, computed from the most recent compaction record, to the active provider extension on every completion call.
 
-FR-CACHE-6. IF a `context-transform` extension's output differs from its input within the stable-prefix boundary, THEN the agent SHALL narrow the boundary reported for that turn and SHALL record the divergence as an extension event rather than rejecting the turn.
+FR-CACHE-6. IF the post-transform content within the stable-prefix boundary differs from what was sent to the provider on the previous turn, THEN the agent SHALL narrow the boundary reported for that turn to end before the earliest differing message and SHALL record the divergence as an extension event rather than rejecting the turn.
 
 ### Tools
 
@@ -322,7 +332,7 @@ FR-TOOL-3. WHEN a tool call targets a path outside the workspace root, the agent
 
 FR-TOOL-4. WHILE a shell command runs, the agent SHALL stream its output to the interface.
 
-FR-TOOL-5. IF a shell command exceeds its timeout, THEN the agent SHALL stop the child process and return a timeout error.
+FR-TOOL-5. IF a shell command exceeds its timeout, THEN the agent SHALL stop the command's process tree and return a timeout error.
 
 FR-TOOL-6. WHERE the host operating system is Windows, the agent SHALL run shell calls through the platform shell.
 
@@ -344,7 +354,13 @@ FR-EXT-6. WHERE an extension is compiled into the binary, the agent SHALL regist
 
 FR-EXT-7. The agent SHALL show whether each extension runs sandboxed or in-process in the extension list.
 
-FR-EXT-8. IF an extension declares an ABI version outside the host's supported window at load time, THEN the agent SHALL disable that extension for the session, report whether a compatible version exists in the registry, and continue the session rather than fail to start.
+FR-EXT-8. IF an extension declares an ABI version outside the host's supported window at load time, THEN the agent SHALL disable that extension for the session, report, on a best-effort non-blocking check, whether a compatible version exists in the registry, and continue the session rather than fail to start.
+
+FR-EXT-9. WHEN the user inspects an extension, the agent SHALL show the denial count recorded for it.
+
+FR-EXT-10. IF an extension log message exceeds the configured limit, THEN the host SHALL truncate it before writing it to diagnostic output.
+
+FR-EXT-11. IF an extension registers a tool or command name that collides with a built-in name or with a name an already-enabled extension registered, THEN the agent SHALL keep the earlier or built-in registration, disable the later one for the session, and report the collision.
 
 ### Capabilities and permissions
 
@@ -354,7 +370,7 @@ FR-PERM-2. WHEN the user installs an extension, the agent SHALL show the declare
 
 FR-PERM-3. IF an extension calls a host import for a capability that its manifest does not declare, THEN the host SHALL return a permission error and record the attempt.
 
-FR-PERM-4. WHEN an extension makes an outbound request, the host SHALL compare the target host against the granted patterns.
+FR-PERM-4. WHEN an extension makes an outbound request, the host SHALL compare the target host and port against the granted patterns.
 
 FR-PERM-5. IF the target host does not match a granted pattern, THEN the host SHALL deny the request and record the denial.
 
@@ -372,13 +388,19 @@ FR-PERM-11. The agent SHALL NOT enforce a grant that exists only in the project 
 
 FR-PERM-12. IF a guest path resolution under the `fs` capability leaves its granted scope, THEN the host SHALL refuse the operation and record the attempt.
 
-FR-PERM-13. IF a hostname granted under the `net` capability resolves to a loopback or private-use address, THEN the host SHALL refuse the connection and record the attempt as a rebinding case, distinct from an ordinary denial.
+FR-PERM-13. IF a hostname granted under the `net` capability resolves to an address in one of the local ranges the capability catalog lists for `net-local`, THEN the host SHALL refuse the connection and record the attempt as a rebinding case, distinct from an ordinary denial.
 
-FR-PERM-14. IF a manifest declares a `net-local` address outside the loopback and private-use ranges, THEN the agent SHALL reject the manifest at install time.
+FR-PERM-14. IF a manifest declares a `net-local` address outside the local ranges the capability catalog lists, THEN the agent SHALL reject the manifest at install time.
 
 FR-PERM-15. IF a manifest declares a bare wildcard covering every host under `net`, THEN the agent SHALL reject the manifest at install time.
 
 FR-PERM-16. WHERE a grant beyond the `fs` or `net` fixed vocabulary is genuinely needed, the agent SHALL allow the user to attach it as an ad hoc grant, at install time or later, with consent text naming the specific path or host being added rather than the manifest requesting it.
+
+FR-PERM-17. The host SHALL normalize IPv4-mapped IPv6 addresses before any range check under `net` or `net-local`.
+
+FR-PERM-18. WHEN the user attaches an ad hoc grant during a session, the agent SHALL honor it for subsequent calls in that session without requiring a restart.
+
+FR-PERM-19. The agent SHALL store project trust state, per-project extension enablement, and ad hoc grants in the user grant store, keyed by the canonical path of the current project.
 
 ### Providers
 
@@ -415,6 +437,8 @@ FR-UI-3. WHEN the terminal is resized, the agent SHALL re-render the layout with
 FR-UI-4. WHILE the agent waits for user approval, the agent SHALL show the exact command or path that triggered the prompt.
 
 FR-UI-5. WHERE the terminal does not support color, the agent SHALL render with plain text only.
+
+FR-UI-6. An extension SHALL NOT open a modal during a running turn unless the user invoked it.
 
 ### Distribution and installation
 
@@ -458,11 +482,13 @@ FR-CFG-1. The agent SHALL merge configuration from flags, environment, project f
 
 FR-CFG-2. WHEN the user runs the config command, the agent SHALL print each resolved value and the source that set it.
 
-FR-CFG-3. The agent SHALL NOT send telemetry by default.
+FR-CFG-3. The agent SHALL NOT send telemetry. Telemetry is out of scope for 1.0.
 
-FR-CFG-4. WHERE telemetry is enabled, the agent SHALL send counters and error classes only, and SHALL NOT send prompt text, file content, or file paths.
+FR-CFG-4. WHERE telemetry is added after 1.0, the agent SHALL make it opt-in and SHALL send counters and error classes only, and SHALL NOT send prompt text, file content, or file paths.
 
 FR-CFG-5. The agent SHALL NOT write credentials to the session log.
+
+FR-CFG-6. WHILE running interactively, the agent SHALL check for a newer version at most once per day and SHALL NOT block startup on the check; headless mode SHALL make no such request unless the user enables it.
 
 ## Non-functional requirements
 
@@ -526,9 +552,9 @@ NFR-24. Every fixed defect that reached a release SHALL get a regression test na
 
 NFR-25. The extension ABI SHALL have a conformance test extension that exercises every host import and every exported function.
 
-NFR-30. Every functional and non-functional requirement in this document SHALL be referenced by at least one test, verified by an automated check run on every pull request.
+NFR-30. Every functional and non-functional requirement in this document SHALL be referenced by at least one test, verified by an automated check run on every pull request; the check is advisory before Phase 8 and a required pipeline gate from Phase 8.
 
-NFR-31. A canonical twenty-turn scripted session with no compaction and no provider change SHALL maintain a cache-hit ratio, measured from turn two onward, above a threshold checked in the same pipeline gate as the binary-size and cold-start measurements.
+NFR-31. A canonical twenty-turn scripted session with no compaction and no provider change SHALL maintain a cache-hit ratio, measured from turn two onward, above a threshold fixed at the Phase 3 exit test and checked in the same pipeline gate as the binary-size and cold-start measurements.
 
 ### Accessibility and usability
 
@@ -590,7 +616,7 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── lca-cli/                the binary
 │   ├── lca-core/               agent loop and dispatch
 │   ├── lca-protocol/           shared types
-│   ├── lca-session/            storage, fork, resume; compaction and transform dispatch live in lca-core
+│   ├── lca-session/            storage, fork, resume, compaction records; compaction and transform dispatch live in lca-core
 │   ├── lca-tools/              built-in tools, behind a swappable backend trait; see ADR-0013
 │   ├── lca-permissions/        grants, prompts, approval store
 │   ├── lca-provider/           provider trait and stream types
@@ -617,7 +643,7 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   └── examples/
 ├── xtask/                      build, size check, release packaging
 ├── docs/
-│   ├── adr/                    architecture decision records, 0001 through 0016
+│   ├── adr/                    architecture decision records, 0001 through 0018
 │   ├── capabilities.md         the capability catalog
 │   ├── extension-authoring.md
 │   ├── abi-versioning.md
@@ -625,6 +651,8 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── flows.md                sequence diagrams for the runtime paths
 │   ├── threat-model.md
 │   ├── release-policy.md
+│   ├── configuration.md        configuration keys, defaults, and merge sources
+│   ├── headless.md             headless output envelope and exit codes
 │   ├── testing-plan.md         the software testing plan
 │   ├── platform-notes.md
 │   ├── glossary.md
@@ -781,7 +809,7 @@ Exit test: a browser page runs a session with one extension loaded, and the same
 
 Six weeks. Nothing new ships in this phase.
 
-Fill the test gaps. Turn on the requirements-traceability check from NFR-30 as a required pipeline gate, not just an advisory report, once the backlog of untagged tests from earlier phases is cleared. Run the fuzz targets long enough to matter. Complete the documentation set in `docs/`, including every provider profile under `docs/providers/`. Write the ABI versioning policy and freeze `lca:ext` at 1.0, closing out the punch list named in `docs/abi-versioning.md`. Set up reproducible builds and artifact checksums. Run an external review of the capability enforcement code, with particular attention to the `net`/`net-local` boundary and the `completion` capability, both added later in the plan than the rest of the capability set.
+Fill the test gaps. Turn on the requirements-traceability check from NFR-30 as a required pipeline gate, not just an advisory report, once the backlog of untagged tests from earlier phases is cleared. Run the fuzz targets long enough to matter. Complete the documentation set in `docs/`, including every provider profile under `docs/providers/`. Finalize the ABI versioning policy and freeze `lca:ext` at 1.0, closing out the punch list named in `docs/abi-versioning.md`. Set up reproducible builds and artifact checksums. Run an external review of the capability enforcement code, with particular attention to the `net`/`net-local` boundary and the `completion` capability, both added later in the plan than the rest of the capability set.
 
 Exit test: the ABI is frozen at 1.0, the pipeline publishes signed and checksummed artifacts for all six native targets, the requirements-traceability check passes with zero untagged requirements, and the security review has no open findings above low severity.
 

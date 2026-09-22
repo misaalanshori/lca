@@ -27,7 +27,7 @@ redirect_path = "/callback"
 namespace = "antigravity"
 ```
 
-Every capability here is load-bearing and narrow: `net` names the specific Google API hosts this provider talks to, not a wildcard; `oauth` is required by the login flow; `credentials` stores exactly this provider's own tokens, unreadable by anything else, per the namespace isolation rule in the capability catalog.
+Every capability here is load-bearing: `net` names Google's API surface, one exact host plus one subdomain wildcard the API genuinely spans across model and media endpoints — a deliberate wildcard, called out here since the authoring guide asks for exact names wherever possible; `oauth` is required by the login flow; `credentials` stores exactly this provider's own tokens, unreadable by anything else, per the namespace isolation rule in the capability catalog.
 
 ## vendor-event usage
 

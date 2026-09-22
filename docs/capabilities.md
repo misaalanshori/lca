@@ -8,7 +8,7 @@ This is the reference for every capability an extension can hold. It covers what
 
 A capability is a named grant attached to an extension instance. The manifest declares what the extension needs. The user approves at install time. The host resolves the approved set into an import table when it instantiates the component.
 
-Resolution happens once, at instantiation. An extension cannot gain a capability during a session. It can lose one, because the user can revoke a grant, and revocation takes effect at the next instantiation.
+The declared set resolves once, at instantiation. An extension cannot declare new capabilities during a session. It can gain an ad hoc grant during a session, one specific host or path the user attaches through extension settings or a login flow, and that grant takes effect for subsequent calls without re-instantiation (FR-PERM-18). It can lose a grant, because the user can revoke one; revocation takes effect at the next instantiation, and calls already in flight finish.
 
 The model is deny by default. A capability that is not granted is not in the import table. A component that calls a missing import traps at link time rather than at call time, which means a mismatch between a manifest and its code fails loudly on the first load instead of silently at an unlucky moment.
 
@@ -30,22 +30,22 @@ The host truncates a message longer than the configured limit. There is no rate 
 
 ### net
 
-Grants outbound HTTPS to a list of host patterns. The extension never touches a socket.
+Grants outbound HTTPS to a list of host patterns, each optionally pinning a port. The extension never touches a socket.
 
 ```toml
 [capabilities.net]
-hosts = ["api.example.com", "*.example-cdn.com"]
+hosts = ["api.example.com", "build.example.com:8443", "*.example-cdn.com"]
 ```
 
 Import interface: `lca:host/net`. A request function taking a method, a URL, headers, and an optional body, returning a response resource with a streaming body reader.
 
-Pattern rules: an exact hostname matches only itself. A leading `*.` matches one or more labels in that position, so `*.example.com` matches `api.example.com` and `a.b.example.com` but not `example.com`. A bare `*` is rejected at manifest validation. Ports are not part of a pattern; the host permits 443 only.
+Pattern rules: an exact hostname matches only itself. A leading `*.` matches one or more labels in that position, so `*.example.com` matches `api.example.com` and `a.b.example.com` but not `example.com`. A bare `*` is rejected at manifest validation. A pattern may pin a port, written `host:port`; a pattern without one grants port 443 only, and HTTPS on any other port needs the pin. A wildcard pattern with a port is rejected at manifest validation, since a wildcard is already the broadest claim in the vocabulary and a port pin is only meaningful on a named host.
 
 HTTPS only. Plain HTTP is refused, including on loopback. Certificate verification is done by the host and cannot be disabled by the extension.
 
-Consent text names every pattern: "Connect to api.example.com and any subdomain of example-cdn.com."
+Consent text names every pattern and any pinned port: "Connect to api.example.com and any subdomain of example-cdn.com." "Connect to build.example.com on port 8443."
 
-The host resolves every hostname before connecting and checks the resolved address, not just the pattern that matched, against the loopback and private-use ranges. A hostname that matches a granted pattern but resolves to one of those ranges is refused and recorded as a rebinding attempt specifically, distinct from an ordinary denial, because it can indicate DNS manipulation rather than a simple misconfiguration. An extension that legitimately needs a local address declares `net-local` instead; see ADR-0011 for the full reasoning. `net` never connects to a loopback or private-use address, regardless of what pattern was granted.
+The host resolves every hostname before connecting and checks the resolved address, not just the pattern that matched, against the canonical local ranges listed under `net-local` below. A hostname that matches a granted pattern but resolves to one of those ranges is refused and recorded as a rebinding attempt specifically, distinct from an ordinary denial, because it can indicate DNS manipulation rather than a simple misconfiguration. An extension that legitimately needs a local address declares `net-local` instead; see ADR-0011 for the full reasoning. `net` never connects to an address in the canonical local ranges, regardless of what pattern was granted.
 
 On denial: the request function returns a permission error naming the host that was refused. The extension can handle it. The denial is recorded.
 
@@ -53,20 +53,22 @@ A manifest cannot declare a wildcard covering every host; a bare `*` is rejected
 
 ### net-local
 
-Grants HTTP or HTTPS, any port, to a loopback address, to a private-use address range, or to an mDNS-style `.local` hostname. Separate from `net` because the risk shape, the pattern syntax, and the port and scheme rules all differ; see ADR-0011.
+Grants HTTP or HTTPS, any port, to `localhost` or a loopback address, to a private-use, link-local, unique-local, or carrier-grade NAT range, or to an mDNS-style `.local` hostname. Separate from `net` because the risk shape, the pattern syntax, and the port and scheme rules all differ; see ADR-0011.
 
 ```toml
 [capabilities.net-local]
-addresses = ["127.0.0.1", "192.168.0.0/16", "*.local"]
+addresses = ["127.0.0.1", "192.168.0.0/16", "100.64.0.0/10", "*.local"]
 ```
 
-Import interface: the same `lca:host/net` request function `net` uses, dispatched against the `net-local` grant when the target address falls in a loopback or private-use range and no `net` grant would otherwise cover it.
+Import interface: the same `lca:host/net` request function `net` uses. Dispatch between the two grants is stated once here and applies everywhere: if the request's host matches a `net` pattern, `net` rules govern the call, and a local resolved address is refused as a rebinding case even when a `net-local` grant would also cover it (FR-PERM-13). `net-local` is consulted only when no `net` pattern matches the request's host, and a non-`.local` hostname is checked against a CIDR entry by resolved address.
 
-Pattern rules: a literal address, a CIDR range, or a `.local` hostname. The host validates every entry against the private-use and loopback blocks at manifest install time and refuses an entry that names a public range; `net-local` cannot be used to smuggle broader access than `net` already provides.
+Pattern rules: a literal address, a CIDR range, `localhost`, or a `.local` hostname. A hostname outside `.local` matches a CIDR entry by resolved address at request time. The host validates every entry against the canonical local ranges at manifest install time and refuses an entry that names an address outside them (FR-PERM-14); `net-local` cannot be used to smuggle general internet access.
 
-This capability reaches further than the machine the agent runs on. A private network can include other people's devices, particularly on a shared or public network with local routing enabled. Consent text says so rather than implying "this machine only": "Connect to a device on your local network."
+The canonical local ranges, the one normative list for `net-local` grants and for `net`'s rebinding check: IPv4 loopback `127.0.0.0/8`; IPv6 loopback `::1/128`; IPv4 private use `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`; IPv4 link-local `169.254.0.0/16`; IPv6 link-local `fe80::/10`; IPv6 unique-local `fc00::/7`; IPv4 carrier-grade NAT `100.64.0.0/10`, which is the tailnet case, a model server reached over WireGuard or Tailscale rather than over the local wire. IPv4-mapped IPv6 addresses are normalized to IPv4 before any range check (FR-PERM-17).
 
-On denial: the request function returns a permission error. An address that is not loopback, private-use, or `.local` is refused the same way an unmatched `net` pattern is, since `net-local` is not a general escape from `net`'s host restrictions.
+This capability reaches further than the machine the agent runs on. A private network can include other people's devices, particularly on a shared or public network with local routing enabled, and the carrier-grade NAT range reaches a tailnet. Consent text says so rather than implying "this machine only": "Connect to a device on your local network, your own machine, or your private tailnet."
+
+On denial: the request function returns a permission error. An address outside the canonical local ranges and not covered by a `.local` grant is refused the same way an unmatched `net` pattern is, since `net-local` is not a general escape from `net`'s host restrictions.
 
 ### fs
 
@@ -88,9 +90,9 @@ Import interface: `lca:host/fs`. Open, read, write, list, and stat functions tak
 | `home-config` | The platform configuration directory | Reading a login an existing command line tool already wrote |
 | `temp` | A per-session temporary directory, removed at exit | Large scratch files that should not appear in the source tree |
 
-Modes are `read` or `read-write`. A scope absent from the manifest is absent from the grant.
+Modes are `read` or `read-write`. A scope absent from the manifest is absent from the grant. Each scope resolves to the per-platform path listed in `docs/platform-notes.md`.
 
-Resolution goes through preopened directory handles. The host never joins a guest string onto a base path. A path that leaves its scope through a parent traversal or a symbolic link is refused, including when the link is created after the grant.
+Resolution goes through preopened directory handles. The host never joins a guest string onto a base path. A path that leaves its scope through a parent traversal or a symbolic link is refused, including when the link is created after the grant. A path that enters the agent's own state directory, where sessions, the extension tree, and the credential store live, is refused the same way, under every scope and every ad hoc grant.
 
 Consent text names the scope in plain words: "Read files in this project. Read and write its own private data directory. Read your configuration directory."
 
@@ -111,7 +113,7 @@ Import interface: `lca:host/credentials`. Get, set, and delete functions taking 
 
 The store prefers the platform keychain where one exists and falls back to a file with owner-only permissions. The extension cannot tell which backend is in use and cannot choose.
 
-Values never enter the session log, never appear in a session export, and are not readable through any other capability. The `fs` capability cannot reach the credential file even with `home-config` granted, because the store lives outside the scopes.
+Values never enter the session log, never appear in a session export, and are not readable through any other capability. The `fs` capability cannot reach the credential file even with `home-config` granted, because the store lives in the agent's own state directory, which the host excludes from every `fs` resolution.
 
 Manifest validation rejects a namespace that does not match the extension name. There is no cross-namespace read at any privilege level.
 
@@ -128,11 +130,11 @@ Grants the loopback authorization flow. The extension never binds a port.
 redirect_path = "/callback"
 ```
 
-Import interface: `lca:host/oauth`. A begin function returning a redirect URL and a flow handle, and an await function taking a handle and returning the callback parameters or a timeout.
+Import interface: `lca:host/oauth`. Three functions: `begin`, returning a redirect URL and a flow handle; `open`, which opens a URL in the user's browser; and `await`, taking a handle and returning the callback parameters or a timeout.
 
 The host picks the port, binds on the loopback interface only, serves a minimal response page, and stops the listener when the flow completes or times out. The default timeout is 300 seconds.
 
-The extension builds the authorization URL itself, including the code challenge, and opens it through the host. It receives the parsed query parameters from the callback. Token exchange happens over the `net` capability, so an extension using `oauth` needs `net` as well.
+The extension builds the authorization URL itself, including the code challenge, and opens it through `open`, which is why opening a browser needs no separate capability. It receives the parsed query parameters from the callback. Token exchange happens over the `net` capability, so an extension using `oauth` needs `net` as well.
 
 Consent text: "Open a browser sign-in and receive the response on a local port."
 
@@ -213,7 +215,7 @@ Grants the right to ask the host for a response from whichever provider is curre
 reason = "Summarizes older parts of the conversation when compacting."
 ```
 
-Import interface: `lca:host/completion`. A request function taking a message list and returning a response, using the same typed shape the `provider` world's own streaming events resolve into.
+Import interface: `lca:host/completion`. A request function taking a message list and returning a response, using the same typed shape the `provider` world's own streaming events resolve into. The host records the usage and cost of each request on the session record that caused it, a `compaction` record for a summarization call, so the spend shows up in session cost.
 
 This keeps the extension graph a star with the host at the center: an extension holding `completion` never calls another extension directly, it asks the host, and the host routes to the active provider. This is the reasoning already established in ADR-0008 for why extension-to-extension calls are not supported.
 

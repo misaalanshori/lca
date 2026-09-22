@@ -42,6 +42,8 @@ The consent screen can describe each scope in one sentence that a person can eva
 
 Symbolic link handling needs explicit tests, including a link created after the grant, because that is where this class of bug lives.
 
+Scope resolution and the state-directory exclusion are one function: the host also refuses any resolution that enters the agent's own state directory, sessions, the extension tree, and the credential store, under every scope including an ad hoc grant. This keeps the credential-isolation guarantee in the capability catalog true on platforms, macOS, where the configuration directory conventionally also holds application data.
+
 One requirement follows. IF a guest path resolution leaves its granted scope, THEN the host SHALL refuse the operation and record the attempt.
 
 The ad hoc grant, mentioned above as the pressure valve beyond the fixed vocabulary, later turned out to generalize beyond `fs`. The OpenAI-compatible provider under `docs/providers/openai-compatible.md` needed the same shape of escape hatch for `net`, since its whole reason for existing is a host the manifest cannot know in advance; the alternative, a manifest-declared wildcard, was already rejected on the same "a consent screen has to name something evaluable" grounds this record used for `fs`. The mechanism is the same in both places: something outside the fixed vocabulary, granted at the point of use rather than at install, with consent text naming the specific thing being added rather than a pattern standing in for it. See the capability catalog's `fs` and `net` sections for both.

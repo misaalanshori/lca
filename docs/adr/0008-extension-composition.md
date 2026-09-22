@@ -1,6 +1,6 @@
 # ADR-0008: Build-time composition for extension dependencies
 
-Status: accepted.
+Status: accepted. One consequence is revised by ADR-0015: `completion` joins the 1.0 capability set.
 
 Date: 2026-09-20.
 
@@ -40,7 +40,7 @@ The extension graph stays a star with the host at the center. Load order does no
 
 Shared code is duplicated across artifacts when authors vendor rather than compose. This costs bytes on disk and nothing else.
 
-Service access capabilities need designing as the cases appear. The completion capability is the obvious first one and it is not in the 1.0 set, because no 1.0 extension needs it yet.
+Service access capabilities need designing as the cases appear. The completion capability is the obvious first one and it is not in the 1.0 set, because no 1.0 extension needs it yet. (Superseded on this point by ADR-0015, where the default compaction strategy became the consumer that justifies it.)
 
 The extension authoring guide needs a section showing the composition workflow. Authors will not discover it on their own. This is a Phase 8 documentation task.
 

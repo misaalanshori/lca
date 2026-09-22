@@ -44,6 +44,8 @@ The host controls the visual language, so extension output looks like the rest o
 
 A hostile extension cannot forge a permission prompt, because it cannot draw outside its region and cannot emit control codes at all.
 
+The vocabulary gained an `image` kind before the freeze, when provider image output was scoped into 1.0; an image widget carries a media type and image bytes, with the host persisting anything large as a session attachment. This is the vocabulary's one planned addition before the ABI freeze.
+
 ## Revisit conditions
 
 A pattern of extension authors working around the vocabulary with ugly constructions. Evidence that a specific high-value extension cannot be built. Either of these argues for growing the vocabulary rather than replacing the model.
