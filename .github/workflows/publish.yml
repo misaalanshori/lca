@@ -119,7 +119,7 @@ jobs:
         run: |
           rustup set profile minimal
           for target in ${{ matrix.targets }}; do rustup target add "$target"; done
-      - name: LLVM's librarian for the MSVC build scripts
+      - name: LLVM for the MSVC build scripts
         if: runner.os == 'Linux'
         run: sudo apt-get install -y llvm
       - uses: taiki-e/install-action@v2
@@ -164,79 +164,9 @@ jobs:
           mkdir -p dist
           if [[ "${{ matrix.name }}" == "windows" ]]; then
             # ring's aarch64-Windows path forces plain gcc-mode clang
-            # (its own FIXME) while cargo-xwin supplies MSVC-style
-            # flags; the committed shim translates between them.
+            # (its own FIXME) while cargo-xwin supplies MSVC-style flags;
+            # the committed shim translates between them.
             sudo install -m755 ci/clang-shim /usr/local/bin/clang
-            export CC_x86_64_pc_windows_msvc=clang
-            export CC_aarch64_pc_windows_msvc=clang
-          fi
-          for target in ${{ matrix.targets }}; do rustup target add "$target"; done
-      - name: LLVM's librarian for the MSVC build scripts
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y llvm
-      - uses: taiki-e/install-action@v2
-        if: runner.os == 'Linux'
-        with:
-          tool: cargo-zigbuild,cargo-xwin
-      - uses: mlugg/setup-zig@v2
-        if: runner.os == 'Linux'
-        with:
-          version: "0.16.0"
-
-      # Verifies: NFR-17's reproducible double build (a tagged commit
-      # reproduces byte for byte, or the published checksums are a
-      # lie) - on the linux leg, where the musl target builds twice
-      # without a cache between them.
-      - name: Reproducible double build (linux x86_64 musl)
-        if: matrix.name == 'linux'
-        run: |
-          set -euo pipefail
-          common="--remap-path-prefix=$PWD=/src --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
-          CARGO_TARGET_DIR=target/repro-a \
-            RUSTFLAGS="$common --remap-path-prefix=$PWD/target/repro-a=/out" \
-            cargo zigbuild --release --target x86_64-unknown-linux-musl
-          CARGO_TARGET_DIR=target/repro-b \
-            RUSTFLAGS="$common --remap-path-prefix=$PWD/target/repro-b=/out" \
-            cargo zigbuild --release --target x86_64-unknown-linux-musl
-          a=target/repro-a/x86_64-unknown-linux-musl/release/lca
-          b=target/repro-b/x86_64-unknown-linux-musl/release/lca
-          sha_a=$(sha256sum "$a" | cut -d" " -f1)
-          sha_b=$(sha256sum "$b" | cut -d" " -f1)
-          echo "$sha_a vs $sha_b"
-          test "$sha_a" = "$sha_b"
-
-      # Verifies: NFR-8 (the two linux musl targets), NFR-9 (the two
-      # macOS targets, built natively on macOS), NFR-10 (the two
-      # Windows MSVC targets): all six artifacts come out of this
-      # matrix (docs/platform-notes.md names each pair).
-      - name: Build the assigned targets
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          if [[ "${{ matrix.name }}" == "windows" ]]; then
-            # ring's aarch64-Windows path forces plain `clang` (its own
-            # FIXME), and cargo-xwin supplies MSVC-style flags. The shim
-            # translates them for the gcc-style driver: /imsvc <dir>
-            # becomes -I, --target= changes spelling, and CL-only linker
-            # flags drop (ring compiles objects; rustc links). Both
-            # windows targets build through it.
-            sudo tee /usr/local/bin/clang >/dev/null <<'SHIM'
-            #!/usr/bin/env bash
-            args=()
-            for ((i = 1; i <= $#; i++)); do
-              a="${!i}"
-              case "$a" in
-                /imsvc) i=$((i+1)); args+=("-I${!i}") ;;
-                --target=*) args+=("-target" "${a#--target=}") ;;
-                -fuse-ld=lld-link) ;;
-                -Xclang) i=$((i+1)) ;;
-                *) args+=("$a") ;;
-              esac
-            done
-            exec /usr/bin/clang "${args[@]}"
-            SHIM
-            sudo chmod +x /usr/local/bin/clang
             export CC_x86_64_pc_windows_msvc=clang
             export CC_aarch64_pc_windows_msvc=clang
           fi
@@ -278,7 +208,7 @@ jobs:
         run: |
           cd dist && sha256sum * > artifacts.sha256 && cat artifacts.sha256
       - name: Sign the artifacts (provenance attestation)
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance
         with:
           subject-path: |
             dist/*
