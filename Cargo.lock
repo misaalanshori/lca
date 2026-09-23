@@ -1403,6 +1403,10 @@ dependencies = [
 name = "lca-tools"
 version = "0.1.0"
 dependencies = [
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
  "lca-permissions",
  "lca-protocol",
  "libc",

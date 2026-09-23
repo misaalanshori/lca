@@ -84,6 +84,25 @@ pub struct Manifest {
     pub process: bool,
     /// The `pty` capability was declared (FR-PERM-1).
     pub pty: bool,
+    /// `net` host patterns (internet, HTTPS only).
+    pub net: Vec<lca_permissions::NetPattern>,
+    /// `net-local` address patterns (local ranges, HTTP allowed).
+    pub net_local: Vec<lca_permissions::LocalPattern>,
+    /// The loopback OAuth flow settings, when declared.
+    pub oauth: Option<OAuthSettings>,
+    /// The credential namespace, when declared; must equal `name`
+    /// (FR-PERM-6, no cross-namespace read at any level, FR-PERM-7).
+    pub credentials: bool,
+}
+
+/// The `oauth` capability's manifest parameters (capability catalog).
+#[derive(Debug, Clone)]
+pub struct OAuthSettings {
+    /// The redirect path the authorization server may use.
+    pub redirect_path: String,
+    /// Seconds to wait for the loopback callback (300 default, the
+    /// catalog's value).
+    pub timeout_seconds: u64,
 }
 
 fn reason_of(value: &toml::Value, key: &str) -> Result<String, LoadError> {
@@ -143,13 +162,17 @@ impl Manifest {
         let mut fs = Vec::new();
         let mut process = false;
         let mut pty = false;
+        let mut parsed_net: Vec<lca_permissions::NetPattern> = Vec::new();
+        let mut parsed_net_local: Vec<lca_permissions::LocalPattern> = Vec::new();
+        let mut parsed_oauth: Option<OAuthSettings> = None;
+        let mut parsed_credentials = false;
         if let Some(capabilities) = value.get("capabilities") {
             let table = capabilities.as_table().ok_or_else(|| {
                 LoadError::InvalidManifest("`capabilities` must be a table".into())
             })?;
             for key in table.keys() {
                 match key.as_str() {
-                    "fs" | "process" | "pty" => {}
+                    "fs" | "process" | "pty" | "net" | "net-local" | "oauth" | "credentials" => {}
                     other => {
                         return Err(LoadError::InvalidManifest(format!(
                             "unknown capability `{other}`"
@@ -189,6 +212,93 @@ impl Manifest {
                 reason_of(cap, "capabilities.pty")?;
                 pty = true;
             }
+            let mut net = Vec::new();
+            if let Some(cap) = table.get("net") {
+                let hosts = cap.get("hosts").and_then(|v| v.as_array()).ok_or_else(|| {
+                    LoadError::InvalidManifest("`capabilities.net.hosts` must be a list".into())
+                })?;
+                for host in hosts {
+                    let host = host.as_str().ok_or_else(|| {
+                        LoadError::InvalidManifest("net host patterns are strings".into())
+                    })?;
+                    net.push(
+                        lca_permissions::parse_net_pattern(host).map_err(|err| {
+                            LoadError::InvalidManifest(format!("`{host}`: {err}"))
+                        })?,
+                    );
+                }
+            }
+            let mut net_local = Vec::new();
+            if let Some(cap) = table.get("net-local") {
+                let addresses =
+                    cap.get("addresses")
+                        .and_then(|v| v.as_array())
+                        .ok_or_else(|| {
+                            LoadError::InvalidManifest(
+                                "`capabilities.net-local.addresses` must be a list".into(),
+                            )
+                        })?;
+                for address in addresses {
+                    let address = address.as_str().ok_or_else(|| {
+                        LoadError::InvalidManifest("net-local addresses are strings".into())
+                    })?;
+                    net_local.push(lca_permissions::parse_local_pattern(address).map_err(
+                        |err| LoadError::InvalidManifest(format!("`{address}`: {err}")),
+                    )?);
+                }
+            }
+            let mut oauth = None;
+            if let Some(cap) = table.get("oauth") {
+                // The token exchange always needs `net` (manifest schema
+                // allOf): oauth without net is a manifest error, not a
+                // runtime surprise.
+                if net.is_empty() {
+                    return Err(LoadError::InvalidManifest(
+                        "capabilities.oauth requires capabilities.net for the token exchange"
+                            .into(),
+                    ));
+                }
+                let redirect_path = cap
+                    .get("redirect_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("/callback")
+                    .to_string();
+                let timeout_seconds = cap
+                    .get("timeout_seconds")
+                    .and_then(|v| v.as_integer())
+                    .unwrap_or(300) as u64;
+                if !(30..=600).contains(&timeout_seconds) {
+                    return Err(LoadError::InvalidManifest(
+                        "capabilities.oauth.timeout_seconds must be between30 and600".into(),
+                    ));
+                }
+                oauth = Some(OAuthSettings {
+                    redirect_path,
+                    timeout_seconds,
+                });
+            }
+            let mut credentials = false;
+            if let Some(cap) = table.get("credentials") {
+                let namespace = cap
+                    .get("namespace")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LoadError::InvalidManifest(
+                            "capabilities.credentials.namespace required".into(),
+                        )
+                    })?;
+                // FR-PERM-6: the namespace IS the extension identity.
+                if namespace != name {
+                    return Err(LoadError::InvalidManifest(format!(
+                        "credentials namespace `{namespace}` must equal the extension name `{name}`"
+                    )));
+                }
+                credentials = true;
+            }
+            parsed_net = net;
+            parsed_net_local = net_local;
+            parsed_oauth = oauth;
+            parsed_credentials = credentials;
         }
 
         Ok(Manifest {
@@ -199,6 +309,10 @@ impl Manifest {
             fs,
             process,
             pty,
+            net: parsed_net,
+            net_local: parsed_net_local,
+            oauth: parsed_oauth,
+            credentials: parsed_credentials,
         })
     }
 
@@ -340,6 +454,7 @@ fn fs_error(err: CapabilityError) -> FsError {
         CapabilityError::NotFound(detail) => FsError::NotFound(detail),
         CapabilityError::Io(detail) => FsError::Io(detail),
         CapabilityError::Invalid(detail) => FsError::Invalid(detail),
+        CapabilityError::Timeout(detail) => FsError::Io(format!("timed out: {detail}")),
     }
 }
 
@@ -350,6 +465,7 @@ fn process_error(err: CapabilityError) -> ProcessError {
         CapabilityError::NotFound(detail) => ProcessError::NotFound(detail),
         CapabilityError::Io(detail) => ProcessError::Io(detail),
         CapabilityError::Invalid(detail) => ProcessError::Invalid(detail),
+        CapabilityError::Timeout(detail) => ProcessError::Io(format!("timed out: {detail}")),
     }
 }
 
@@ -360,6 +476,7 @@ fn pty_error(err: CapabilityError) -> PtyError {
         CapabilityError::NotFound(detail) => PtyError::NotFound(detail),
         CapabilityError::Io(detail) => PtyError::Io(detail),
         CapabilityError::Invalid(detail) => PtyError::Invalid(detail),
+        CapabilityError::Timeout(detail) => PtyError::Io(format!("timed out: {detail}")),
     }
 }
 

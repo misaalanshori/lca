@@ -20,6 +20,9 @@ pub enum CapabilityError {
     /// The guest supplied something malformed (unknown handle, absolute
     /// path, bad dimensions).
     Invalid(String),
+    /// A bounded host operation ran out of time (the OAuth callback
+    /// window, capability catalog default300 s).
+    Timeout(String),
 }
 
 impl CapabilityError {
@@ -37,6 +40,7 @@ impl fmt::Display for CapabilityError {
             CapabilityError::NotFound(detail) => write!(f, "not found: {detail}"),
             CapabilityError::Io(detail) => write!(f, "i/o error: {detail}"),
             CapabilityError::Invalid(detail) => write!(f, "invalid argument: {detail}"),
+            CapabilityError::Timeout(detail) => write!(f, "timed out: {detail}"),
         }
     }
 }

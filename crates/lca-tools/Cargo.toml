@@ -13,6 +13,13 @@ lca-permissions = { path = "../lca-permissions" }
 tokio.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Dependency justification (SRDD closed list): hyper with rustls IS the
+# documented HTTPS transport; the `net` capability performs requests
+# host-side exactly like the OpenAI-compatible provider does.
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+hyper-rustls.workspace = true
 # Dependency justification (SRDD closed list + review): `regex` powers the
 # built-in grep tool. Writing a correct regex engine is a multi-year project
 # (the same argument ADR-0001 makes for not writing a runtime), and grep

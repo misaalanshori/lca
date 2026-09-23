@@ -139,10 +139,11 @@ fn manifest_declares_and_parses_every_capability() {
         "reason must say something"
     );
 
-    // Unknown capability keys are rejected (schema additionalProperties).
+    // Unknown capability keys are rejected (schema additionalProperties);
+    // net and friends arrived with this phase, `completion` is Phase4's.
     assert!(
         Manifest::parse(&manifest_with(
-            "\n[capabilities.net]\nhosts = [\"api.example.com\"]\n"
+            "\n[capabilities.completion]\nreason = \"too early for now\"\n"
         ))
         .is_err(),
         "capabilities arrive phase by phase"
