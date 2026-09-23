@@ -566,6 +566,39 @@ now through `lca_tui::sanitize_text`: the notice stream (four sites),
 the slash-command list (extension-chosen names, FR-UI-1's "host
 display"), and `InsertText` reaching the input buffer.
 
+**The release actually released.** The dispatch that counts finished
+green end to end: all four matrix legs, then the `release` job - six
+binaries (13-19 MB each) plus `artifacts.sha256` on tag
+`phase5-0.1.0`, the repro job's double hash matching inside the linux
+leg, and a real in-toto attestation behind each asset
+(`gh api /attestations/sha256:<digest>` answers
+`application/vnd.in-toto+json` for, e.g., the Windows exe). The
+darwin-x86_64 artifact moved onto the arm runner along the way: the
+macos-13 Intel label sat queued for two hours with no runner while
+macos-14 spun freely, and Apple's SDK is universal, so `rustup target
+add x86_64-apple-darwin` plus a normal build crosses the last arch
+without betting the release queue on Intel hardware supply. The
+fuzz schedule also ran its first clean full pass in CI - four targets,
+ten minutes each, zero crashes (the first dispatch had died because
+cargo-fuzz's default triple is whatever its own binary was built for
+and the install-action release is a static musl build, so the schedule
+now says `--target x86_64-unknown-linux-gnu` out loud).
+
+**The macOS OAuth flake, root-caused and fixed.** The antigravity
+login test failed on macOS CI with "sending the callback: Broken
+pipe", and chasing it found a real portability bug rather than a
+test problem: `TcpListener::set_nonblocking(true)` - the listener's
+flag is inherited by accepted sockets on BSD/macOS and not on Linux,
+so the first `read` on the callback connection returned WouldBlock
+before the client had written anything, the empty read was treated as
+"peer gone", and the connection was closed under the client. The
+listener now forces the accepted socket back to blocking, reads until
+a real request line or its patience runs out, and a connection that
+never sends a query-carrying line does not consume the flow - with a
+regression test that connects first and writes past the old five-
+second window (it fails against the old code with exactly the EPIPE
+the flake showed).
+
 **Two CI-found bugs fixed at the root.** The e2e sandbox wrote grant
 files under `XDG_DATA_HOME`, but macOS reads its state from
 `~/Library/Application Support/lca` by documented convention
@@ -584,11 +617,14 @@ between one and six hours with no log output - GitHub's runners were
 having a bad afternoon) were cancelled as superseded; only runs for
 the current HEAD and the publish dispatch are kept.
 
-Deviations, written down rather than hidden: the macOS runner pool was
-starved during this phase, so the darwin-x86_64 release artifact and
-parts of the CI matrix took reruns to land - the receipts are in the
-workflow runs, and the five-test macOS pty quarantine stands as the
-recorded lowest-priority platform gap; the external security review
+Deviations, written down rather than hidden: GitHub's hosted runner
+pool was sick for most of this phase - a dozen-plus runs wedged,
+several failed with the annotation "the hosted runner lost
+communication with the server", and logs for the affected jobs never
+made it to storage, so the receipt trail is run IDs and annotations
+rather than full job logs; the five-test macOS pty quarantine stands
+as the recorded lowest-priority platform gap (the macOS suite is
+otherwise green); the external security review
 is a human task, and its state is "self-walkthrough complete in
 docs/threat-model.md, ready for external review, no known findings
 above low"; and the sanctioned Phase 7 cut (FR-WEB-1/2/3, NFR-11,
@@ -596,6 +632,6 @@ listed in `scripts/deferred-requirements.txt` and printed by the
 traceability gate) remains the scope line this phase inherits.
 
 Gates at the exit: fmt, clippy `-D warnings`, doc `-D warnings`,
-255 nextest tests green on Linux, `cargo xwin clippy` green for the
+256 nextest tests green on Linux, `cargo xwin clippy` green for the
 Windows target, workflow YAML validated, the perf gate green, and CI
 plus the publish dispatch recorded in the run history above.
