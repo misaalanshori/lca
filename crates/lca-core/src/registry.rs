@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};
 use lca_protocol::{
-    CommandEffect, DispatchError, HookAction, PostToolObservation, ToolCall, ToolSpec,
+    CommandEffect, DispatchError, HookAction, IdentityOutcome, PostToolObservation, ToolCall,
+    ToolSpec, Usage,
 };
 
 /// Built-in tool names are reserved (FR-TOOL-1's set; an extension
@@ -17,6 +18,39 @@ pub const BUILTIN_TOOLS: &[&str] = &["read", "write", "edit", "list", "glob", "g
 
 /// Built-in slash command names, reserved the same way (SRDD's list).
 pub const BUILTIN_COMMANDS: &[&str] = &["login", "logout", "usage", "model", "compact", "stats"];
+
+/// The standard usage shape the generic `/usage` prints (ADR-0012).
+fn format_usage(usage: &Usage) -> String {
+    format!(
+        "input {}, output {}, cache read {}, cache write {}, cost ${:.4}",
+        usage.input, usage.output, usage.cache_read, usage.cache_write, usage.cost
+    )
+}
+
+/// One of ADR-0012's three identity exports, which the host namespaces
+/// under the extension's own name with no work by the author.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityCommand {
+    /// The `login` export.
+    Login,
+    /// The `logout` export.
+    Logout,
+    /// The `usage` export.
+    Usage,
+}
+
+/// Where a full command name leads: the extension's `command` world, or
+/// one of its `provider`-world identity exports (FR-PROV-10).
+enum Route {
+    World { entry: usize, leaf: String },
+    Identity { entry: usize, op: IdentityCommand },
+}
+
+/// Pending route before the entry index is known (see `register`).
+enum PendingRoute {
+    World(String),
+    Identity(IdentityCommand),
+}
 
 /// A reported name collision (FR-EXT-11).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,9 +78,9 @@ pub struct ExtensionRegistry {
     entries: Vec<Registered>,
     /// Bare tool name -> entry index.
     tools: HashMap<String, usize>,
-    /// Full command name (`ext.command`, or a claimed built-in leaf) ->
-    /// (entry index, leaf).
-    commands: HashMap<String, (usize, String)>,
+    /// Full command name (`ext.command`, a claimed built-in leaf, or an
+    /// auto-namespaced identity export) -> where it leads.
+    commands: HashMap<String, Route>,
     collisions: Vec<CollisionReport>,
 }
 
@@ -88,7 +122,7 @@ impl ExtensionRegistry {
         }
 
         let mut pending_tools: Vec<String> = Vec::new();
-        let mut pending_commands: Vec<(String, String)> = Vec::new();
+        let mut pending_commands: Vec<(String, PendingRoute)> = Vec::new();
         let native_claim = handle.delivery() == DeliveryMode::Native;
         let slots = handle.builtin_command_slots();
 
@@ -113,7 +147,7 @@ impl ExtensionRegistry {
                         let winner = self
                             .commands
                             .get(&full)
-                            .map(|(index, _)| self.entry_name(*index).to_string());
+                            .map(|route| self.route_name(route).to_string());
                         match winner {
                             Some(winner) => self.collisions.push(CollisionReport {
                                 extension: name.clone(),
@@ -121,7 +155,7 @@ impl ExtensionRegistry {
                                 kind: "command",
                                 winner,
                             }),
-                            None => pending_commands.push((full, spec.name)),
+                            None => pending_commands.push((full, PendingRoute::World(spec.name))),
                         }
                     }
                 }
@@ -134,6 +168,32 @@ impl ExtensionRegistry {
                         kind: "command",
                         winner: format!("unavailable: {err}"),
                     });
+                }
+            }
+        }
+
+        if handle.worlds().contains(&World::Provider) {
+            // FR-PROV-10 / ADR-0012: the host namespaces the three
+            // identity exports itself, so two providers that both export
+            // `usage` can never collide.
+            for (leaf, op) in [
+                ("login", IdentityCommand::Login),
+                ("logout", IdentityCommand::Logout),
+                ("usage", IdentityCommand::Usage),
+            ] {
+                let full = format!("{name}.{leaf}");
+                let winner = self
+                    .commands
+                    .get(&full)
+                    .map(|route| self.route_name(route).to_string());
+                match winner {
+                    Some(winner) => self.collisions.push(CollisionReport {
+                        extension: name.clone(),
+                        name: full,
+                        kind: "command",
+                        winner,
+                    }),
+                    None => pending_commands.push((full, PendingRoute::Identity(op))),
                 }
             }
         }
@@ -179,8 +239,18 @@ impl ExtensionRegistry {
         for tool in pending_tools {
             self.tools.insert(tool, entry_index);
         }
-        for (full, leaf) in pending_commands {
-            self.commands.insert(full, (entry_index, leaf));
+        for (full, pending) in pending_commands {
+            let route = match pending {
+                PendingRoute::World(leaf) => Route::World {
+                    entry: entry_index,
+                    leaf,
+                },
+                PendingRoute::Identity(op) => Route::Identity {
+                    entry: entry_index,
+                    op,
+                },
+            };
+            self.commands.insert(full, route);
         }
         self.entries.push(Registered {
             handle,
@@ -190,6 +260,169 @@ impl ExtensionRegistry {
 
     fn entry_name(&self, index: usize) -> &str {
         self.entries[index].handle.name()
+    }
+
+    fn route_name(&self, route: &Route) -> &str {
+        match route {
+            Route::World { entry, .. } | Route::Identity { entry, .. } => self.entry_name(*entry),
+        }
+    }
+
+    /// Every enabled provider extension's name, in registration order
+    /// (FR-PROV-11's list for the generic `/login`).
+    pub fn provider_names(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.enabled && entry.handle.worlds().contains(&World::Provider))
+            .map(|entry| entry.handle.name().to_string())
+            .collect()
+    }
+
+    /// The enabled provider registered under `name` (the configured
+    /// active provider resolves through this; `None` is FR-PROV-6's
+    /// data and a valid zero-provider state, FR-PROV-9).
+    pub fn provider(&self, name: &str) -> Option<&Arc<dyn ExtensionDispatch>> {
+        self.entries
+            .iter()
+            .find(|entry| {
+                entry.enabled
+                    && entry.handle.name() == name
+                    && entry.handle.worlds().contains(&World::Provider)
+            })
+            .map(|entry| &entry.handle)
+    }
+
+    /// Enable or disable one registered extension for the session
+    /// (FR-PROV-9's disable knob; enablement itself lives in the grant
+    /// store, per `docs/configuration.md`).
+    pub fn set_enabled(&mut self, name: &str, enabled: bool) {
+        for entry in &mut self.entries {
+            if entry.handle.name() == name {
+                entry.enabled = enabled;
+            }
+        }
+    }
+
+    /// Run one identity future to completion from the input editor's
+    /// thread: command invocation runs outside any async context (the
+    /// TUI is synchronous there), so a fresh current-thread runtime is
+    /// safe and needs no runtime handle plumbing.
+    /// ponytail: panics if a caller ever invokes this from inside an
+    /// async task; route such a caller through `spawn` + a channel.
+    fn drive<T>(&self, future: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("identity runtime")
+            .block_on(future)
+    }
+
+    /// One identity operation rendered as a notice (the effect the
+    /// input editor shows). Text shape is deterministic for tests.
+    fn identity_effect(
+        &self,
+        handle: &Arc<dyn ExtensionDispatch>,
+        op: IdentityCommand,
+    ) -> CommandEffect {
+        let handle = handle.clone();
+        self.drive(async move {
+            let name = handle.name().to_string();
+            match op {
+                IdentityCommand::Login => match handle.identity_login().await {
+                    Ok(IdentityOutcome::Ok) => {
+                        CommandEffect::ShowWidget(format!("logged in via `{name}`"))
+                    }
+                    Ok(IdentityOutcome::NotSupported) => {
+                        CommandEffect::ShowWidget(format!("login is not supported by `{name}`"))
+                    }
+                    Ok(IdentityOutcome::Failed(reason)) => {
+                        CommandEffect::ShowWidget(format!("login failed: {reason}"))
+                    }
+                    Err(err) => CommandEffect::ShowWidget(format!("login failed: {err}")),
+                },
+                IdentityCommand::Logout => match handle.identity_logout().await {
+                    Ok(IdentityOutcome::Ok) => {
+                        CommandEffect::ShowWidget(format!("logged out of `{name}`"))
+                    }
+                    Ok(IdentityOutcome::NotSupported) => {
+                        CommandEffect::ShowWidget(format!("logout is not supported by `{name}`"))
+                    }
+                    Ok(IdentityOutcome::Failed(reason)) => {
+                        CommandEffect::ShowWidget(format!("logout failed: {reason}"))
+                    }
+                    Err(err) => CommandEffect::ShowWidget(format!("logout failed: {err}")),
+                },
+                IdentityCommand::Usage => match handle.identity_usage().await {
+                    Ok(Ok(usage)) => CommandEffect::ShowWidget(format_usage(&usage)),
+                    Ok(Err(IdentityOutcome::NotSupported)) => {
+                        CommandEffect::ShowWidget(format!("usage is not supported by `{name}`"))
+                    }
+                    Ok(Err(IdentityOutcome::Failed(reason))) => {
+                        CommandEffect::ShowWidget(format!("usage failed: {reason}"))
+                    }
+                    Ok(Err(IdentityOutcome::Ok)) => {
+                        CommandEffect::ShowWidget(format!("`{name}` returned no usage record"))
+                    }
+                    Err(err) => CommandEffect::ShowWidget(format!("usage failed: {err}")),
+                },
+            }
+        })
+    }
+
+    /// The generic `/login`, `/logout`, and `/usage` (FR-PROV-11):
+    /// `login` lists every installed provider when the user has not
+    /// chosen one, `logout` and `usage` follow `active`. `None` means
+    /// zero providers are enabled — a valid state (FR-PROV-9) that the
+    /// caller reports as FR-PROV-6's "no model is available".
+    pub fn invoke_generic(
+        &self,
+        command: &str,
+        argument: &str,
+        active: &str,
+    ) -> Option<CommandEffect> {
+        let names = self.provider_names();
+        if names.is_empty() {
+            return None;
+        }
+        let op = match command {
+            "login" => IdentityCommand::Login,
+            "logout" => IdentityCommand::Logout,
+            "usage" => IdentityCommand::Usage,
+            _ => return None,
+        };
+        let target = match op {
+            IdentityCommand::Login => {
+                if !argument.is_empty() {
+                    if names.iter().any(|name| name == argument) {
+                        argument.to_string()
+                    } else {
+                        return Some(CommandEffect::ShowWidget(format!(
+                            "no provider named `{argument}`; installed: {}",
+                            names.join(", ")
+                        )));
+                    }
+                } else if names.len() == 1 {
+                    names[0].clone()
+                } else {
+                    return Some(CommandEffect::ShowWidget(format!(
+                        "{} installed: {}. Choose: /login <name>",
+                        names.len(),
+                        names.join(", ")
+                    )));
+                }
+            }
+            IdentityCommand::Logout | IdentityCommand::Usage => match self.provider(active) {
+                Some(_) => active.to_string(),
+                None => {
+                    return Some(CommandEffect::ShowWidget(format!(
+                        "no provider is enabled (configured `{active}` is unavailable);                          installed: {}",
+                        names.join(", ")
+                    )));
+                }
+            },
+        };
+        let handle = self.provider(&target)?.clone();
+        Some(self.identity_effect(&handle, op))
     }
 
     /// Every collision reported during registration (FR-EXT-11's report).
@@ -243,15 +476,23 @@ impl ExtensionRegistry {
         names
     }
 
-    /// Invoke a full command name (the host namespaced it, or it is a
-    /// claimed built-in slot).
+    /// Invoke a full command name (the host namespaced it, it is a
+    /// claimed built-in slot, or it is an auto-namespaced identity
+    /// export, FR-PROV-10).
     pub fn invoke_command(&self, full: &str, argument: &str) -> Option<CommandEffect> {
-        let (index, leaf) = self.commands.get(full)?;
-        let entry = &self.entries[*index];
-        if !entry.enabled {
+        let route = self.commands.get(full)?;
+        let (entry, handle) = match route {
+            Route::World { entry, .. } | Route::Identity { entry, .. } => {
+                (*entry, &self.entries[*entry].handle)
+            }
+        };
+        if !self.entries[entry].enabled {
             return None;
         }
-        entry.handle.invoke_command(leaf, argument).ok()
+        match route {
+            Route::World { leaf, .. } => handle.invoke_command(leaf, argument).ok(),
+            Route::Identity { op, .. } => Some(self.identity_effect(handle, *op)),
+        }
     }
 
     /// Merge the `pre-turn` hook across every enabled extension

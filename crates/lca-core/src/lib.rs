@@ -9,6 +9,8 @@
 
 mod registry;
 
+pub mod ext_provider;
+pub use ext_provider::ExtensionProvider;
 pub use registry::{BUILTIN_COMMANDS, BUILTIN_TOOLS, CollisionReport, ExtensionRegistry};
 
 use std::sync::Arc;

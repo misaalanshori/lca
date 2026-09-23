@@ -338,9 +338,16 @@ fn the_native_conformance_handle_registers_through_the_table() {
     let handle: Arc<dyn ExtensionDispatch> = Arc::new(conformance::NativeConformance::new(caps));
     let mut registry = ExtensionRegistry::new();
     registry.register(handle);
+    // The command world's own spec plus ADR-0012's auto-namespaced
+    // identity trio (FR-PROV-10), since conformance is a provider.
     assert_eq!(
         registry.command_names(),
-        vec!["conformance.probe".to_string()]
+        vec![
+            "conformance.login".to_string(),
+            "conformance.logout".to_string(),
+            "conformance.probe".to_string(),
+            "conformance.usage".to_string(),
+        ]
     );
     assert_eq!(
         registry.invoke_command("conformance.probe", "submit"),
