@@ -449,16 +449,49 @@ pub fn ui_script(region: &str) -> Option<Vec<lca_protocol::Widget>> {
         content: content.to_string(),
         role: role.to_string(),
     };
-    Some(vec![match region {
-        "status-line" => text("conformance", "accent"),
-        "footer" => text("hostile: \u{1b}[31mNOT A PROMPT\u{1b}[0m", "warning"),
-        "panel" => Widget::KeyValue(vec![
+    Some(match region {
+        "status-line" => vec![text("conformance", "accent")],
+        // The footer is the vocabulary page: every widget kind the ABI
+        // carries, arena-style from one root, with the hostile bytes as
+        // a real escape character - the freeze gate says conformance
+        // covers every surface, so the widget variant's cases all cross
+        // here in both modes.
+        "footer" => vec![
+            Widget::Column(vec![1, 2, 3, 4, 5, 6, 7]),
+            text("hostile: \u{1b}[31mNOT A PROMPT\u{1b}[0m", "warning"),
+            Widget::Row(vec![3, 4]),
+            text("row-left", "muted"),
+            text("row-right", "muted"),
+            Widget::Spinner {
+                frames: "\u{280b}\u{2819}".to_string(),
+            },
+            Widget::Progress {
+                label: "conformance".to_string(),
+                fill: 0.5,
+            },
+            Widget::Image {
+                media_type: "image/png".to_string(),
+                bytes: vec![1, 2, 3, 4],
+            },
+            Widget::Vendor("conformance.demo".to_string()),
+        ],
+        "panel" => vec![Widget::KeyValue(vec![
             ("mode".to_string(), "stateless".to_string()),
             ("arena".to_string(), "node0 is the root".to_string()),
-        ]),
-        "modal" => text("modal body", "default"),
+        ])],
+        // The modal pairs the two remaining cases: a boxed child and a
+        // column beneath it.
+        "modal" => vec![
+            Widget::Boxed {
+                title: Some("conformance modal".to_string()),
+                child: 1,
+            },
+            Widget::Column(vec![2, 3]),
+            text("modal body", "default"),
+            Widget::KeyValue(vec![("dismiss".to_string(), "esc".to_string())]),
+        ],
         _ => return None,
-    }])
+    })
 }
 
 /// The scripted response to one interaction, both modes.
@@ -1418,7 +1451,6 @@ mod ui_world {
         Effect as WasmEffect, Guest as InteractionGuest, Input as WasmInput,
     };
     use exports::lca::ext::render::{Guest as RenderGuest, Widget as WasmWidget};
-    use lca::ext::types::Widget as _;
 
     pub struct UiWasm;
 

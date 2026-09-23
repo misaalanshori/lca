@@ -423,18 +423,64 @@ async fn ui_regions_and_effects_agree_across_modes() {
         assert_eq!(wasm_tree, native_tree, "tree divergence in {region}");
         let tree = wasm_tree.expect("a scripted tree");
         assert!(!tree.is_empty(), "{region} has content");
-        assert_eq!(tree.nodes.len(), 1, "the script's single root node");
-    }
-
-    // The hostile fixture crossed intact: the HOST must escape it
-    // (lca-tui's sanitizer test is the other half of FR-UI-2).
-    let footer = wasm.render("footer").expect("footer").expect("tree");
-    match &footer.nodes[0] {
-        lca_protocol::Widget::Text { content, .. } => {
-            assert!(content.contains("\u{1b}[31m"), "{content}")
+        if region == "status-line" {
+            assert_eq!(tree.nodes.len(), 1, "a single span needs no arena");
         }
-        other => panic!("a text node, got {other:?}"),
     }
+    // The hostile fixture crossed intact, escape byte and all: the
+    // HOST must defang it on the way out (lca-tui's sanitizer test is
+    // the other half of FR-UI-2).
+    let footer = wasm.render("footer").expect("footer").expect("tree");
+    let hostile = footer
+        .nodes
+        .iter()
+        .find_map(|node| match node {
+            lca_protocol::Widget::Text { content, .. } if content.contains("NOT A PROMPT") => {
+                Some(content.clone())
+            }
+            _ => None,
+        })
+        .expect("the hostile span crossed the boundary");
+    assert!(
+        hostile.contains('\u{1b}'),
+        "the real escape byte survived the ABI: {hostile:?}"
+    );
+
+    // The freeze gate's coverage claim: every widget case crosses the
+    // boundary in both modes (the footer is the vocabulary page).
+    use lca_protocol::Widget as W;
+    let footer_nodes = &footer.nodes;
+    assert!(
+        footer_nodes.iter().any(|w| matches!(w, W::Column(_))),
+        "column"
+    );
+    assert!(footer_nodes.iter().any(|w| matches!(w, W::Row(_))), "row");
+    assert!(
+        footer_nodes.iter().any(|w| matches!(w, W::Spinner { .. })),
+        "spinner"
+    );
+    assert!(
+        footer_nodes.iter().any(|w| matches!(w, W::Progress { .. })),
+        "progress"
+    );
+    assert!(
+        footer_nodes.iter().any(|w| matches!(w, W::Image { .. })),
+        "image"
+    );
+    assert!(
+        footer_nodes.iter().any(|w| matches!(w, W::Vendor(_))),
+        "the reserved vendor case"
+    );
+    let modal = wasm.render("modal").expect("modal").expect("tree");
+    assert!(
+        modal.nodes.iter().any(|w| matches!(w, W::Boxed { .. })),
+        "boxed"
+    );
+    let panel = wasm.render("panel").expect("panel").expect("tree");
+    assert!(
+        panel.nodes.iter().any(|w| matches!(w, W::KeyValue(_))),
+        "keyvalue"
+    );
 
     // Events: the modal branch answers, other regions do nothing.
     assert_eq!(
