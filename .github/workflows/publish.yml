@@ -84,3 +84,88 @@ jobs:
           for image in openai-compatible skills compaction-default antigravity; do
             gh api --method PATCH "/user/packages/container/lca%2F${image}" -f visibility=public || true
           done
+
+  # The release build: reproducible, checksummed, provenance-attested
+  # artifacts for every target the release policy names (NFR-8, NFR-9,
+  # NFR-10 via the six-target matrix; NFR-17 via the double build and
+  # the published checksums).
+  artifacts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: |
+          rustup set profile minimal
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+            x86_64-apple-darwin aarch64-apple-darwin \
+            x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild,cargo-xwin
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      # Verifies: NFR-17 (a tagged commit reproduces byte for byte):
+      # two independent builds with every embedded path remapped to the
+      # same shape must produce the same binary, or the checksums this
+      # job publishes would be a lie.
+      - name: Reproducible double build (linux x86_64 musl)
+        run: |
+          set -euo pipefail
+          common="--remap-path-prefix=$PWD=/src --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+          CARGO_TARGET_DIR=target/repro-a \
+            RUSTFLAGS="$common --remap-path-prefix=$PWD/target/repro-a=/out" \
+            cargo zigbuild --release --target x86_64-unknown-linux-musl
+          CARGO_TARGET_DIR=target/repro-b \
+            RUSTFLAGS="$common --remap-path-prefix=$PWD/target/repro-b=/out" \
+            cargo zigbuild --release --target x86_64-unknown-linux-musl
+          a=target/repro-a/x86_64-unknown-linux-musl/release/lca
+          b=target/repro-b/x86_64-unknown-linux-musl/release/lca
+          sha_a=$(sha256sum "$a" | cut -d" " -f1)
+          sha_b=$(sha256sum "$b" | cut -d" " -f1)
+          echo "$sha_a vs $sha_b"
+          test "$sha_a" = "$sha_b"
+
+      # Verifies: NFR-8 (the two linux musl targets), NFR-9 (the two
+      # macOS targets), NFR-10 (the two Windows MSVC targets): all six
+      # artifacts come out of this one matrix on Linux (the platform
+      # notes name each pair).
+      - name: Build the six release targets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cargo zigbuild --release --target x86_64-unknown-linux-musl
+          cargo zigbuild --release --target aarch64-unknown-linux-musl
+          cargo zigbuild --release --target x86_64-apple-darwin
+          cargo zigbuild --release --target aarch64-apple-darwin
+          cargo xwin build --release --target x86_64-pc-windows-msvc
+          cargo xwin build --release --target aarch64-pc-windows-msvc
+          cp target/x86_64-unknown-linux-musl/release/lca dist/lca-x86_64-unknown-linux-musl
+          cp target/aarch64-unknown-linux-musl/release/lca dist/lca-aarch64-unknown-linux-musl
+          cp target/x86_64-apple-darwin/release/lca dist/lca-x86_64-apple-darwin
+          cp target/aarch64-apple-darwin/release/lca dist/lca-aarch64-apple-darwin
+          cp target/x86_64-pc-windows-msvc/release/lca.exe dist/lca-x86_64-pc-windows-msvc.exe
+          cp target/aarch64-pc-windows-msvc/release/lca.exe dist/lca-aarch64-pc-windows-msvc.exe
+
+      - name: Checksums
+        run: |
+          cd dist && sha256sum * > artifacts.sha256 && cat artifacts.sha256
+
+      - name: Sign the artifacts (provenance attestation)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/lca-*
+            dist/artifacts.sha256
+
+      - name: Attach everything to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release-tag }}
+        run: |
+          gh release upload "$RELEASE_TAG" dist/* --clobber
