@@ -1,7 +1,7 @@
 name = "conformance"
 version = "0.1.0"
 abi = "0.1"
-worlds = ["tool", "command", "hooks", "provider", "compaction", "context-transform"]
+worlds = ["tool", "command", "hooks", "provider", "compaction", "context-transform", "ui"]
 description = "ABI conformance probe covering every world, import, and denied path."
 license = "Apache-2.0"
 
@@ -13,3 +13,6 @@ reason = "Runs probe programs for conformance."
 
 [capabilities.pty]
 reason = "Runs interactive probe programs for conformance."
+
+[capabilities.ui]
+regions = ["status-line", "footer", "panel", "modal"]

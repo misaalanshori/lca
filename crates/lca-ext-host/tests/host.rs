@@ -256,7 +256,8 @@ fn manifest_parses_identity_fields() {
             "hooks".to_string(),
             "provider".to_string(),
             "compaction".to_string(),
-            "context-transform".to_string()
+            "context-transform".to_string(),
+            "ui".to_string()
         ]
     );
     assert!(

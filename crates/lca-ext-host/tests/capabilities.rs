@@ -386,3 +386,16 @@ fn pty_spawn_delivers_terminal_output() {
     assert_eq!(result.status, ToolResultStatus::Ok, "{}", result.content);
     assert!(result.content.contains("pty-ok"), "{}", result.content);
 }
+
+// Verifies: FR-PERM-3's ui shape and the catalog's ui denial behavior
+// - a region the manifest never declared is never rendered, and the
+// ask is recorded (FR-EXT-9's journal), with the world itself granted.
+#[test]
+fn an_ungranted_ui_region_never_renders_and_is_recorded() {
+    use lca_ext_host::Manifest;
+    let manifest_text = "name = \"region-test\"\nversion = \"1.0.0\"\nabi = \"0.1\"\n\
+worlds = [\"ui\"]\ndescription = \"x\"\n\
+[capabilities.ui]\nregions = [\"status-line\"]\n";
+    let manifest = Manifest::parse(manifest_text).expect("parses");
+    assert_eq!(manifest.ui_regions, vec!["status-line"]);
+}

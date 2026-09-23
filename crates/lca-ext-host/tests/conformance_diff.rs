@@ -166,8 +166,8 @@ async fn native_and_wasm_modes_produce_identical_results() {
     assert_eq!(wasm.worlds(), native.worlds());
     assert_eq!(
         wasm.worlds().len(),
-        6,
-        "tool, command, hooks, provider, compaction, context-transform"
+        7,
+        "tool, command, hooks, provider, compaction, context-transform, ui"
     );
     assert_eq!(wasm.delivery(), DeliveryMode::Wasm);
     assert_eq!(native.delivery(), DeliveryMode::Native);
@@ -401,4 +401,64 @@ async fn compaction_and_transform_agree_across_modes_with_completion_denied() {
         .expect("host call")
         .expect("not a rejection");
     assert_eq!(injected.len(), 2, "one appended message");
+}
+
+// Verifies: the Phase 6 conformance cases - both modes return the same
+// tree for every region (NFR-25 over ADR-0003's arena), the hostile
+// span crosses byte for byte so the host is the one that must defang
+// it (FR-UI-2), and interaction effects agree (FR-UI-6's vocabulary).
+#[tokio::test]
+async fn ui_regions_and_effects_agree_across_modes() {
+    let fixture = Fixture::new("diff-ui");
+    let (wasm, native, _engine) = fixture.both_modes();
+
+    assert_eq!(wasm.ui_regions(), native.ui_regions());
+    assert_eq!(wasm.ui_regions().len(), 4, "all four regions granted");
+
+    for region in ["status-line", "footer", "panel", "modal"] {
+        let wasm_tree = wasm.render(region).expect("wasm render");
+        let native_tree = native.render(region).expect("native render");
+        assert_eq!(wasm_tree, native_tree, "tree divergence in {region}");
+        let tree = wasm_tree.expect("a scripted tree");
+        assert!(!tree.is_empty(), "{region} has content");
+        assert_eq!(tree.nodes.len(), 1, "the script's single root node");
+    }
+
+    // The hostile fixture crossed intact: the HOST must escape it
+    // (lca-tui's sanitizer test is the other half of FR-UI-2).
+    let footer = wasm.render("footer").expect("footer").expect("tree");
+    match &footer.nodes[0] {
+        lca_protocol::Widget::Text { content, .. } => {
+            assert!(content.contains("\u{1b}[31m"), "{content}")
+        }
+        other => panic!("a text node, got {other:?}"),
+    }
+
+    // Events: the modal branch answers, other regions do nothing.
+    assert_eq!(
+        wasm.on_ui_event("modal", &lca_protocol::UiInput::Key { key: "q".into() })
+            .expect("event"),
+        native
+            .on_ui_event("modal", &lca_protocol::UiInput::Key { key: "q".into() })
+            .expect("event")
+    );
+    assert_eq!(
+        wasm.on_ui_event("modal", &lca_protocol::UiInput::Key { key: "q".into() })
+            .expect("event"),
+        lca_protocol::UiEffect::CloseModal
+    );
+    assert_eq!(
+        wasm.on_ui_event(
+            "modal",
+            &lca_protocol::UiInput::Submit { text: "hi".into() }
+        )
+        .expect("event"),
+        lca_protocol::UiEffect::ShowNotice("heard: hi".to_string())
+    );
+    assert_eq!(
+        wasm.on_ui_event("panel", &lca_protocol::UiInput::Cancel)
+            .expect("event"),
+        lca_protocol::UiEffect::None,
+        "only the modal region answers"
+    );
 }

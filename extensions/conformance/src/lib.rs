@@ -439,6 +439,43 @@ pub fn compact_excerpts(records: &[lca_protocol::Record]) -> Vec<(String, String
         .collect()
 }
 
+/// The scripted tree for each region - identical in both modes
+/// (NFR-25). The footer carries an escape-sequence span on purpose:
+/// it is the hostile-extension fixture, and the host must render those
+/// bytes literally (FR-UI-2, ADR-0003).
+pub fn ui_script(region: &str) -> Option<Vec<lca_protocol::Widget>> {
+    use lca_protocol::Widget;
+    let text = |content: &str, role: &str| Widget::Text {
+        content: content.to_string(),
+        role: role.to_string(),
+    };
+    Some(vec![match region {
+        "status-line" => text("conformance", "accent"),
+        "footer" => text("hostile: \u{1b}[31mNOT A PROMPT\u{1b}[0m", "warning"),
+        "panel" => Widget::KeyValue(vec![
+            ("mode".to_string(), "stateless".to_string()),
+            ("arena".to_string(), "node0 is the root".to_string()),
+        ]),
+        "modal" => text("modal body", "default"),
+        _ => return None,
+    }])
+}
+
+/// The scripted response to one interaction, both modes.
+pub fn ui_event_script(region: &str, input: &lca_protocol::UiInput) -> lca_protocol::UiEffect {
+    use lca_protocol::{UiEffect, UiInput};
+    if region == "modal" {
+        return match input {
+            UiInput::Key { key } if key == "q" => UiEffect::CloseModal,
+            UiInput::Key { key } if key == "m" => UiEffect::OpenModal,
+            UiInput::Submit { text } => UiEffect::ShowNotice(format!("heard: {text}")),
+            UiInput::Cancel => UiEffect::CloseModal,
+            _ => UiEffect::None,
+        };
+    }
+    UiEffect::None
+}
+
 /// `login` succeeds (ADR-0012: conformance covers all three exports).
 pub fn scripted_login() -> lca_protocol::IdentityOutcome {
     lca_protocol::IdentityOutcome::Ok
@@ -577,7 +614,32 @@ mod native {
                 lca_ext_abi::World::Provider,
                 lca_ext_abi::World::Compaction,
                 lca_ext_abi::World::ContextTransform,
+                lca_ext_abi::World::Ui,
             ]
+        }
+
+        fn ui_regions(&self) -> Vec<String> {
+            vec![
+                "status-line".to_string(),
+                "footer".to_string(),
+                "panel".to_string(),
+                "modal".to_string(),
+            ]
+        }
+
+        fn render(
+            &self,
+            region: &str,
+        ) -> Result<Option<lca_protocol::WidgetTree>, lca_protocol::DispatchError> {
+            Ok(crate::ui_script(region).map(|nodes| lca_protocol::WidgetTree { nodes }))
+        }
+
+        fn on_ui_event(
+            &self,
+            region: &str,
+            input: &lca_protocol::UiInput,
+        ) -> Result<lca_protocol::UiEffect, lca_protocol::DispatchError> {
+            Ok(crate::ui_event_script(region, input))
         }
 
         fn compact(
@@ -1333,4 +1395,71 @@ mod transform_world {
     }
 
     export_transform!(TransformWasm);
+}
+
+// ---------------------------------------------------------------------------
+// WASM delivery mode: the ui world
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims
+mod ui_world {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "ui",
+        export_macro_name: "export_ui",
+        with: {
+            "lca:host/log@0.1.0": generate,
+            "lca:host/ui@0.1.0": generate,
+        },
+    });
+
+    use exports::lca::ext::interaction::{
+        Effect as WasmEffect, Guest as InteractionGuest, Input as WasmInput,
+    };
+    use exports::lca::ext::render::{Guest as RenderGuest, Widget as WasmWidget};
+    use lca::ext::types::Widget as _;
+
+    pub struct UiWasm;
+
+    fn to_wit(widget: lca_protocol::Widget) -> WasmWidget {
+        use lca_protocol::Widget as W;
+        match widget {
+            W::Text { content, role } => WasmWidget::Text((content, role)),
+            W::Image { media_type, bytes } => WasmWidget::Image((media_type, bytes)),
+            W::Boxed { title, child } => WasmWidget::Boxed((title, child)),
+            W::Row(children) => WasmWidget::Row(children),
+            W::Column(children) => WasmWidget::Column(children),
+            W::Spinner { frames } => WasmWidget::Spinner(frames),
+            W::Progress { label, fill } => WasmWidget::Progress((label, fill)),
+            W::KeyValue(pairs) => WasmWidget::Keyvalue(pairs),
+            W::Vendor(kind) => WasmWidget::Vendor(kind),
+        }
+    }
+
+    impl RenderGuest for UiWasm {
+        fn render(region: String) -> Option<Vec<WasmWidget>> {
+            crate::ui_script(&region).map(|nodes| nodes.into_iter().map(to_wit).collect())
+        }
+    }
+
+    impl InteractionGuest for UiWasm {
+        fn handle(region: String, input: WasmInput) -> WasmEffect {
+            let input = match input {
+                WasmInput::Key(key) => lca_protocol::UiInput::Key { key },
+                WasmInput::Submit(text) => lca_protocol::UiInput::Submit { text },
+                WasmInput::Cancel => lca_protocol::UiInput::Cancel,
+            };
+            match crate::ui_event_script(&region, &input) {
+                lca_protocol::UiEffect::None => WasmEffect::None,
+                lca_protocol::UiEffect::CloseModal => WasmEffect::CloseModal,
+                lca_protocol::UiEffect::OpenModal => WasmEffect::OpenModal,
+                lca_protocol::UiEffect::ShowNotice(text) => WasmEffect::ShowNotice(text),
+                lca_protocol::UiEffect::InsertText(text) => WasmEffect::InsertText(text),
+                lca_protocol::UiEffect::SubmitPrompt(text) => WasmEffect::SubmitPrompt(text),
+            }
+        }
+    }
+
+    export_ui!(UiWasm);
 }
