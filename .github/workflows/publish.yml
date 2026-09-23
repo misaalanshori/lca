@@ -208,7 +208,7 @@ jobs:
         run: |
           cd dist && sha256sum * > artifacts.sha256 && cat artifacts.sha256
       - name: Sign the artifacts (provenance attestation)
-        uses: actions/attest-build-provenance
+        uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             dist/*
