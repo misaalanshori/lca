@@ -1,0 +1,23 @@
+package lca:ext@0.1.0;
+
+/// The `compaction` world: one strategy that turns a candidate range of
+/// the session into a replacement summary (ADR-0015, FR-SESS-5). The
+/// host writes what comes back as a durable record; nothing else here
+/// touches storage.
+world compaction {
+  import lca:host/log@0.1.0;
+  /// The default strategy summarizes with the model it asks for through
+  /// the `completion` capability; a mechanical strategy needs no such
+  /// grant and imports only the log.
+  import lca:host/completion@0.1.0;
+  export compact;
+}
+
+interface compact {
+  use types.{session-record};
+
+  /// The candidate range, oldest first, and the strategy's verdict: a
+  /// summary to write as the replacement, or the reason it refuses
+  /// (which ends compaction without a record).
+  compact: func(records: list<session-record>) -> result<string, string>;
+}

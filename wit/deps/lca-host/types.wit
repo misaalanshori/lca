@@ -1,0 +1,44 @@
+package lca:host@0.1.0;
+
+/// The host package's own copies of the records its capability
+/// interfaces carry. They mirror `lca:ext/types` case for case; WIT
+/// cannot express a use across these two packages without a dependency
+/// cycle (lca:ext imports lca:host), so the boundaries map records the
+/// same way every other crossing does - the host already converts at
+/// the provider and capability boundaries.
+interface types {
+  /// One key-value pair reserved for non-structural additions.
+  record extra-pair {
+    key: string,
+    value: string,
+  }
+
+  /// One message handed to `completion`.
+  record tool-call {
+    call-id: string,
+    name: string,
+    arguments: string,
+    extras: list<extra-pair>,
+  }
+
+  record message {
+    /// `system`, `user`, `assistant`, or `tool`.
+    role: string,
+    /// Concatenated text content.
+    content: string,
+    tool-calls: list<tool-call>,
+    tool-call-id: option<string>,
+    extras: list<extra-pair>,
+  }
+
+  /// Token usage and cost, identical to the provider world's record.
+  record usage {
+    input: u64,
+    output: u64,
+    cache-read: u64,
+    cache-write: u64,
+    cache-write-hour: u64,
+    cost: f64,
+    extras: list<extra-pair>,
+  }
+}

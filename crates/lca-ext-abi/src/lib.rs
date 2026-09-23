@@ -26,6 +26,12 @@ pub enum World {
     /// Offer models, streamed completions, and account identity
     /// (`provider` world, ADR-0004/ADR-0012).
     Provider,
+    /// Turn a candidate range of the session into a replacement summary
+    /// (`compaction` world, ADR-0015, FR-SESS-5).
+    Compaction,
+    /// Reshape the outgoing message list, or reject the turn
+    /// (`context-transform` world, ADR-0015, FR-CTX-2/3).
+    ContextTransform,
 }
 
 /// Whether this handle runs sandboxed (WASM) or in-process (native); the
@@ -65,8 +71,9 @@ pub mod dispatch {
 
     use crate::{DeliveryMode, World};
     use lca_protocol::{
-        CommandEffect, CommandSpec, CompletionRequest, DispatchError, EventSink, HookAction,
-        IdentityOutcome, ModelInfo, PostToolObservation, ToolCall, ToolResult, ToolSpec, Usage,
+        ChatMessage, CommandEffect, CommandSpec, CompletionRequest, DispatchError, EventSink,
+        HookAction, IdentityOutcome, ModelInfo, PostToolObservation, Record, ToolCall, ToolResult,
+        ToolSpec, Usage,
     };
 
     /// Boxed future bound for dispatch calls, tied to the handle's life.
@@ -197,6 +204,37 @@ pub mod dispatch {
             Box::pin(std::future::ready(Ok(Err(IdentityOutcome::NotSupported))))
         }
 
+        /// Compact a candidate range of the session into a replacement
+        /// summary (`compaction` world, FR-SESS-5/FR-CTX-1). The host
+        /// writes what comes back as a durable record and reuses it on
+        /// later reads; an error means no record and no compaction.
+        fn compact(
+            &self,
+            _records: &[Record],
+        ) -> DispatchFuture<'static, Result<String, DispatchError>> {
+            Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
+                extension: self.name().to_string(),
+                world: "compaction",
+            })))
+        }
+
+        /// Reshape the outgoing messages (`context-transform` world,
+        /// FR-CTX-2). `Err(reason)` is a rejection: the host ends the
+        /// turn with that reason and never calls the provider
+        /// (FR-CTX-3). The default passes the list through unchanged;
+        /// only handles whose `worlds` include `ContextTransform` are
+        /// ever asked.
+        fn transform_messages(
+            &self,
+            messages: Vec<ChatMessage>,
+        ) -> DispatchFuture<'static, Result<Result<Vec<ChatMessage>, String>, DispatchError>>
+        {
+            // The outer Result separates a host-level failure (trap,
+            // disabled) from the extension's own verdict; the inner is
+            // the transformed list or the rejection reason (FR-CTX-3).
+            Box::pin(std::future::ready(Ok(Ok(messages))))
+        }
+
         /// Force a running call to trap: Wasmtime epoch interruption for
         /// WASM handles (FR-CONC-1), a no-op for native code that shares
         /// the caller's cancellation flag.
@@ -230,5 +268,15 @@ pub mod host {
     /// The `provider` world (streaming, identity, model listing).
     pub mod provider {
         wasmtime::component::bindgen!({ path: "../../wit", world: "provider" });
+    }
+
+    /// The `compaction` world.
+    pub mod compaction {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "compaction" });
+    }
+
+    /// The `context-transform` world.
+    pub mod context_transform {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "context-transform" });
     }
 }

@@ -1,0 +1,17 @@
+package lca:ext@0.1.0;
+
+/// The `context-transform` world: reshape the resolved message list on
+/// every turn, touching nothing durable (ADR-0015, FR-CTX-2/3/4).
+world context-transform {
+  import lca:host/log@0.1.0;
+  export transform;
+}
+
+interface transform {
+  use types.{message};
+
+  /// The resolved messages about to go to the model, and either the
+  /// reshaped list or a rejection reason that ends the turn before any
+  /// provider call (FR-CTX-3).
+  transform: func(messages: list<message>) -> result<list<message>, string>;
+}

@@ -60,6 +60,9 @@ pub struct CapabilityGrants {
     /// The credentials capability, when declared (FR-PERM-6): the
     /// namespace is always `self.name`, never guest input.
     pub credentials: bool,
+    /// The `completion` capability, when declared (ADR-0015): ask the
+    /// host for a response from the active provider.
+    pub completion: bool,
 }
 
 type HttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<hyper::body::Bytes>>;
@@ -69,6 +72,21 @@ type HttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<hyper
 struct OAuthFlow {
     rx: Option<std::sync::mpsc::Receiver<Vec<(String, String)>>>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The host-mediated model call (capability catalog `completion`): a
+/// granted extension asks; the host routes to whichever provider is
+/// currently active, which keeps the extension graph a star with the
+/// host at the center (ADR-0008, ADR-0015). Synchronous by contract:
+/// the callers are blocking regions (ADR-0014), and the backend does
+/// its own runtime bridging.
+pub trait CompletionBackend: Send + Sync {
+    /// One non-streaming completion: the assistant text plus the usage
+    /// the host attributes to the session record that caused the call.
+    fn complete(
+        &self,
+        messages: &[lca_protocol::ChatMessage],
+    ) -> Result<(String, lca_protocol::Usage), String>;
 }
 
 /// The runtime capability calls fall back to when no ambient runtime
@@ -123,6 +141,10 @@ pub struct Capabilities {
     store: Arc<Mutex<GrantStore>>,
     project: PathBuf,
     proposals: Option<Proposals>,
+    completion: Arc<Mutex<Option<Arc<dyn CompletionBackend>>>>,
+    /// Usage summed from `completion` calls since the caller last
+    /// drained it; the host attributes it to the causing record.
+    completion_usage: Arc<Mutex<Option<lca_protocol::Usage>>>,
     denials: Arc<Mutex<Vec<Denial>>>,
     /// Auth URLs the extension asked to open (host diagnostics; the
     /// provider-flow tests read the state from here).
@@ -162,6 +184,8 @@ impl Capabilities {
             store,
             project,
             proposals,
+            completion: Arc::new(Mutex::new(None)),
+            completion_usage: Arc::new(Mutex::new(None)),
             denials: Arc::new(Mutex::new(Vec::new())),
             oauth_opened: Arc::new(Mutex::new(Vec::new())),
             handles: Arc::new(Mutex::new(HandleTable::default())),
@@ -206,6 +230,68 @@ impl Capabilities {
     /// Every recorded refusal (FR-EXT-9's data).
     pub fn denials(&self) -> Vec<Denial> {
         self.denials.lock().expect("denial lock").clone()
+    }
+
+    /// Attach the backend behind the `completion` capability (the host
+    /// routes to the active provider; ADR-0008's star topology).
+    pub fn set_completion(&self, backend: Arc<dyn CompletionBackend>) {
+        *self.completion.lock().expect("completion lock") = Some(backend);
+    }
+
+    /// Ask the host for one response (capability catalog `completion`).
+    /// Undeclared means permission-denied and recorded (FR-PERM-3);
+    /// declared without a backend means there is no provider to ask.
+    pub fn complete(
+        &self,
+        messages: Vec<lca_protocol::ChatMessage>,
+    ) -> Result<(String, lca_protocol::Usage), CapabilityError> {
+        if !self.grants.completion {
+            return Err(self.refused(
+                "completion",
+                &self.name,
+                CapabilityError::NotGranted(
+                    "the manifest does not declare the completion capability".to_string(),
+                ),
+            ));
+        }
+        let backend = {
+            let slot = self.completion.lock().expect("completion lock");
+            slot.clone()
+        };
+        let Some(backend) = backend else {
+            return Err(self.refused(
+                "completion",
+                &self.name,
+                CapabilityError::Invalid("no active provider is available".to_string()),
+            ));
+        };
+        let (text, usage) = backend.complete(&messages).map_err(|detail| {
+            let err = CapabilityError::Io(format!("completion failed: {detail}"));
+            self.record("completion", &self.name, &err.to_string());
+            err
+        })?;
+        let mut slot = self.completion_usage.lock().expect("completion lock");
+        let total = slot.get_or_insert_with(lca_protocol::Usage::default);
+        total.input += usage.input;
+        total.output += usage.output;
+        total.cache_read += usage.cache_read;
+        total.cache_write += usage.cache_write;
+        total.cache_write_1h += usage.cache_write_1h;
+        total.cost += usage.cost;
+        total.cost_input += usage.cost_input;
+        total.cost_cache_read += usage.cost_cache_read;
+        total.cost_cache_write += usage.cost_cache_write;
+        Ok((text, usage))
+    }
+
+    /// Usage accumulated by `completion` calls since the last drain;
+    /// the caller attributes it to the session record it is about to
+    /// write (capability catalog: spend shows in session cost).
+    pub fn take_completion_usage(&self) -> Option<lca_protocol::Usage> {
+        self.completion_usage
+            .lock()
+            .expect("completion lock")
+            .take()
     }
 
     /// Every URL this extension asked the host to open, in order: how

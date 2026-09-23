@@ -1,0 +1,32 @@
+package lca:host@0.1.0;
+
+/// The `completion` capability: ask the host for a response from
+/// whichever provider is currently active, instead of the extension
+/// making its own model call. The star topology of ADR-0008 - the
+/// extension never calls another extension, it asks the host (ADR-0015,
+/// capability catalog `completion`).
+interface completion {
+  use types.{extra-pair, message, usage};
+
+  variant error {
+    /// Refused: the manifest does not declare the capability, or the
+    /// grant is missing; the host records it (FR-PERM-3).
+    permission(string),
+    not-granted(string),
+    /// The host could not complete, e.g. no provider is enabled.
+    io(string),
+    invalid(string),
+  }
+
+  /// One non-streaming response in the typed shape the provider world's
+  /// events resolve into. The host records `usage` on the session
+  /// record that caused the call (a `compaction` record for a
+  /// summarization), so the spend shows in session cost.
+  record response {
+    text: string,
+    usage: usage,
+    extras: list<extra-pair>,
+  }
+
+  request: func(messages: list<message>) -> result<response, error>;
+}

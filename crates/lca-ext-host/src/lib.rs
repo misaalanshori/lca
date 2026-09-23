@@ -23,6 +23,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use lca_ext_abi::host::compaction::CompactionPre;
+use lca_ext_abi::host::context_transform::ContextTransformPre;
 use lca_ext_abi::host::provider::ProviderPre;
 use lca_ext_abi::host::tool::{Tool, ToolPre};
 use lca_ext_abi::{DeliveryMode, World};
@@ -96,6 +98,8 @@ pub struct Manifest {
     /// The credential namespace, when declared; must equal `name`
     /// (FR-PERM-6, no cross-namespace read at any level, FR-PERM-7).
     pub credentials: bool,
+    /// The `completion` capability was declared (ADR-0015).
+    pub completion: bool,
 }
 
 fn reason_of(value: &toml::Value, key: &str) -> Result<String, LoadError> {
@@ -159,6 +163,7 @@ impl Manifest {
         let mut parsed_net_local: Vec<lca_permissions::LocalPattern> = Vec::new();
         let mut parsed_oauth: Option<OAuthSettings> = None;
         let mut parsed_credentials = false;
+        let mut parsed_completion = false;
         if let Some(capabilities) = value.get("capabilities") {
             let table = capabilities.as_table().ok_or_else(|| {
                 LoadError::InvalidManifest("`capabilities` must be a table".into())
@@ -271,6 +276,13 @@ impl Manifest {
                 });
             }
             let mut credentials = false;
+            let mut completion = false;
+            if let Some(cap) = table.get("completion") {
+                // The reason is required (capability catalog): consent
+                // text uses it verbatim.
+                reason_of(cap, "capabilities.completion")?;
+                completion = true;
+            }
             if let Some(cap) = table.get("credentials") {
                 let namespace = cap
                     .get("namespace")
@@ -292,6 +304,7 @@ impl Manifest {
             parsed_net_local = net_local;
             parsed_oauth = oauth;
             parsed_credentials = credentials;
+            parsed_completion = completion;
         }
 
         Ok(Manifest {
@@ -306,6 +319,7 @@ impl Manifest {
             net_local: parsed_net_local,
             oauth: parsed_oauth,
             credentials: parsed_credentials,
+            completion: parsed_completion,
         })
     }
 
@@ -920,6 +934,7 @@ impl ExtHost {
                 // ad hoc grants (FR-PERM-16) from user consent.
                 oauth: manifest.oauth.clone(),
                 credentials: manifest.credentials,
+                completion: manifest.completion,
             },
             self.env.roots.clone(),
             self.env.prompt.clone(),
@@ -964,6 +979,15 @@ impl ExtHost {
                     .map_err(|err| LoadError::Link(err.to_string()))
             })
             .transpose()?;
+        if manifest.completion {
+            // The compaction world's `completion` import; `log` is
+            // already defined by the tool world above.
+            lca_ext_abi::host::compaction::lca::host::completion::add_to_linker::<_, HasSelf<_>>(
+                &mut linker,
+                |state| state,
+            )
+            .expect("completion imports");
+        }
         let provider = declares_provider
             .then(|| ProviderPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string())))
             .transpose()?;
@@ -972,9 +996,23 @@ impl ExtHost {
             .iter()
             .any(|world| world == "hooks")
             .then(|| {
-                lca_ext_abi::host::hooks::HooksPre::new(pre)
+                lca_ext_abi::host::hooks::HooksPre::new(pre.clone())
                     .map_err(|err| LoadError::Link(err.to_string()))
             })
+            .transpose()?;
+        let compaction = manifest
+            .worlds
+            .iter()
+            .any(|world| world == "compaction")
+            .then(|| {
+                CompactionPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string()))
+            })
+            .transpose()?;
+        let context_transform = manifest
+            .worlds
+            .iter()
+            .any(|world| world == "context-transform")
+            .then(|| ContextTransformPre::new(pre).map_err(|err| LoadError::Link(err.to_string())))
             .transpose()?;
 
         Ok(WasmExtension {
@@ -986,6 +1024,8 @@ impl ExtHost {
                 command,
                 hooks,
                 provider,
+                compaction,
+                context_transform,
                 limits: self.limits.clone(),
                 enabled: Arc::new(AtomicBool::new(true)),
                 logs: Arc::new(Mutex::new(Vec::new())),
@@ -1007,6 +1047,8 @@ struct Inner {
     command: Option<lca_ext_abi::host::command::CommandPre<HostState>>,
     hooks: Option<lca_ext_abi::host::hooks::HooksPre<HostState>>,
     provider: Option<ProviderPre<HostState>>,
+    compaction: Option<CompactionPre<HostState>>,
+    context_transform: Option<ContextTransformPre<HostState>>,
     limits: ExtensionLimits,
     enabled: Arc<AtomicBool>,
     logs: Arc<Mutex<Vec<String>>>,
@@ -1292,6 +1334,111 @@ fn session_close_work(inner: &Inner) -> Result<(), CallError> {
 }
 
 // ---------------------------------------------------------------------------
+// The `completion` capability: the host's side of ADR-0008's star
+// ---------------------------------------------------------------------------
+
+use lca_ext_abi::host::compaction::exports::lca::ext as compaction_exports;
+use lca_ext_abi::host::compaction::lca::host::completion as wit_cap_completion;
+use lca_ext_abi::host::context_transform::exports::lca::ext as transform_exports;
+
+fn completion_error(err: CapabilityError) -> wit_cap_completion::Error {
+    use wit_cap_completion::Error as E;
+    match err {
+        CapabilityError::Permission(detail) => E::Permission(detail),
+        CapabilityError::NotGranted(detail) => E::NotGranted(detail),
+        CapabilityError::NotFound(_) | CapabilityError::Timeout(_) => E::Io("unavailable".into()),
+        CapabilityError::Io(detail) => E::Io(detail),
+        CapabilityError::Invalid(detail) => E::Invalid(detail),
+    }
+}
+
+/// `lca:host/types.message` -> the protocol message (the host package
+/// keeps its own copies of the records; this is the crossing).
+fn from_host_message(
+    message: lca_ext_abi::host::compaction::lca::host::types::Message,
+) -> lca_protocol::ChatMessage {
+    use lca_protocol::{ChatMessage, ContentBlock, MessageRole};
+    ChatMessage {
+        role: match message.role.as_str() {
+            "system" => MessageRole::System,
+            "user" => MessageRole::User,
+            "assistant" => MessageRole::Assistant,
+            _ => MessageRole::Tool,
+        },
+        content: if message.content.is_empty() {
+            Vec::new()
+        } else {
+            vec![ContentBlock::Text {
+                text: message.content,
+            }]
+        },
+        tool_calls: message
+            .tool_calls
+            .iter()
+            .map(|call| ToolCall {
+                call_id: call.call_id.clone(),
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
+            })
+            .collect(),
+        tool_call_id: message.tool_call_id,
+        usage: None,
+        extras: Default::default(),
+    }
+}
+
+/// The protocol reply -> `lca:host/completion.response`.
+fn to_host_response(text: String, usage: lca_protocol::Usage) -> wit_cap_completion::Response {
+    let mut extras = usage
+        .extras
+        .iter()
+        .map(
+            |(key, value)| lca_ext_abi::host::compaction::lca::host::types::ExtraPair {
+                key: key.clone(),
+                value: value.clone(),
+            },
+        )
+        .collect::<Vec<_>>();
+    for (key, value) in [
+        ("cost_input", usage.cost_input),
+        ("cost_cache_read", usage.cost_cache_read),
+        ("cost_cache_write", usage.cost_cache_write),
+    ] {
+        if value != 0.0 {
+            extras.push(lca_ext_abi::host::compaction::lca::host::types::ExtraPair {
+                key: key.to_string(),
+                value: value.to_string(),
+            });
+        }
+    }
+    use lca_ext_abi::host::compaction::lca::host::types::Usage as HostUsage;
+    wit_cap_completion::Response {
+        text,
+        usage: HostUsage {
+            input: usage.input,
+            output: usage.output,
+            cache_read: usage.cache_read,
+            cache_write: usage.cache_write,
+            cache_write_hour: usage.cache_write_1h,
+            cost: usage.cost,
+            extras,
+        },
+        extras: Vec::new(),
+    }
+}
+
+impl wit_cap_completion::Host for HostState {
+    fn request(
+        &mut self,
+        messages: Vec<lca_ext_abi::host::compaction::lca::host::types::Message>,
+    ) -> Result<wit_cap_completion::Response, wit_cap_completion::Error> {
+        let messages = messages.into_iter().map(from_host_message).collect();
+        let (text, usage) = self.cap.complete(messages).map_err(completion_error)?;
+        Ok(to_host_response(text, usage))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Provider-world work: model listing, the streaming completion, identity
 // ---------------------------------------------------------------------------
 
@@ -1418,6 +1565,139 @@ fn from_wit_identity_usage(usage: wit_identity::TokenUsage) -> Usage {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Compaction and context-transform work
+// ---------------------------------------------------------------------------
+
+fn to_wit_session_record(
+    record: &lca_protocol::Record,
+) -> compaction_exports::compact::SessionRecord {
+    compaction_exports::compact::SessionRecord {
+        kind: record.type_tag().to_string(),
+        id: record.id().unwrap_or_default().to_string(),
+        body: serde_json::to_string(record).unwrap_or_default(),
+        extras: Vec::new(),
+    }
+}
+
+fn compact_work(inner: &Inner, records: Vec<lca_protocol::Record>) -> Result<String, CallError> {
+    let pre = inner
+        .compaction
+        .as_ref()
+        .ok_or_else(|| CallError::InvalidArguments("no compaction world".into()))?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let wit_records: Vec<_> = records.iter().map(to_wit_session_record).collect();
+    let summary = instance
+        .lca_ext_compact()
+        .call_compact(&mut store, &wit_records)
+        .map_err(|err| inner.classify(err))?;
+    summary.map_err(|reason| CallError::InvalidArguments(format!("compaction refused: {reason}")))
+}
+
+/// Protocol messages -> the `context-transform` world's WIT records.
+fn to_wit_messages(
+    messages: &[lca_protocol::ChatMessage],
+) -> Vec<transform_exports::transform::Message> {
+    use transform_exports::transform::Message as WitMessage;
+    messages
+        .iter()
+        .map(|message| WitMessage {
+            role: match message.role {
+                lca_protocol::MessageRole::System => "system".to_string(),
+                lca_protocol::MessageRole::User => "user".to_string(),
+                lca_protocol::MessageRole::Assistant => "assistant".to_string(),
+                lca_protocol::MessageRole::Tool => "tool".to_string(),
+            },
+            content: message
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    lca_protocol::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+            tool_calls: message
+                .tool_calls
+                .iter()
+                .map(
+                    |call| lca_ext_abi::host::context_transform::lca::ext::types::ToolCall {
+                        call_id: call.call_id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                        extras: Vec::new(),
+                    },
+                )
+                .collect(),
+            tool_call_id: message.tool_call_id.clone(),
+            extras: Vec::new(),
+        })
+        .collect()
+}
+
+fn from_wit_messages(
+    messages: Vec<transform_exports::transform::Message>,
+) -> Vec<lca_protocol::ChatMessage> {
+    messages
+        .into_iter()
+        .map(|message| lca_protocol::ChatMessage {
+            role: match message.role.as_str() {
+                "system" => lca_protocol::MessageRole::System,
+                "user" => lca_protocol::MessageRole::User,
+                "assistant" => lca_protocol::MessageRole::Assistant,
+                _ => lca_protocol::MessageRole::Tool,
+            },
+            content: if message.content.is_empty() {
+                Vec::new()
+            } else {
+                vec![lca_protocol::ContentBlock::Text {
+                    text: message.content,
+                }]
+            },
+            tool_calls: message
+                .tool_calls
+                .iter()
+                .map(|call| ToolCall {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                })
+                .collect(),
+            tool_call_id: message.tool_call_id,
+            usage: None,
+            extras: Default::default(),
+        })
+        .collect()
+}
+
+/// One transform pass: the guest's `Err(reason)` is the rejection
+/// (FR-CTX-3), not a host failure.
+fn transform_work(
+    inner: &Inner,
+    messages: Vec<lca_protocol::ChatMessage>,
+) -> Result<Result<Vec<lca_protocol::ChatMessage>, String>, CallError> {
+    let pre = inner
+        .context_transform
+        .as_ref()
+        .ok_or_else(|| CallError::InvalidArguments("no context-transform world".into()))?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let wit_messages = to_wit_messages(&messages);
+    let outcome = instance
+        .lca_ext_transform()
+        .call_transform(&mut store, &wit_messages)
+        .map_err(|err| inner.classify(err))?;
+    Ok(match outcome {
+        Ok(list) => Ok(from_wit_messages(list)),
+        Err(reason) => Err(reason),
+    })
+}
+
 /// One loaded extension (ADR-0019's handle for the WASM mode).
 pub struct WasmExtension {
     inner: Arc<Inner>,
@@ -1541,6 +1821,8 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
                 "command" => Some(World::Command),
                 "hooks" => Some(World::Hooks),
                 "provider" => Some(World::Provider),
+                "compaction" => Some(World::Compaction),
+                "context-transform" => Some(World::ContextTransform),
                 _ => None,
             })
             .collect()
@@ -1820,6 +2102,48 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
                 });
             }
             pool_call(inner, identity_usage_work)
+                .await
+                .map_err(|err| to_dispatch(err, &extension))
+        })
+    }
+
+    fn compact(
+        &self,
+        records: &[lca_protocol::Record],
+    ) -> lca_ext_abi::DispatchFuture<'static, Result<String, DispatchError>> {
+        if !self.worlds().contains(&World::Compaction) {
+            return Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
+                extension: self.name().to_string(),
+                world: "compaction",
+            })));
+        }
+        let records = records.to_vec();
+        let inner = self.inner.clone();
+        let extension = inner.name.clone();
+        Box::pin(async move {
+            pool_call(inner, move |inner| compact_work(inner, records))
+                .await
+                .map_err(|err| to_dispatch(err, &extension))
+        })
+    }
+
+    fn transform_messages(
+        &self,
+        messages: Vec<lca_protocol::ChatMessage>,
+    ) -> lca_ext_abi::DispatchFuture<
+        'static,
+        Result<Result<Vec<lca_protocol::ChatMessage>, String>, DispatchError>,
+    > {
+        if !self.worlds().contains(&World::ContextTransform) {
+            return Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
+                extension: self.name().to_string(),
+                world: "context-transform",
+            })));
+        }
+        let inner = self.inner.clone();
+        let extension = inner.name.clone();
+        Box::pin(async move {
+            pool_call(inner, move |inner| transform_work(inner, messages))
                 .await
                 .map_err(|err| to_dispatch(err, &extension))
         })
