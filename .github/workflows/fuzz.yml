@@ -9,7 +9,10 @@ name: fuzz
 
 on:
   schedule:
-    - cron: "174 * * * *"
+    # Daily at04:17 UTC, off the push path (the testing plan's
+    # dedicated schedule). Minute17 keeps it clear of the hour's
+    # other scheduled jobs.
+    - cron: "17 4 * * *"
   workflow_dispatch:
 
 env:
