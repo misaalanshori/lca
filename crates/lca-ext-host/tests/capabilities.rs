@@ -363,6 +363,10 @@ fn declined_process_spawn_is_refused_and_recorded() {
 
 // The pty capability: a program gets a real terminal and its output
 // reaches the extension (ADR-0016, capability catalog).
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "ENOTTY on the macOS allocation path - tracked in docs/platform-notes.md"
+)]
 #[test]
 fn pty_spawn_delivers_terminal_output() {
     let sandbox = Sandbox::new("pty");

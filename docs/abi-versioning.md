@@ -22,7 +22,7 @@ A minor version change adds surface. Existing extensions keep working. New exten
 
 A patch version change fixes documentation, comments, or tooling. The interface bytes do not change.
 
-The manifest declares a line as `major.minor`. An extension declaring `abi = "0.1"` targets any 0.1.x.
+The manifest declares a line as `major.minor`. An extension declaring `abi = "1.0"` targets any 1.0.x (plus the freeze grandfather,0.1, per the amnesty below).
 
 During 0.x, the minor position behaves as the breaking position, which is the normal semver convention for pre-1.0 and is why the ABI freezes at 1.0 in Phase 8.
 

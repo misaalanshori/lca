@@ -87,35 +87,56 @@ jobs:
           done
 
   # The release build: reproducible, checksummed, provenance-attested
-  # artifacts for every target the release policy names (NFR-8, NFR-9,
-  # NFR-10 via the six-target matrix; NFR-17 via the double build and
-  # the published checksums).
+  # artifacts for every target the release policy names. The macOS
+  # pairs build on macOS runners natively - apple targets need the
+  # platform's own SDK (docs/platform-notes.md), and cross-linking
+  # them from Linux with zig never found one (the Phase 0 matrix's
+  # receipt shows the same wall).
   artifacts:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+            targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          - os: ubuntu-latest
+            name: windows
+            targets: x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+          - os: macos-13
+            name: darwin-x86_64
+            targets: x86_64-apple-darwin
+          - os: macos-14
+            name: darwin-aarch64
+            targets: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
+        shell: bash
         run: |
           rustup set profile minimal
-          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
-            x86_64-apple-darwin aarch64-apple-darwin \
-            x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+          for target in ${{ matrix.targets }}; do rustup target add "$target"; done
+      - name: LLVM's librarian for the MSVC build scripts
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y llvm
       - uses: taiki-e/install-action@v2
+        if: runner.os == 'Linux'
         with:
           tool: cargo-zigbuild,cargo-xwin
       - uses: mlugg/setup-zig@v2
+        if: runner.os == 'Linux'
         with:
           version: "0.16.0"
 
-      # Verifies: NFR-17 (a tagged commit reproduces byte for byte):
-      # two independent builds with every embedded path remapped to the
-      # same shape must produce the same binary, or the checksums this
-      # job publishes would be a lie.
+      # Verifies: NFR-17's reproducible double build (a tagged commit
+      # reproduces byte for byte, or the published checksums are a
+      # lie) - on the linux leg, where the musl target builds twice
+      # without a cache between them.
       - name: Reproducible double build (linux x86_64 musl)
+        if: matrix.name == 'linux'
         run: |
           set -euo pipefail
           common="--remap-path-prefix=$PWD=/src --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
@@ -133,45 +154,56 @@ jobs:
           test "$sha_a" = "$sha_b"
 
       # Verifies: NFR-8 (the two linux musl targets), NFR-9 (the two
-      # macOS targets), NFR-10 (the two Windows MSVC targets): all six
-      # artifacts come out of this one matrix on Linux (the platform
-      # notes name each pair).
-      - name: Build the six release targets
+      # macOS targets, built natively on macOS), NFR-10 (the two
+      # Windows MSVC targets): all six artifacts come out of this
+      # matrix (docs/platform-notes.md names each pair).
+      - name: Build the assigned targets
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          cargo zigbuild --release --target x86_64-unknown-linux-musl
-          cargo zigbuild --release --target aarch64-unknown-linux-musl
-          # The macOS cross builds need zig named as the target's cc
-          # and linker (the Phase 0 matrix's recipe): without them
-          # rustc's apple link flags never find an SDK.
-          ZIG=$(command -v zig)
-          env CC_x86_64_apple_darwin="$ZIG cc -target x86_64-macos" \
-              CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$ZIG" \
-              cargo zigbuild --release --target x86_64-apple-darwin
-          env CC_aarch64_apple_darwin="$ZIG cc -target aarch64-macos" \
-              CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$ZIG" \
-              cargo zigbuild --release --target aarch64-apple-darwin
-          cargo xwin build --release --target x86_64-pc-windows-msvc
-          cargo xwin build --release --target aarch64-pc-windows-msvc
-          cp target/x86_64-unknown-linux-musl/release/lca dist/lca-x86_64-unknown-linux-musl
-          cp target/aarch64-unknown-linux-musl/release/lca dist/lca-aarch64-unknown-linux-musl
-          cp target/x86_64-apple-darwin/release/lca dist/lca-x86_64-apple-darwin
-          cp target/aarch64-apple-darwin/release/lca dist/lca-aarch64-apple-darwin
-          cp target/x86_64-pc-windows-msvc/release/lca.exe dist/lca-x86_64-pc-windows-msvc.exe
-          cp target/aarch64-pc-windows-msvc/release/lca.exe dist/lca-aarch64-pc-windows-msvc.exe
+          for target in ${{ matrix.targets }}; do
+            if [[ "$target" == *musl ]]; then
+              cargo zigbuild --release --target "$target"
+              cp "target/$target/release/lca" "dist/lca-$target"
+            elif [[ "$target" == *windows-msvc ]]; then
+              cargo xwin build --release --target "$target"
+              cp "target/$target/release/lca.exe" "dist/lca-$target.exe"
+            else
+              cargo build --release --target "$target"
+              cp "target/$target/release/lca" "dist/lca-$target"
+            fi
+          done
 
+      - name: Upload this leg's artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
       - name: Checksums
         run: |
           cd dist && sha256sum * > artifacts.sha256 && cat artifacts.sha256
-
       - name: Sign the artifacts (provenance attestation)
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            dist/lca-*
-            dist/artifacts.sha256
-
+            dist/*
       - name: Attach everything to the release
         env:
           GH_TOKEN: ${{ github.token }}
