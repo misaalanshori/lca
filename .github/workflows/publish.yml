@@ -121,12 +121,16 @@ jobs:
           for target in ${{ matrix.targets }}; do rustup target add "$target"; done
       - name: LLVM19 for the MSVC build scripts
         if: runner.os == 'Linux'
-        # Version-pinned: clang-cl19 matches the local receipt; the
-        # image's default clang disagrees with xwin's headers on
-        # intrin.h's __prefetch (wasmtime-fiber's windows.c).
+        # apt.llvm.org's19 is19.1.7 - the exact version both windows
+        # exes built with locally. Ubuntu's archive ships19.1.1, whose
+        # clang-cl disagrees with xwin's intrin.h over __prefetch
+        # (wasmtime-fiber's windows.c fails to compile there and only
+        # there).
         run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-19 clang-19
+          curl -sSfL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 19
+          sudo apt-get install -y -q clang-19
       - uses: taiki-e/install-action@v2
         if: runner.os == 'Linux'
         with:
