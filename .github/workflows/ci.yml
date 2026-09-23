@@ -38,6 +38,10 @@ jobs:
       - name: tests (nextest)
         run: cargo nextest run --workspace --no-fail-fast
       # Verifies: NFR-30 (advisory before Phase 8, required from Phase 8).
+      # Verifies: NFR-5's real bound: hook overhead measured against a
+      # release wasmtime (debug instrumentation dominates the1 ms).
+      - name: nfr release gates
+        run: cargo nextest run --release -p lca-ext-host -E 'test(/nfr|instantiation|hook|epoch/)'
       # Verifies: NFR-16 (dependency license and advisory checks on merge).
       - name: cargo-deny
         if: runner.os == 'Linux'

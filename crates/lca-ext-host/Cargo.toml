@@ -20,5 +20,10 @@ serde_json.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+conformance = { path = "../../extensions/conformance" }
+lca-ext-native = { path = "../lca-ext-native" }
+tokio.workspace = true
+
 [lints]
 workspace = true

@@ -1323,7 +1323,9 @@ name = "lca-ext-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "conformance",
  "lca-ext-abi",
+ "lca-ext-native",
  "lca-permissions",
  "lca-protocol",
  "lca-tools",

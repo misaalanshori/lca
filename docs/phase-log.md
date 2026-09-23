@@ -125,3 +125,51 @@ capabilities with their conformance cases (FR-PERM-12 and friends), the
 full conformance extension diffed across native and WASM modes, one
 built-in behavior moved onto the extension path, and the NFR-4, NFR-5,
 and NFR-29 measurements.
+
+## Phase 2 — the extension host: PASS (local gates; pipeline legs tracked under Phase 1's CI blocker)
+
+Exit test: "the conformance extension passes in native mode and WASM
+mode with identical results, a trapping extension disables itself without
+taking down the session, and a cancelled turn interrupts a running
+extension call within the latency bound in NFR-29."
+
+Evidence:
+
+- **Identical results**: `crates/lca-ext-host/tests/conformance_diff.rs`
+  runs the multi-world conformance extension (tool, command, hooks; fs,
+  process, pty imports) through `Arc<dyn ExtensionDispatch>` handles built
+  both ways — WASM via `ExtHost::load`, native via
+  `conformance::NativeConformance` — over the same roots, prompt, and
+  grant store, and asserts exact `ToolResult`/`CommandEffect`/
+  `HookAction` equality across seven execution scenarios (grant success,
+  scope escape refusal, ungranted scope, listing, process spawn, pty
+  spawn), both command effects, and both hook verdicts. Both handles were
+  registered through `lca_ext_native::NativeRegistry`, the same handle
+  type core uses (FR-EXT-6).
+- **Trap does not take down the session**:
+  `a_trapping_extension_is_reported_and_the_session_survives` traps the
+  WASM extension mid-turn and asserts an `extension-event` on the wire
+  and in the log, an error result back to the model, and a normal
+  assistant record after recovery (FR-EXT-3); `host.rs` additionally
+  asserts the disable bit and that the host still loads other extensions.
+- **NFR-29**: `epoch_interruption_traps_within_fifty_milliseconds`
+  measures epoch increment to instance trap with an unlimited fuel
+  budget (median well under50 ms), and the loop-level test cancels a
+  spinning extension call mid-turn and gets `StopReason::Cancelled` with
+  completed records kept (FR-CONC-1, FR-CONC-3). NFR-4 (instantiation
+  <=20 ms) and NFR-5 (hook overhead <=1 ms) are asserted in the same
+  file; the release-mode bound for NFR-5 runs in CI's `nfr release gates`
+  step because debug instrumentation alone exceeds it.
+
+Also landed in this phase: the fs scope resolver (FR-PERM-12) with
+symlink-after-grant and state-directory exclusion, the shared capability
+engine both modes call (FR-PERM-1, FR-PERM-3), the six-point dispatch
+trait (ADR-0019), the registry's collision rules (FR-EXT-11), the
+pre-tool seam (FR-CORE-10), the interrupt watcher (FR-CONC-1), and the
+`/stats` move into hooks-example. Suite:169 tests, green twice in a row;
+clippy/doc/fmt green; `cargo xwin check` green.
+
+WIT realizations recorded here: `list` is a keyword (the catalog's list
+function exports as `list-entries`), and the usage record's
+`cache_write_1h` spells `cache-write-hour` in WIT (digit-leading
+segments are illegal); JSON surfaces keep their documented names.
