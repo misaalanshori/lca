@@ -347,6 +347,7 @@ dependencies = [
  "lca-protocol",
  "lca-tools",
  "serde_json",
+ "tokio",
  "wit-bindgen 0.41.0",
 ]
 

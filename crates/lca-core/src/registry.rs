@@ -527,9 +527,18 @@ impl ExtensionRegistry {
             .enabled()
             .filter(|handle| handle.worlds().contains(&World::ContextTransform))
         {
-            match handle.transform_messages(messages).await {
+            // The clone keeps the input alive for a Disabled skip;
+            // every other arm replaces or returns it anyway.
+            match handle.transform_messages(messages.clone()).await {
                 Ok(Ok(list)) => messages = list,
                 Ok(Err(reason)) => return Err(reason),
+                // A handle that just disabled itself (trapped, hit its
+                // limits) drops out of the chain the same way the hooks
+                // loops skip it: FR-EXT-5's host-continues rule outranks
+                // FR-CTX-2 for a dead extension. Every other failure
+                // stops the turn - messages that half-transformed must
+                // not reach the provider.
+                Err(DispatchError::Disabled) => continue,
                 Err(err) => {
                     return Err(format!(
                         "the context transform `{}` failed: {err}",

@@ -216,3 +216,28 @@ The `net` capability's resolved-address check rejects a connection whose resolve
 The three fuzz targets have run long enough to be meaningful, and their corpora are checked in.
 
 Denial recording cannot be suppressed by the extension that triggered it.
+
+## The `completion` capability (ADR-0015, Phase 4)
+
+An extension holding `completion` can spend the user's model budget
+without the user watching each call. The scenario to walk: a malicious
+or compromised compaction strategy asks for completions in a loop,
+each one billed to the account, or exfiltrates data by encoding it in
+the prompt it sends.
+
+Controls that hold it: the capability is manifest-declared with a
+required `reason` shown verbatim on the consent screen, so installing
+this reach is a visible act (capability catalog); the request routes
+through the host to the ACTIVE provider, never to another extension,
+keeping the graph a star with no extension-to-extension channel to
+abuse (ADR-0008); the extension never sees the provider's credentials
+- the host holds them (FR-PERM-6/7); every denied or undeclared call
+returns a permission error and is recorded (FR-PERM-3), which the
+conformance extension exercises in both delivery modes; and the usage
+lands on the session record that caused the spend, so a runaway shows
+up in session cost rather than only on the invoice (capability
+catalog). What this control does NOT provide: a per-turn budget on
+completion calls. The catalog's cost attribution is the detector, not
+a limiter; a metering limit is the upgrade path if attribution proves
+insufficient in use.
+

@@ -20,6 +20,7 @@ serde_json.workspace = true
 lca-ext-abi = { path = "../../crates/lca-ext-abi" }
 # Native twin only: the shared capability engine (never linked into wasm).
 lca-tools = { path = "../../crates/lca-tools" }
+tokio.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wit-bindgen = "0.41"

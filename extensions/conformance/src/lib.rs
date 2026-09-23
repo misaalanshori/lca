@@ -377,6 +377,68 @@ pub fn scripted_events(model: &str) -> Vec<lca_protocol::StreamEvent> {
     }
 }
 
+/// The compaction script: a body carrying `call-completion` makes the
+/// strategy ask the host through the `completion` capability (whose
+/// denial must surface as the refusal - FR-PERM-3's completion case);
+/// anything else gets the mechanical summary both modes must agree on.
+pub fn compact_script(
+    excerpts: &[(String, String)],
+    ask: Option<&dyn Fn() -> Result<String, String>>,
+) -> Result<String, String> {
+    let wants_model = excerpts
+        .iter()
+        .any(|(_kind, body)| body.contains("call-completion"));
+    if wants_model {
+        match ask {
+            Some(ask) => ask(),
+            None => Err("completion is not available".to_string()),
+        }
+    } else {
+        Ok(format!("conformance compacted {} records", excerpts.len()))
+    }
+}
+
+/// The transform script: a rejection marker rejects, an injection
+/// marker appends one message, everything else passes through - both
+/// modes run this exact decision (NFR-25).
+pub fn transform_script(
+    mut messages: Vec<lca_protocol::ChatMessage>,
+) -> Result<Vec<lca_protocol::ChatMessage>, String> {
+    let text: String = messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            lca_protocol::ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.contains("conformance-reject") {
+        return Err("conformance transform rejection".to_string());
+    }
+    if text.contains("conformance-inject") {
+        messages.push(lca_protocol::ChatMessage::text(
+            lca_protocol::MessageRole::System,
+            "[conformance injected] instructions",
+        ));
+    }
+    Ok(messages)
+}
+
+/// Render the candidate records for the compaction script (the same
+/// `(kind, body)` pair in both modes).
+pub fn compact_excerpts(records: &[lca_protocol::Record]) -> Vec<(String, String)> {
+    records
+        .iter()
+        .map(|record| {
+            (
+                record.type_tag().to_string(),
+                serde_json::to_string(record).unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
 /// `login` succeeds (ADR-0012: conformance covers all three exports).
 pub fn scripted_login() -> lca_protocol::IdentityOutcome {
     lca_protocol::IdentityOutcome::Ok
@@ -513,7 +575,56 @@ mod native {
                 lca_ext_abi::World::Command,
                 lca_ext_abi::World::Hooks,
                 lca_ext_abi::World::Provider,
+                lca_ext_abi::World::Compaction,
+                lca_ext_abi::World::ContextTransform,
             ]
+        }
+
+        fn compact(
+            &self,
+            records: &[lca_protocol::Record],
+        ) -> lca_ext_abi::DispatchFuture<'static, Result<String, lca_protocol::DispatchError>>
+        {
+            let excerpts = compact_excerpts(records);
+            let cap = self.cap.clone();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    let ask = || -> Result<String, String> {
+                        let messages = vec![lca_protocol::ChatMessage::text(
+                            lca_protocol::MessageRole::User,
+                            "conformance completion request",
+                        )];
+                        cap.complete(messages)
+                            .map(|(text, _usage)| text)
+                            .map_err(|err| err.to_string())
+                    };
+                    compact_script(&excerpts, Some(&ask as &dyn Fn() -> Result<String, String>))
+                        .map_err(|reason| {
+                            // Mirror the host's wrapping byte for byte so
+                            // the refusal reads identically in both modes
+                            // (NFR-25): to_dispatch prefixes the extension
+                            // and the invalid-arguments class, the host's
+                            // compact work prefixes the refusal.
+                            lca_protocol::DispatchError::Failed(format!(
+                                "{}: invalid arguments: compaction refused: {reason}",
+                                "conformance"
+                            ))
+                        })
+                })
+                .await
+                .map_err(|_| lca_protocol::DispatchError::Failed("conformance panicked".into()))
+                .and_then(std::convert::identity)
+            })
+        }
+
+        fn transform_messages(
+            &self,
+            messages: Vec<lca_protocol::ChatMessage>,
+        ) -> lca_ext_abi::DispatchFuture<
+            'static,
+            Result<Result<Vec<lca_protocol::ChatMessage>, String>, lca_protocol::DispatchError>,
+        > {
+            Box::pin(std::future::ready(Ok(transform_script(messages))))
         }
 
         fn provider_models(
@@ -1072,4 +1183,154 @@ mod provider_world {
     }
 
     export_provider!(ProviderComponent);
+}
+
+// ---------------------------------------------------------------------------
+// WASM delivery mode: the compaction world
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims
+mod compaction_world {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "compaction",
+        export_macro_name: "export_compaction",
+        with: {
+            "lca:host/log@0.1.0": generate,
+            "lca:host/completion@0.1.0": generate,
+            "lca:host/types@0.1.0": generate,
+        },
+    });
+
+    use exports::lca::ext::compact::{Guest as CompactGuest, SessionRecord};
+    use lca::host::completion;
+
+    fn to_capability(err: completion::Error) -> String {
+        use lca_protocol::CapabilityError as E;
+        match err {
+            completion::Error::Permission(d) => E::Permission(d).to_string(),
+            completion::Error::NotGranted(d) => E::NotGranted(d).to_string(),
+            completion::Error::Io(d) => E::Io(d).to_string(),
+            completion::Error::Invalid(d) => E::Invalid(d).to_string(),
+        }
+    }
+
+    pub struct CompactionWasm;
+
+    impl CompactGuest for CompactionWasm {
+        fn compact(records: Vec<SessionRecord>) -> Result<String, String> {
+            let excerpts: Vec<(String, String)> = records
+                .into_iter()
+                .map(|record| (record.kind, record.body))
+                .collect();
+            let ask = || -> Result<String, String> {
+                let request = completion::Message {
+                    role: "user".to_string(),
+                    content: "conformance completion request".to_string(),
+                    tool_calls: Vec::new(),
+                    tool_call_id: None,
+                    extras: Vec::new(),
+                };
+                let response = completion::request(&[request]).map_err(to_capability)?;
+                Ok(response.text)
+            };
+            crate::compact_script(&excerpts, Some(&ask as &dyn Fn() -> Result<String, String>))
+        }
+    }
+
+    export_compaction!(CompactionWasm);
+}
+
+// ---------------------------------------------------------------------------
+// WASM delivery mode: the context-transform world
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims
+mod transform_world {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "context-transform",
+        export_macro_name: "export_transform",
+        with: {
+            "lca:host/log@0.1.0": generate,
+            "lca:host/fs@0.1.0": generate,
+        },
+    });
+
+    use exports::lca::ext::transform::{Guest as TransformGuest, Message as WasmMessage};
+    use lca::ext::types::ToolCall as WasmToolCall;
+
+    pub struct TransformWasm;
+
+    impl TransformGuest for TransformWasm {
+        fn transform(messages: Vec<WasmMessage>) -> Result<Vec<WasmMessage>, String> {
+            let protocol: Vec<lca_protocol::ChatMessage> = messages
+                .iter()
+                .map(|message| lca_protocol::ChatMessage {
+                    role: match message.role.as_str() {
+                        "system" => lca_protocol::MessageRole::System,
+                        "user" => lca_protocol::MessageRole::User,
+                        "assistant" => lca_protocol::MessageRole::Assistant,
+                        _ => lca_protocol::MessageRole::Tool,
+                    },
+                    content: if message.content.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![lca_protocol::ContentBlock::Text {
+                            text: message.content.clone(),
+                        }]
+                    },
+                    tool_calls: message
+                        .tool_calls
+                        .iter()
+                        .map(|call| lca_protocol::ToolCall {
+                            call_id: call.call_id.clone(),
+                            name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                        })
+                        .collect(),
+                    tool_call_id: message.tool_call_id.clone(),
+                    usage: None,
+                    extras: Default::default(),
+                })
+                .collect();
+            let transformed = crate::transform_script(protocol)?;
+            Ok(transformed
+                .into_iter()
+                .map(|message| WasmMessage {
+                    role: match message.role {
+                        lca_protocol::MessageRole::System => "system".to_string(),
+                        lca_protocol::MessageRole::User => "user".to_string(),
+                        lca_protocol::MessageRole::Assistant => "assistant".to_string(),
+                        lca_protocol::MessageRole::Tool => "tool".to_string(),
+                    },
+                    content: message
+                        .content
+                        .iter()
+                        .filter_map(|block| match block {
+                            lca_protocol::ContentBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join(""),
+                    tool_calls: message
+                        .tool_calls
+                        .iter()
+                        .map(|call| WasmToolCall {
+                            call_id: call.call_id.clone(),
+                            name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                            extras: Vec::new(),
+                        })
+                        .collect(),
+                    tool_call_id: message.tool_call_id,
+                    extras: Vec::new(),
+                })
+                .collect())
+        }
+    }
+
+    export_transform!(TransformWasm);
 }

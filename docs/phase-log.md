@@ -282,3 +282,71 @@ rerun before chasing it.
 
 Phase 4 next: compaction and context-transform worlds, wiring the
 cache baseline reset to real compaction records.
+
+## Phase 4 — compaction, context transform, and skills: PASS
+
+The exit test clause by clause, with receipts (all in
+`crates/lca-core/tests/loop.rs` unless noted):
+
+- **Usage crossing the configured threshold triggers the default
+  compaction extension.** `the_default_strategy_compacts_through_the_
+  real_completion_backend` runs the REAL `compaction-default` over the
+  REAL `ProviderBackend`: turn1's usage crosses, the strategy asks the
+  fake through the `completion` capability, and the model's answer
+  (FR-SESS-4, FR-SESS-5) becomes the record's summary. Doubles cover
+  the threshold edge cases (`crossing_the_threshold_compacts_once...`,
+  `the_cache_baseline_resets...`); the engine's denial path for an
+  undeclared `completion` is a conformance case in both delivery modes
+  (`compaction_and_transform_agree_across_modes_with_completion_denied`,
+  ext-host).
+- **The summary persists across a restart without being recomputed.**
+  Same test: a fresh `SessionStore` over the same directory re-reads
+  the record, assembly surfaces the summary as a message, and the
+  strategy's call count never moves (FR-CTX-1).
+- **The cache-waste baseline resets exactly on that turn and reports
+  zero waste on every turn after.** `the_cache_baseline_resets_exactly_
+  on_the_compaction_record` counts the scripted1500-token miss before
+  the record, proves every counted miss's id sorts before it, and
+  asserts the post-record segment scans clean (FR-CACHE-2, measured
+  over the raw log - suppressed records still cost real money).
+- **Skills handling injects matched instructions through the transform
+  chain on an ordinary turn without affecting the cache boundary.**
+  `skills_inject_through_the_chain_without_moving_the_cache_boundary`:
+  the injection rides appended (never in place), the boundary equals an
+  untransformed assembly, the stable region is byte-identical, and
+  `extensions/skills/tests/skills.rs` pins the parse/match/append
+  shape - reading the workspace's `.lca/skills` through the fs
+  capability's read scope only.
+- **A transform rejection ends the turn with the reason surfaced rather
+  than calling the provider.** `a_transform_rejection_ends_the_turn_
+  before_the_provider`: status and stop reason are errors, the reason
+  is in the outcome, the fake's call count is zero, and nothing was
+  persisted (FR-CTX-3, FR-CTX-4). The rejection's ABI shape is a
+  conformance case across modes too.
+
+Alongside: the `completion` threat-model scenario is written where the
+SRDD asked for it, the conformance extension carries both new worlds
+plus the completion-denial case (native and WASM diffs byte-identical),
+and both first-party extensions build for wasm32-wasip2 (fixtures not
+committed - conformance covers the world plumbing; Phase 5's install
+flow is what loads them).
+
+Deviations and notes: skills' file layout (`.lca/skills/<name>/SKILL.md`
+with a `key: value` header and `---` body) is documented in the crate
+because no document in `docs/` specifies one; the default strategy's
+manual `/compact` trigger is not wired yet (the threshold path is the
+exit test's; the built-in slot stays unclaimed rather than hollowly
+answered - noted for the Phase 6 interface work); the FR-CACHE-5
+boundary rule settled as "everything through the latest compaction
+record, never this turn's own message, growing between records" -
+the growth `docs/providers/antigravity.md` relies on and the reason the
+old prefix test's expectation moved from0 to2.
+
+Gates at the exit: fmt, clippy `-D warnings`, doc `-D warnings`,
+232 nextest tests green on Linux, windows-target clippy green, all
+three fixtures building for wasm32-wasip2. One disabled-extension fix
+landed with the phase: a handle that traps mid-turn drops out of the
+transform chain (FR-EXT-5 outranks FR-CTX-2 for a dead extension)
+instead of failing the turn - found by the Phase 2 trap test, which is
+exactly what regression tests are for.
+

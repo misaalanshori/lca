@@ -948,6 +948,17 @@ impl ExtHost {
         let mut linker: HostLinker = Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).expect("wasi imports");
         Tool::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state).expect("world imports");
+        // The compaction world always imports `completion`; like every
+        // capability interface it links in a denied state until the
+        // manifest declares it (FR-PERM-3), so this is unconditional
+        // and the grant does the gating (`log` is already defined by
+        // the tool world above). It must be defined before
+        // `instantiate_pre` validates the component against the linker.
+        lca_ext_abi::host::compaction::lca::host::completion::add_to_linker::<_, HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("completion imports");
         let declares_provider = manifest.worlds.iter().any(|world| world == "provider");
         if declares_provider {
             // The provider world shares `lca:host/log` with the tool world
@@ -979,15 +990,6 @@ impl ExtHost {
                     .map_err(|err| LoadError::Link(err.to_string()))
             })
             .transpose()?;
-        if manifest.completion {
-            // The compaction world's `completion` import; `log` is
-            // already defined by the tool world above.
-            lca_ext_abi::host::compaction::lca::host::completion::add_to_linker::<_, HasSelf<_>>(
-                &mut linker,
-                |state| state,
-            )
-            .expect("completion imports");
-        }
         let provider = declares_provider
             .then(|| ProviderPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string())))
             .transpose()?;

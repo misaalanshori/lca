@@ -93,7 +93,13 @@ impl Fixture {
         ))
     }
 
-    fn both_modes(&self) -> (Arc<dyn ExtensionDispatch>, Arc<dyn ExtensionDispatch>) {
+    fn both_modes(
+        &self,
+    ) -> (
+        Arc<dyn ExtensionDispatch>,
+        Arc<dyn ExtensionDispatch>,
+        Arc<lca_tools::Capabilities>,
+    ) {
         let mut host = ExtHost::new(
             ExtensionLimits {
                 memory_bytes: 64 * 1024 * 1024,
@@ -103,14 +109,17 @@ impl Fixture {
             self.env(),
         );
         let wasm = host.load(FIXTURE, MANIFEST).expect("load wasm mode");
-        let native = conformance::NativeConformance::new(self.capabilities());
+        let engine = self.capabilities();
+        let native = conformance::NativeConformance::new(engine.clone());
         // The same registry type holds both handle kinds (FR-EXT-6: one
         // handle type, no mode branching).
         let mut registry = NativeRegistry::new();
         registry.register(Arc::new(wasm));
         registry.register(Arc::new(native));
         let handles = registry.into_handles();
-        (handles[0].clone(), handles[1].clone())
+        // The SAME engine the native handle ran on, so its recorded
+        // denials are visible to the test (FR-PERM-3).
+        (handles[0].clone(), handles[1].clone(), engine)
     }
 }
 
@@ -150,12 +159,16 @@ fn pty_args(program: &str, marker: &str) -> String {
 #[tokio::test]
 async fn native_and_wasm_modes_produce_identical_results() {
     let fixture = Fixture::new("diff");
-    let (wasm, native) = fixture.both_modes();
+    let (wasm, native, _engine) = fixture.both_modes();
 
     // Identity and shape.
     assert_eq!(wasm.name(), native.name());
     assert_eq!(wasm.worlds(), native.worlds());
-    assert_eq!(wasm.worlds().len(), 4, "tool, command, hooks, provider");
+    assert_eq!(
+        wasm.worlds().len(),
+        6,
+        "tool, command, hooks, provider, compaction, context-transform"
+    );
     assert_eq!(wasm.delivery(), DeliveryMode::Wasm);
     assert_eq!(native.delivery(), DeliveryMode::Native);
     // FR-EXT-7's labels differ BY DESIGN; everything else must not.
@@ -209,7 +222,7 @@ async fn native_and_wasm_modes_produce_identical_results() {
 #[tokio::test]
 async fn commands_and_hooks_agree_across_modes() {
     let fixture = Fixture::new("diff-hooks");
-    let (wasm, native) = fixture.both_modes();
+    let (wasm, native, _engine) = fixture.both_modes();
 
     assert_eq!(
         wasm.command_specs().expect("wasm"),
@@ -269,4 +282,123 @@ async fn commands_and_hooks_agree_across_modes() {
     native.on_session_close().await.expect("native");
 
     assert!(wasm.worlds().contains(&World::Hooks));
+}
+
+// Verifies: the Phase 4 conformance cases (SRDD: the new worlds and
+// the completion capability get conformance coverage alongside) -
+// compact, transform, and rejection agree across delivery modes
+// (NFR-25), and the undeclared `completion` capability refuses with a
+// recorded denial on BOTH sides (FR-PERM-3).
+#[tokio::test]
+async fn compaction_and_transform_agree_across_modes_with_completion_denied() {
+    let fixture = Fixture::new("diff-ctx");
+    let (wasm, native, engine) = fixture.both_modes();
+
+    // Mechanical compaction: identical summaries.
+    let records: Vec<lca_protocol::Record> = {
+        let ts = 1_700_000_000_000u64;
+        vec![
+            lca_protocol::Record::User {
+                v: lca_protocol::FORMAT_VERSION,
+                ts,
+                id: "01".to_string(),
+                content: "first request".to_string(),
+                attachments: Vec::new(),
+            },
+            lca_protocol::Record::Assistant {
+                v: lca_protocol::FORMAT_VERSION,
+                ts,
+                id: "02".to_string(),
+                content: vec![lca_protocol::ContentBlock::Text {
+                    text: "reply".to_string(),
+                }],
+                reasoning: None,
+                usage: None,
+                provider: Some("fake".to_string()),
+                model: Some("faux-1".to_string()),
+            },
+        ]
+    };
+    let wasm_summary = wasm.compact(&records).await.expect("wasm compact");
+    let native_summary = native.compact(&records).await.expect("native compact");
+    assert_eq!(wasm_summary, native_summary, "identical summaries");
+    assert_eq!(wasm_summary, "conformance compacted 2 records");
+
+    // The completion-carrying candidate: undeclared in this manifest,
+    // so both modes surface the refusal (FR-PERM-3's completion case)
+    // and the host records it.
+    let mut completion_records = records.clone();
+    completion_records.push(lca_protocol::Record::User {
+        v: lca_protocol::FORMAT_VERSION,
+        ts: 1_700_000_000_100u64,
+        id: "03".to_string(),
+        content: "call-completion".to_string(),
+        attachments: Vec::new(),
+    });
+    let wasm_err = wasm
+        .compact(&completion_records)
+        .await
+        .expect_err("completion is not declared");
+    let native_err = native
+        .compact(&completion_records)
+        .await
+        .expect_err("completion is not declared");
+    assert!(
+        wasm_err.to_string().contains("completion"),
+        "wasm: {wasm_err}"
+    );
+    assert_eq!(format!("{wasm_err}"), format!("{native_err}"));
+    assert!(
+        engine
+            .denials()
+            .iter()
+            .any(|denial| denial.capability == "completion"),
+        "the denial was recorded (FR-PERM-3)"
+    );
+
+    // Transform: pass, inject, and reject - identical in both modes.
+    let turns = vec![
+        vec![lca_protocol::ChatMessage::text(
+            lca_protocol::MessageRole::User,
+            "plain turn",
+        )],
+        vec![lca_protocol::ChatMessage::text(
+            lca_protocol::MessageRole::User,
+            "please conformance-inject here",
+        )],
+        vec![lca_protocol::ChatMessage::text(
+            lca_protocol::MessageRole::User,
+            "conformance-reject this one",
+        )],
+    ];
+    for messages in turns {
+        let wasm_out = wasm
+            .transform_messages(messages.clone())
+            .await
+            .expect("wasm transform host call");
+        let native_out = native
+            .transform_messages(messages.clone())
+            .await
+            .expect("native transform host call");
+        assert_eq!(wasm_out, native_out, "transform divergence");
+    }
+    // The rejection carries its reason (FR-CTX-3's shape at the ABI).
+    let rejected = wasm
+        .transform_messages(vec![lca_protocol::ChatMessage::text(
+            lca_protocol::MessageRole::User,
+            "conformance-reject",
+        )])
+        .await
+        .expect("host call");
+    assert_eq!(rejected, Err("conformance transform rejection".to_string()));
+    // The injection appended one message; nothing else changed.
+    let injected = native
+        .transform_messages(vec![lca_protocol::ChatMessage::text(
+            lca_protocol::MessageRole::User,
+            "conformance-inject",
+        )])
+        .await
+        .expect("host call")
+        .expect("not a rejection");
+    assert_eq!(injected.len(), 2, "one appended message");
 }
