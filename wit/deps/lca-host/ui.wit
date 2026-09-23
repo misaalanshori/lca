@@ -1,4 +1,4 @@
-package lca:host@0.1.0;
+package lca:host@1.0.0;
 
 /// The `ui` capability's imports: everything an extension may ask of
 /// the host about drawing that is not rendering itself (capability

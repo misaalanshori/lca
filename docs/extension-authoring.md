@@ -104,7 +104,7 @@ Write the manifest as `extension.toml` next to `Cargo.toml`.
 ```toml
 name = "word-count"
 version = "0.1.0"
-abi = "0.1"
+abi = "1.0"
 worlds = ["tool"]
 description = "Counts words in a workspace file."
 license = "MIT"

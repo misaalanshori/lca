@@ -97,7 +97,9 @@ The host exposes the same information to extensions through the always-granted l
 
 ## Freezing at 1.0
 
-Phase 8 freezes the ABI at 1.0. After the freeze, no breaking change ships without a 2.0, and a 2.0 is a serious undertaking that needs its own plan for dual-loading or migration.
+Phase 8 freezes the ABI at 1.0 (executed 2026-09-23: the WIT package and the `lca:host` imports both carry `@1.0.0`, `lca-ext-abi::ABI_VERSION` reads `1.0`, every first-party manifest declares `abi = "1.0"`, and `wit/CHANGELOG.md` opens with the freeze entry). After the freeze, no breaking change ships without a 2.0, and a 2.0 is a serious undertaking that needs its own plan for dual-loading or migration.
+
+One amnesty comes with the bump: the line that was current at the freeze, 0.1, keeps loading on a 1.0 host. The window accepts it alongside the current line and the previous minor, so an extension published the week before the freeze does not die to a version change that altered no bytes. Nothing older than that line loads, and nothing about it applies to a future major.
 
 Everything that should be a variant case, an extension point, or a string vocabulary rather than an enum has to be settled before the freeze. The conformance extension has to cover every surface. These are the two gates on the freeze, and neither is a matter of judgment at the time: they are checked.
 

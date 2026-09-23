@@ -18,7 +18,7 @@ compacts). Authentication is a bearer token in the request header, read from the
 ```toml
 name = "openai-compatible"
 version = "1.0.0"
-abi = "0.1"
+abi = "1.0"
 worlds = ["provider", "command"]
 description = "Any OpenAI-compatible chat completions endpoint. Configurable base URL and key."
 

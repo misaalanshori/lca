@@ -1,6 +1,6 @@
 name = "compaction-default"
 version = "1.0.0"
-abi = "0.1"
+abi = "1.0"
 worlds = ["compaction"]
 description = "The default compaction strategy: summarize the old range through the active provider, with a mechanical fallback."
 

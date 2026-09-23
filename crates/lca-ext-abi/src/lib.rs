@@ -9,7 +9,7 @@
 
 /// The ABI version this build implements (`major.minor`, per the manifest's
 /// `abi` field and the support window in docs/abi-versioning.md).
-pub const ABI_VERSION: &str = "0.1";
+pub const ABI_VERSION: &str = "1.0";
 
 /// The WIT package name that crosses every manifest and registry tag.
 pub const PACKAGE: &str = "lca:ext";

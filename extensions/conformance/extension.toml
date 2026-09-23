@@ -1,6 +1,6 @@
 name = "conformance"
 version = "0.1.0"
-abi = "0.1"
+abi = "1.0"
 worlds = ["tool", "command", "hooks", "provider", "compaction", "context-transform", "ui"]
 description = "ABI conformance probe covering every world, import, and denied path."
 license = "Apache-2.0"

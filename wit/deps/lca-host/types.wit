@@ -1,4 +1,4 @@
-package lca:host@0.1.0;
+package lca:host@1.0.0;
 
 /// The host package's own copies of the records its capability
 /// interfaces carry. They mirror `lca:ext/types` case for case; WIT

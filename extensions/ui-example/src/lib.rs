@@ -354,8 +354,8 @@ mod wasm_mode {
         world: "ui",
         export_macro_name: "export_ui",
         with: {
-            "lca:host/log@0.1.0": generate,
-            "lca:host/ui@0.1.0": generate,
+            "lca:host/log@1.0.0": generate,
+            "lca:host/ui@1.0.0": generate,
         },
     });
 

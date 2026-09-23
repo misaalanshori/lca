@@ -832,10 +832,10 @@ mod tool_world {
         world: "tool",
         export_macro_name: "export_tool",
         with: {
-            "lca:host/log@0.1.0": generate,
-            "lca:host/fs@0.1.0": generate,
-            "lca:host/process@0.1.0": generate,
-            "lca:host/pty@0.1.0": generate,
+            "lca:host/log@1.0.0": generate,
+            "lca:host/fs@1.0.0": generate,
+            "lca:host/process@1.0.0": generate,
+            "lca:host/pty@1.0.0": generate,
         },
     });
 
@@ -1105,10 +1105,10 @@ mod provider_world {
         world: "provider",
         export_macro_name: "export_provider",
         with: {
-            "lca:host/log@0.1.0": generate,
-            "lca:host/net@0.1.0": generate,
-            "lca:host/oauth@0.1.0": generate,
-            "lca:host/credentials@0.1.0": generate,
+            "lca:host/log@1.0.0": generate,
+            "lca:host/net@1.0.0": generate,
+            "lca:host/oauth@1.0.0": generate,
+            "lca:host/credentials@1.0.0": generate,
         },
     });
 
@@ -1259,9 +1259,9 @@ mod compaction_world {
         world: "compaction",
         export_macro_name: "export_compaction",
         with: {
-            "lca:host/log@0.1.0": generate,
-            "lca:host/completion@0.1.0": generate,
-            "lca:host/types@0.1.0": generate,
+            "lca:host/log@1.0.0": generate,
+            "lca:host/completion@1.0.0": generate,
+            "lca:host/types@1.0.0": generate,
         },
     });
 
@@ -1316,8 +1316,8 @@ mod transform_world {
         world: "context-transform",
         export_macro_name: "export_transform",
         with: {
-            "lca:host/log@0.1.0": generate,
-            "lca:host/fs@0.1.0": generate,
+            "lca:host/log@1.0.0": generate,
+            "lca:host/fs@1.0.0": generate,
         },
     });
 
@@ -1409,8 +1409,8 @@ mod ui_world {
         world: "ui",
         export_macro_name: "export_ui",
         with: {
-            "lca:host/log@0.1.0": generate,
-            "lca:host/ui@0.1.0": generate,
+            "lca:host/log@1.0.0": generate,
+            "lca:host/ui@1.0.0": generate,
         },
     });
 

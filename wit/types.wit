@@ -1,4 +1,4 @@
-package lca:ext@0.1.0;
+package lca:ext@1.0.0;
 
 /// Types shared by every world. Every record that crosses the ABI carries
 /// a reserved `extras` map so non-structural data can travel without a

@@ -247,7 +247,7 @@ worlds = ["tool"]
 fn manifest_parses_identity_fields() {
     let manifest: Manifest = Manifest::parse(manifest()).expect("parses");
     assert_eq!(manifest.name, "conformance");
-    assert_eq!(manifest.abi, "0.1");
+    assert_eq!(manifest.abi, lca_ext_abi::ABI_VERSION);
     assert_eq!(
         manifest.worlds,
         vec![

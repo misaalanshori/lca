@@ -350,8 +350,8 @@ mod wasm_mode {
         world: "context-transform",
         export_macro_name: "export_transform",
         with: {
-            "lca:host/log@0.1.0": generate,
-            "lca:host/fs@0.1.0": generate,
+            "lca:host/log@1.0.0": generate,
+            "lca:host/fs@1.0.0": generate,
         },
     });
 

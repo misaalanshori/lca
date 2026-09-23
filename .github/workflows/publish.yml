@@ -62,12 +62,13 @@ jobs:
           LCA_OCI_USER: ${{ github.actor }}
         run: |
           publish() {
-            local image="$1" wasm="$2" manifest="$3" version
+            local image="$1" wasm="$2" manifest="$3" version abi
             # strip() before strip('"'): the line carries its newline, so
             # a bare strip('"') leaves it inside the tag and the registry
             # looks for a tag that is not there (404).
             version=$(python3 -c "import sys;v=dict(l.split(' = ') for l in open(sys.argv[1]) if ' = ' in l)['version'];print(v.strip().strip('\"'))" "$manifest")
-            bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "abi-0.1" "$wasm" "$manifest"
+            abi=$(python3 -c "import sys;v=dict(l.split(' = ') for l in open(sys.argv[1]) if ' = ' in l)['abi'];print(v.strip().strip('\"'))" "$manifest")
+            bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "abi-${abi}" "$wasm" "$manifest"
             bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "${version}" "$wasm" "$manifest"
           }
           publish openai-compatible extensions/openai-compatible/fixtures/component.wasm extensions/openai-compatible/extension.toml

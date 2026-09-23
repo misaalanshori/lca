@@ -43,7 +43,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 /// The ABI lines this host loads: the current minor and the one before it
 /// (NFR-19).
-pub const SUPPORTED_ABI_WINDOW: &str = "0.0..=0.1";
+pub const SUPPORTED_ABI_WINDOW: &str = "0.1..=1.0";
 
 /// Resource limits applied to every call, resolved from the manifest and
 /// clamped to host maximums (`docs/flows.md`).
@@ -374,9 +374,15 @@ impl Manifest {
         let Some((current_major, current_minor)) = parse_abi(lca_ext_abi::ABI_VERSION) else {
             return false;
         };
-        declared_major == current_major
-            && (declared_minor == current_minor
-                || (current_minor > 0 && declared_minor == current_minor - 1))
+        if declared_major == current_major {
+            return declared_minor == current_minor
+                || (current_minor > 0 && declared_minor == current_minor - 1);
+        }
+        // The freeze grandfather: artifacts published against the line
+        // that was current when the ABI froze (0.1) keep loading on a
+        // 1.0 host, one cycle of amnesty so nobody's installed
+        // extension dies to a version bump that changed no bytes.
+        (declared_major, declared_minor) == (0, 1) && (current_major, current_minor) == (1, 0)
     }
 }
 

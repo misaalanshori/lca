@@ -1,12 +1,12 @@
-package lca:ext@0.1.0;
+package lca:ext@1.0.0;
 
 /// The `ui` world: draw without the terminal (ADR-0003). The host owns
 /// layout and drawing; a text span carries data, never control codes
 /// (FR-UI-2), and the widget variant reserves a case so the vocabulary
 /// can grow before the ABI freeze without breaking it then.
 world ui {
-  import lca:host/log@0.1.0;
-  import lca:host/ui@0.1.0;
+  import lca:host/log@1.0.0;
+  import lca:host/ui@1.0.0;
   export render;
   export interaction;
 }

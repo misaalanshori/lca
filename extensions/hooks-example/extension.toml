@@ -1,6 +1,6 @@
 name = "hooks-example"
 version = "0.1.0"
-abi = "0.1"
+abi = "1.0"
 worlds = ["hooks", "command"]
 description = "Reference hooks policy plus the /stats built-in command, native-linked."
 license = "Apache-2.0"

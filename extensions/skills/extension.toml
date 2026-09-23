@@ -1,6 +1,6 @@
 name = "skills"
 version = "1.0.0"
-abi = "0.1"
+abi = "1.0"
 worlds = ["context-transform"]
 description = "Match a project skill against the latest user message and inject its instructions before the model sees the turn."
 

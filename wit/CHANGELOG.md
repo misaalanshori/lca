@@ -4,7 +4,23 @@ Written for extension authors. Each entry names the version, the date, and
 every change grouped as added, deprecated, removed, or fixed, with a
 migration note for anything breaking (docs/abi-versioning.md).
 
-##0.1.0 — unreleased
+##1.0.0 — 2026-09-23
+
+The freeze release: the ABI is now stable under semver, no breaking
+change ships without2.0, and the pre-freeze punch list is closed out in
+this one line - `provider` gains the `login`/`logout`/`usage` identity
+exports (ADR-0012), the `compaction` and `context-transform` worlds
+join the surface (ADR-0015), the `completion`, `net-local`, and `pty`
+capabilities join the catalog (ADR-0015/0011/0016), `usage` carries
+`cost`, every record carries `extras`, the widget vocabulary gains
+`image` with its reserved `vendor` case, and the hook points are fixed
+at `pre-turn`, `pre-tool-use`, `post-tool-use`, `post-turn-end`,
+`attention-required`, `session-close`.
+
+A host at1.0 loads extensions built for0.1 unchanged: that line is
+the freeze grandfather (docs/abi-versioning.md).
+
+##0.1.0 — the pre-freeze line (superseded by1.0.0)
 
 The initial surface, ahead of the Phase 8 freeze at 1.0.
 
