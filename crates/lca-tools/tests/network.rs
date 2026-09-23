@@ -321,6 +321,54 @@ fn oauth_begin_binds_loopback_and_the_callback_delivers_parameters() {
     caps.oauth_end(flow).expect("end");
 }
 
+// Verifies: FR-PROV-3 against the connect-then-wait race - a client
+// that connects and then takes its time writing the request (a
+// descheduled thread on a loaded runner, a browser's preconnect) still
+// gets its callback served. One-shot reads closed the connection under
+// such a client and its write died with EPIPE: the exact failure that
+// flaked the OAuth login on macOS CI.
+#[test]
+fn oauth_callback_survives_a_client_that_connects_before_it_writes() {
+    let sandbox = Sandbox::new("oauth-slow-client");
+    let caps = sandbox.caps(CapabilityGrants {
+        oauth: Some(OAuthSettings {
+            redirect_path: "/callback".to_string(),
+            timeout_seconds: 30,
+        }),
+        ..CapabilityGrants::default()
+    });
+
+    let (redirect, flow) = caps.oauth_begin("/callback").expect("begin");
+    let rest = redirect.trim_start_matches("http://").to_string();
+    let (hostport, path) = rest.split_once('/').expect("redirect has a path");
+    let hostport = hostport.to_string();
+    let path = path.to_string();
+    let client = std::thread::spawn(move || {
+        let stream = std::net::TcpStream::connect(&hostport).expect("connect");
+        // Long past the listener's original one-shot patience: the
+        // thread "loses the scheduler" between connect and write.
+        std::thread::sleep(std::time::Duration::from_millis(5500));
+        let mut stream = stream;
+        use std::io::{Read, Write};
+        let request =
+            format!("GET /{path}?code=slow-code&state=slow HTTP/1.1\r\nHost: {hostport}\r\n\r\n");
+        stream
+            .write_all(request.as_bytes())
+            .expect("write survives the wait");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read");
+        response
+    });
+    let params = caps.oauth_await(flow).expect("callback arrives");
+    let response = client.join().expect("client thread");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(
+        params.contains(&("code".to_string(), "slow-code".to_string())),
+        "{params:?}"
+    );
+    caps.oauth_end(flow).expect("end");
+}
+
 // Verifies: FR-PROV-3's denied path: no oauth grant, no listener.
 #[test]
 fn oauth_without_a_grant_never_binds() {

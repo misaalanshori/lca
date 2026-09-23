@@ -1193,17 +1193,43 @@ impl Capabilities {
             while !stop_for_thread.load(std::sync::atomic::Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                        // Read until a full request line arrives, the peer
+                        // goes away, or patience runs out - one read is not
+                        // enough: a client can connect and then sit on the
+                        // socket for a beat (a descheduled test thread, a
+                        // browser's preconnect), and answering the empty
+                        // read would close the connection under it and
+                        // fail its write with EPIPE, which is exactly how
+                        // this flaked on macOS CI. A connection that never
+                        // sends a query-carrying request line is a probe or
+                        // a stray; it does not consume the flow, the loop
+                        // just goes back to accepting.
+                        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(60)));
                         let mut buf = vec![0u8; 8192];
-                        let read = stream.read(&mut buf).unwrap_or(0);
-                        let request = String::from_utf8_lossy(&buf[..read]).into_owned();
-                        let params = request
-                            .lines()
-                            .next()
-                            .and_then(|line| line.split_whitespace().nth(1))
-                            .and_then(|target| target.split_once('?'))
-                            .map(|(_, query)| parse_query(query))
-                            .unwrap_or_default();
+                        let mut filled = 0usize;
+                        let mut target: Option<String> = None;
+                        while filled < buf.len() {
+                            match stream.read(&mut buf[filled..]) {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    filled += n;
+                                    let text = String::from_utf8_lossy(&buf[..filled]);
+                                    if let Some(line) = text.lines().next()
+                                        && let Some(t) = line.split_whitespace().nth(1)
+                                    {
+                                        target = Some(t.to_string());
+                                        break;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        let Some(target) =
+                            target.and_then(|t| t.split_once('?').map(|q| q.1.to_string()))
+                        else {
+                            continue;
+                        };
+                        let params = parse_query(&target);
                         let page = "HTTP/1.1 200 OK
 content-type: text/html
                                     content-length:63
