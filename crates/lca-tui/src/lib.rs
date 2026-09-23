@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender};
 
 use lca_core::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
+use lca_protocol::CommandEffect;
 use lca_protocol::Usage;
 use ratatui::Frame;
 use ratatui::backend::Backend;
@@ -56,6 +57,9 @@ pub struct TurnStatusLine {
     pub text: String,
 }
 
+/// How the input editor invokes a registered slash command.
+pub type CommandInvoker = Arc<dyn Fn(&str, &str) -> CommandEffect + Send + Sync>;
+
 /// Static inputs for the interface.
 pub struct UiOptions {
     /// `provider/model` for the status line.
@@ -64,8 +68,11 @@ pub struct UiOptions {
     pub initial_lines: Vec<String>,
     /// Plain-text rendering (FR-UI-5).
     pub plain: bool,
-    /// Session statistics for `/stats`.
-    pub stats: Arc<dyn Fn() -> String + Send + Sync>,
+    /// Invoke a registered slash command (the registry supplies the
+    /// table; `/stats` fills its built-in slot through an extension,
+    /// ADR-0019). Arguments are the bare typed name and its argument
+    /// text.
+    pub invoke_command: CommandInvoker,
     /// Slash commands offered by completion.
     pub slash_commands: Vec<String>,
     /// Workspace root for path completion.
@@ -298,28 +305,33 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                 return Action::Continue;
             }
             let submitted = state.buffer.clone();
-            if let Some(command) = submitted.strip_prefix('/') {
-                let name = command.split_whitespace().next().unwrap_or("").to_string();
+            if submitted.starts_with('/') {
+                let command_line = submitted.strip_prefix('/').unwrap_or(&submitted);
+                let mut parts = command_line.splitn(2, ' ');
+                let name = parts.next().unwrap_or("").to_string();
+                let argument = parts.next().unwrap_or("").to_string();
                 state.history.push(submitted);
                 state.history_index = None;
                 state.buffer.clear();
-                if name == "stats" {
-                    state.notice = Some((state.options.stats)());
-                    return Action::Continue;
-                }
-                if name == "exit" || name == "quit" {
-                    return Action::Exit;
-                }
-                let known = state
+                let full = format!("/{name}");
+                if state
                     .options
                     .slash_commands
                     .iter()
-                    .any(|c| c.trim_start_matches('/') == name.as_str());
-                state.notice = Some(if known {
-                    format!("/{name} is not available in this build yet")
-                } else {
-                    format!("unknown command /{name}")
-                });
+                    .any(|command| command == &full)
+                {
+                    match (state.options.invoke_command)(&name, &argument) {
+                        CommandEffect::ShowWidget(text) => state.notice = Some(text),
+                        CommandEffect::InsertText(text) => state.buffer.push_str(&text),
+                        CommandEffect::SubmitPrompt(text) => {
+                            state.buffer = text;
+                            return Action::Submit;
+                        }
+                        CommandEffect::None => {}
+                    }
+                    return Action::Continue;
+                }
+                state.notice = Some(format!("unknown command /{name}"));
                 return Action::Continue;
             }
             let submitted = std::mem::take(&mut state.buffer);

@@ -1268,6 +1268,7 @@ dependencies = [
  "hyper-util",
  "lca-config",
  "lca-core",
+ "lca-ext-native",
  "lca-permissions",
  "lca-protocol",
  "lca-provider",

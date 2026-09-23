@@ -6,6 +6,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use lca_config::{ColorMode, Config, LoadInput, MergeSource};
@@ -381,11 +382,22 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
     );
     let mut grants = grants;
     let mut prompt_impl = HeadlessPrompt::default();
+    // Hooks apply headless too: register the first-party native set with
+    // a stats source over this session (ADR-0013).
+    let stats_store = store.clone();
+    let stats_session = session.clone();
+    let mut registry = lca_core::ExtensionRegistry::new();
+    for handle in lca_ext_native::default_native_extensions(Arc::new(move || {
+        crate::tui::session_stats(&stats_store, &stats_session)
+    })) {
+        registry.register(handle);
+    }
     let agent_config = AgentConfig {
         provider: provider_name.clone(),
         model: config.model().unwrap_or_default().to_string(),
         retry_limit: config.provider_retry_limit() as u32,
         max_iterations: config.tool_max_iterations() as u32,
+        extensions: Arc::new(registry),
         ..AgentConfig::default()
     };
     let proposals = if grants.is_trusted(cwd) {

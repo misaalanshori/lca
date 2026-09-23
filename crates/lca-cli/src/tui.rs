@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use lca_core::{Agent, AgentConfig};
 use lca_permissions::{Decision, GrantStore, PermissionPrompt, ProposalDiff, Proposals};
+use lca_protocol::CommandEffect;
 use lca_protocol::Record;
 use lca_session::{Session, SessionStore, ViewMode};
 use lca_tools::{NativeOps, ToolExecutor};
@@ -61,11 +62,25 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     )));
     let grants = Arc::new(Mutex::new(grants));
     let proposals: Option<Proposals> = trusted.then(|| config.permissions_proposals().clone());
+    let stats_store = store.clone();
+    let stats_session = session.clone();
+    // First-party, native-linked extensions (ADR-0013): hooks-example
+    // provides the reference policy and fills the /stats built-in slot,
+    // which is the Phase 2 move of that behavior out of the TUI.
+    let mut registry = lca_core::ExtensionRegistry::new();
+    for handle in lca_ext_native::default_native_extensions(Arc::new(move || {
+        session_stats(&stats_store, &stats_session)
+    })) {
+        registry.register(handle);
+    }
+    let registry = Arc::new(registry);
+
     let agent_config = AgentConfig {
         provider: provider_name.clone(),
         model: config.model().unwrap_or_default().to_string(),
         retry_limit: config.provider_retry_limit() as u32,
         max_iterations: config.tool_max_iterations() as u32,
+        extensions: registry.clone(),
         ..AgentConfig::default()
     };
 
@@ -82,21 +97,23 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         }
     };
 
-    let stats_store = store.clone();
-    let stats_session = session.clone();
     let options = UiOptions {
         model_label: format!("{provider_name}/{model_label}"),
         initial_lines,
         plain: config.ui_color() == lca_config::ColorMode::Never,
-        stats: Arc::new(move || session_stats(&stats_store, &stats_session)),
-        slash_commands: vec![
-            "/login".into(),
-            "/logout".into(),
-            "/usage".into(),
-            "/model".into(),
-            "/compact".into(),
-            "/stats".into(),
-        ],
+        invoke_command: {
+            let registry = registry.clone();
+            Arc::new(move |name, argument| {
+                registry
+                    .invoke_command(name, argument)
+                    .unwrap_or(CommandEffect::None)
+            })
+        },
+        slash_commands: registry
+            .command_names()
+            .into_iter()
+            .map(|name| format!("/{name}"))
+            .collect(),
         workspace: cwd.to_path_buf(),
     };
 
@@ -194,7 +211,7 @@ fn display_line(record: &Record) -> Option<String> {
     })
 }
 
-fn session_stats(store: &SessionStore, session: &Session) -> String {
+pub(crate) fn session_stats(store: &SessionStore, session: &Session) -> String {
     let Ok(read) = store.read_with(session, ViewMode::Display) else {
         return "statistics unavailable".to_string();
     };

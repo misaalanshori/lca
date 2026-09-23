@@ -20,6 +20,7 @@ lca-permissions = { path = "../lca-permissions" }
 lca-provider = { path = "../lca-provider" }
 lca-tools = { path = "../lca-tools" }
 lca-core = { path = "../lca-core" }
+lca-ext-native = { path = "../lca-ext-native" }
 lca-tui = { path = "../lca-tui" }
 openai-compatible = { path = "../../extensions/openai-compatible", optional = true }
 tokio.workspace = true

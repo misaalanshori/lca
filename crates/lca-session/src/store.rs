@@ -115,6 +115,7 @@ impl Session {
 }
 
 /// One session's store rooted at the user data directory.
+#[derive(Clone)]
 pub struct SessionStore {
     root: PathBuf,
 }

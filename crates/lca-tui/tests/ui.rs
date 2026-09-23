@@ -16,7 +16,13 @@ fn options() -> UiOptions {
             "assistant: working on it".to_string(),
         ],
         plain: false,
-        stats: std::sync::Arc::new(|| "stats go here".to_string()),
+        invoke_command: std::sync::Arc::new(|name, _arg| {
+            if name == "stats" {
+                lca_protocol::CommandEffect::ShowWidget("stats go here".to_string())
+            } else {
+                lca_protocol::CommandEffect::None
+            }
+        }),
         workspace: std::path::PathBuf::new(),
         slash_commands: vec![
             "/login".into(),
