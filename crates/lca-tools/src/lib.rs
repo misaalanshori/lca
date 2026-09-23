@@ -8,11 +8,13 @@
 
 #![deny(unsafe_code)]
 
+mod bridge;
 mod capabilities;
 mod ops;
 mod process;
 mod pty;
 
+pub use bridge::{BridgeError, bridge_stream};
 pub use capabilities::{Capabilities, CapabilityGrants, Denial};
 pub use ops::{Entry, ExecOutcome, NativeOps, Stat, ToolOps};
 pub use process::{TreeChild, read_up_to, spawn_direct, write_all};

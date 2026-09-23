@@ -1,0 +1,11 @@
+name = "openai-compatible"
+version = "1.0.0"
+abi = "0.1"
+worlds = ["provider", "command"]
+description = "Any OpenAI-compatible chat completions endpoint. Configurable base URL and key."
+
+[capabilities.net]
+hosts = ["api.openai.com"]
+
+[capabilities.credentials]
+namespace = "openai-compatible"

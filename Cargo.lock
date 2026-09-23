@@ -1627,10 +1627,14 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "lca-ext-abi",
+ "lca-permissions",
  "lca-protocol",
- "lca-provider",
+ "lca-tools",
  "serde_json",
  "tokio",
+ "toml",
+ "wit-bindgen 0.41.0",
 ]
 
 [[package]]

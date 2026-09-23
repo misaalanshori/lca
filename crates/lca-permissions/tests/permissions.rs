@@ -376,3 +376,71 @@ fn action_display_shows_the_exact_command_or_path() {
         "raw path, not canonicalised away"
     );
 }
+
+// Verifies: FR-PERM-19 (per-project extension enablement in the grant
+// store) with FR-PROV-9 riding on it: disable survives a save/reload,
+// and a project that never decided stays at the default.
+#[test]
+fn extension_enablement_persists_per_project() {
+    let dir = std::env::temp_dir().join(format!("lca-grants-en-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let project = dir.join("project");
+    std::fs::create_dir_all(&project).expect("mkdir project");
+    let path = dir.join("grants.json");
+
+    let mut store = GrantStore::open(&path).expect("store");
+    assert_eq!(store.extension_enabled(&project, "openai-compatible"), None);
+    store
+        .set_extension_enabled(&project, "openai-compatible", false)
+        .expect("disable");
+    drop(store);
+
+    let reopened = GrantStore::open(&path).expect("reopen");
+    assert_eq!(
+        reopened.extension_enabled(&project, "openai-compatible"),
+        Some(false),
+        "the disable survives the round trip"
+    );
+    assert_eq!(
+        reopened.extension_enabled(&project, "hooks-example"),
+        None,
+        "a provider nothing was said about keeps its default"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Verifies: FR-PERM-16's persistence half (ADR-0022): an ad hoc net
+// grant approved for one project is readable back for the capability
+// engine, invalid vocabulary is refused at approval and skipped on
+// read, and one project's grant never leaks to another.
+#[test]
+fn adhoc_net_grants_persist_per_project() {
+    let dir = std::env::temp_dir().join(format!("lca-grants-net-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let project = dir.join("project");
+    let other = dir.join("other");
+    std::fs::create_dir_all(&project).expect("mkdir project");
+    std::fs::create_dir_all(&other).expect("mkdir other");
+    let path = dir.join("grants.json");
+
+    let mut store = GrantStore::open(&path).expect("store");
+    assert!(store.net_patterns(&project).is_empty());
+    store
+        .approve_net_pattern(&project, "llm.example.com:8443")
+        .expect("approve");
+    assert!(
+        store.approve_net_pattern(&project, "workspace").is_err(),
+        "fs vocabulary refused"
+    );
+    drop(store);
+
+    let reopened = GrantStore::open(&path).expect("reopen");
+    assert_eq!(
+        reopened.net_patterns(&project),
+        vec!["llm.example.com:8443".to_string()]
+    );
+    assert!(reopened.net_patterns(&other).is_empty(), "per project only");
+    let _ = std::fs::remove_dir_all(&dir);
+}

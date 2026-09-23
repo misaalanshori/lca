@@ -32,6 +32,45 @@ impl EventSink for Mid {
     }
 }
 
+/// Recover the headless error class from a dispatch-level message
+/// (`docs/headless.md`'s `transport`/`auth`/`invalid` vocabulary): the
+/// error boundary is string-only, because WIT errors are text
+/// (ADR-0019), so an embedded HTTP status regains the class its status
+/// codes derive, a recorded refusal stays out of `transport`, and
+/// everything else is a transport failure retried per FR-CORE-6.
+/// ponytail: message-shape heuristics; a pre-freeze ABI addition could
+/// carry the class explicitly (the `docs/abi-versioning.md` punch list
+/// is where that belongs).
+fn classify_message(message: &str) -> (&'static str, bool) {
+    if let Some(status) = message
+        .split("provider returned HTTP ")
+        .nth(1)
+        .and_then(|tail| tail.get(..3))
+        .and_then(|token| token.parse::<u16>().ok())
+    {
+        let class = match status {
+            401 | 403 => "auth",
+            400..=499 => "invalid",
+            _ => "transport",
+        };
+        let retryable = status == 429 || status == 408 || (500..=599).contains(&status);
+        return (class, retryable);
+    }
+    let refusal = [
+        "permission denied",
+        "not granted",
+        "not found",
+        "invalid argument",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle));
+    if refusal {
+        ("invalid", false)
+    } else {
+        ("transport", true)
+    }
+}
+
 impl Provider for ExtensionProvider {
     fn name(&self) -> &str {
         self.handle.name()
@@ -86,10 +125,14 @@ impl Provider for ExtensionProvider {
                     break;
                 }
             }
-            answered.map_err(|err| ProviderError {
-                message: err.to_string(),
-                class: "invalid",
-                retryable: false,
+            answered.map_err(|err| {
+                let message = err.to_string();
+                let (class, retryable) = classify_message(&message);
+                ProviderError {
+                    message,
+                    class,
+                    retryable,
+                }
             })
         })
     }

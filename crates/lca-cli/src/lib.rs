@@ -109,6 +109,71 @@ pub mod exit {
     pub const SESSION: i32 = 6;
 }
 
+/// FR-PROV-6's report, shared by both front ends and by the mid-session
+/// identity commands: no enabled provider answers the configured name,
+/// so there is no model, and the install command is the way out.
+pub(crate) fn no_model_message(provider: &str) -> String {
+    format!(
+        "No model is available (provider `{provider}` is not enabled). \
+         Install one with `lca ext install <reference>`."
+    )
+}
+
+/// FR-PROV-9's disable knob (FR-PERM-19's storage): every handle the
+/// grant store has disabled for this project leaves the registry.
+pub(crate) fn apply_enablement(
+    registry: &mut lca_core::ExtensionRegistry,
+    disabled_here: impl Fn(&str) -> bool,
+) {
+    for name in registry.registered_names() {
+        if disabled_here(&name) {
+            registry.set_enabled(&name, false);
+        }
+    }
+}
+
+/// The capability environment for the bundled native provider: the
+/// manifest's grants plus this project's ad hoc `net` patterns
+/// (FR-PERM-16), over the user's own scope roots.
+/// ponytail: opens a second grant-store instance; nothing in the
+/// capability engine writes grants yet, so there is no writer conflict,
+/// and one shared owner comes back with the ad hoc attach flow (ADR-0022).
+#[cfg(feature = "bundled-openai-compat")]
+pub(crate) fn openai_capabilities(cwd: &Path) -> std::sync::Arc<lca_tools::Capabilities> {
+    use std::sync::{Arc, Mutex};
+
+    let data = data_dir();
+    let private = data.join("extensions/openai-compatible");
+    let _ = std::fs::create_dir_all(&private);
+    let roots = lca_permissions::ScopeRoots {
+        workspace: cwd.to_path_buf(),
+        private,
+        home_config: config_file()
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| data.clone()),
+        temp: std::env::temp_dir(),
+        state_dir: data.clone(),
+    };
+    let store =
+        GrantStore::open(&data.join("grants.json")).expect("the grant store was read at startup");
+    let mut grants = openai_compatible::manifest_grants();
+    grants.adhoc_net = store
+        .net_patterns(cwd)
+        .iter()
+        .filter_map(|pattern| lca_permissions::parse_net_pattern(pattern).ok())
+        .collect();
+    Arc::new(lca_tools::Capabilities::new(
+        "openai-compatible",
+        grants,
+        roots,
+        Arc::new(Mutex::new(HeadlessPrompt::default())),
+        Arc::new(Mutex::new(store)),
+        data,
+        None,
+    ))
+}
+
 /// The user data directory for sessions, grants, and state.
 pub fn data_dir() -> PathBuf {
     lca_session::default_data_dir()
@@ -348,17 +413,6 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
         }
     };
     let provider_name = config.provider().to_string();
-    let provider: Box<dyn lca_provider::Provider> = match provider_name.as_str() {
-        #[cfg(feature = "bundled-openai-compat")]
-        "openai-compatible" => Box::new(openai_compatible::OpenAiCompatible::default()),
-        other => {
-            eprintln!(
-                "No model is available (provider `{other}` is not enabled). \
-                 Install one with `lca ext install <reference>`."
-            );
-            return exit::USAGE;
-        }
-    };
     let title: String = prompt.chars().take(60).collect();
     let session =
         match store.create_session(cwd, if title.is_empty() { "headless" } else { &title }) {
@@ -392,6 +446,22 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
     })) {
         registry.register(handle);
     }
+    #[cfg(feature = "bundled-openai-compat")]
+    registry.register(Arc::new(openai_compatible::OpenAiCompat::new(
+        openai_capabilities(cwd),
+    )));
+    apply_enablement(&mut registry, |name| {
+        grants.extension_enabled(cwd, name) == Some(false)
+    });
+    // FR-PROV-6: the configured provider must resolve to an enabled
+    // handle; zero providers is an ordinary, reportable state.
+    let provider: Box<dyn lca_provider::Provider> = match registry.provider(&provider_name) {
+        Some(handle) => Box::new(lca_core::ExtensionProvider::new(handle.clone())),
+        None => {
+            eprintln!("{}", no_model_message(&provider_name));
+            return exit::USAGE;
+        }
+    };
     let agent_config = AgentConfig {
         provider: provider_name.clone(),
         model: config.model().unwrap_or_default().to_string(),

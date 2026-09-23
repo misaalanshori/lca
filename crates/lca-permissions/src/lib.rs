@@ -155,6 +155,11 @@ struct ProjectEntry {
     /// Per-project extension enablement (FR-PERM-19).
     #[serde(default)]
     extensions: BTreeMap<String, bool>,
+    /// Ad hoc `net` grants attached when the host was named
+    /// (FR-PERM-16, ADR-0022): host-pattern vocabulary only, never an
+    /// fs path, never a bare wildcard.
+    #[serde(default)]
+    net_patterns: BTreeSet<String>,
 }
 
 /// The user grant store: one JSON file outside every project directory.
@@ -255,6 +260,42 @@ impl GrantStore {
             .or_default()
             .extensions
             .insert(name.to_string(), enabled);
+        self.save()
+    }
+
+    /// The ad hoc `net` patterns approved for this project, in the
+    /// order the store lists them (FR-PERM-16's persistence; ADR-0022).
+    /// A pattern that no longer parses is skipped rather than failing
+    /// every later request over one corrupt line.
+    pub fn net_patterns(&self, project_dir: &Path) -> Vec<String> {
+        self.data
+            .projects
+            .get(&canonical_key(project_dir))
+            .map(|entry| {
+                entry
+                    .net_patterns
+                    .iter()
+                    .filter(|pattern| parse_net_pattern(pattern).is_ok())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Record one ad hoc `net` grant for this project (FR-PERM-16).
+    pub fn approve_net_pattern(&mut self, project_dir: &Path, pattern: &str) -> Result<(), Error> {
+        parse_net_pattern(pattern).map_err(|_| Error::Corrupt {
+            path: self.path.clone(),
+            source: <serde_json::Error as serde::de::Error>::custom(format!(
+                "not a net pattern: {pattern}"
+            )),
+        })?;
+        self.data
+            .projects
+            .entry(canonical_key(project_dir))
+            .or_default()
+            .net_patterns
+            .insert(pattern.to_string());
         self.save()
     }
 

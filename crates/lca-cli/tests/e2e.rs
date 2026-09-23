@@ -146,6 +146,35 @@ fn sandbox(name: &str) -> Sandbox {
     Sandbox { root, home, data }
 }
 
+/// Consent the loopback mock host would get from the login modal in
+/// production (FR-PERM-16); here the test stands in for the user's
+/// approval, recorded in the grant store exactly as the real flow
+/// writes it.
+impl Sandbox {
+    fn approve_loopback_net(&self, extra: serde_json::Value) {
+        let project = std::fs::canonicalize(self.project()).expect("canonical project");
+        let mut entry = serde_json::json!({
+            "trusted": true,
+            "net_patterns": ["127.0.0.1"],
+        });
+        if let (Some(object), Some(more)) = (entry.as_object_mut(), extra.as_object()) {
+            for (key, value) in more {
+                object.insert(key.clone(), value.clone());
+            }
+        }
+        let grants = serde_json::json!({
+            "version": 1,
+            "projects": { project.to_string_lossy(): entry },
+        });
+        std::fs::create_dir_all(self.data.join("lca")).expect("mkdir lca");
+        std::fs::write(
+            self.data.join("lca/grants.json"),
+            serde_json::to_vec_pretty(&grants).expect("grants serialize"),
+        )
+        .expect("write grants");
+    }
+}
+
 impl Sandbox {
     fn project(&self) -> PathBuf {
         self.root.join("project")
@@ -156,6 +185,11 @@ impl Sandbox {
     }
 
     fn run_env(&self, mock: Option<&Mock>, args: &[&str], extra: &[(&str, &str)]) -> Output {
+        // Default consent for the loopback mock, unless the test
+        // already wrote its own store (a disable test, say).
+        if mock.is_some() && !self.data.join("lca/grants.json").exists() {
+            self.approve_loopback_net(serde_json::json!({}));
+        }
         let mut command = Command::new(env!("CARGO_BIN_EXE_lca"));
         command
             .args(args)
@@ -304,6 +338,30 @@ fn disabled_provider_reports_the_install_command() {
         "offers the install command: {text}"
     );
     assert_eq!(mock.request_count(), 0, "no request without a provider");
+}
+
+// Verifies: FR-PROV-9's disable path proper (FR-PERM-19's storage) -
+// the default provider is registered but the grant store has it
+// disabled for this project, so zero providers are enabled, the agent
+// reports FR-PROV-6's message, and no socket opens.
+#[test]
+fn a_grant_store_disable_leaves_zero_enabled_providers() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("never called"))]));
+    let box_ = sandbox("provider-off");
+    box_.approve_loopback_net(serde_json::json!({
+        "extensions": { "openai-compatible": false },
+    }));
+    let output = box_.run(Some(&mock), &["-p", "hi"]);
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("No model is available"), "{text}");
+    assert!(text.contains("lca ext install"), "{text}");
+    assert_eq!(
+        mock.request_count(),
+        0,
+        "a disabled provider opens no socket"
+    );
 }
 
 // Exit code table, docs/headless.md:2 = usage error.

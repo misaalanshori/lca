@@ -425,6 +425,15 @@ impl ExtensionRegistry {
         Some(self.identity_effect(&handle, op))
     }
 
+    /// Every registered handle's name, enabled or not (the grant
+    /// store's enablement filter runs against this, FR-PROV-9).
+    pub fn registered_names(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|entry| entry.handle.name().to_string())
+            .collect()
+    }
+
     /// Every collision reported during registration (FR-EXT-11's report).
     pub fn collisions(&self) -> &[CollisionReport] {
         &self.collisions

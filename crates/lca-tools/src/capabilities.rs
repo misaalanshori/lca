@@ -730,6 +730,16 @@ impl Capabilities {
                 CapabilityError::Permission("net-local grants HTTP or HTTPS only".into()),
             ));
         }
+        // Declared-but-unmatched targets are ordinary denials
+        // (FR-PERM-5); the recorded capability is whichever family this
+        // sandbox declared, so an IP literal with only `net` granted is
+        // a `net` denial, not a phantom `net-local` one. Only "no grant
+        // family at all" reached the top's NotGranted.
+        let capability = if self.grants.net_local.is_empty() {
+            "net"
+        } else {
+            "net-local"
+        };
         if self.grants.net_local.iter().any(|p| p.matches_name(&host)) {
             return self.http_exchange(method, url, headers, body);
         }
@@ -742,19 +752,11 @@ impl Capabilities {
                 return self.http_exchange(method, url, headers, body);
             }
             return Err(self.refused(
-                "net-local",
+                capability,
                 url,
                 CapabilityError::Permission(format!("{ip} matches no granted local range")),
             ));
         }
-        // Declared-but-unmatched targets are ordinary denials
-        // (FR-PERM-5); only "no grant family at all" reached the top's
-        // NotGranted.
-        let capability = if self.grants.net_local.is_empty() {
-            "net"
-        } else {
-            "net-local"
-        };
         if !self.grants.net_local.is_empty() {
             // A name that will not resolve inside the local space is a
             // plain denial, not an I/O failure (FR-PERM-5).

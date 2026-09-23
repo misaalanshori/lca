@@ -35,17 +35,6 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     };
 
     let provider_name = config.provider().to_string();
-    let provider: Arc<dyn lca_provider::Provider> = match provider_name.as_str() {
-        #[cfg(feature = "bundled-openai-compat")]
-        "openai-compatible" => Arc::new(openai_compatible::OpenAiCompatible::default()),
-        other => {
-            eprintln!(
-                "No model is available (provider `{other}` is not enabled). \
-                 Install one with `lca ext install <reference>`."
-            );
-            return Ok(crate::exit::USAGE);
-        }
-    };
 
     let records = store
         .read_with(&session, ViewMode::Display)
@@ -73,7 +62,23 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     })) {
         registry.register(handle);
     }
+    #[cfg(feature = "bundled-openai-compat")]
+    registry.register(Arc::new(openai_compatible::OpenAiCompat::new(
+        crate::openai_capabilities(cwd),
+    )));
+    crate::apply_enablement(&mut registry, |name| {
+        grants.lock().expect("grants").extension_enabled(cwd, name) == Some(false)
+    });
     let registry = Arc::new(registry);
+    // FR-PROV-6 before anything reaches the interface: the configured
+    // provider must resolve to an enabled handle.
+    let provider: Arc<dyn lca_provider::Provider> = match registry.provider(&provider_name) {
+        Some(handle) => Arc::new(lca_core::ExtensionProvider::new(handle.clone())),
+        None => {
+            eprintln!("{}", crate::no_model_message(&provider_name));
+            return Ok(crate::exit::USAGE);
+        }
+    };
 
     let agent_config = AgentConfig {
         provider: provider_name.clone(),
@@ -103,17 +108,35 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         plain: config.ui_color() == lca_config::ColorMode::Never,
         invoke_command: {
             let registry = registry.clone();
+            let provider_name = provider_name.clone();
             Arc::new(move |name, argument| {
+                // The generic identity commands dispatch across
+                // installed providers first (FR-PROV-11); with zero
+                // enabled providers FR-PROV-6's report shows instead.
+                if matches!(name, "login" | "logout" | "usage") {
+                    if let Some(effect) = registry.invoke_generic(name, argument, &provider_name) {
+                        return effect;
+                    }
+                    return CommandEffect::ShowWidget(crate::no_model_message(&provider_name));
+                }
                 registry
                     .invoke_command(name, argument)
                     .unwrap_or(CommandEffect::None)
             })
         },
-        slash_commands: registry
-            .command_names()
-            .into_iter()
-            .map(|name| format!("/{name}"))
-            .collect(),
+        slash_commands: {
+            let mut names: Vec<String> = ["login", "logout", "usage"]
+                .iter()
+                .map(|name| format!("/{name}"))
+                .collect();
+            names.extend(
+                registry
+                    .command_names()
+                    .into_iter()
+                    .map(|name| format!("/{name}")),
+            );
+            names
+        },
         workspace: cwd.to_path_buf(),
     };
 

@@ -99,6 +99,12 @@ pub fn parse_net_pattern(value: &str) -> Result<NetPattern, PatternError> {
     if host.is_empty() || host == "*" {
         return Err(invalid("not a hostname"));
     }
+    // Bare single labels are refused except `localhost`, the one real
+    // name without a dot; everything else that short is fs vocabulary
+    // (`workspace`) or nonsense, and `net-local` owns local names anyway.
+    if !host.contains('.') && !host.contains(':') && !host.eq_ignore_ascii_case("localhost") {
+        return Err(invalid("not a hostname"));
+    }
     if wildcard {
         let rest = host.trim_start_matches('.');
         if rest.starts_with('.') || rest.is_empty() {
