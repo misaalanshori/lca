@@ -171,8 +171,11 @@ jobs:
             # ring's aarch64-Windows path forces plain gcc-mode clang
             # (its own FIXME) while cargo-xwin supplies MSVC-style flags;
             # the committed shim translates between them.
-            sudo install -m755 ci/clang-shim /usr/local/bin/clang
-            export PATH="/usr/lib/llvm-19/bin:$PATH"
+            # Shim DIR first: /usr/lib/llvm-19/bin also ships a `clang`,
+            # and PATH order decides which one cc-rs finds.
+            sudo mkdir -p /opt/cc-shim
+            sudo install -m755 ci/clang-shim /opt/cc-shim/clang
+            export PATH="/opt/cc-shim:/usr/lib/llvm-19/bin:$PATH"
             export CC_x86_64_pc_windows_msvc=clang
             export CC_aarch64_pc_windows_msvc=clang
           fi
