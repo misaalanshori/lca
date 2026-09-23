@@ -1,0 +1,55 @@
+package lca:ext@0.1.0;
+
+/// The `ui` world: draw without the terminal (ADR-0003). The host owns
+/// layout and drawing; a text span carries data, never control codes
+/// (FR-UI-2), and the widget variant reserves a case so the vocabulary
+/// can grow before the ABI freeze without breaking it then.
+world ui {
+  import lca:host/log@0.1.0;
+  import lca:host/ui@0.1.0;
+  export render;
+  export interaction;
+}
+
+/// One region's content, and the host's rendering contract (the four
+/// regions and their constraints are the capability catalog's table).
+interface render {
+  use types.{widget};
+
+  /// The tree for `region` (`status-line`, `footer`, `panel`, `modal`),
+  /// or nothing to show. The host only asks for regions the manifest
+  /// declared and the user approved; an ungranted ask means this is
+  /// never called (capability catalog `ui`).
+  ///
+  /// Nodes form an arena: a `boxed`/`row`/`column` child is an index
+  /// into this same list and node0 is the root, because WIT records
+  /// cannot reference themselves (ADR-0003's vocabulary, flattened
+  /// without giving the variant's reserved case up).
+  render: func(region: string) -> option<list<widget>>;
+}
+
+/// User interactions in, effects out. The host delivers events only in
+/// response to real user input, which is what makes FR-UI-6 enforceable:
+/// a modal the extension asks for outside such a delivery is dropped.
+interface interaction {
+  /// A key or button the user produced (`key`), or a submission of what
+  /// they typed into a modal (`submit`), or their dismissal (`cancel`).
+  variant input {
+    key(string),
+    submit(string),
+    cancel,
+  }
+
+  /// What the event asks the host to do (the `command` world's effect
+  /// vocabulary plus the modal control imports cannot cover).
+  variant effect {
+    none,
+    close-modal,
+    open-modal,
+    show-notice(string),
+    insert-text(string),
+    submit-prompt(string),
+  }
+
+  handle: func(input: input) -> effect;
+}

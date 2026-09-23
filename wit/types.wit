@@ -71,7 +71,37 @@ interface types {
     extras: list<extra-pair>,
   }
 
-  /// One session record handed to the `compaction` world.
+  /// The widget vocabulary (ADR-0003): the host lays out and draws;
+  /// text carries data, never control codes (FR-UI-2). A color field is
+  /// a semantic role - intent, not color - so it renders under any theme
+  /// and degrades to plain text without color (FR-UI-5).
+  variant widget {
+    /// Content plus its semantic role (`default`, `muted`, `warning`,
+    /// `error`, `accent`, ... a string vocabulary, not an enum).
+    text(tuple<string, string>),
+    /// An image: media type plus bytes (ADR-0003's pre-freeze addition
+    /// for provider image output).
+    image(tuple<string, list<u8>>),
+    /// A bordered box with an optional title around one child.
+    /// A child reference is an index into the same node list: WIT
+    /// records cannot be recursive, so trees travel as an arena with
+    /// node0 as the root (documented at the `render` interface).
+    boxed(tuple<option<string>, u32>),
+    /// Children side by side, as node indices.
+    row(list<u32>),
+    /// Children stacked, as node indices.
+    column(list<u32>),
+    /// A busy indicator; the animation frames are the host's.
+    spinner(string),
+    /// A label with a0..1 fill fraction.
+    progress(tuple<string, f32>),
+    /// Label/value pairs (the key-value list).
+    keyvalue(list<tuple<string, string>>),
+    /// Reserved so the vocabulary's next kind lands without a canonical
+    /// ABI break (ADR-0003; never constructed by1.0 hosts).
+    vendor(string),
+  }
+
   record session-record {
     /// The log's `t` tag: user, assistant, tool-call, tool-result, ...
     kind: string,

@@ -1,0 +1,13 @@
+package lca:host@0.1.0;
+
+/// The `ui` capability's imports: everything an extension may ask of
+/// the host about drawing that is not rendering itself (capability
+/// catalog `ui`, ADR-0003).
+interface ui {
+  /// Ask the host to redraw the extension's granted regions (a pull
+  /// model also works; this is for a push after async work lands).
+  request-redraw: func();
+  /// Close the modal this extension opened (user dismissal goes
+  /// through the `interaction` world's effect instead).
+  close-modal: func();
+}
