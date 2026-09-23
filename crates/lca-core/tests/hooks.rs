@@ -15,7 +15,7 @@ use lca_ext_host::{ExtHost, ExtensionLimits, HostEnvironment};
 use lca_permissions::{Decision, GrantStore, PermissionPrompt, ProposalDiff, ScopeRoots};
 use lca_protocol::{
     CommandEffect, CommandSpec, DispatchError, HookAction, PostToolObservation, Record, ToolCall,
-    ToolResult, ToolResultStatus, ToolSpec,
+    ToolResultStatus, ToolSpec,
 };
 use lca_session::ViewMode;
 use lca_testkit::{FakeProvider, fake_usage};
@@ -211,7 +211,6 @@ struct Harness {
     store: lca_session::SessionStore,
     session: lca_session::Session,
     grants: GrantStore,
-    project: PathBuf,
     tools: lca_tools::ToolExecutor,
     provider: Arc<FakeProvider>,
     prompt: Arc<PromptSpy>,
@@ -242,7 +241,6 @@ fn harness(name: &str, provider: FakeProvider, registry: ExtensionRegistry) -> H
         store,
         session,
         grants,
-        project,
         tools,
         provider: Arc::new(provider),
         prompt: Arc::new(PromptSpy::default()),
@@ -658,7 +656,7 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
             t.tool_call("conformance", r#"{"mode":"loop"}"#)
                 .usage(fake_usage(10, 10, 0, 10))
         })
-        .turn(|t| t.text("never".into()).usage(fake_usage(10, 5, 0, 0)))
+        .turn(|t| t.text("never").usage(fake_usage(10, 5, 0, 0)))
         .build();
     let mut h = harness("cancel-ext", provider, registry);
 
