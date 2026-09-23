@@ -173,3 +173,42 @@ WIT realizations recorded here: `list` is a keyword (the catalog's list
 function exports as `list-entries`), and the usage record's
 `cache_write_1h` spells `cache-write-hour` in WIT (digit-leading
 segments are illegal); JSON surfaces keep their documented names.
+
+## Phase 3 — providers, network capabilities, credentials: IN PROGRESS
+
+Landed so far, each commit green:
+
+- The `provider` world WIT with the pull-based completion stream
+  (ADR-0004), cache-boundary request field (ADR-0017), and the
+  `login`/`logout`/`usage` identity exports with their `not-supported`
+  outcome (ADR-0012); `lca:host` gains `net`, `oauth`, and `credentials`.
+- Cache-waste measurement (ADR-0017): prompt-count comparison minus
+  cache reads, compaction-only baseline reset, model switches counted,
+  noise floor, never-reported-cache distinction (FR-CACHE-1 through4),
+  with cost buckets on `Usage` so a miss's dollar cost comes from the
+  turn's own paid-versus-read rates. `/stats` surfaces the totals.
+- Pattern validation: net rules (FR-PERM-15, port pins, wildcard
+  labels), net-local canonical ranges (FR-PERM-14), and the single
+  IPv4-mapped normalization point (FR-PERM-17).
+- The runtime engines: host-side HTTP through `net`/`net-local`/ad hoc
+  dispatch with the rebinding refusal recorded distinctly (FR-PERM-13,
+  FR-PERM-16, FR-PERM-5), the loopback OAuth flow bound to127.0.0.1
+  (FR-PROV-3/4), and namespace-isolated credentials with owner-only
+  file permissions (FR-PERM-6/7, NFR-14).
+- Manifest validation for all four new capabilities, including
+  oauth-requires-net from the schema's allOf.
+
+Open decision (needs an ADR before implementation, not a silent
+shortcut): the catalog says credentials prefer the platform keychain
+"where one exists". A Linux keychain needs a Secret Service/dbus
+dependency and macOS needs Security-framework FFI, neither of which is
+in the SRDD's closed dependency list. 1.0 ships the owner-only file
+backend (which satisfies NFR-14 and the isolation requirements); the
+keychain preference becomes ADR-0021 when a dependency justification is
+written. Noted here rather than claimed as done.
+
+Remaining for the Phase 3 exit test: provider-world host bindings and
+the dispatch adapter onto `lca-provider::Provider`, the generic
+`/login`//logout`//usage` commands with auto-namespacing (FR-PROV-10/11),
+the OpenAI-compatible provider in dual mode, the Antigravity OAuth
+provider, and the NFR-31 clean-conversation benchmark.
