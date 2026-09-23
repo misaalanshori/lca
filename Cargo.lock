@@ -1350,6 +1350,7 @@ dependencies = [
 name = "lca-permissions"
 version = "0.1.0"
 dependencies = [
+ "ipnet",
  "lca-protocol",
  "proptest",
  "serde",

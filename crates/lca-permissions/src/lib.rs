@@ -9,6 +9,8 @@
 
 #![forbid(unsafe_code)]
 
+mod net;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -469,6 +471,11 @@ impl From<serde_json::Error> for Error {
 // ---------------------------------------------------------------------------
 // Filesystem scopes (ADR-0005, capability catalog `fs`)
 // ---------------------------------------------------------------------------
+
+pub use net::{
+    LocalPattern, NetPattern, PatternError, is_local_address, normalize_ip, parse_local_pattern,
+    parse_net_pattern,
+};
 
 /// The fixed scope vocabulary a manifest may name (ADR-0005). The manifest
 /// names a scope and a mode; it never carries a path.

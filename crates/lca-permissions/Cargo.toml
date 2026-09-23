@@ -12,6 +12,7 @@ lca-protocol = { path = "../lca-protocol" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+ipnet.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
