@@ -38,6 +38,9 @@ clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sha2 = "0.10"
+# zip - the ADR-0010 HTTPS archive format; DEFLATE gets a maintained
+# implementation instead of a hand-written one (SRDD dependency rule).
+zip = { version = "2", default-features = false, features = ["deflate"] }
 ipnet = "2"
 toml = "0.8"
 wasmtime = { version = "49.0.0", default-features = false, features = [

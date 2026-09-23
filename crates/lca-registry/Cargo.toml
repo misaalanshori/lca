@@ -1,0 +1,33 @@
+[package]
+name = "lca-registry"
+description = "OCI and plain-HTTPS-archive extension resolution, the install tree, and the extension lockfile (ADR-0010, FR-DIST-*)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Dependency justifications (the SRDD's closed list and its rule):
+# sha2 - digest verification (listed).
+# hyper/hyper-util/hyper-rustls - the existing HTTP client; the OCI
+#   resolver uses the table's documented fallback, "direct OCI
+#   Distribution API calls over the existing HTTP client", rather than
+#   pulling wasm-pkg-client, because anonymous pulls are three GETs and
+#   a header check.
+# zip - reads (and, for tests and authors, packs) the ADR-0010 archive;
+#   DEFLATE must not be hand-written - SRDD "Dependencies need a reason".
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+hyper-rustls.workspace = true
+tokio.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true
