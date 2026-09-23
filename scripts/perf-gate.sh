@@ -62,11 +62,19 @@ if [ "$interpreter_size" -gt "$max_interpreter" ]; then
   echo "NFR-2 exceeded: interpreter-only build is larger than12 MB"
   exit 1
 fi
-if strings "$interpreter" | grep -qi cranelift; then
-  echo "NFR-15 violated: the interpreter-only build contains compiler code"
+# The compiler proper, not the name: wasmtime-environ's data structures
+# (cranelift-entity, cranelift-bforest) and one config-error string ride
+# along in every pulley-only build, but cranelift-codegen's paths or
+# symbols mean executable-memory codegen reached the binary. Counted,
+# not grep -q: under pipefail grep -q's early exit can SIGPIPE strings
+# and read a match as a failure (or hide one), which made this check
+# non-deterministic between machines.
+compiler_hits=$(strings "$interpreter" | grep -c -E '/cranelift-(codegen|opt|control|simple)|cranelift_codegen|compile_function' || true)
+if [ "$compiler_hits" -gt 0 ]; then
+  echo "NFR-15 violated: the interpreter-only build contains compiler code ($compiler_hits hits)"
   exit 1
 fi
-echo "interpreter build: no cranelift, size within budget"
+echo "interpreter build: no cranelift compiler, size within budget"
 
 # Verifies: NFR-6 (idle memory with no extensions enabled). The
 # interface idles in a pty until we sample its resident set.

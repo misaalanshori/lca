@@ -146,6 +146,23 @@ fn sandbox(name: &str) -> Sandbox {
     Sandbox { root, home, data }
 }
 
+impl Sandbox {
+    /// Where the binary under test keeps its state on this platform -
+    /// `default_data_dir()` honored the spawn environment (XDG_DATA_HOME
+    /// on Linux, HOME on macOS where Library is the documented home by
+    /// convention, APPDATA on Windows), and every grants/extension path
+    /// here must land in the same place or macOS silently reads an empty
+    /// grant store (docs/platform-notes.md: macOS state lives under
+    /// ~/Library/Application Support/lca).
+    fn state_dir(&self) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            self.home.join("Library/Application Support/lca")
+        } else {
+            self.data.join("lca")
+        }
+    }
+}
+
 /// Consent the loopback mock host would get from the login modal in
 /// production (FR-PERM-16); here the test stands in for the user's
 /// approval, recorded in the grant store exactly as the real flow
@@ -166,9 +183,9 @@ impl Sandbox {
             "version": 1,
             "projects": { project.to_string_lossy(): entry },
         });
-        std::fs::create_dir_all(self.data.join("lca")).expect("mkdir lca");
+        std::fs::create_dir_all(self.state_dir()).expect("mkdir lca");
         std::fs::write(
-            self.data.join("lca/grants.json"),
+            self.state_dir().join("grants.json"),
             serde_json::to_vec_pretty(&grants).expect("grants serialize"),
         )
         .expect("write grants");
@@ -187,7 +204,7 @@ impl Sandbox {
     fn run_env(&self, mock: Option<&Mock>, args: &[&str], extra: &[(&str, &str)]) -> Output {
         // Default consent for the loopback mock, unless the test
         // already wrote its own store (a disable test, say).
-        if mock.is_some() && !self.data.join("lca/grants.json").exists() {
+        if mock.is_some() && !self.state_dir().join("grants.json").exists() {
             self.approve_loopback_net(serde_json::json!({}));
         }
         let mut command = Command::new(env!("CARGO_BIN_EXE_lca"));
@@ -197,6 +214,8 @@ impl Sandbox {
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
             .env("XDG_DATA_HOME", &self.data)
+            .env("APPDATA", &self.data)
+            .env("LOCALAPPDATA", &self.data)
             .env("XDG_CONFIG_HOME", self.home.join(".config"))
             .env_remove("OPENAI_BASE_URL")
             .env_remove("OPENAI_API_KEY")
@@ -669,7 +688,7 @@ impl Sandbox {
 
     /// The installed-extension tree under this sandbox's data dir.
     fn extensions_root(&self) -> PathBuf {
-        self.data.join("lca").join("extensions")
+        self.state_dir().join("extensions")
     }
 
     /// Write the grant store (ad hoc loopback net consent, the stand-in
@@ -685,9 +704,9 @@ impl Sandbox {
             "version": 1,
             "projects": { project.to_string_lossy(): entry },
         });
-        std::fs::create_dir_all(self.data.join("lca")).expect("mkdir lca");
+        std::fs::create_dir_all(self.state_dir()).expect("mkdir lca");
         std::fs::write(
-            self.data.join("lca").join("grants.json"),
+            self.state_dir().join("grants.json"),
             serde_json::to_vec_pretty(&grants).expect("grants serialize"),
         )
         .expect("write grants");
