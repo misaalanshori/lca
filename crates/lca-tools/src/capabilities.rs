@@ -293,6 +293,36 @@ impl Capabilities {
             parameter: parameter.to_string(),
             reason: reason.to_string(),
         });
+        // FR-EXT-9: `lca ext info` counts these when nothing from this
+        // session is running, so each one also lands in the extension's
+        // journal - the same path lca-registry::InstallTree::denials_path
+        // reads. Best effort: a denial that cannot be journaled is still
+        // recorded in memory and still refused.
+        let path = self
+            .roots
+            .state_dir
+            .join("extensions")
+            .join(&self.name)
+            .join("denials.jsonl");
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let line = format!(
+            "{{\"capability\":\"{capability}\",\"parameter\":\"{}\",\"ts\":{}}}\n",
+            parameter.replace('"', "'"),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_millis() as u64)
+                .unwrap_or(0)
+        );
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            use std::io::Write as _;
+            let _ = file.write_all(line.as_bytes());
+        }
     }
 
     fn undeclared(&self, capability: &str) -> CapabilityError {

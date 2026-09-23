@@ -100,6 +100,10 @@ pub struct Manifest {
     pub credentials: bool,
     /// The `completion` capability was declared (ADR-0015).
     pub completion: bool,
+    /// The manifest's resource hints, clamped to the host's maxima at
+    /// load (schema `limits`: memory64MB/fuel10M defaults,512MB/1B
+    /// maximums; absent means the host's own values apply).
+    pub limits: Option<ExtensionLimits>,
 }
 
 fn reason_of(value: &toml::Value, key: &str) -> Result<String, LoadError> {
@@ -164,6 +168,7 @@ impl Manifest {
         let mut parsed_oauth: Option<OAuthSettings> = None;
         let mut parsed_credentials = false;
         let mut parsed_completion = false;
+        let mut parsed_limits: Option<ExtensionLimits> = None;
         if let Some(capabilities) = value.get("capabilities") {
             let table = capabilities.as_table().ok_or_else(|| {
                 LoadError::InvalidManifest("`capabilities` must be a table".into())
@@ -305,6 +310,7 @@ impl Manifest {
             parsed_oauth = oauth;
             parsed_credentials = credentials;
             parsed_completion = completion;
+            parsed_limits = manifest_limits(&value)?;
         }
 
         Ok(Manifest {
@@ -320,6 +326,7 @@ impl Manifest {
             oauth: parsed_oauth,
             credentials: parsed_credentials,
             completion: parsed_completion,
+            limits: parsed_limits,
         })
     }
 
@@ -336,6 +343,39 @@ impl Manifest {
             && (declared_minor == current_minor
                 || (current_minor > 0 && declared_minor == current_minor - 1))
     }
+}
+
+/// The schema's bounds for `limits` (extension-manifest.schema.json):
+/// the host maximums flows.md says every request is clamped to.
+pub const MAX_MEMORY_BYTES: usize = 512 * 1024 * 1024;
+/// The host's per-call fuel ceiling (schema `limits.fuel_per_call`
+/// maximum).
+pub const MAX_FUEL_PER_CALL: u64 = 1_000_000_000;
+
+/// Parse the manifest's optional `limits` table against the schema's
+/// ranges (out-of-range is clamped at load, here we reject nonsense).
+fn manifest_limits(value: &toml::Value) -> Result<Option<ExtensionLimits>, LoadError> {
+    let Some(table) = value.get("limits") else {
+        return Ok(None);
+    };
+    let memory_mb = table
+        .get("memory_mb")
+        .and_then(|v| v.as_integer())
+        .unwrap_or(64);
+    let fuel = table
+        .get("fuel_per_call")
+        .and_then(|v| v.as_integer())
+        .unwrap_or(10_000_000);
+    if memory_mb < 1 || fuel < 1000 {
+        return Err(LoadError::InvalidManifest(
+            "`limits` values are below the schema minimums".into(),
+        ));
+    }
+    Ok(Some(ExtensionLimits {
+        memory_bytes: (memory_mb as usize).min(MAX_MEMORY_BYTES),
+        fuel_per_call: (fuel as u64).min(MAX_FUEL_PER_CALL),
+        log_limit_bytes: 0, // log stays the host's (config key)
+    }))
 }
 
 fn parse_abi(value: &str) -> Option<(u64, u64)> {
@@ -943,6 +983,17 @@ impl ExtHost {
             self.env.proposals.clone(),
         ));
 
+        // Resource limits come from the manifest, clamped to the
+        // host's maxima (flows.md); a manifest without `limits` gets
+        // the host's own values (the hints are optional).
+        let effective_limits = match manifest.limits {
+            Some(requested) => ExtensionLimits {
+                memory_bytes: requested.memory_bytes.min(self.limits.memory_bytes),
+                fuel_per_call: requested.fuel_per_call.min(self.limits.fuel_per_call),
+                log_limit_bytes: self.limits.log_limit_bytes,
+            },
+            None => self.limits.clone(),
+        };
         let component = wasmtime::component::Component::new(&self.engine, wasm)
             .map_err(|err| LoadError::Link(err.to_string()))?;
         let mut linker: HostLinker = Linker::new(&self.engine);
@@ -1028,7 +1079,7 @@ impl ExtHost {
                 provider,
                 compaction,
                 context_transform,
-                limits: self.limits.clone(),
+                limits: effective_limits,
                 enabled: Arc::new(AtomicBool::new(true)),
                 logs: Arc::new(Mutex::new(Vec::new())),
                 cap,
