@@ -99,27 +99,60 @@ impl PtyChild {
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]
-#[allow(unsafe_code)] // documented crate exemption: POSIX pty ioctls
-mod unsafe_ioctl {
-    //! The POSIX ioctl surface std does not expose.
+#[allow(unsafe_code)] // documented crate exemption: POSIX pty allocation
+mod unsafe_ptmx {
+    //! The POSIX pty surface std does not expose. The `posix_openpt`/
+    //! `grantpt`/`unlockpt`/`ptsname` family is portable across every unix
+    //! target we ship (libc defines it in `unix/mod.rs`), unlike the
+    //! ptmx-specific ioctl constants, which differ per platform and do not
+    //! exist in libc for macOS.
 
-    /// Unlock the slave side of a freshly opened ptmx pair.
-    pub(super) fn unlock_ptmx(fd: i32) -> std::io::Result<()> {
-        // SAFETY: `fd` is an open descriptor we just created; the ioctl
-        // reads a pointer to an int we own for the duration.
-        check(unsafe { libc::ioctl(fd, libc::TIOCSPTLCK, &0i32) })
+    use std::os::unix::io::{FromRawFd, RawFd};
+
+    /// Open a master/slave pty pair's master side, unlocked and ready.
+    pub(super) fn open_master() -> std::io::Result<std::fs::File> {
+        // SAFETY: posix_openpt returns a fresh descriptor or -1; O_NOCTTY
+        // keeps the slave from becoming a controlling terminal.
+        let fd = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `fd` is open and owned by us.
+        if unsafe { libc::grantpt(fd) } != 0 {
+            let err = std::io::Error::last_os_error();
+            // SAFETY: closing our own descriptor on the error path.
+            unsafe { libc::close(fd) };
+            return Err(err);
+        }
+        // SAFETY: same descriptor; unlock the slave side.
+        if unsafe { libc::unlockpt(fd) } != 0 {
+            let err = std::io::Error::last_os_error();
+            // SAFETY: closing our own descriptor on the error path.
+            unsafe { libc::close(fd) };
+            return Err(err);
+        }
+        // SAFETY: `fd` transfers to the File, which closes it on drop.
+        Ok(unsafe { std::fs::File::from_raw_fd(fd) })
     }
 
-    /// The number of the slave for this master.
-    pub(super) fn pty_number(fd: i32) -> std::io::Result<u32> {
-        let mut n: libc::c_uint = 0;
-        // SAFETY: `fd` is open and `n` is a correctly sized stack slot.
-        check(unsafe { libc::ioctl(fd, libc::TIOCGPTN, &mut n) })?;
-        Ok(n)
+    /// The slave path for an open master (copied out immediately: the
+    /// libc buffer is overwritten by the next call).
+    pub(super) fn slave_path(fd: RawFd) -> std::io::Result<std::path::PathBuf> {
+        use std::ffi::CStr;
+        // SAFETY: ptsname writes into a libc-owned buffer for this fd.
+        let ptr = unsafe { libc::ptsname(fd) };
+        if ptr.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: NUL-terminated string from the C library.
+        let name = unsafe { CStr::from_ptr(ptr) };
+        Ok(std::path::PathBuf::from(
+            name.to_string_lossy().into_owned(),
+        ))
     }
 
     /// Set the window size on the master; the kernel signals the group.
-    pub(super) fn set_winsize(fd: i32, rows: u16, cols: u16) -> std::io::Result<()> {
+    pub(super) fn set_winsize(fd: RawFd, rows: u16, cols: u16) -> std::io::Result<()> {
         let size = libc::winsize {
             ws_row: rows,
             ws_col: cols,
@@ -127,26 +160,18 @@ mod unsafe_ioctl {
             ws_ypixel: 0,
         };
         // SAFETY: `fd` is open and `size` outlives the call.
-        check(unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &size) })
-    }
-
-    fn check(rc: libc::c_int) -> std::io::Result<()> {
+        let rc = unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &size) };
         if rc < 0 {
             Err(std::io::Error::last_os_error())
         } else {
             Ok(())
         }
     }
-}
 
-#[cfg(unix)]
-fn slave_path(fd: i32) -> std::io::Result<std::path::PathBuf> {
-    let number = unsafe_ioctl::pty_number(fd)?;
-    if cfg!(target_os = "linux") {
-        Ok(std::path::PathBuf::from(format!("/dev/pts/{number}")))
-    } else {
-        // macOS names its ptys /dev/ttysN.
-        Ok(std::path::PathBuf::from(format!("/dev/ttys{number}")))
+    /// The raw descriptor of an open file.
+    pub(super) fn raw_fd(file: &std::fs::File) -> RawFd {
+        use std::os::unix::io::AsRawFd;
+        file.as_raw_fd()
     }
 }
 
@@ -161,14 +186,10 @@ fn spawn_impl(
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::process::CommandExt;
 
-    let master = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/ptmx")?;
-    let fd = std::os::unix::io::AsRawFd::as_raw_fd(&master);
-    unsafe_ioctl::unlock_ptmx(fd)?;
-    unsafe_ioctl::set_winsize(fd, rows, cols)?;
-    let slave_path = slave_path(fd)?;
+    let master = unsafe_ptmx::open_master()?;
+    let fd = unsafe_ptmx::raw_fd(&master);
+    unsafe_ptmx::set_winsize(fd, rows, cols)?;
+    let slave_path = unsafe_ptmx::slave_path(fd)?;
     let slave = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -214,7 +235,7 @@ fn write_impl(inner: &mut Inner, bytes: &[u8]) -> std::io::Result<u64> {
 #[cfg(unix)]
 fn resize_impl(inner: &mut Inner, rows: u16, cols: u16) -> std::io::Result<()> {
     use std::os::unix::io::AsRawFd;
-    unsafe_ioctl::set_winsize(inner.master.as_raw_fd(), rows, cols)
+    unsafe_ptmx::set_winsize(inner.master.as_raw_fd(), rows, cols)
 }
 
 #[cfg(unix)]
