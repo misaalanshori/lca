@@ -83,7 +83,7 @@ pub fn schema_json() -> (String, String, String) {
     (
         "conformance".to_string(),
         "ABI conformance probe: dispatches on the mode argument.".to_string(),
-        r#"{"type":"object","properties":{"mode":{"type":"string"}}"#.to_string(),
+        r#"{"type":"object","properties":{"mode":{"type":"string"}}}"#.to_string(),
     )
 }
 
@@ -388,11 +388,15 @@ mod native {
             Ok(vec![self.schema()])
         }
 
-        fn execute_tool(
-            &self,
-            call: &ToolCall,
-        ) -> Result<lca_protocol::ToolResult, lca_protocol::DispatchError> {
-            Ok(self.execute(call))
+        fn execute_tool<'a>(
+            &'a self,
+            call: &'a ToolCall,
+        ) -> lca_ext_abi::DispatchFuture<
+            'a,
+            Result<lca_protocol::ToolResult, lca_protocol::DispatchError>,
+        > {
+            let result = self.execute(call);
+            Box::pin(std::future::ready(Ok(result)))
         }
 
         fn command_specs(
@@ -409,11 +413,48 @@ mod native {
             Ok(invoke_command(argument))
         }
 
-        fn on_pre_tool_use(
+        fn on_pre_tool_use<'a>(
+            &'a self,
+            call: &'a ToolCall,
+        ) -> lca_ext_abi::DispatchFuture<
+            'a,
+            Result<lca_protocol::HookAction, lca_protocol::DispatchError>,
+        > {
+            let action = pre_tool_action(&call.name);
+            Box::pin(std::future::ready(Ok(action)))
+        }
+
+        fn on_pre_turn(
             &self,
-            call: &ToolCall,
-        ) -> Result<lca_protocol::HookAction, lca_protocol::DispatchError> {
-            Ok(pre_tool_action(&call.name))
+        ) -> lca_ext_abi::DispatchFuture<'static, Result<(), lca_protocol::DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
+
+        fn on_post_tool_use<'a>(
+            &'a self,
+            _observation: &'a lca_protocol::PostToolObservation,
+        ) -> lca_ext_abi::DispatchFuture<'a, Result<(), lca_protocol::DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
+
+        fn on_post_turn_end<'a>(
+            &'a self,
+            _status: &'a str,
+        ) -> lca_ext_abi::DispatchFuture<'a, Result<(), lca_protocol::DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
+
+        fn on_attention_required<'a>(
+            &'a self,
+            _reason: &'a str,
+        ) -> lca_ext_abi::DispatchFuture<'a, Result<(), lca_protocol::DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
+
+        fn on_session_close(
+            &self,
+        ) -> lca_ext_abi::DispatchFuture<'static, Result<(), lca_protocol::DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
         }
     }
 }

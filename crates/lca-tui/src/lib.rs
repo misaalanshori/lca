@@ -201,6 +201,13 @@ impl UiState {
                 self.active.push_str(&format!("\n! {message}\n"));
             }
             TurnEvent::AssistantText(_) => {}
+            TurnEvent::ExtensionEvent {
+                extension,
+                event,
+                detail,
+            } => {
+                self.notice = Some(format!("[{extension}] {event}: {detail}"));
+            }
             TurnEvent::TurnEnded {
                 status,
                 stop_reason,

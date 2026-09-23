@@ -12,6 +12,7 @@ lca-permissions = { path = "../lca-permissions" }
 lca-protocol = { path = "../lca-protocol" }
 lca-tools = { path = "../lca-tools" }
 lca-ext-abi = { path = "../lca-ext-abi", features = ["host"] }
+tokio.workspace = true
 wasmtime.workspace = true
 wasmtime-wasi = { version = "49.0.0", default-features = false, features = ["p2"] }
 toml.workspace = true

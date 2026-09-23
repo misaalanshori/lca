@@ -932,6 +932,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hooks-example"
+version = "0.1.0"
+dependencies = [
+ "lca-ext-abi",
+ "lca-protocol",
+]
+
+[[package]]
 name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1285,6 +1293,10 @@ dependencies = [
 name = "lca-core"
 version = "0.1.0"
 dependencies = [
+ "conformance",
+ "lca-ext-abi",
+ "lca-ext-host",
+ "lca-ext-native",
  "lca-permissions",
  "lca-protocol",
  "lca-provider",
@@ -1316,9 +1328,19 @@ dependencies = [
  "lca-tools",
  "serde_json",
  "thiserror",
+ "tokio",
  "toml",
  "wasmtime",
  "wasmtime-wasi",
+]
+
+[[package]]
+name = "lca-ext-native"
+version = "0.1.0"
+dependencies = [
+ "hooks-example",
+ "lca-ext-abi",
+ "lca-protocol",
 ]
 
 [[package]]

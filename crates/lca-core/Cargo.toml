@@ -11,6 +11,7 @@ repository.workspace = true
 lca-protocol = { path = "../lca-protocol" }
 lca-session = { path = "../lca-session" }
 lca-provider = { path = "../lca-provider" }
+lca-ext-abi = { path = "../lca-ext-abi" }
 lca-tools = { path = "../lca-tools" }
 lca-permissions = { path = "../lca-permissions" }
 tokio.workspace = true
@@ -19,6 +20,9 @@ thiserror.workspace = true
 
 [dev-dependencies]
 lca-testkit = { path = "../lca-testkit" }
+lca-ext-host = { path = "../lca-ext-host" }
+lca-ext-native = { path = "../lca-ext-native" }
+conformance = { path = "../../extensions/conformance" }
 serde_json.workspace = true
 
 [lints]

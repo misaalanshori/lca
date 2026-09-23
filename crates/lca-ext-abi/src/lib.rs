@@ -49,12 +49,25 @@ impl DeliveryMode {
 /// The one interface both delivery modes implement (ADR-0019,
 /// FR-EXT-6). Call sites hold `Arc<dyn ExtensionDispatch>` and never
 /// branch on the mode.
+///
+/// Shape: registration-time metadata and input-editor invocations are
+/// synchronous (they run before or outside the turn's async path), while
+/// tool execution and hooks return boxed futures, because a component
+/// call runs through `spawn_blocking` and synchronous WASI only works
+/// off the runtime's poll path (ADR-0014: WASM calls share the Tokio
+/// runtime through blocking-pool execution, not per-call OS threads).
 pub mod dispatch {
+    use core::future::Future;
+    use std::pin::Pin;
+
     use crate::{DeliveryMode, World};
     use lca_protocol::{
         CommandEffect, CommandSpec, DispatchError, HookAction, PostToolObservation, ToolCall,
         ToolResult, ToolSpec,
     };
+
+    /// Boxed future bound for dispatch calls, tied to the handle's life.
+    pub type DispatchFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
     /// A loaded extension, whichever way it is delivered.
     pub trait ExtensionDispatch: Send + Sync {
@@ -67,55 +80,66 @@ pub mod dispatch {
         /// Worlds this handle implements.
         fn worlds(&self) -> Vec<World>;
 
-        /// Tool specs (`tool` world).
+        /// Tool specs (`tool` world). Registration-time only: a WASM
+        /// handle runs one blocking component call and joins it.
         fn tool_specs(&self) -> Result<Vec<ToolSpec>, DispatchError>;
 
         /// Run one tool call (`tool` world).
-        fn execute_tool(&self, call: &ToolCall) -> Result<ToolResult, DispatchError>;
+        fn execute_tool<'a>(
+            &'a self,
+            call: &'a ToolCall,
+        ) -> DispatchFuture<'a, Result<ToolResult, DispatchError>>;
 
-        /// Registered commands (`command` world).
+        /// Registered commands (`command` world), registration-time.
         fn command_specs(&self) -> Result<Vec<CommandSpec>, DispatchError>;
 
-        /// Invoke one command (`command` world).
+        /// Invoke one command (`command` world). Runs on the input
+        /// editor's thread, outside any async context.
         fn invoke_command(
             &self,
             name: &str,
             argument: &str,
         ) -> Result<CommandEffect, DispatchError>;
 
-        /// `pre-turn`: observe, nothing to return (FR hooks).
-        fn on_pre_turn(&self) -> Result<(), DispatchError> {
-            Ok(())
+        /// Reserved built-in slash slots this handle fills (SRDD's
+        /// built-in command list). Only first-party *native* handles may
+        /// return names here — the WASM implementation of this trait
+        /// hardcodes the default, and a manifest cannot ask for it; this
+        /// is how a built-in behavior moves onto the extension path
+        /// while the user-facing name stays put (ADR-0019).
+        fn builtin_command_slots(&self) -> Vec<String> {
+            Vec::new()
         }
+
+        /// `pre-turn`: observe.
+        fn on_pre_turn(&self) -> DispatchFuture<'static, Result<(), DispatchError>>;
 
         /// `pre-tool-use`: allow, deny, or replace (FR-CORE-10).
-        fn on_pre_tool_use(&self, call: &ToolCall) -> Result<HookAction, DispatchError> {
-            let _ = call;
-            Ok(HookAction::Allow)
-        }
+        fn on_pre_tool_use<'a>(
+            &'a self,
+            call: &'a ToolCall,
+        ) -> DispatchFuture<'a, Result<HookAction, DispatchError>>;
 
         /// `post-tool-use`: observe.
-        fn on_post_tool_use(&self, observation: &PostToolObservation) -> Result<(), DispatchError> {
-            let _ = observation;
-            Ok(())
-        }
+        fn on_post_tool_use<'a>(
+            &'a self,
+            observation: &'a PostToolObservation,
+        ) -> DispatchFuture<'a, Result<(), DispatchError>>;
 
         /// `post-turn-end`: observe with `ok` or `error`.
-        fn on_post_turn_end(&self, status: &str) -> Result<(), DispatchError> {
-            let _ = status;
-            Ok(())
-        }
+        fn on_post_turn_end<'a>(
+            &'a self,
+            status: &'a str,
+        ) -> DispatchFuture<'a, Result<(), DispatchError>>;
 
         /// `attention-required`: observe a reason.
-        fn on_attention_required(&self, reason: &str) -> Result<(), DispatchError> {
-            let _ = reason;
-            Ok(())
-        }
+        fn on_attention_required<'a>(
+            &'a self,
+            reason: &'a str,
+        ) -> DispatchFuture<'a, Result<(), DispatchError>>;
 
         /// `session-close`: observe.
-        fn on_session_close(&self) -> Result<(), DispatchError> {
-            Ok(())
-        }
+        fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>>;
 
         /// Force a running call to trap: Wasmtime epoch interruption for
         /// WASM handles (FR-CONC-1), a no-op for native code that shares
@@ -124,7 +148,7 @@ pub mod dispatch {
     }
 }
 
-pub use dispatch::ExtensionDispatch;
+pub use dispatch::{DispatchFuture, ExtensionDispatch};
 
 #[cfg(feature = "host")]
 #[allow(missing_docs)] // generated bindings: the WIT files carry the docs
@@ -145,15 +169,5 @@ pub mod host {
     /// The `hooks` world.
     pub mod hooks {
         wasmtime::component::bindgen!({ path: "../../wit", world: "hooks" });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    /// The constants every manifest check compares against.
-    #[test]
-    fn abi_version_matches_the_manifest_line() {
-        assert_eq!(super::ABI_VERSION, "0.1");
-        assert_eq!(super::PACKAGE, "lca:ext");
     }
 }

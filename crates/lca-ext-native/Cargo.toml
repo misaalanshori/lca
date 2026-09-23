@@ -1,0 +1,16 @@
+[package]
+name = "lca-ext-native"
+description = "In-binary extension registry: the same handle type as lca-ext-host, no sandbox, labeled unsandboxed (ADR-0013, FR-EXT-6)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+lca-ext-abi = { path = "../lca-ext-abi" }
+lca-protocol = { path = "../lca-protocol" }
+hooks-example = { path = "../../extensions/hooks-example" }
+
+[lints]
+workspace = true

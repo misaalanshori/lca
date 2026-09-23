@@ -248,7 +248,14 @@ fn manifest_parses_identity_fields() {
     let manifest: Manifest = Manifest::parse(manifest()).expect("parses");
     assert_eq!(manifest.name, "conformance");
     assert_eq!(manifest.abi, "0.1");
-    assert_eq!(manifest.worlds, vec!["tool".to_string()]);
+    assert_eq!(
+        manifest.worlds,
+        vec![
+            "tool".to_string(),
+            "command".to_string(),
+            "hooks".to_string()
+        ]
+    );
     assert!(
         Manifest::parse(
             "name = \"Bad Name\"\nversion = \"1.0.0\"\nabi = \"0.1\"\nworlds = [\"tool\"]"

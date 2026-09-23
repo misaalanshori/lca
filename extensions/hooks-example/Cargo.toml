@@ -1,0 +1,16 @@
+[package]
+name = "hooks-example"
+description = "Reference hooks implementation: a deny-by-pattern policy, plus the native command that fills the /stats built-in slot (the Phase 2 proof that a built-in behavior lives on the extension path)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lca-ext-abi = { path = "../../crates/lca-ext-abi" }
+lca-protocol = { path = "../../crates/lca-protocol" }
+
+[lints]
+workspace = true

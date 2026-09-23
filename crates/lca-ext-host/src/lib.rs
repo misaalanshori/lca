@@ -24,8 +24,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lca_ext_abi::host::tool::{Tool, ToolPre};
+use lca_ext_abi::{DeliveryMode, World};
 use lca_permissions::{GrantStore, PermissionPrompt, Proposals, ScopeGrant, ScopeRoots};
-use lca_protocol::{CapabilityError, ToolCall, ToolResult, ToolResultStatus, ToolSpec};
+use lca_protocol::{
+    CapabilityError, CommandEffect, DispatchError, HookAction, PostToolObservation, ToolCall,
+    ToolResultStatus, ToolSpec,
+};
 use lca_tools::{Capabilities, CapabilityGrants, Denial};
 use wasmtime::component::{HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
@@ -467,21 +471,6 @@ pub struct ExtHost {
     env: Arc<HostEnvironment>,
 }
 
-/// One loaded extension. Either delivery mode exposes this shape, which is
-/// the dispatch seam ADR-0013 names (FR-EXT-6's native twin registers
-/// through the same calls).
-pub struct WasmExtension {
-    name: String,
-    worlds: Vec<String>,
-    tool: Option<ToolPre<HostState>>,
-    command: Option<lca_ext_abi::host::command::CommandPre<HostState>>,
-    hooks: Option<lca_ext_abi::host::hooks::HooksPre<HostState>>,
-    limits: ExtensionLimits,
-    enabled: Arc<AtomicBool>,
-    logs: Arc<Mutex<Vec<String>>>,
-    cap: Arc<Capabilities>,
-}
-
 impl ExtHost {
     /// Build the host with its resource limits and environment.
     pub fn new(limits: ExtensionLimits, env: Arc<HostEnvironment>) -> ExtHost {
@@ -569,119 +558,59 @@ impl ExtHost {
             .transpose()?;
 
         Ok(WasmExtension {
-            name: manifest.name,
-            worlds: manifest.worlds.clone(),
-            tool,
-            command,
-            hooks,
-            limits: self.limits.clone(),
-            enabled: Arc::new(AtomicBool::new(true)),
-            logs: Arc::new(Mutex::new(Vec::new())),
-            cap,
+            inner: Arc::new(Inner {
+                engine: self.engine.clone(),
+                name: manifest.name,
+                worlds: manifest.worlds.clone(),
+                tool,
+                command,
+                hooks,
+                limits: self.limits.clone(),
+                enabled: Arc::new(AtomicBool::new(true)),
+                logs: Arc::new(Mutex::new(Vec::new())),
+                cap,
+            }),
         })
     }
 }
 
-impl WasmExtension {
-    /// The extension's identity.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
+/// All pieces one loaded extension needs; behind an `Arc` so every
+/// component call can run on its own blocking thread with a cloned
+/// handle (synchronous WASI only works where no runtime is polling,
+/// ADR-0014).
+struct Inner {
+    engine: Engine,
+    name: String,
+    worlds: Vec<String>,
+    tool: Option<ToolPre<HostState>>,
+    command: Option<lca_ext_abi::host::command::CommandPre<HostState>>,
+    hooks: Option<lca_ext_abi::host::hooks::HooksPre<HostState>>,
+    limits: ExtensionLimits,
+    enabled: Arc<AtomicBool>,
+    logs: Arc<Mutex<Vec<String>>>,
+    cap: Arc<Capabilities>,
+}
 
-    /// Whether it is still enabled for this session (FR-EXT-7's data, and
-    /// the disable bit FR-EXT-3/5 set).
-    pub fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::SeqCst)
-    }
-
-    /// Everything this extension logged through the always-granted import,
-    /// already truncated at the configured limit (FR-EXT-10).
-    pub fn captured_logs(&self) -> Vec<String> {
-        self.logs.lock().expect("log lock").clone()
-    }
-
-    /// Every capability attempt this extension was refused (FR-EXT-9's
-    /// data; `lca ext info` prints the count in Phase 5).
-    pub fn denials(&self) -> Vec<Denial> {
-        self.cap.denials()
-    }
-
-    /// How many capability attempts were refused (FR-EXT-9).
-    pub fn denial_count(&self) -> usize {
-        self.cap.denial_count()
-    }
-
-    /// The shared capability engine, for native-mode twins of this
-    /// extension's behavior (conformance identity).
-    pub fn capabilities(&self) -> Arc<Capabilities> {
-        self.cap.clone()
-    }
-
-    /// Disable it for the session (the trap and limit paths).
+impl Inner {
     fn disable(&self) {
         self.enabled.store(false, Ordering::SeqCst);
     }
 
-    /// The tool spec the extension registers.
-    pub fn schema(&self) -> Result<ToolSpec, CallError> {
-        let (mut store, instance) = self.instantiate()?;
-        let schema = instance
-            .lca_ext_tool_schema()
-            .call_get_schema(&mut store)
-            .map_err(|err| self.classify(err))?;
-        let parameters = serde_json::from_str(&schema.parameters)
-            .unwrap_or_else(|_| serde_json::json!({ "type": "object" }));
-        Ok(ToolSpec {
-            name: schema.name,
-            description: schema.description,
-            parameters,
-            extras: Default::default(),
-        })
-    }
-
-    /// Execute one call.
-    pub fn execute(&self, call: &ToolCall) -> Result<ToolResult, CallError> {
-        let (mut store, instance) = self.instantiate()?;
-        let guest_call = lca_ext_abi::host::tool::lca::ext::types::ToolCall {
-            call_id: call.call_id.clone(),
-            name: call.name.clone(),
-            arguments: call.arguments.clone(),
-            extras: Vec::new(),
-        };
-        let guest_result = instance
-            .lca_ext_execute()
-            .call_run(&mut store, &guest_call)
-            .map_err(|err| self.classify(err))?;
-        Ok(ToolResult {
-            call_id: guest_result.call_id,
-            status: match guest_result.status.as_str() {
-                "ok" => ToolResultStatus::Ok,
-                "denied" => ToolResultStatus::Denied,
-                "timeout" => ToolResultStatus::Timeout,
-                _ => ToolResultStatus::Error,
-            },
-            content: guest_result.content.unwrap_or_default(),
-            truncated: guest_result.truncated,
-            extras: Default::default(),
-        })
-    }
-
-    fn store(&self) -> Result<Store<HostState>, CallError> {
-        if !self.is_enabled() {
+    fn build_store(&self) -> Result<Store<HostState>, CallError> {
+        if !self.enabled.load(Ordering::SeqCst) {
             return Err(CallError::Disabled);
         }
         let wasi = wasmtime_wasi::WasiCtx::builder().build();
-        let logs = self.logs.clone();
-        let log_limit = self.limits.log_limit_bytes;
-        let memory = self.limits.memory_bytes;
         let mut store = Store::new(
-            self.engine(),
+            &self.engine,
             HostState {
                 wasi,
                 table: ResourceTable::new(),
-                limits: StoreLimitsBuilder::new().memory_size(memory).build(),
-                logs,
-                log_limit,
+                limits: StoreLimitsBuilder::new()
+                    .memory_size(self.limits.memory_bytes)
+                    .build(),
+                logs: self.logs.clone(),
+                log_limit: self.limits.log_limit_bytes,
                 cap: self.cap.clone(),
             },
         );
@@ -695,29 +624,6 @@ impl WasmExtension {
             .set_fuel(self.limits.fuel_per_call)
             .map_err(|err| CallError::InvalidArguments(err.to_string()))?;
         Ok(store)
-    }
-
-    /// The engine behind this component (cancellation increments its
-    /// epoch, ADR-0014).
-    fn engine(&self) -> &Engine {
-        self.tool
-            .as_ref()
-            .map(|pre| pre.engine())
-            .or_else(|| self.command.as_ref().map(|pre| pre.engine()))
-            .or_else(|| self.hooks.as_ref().map(|pre| pre.engine()))
-            .expect("at least one world is implemented")
-    }
-
-    fn instantiate(&self) -> Result<(Store<HostState>, Tool), CallError> {
-        let pre = self
-            .tool
-            .as_ref()
-            .ok_or_else(|| CallError::InvalidArguments("no tool world".into()))?;
-        let mut store = self.store()?;
-        let instance = pre
-            .instantiate(&mut store)
-            .map_err(|err| self.classify(err))?;
-        Ok((store, instance))
     }
 
     /// Map a Wasmtime failure onto the host's contract: which failures
@@ -751,172 +657,160 @@ impl WasmExtension {
     }
 }
 
-// ---------------------------------------------------------------------------
-// One dispatch interface for both delivery modes (ADR-0019, FR-EXT-6)
-// ---------------------------------------------------------------------------
+type DispatchCommandSpec = lca_protocol::CommandSpec;
 
-use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};
-use lca_protocol::{
-    CommandEffect, CommandSpec as DispatchCommandSpec, DispatchError, HookAction,
-    PostToolObservation,
-};
-
-fn to_dispatch(call_err: CallError, extension: &str) -> DispatchError {
-    match call_err {
-        CallError::Disabled => DispatchError::Disabled,
-        other => DispatchError::Failed(format!("{extension}: {other}")),
-    }
+fn schema_work(inner: &Inner) -> Result<ToolSpec, CallError> {
+    let pre = inner
+        .tool
+        .as_ref()
+        .ok_or_else(|| CallError::InvalidArguments("no tool world".into()))?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let schema = instance
+        .lca_ext_tool_schema()
+        .call_get_schema(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let parameters = serde_json::from_str(&schema.parameters)
+        .unwrap_or_else(|_| serde_json::json!({ "type": "object" }));
+    Ok(ToolSpec {
+        name: schema.name,
+        description: schema.description,
+        parameters,
+        extras: Default::default(),
+    })
 }
 
-impl ExtensionDispatch for WasmExtension {
-    fn name(&self) -> &str {
-        &self.name
-    }
+fn execute_work(inner: &Inner, call: ToolCall) -> Result<lca_protocol::ToolResult, CallError> {
+    let pre = inner
+        .tool
+        .as_ref()
+        .ok_or_else(|| CallError::InvalidArguments("no tool world".into()))?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let guest_call = lca_ext_abi::host::tool::lca::ext::types::ToolCall {
+        call_id: call.call_id,
+        name: call.name,
+        arguments: call.arguments,
+        extras: Vec::new(),
+    };
+    let guest_result = instance
+        .lca_ext_execute()
+        .call_run(&mut store, &guest_call)
+        .map_err(|err| inner.classify(err))?;
+    Ok(lca_protocol::ToolResult {
+        call_id: guest_result.call_id,
+        status: match guest_result.status.as_str() {
+            "ok" => ToolResultStatus::Ok,
+            "denied" => ToolResultStatus::Denied,
+            "timeout" => ToolResultStatus::Timeout,
+            _ => ToolResultStatus::Error,
+        },
+        content: guest_result.content.unwrap_or_default(),
+        truncated: guest_result.truncated,
+        extras: Default::default(),
+    })
+}
 
-    fn delivery(&self) -> DeliveryMode {
-        DeliveryMode::Wasm
-    }
+fn command_specs_work(inner: &Inner) -> Result<Vec<DispatchCommandSpec>, CallError> {
+    let pre = inner
+        .command
+        .as_ref()
+        .ok_or_else(|| CallError::InvalidArguments("no command world".into()))?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let spec = instance
+        .lca_ext_command_spec()
+        .call_get_spec(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    Ok(vec![DispatchCommandSpec {
+        name: spec.name,
+        hint: spec.hint,
+        completion: spec.completion,
+        extras: spec
+            .extras
+            .into_iter()
+            .map(|pair| (pair.key, pair.value))
+            .collect(),
+    }])
+}
 
-    fn worlds(&self) -> Vec<World> {
-        self.worlds
-            .iter()
-            .filter_map(|world| match world.as_str() {
-                "tool" => Some(World::Tool),
-                "command" => Some(World::Command),
-                "hooks" => Some(World::Hooks),
-                _ => None,
-            })
-            .collect()
-    }
+fn invoke_work(inner: &Inner, leaf: &str, argument: &str) -> Result<CommandEffect, CallError> {
+    let pre = inner
+        .command
+        .as_ref()
+        .ok_or_else(|| CallError::InvalidArguments("no command world".into()))?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let effect = instance
+        .lca_ext_invoke()
+        .call_run(&mut store, argument)
+        .map_err(|err| inner.classify(err))?;
+    let _ = leaf;
+    use lca_ext_abi::host::command::exports::lca::ext::invoke::Effect;
+    Ok(match effect {
+        Effect::InsertText(text) => CommandEffect::InsertText(text),
+        Effect::SubmitPrompt(text) => CommandEffect::SubmitPrompt(text),
+        Effect::ShowWidget(text) => CommandEffect::ShowWidget(text),
+        Effect::None => CommandEffect::None,
+    })
+}
 
-    fn tool_specs(&self) -> Result<Vec<ToolSpec>, DispatchError> {
-        if !self.worlds().contains(&World::Tool) {
-            return Err(DispatchError::MissingWorld {
-                extension: self.name.clone(),
-                world: "tool",
-            });
-        }
-        self.schema()
-            .map(|spec| vec![spec])
-            .map_err(|err| to_dispatch(err, &self.name))
-    }
+fn pre_tool_work(inner: &Inner, call: ToolCall) -> Result<HookAction, CallError> {
+    let pre = inner
+        .hooks
+        .as_ref()
+        .ok_or_else(|| CallError::InvalidArguments("no hooks world".into()))?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let action = instance
+        .lca_ext_hook_pre_tool_use()
+        .call_on_pre_tool_use(
+            &mut store,
+            &lca_ext_abi::host::hooks::exports::lca::ext::hook_pre_tool_use::ToolCall {
+                call_id: call.call_id,
+                name: call.name,
+                arguments: call.arguments,
+                extras: Vec::new(),
+            },
+        )
+        .map_err(|err| inner.classify(err))?;
+    use lca_ext_abi::host::hooks::exports::lca::ext::hook_pre_tool_use::Action;
+    Ok(match action {
+        Action::Allow => HookAction::Allow,
+        Action::Deny(reason) => HookAction::Deny(reason),
+        Action::Replace(replacement) => HookAction::Replace(ToolCall {
+            call_id: replacement.call_id,
+            name: replacement.name,
+            arguments: replacement.arguments,
+        }),
+    })
+}
 
-    fn execute_tool(&self, call: &ToolCall) -> Result<lca_protocol::ToolResult, DispatchError> {
-        if !self.worlds().contains(&World::Tool) {
-            return Err(DispatchError::MissingWorld {
-                extension: self.name.clone(),
-                world: "tool",
-            });
-        }
-        self.execute(call)
-            .map_err(|err| to_dispatch(err, &self.name))
-    }
-
-    fn command_specs(&self) -> Result<Vec<DispatchCommandSpec>, DispatchError> {
-        let Some(pre) = self.command.as_ref() else {
-            return Err(DispatchError::MissingWorld {
-                extension: self.name.clone(),
-                world: "command",
-            });
-        };
-        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
-        let instance = pre
-            .instantiate(&mut store)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
-        let spec = instance
-            .lca_ext_command_spec()
-            .call_get_spec(&mut store)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
-        Ok(vec![DispatchCommandSpec {
-            name: spec.name,
-            hint: spec.hint,
-            completion: spec.completion,
-            extras: spec
-                .extras
-                .into_iter()
-                .map(|pair| (pair.key, pair.value))
-                .collect(),
-        }])
-    }
-
-    fn invoke_command(&self, _name: &str, argument: &str) -> Result<CommandEffect, DispatchError> {
-        let Some(pre) = self.command.as_ref() else {
-            return Err(DispatchError::MissingWorld {
-                extension: self.name.clone(),
-                world: "command",
-            });
-        };
-        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
-        let instance = pre
-            .instantiate(&mut store)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
-        let effect = instance
-            .lca_ext_invoke()
-            .call_run(&mut store, argument)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
-        use lca_ext_abi::host::command::exports::lca::ext::invoke::Effect;
-        Ok(match effect {
-            Effect::InsertText(text) => CommandEffect::InsertText(text),
-            Effect::SubmitPrompt(text) => CommandEffect::SubmitPrompt(text),
-            Effect::ShowWidget(text) => CommandEffect::ShowWidget(text),
-            Effect::None => CommandEffect::None,
-        })
-    }
-
-    fn on_pre_turn(&self) -> Result<(), DispatchError> {
-        let Some(pre) = self.hooks.as_ref() else {
-            return Ok(());
-        };
-        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
-        let instance = pre
-            .instantiate(&mut store)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
-        instance
-            .lca_ext_hook_pre_turn()
-            .call_on_pre_turn(&mut store)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))
-    }
-
-    fn on_pre_tool_use(&self, call: &ToolCall) -> Result<HookAction, DispatchError> {
-        let Some(pre) = self.hooks.as_ref() else {
-            return Ok(HookAction::Allow);
-        };
-        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
-        let instance = pre
-            .instantiate(&mut store)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
-        let action = instance
-            .lca_ext_hook_pre_tool_use()
-            .call_on_pre_tool_use(
-                &mut store,
-                &lca_ext_abi::host::hooks::exports::lca::ext::hook_pre_tool_use::ToolCall {
-                    call_id: call.call_id.clone(),
-                    name: call.name.clone(),
-                    arguments: call.arguments.clone(),
-                    extras: Vec::new(),
-                },
-            )
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
-        use lca_ext_abi::host::hooks::exports::lca::ext::hook_pre_tool_use::Action;
-        Ok(match action {
-            Action::Allow => HookAction::Allow,
-            Action::Deny(reason) => HookAction::Deny(reason),
-            Action::Replace(replacement) => HookAction::Replace(ToolCall {
-                call_id: replacement.call_id,
-                name: replacement.name,
-                arguments: replacement.arguments,
-            }),
-        })
-    }
-
-    fn on_post_tool_use(&self, observation: &PostToolObservation) -> Result<(), DispatchError> {
-        let Some(pre) = self.hooks.as_ref() else {
-            return Ok(());
-        };
-        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
-        let instance = pre
-            .instantiate(&mut store)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+fn observe_work(
+    inner: &Inner,
+    observation: Option<&PostToolObservation>,
+    status: Option<&str>,
+    attention: Option<&str>,
+) -> Result<(), CallError> {
+    let pre = inner
+        .hooks
+        .as_ref()
+        .ok_or_else(|| CallError::InvalidArguments("no hooks world".into()))?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    if let Some(observation) = observation {
         instance
             .lca_ext_hook_post_tool_use()
             .call_on_post_tool_use(
@@ -940,53 +834,310 @@ impl ExtensionDispatch for WasmExtension {
                     extras: Vec::new(),
                 },
             )
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))
-    }
-
-    fn on_post_turn_end(&self, status: &str) -> Result<(), DispatchError> {
-        let Some(pre) = self.hooks.as_ref() else {
-            return Ok(());
-        };
-        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
-        let instance = pre
-            .instantiate(&mut store)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+            .map_err(|err| inner.classify(err))?;
+    } else if let Some(status) = status {
         instance
             .lca_ext_hook_post_turn_end()
             .call_on_post_turn_end(&mut store, status)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))
-    }
-
-    fn on_attention_required(&self, reason: &str) -> Result<(), DispatchError> {
-        let Some(pre) = self.hooks.as_ref() else {
-            return Ok(());
-        };
-        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
-        let instance = pre
-            .instantiate(&mut store)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
+            .map_err(|err| inner.classify(err))?;
+    } else if let Some(reason) = attention {
         instance
             .lca_ext_hook_attention_required()
             .call_on_attention_required(&mut store, reason)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))
+            .map_err(|err| inner.classify(err))?;
+    } else {
+        instance
+            .lca_ext_hook_pre_turn()
+            .call_on_pre_turn(&mut store)
+            .map_err(|err| inner.classify(err))?;
+    }
+    Ok(())
+}
+
+fn session_close_work(inner: &Inner) -> Result<(), CallError> {
+    let pre = inner
+        .hooks
+        .as_ref()
+        .ok_or_else(|| CallError::InvalidArguments("no hooks world".into()))?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    instance
+        .lca_ext_hook_session_close()
+        .call_on_session_close(&mut store)
+        .map_err(|err| inner.classify(err))
+}
+
+/// One loaded extension (ADR-0019's handle for the WASM mode).
+pub struct WasmExtension {
+    inner: Arc<Inner>,
+}
+
+/// Run blocking component work on the runtime's blocking pool; a panic
+/// inside the call disables the extension instead of the caller
+/// (FR-EXT-3).
+async fn pool_call<T: Send + 'static>(
+    inner: Arc<Inner>,
+    work: impl FnOnce(&Inner) -> Result<T, CallError> + Send + 'static,
+) -> Result<T, CallError> {
+    let inner2 = inner.clone();
+    match tokio::task::spawn_blocking(move || work(&inner2)).await {
+        Ok(result) => result,
+        Err(_) => {
+            inner.disable();
+            Err(CallError::Trap("host call panicked".to_string()))
+        }
+    }
+}
+
+impl WasmExtension {
+    /// Run blocking component work on a dedicated thread: synchronous
+    /// WASI blocks on the ambient handle, which only exists where no
+    /// runtime is polling (ADR-0014's blocking-region rule). A panic
+    /// inside the call disables the extension instead of unwinding the
+    /// caller (FR-EXT-3).
+    fn blocking<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Inner) -> Result<T, CallError> + Send + 'static,
+    ) -> Result<T, CallError> {
+        let inner = self.inner.clone();
+        match std::thread::spawn(move || work(&inner)).join() {
+            Ok(result) => result,
+            Err(_) => {
+                self.inner.disable();
+                Err(CallError::Trap("host call panicked".to_string()))
+            }
+        }
     }
 
-    fn on_session_close(&self) -> Result<(), DispatchError> {
-        let Some(pre) = self.hooks.as_ref() else {
-            return Ok(());
-        };
-        let mut store = self.store().map_err(|err| to_dispatch(err, &self.name))?;
-        let instance = pre
-            .instantiate(&mut store)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))?;
-        instance
-            .lca_ext_hook_session_close()
-            .call_on_session_close(&mut store)
-            .map_err(|err| to_dispatch(self.classify(err), &self.name))
+    /// The async twin: same work on the runtime's blocking pool.
+    async fn on_blocking_pool<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Inner) -> Result<T, CallError> + Send + 'static,
+    ) -> Result<T, CallError> {
+        pool_call(self.inner.clone(), work).await
+    }
+
+    /// The extension's identity.
+    pub fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    /// Whether it is still enabled for this session (FR-EXT-7's data, and
+    /// the disable bit FR-EXT-3/5 set).
+    pub fn is_enabled(&self) -> bool {
+        self.inner.enabled.load(Ordering::SeqCst)
+    }
+
+    /// Everything this extension logged through the always-granted import,
+    /// already truncated at the configured limit (FR-EXT-10).
+    pub fn captured_logs(&self) -> Vec<String> {
+        self.inner.logs.lock().expect("log lock").clone()
+    }
+
+    /// Every capability attempt this extension was refused (FR-EXT-9's
+    /// data; `lca ext info` prints the count in Phase 5).
+    pub fn denials(&self) -> Vec<Denial> {
+        self.inner.cap.denials()
+    }
+
+    /// How many capability attempts were refused (FR-EXT-9).
+    pub fn denial_count(&self) -> usize {
+        self.inner.cap.denial_count()
+    }
+
+    /// The shared capability engine, for native-mode twins of this
+    /// extension's behavior (conformance identity).
+    pub fn capabilities(&self) -> Arc<Capabilities> {
+        self.inner.cap.clone()
+    }
+
+    /// The tool spec the extension registers (blocking; registration-time
+    /// or test use).
+    pub fn schema(&self) -> Result<ToolSpec, CallError> {
+        self.blocking(schema_work)
+    }
+
+    /// Execute one call (blocking; tests use this, the loop awaits
+    /// `execute_tool`).
+    pub fn execute(&self, call: &ToolCall) -> Result<lca_protocol::ToolResult, CallError> {
+        let call = call.clone();
+        self.blocking(move |inner| execute_work(inner, call))
+    }
+}
+
+fn to_dispatch(call_err: CallError, extension: &str) -> DispatchError {
+    match call_err {
+        CallError::Disabled => DispatchError::Disabled,
+        other => DispatchError::Failed(format!("{extension}: {other}")),
+    }
+}
+
+impl lca_ext_abi::ExtensionDispatch for WasmExtension {
+    fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    fn delivery(&self) -> DeliveryMode {
+        DeliveryMode::Wasm
+    }
+
+    fn worlds(&self) -> Vec<World> {
+        self.inner
+            .worlds
+            .iter()
+            .filter_map(|world| match world.as_str() {
+                "tool" => Some(World::Tool),
+                "command" => Some(World::Command),
+                "hooks" => Some(World::Hooks),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn tool_specs(&self) -> Result<Vec<ToolSpec>, DispatchError> {
+        if !self.worlds().contains(&World::Tool) {
+            return Err(DispatchError::MissingWorld {
+                extension: self.name().to_string(),
+                world: "tool",
+            });
+        }
+        self.schema()
+            .map(|spec| vec![spec])
+            .map_err(|err| to_dispatch(err, self.name()))
+    }
+
+    fn execute_tool<'a>(
+        &'a self,
+        call: &'a ToolCall,
+    ) -> lca_ext_abi::DispatchFuture<'a, Result<lca_protocol::ToolResult, DispatchError>> {
+        Box::pin(async move {
+            if !self.worlds().contains(&World::Tool) {
+                return Err(DispatchError::MissingWorld {
+                    extension: self.name().to_string(),
+                    world: "tool",
+                });
+            }
+            let call = call.clone();
+            self.on_blocking_pool(move |inner| execute_work(inner, call))
+                .await
+                .map_err(|err| to_dispatch(err, self.name()))
+        })
+    }
+
+    fn command_specs(&self) -> Result<Vec<DispatchCommandSpec>, DispatchError> {
+        if !self.worlds().contains(&World::Command) {
+            return Err(DispatchError::MissingWorld {
+                extension: self.name().to_string(),
+                world: "command",
+            });
+        }
+        self.blocking(command_specs_work)
+            .map_err(|err| to_dispatch(err, self.name()))
+    }
+
+    fn invoke_command(&self, _name: &str, argument: &str) -> Result<CommandEffect, DispatchError> {
+        if !self.worlds().contains(&World::Command) {
+            return Err(DispatchError::MissingWorld {
+                extension: self.name().to_string(),
+                world: "command",
+            });
+        }
+        let leaf = _name.to_string();
+        let argument = argument.to_string();
+        self.blocking(move |inner| invoke_work(inner, &leaf, &argument))
+            .map_err(|err| to_dispatch(err, self.name()))
+    }
+
+    fn on_pre_turn(&self) -> lca_ext_abi::DispatchFuture<'static, Result<(), DispatchError>> {
+        let inner = self.inner.clone();
+        let name = inner.name.clone();
+        Box::pin(async move {
+            if !inner.worlds.contains(&"hooks".to_string()) {
+                return Ok(());
+            }
+            pool_call(inner, |inner| observe_work(inner, None, None, None))
+                .await
+                .map_err(|err| to_dispatch(err, &name))
+        })
+    }
+
+    fn on_pre_tool_use<'a>(
+        &'a self,
+        call: &'a ToolCall,
+    ) -> lca_ext_abi::DispatchFuture<'a, Result<HookAction, DispatchError>> {
+        Box::pin(async move {
+            if !self.worlds().contains(&World::Hooks) {
+                return Ok(HookAction::Allow);
+            }
+            let call = call.clone();
+            self.on_blocking_pool(move |inner| pre_tool_work(inner, call))
+                .await
+                .map_err(|err| to_dispatch(err, self.name()))
+        })
+    }
+
+    fn on_post_tool_use<'a>(
+        &'a self,
+        observation: &'a PostToolObservation,
+    ) -> lca_ext_abi::DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(async move {
+            if !self.worlds().contains(&World::Hooks) {
+                return Ok(());
+            }
+            let observation = observation.clone();
+            self.on_blocking_pool(move |inner| observe_work(inner, Some(&observation), None, None))
+                .await
+                .map_err(|err| to_dispatch(err, self.name()))
+        })
+    }
+
+    fn on_post_turn_end<'a>(
+        &'a self,
+        status: &'a str,
+    ) -> lca_ext_abi::DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(async move {
+            if !self.worlds().contains(&World::Hooks) {
+                return Ok(());
+            }
+            let status = status.to_string();
+            self.on_blocking_pool(move |inner| observe_work(inner, None, Some(&status), None))
+                .await
+                .map_err(|err| to_dispatch(err, self.name()))
+        })
+    }
+
+    fn on_attention_required<'a>(
+        &'a self,
+        reason: &'a str,
+    ) -> lca_ext_abi::DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(async move {
+            if !self.worlds().contains(&World::Hooks) {
+                return Ok(());
+            }
+            let reason = reason.to_string();
+            self.on_blocking_pool(move |inner| observe_work(inner, None, None, Some(&reason)))
+                .await
+                .map_err(|err| to_dispatch(err, self.name()))
+        })
+    }
+
+    fn on_session_close(&self) -> lca_ext_abi::DispatchFuture<'static, Result<(), DispatchError>> {
+        let inner = self.inner.clone();
+        let name = inner.name.clone();
+        Box::pin(async move {
+            if !inner.worlds.contains(&"hooks".to_string()) {
+                return Ok(());
+            }
+            pool_call(inner, session_close_work)
+                .await
+                .map_err(|err| to_dispatch(err, &name))
+        })
     }
 
     fn interrupt(&self) {
         // FR-CONC-1: epoch interruption, independent of the fuel budget.
-        self.engine().increment_epoch();
+        self.inner.engine.increment_epoch();
     }
 }

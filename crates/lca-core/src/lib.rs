@@ -2,17 +2,23 @@
 //! execution, retry with backoff, and cancellation that keeps every record
 //! already written (ADR-0014, `docs/flows.md`).
 //!
-//! Hooks (`FR-CORE-10`) and compaction invocation (`FR-SESS-4`) arrive in
-//! Phases 2 and 4; the seams they occupy are marked below.
+//! The pre-tool hook seam (FR-CORE-10) runs before the permission layer;
+//! compaction invocation (`FR-SESS-4`) arrives in Phase 4.
 
 #![forbid(unsafe_code)]
 
+mod registry;
+
+pub use registry::{BUILTIN_COMMANDS, BUILTIN_TOOLS, CollisionReport, ExtensionRegistry};
+
+use std::sync::Arc;
 use std::time::Duration;
 
+use lca_ext_abi::ExtensionDispatch;
 use lca_permissions::{GrantStore, PermissionPrompt, Proposals};
 use lca_protocol::{
-    ChatMessage, ContentBlock, FORMAT_VERSION, MessageRole, Record, StreamEvent, ToolCall,
-    ToolResult, ToolSource, Usage,
+    ChatMessage, ContentBlock, DispatchError, FORMAT_VERSION, HookAction, MessageRole, Record,
+    StreamEvent, ToolCall, ToolResult, ToolSource, Usage,
 };
 use lca_provider::{CompletionRequest, ProtocolError, Provider, ToolCallAccumulator};
 use lca_session::{Session, SessionStore, ViewMode};
@@ -33,6 +39,9 @@ pub struct AgentConfig {
     pub max_iterations: u32,
     /// System message prepended to every request.
     pub system_prompt: String,
+    /// The dispatch table: loaded extensions in registration order
+    /// (ADR-0019; empty by default).
+    pub extensions: Arc<ExtensionRegistry>,
 }
 
 impl Default for AgentConfig {
@@ -47,6 +56,7 @@ impl Default for AgentConfig {
                 "You are LCA, a coding agent. Use the tools to read, write, edit, search, \
                  and run commands in the user's workspace."
                     .to_string(),
+            extensions: Arc::new(ExtensionRegistry::new()),
         }
     }
 }
@@ -128,6 +138,17 @@ pub enum TurnEvent {
         class: String,
         /// Whether a retry could have helped.
         retryable: bool,
+    },
+    /// An extension lifecycle event: load, disable, trap, capability
+    /// denial, or cache divergence (the headless `extension-event`
+    /// envelope, `docs/headless.md`).
+    ExtensionEvent {
+        /// The extension's identity.
+        extension: String,
+        /// The event kind: `disabled`, `error`, `collision`, ...
+        event: String,
+        /// Detail text.
+        detail: String,
     },
     /// The turn ended.
     TurnEnded {
@@ -311,7 +332,54 @@ impl<'a> Agent<'a> {
     }
 
     /// Run one turn to completion (or cancellation, or error).
+    ///
+    /// While it runs, a watcher watches the cancellation flag and, when it
+    /// fires, bumps every WASM extension's epoch so a spinning call traps
+    /// at its next yield (FR-CONC-1, ADR-0014) regardless of fuel.
     pub async fn run_turn(
+        &mut self,
+        input: &str,
+        sink: &mut dyn TurnSink,
+        cancel: &CancelFlag,
+    ) -> TurnOutcome {
+        let handles: Vec<Arc<dyn ExtensionDispatch>> =
+            self.config.extensions.enabled().cloned().collect();
+        // A plain thread, not a task: a synchronous WASM call blocks the
+        // runtime thread it runs on, and cancellation must still reach a
+        // spinning instance from a thread that is definitely running
+        // (FR-CONC-1). One-millisecond poll keeps NFR-29's budget.
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = if handles.is_empty() {
+            None
+        } else {
+            let cancel = cancel.clone();
+            let shutdown = shutdown.clone();
+            Some(std::thread::spawn(move || {
+                while !cancel.is_cancelled() && !shutdown.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                if cancel.is_cancelled() {
+                    for handle in handles {
+                        handle.interrupt();
+                    }
+                }
+            }))
+        };
+        let outcome = self.turn_body(input, sink, cancel).await;
+        shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(watcher) = watcher {
+            let _ = watcher.join();
+        }
+        let status = match outcome.status {
+            TurnStatus::Ok => "ok",
+            TurnStatus::Error => "error",
+        };
+        self.config.extensions.on_post_turn_end(status).await;
+        outcome
+    }
+
+    async fn turn_body(
         &mut self,
         input: &str,
         sink: &mut dyn TurnSink,
@@ -357,9 +425,11 @@ impl<'a> Agent<'a> {
                 }
             };
             let assembled = assemble(&records, &self.config.system_prompt);
+            let mut tools = ToolExecutor::specs();
+            tools.extend(self.config.extensions.tool_specs());
             let request = CompletionRequest {
                 messages: assembled.messages,
-                tools: ToolExecutor::specs(),
+                tools,
                 model: self.config.model.clone(),
                 stable_prefix: assembled.stable_prefix,
                 extras: Default::default(),
@@ -532,26 +602,9 @@ impl<'a> Agent<'a> {
 
             // Sequential execution inside one turn (FR-CONC-2).
             for call in &response.calls {
-                let result = self.run_tool_call(call, sink, cancel).await;
-                if let Err(err) = self.store.append(
-                    self.session,
-                    Record::ToolResult {
-                        v: FORMAT_VERSION,
-                        ts: lca_session::now_ms(),
-                        id: lca_session::new_record_id(),
-                        call_id: result.call_id.clone(),
-                        status: result.status,
-                        content: Some(result.content.clone()),
-                        attachment: None,
-                        truncated: result.truncated,
-                    },
-                ) {
-                    return self.fail(
-                        StopReason::Error,
-                        format!("cannot write to the session log: {err}"),
-                    );
+                if let Err(outcome) = self.run_tool_call(call, sink, cancel).await {
+                    return outcome;
                 }
-                sink.on_event(TurnEvent::ToolFinished(result));
                 if cancel.is_cancelled() {
                     sink.on_event(TurnEvent::TurnEnded {
                         status: TurnStatus::Ok,
@@ -577,14 +630,115 @@ impl<'a> Agent<'a> {
         }
     }
 
+    /// Append an extension lifecycle record and surface it (FR-EXT-3's
+    /// report half; the headless `extension-event` envelope).
+    fn record_extension_event(
+        &mut self,
+        extension: &str,
+        event: &str,
+        detail: &str,
+        sink: &mut dyn TurnSink,
+    ) -> Result<(), String> {
+        self.store
+            .append(
+                self.session,
+                Record::ExtensionEvent {
+                    v: FORMAT_VERSION,
+                    ts: lca_session::now_ms(),
+                    id: lca_session::new_record_id(),
+                    extension: extension.to_string(),
+                    event: event.to_string(),
+                    detail: detail.to_string(),
+                },
+            )
+            .map_err(|err| format!("cannot write to the session log: {err}"))?;
+        sink.on_event(TurnEvent::ExtensionEvent {
+            extension: extension.to_string(),
+            event: event.to_string(),
+            detail: detail.to_string(),
+        });
+        Ok(())
+    }
+
+    /// One tool call: pre-tool hooks first (FR-CORE-10 — a hook denial
+    /// ends the call without ever prompting), then the permission layer
+    /// on whatever call survives (a replaced call passes through like
+    /// any other and is not re-hooked), then execution through the
+    /// dispatch table or the built-in table. The result record, the
+    /// sink event, and the `post-tool-use` hook all belong here so no
+    /// caller can forget one.
     async fn run_tool_call(
         &mut self,
         call: &ToolCall,
         sink: &mut dyn TurnSink,
         cancel: &CancelFlag,
-    ) -> ToolResult {
-        // Phase 2 inserts the pre-tool hook here: a hook denial ends the
-        // call without ever prompting (FR-CORE-10).
+    ) -> Result<(), TurnOutcome> {
+        let registry = self.config.extensions.clone();
+        let mut hook_errors: Vec<(String, String)> = Vec::new();
+        let mut effective = call.clone();
+        let action = {
+            let mut observe = |handle: &Arc<dyn ExtensionDispatch>, err: &DispatchError| {
+                hook_errors.push((handle.name().to_string(), err.to_string()));
+            };
+            registry.pre_tool_use(&effective, &mut observe).await
+        };
+        for (extension, detail) in hook_errors {
+            if let Err(err) = self.record_extension_event(&extension, "error", &detail, sink) {
+                return Err(self.fail(StopReason::Error, err));
+            }
+        }
+
+        let result = match action {
+            HookAction::Deny(reason) => {
+                // No permission prompt: the hook already answered
+                // (FR-CORE-10).
+                ToolResult::denied(effective.call_id.clone(), reason)
+            }
+            HookAction::Replace(replacement) => {
+                effective = replacement;
+                self.execute_after_permission(&effective, &registry, sink, cancel)
+                    .await?
+            }
+            HookAction::Allow => {
+                self.execute_after_permission(&effective, &registry, sink, cancel)
+                    .await?
+            }
+        };
+
+        if let Err(err) = self.store.append(
+            self.session,
+            Record::ToolResult {
+                v: FORMAT_VERSION,
+                ts: lca_session::now_ms(),
+                id: lca_session::new_record_id(),
+                call_id: result.call_id.clone(),
+                status: result.status,
+                content: Some(result.content.clone()),
+                attachment: None,
+                truncated: result.truncated,
+            },
+        ) {
+            return Err(self.fail(
+                StopReason::Error,
+                format!("cannot write to the session log: {err}"),
+            ));
+        }
+        sink.on_event(TurnEvent::ToolFinished(result.clone()));
+        registry.on_post_tool_use(&effective, &result).await;
+        Ok(())
+    }
+
+    /// The permission layer plus execution (FR-TOOL-3's path), shared by
+    /// allow and replace.
+    async fn execute_after_permission(
+        &mut self,
+        call: &ToolCall,
+        registry: &Arc<ExtensionRegistry>,
+        sink: &mut dyn TurnSink,
+        cancel: &CancelFlag,
+    ) -> Result<ToolResult, TurnOutcome> {
+        // Phase 2 seam note: hooks have already run by the time this is
+        // called (FR-CORE-10: hook before permission).
         if let Some(action) = self.tools.required_permission(call) {
             let outcome = match lca_permissions::authorize(
                 self.grants,
@@ -595,9 +749,8 @@ impl<'a> Agent<'a> {
             ) {
                 Ok(outcome) => outcome,
                 Err(err) => {
-                    return ToolResult::error(
-                        call.call_id.clone(),
-                        format!("permission store error: {err}"),
+                    return Err(
+                        self.fail(StopReason::Error, format!("permission store error: {err}"))
                     );
                 }
             };
@@ -621,14 +774,37 @@ impl<'a> Agent<'a> {
                 }
             }
             if !outcome.allowed {
-                return ToolResult::denied(
+                return Ok(ToolResult::denied(
                     call.call_id.clone(),
                     format!("The user denied this action: {}", action.display()),
-                );
+                ));
             }
         }
 
         sink.on_event(TurnEvent::ToolStarted(call.clone()));
+
+        // Extension tool or built-in: one dispatch table, no mode
+        // branching at this call site beyond asking who owns the name
+        // (FR-EXT-6 lives in the registry's single trait).
+        if let Some(handle) = registry.tool_owner(&call.name).cloned() {
+            let executed = handle.execute_tool(call).await;
+            return Ok(match executed {
+                Ok(result) => result,
+                Err(err) => {
+                    let event = match err {
+                        DispatchError::Disabled => "disabled",
+                        _ => "error",
+                    };
+                    if let Err(write_err) =
+                        self.record_extension_event(handle.name(), event, &err.to_string(), sink)
+                    {
+                        return Err(self.fail(StopReason::Error, write_err));
+                    }
+                    ToolResult::error(call.call_id.clone(), err.to_string())
+                }
+            });
+        }
+
         let cancel_for_tool = cancel.clone();
         let mut sink_chunk = |chunk: &[u8]| {
             sink.on_event(TurnEvent::ToolOutputChunk {
@@ -636,9 +812,11 @@ impl<'a> Agent<'a> {
                 chunk: String::from_utf8_lossy(chunk).into_owned(),
             });
         };
-        self.tools
+        let result = self
+            .tools
             .execute(call, &mut sink_chunk, &cancel_for_tool)
-            .await
+            .await;
+        Ok(result)
     }
 
     /// One completion call, with retry (FR-CORE-6) and cancellation
