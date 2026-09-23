@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# ring's build script forces plain gcc-mode clang for Windows AArch64
+# (its own FIXME in configure_cc), while cargo-xwin supplies MSVC-style
+# flags. This shim sits ahead of the real clang and translates for the
+# gcc-style driver: /imsvc <dir> becomes -I<dir>, --target=X becomes
+# -target X, and the CL-only flags drop (-fuse-ld=lld-link is cargo's
+# job at link time; ring only compiles objects). Everything else passes
+# through untouched, including --version, so compiler-family detection
+# still sees a real clang.
+args=()
+for ((i = 1; i <= $#; i++)); do
+  a="${!i}"
+  case "$a" in
+    /imsvc)
+      i=$((i + 1))
+      args+=("-I${!i}")
+      ;;
+    --target=*)
+      args+=("-target" "${a#--target=}")
+      ;;
+    -fuse-ld=lld-link)
+      ;;
+    -Xclang)
+      i=$((i + 1))
+      ;;
+    *)
+      args+=("$a")
+      ;;
+  esac
+done
+real=$(/usr/bin/clang-18 --version >/dev/null 2>&1 && echo /usr/bin/clang-18 || echo /usr/bin/clang)
+exec "$real" "${args[@]}"
