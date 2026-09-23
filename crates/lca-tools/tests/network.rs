@@ -192,6 +192,54 @@ fn scheme_rules_follow_the_capability() {
     }
 }
 
+// Verifies: the capability catalog's `net` contract — a response body
+// is a streaming reader: the first bytes reach the extension while the
+// server is still sending, not once the whole body has arrived.
+#[test]
+fn response_bodies_stream_before_the_server_finishes() {
+    let sandbox = Sandbox::new("stream-body");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let port = addr.port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten().take(1) {
+            let mut stream = stream;
+            use std::io::{Read, Write};
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            // Valid head, no length header: the body runs to connection
+            // close, which keeps the reader streaming frames.
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\nAAAA",
+            );
+            let _ = stream.flush();
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            let _ = stream.write_all(b"BBBB");
+        }
+    });
+
+    let caps = sandbox.caps(local_grants(&["127.0.0.1"]));
+    let url = format!("http://127.0.0.1:{port}/slow");
+    let handle = caps
+        .net_request("GET", &url, &[], None)
+        .expect("request head");
+    let started = std::time::Instant::now();
+    let first = caps
+        .net_read_body(handle, 4)
+        .expect("first chunk")
+        .expect("data before the server finished");
+    let elapsed = started.elapsed();
+    assert_eq!(&first, b"AAAA");
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "the first chunk waited for the rest of the body: {elapsed:?}"
+    );
+    let second = caps.net_read_body(handle, 64).expect("second chunk");
+    assert_eq!(second.as_deref(), Some(b"BBBB".as_slice()));
+    assert!(caps.net_read_body(handle, 64).expect("eof").is_none());
+    caps.net_close_response(handle).expect("close");
+}
+
 // Verifies: FR-PERM-16 (a grant beyond the fixed vocabulary attaches as
 // an ad hoc grant whose consent names the specific host, not a pattern
 // the manifest asked for).

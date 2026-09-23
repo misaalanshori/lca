@@ -71,16 +71,15 @@ struct OAuthFlow {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// The runtime capability calls fall back to when no ambient runtime
+/// exists (see [`Capabilities::drive`]).
+static SHARED_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
 enum HandleEntry {
-    /// A buffered HTTP response; `cursor` walks the body for
-    /// `net_read_body` (the catalog's streaming reader; buffered whole for
-    /// now — ponytail: body streaming ceiling = largest response in
-    /// memory).
     Response {
         status: u16,
         headers: Vec<(String, String)>,
-        body: Vec<u8>,
-        cursor: usize,
+        body: ResponseBody,
     },
     Process {
         child: crate::process::TreeChild,
@@ -89,6 +88,24 @@ enum HandleEntry {
         stdin: Option<std::process::ChildStdin>,
     },
     Pty(crate::pty::PtyChild),
+}
+
+/// The body half of a response: a live stream the reader pulls frames
+/// from, the `Busy` placeholder while a reader holds it outside the
+/// lock (the catalog's streaming body reader; one reader per handle),
+/// or finished. `Failed` keeps a mid-body error visible to later reads.
+enum ResponseBody {
+    /// Frames arrive as the server sends them; nothing is buffered
+    /// beyond the chunk a read is assembling.
+    Live(Box<hyper::body::Incoming>),
+    /// Another read holds the body right now.
+    Busy,
+    /// EOF reached (or a failure consumed the stream).
+    Finished,
+    /// The stream failed after a chunk was already handed back; the
+    /// next read reports it (ponytail: a failure lands on the read
+    /// after the one that carried the last bytes).
+    Failed(String),
 }
 
 #[derive(Default)]
@@ -150,21 +167,30 @@ impl Capabilities {
         }
     }
 
-    /// Drive a future to completion from a host call. Capability calls run
-    /// on a blocking thread (or a plain test thread), never inside a
-    /// runtime poll, so the ambient-handle path is always legal there
-    /// (ADR-0014's blocking-region rule). ponytail: callers outside that
-    /// region would panic; every current caller is inside one.
+    /// Drive a future to completion from a host call. Capability calls
+    /// run on a blocking thread (or a plain thread outside any runtime),
+    /// never inside a runtime poll, so the ambient-handle path is always
+    /// legal there (ADR-0014's blocking-region rule). Outside any
+    /// runtime, one process-long shared runtime drives the call: a live
+    /// HTTP connection's background task must outlive the call that
+    /// opened it, or a streaming body reader finds the connection dead
+    /// on its second read (which is exactly what a throwaway runtime per
+    /// call did).
+    /// ponytail: callers already inside an async poll would panic on
+    /// `block_on`; every current caller is inside a blocking region.
     fn drive<F: std::future::Future>(future: F) -> F::Output {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => handle.block_on(future),
-            Err(_) => {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("runtime");
-                runtime.block_on(future)
-            }
+            Err(_) => SHARED_RUNTIME
+                .get_or_init(|| {
+                    tokio::runtime::Builder::new_multi_thread()
+                        .worker_threads(1)
+                        .enable_all()
+                        .build()
+                        .expect("capability runtime")
+                })
+                .handle()
+                .block_on(future),
         }
     }
 
@@ -803,8 +829,9 @@ impl Capabilities {
                 )
             })
             .collect::<Vec<_>>();
-        let collected = Self::drive(http_body_util::BodyExt::collect(response.into_body()))
-            .map_err(|err| CapabilityError::Io(format!("reading the response: {err}")))?;
+        // The head arrives before the body does: nothing is buffered
+        // here, the reader pulls frames as the server sends them
+        // (capability catalog: streaming body reader).
         let mut table = self.handles.lock().expect("handle lock");
         let id = table.next;
         table.next += 1;
@@ -813,8 +840,7 @@ impl Capabilities {
             HandleEntry::Response {
                 status,
                 headers: response_headers,
-                body: collected.to_bytes().to_vec(),
-                cursor: 0,
+                body: ResponseBody::Live(Box::new(response.into_body())),
             },
         );
         Ok(id)
@@ -851,29 +877,114 @@ impl Capabilities {
         }
     }
 
-    /// Read up to `max` body bytes; `None` at EOF.
+    /// Read up to `max` body bytes from the live stream; `None` at EOF.
+    /// The body leaves the table while a frame wait is in flight, so a
+    /// slow server never holds up the other capabilities' handles; a
+    /// second concurrent reader of the same handle is refused.
     pub fn net_read_body(
         &self,
         handle: u32,
         max: usize,
     ) -> Result<Option<Vec<u8>>, CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
-        match table.entries.get_mut(&handle) {
-            Some(HandleEntry::Response { body, cursor, .. }) => {
-                if *cursor >= body.len() {
-                    return Ok(None);
+        use http_body_util::BodyExt as _;
+        let max = max.max(1);
+        let mut body = {
+            let mut table = self.handles.lock().expect("handle lock");
+            match table.entries.get_mut(&handle) {
+                Some(HandleEntry::Response { body, .. }) => {
+                    match std::mem::replace(body, ResponseBody::Busy) {
+                        ResponseBody::Live(inner) => inner,
+                        previous => {
+                            let message = match &previous {
+                                ResponseBody::Failed(message) => {
+                                    Some(CapabilityError::Io(message.clone()))
+                                }
+                                _ => None,
+                            };
+                            *body = previous;
+                            return match message {
+                                Some(message) => Err(message),
+                                None if matches!(body, ResponseBody::Finished) => Ok(None),
+                                None => Err(CapabilityError::Invalid(format!(
+                                    "handle {handle} is being read already"
+                                ))),
+                            };
+                        }
+                    }
                 }
-                let end = (*cursor + max.max(1)).min(body.len());
-                let chunk = body[*cursor..end].to_vec();
-                *cursor = end;
-                Ok(Some(chunk))
+                Some(_) => {
+                    return Err(CapabilityError::Invalid(format!(
+                        "handle {handle} is not a response"
+                    )));
+                }
+                None => {
+                    return Err(CapabilityError::NotFound(format!(
+                        "unknown handle {handle}"
+                    )));
+                }
             }
-            Some(_) => Err(CapabilityError::Invalid(format!(
-                "handle {handle} is not a response"
-            ))),
-            None => Err(CapabilityError::NotFound(format!(
-                "unknown handle {handle}"
-            ))),
+        };
+
+        // ponytail: the catalog fixes no per-read timeout; the OAuth
+        // flow's 300-second default is the model, and a config key can
+        // replace it when a slow source needs more.
+        const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+        let mut collected: Vec<u8> = Vec::new();
+        let mut reached_eof = false;
+        let mut failure: Option<String> = None;
+        loop {
+            if collected.len() >= max {
+                break;
+            }
+            let frame = {
+                // The timeout is constructed where it is polled: inside
+                // the runtime `drive` establishes, never before it.
+                let pulled =
+                    Self::drive(async { tokio::time::timeout(READ_TIMEOUT, body.frame()).await });
+                match pulled {
+                    Ok(Some(Ok(frame))) => frame,
+                    Ok(Some(Err(err))) => {
+                        failure = Some(format!("reading the response: {err}"));
+                        break;
+                    }
+                    Ok(None) => {
+                        reached_eof = true;
+                        break;
+                    }
+                    Err(_) => {
+                        failure = Some("timed out waiting for the response body".to_string());
+                        break;
+                    }
+                }
+            };
+            if let Ok(data) = frame.into_data() {
+                collected.extend_from_slice(&data);
+            }
+            // Non-data frames (trailers) carry no body bytes.
+        }
+
+        let final_state = match failure {
+            None if reached_eof => ResponseBody::Finished,
+            None => ResponseBody::Live(body),
+            // The stream is dead either way; keep the error for the
+            // read that follows, or surface it now if nothing was read.
+            Some(message) if collected.is_empty() => {
+                return Err(CapabilityError::Io(message.clone()));
+            }
+            Some(message) => ResponseBody::Failed(message),
+        };
+        {
+            let mut table = self.handles.lock().expect("handle lock");
+            if let Some(HandleEntry::Response { body, .. }) = table.entries.get_mut(&handle) {
+                *body = final_state;
+            }
+            // A handle closed mid-read stays closed: dropping the live
+            // stream above aborts the connection, which is correct.
+        }
+        if collected.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(collected))
         }
     }
 
