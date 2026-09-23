@@ -240,7 +240,7 @@ pub(crate) fn session_stats(store: &SessionStore, session: &Session) -> String {
     let waste = lca_session::compute_cache_waste(&read.records, 1024);
     format!(
         "{messages} messages, in {input} tokens (cache read {cache_read}, cache write {cache_write}), \
-         out {output} tokens, cost ${cost:.4}; cache waste {} tokens / ${{:.4}} across {} misses",
+         out {output} tokens, cost ${cost:.4}; cache waste {} tokens / ${1:.4} across {2} misses",
         waste.missed_tokens, waste.missed_cost, waste.miss_count
     )
 }

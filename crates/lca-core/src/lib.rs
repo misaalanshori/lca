@@ -667,6 +667,9 @@ impl<'a> Agent<'a> {
     /// dispatch table or the built-in table. The result record, the
     /// sink event, and the `post-tool-use` hook all belong here so no
     /// caller can forget one.
+    // TurnOutcome grew with Usage's cost buckets past clippy's preferred
+    // Err size; boxing it would ripple through every caller for a lint.
+    #[allow(clippy::result_large_err)]
     async fn run_tool_call(
         &mut self,
         call: &ToolCall,
@@ -730,6 +733,7 @@ impl<'a> Agent<'a> {
 
     /// The permission layer plus execution (FR-TOOL-3's path), shared by
     /// allow and replace.
+    #[allow(clippy::result_large_err)]
     async fn execute_after_permission(
         &mut self,
         call: &ToolCall,
