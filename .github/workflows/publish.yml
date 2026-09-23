@@ -119,9 +119,14 @@ jobs:
         run: |
           rustup set profile minimal
           for target in ${{ matrix.targets }}; do rustup target add "$target"; done
-      - name: LLVM for the MSVC build scripts
+      - name: LLVM19 for the MSVC build scripts
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y llvm
+        # Version-pinned: clang-cl19 matches the local receipt; the
+        # image's default clang disagrees with xwin's headers on
+        # intrin.h's __prefetch (wasmtime-fiber's windows.c).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-19 clang-19
       - uses: taiki-e/install-action@v2
         if: runner.os == 'Linux'
         with:
@@ -167,6 +172,7 @@ jobs:
             # (its own FIXME) while cargo-xwin supplies MSVC-style flags;
             # the committed shim translates between them.
             sudo install -m755 ci/clang-shim /usr/local/bin/clang
+            export PATH="/usr/lib/llvm-19/bin:$PATH"
             export CC_x86_64_pc_windows_msvc=clang
             export CC_aarch64_pc_windows_msvc=clang
           fi
