@@ -1,5 +1,5 @@
 //! The provider-world adapter: a `provider`-world handle answers the
-//! core's [`Provider`](lca_provider::Provider) trait, so the turn loop
+//! core's [Provider](lca_provider::Provider) trait, so the turn loop
 //! never learns which world or delivery mode produced the stream
 //! (ADR-0019's one-interface rule applied to the model backend).
 
