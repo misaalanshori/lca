@@ -1,0 +1,103 @@
+package lca:ext@0.1.0;
+
+
+/// The `provider` world: model listing, a streamed completion, and the
+/// account identity operations (ADR-0012), with everything a provider
+/// needs to reach its endpoint through host capabilities instead of a
+/// socket of its own.
+world provider {
+  import lca:host/log@0.1.0;
+  import lca:host/net@0.1.0;
+  import lca:host/oauth@0.1.0;
+  import lca:host/credentials@0.1.0;
+  export provider-models;
+  export provider-completion;
+  export provider-identity;
+}
+
+interface provider-models {
+  use types.{extra-pair};
+
+  record model-info {
+    id: string,
+    name: string,
+    ///0 when the provider does not publish one.
+    context-window: u32,
+    max-tokens: u32,
+    extras: list<extra-pair>,
+  }
+
+  list-models: func() -> list<model-info>;
+}
+
+interface provider-completion {
+  use types.{extra-pair, message, usage};
+
+  /// The tool schema shape a provider advertises alongside a request.
+  record tool-spec {
+    name: string,
+    description: string,
+    /// JSON Schema for the arguments, as JSON text.
+    parameters: string,
+    extras: list<extra-pair>,
+  }
+
+  /// One completion request as the core assembles it: the stable-prefix
+  /// boundary (FR-CACHE-5) is advisory, and ignored safely by vendors
+  /// with no explicit cache marker (ADR-0017).
+  record completion-request {
+    messages: list<message>,
+    tools: list<tool-spec>,
+    model: string,
+    stable-prefix: u32,
+    extras: list<extra-pair>,
+  }
+
+  /// The typed event stream (ADR-0004): every vendor concept that lacks
+  /// a case travels through `vendor-event` (kind plus JSON text) until it
+  /// earns one at a major version.
+  variant stream-event {
+    text-delta(string),
+    reasoning-delta(string),
+    /// call-id, then tool name.
+    tool-call-start(tuple<string, string>),
+    /// call-id, then the argument fragment.
+    tool-call-arg-delta(tuple<string, string>),
+    /// call-id.
+    tool-call-end(string),
+    usage(usage),
+    /// message, then whether a retry could help (FR-CORE-6).
+    error(tuple<string, bool>),
+    /// kind, then a JSON payload.
+    vendor-event(tuple<string, string>),
+  }
+
+  /// A pull stream: the host drives `next` from an async task, never a
+  /// push callback (ADR-0004; Phase 0 validated the shape).
+  resource completion-stream {
+    next: func() -> option<stream-event>;
+  }
+
+  stream-completion: func(request: completion-request) -> result<completion-stream, string>;
+}
+
+interface provider-identity {
+  use types.{usage as token-usage};
+
+  /// What an identity operation did. Every provider exports all three
+  /// functions and returns `not-supported` where it has none
+  /// (ADR-0012's optional-export rule).
+  variant identity-outcome {
+    ok,
+    not-supported,
+    failed(string),
+  }
+
+  /// Run the provider's login flow (OAuth through the `oauth`
+  /// capability, or a setup prompt through `ui` in Phase6).
+  login: func() -> identity-outcome;
+  logout: func() -> identity-outcome;
+  /// The standard usage shape the generic `/usage` prints; `usage` maps
+  /// `not-supported` from the outcome variant.
+  usage: func() -> result<token-usage, identity-outcome>;
+}

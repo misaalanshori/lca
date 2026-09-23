@@ -82,3 +82,80 @@ interface pty {
   wait: func(handle: u32) -> result<s32, error>;
   kill: func(handle: u32) -> result<_, error>;
 }
+
+/// The `net` capability: outbound requests through the host, never a
+/// socket (capability catalog). One interface serves both `net`
+/// (internet hosts, HTTPS only) and `net-local` (local ranges, HTTP
+/// allowed); dispatch between them is stated once in the catalog and
+/// enforced by the granted pattern sets.
+interface net {
+  variant error {
+    /// Pattern mismatch, rebinding refusal (FR-PERM-13), or scheme/port
+    /// rules; the detail says which, and the host records it.
+    permission(string),
+    /// The capability is not in this extension's granted set (NFR-13).
+    not-granted(string),
+    dns(string),
+    /// TLS or certificate failure.
+    tls(string),
+    io(string),
+    invalid(string),
+  }
+
+  /// Start a request; returns a response handle. `net` grants accept
+  /// only `https`, `net-local` grants accept `http` too (ADR-0011).
+  request: func(
+    method: string,
+    url: string,
+    headers: list<tuple<string, string>>,
+    body: option<list<u8>>,
+  ) -> result<u32, error>;
+  response-status: func(handle: u32) -> result<u16, error>;
+  response-headers: func(handle: u32) -> result<list<tuple<string, string>>, error>;
+  /// Read the body until it ends; `None` means EOF.
+  read-body: func(handle: u32, max: u64) -> result<option<list<u8>>, error>;
+  close-response: func(handle: u32) -> result<_, error>;
+}
+
+/// The `oauth` capability: the loopback authorization flow. The extension
+/// never binds a port; the host listener binds127.0.0.1 only
+/// (FR-PROV-4).
+interface oauth {
+  variant error {
+    permission(string),
+    not-granted(string),
+    /// No callback arrived before the flow timeout (default300 s).
+    timeout(string),
+    io(string),
+    invalid(string),
+  }
+
+  /// Pick a port, bind the loopback listener, and return the redirect
+  /// URL plus a flow handle (FR-PROV-3).
+  begin: func(redirect-path: string) -> result<tuple<string, u32>, error>;
+  /// Open a URL in the user's browser (best effort).
+  open: func(url: string) -> result<_, error>;
+  /// Block until the callback arrives; returns its parsed query
+  /// parameters. The extension verifies `state` itself.
+  await-callback: func(handle: u32) -> result<list<tuple<string, string>>, error>;
+  /// Abandon a flow and stop its listener.
+  end-flow: func(handle: u32) -> result<_, error>;
+}
+
+/// The `credentials` capability: one namespace per extension, keyed by
+/// the extension's own identity (FR-PERM-6). There is no cross-namespace
+/// read at any privilege level (FR-PERM-7); a denied `get` returns an
+/// empty result rather than an error, so checking for an existing login
+/// needs no denial/absence distinction (capability catalog).
+interface credentials {
+  variant error {
+    permission(string),
+    not-granted(string),
+    io(string),
+    invalid(string),
+  }
+
+  get: func(key: string) -> option<string>;
+  set: func(key: string, value: string) -> result<_, error>;
+  delete: func(key: string) -> result<_, error>;
+}
