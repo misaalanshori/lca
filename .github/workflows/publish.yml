@@ -130,7 +130,11 @@ jobs:
       - uses: taiki-e/install-action@v2
         if: runner.os == 'Linux'
         with:
-          tool: cargo-zigbuild,cargo-xwin
+          # Pinned to the local receipt's versions: xwin's SDK snapshot
+          # moves with its release, and the newest MSVC intrin.h
+          # disagrees with clang-19 over __prefetch (wasmtime-fiber's
+          # windows.c) - 0.23.1's snapshot compiles it.
+          tool: cargo-zigbuild@0.23.4,cargo-xwin@0.23.1
       - uses: mlugg/setup-zig@v2
         if: runner.os == 'Linux'
         with:
