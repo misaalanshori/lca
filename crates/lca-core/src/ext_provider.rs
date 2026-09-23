@@ -137,3 +137,137 @@ impl Provider for ExtensionProvider {
         })
     }
 }
+
+/// The backend behind the `completion` capability: the active provider
+/// driven to one non-streaming response (capability catalog
+/// `completion`, ADR-0015's forcing case). The CLI wires the same Arc
+/// into the default strategy's capability engine and into
+/// `AgentConfig`, so the usage this accumulates lands on the
+/// compaction record that caused the spend.
+pub struct ProviderBackend {
+    provider: std::sync::Arc<dyn lca_provider::Provider>,
+    model: String,
+    session_id: String,
+    usage: std::sync::Mutex<Option<lca_protocol::Usage>>,
+}
+
+impl ProviderBackend {
+    /// Adapt the provider the agent itself talks to. `model` follows
+    /// the session's configured model; `session_id` rides as the
+    /// conversation-routing extras (ADR-0023).
+    pub fn new(
+        provider: std::sync::Arc<dyn lca_provider::Provider>,
+        model: impl Into<String>,
+        session_id: impl Into<String>,
+    ) -> ProviderBackend {
+        ProviderBackend {
+            provider,
+            model: model.into(),
+            session_id: session_id.into(),
+            usage: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl lca_tools::CompletionBackend for ProviderBackend {
+    fn complete(
+        &self,
+        messages: &[lca_protocol::ChatMessage],
+    ) -> Result<(String, lca_protocol::Usage), String> {
+        let mut extras = std::collections::BTreeMap::new();
+        extras.insert("session-id".to_string(), self.session_id.clone());
+        let request = CompletionRequest {
+            messages: messages.to_vec(),
+            tools: Vec::new(),
+            model: self.model.clone(),
+            stable_prefix: 0,
+            extras,
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
+        let run = async move {
+            // Poll the producer and the channel together until the
+            // producer finishes - then drop it (closing the channel)
+            // and drain whatever it buffered: a scripted or cached
+            // response can complete before the first event is read.
+            let done = {
+                let producer = self.provider.stream(request, tx);
+                tokio::pin!(producer);
+                let done;
+                let mut collected = (
+                    String::new(),
+                    lca_protocol::Usage::default(),
+                    None::<String>,
+                );
+                let absorb = |event: StreamEvent, collected: &mut (String, lca_protocol::Usage, Option<String>)| {
+                    match event {
+                        StreamEvent::TextDelta { delta } => collected.0.push_str(&delta),
+                        StreamEvent::Usage { usage: reported } => collected.1 = reported,
+                        StreamEvent::Error { message, .. } => collected.2 = Some(message),
+                        _ => {}
+                    }
+                };
+                loop {
+                    tokio::select! {
+                        result = &mut producer => {
+                            done = Some(result);
+                            break;
+                        }
+                        item = rx.recv() => {
+                            if let Some(event) = item {
+                                absorb(event, &mut collected);
+                            }
+                        }
+                    }
+                }
+                (done, collected)
+            };
+            let (result, mut collected) = done;
+            while let Some(event) = rx.recv().await {
+                match event {
+                    StreamEvent::TextDelta { delta } => collected.0.push_str(&delta),
+                    StreamEvent::Usage { usage: reported } => collected.1 = reported,
+                    StreamEvent::Error { message, .. } => collected.2 = Some(message),
+                    _ => {}
+                }
+            }
+            if collected.2.is_none()
+                && let Some(Err(err)) = result
+            {
+                collected.2 = Some(err.message);
+            }
+            collected
+        };
+        let (text, usage, failure) = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(run),
+            Err(_) => {
+                // ponytail: a fresh current-thread runtime outside any
+                // async context (tests, synchronous host calls); the
+                // ambient-handle path is the one production uses.
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|err| format!("runtime: {err}"))?;
+                runtime.block_on(run)
+            }
+        };
+        if let Some(message) = failure {
+            return Err(message);
+        }
+        let mut slot = self.usage.lock().expect("backend usage");
+        let total = slot.get_or_insert_with(lca_protocol::Usage::default);
+        total.input += usage.input;
+        total.output += usage.output;
+        total.cache_read += usage.cache_read;
+        total.cache_write += usage.cache_write;
+        total.cache_write_1h += usage.cache_write_1h;
+        total.cost += usage.cost;
+        total.cost_input += usage.cost_input;
+        total.cost_cache_read += usage.cost_cache_read;
+        total.cost_cache_write += usage.cost_cache_write;
+        Ok((text, usage))
+    }
+
+    fn take_usage(&self) -> Option<lca_protocol::Usage> {
+        self.usage.lock().expect("backend usage").take()
+    }
+}

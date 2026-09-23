@@ -8,11 +8,21 @@ rust-version.workspace = true
 repository.workspace = true
 
 [features]
-default = ["bundled-openai-compat"]
-# ADR-0013: the default provider ships enabled; users can disable it.
+default = [
+    "bundled-openai-compat",
+    "bundled-compaction-default",
+    "bundled-skills",
+]
+# ADR-0013: the default provider, compaction strategy, and skills
+# handling ship enabled; users can disable any of them (FR-SESS-5's
+# default compaction, SRDD's bundled-skills/bundled-compaction-default).
 bundled-openai-compat = ["dep:openai-compatible"]
+bundled-compaction-default = ["dep:compaction-default"]
+bundled-skills = ["dep:skills"]
 
 [dependencies]
+compaction-default = { path = "../../extensions/compaction-default", optional = true }
+skills = { path = "../../extensions/skills", optional = true }
 lca-protocol = { path = "../lca-protocol" }
 lca-config = { path = "../lca-config" }
 lca-session = { path = "../lca-session" }

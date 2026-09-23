@@ -60,6 +60,7 @@ fn settings_for(base_url: &str, key: Option<&str>) -> openai_compatible::Setting
         base_url: base_url.to_string(),
         api_key: key.map(str::to_string),
         model: "test-model".to_string(),
+        context_window: 0,
     }
 }
 

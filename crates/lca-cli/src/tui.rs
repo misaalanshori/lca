@@ -69,9 +69,9 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     crate::apply_enablement(&mut registry, |name| {
         grants.lock().expect("grants").extension_enabled(cwd, name) == Some(false)
     });
-    let registry = Arc::new(registry);
     // FR-PROV-6 before anything reaches the interface: the configured
-    // provider must resolve to an enabled handle.
+    // provider must resolve to an enabled handle. (The registry stays
+    // mutable until the two completion-dependent handles are in.)
     let provider: Arc<dyn lca_provider::Provider> = match registry.provider(&provider_name) {
         Some(handle) => Arc::new(lca_core::ExtensionProvider::new(handle.clone())),
         None => {
@@ -79,17 +79,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             return Ok(crate::exit::USAGE);
         }
     };
-
-    let agent_config = AgentConfig {
-        provider: provider_name.clone(),
-        model: config.model().unwrap_or_default().to_string(),
-        retry_limit: config.provider_retry_limit() as u32,
-        max_iterations: config.tool_max_iterations() as u32,
-        extensions: registry.clone(),
-        ..AgentConfig::default()
-    };
-
-    let model_label = {
+    let model_id = {
         let configured = config.model().unwrap_or_default();
         if configured.is_empty() {
             provider
@@ -101,9 +91,56 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             configured.to_string()
         }
     };
+    // The default compaction strategy asks THIS provider through the
+    // `completion` capability; the same backend Arc drains its usage
+    // onto the compaction record (capability catalog: spend shows in
+    // session cost).
+    #[cfg(feature = "bundled-compaction-default")]
+    let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = {
+        let backend = Arc::new(lca_core::ext_provider::ProviderBackend::new(
+            provider.clone(),
+            model_id.clone(),
+            session.id().to_string(),
+        ));
+        let cap = crate::extension_capabilities(
+            cwd,
+            "compaction-default",
+            compaction_default::manifest_grants(),
+        );
+        cap.set_completion(backend.clone());
+        registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
+        Some(backend)
+    };
+    #[cfg(not(feature = "bundled-compaction-default"))]
+    let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = None;
+    #[cfg(feature = "bundled-skills")]
+    registry.register(Arc::new(skills::Skills::new(
+        crate::extension_capabilities(cwd, "skills", skills::manifest_grants()),
+    )));
+    crate::apply_enablement(&mut registry, |name| {
+        grants.lock().expect("grants").extension_enabled(cwd, name) == Some(false)
+    });
+    let registry = Arc::new(registry);
+
+    let agent_config = AgentConfig {
+        provider: provider_name.clone(),
+        model: model_id.clone(),
+        retry_limit: config.provider_retry_limit() as u32,
+        max_iterations: config.tool_max_iterations() as u32,
+        extensions: registry.clone(),
+        compaction_threshold: config.compaction_threshold(),
+        model_context_window: provider
+            .list_models()
+            .iter()
+            .find(|model| model.id == model_id)
+            .map(|model| model.context_window)
+            .unwrap_or(0),
+        completion_backend,
+        ..AgentConfig::default()
+    };
 
     let options = UiOptions {
-        model_label: format!("{provider_name}/{model_label}"),
+        model_label: format!("{provider_name}/{model_id}"),
         initial_lines,
         plain: config.ui_color() == lca_config::ColorMode::Never,
         invoke_command: {

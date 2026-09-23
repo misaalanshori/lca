@@ -326,6 +326,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "compaction-default"
+version = "0.1.0"
+dependencies = [
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-tools",
+ "serde_json",
+ "tokio",
+ "toml",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "conformance"
 version = "0.1.0"
 dependencies = [
@@ -1279,6 +1293,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "compaction-default",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -1293,6 +1308,7 @@ dependencies = [
  "lca-tui",
  "openai-compatible",
  "serde_json",
+ "skills",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1310,6 +1326,7 @@ dependencies = [
 name = "lca-core"
 version = "0.1.0"
 dependencies = [
+ "compaction-default",
  "conformance",
  "lca-ext-abi",
  "lca-ext-host",
@@ -2218,6 +2235,18 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "skills"
+version = "0.1.0"
+dependencies = [
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-tools",
+ "tokio",
+ "wit-bindgen 0.41.0",
+]
 
 [[package]]
 name = "slab"

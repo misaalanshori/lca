@@ -62,6 +62,9 @@ pub struct Settings {
     pub api_key: Option<String>,
     /// Default model identifier.
     pub model: String,
+    /// The model's context window when the endpoint publishes none; the
+    /// FR-SESS-4 threshold needs it, `0` means unknown (never compacts).
+    pub context_window: u32,
 }
 
 impl Default for Settings {
@@ -80,6 +83,10 @@ impl Default for Settings {
             model: std::env::var("OPENAI_MODEL")
                 .or_else(|_| std::env::var("LCA_MODEL"))
                 .unwrap_or_else(|_| "gpt-4o-mini".to_string()),
+            context_window: std::env::var("OPENAI_CONTEXT_WINDOW")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0),
         }
     }
 }
@@ -611,7 +618,7 @@ mod native {
             Ok(vec![ModelInfo {
                 id: self.settings.model.clone(),
                 name: self.settings.model.clone(),
-                context_window: 0,
+                context_window: self.settings.context_window,
                 max_tokens: 0,
             }])
         }
@@ -970,7 +977,7 @@ mod wasm_mode {
             vec![WasmModel {
                 id: settings.model.clone(),
                 name: settings.model,
-                context_window: 0,
+                context_window: self.settings.context_window,
                 max_tokens: 0,
                 extras: Vec::new(),
             }]

@@ -1,0 +1,8 @@
+name = "compaction-default"
+version = "1.0.0"
+abi = "0.1"
+worlds = ["compaction"]
+description = "The default compaction strategy: summarize the old range through the active provider, with a mechanical fallback."
+
+[capabilities.completion]
+reason = "Summarizes older parts of the conversation when compacting."

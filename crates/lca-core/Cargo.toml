@@ -19,6 +19,7 @@ tracing.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+compaction-default = { path = "../../extensions/compaction-default" }
 lca-testkit = { path = "../lca-testkit" }
 lca-ext-host = { path = "../lca-ext-host" }
 lca-ext-native = { path = "../lca-ext-native" }

@@ -138,16 +138,24 @@ pub(crate) fn apply_enablement(
 /// ponytail: opens a second grant-store instance; nothing in the
 /// capability engine writes grants yet, so there is no writer conflict,
 /// and one shared owner comes back with the ad hoc attach flow (ADR-0022).
-#[cfg(feature = "bundled-openai-compat")]
-pub(crate) fn openai_capabilities(cwd: &Path) -> std::sync::Arc<lca_tools::Capabilities> {
+/// One capability engine for a bundled extension: the platform's scope
+/// roots, this user's grant store, and a prompt that denies - only a
+/// net ad hoc attach ever asks, and that flow arrives with the install
+/// and login modals (Phases 5-7, ADR-0022).
+/// ponytail: opens a second grant-store instance per engine; nothing in
+/// these engines writes grants yet (ADR-0022's note applies to all of
+/// them), one shared owner comes back with the attach flow.
+pub(crate) fn extension_capabilities(
+    cwd: &Path,
+    name: &str,
+    grants: lca_tools::CapabilityGrants,
+) -> std::sync::Arc<lca_tools::Capabilities> {
     use std::sync::{Arc, Mutex};
 
     let data = data_dir();
-    let private = data.join("extensions/openai-compatible");
-    let _ = std::fs::create_dir_all(&private);
     let roots = lca_permissions::ScopeRoots {
         workspace: cwd.to_path_buf(),
-        private,
+        private: data.join("extensions"),
         home_config: config_file()
             .parent()
             .map(Path::to_path_buf)
@@ -157,14 +165,8 @@ pub(crate) fn openai_capabilities(cwd: &Path) -> std::sync::Arc<lca_tools::Capab
     };
     let store =
         GrantStore::open(&data.join("grants.json")).expect("the grant store was read at startup");
-    let mut grants = openai_compatible::manifest_grants();
-    grants.adhoc_net = store
-        .net_patterns(cwd)
-        .iter()
-        .filter_map(|pattern| lca_permissions::parse_net_pattern(pattern).ok())
-        .collect();
     Arc::new(lca_tools::Capabilities::new(
-        "openai-compatible",
+        name,
         grants,
         roots,
         Arc::new(Mutex::new(HeadlessPrompt::default())),
@@ -172,6 +174,20 @@ pub(crate) fn openai_capabilities(cwd: &Path) -> std::sync::Arc<lca_tools::Capab
         data,
         None,
     ))
+}
+
+#[cfg(feature = "bundled-openai-compat")]
+pub(crate) fn openai_capabilities(cwd: &Path) -> std::sync::Arc<lca_tools::Capabilities> {
+    let data = data_dir();
+    let store =
+        GrantStore::open(&data.join("grants.json")).expect("the grant store was read at startup");
+    let mut grants = openai_compatible::manifest_grants();
+    grants.adhoc_net = store
+        .net_patterns(cwd)
+        .iter()
+        .filter_map(|pattern| lca_permissions::parse_net_pattern(pattern).ok())
+        .collect();
+    extension_capabilities(cwd, "openai-compatible", grants)
 }
 
 /// The user data directory for sessions, grants, and state.
@@ -450,24 +466,75 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
     registry.register(Arc::new(openai_compatible::OpenAiCompat::new(
         openai_capabilities(cwd),
     )));
+    // The grant store's disable wins before the provider resolves
+    // (FR-PROV-9/FR-PERM-19); applied again after the two
+    // completion-dependent handles register below.
     apply_enablement(&mut registry, |name| {
         grants.extension_enabled(cwd, name) == Some(false)
     });
     // FR-PROV-6: the configured provider must resolve to an enabled
-    // handle; zero providers is an ordinary, reportable state.
-    let provider: Box<dyn lca_provider::Provider> = match registry.provider(&provider_name) {
-        Some(handle) => Box::new(lca_core::ExtensionProvider::new(handle.clone())),
+    // handle; zero providers is an ordinary, reportable state. Resolved
+    // before the completion-dependent handles register (they need it).
+    let provider: Arc<dyn lca_provider::Provider> = match registry.provider(&provider_name) {
+        Some(handle) => Arc::new(lca_core::ExtensionProvider::new(handle.clone())),
         None => {
             eprintln!("{}", no_model_message(&provider_name));
             return exit::USAGE;
         }
     };
+    let model_id = {
+        let configured = config.model().unwrap_or_default();
+        if configured.is_empty() {
+            provider
+                .list_models()
+                .first()
+                .map(|model| model.id.clone())
+                .unwrap_or_else(|| provider_name.clone())
+        } else {
+            configured.to_string()
+        }
+    };
+    #[cfg(feature = "bundled-compaction-default")]
+    let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = {
+        let backend = Arc::new(lca_core::ext_provider::ProviderBackend::new(
+            provider.clone(),
+            model_id.clone(),
+            session.id().to_string(),
+        ));
+        let cap = extension_capabilities(
+            cwd,
+            "compaction-default",
+            compaction_default::manifest_grants(),
+        );
+        cap.set_completion(backend.clone());
+        registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
+        Some(backend)
+    };
+    #[cfg(not(feature = "bundled-compaction-default"))]
+    let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = None;
+    #[cfg(feature = "bundled-skills")]
+    registry.register(Arc::new(skills::Skills::new(extension_capabilities(
+        cwd,
+        "skills",
+        skills::manifest_grants(),
+    ))));
+    apply_enablement(&mut registry, |name| {
+        grants.extension_enabled(cwd, name) == Some(false)
+    });
     let agent_config = AgentConfig {
         provider: provider_name.clone(),
-        model: config.model().unwrap_or_default().to_string(),
+        model: model_id.clone(),
         retry_limit: config.provider_retry_limit() as u32,
         max_iterations: config.tool_max_iterations() as u32,
         extensions: Arc::new(registry),
+        compaction_threshold: config.compaction_threshold(),
+        model_context_window: provider
+            .list_models()
+            .iter()
+            .find(|model| model.id == model_id)
+            .map(|model| model.context_window)
+            .unwrap_or(0),
+        completion_backend,
         ..AgentConfig::default()
     };
     let proposals = if grants.is_trusted(cwd) {

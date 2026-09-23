@@ -719,6 +719,7 @@ async fn twenty_clean_turns_report_zero_cache_waste_and_hold_the_ratio() {
 
 use lca_ext_abi::{DeliveryMode, DispatchFuture, ExtensionDispatch, World};
 use lca_protocol::{ChatMessage, DispatchError};
+use lca_tools::CompletionBackend as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// What the transform double does per call.
@@ -1350,4 +1351,219 @@ fn count_extension_events(h: &Harness, event: &str) -> usize {
         .iter()
         .filter(|record| matches!(record, Record::ExtensionEvent { event: found, .. } if found == event))
         .count()
+}
+
+// Verifies: the Phase 4 exit test's first two clauses against the REAL
+// default strategy and the REAL completion backend (not doubles):
+// crossing the configured threshold triggers `compaction-default`, it
+// asks the active provider through the `completion` capability, the
+// model's answer is the summary, and the summarization usage lands on
+// the durable record (capability catalog: spend shows in session cost).
+#[tokio::test]
+async fn the_default_strategy_compacts_through_the_real_completion_backend() {
+    // Script order: turn1's reply (big usage - the crossing), the
+    // summarization the strategy will ask for, then small replies.
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("first reply").usage(fake_usage(5000, 40, 4000, 0)))
+        .turn(|t| {
+            t.text("SYNTHESIS: the parser was added and tested.")
+                .usage(fake_usage(1000, 40, 4000, 0))
+        })
+        .turn(|t| t.text("ok").usage(fake_usage(10, 5, 0, 0)))
+        .turn(|t| t.text("ok").usage(fake_usage(10, 5, 0, 0)))
+        .build();
+    let provider = Arc::new(provider);
+    // The completion backend wraps the SAME provider the agent talks
+    // to: the capability's star topology with the host at the center.
+    let backend = Arc::new(lca_core::ext_provider::ProviderBackend::new(
+        provider.clone(),
+        "faux-1",
+        "session-under-test",
+    ));
+    let cap = Arc::new(lca_tools::Capabilities::new(
+        "compaction-default",
+        compaction_default::manifest_grants(),
+        scratch_roots("default-strategy"),
+        Arc::new(std::sync::Mutex::new(Prompt {
+            answers: Vec::new(),
+            asked: Vec::new(),
+        })),
+        Arc::new(std::sync::Mutex::new(
+            GrantStore::open(&scratch("default-strategy-grants").join("grants.json"))
+                .expect("grants"),
+        )),
+        scratch("default-strategy-project"),
+        None,
+    ));
+    cap.set_completion(backend.clone());
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(compaction_default::CompactionDefault::new(
+        cap.clone(),
+    )));
+    let mut config = phase_config(registry, 10_000, 0.5);
+    config.completion_backend = Some(backend.clone());
+
+    let root = scratch("default-strategy");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).expect("mkdir");
+    let store = SessionStore::new(root.join("data"));
+    let session = store.create_session(&project, "test").expect("session");
+    let grants = GrantStore::open(&root.join("grants.json")).expect("grants");
+    let mut tools = ToolExecutor::new(
+        Arc::new(NativeOps),
+        project.clone(),
+        project.clone(),
+        65536,
+        Duration::from_secs(30),
+    );
+    let mut grants = grants;
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: Vec::new(),
+        asked: Vec::new(),
+    };
+    // Turn1: no previous usage, nothing crosses; its reply's usage is
+    // what the next turn measures.
+    let outcome = {
+        let mut agent = Agent::new(
+            &store,
+            &session,
+            provider.as_ref(),
+            &mut tools,
+            &mut grants,
+            &mut prompt,
+            None,
+            config.clone(),
+        );
+        agent
+            .run_turn("big first turn", &mut sink, &CancelFlag::new())
+            .await
+    };
+    assert_eq!(
+        outcome.status,
+        lca_core::TurnStatus::Ok,
+        "{:?}",
+        outcome.error
+    );
+
+    // Turn2: turn1's usage crosses the threshold; the default strategy
+    // asks the active provider through `completion` for the summary.
+    let outcome = {
+        let mut agent = Agent::new(
+            &store,
+            &session,
+            provider.as_ref(),
+            &mut tools,
+            &mut grants,
+            &mut prompt,
+            None,
+            config.clone(),
+        );
+        agent
+            .run_turn("second turn", &mut sink, &CancelFlag::new())
+            .await
+    };
+    assert_eq!(
+        outcome.status,
+        lca_core::TurnStatus::Ok,
+        "{:?}",
+        outcome.error
+    );
+
+    let records = store
+        .read_with(&session, ViewMode::Display)
+        .expect("records")
+        .records;
+    let compaction = records
+        .iter()
+        .find_map(|record| match record {
+            Record::Compaction {
+                summary,
+                strategy,
+                usage,
+                replaced_from,
+                replaced_to,
+                ..
+            } => Some((
+                summary.clone(),
+                strategy.clone(),
+                usage.clone(),
+                replaced_from.clone(),
+                replaced_to.clone(),
+            )),
+            _ => None,
+        })
+        .expect("the threshold triggered the default strategy (FR-SESS-4)");
+    assert_eq!(
+        compaction.0, "SYNTHESIS: the parser was added and tested.",
+        "the model's answer is the summary"
+    );
+    assert_eq!(
+        compaction.1, "compaction-default",
+        "FR-SESS-5's strategy name"
+    );
+    let usage = compaction
+        .2
+        .expect("the summarization usage is on the record");
+    assert_eq!(
+        usage.input, 1000,
+        "billed input excludes the fake's cache read"
+    );
+    assert_eq!(
+        usage.cache_read, 4000,
+        "the completion call's cache fields carried"
+    );
+    assert!(!compaction.3.is_empty(), "a range was named");
+    assert_ne!(compaction.3, compaction.4, "from != to");
+
+    // Turn3: reuses it - no second invocation, no recompute (FR-CTX-1,
+    // exit clause2).
+    let outcome = {
+        let mut agent = Agent::new(
+            &store,
+            &session,
+            provider.as_ref(),
+            &mut tools,
+            &mut grants,
+            &mut prompt,
+            None,
+            config.clone(),
+        );
+        agent
+            .run_turn("third turn", &mut sink, &CancelFlag::new())
+            .await
+    };
+    assert_eq!(outcome.status, lca_core::TurnStatus::Ok);
+    let records = store
+        .read_with(&session, ViewMode::Display)
+        .expect("records")
+        .records;
+    assert_eq!(
+        records
+            .iter()
+            .filter(|r| matches!(r, Record::Compaction { .. }))
+            .count(),
+        1,
+        "the summary is reused (exit clause2)"
+    );
+
+    // The backend drained: a later compaction would attribute its own
+    // usage fresh (spend lands per record, not cumulatively).
+    assert!(
+        backend.take_usage().is_none(),
+        "usage was drained onto the record"
+    );
+}
+
+/// Roots for a throwaway Capabilities engine (pattern of the other
+/// fixtures in this file).
+fn scratch_roots(name: &str) -> lca_permissions::ScopeRoots {
+    let root = scratch(name);
+    lca_permissions::ScopeRoots {
+        workspace: root.join("project"),
+        private: root.join("private"),
+        home_config: root.join("config"),
+        temp: root.join("tmp"),
+        state_dir: root.join("data"),
+    }
 }
