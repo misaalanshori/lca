@@ -169,6 +169,26 @@ mod unsafe_ptmx {
     }
 
     /// The raw descriptor of an open file.
+    /// Put the master into nonblocking mode: a live panel polls it
+    /// between keystrokes, and "no data yet" has to be an empty read
+    /// rather than a frozen frame (`read_impl` maps `WouldBlock`).
+    pub(super) fn set_nonblocking(file: &std::fs::File) -> std::io::Result<()> {
+        // SAFETY: our own open descriptor; F_GETFL/F_SETFL with
+        // libc::O_NONBLOCK is the portable POSIX spelling (the constant
+        // differs between Linux and macOS, which is why libc decides it
+        // and not a literal here).
+        unsafe {
+            let flags = libc::fcntl(raw_fd(file), libc::F_GETFL);
+            if flags < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::fcntl(raw_fd(file), libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn raw_fd(file: &std::fs::File) -> RawFd {
         use std::os::unix::io::AsRawFd;
         file.as_raw_fd()
@@ -209,6 +229,10 @@ fn spawn_impl(
     // The parent's slave copies moved into the child's stdio; holding one
     // open would stop the master from ever reporting EOF (platform notes
     // class of bug: inherited handles keep pipes alive).
+    // A live panel polls the master between keystrokes: nonblocking
+    // makes "no data yet" an empty read instead of a frozen frame
+    // (read_impl maps WouldBlock to an empty chunk; EOF stays EIO).
+    unsafe_ptmx::set_nonblocking(&master)?;
     Ok(Inner {
         master,
         child,
@@ -223,6 +247,10 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
         // Linux reports EIO on the master once every slave side is gone;
         // that is this stream's EOF, not a failure.
         Err(err) if err.raw_os_error() == Some(5) => Ok(None),
+        // The master is nonblocking: no data yet is "nothing this
+        // call", not EOF and not an error - a panel polling a live
+        // session between keystrokes lands here every time.
+        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(Some(Vec::new())),
         Err(err) => Err(err),
     }
 }

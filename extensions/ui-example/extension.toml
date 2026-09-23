@@ -1,0 +1,17 @@
+name = "ui-example"
+version = "1.0.0"
+abi = "0.1"
+worlds = ["ui"]
+description = "The reference rendering extension: status segment, footer, side panel, modal, and a live terminal session in the panel."
+
+[capabilities.ui]
+regions = ["status-line", "footer", "panel", "modal"]
+
+# process and pty take a cwd scope, which resolves through the fs
+# vocabulary: the demo names `workspace`, so it grants it (the same
+# pairing every process-holding manifest has had since Phase 2).
+[capabilities.fs]
+workspace = "read"
+
+[capabilities.pty]
+reason = "Gives that demo a real terminal so it behaves like one."

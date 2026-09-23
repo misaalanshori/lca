@@ -1,0 +1,31 @@
+[package]
+name = "ui-example"
+description = "The reference ui extension: a status segment, footer, side panel with a live pty session, and a modal (ADR-0003, ADR-0016)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+lca-protocol = { path = "../../crates/lca-protocol" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lca-ext-abi = { path = "../../crates/lca-ext-abi" }
+lca-tools = { path = "../../crates/lca-tools" }
+lca-permissions = { path = "../../crates/lca-permissions" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = "0.41"
+
+[dev-dependencies]
+# The reference test draws through the same sanitizer the TUI uses.
+lca-tui = { path = "../../crates/lca-tui" }
+toml.workspace = true
+
+[lints]
+workspace = true

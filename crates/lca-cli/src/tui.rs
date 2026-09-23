@@ -147,6 +147,46 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         ..AgentConfig::default()
     };
 
+    // The ui view over the registry: only handles that declared
+    // regions register here (FR-UI-1's pull table; deny-by-default
+    // comes from ui_regions returning empty).
+    let render_regions = {
+        let registry = registry.clone();
+        Some(std::sync::Arc::new(
+            move |region: &str| -> Vec<(String, lca_protocol::WidgetTree)> {
+                registry
+                    .enabled()
+                    .filter(|handle| handle.ui_regions().iter().any(|r| r == region))
+                    .filter_map(|handle| {
+                        handle
+                            .render(region)
+                            .ok()
+                            .flatten()
+                            .map(|tree| (handle.name().to_string(), tree))
+                    })
+                    .collect()
+            },
+        ) as lca_tui::RegionRenderer)
+    };
+    let ui_events = {
+        let registry = registry.clone();
+        Some(std::sync::Arc::new(
+            move |region: &str,
+                  input: &lca_protocol::UiInput|
+                  -> Option<(String, lca_protocol::UiEffect)> {
+                registry
+                    .enabled()
+                    .filter(|handle| handle.ui_regions().iter().any(|r| r == region))
+                    .find_map(|handle| {
+                        handle
+                            .on_ui_event(region, input)
+                            .ok()
+                            .map(|effect| (handle.name().to_string(), effect))
+                    })
+            },
+        ) as lca_tui::RegionInteractor)
+    };
+
     let options = UiOptions {
         model_label: format!("{provider_name}/{model_id}"),
         initial_lines,
@@ -169,6 +209,8 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     .unwrap_or(CommandEffect::None)
             })
         },
+        render_regions,
+        ui_events,
         slash_commands: {
             let mut names: Vec<String> = ["login", "logout", "usage"]
                 .iter()

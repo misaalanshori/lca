@@ -24,6 +24,8 @@ fn options() -> UiOptions {
             }
         }),
         workspace: std::path::PathBuf::new(),
+        render_regions: None,
+        ui_events: None,
         slash_commands: vec![
             "/login".into(),
             "/logout".into(),
@@ -336,4 +338,254 @@ fn color_mode_resolves_from_options() {
         ColorMode::from_config(lca_config::ColorMode::Auto),
         ColorMode::Themed
     );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: the ui world's exit clauses
+// ---------------------------------------------------------------------------
+
+/// Options carrying a scripted ui table: the hostile span lives in the
+/// footer, and every region has content (the reference extension's
+/// shape, inlined so the test owns its fixture).
+fn options_with_ui() -> UiOptions {
+    use lca_protocol::{UiEffect, UiInput, Widget, WidgetTree};
+    fn text(content: &str, role: &str) -> Widget {
+        text_node(content, role)
+    }
+    let mut options = options();
+    options.render_regions = Some(std::sync::Arc::new(|region: &str| {
+        let nodes = match region {
+            "status-line" => vec![text("ext-seg", "accent")],
+            "footer" => vec![text("\u{1b}[31mNOT A PROMPT\u{1b}[0m", "warning")],
+            "panel" => vec![Widget::KeyValue(vec![(
+                "live".to_string(),
+                "session output here".to_string(),
+            )])],
+            "modal" => vec![
+                Widget::Boxed {
+                    title: Some("extension dialog".to_string()),
+                    child: 1,
+                },
+                text("modal body", "default"),
+            ],
+            _ => return vec![],
+        };
+        vec![("test-ext".to_string(), WidgetTree { nodes })]
+    }));
+    options.ui_events = Some(std::sync::Arc::new(|region: &str, input: &UiInput| {
+        if region == "modal" && matches!(input, UiInput::Submit { .. }) {
+            Some((
+                "test-ext".to_string(),
+                UiEffect::ShowNotice("modal ok".to_string()),
+            ))
+        } else if matches!(input, UiInput::Key { key } if key == "m") {
+            Some(("test-ext".to_string(), UiEffect::OpenModal))
+        } else {
+            None
+        }
+    }));
+    options
+}
+
+// Verifies: FR-UI-2 (the sanitizer is the choke point) - a hostile span
+// becomes visible text, never a control byte, and every widget kind
+// renders through it.
+#[test]
+fn control_sequences_become_visible_text() {
+    use lca_tui::{sanitize_text, widget_lines};
+    let hostile = "\u{1b}[31mEVIL\u{1b}[0m";
+    let sanitized = sanitize_text(hostile);
+    assert_eq!(sanitized, "\\x1b[31mEVIL\\x1b[0m", "{sanitized}");
+    assert!(!sanitized.contains('\u{1b}'), "no raw escape survives");
+
+    // Layout characters belong to the host, not the extension.
+    assert_eq!(sanitize_text("a\nb\tc"), "a b c");
+
+    // Every kind produces lines, and text inside them is sanitized.
+    use lca_protocol::{Widget, WidgetTree};
+    let tree = WidgetTree {
+        nodes: vec![
+            Widget::Column(vec![1, 2]),
+            text_node("line one", "default"),
+            Widget::Progress {
+                label: "prog".to_string(),
+                fill: 0.5,
+            },
+        ],
+    };
+    let lines = widget_lines(&tree.nodes);
+    assert_eq!(lines[0], "line one");
+    assert!(
+        lines[1].contains("prog [##########----------]  50%"),
+        "{lines:?}"
+    );
+
+    // The image widget renders as a labeled placeholder: terminal
+    // image protocols are the renderer's future work, not the ABI's.
+    let image = WidgetTree {
+        nodes: vec![Widget::Image {
+            media_type: "image/png".to_string(),
+            bytes: vec![0, 1, 2, 3],
+        }],
+    };
+    let lines = widget_lines(&image.nodes);
+    assert_eq!(lines, vec!["[image image/png, 4 bytes]".to_string()]);
+}
+
+fn text_node(content: &str, role: &str) -> lca_protocol::Widget {
+    lca_protocol::Widget::Text {
+        content: content.to_string(),
+        role: role.to_string(),
+    }
+}
+
+// Verifies: the Phase 6 exit clauses1 and2 at the interface level -
+// an extension renders in all four regions, and the hostile span in the
+// footer reaches the virtual terminal as literal characters (FR-UI-2,
+// ADR-0003's spoofing protection: no cell in the buffer is a control
+// code).
+#[test]
+fn an_extension_renders_in_all_four_regions_and_the_hostile_span_stays_literal() {
+    let options = options_with_ui();
+    let mut state = UiState::new(options);
+    let mut terminal = terminal(100, 30);
+
+    // Status + footer draw without any toggling (panel and modal need
+    // the user).
+    render(&mut terminal, &state).expect("draw");
+    let text = buffer_text(&mut terminal);
+    assert!(text.contains("ext-seg"), "status line: {text}");
+
+    // The side panel opens with Ctrl+P (the host's binding).
+    assert!(matches!(
+        handle_key(
+            &mut state,
+            key_event(
+                crossterm::event::KeyCode::Char('p'),
+                crossterm::event::KeyModifiers::CONTROL
+            )
+        ),
+        Action::Continue
+    ));
+    assert!(state.panel_open);
+    render(&mut terminal, &state).expect("draw");
+    let text = buffer_text(&mut terminal);
+    assert!(text.contains("session output here"), "panel: {text}");
+    assert!(text.contains("footer"), "footer border: {text}");
+
+    // The footer carries the hostile span, and the buffer holds no raw
+    // control byte anywhere: the escape sequence is visible text.
+    assert!(
+        text.contains("\\x1b[31mNOT A PROMPT\\x1b[0m"),
+        "hostile span rendered literally: {text:?}"
+    );
+    assert!(
+        !text.contains('\u{1b}'),
+        "no control byte reached the terminal"
+    );
+
+    // The modal opens on the user's key (idle: allowed).
+    state.turn_running = false;
+    handle_key(
+        &mut state,
+        key_event(
+            crossterm::event::KeyCode::Char('m'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert!(state.modal_open, "the user's key opened the modal");
+    render(&mut terminal, &state).expect("draw");
+    let text = buffer_text(&mut terminal);
+    assert!(text.contains("modal body"), "modal content: {text}");
+    assert!(text.contains("extension dialog"), "modal title: {text}");
+
+    // Escape dismisses it (user-dismissible: catalog `ui`).
+    handle_key(
+        &mut state,
+        key_event(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert!(!state.modal_open);
+
+    // Ctrl+P closes the panel again.
+    handle_key(
+        &mut state,
+        key_event(
+            crossterm::event::KeyCode::Char('p'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ),
+    );
+    assert!(!state.panel_open);
+}
+
+// Verifies: FR-UI-6 - an extension cannot open a modal during a running
+// turn; the same key that opens it while idle is dropped mid-turn.
+#[test]
+fn an_extension_cannot_open_a_modal_during_a_running_turn() {
+    let options = options_with_ui();
+    let mut state = UiState::new(options);
+    // Keys reach a registered region only while it is focused: the
+    // panel is how the reference extension's `m` is reached (status and
+    // footer are display-only in v1 - the catalog says segment and
+    // lines, not input focus).
+    handle_key(
+        &mut state,
+        key_event(
+            crossterm::event::KeyCode::Char('p'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ),
+    );
+    assert!(state.panel_open);
+
+    state.turn_running = true;
+    handle_key(
+        &mut state,
+        key_event(
+            crossterm::event::KeyCode::Char('m'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert!(!state.modal_open, "dropped while the turn runs (FR-UI-6)");
+
+    state.turn_running = false;
+    handle_key(
+        &mut state,
+        key_event(
+            crossterm::event::KeyCode::Char('m'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert!(state.modal_open, "allowed once the user has the agent idle");
+}
+
+// Verifies: a submission in the modal surfaces through the effect path
+// (the same machinery slash commands use, FR-UI-1's interaction half).
+#[test]
+fn modal_submissions_flow_through_the_effect() {
+    let options = options_with_ui();
+    let mut state = UiState::new(options);
+    state.modal_open = true;
+    state.buffer.push_str("typed in the modal");
+    handle_key(
+        &mut state,
+        key_event(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert_eq!(
+        state.notice.as_deref(),
+        Some("modal ok"),
+        "the effect applied"
+    );
+    assert!(!state.modal_open || state.notice.is_some());
+}
+
+fn key_event(
+    code: crossterm::event::KeyCode,
+    modifiers: crossterm::event::KeyModifiers,
+) -> crossterm::event::KeyEvent {
+    crossterm::event::KeyEvent::new(code, modifiers)
 }

@@ -60,6 +60,113 @@ pub struct TurnStatusLine {
 /// How the input editor invokes a registered slash command.
 pub type CommandInvoker = Arc<dyn Fn(&str, &str) -> CommandEffect + Send + Sync>;
 
+/// Which extensions draw in a region: the CLI's view over the registry
+/// (ADR-0003's pull model - the host asks, the extension answers).
+pub type RegionRenderer =
+    Arc<dyn Fn(&str) -> Vec<(String, lca_protocol::WidgetTree)> + Send + Sync>;
+
+/// Deliver one user interaction to the extensions registered for that
+/// region; the first `Some` answers and the host applies its effect.
+/// Effects only ever originate here - from real user input - which is
+/// what makes FR-UI-6 ("no modal without the user") enforceable.
+pub type RegionInteractor = Arc<
+    dyn Fn(&str, &lca_protocol::UiInput) -> Option<(String, lca_protocol::UiEffect)> + Send + Sync,
+>;
+
+/// Escape sequences and other control characters become visible text
+/// before anything is drawn: spans carry data, never control codes
+/// (FR-UI-2, ADR-0003). Tabs and newlines collapse to spaces because
+/// the host owns layout.
+pub fn sanitize_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '\n' | '\t' | '\r' => out.push(' '),
+            c if (c as u32) < 0x20 || c == '\x7f' => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// One node's lines, arena-style: node0 is the root and children are
+/// indices. Every text node passes through [`sanitize_text`] - the one
+/// choke point for FR-UI-2.
+pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
+    fn walk(nodes: &[lca_protocol::Widget], index: usize, out: &mut Vec<String>) {
+        use lca_protocol::Widget;
+        let Some(node) = nodes.get(index) else { return };
+        match node {
+            Widget::Text { content, .. } => out.push(sanitize_text(content)),
+            Widget::Image { media_type, bytes } => {
+                out.push(format!("[image {media_type}, {} bytes]", bytes.len()))
+            }
+            Widget::Boxed { title, child } => {
+                if let Some(title) = title {
+                    out.push(format!("[{title}]"));
+                }
+                walk(nodes, *child as usize, out);
+            }
+            Widget::Row(children) => {
+                // Side by side, first line of each (v1 layout; ponytail:
+                // a real row shaper when an extension needs wrapping).
+                let parts: Vec<String> = children
+                    .iter()
+                    .filter_map(|child| {
+                        let mut lines = Vec::new();
+                        walk(nodes, *child as usize, &mut lines);
+                        lines.into_iter().next()
+                    })
+                    .collect();
+                out.push(parts.join(" | "));
+            }
+            Widget::Column(children) => {
+                for child in children {
+                    walk(nodes, *child as usize, out);
+                }
+            }
+            Widget::Spinner { frames } => {
+                let ticks = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|since| since.subsec_millis())
+                    .unwrap_or(0);
+                let count = chars_count(frames);
+                if count > 0 {
+                    let pick = (ticks / 80) as usize % count;
+                    out.push(frames.chars().nth(pick).unwrap_or(' ').to_string());
+                } else {
+                    out.push(" ".to_string());
+                }
+            }
+            Widget::Progress { label, fill } => {
+                let fill = (*fill).clamp(0.0, 1.0);
+                let width = 20;
+                let done = (fill * width as f32).round() as usize;
+                out.push(format!(
+                    "{label} [{}{}] {:>3}%",
+                    "#".repeat(done),
+                    "-".repeat(width - done),
+                    (fill * 100.0).round() as u32
+                ));
+            }
+            Widget::KeyValue(pairs) => {
+                for (key, value) in pairs {
+                    out.push(format!("{key}: {}", sanitize_text(value)));
+                }
+            }
+            Widget::Vendor(kind) => out.push(format!("[vendor {kind}]")),
+        }
+    }
+    fn chars_count(text: &str) -> usize {
+        text.chars().count()
+    }
+    let mut out = Vec::new();
+    if !nodes.is_empty() {
+        walk(nodes, 0, &mut out);
+    }
+    out
+}
+
 /// Static inputs for the interface.
 pub struct UiOptions {
     /// `provider/model` for the status line.
@@ -77,6 +184,11 @@ pub struct UiOptions {
     pub slash_commands: Vec<String>,
     /// Workspace root for path completion.
     pub workspace: PathBuf,
+    /// Extension trees per region (`None`: no ui-capable extension is
+    /// registered, which is the default).
+    pub render_regions: Option<RegionRenderer>,
+    /// User interactions routed to extensions (FR-UI-6's only source).
+    pub ui_events: Option<RegionInteractor>,
 }
 
 /// The permission modal: what is being asked, and how to answer.
@@ -117,6 +229,11 @@ pub struct UiState {
     pub permission: Option<PermissionModal>,
     /// Ctrl+C seen once on an idle prompt.
     pub ctrl_c_armed: bool,
+    /// The extension side panel is open.
+    pub panel_open: bool,
+    /// An extension modal is open (one at a time, user-dismissible:
+    /// capability catalog `ui`).
+    pub modal_open: bool,
     /// Terminal size, tracked across resizes (FR-UI-3).
     pub size: (u16, u16),
 }
@@ -147,6 +264,8 @@ impl UiState {
             mode: InputMode::Normal,
             permission: None,
             ctrl_c_armed: false,
+            panel_open: false,
+            modal_open: false,
             size: (80, 24),
         }
     }
@@ -259,6 +378,56 @@ pub enum Action {
     Exit,
 }
 
+/// Apply one extension effect. `OpenModal` is dropped while a turn
+/// runs: an extension cannot interrupt work (FR-UI-6), and this is the
+/// single place effects are applied, all of them sourced from real
+/// user input.
+fn apply_ui_effect(state: &mut UiState, effect: lca_protocol::UiEffect) -> Option<Action> {
+    use lca_protocol::UiEffect;
+    match effect {
+        UiEffect::None => None,
+        UiEffect::CloseModal => {
+            state.modal_open = false;
+            None
+        }
+        UiEffect::OpenModal => {
+            if !state.turn_running {
+                state.modal_open = true;
+            }
+            None
+        }
+        UiEffect::ShowNotice(text) => {
+            state.notice = Some(text);
+            None
+        }
+        UiEffect::InsertText(text) => {
+            state.buffer.push_str(&text);
+            None
+        }
+        UiEffect::SubmitPrompt(text) => {
+            state.buffer = text;
+            Some(Action::Submit)
+        }
+    }
+}
+
+/// Map a key to the interaction vocabulary the ui world speaks.
+fn key_input(key: crossterm::event::KeyEvent) -> lca_protocol::UiInput {
+    use crossterm::event::KeyCode;
+    match key.code {
+        KeyCode::Char(character) => lca_protocol::UiInput::Key {
+            key: character.to_string(),
+        },
+        KeyCode::Enter => lca_protocol::UiInput::Submit {
+            text: String::new(),
+        },
+        KeyCode::Esc => lca_protocol::UiInput::Cancel,
+        other => lca_protocol::UiInput::Key {
+            key: format!("{other:?}"),
+        },
+    }
+}
+
 /// Handle one key press against the state (NFR-27: keyboard only).
 pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Action {
     use crossterm::event::{KeyCode, KeyModifiers};
@@ -293,6 +462,57 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                 Action::Continue
             }
         };
+    }
+
+    use crossterm::event::KeyCode as K;
+    // The extension modal runs first: Enter submits what is typed,
+    // Escape dismisses (host-level: a modal is user-dismissible), and
+    // everything else goes to the extension that opened it.
+    if state.modal_open {
+        if key.code == K::Esc {
+            state.modal_open = false;
+            return Action::Continue;
+        }
+        let input = match key.code {
+            K::Enter => {
+                let text = std::mem::take(&mut state.buffer);
+                lca_protocol::UiInput::Submit { text }
+            }
+            other => key_input(crossterm::event::KeyEvent::new(other, key.modifiers)),
+        };
+        if let Some(interactor) = &state.options.ui_events
+            && let Some((_, effect)) = interactor("modal", &input)
+            && let Some(action) = apply_ui_effect(state, effect)
+        {
+            return action;
+        }
+        return Action::Continue;
+    }
+
+    // Ctrl+P toggles the side panel (the host's binding, not routed to
+    // an extension).
+    if key.code == K::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        state.panel_open = !state.panel_open;
+        return Action::Continue;
+    }
+
+    // With the panel open and no control chord in flight, keys belong
+    // to whatever extension registered for the region: the live session
+    // in the reference panel eats them the way a terminal would. An
+    // extension that claims nothing closes the panel instead.
+    if state.panel_open && !key.modifiers.contains(KeyModifiers::CONTROL) {
+        let input = key_input(key);
+        if let Some(interactor) = &state.options.ui_events {
+            if let Some((_, effect)) = interactor("panel", &input) {
+                if let Some(action) = apply_ui_effect(state, effect) {
+                    return action;
+                }
+                return Action::Continue;
+            }
+            // Nothing claims the panel: close it and let the key edit
+            // normally.
+            state.panel_open = false;
+        }
     }
 
     match key.code {
@@ -528,15 +748,47 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         }
     };
 
+    // Extension content this frame: pulled from the registry's view
+    // (ADR-0003's model - the host asks, never the other way round).
+    let footer_trees = state
+        .options
+        .render_regions
+        .as_ref()
+        .map(|render| render("footer"))
+        .unwrap_or_default();
+    let footer_lines: Vec<String> = footer_trees
+        .iter()
+        .flat_map(|(_, tree)| widget_lines(&tree.nodes))
+        .take(3) // the catalog's footer constraint
+        .collect();
+
+    // The side panel, when open, takes a right-hand column (the
+    // catalog's `panel` region).
+    let (main_area, panel_area) = if state.panel_open {
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(30), Constraint::Length(42)])
+            .split(frame.area());
+        (split[0], Some(split[1]))
+    } else {
+        (frame.area(), None)
+    };
+
+    let mut vertical = vec![Constraint::Min(3), Constraint::Min(3)];
+    if !footer_lines.is_empty() {
+        // The footer draws with a border: two rows of chrome around its
+        // lines (the catalog's "up to three lines" plus the frame).
+        vertical.push(Constraint::Length(footer_lines.len() as u16 + 2));
+    }
+    vertical.push(Constraint::Length(1));
+    vertical.push(Constraint::Length(3));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),
-            Constraint::Min(3),
-            Constraint::Length(1),
-            Constraint::Length(3),
-        ])
-        .split(frame.area());
+        .constraints(vertical)
+        .split(main_area);
+    let footer_row = (!footer_lines.is_empty()).then_some(chunks[2]);
+    let status_row = chunks[chunks.len() - 2];
+    let input_row = chunks[chunks.len() - 1];
 
     let scroll_text = state.scrollback.join("\n");
     let scroll_lines = scroll_text.lines().count() as u16;
@@ -577,7 +829,7 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
             .map(|status| status.text.clone())
             .unwrap_or_default()
     };
-    let status_spans = vec![
+    let mut status_spans = vec![
         Span::styled(
             format!(" {} ", state.options.model_label),
             theme(plain, Color::Cyan).add_modifier(Modifier::BOLD),
@@ -591,7 +843,45 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         ),
         Span::styled(format!("| {state_cue}"), theme(plain, Color::Green)),
     ];
-    frame.render_widget(Paragraph::new(Line::from(status_spans)), chunks[2]);
+    // Extension status segments join the line (FR-UI-1: their trees,
+    // our spans).
+    if let Some(render) = &state.options.render_regions {
+        for (_name, tree) in render("status-line") {
+            for line in widget_lines(&tree.nodes).into_iter().take(1) {
+                status_spans.push(Span::styled(
+                    format!(" {line} "),
+                    theme(plain, Color::Magenta),
+                ));
+            }
+        }
+    }
+    frame.render_widget(Paragraph::new(Line::from(status_spans)), status_row);
+
+    if let Some(footer_row) = footer_row {
+        frame.render_widget(
+            Paragraph::new(footer_lines.join("\n"))
+                .block(Block::default().borders(Borders::ALL).title("footer")),
+            footer_row,
+        );
+    }
+
+    if let Some(panel_area) = panel_area {
+        let mut panel_lines: Vec<String> = Vec::new();
+        if let Some(render) = &state.options.render_regions {
+            for (_name, tree) in render("panel") {
+                panel_lines.extend(widget_lines(&tree.nodes));
+            }
+        }
+        if panel_lines.is_empty() {
+            panel_lines.push("(nothing registered for the panel)".to_string());
+        }
+        frame.render_widget(
+            Paragraph::new(panel_lines.join("\n"))
+                .block(Block::default().borders(Borders::ALL).title("panel"))
+                .wrap(Wrap { trim: false }),
+            panel_area,
+        );
+    }
 
     let input_text = if state.buffer.is_empty() {
         "> ".to_string()
@@ -601,8 +891,8 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
     let input = Paragraph::new(input_text)
         .block(Block::default().borders(Borders::ALL).title("input"))
         .wrap(Wrap { trim: false });
-    frame.render_widget(input, chunks[3]);
-    frame.set_cursor_position(cursor_position(chunks[3], state));
+    frame.render_widget(input, input_row);
+    frame.set_cursor_position(cursor_position(input_row, state));
 
     if let Some(modal) = &state.permission {
         let area = centered(frame.area(), 70, 9);
@@ -617,6 +907,39 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
                     .borders(Borders::ALL)
                     .border_style(theme(plain, Color::Yellow))
                     .title("permission required"),
+            )
+            .wrap(Wrap { trim: false });
+        frame.render_widget(dialog, area);
+    } else if state.modal_open {
+        // The extension modal: same host-drawn chrome, extension-drawn
+        // content - every line already passed through the sanitizer.
+        let area = centered(frame.area(), 70, 9);
+        frame.render_widget(Clear, area);
+        let trees = state
+            .options
+            .render_regions
+            .as_ref()
+            .map(|render| render("modal"))
+            .unwrap_or_default();
+        let mut lines: Vec<String> = Vec::new();
+        let mut title = String::from("extension");
+        for (name, tree) in &trees {
+            for line in widget_lines(&tree.nodes) {
+                if title == "extension" && line.starts_with('[') {
+                    title = line.trim_matches(['[', ']']).to_string();
+                }
+                lines.push(line);
+            }
+            if lines.is_empty() {
+                lines.push(name.clone());
+            }
+        }
+        let dialog = Paragraph::new(lines.join("\n"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(theme(plain, Color::Magenta))
+                    .title(title),
             )
             .wrap(Wrap { trim: false });
         frame.render_widget(dialog, area);

@@ -417,3 +417,62 @@ tests green on Linux, windows-target clippy green. macOS pty failures
 remain the recorded lowest-priority platform follow-up (Linux, then
 Windows, then macOS, per instruction).
 
+## Phase 6 - the UI world: PASS
+
+The exit test clause by clause:
+
+- **An extension renders in all four regions.** `ui-example` registers
+  for `status-line`, `footer`, `panel`, and `modal` (the manifest's
+  four-region enum, parsed and range-checked by the same loader the
+  install path shares), and the interface-level test draws every one
+  through ratatui's virtual terminal: the segment joins the status
+  line, the footer gets its bordered rows, Ctrl+P opens the side panel,
+  and the user's key opens the modal. The conformance extension
+  carries the same four regions in both delivery modes, trees diffed
+  byte for byte (NFR-25 over the arena).
+- **A hostile extension's escape sequences render as literal
+  characters.** The sanitizer is the single choke point every text node
+  passes through: ESC and friends become `\x1b`-style text, tabs and
+  newlines collapse to spaces because layout belongs to the host, and
+  the interface test asserts the virtual terminal's buffer contains the
+  visible sequence and not one control byte (FR-UI-2, ADR-0003's
+  spoofing protection). The conformance footer is the hostile fixture,
+  identical across modes so the host is provably the side that defangs
+  it. A hostile widget arena pointing a child at itself renders once
+  instead of recursing forever - the widget-shaped sibling attack,
+  with its own visited-set guard.
+- **A pty-backed extension displays a live interactive session in a
+  panel with no raw terminal access of its own.** `ui-example`'s panel
+  spawns a shell through the `pty` capability on its first draw (the
+  user opening the panel is the invocation - FR-UI-6's shape), keystrokes
+  typed into the panel land in the program, and what comes back reaches
+  the terminal only as data in a widget tree: the test types, polls,
+  and asserts the echo arrives with no control byte of its own
+  (ADR-0016's pattern end to end). Getting there needed the pty master
+  to be nonblocking with `WouldBlock` reading as "nothing this call" -
+  a blocking read inside a frame would have frozen the whole interface
+  on a silent session, which is exactly the class of platform trap
+  `docs/platform-notes.md` exists for.
+- **FR-UI-6** has its own test: the same key that opens the modal
+  while idle is dropped mid-turn, because effects only ever originate
+  from delivered user input - one function applies them, and it is the
+  only path to `modal_open`.
+
+Deviations, written down rather than hidden: keys reach a region only
+while it is focused (the panel, then the modal) - status and footer are
+display-only in v1, matching the catalog's "segment" and "lines"
+wording, so the reference extension's `m` is reached from the panel;
+`image` renders as a labeled placeholder since terminal image protocols
+are renderer work no document has specified; the modal opens from the
+panel's keys, not from an idle bare key; and the WASM guest's panel is
+stateless by construction - the host gives each call a fresh instance
+(the Phase 2 trap-isolation rule), so a cross-call pty handle cannot
+live in the guest, which is why the live session is the native-linked
+path and why the wasm panel shows its placeholder. The upgrade path for
+either is an instance cache with epoch reset, noted for when a third
+party's wasm extension needs persistent panel state.
+
+Gates at the exit: fmt, clippy `-D warnings`, doc `-D warnings`,252
+nextest tests green on Linux, and both the conformance and ui-example
+components building for wasm32-wasip2.
+
