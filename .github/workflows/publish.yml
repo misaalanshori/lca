@@ -142,8 +142,16 @@ jobs:
           mkdir -p dist
           cargo zigbuild --release --target x86_64-unknown-linux-musl
           cargo zigbuild --release --target aarch64-unknown-linux-musl
-          cargo zigbuild --release --target x86_64-apple-darwin
-          cargo zigbuild --release --target aarch64-apple-darwin
+          # The macOS cross builds need zig named as the target's cc
+          # and linker (the Phase 0 matrix's recipe): without them
+          # rustc's apple link flags never find an SDK.
+          ZIG=$(command -v zig)
+          env CC_x86_64_apple_darwin="$ZIG cc -target x86_64-macos" \
+              CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$ZIG" \
+              cargo zigbuild --release --target x86_64-apple-darwin
+          env CC_aarch64_apple_darwin="$ZIG cc -target aarch64-macos" \
+              CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$ZIG" \
+              cargo zigbuild --release --target aarch64-apple-darwin
           cargo xwin build --release --target x86_64-pc-windows-msvc
           cargo xwin build --release --target aarch64-pc-windows-msvc
           cp target/x86_64-unknown-linux-musl/release/lca dist/lca-x86_64-unknown-linux-musl

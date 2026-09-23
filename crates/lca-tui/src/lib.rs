@@ -397,11 +397,11 @@ fn apply_ui_effect(state: &mut UiState, effect: lca_protocol::UiEffect) -> Optio
             None
         }
         UiEffect::ShowNotice(text) => {
-            state.notice = Some(text);
+            state.notice = Some(sanitize_text(&text));
             None
         }
         UiEffect::InsertText(text) => {
-            state.buffer.push_str(&text);
+            state.buffer.push_str(&sanitize_text(&text));
             None
         }
         UiEffect::SubmitPrompt(text) => {
@@ -541,8 +541,12 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                     .any(|command| command == &full)
                 {
                     match (state.options.invoke_command)(&name, &argument) {
-                        CommandEffect::ShowWidget(text) => state.notice = Some(text),
-                        CommandEffect::InsertText(text) => state.buffer.push_str(&text),
+                        CommandEffect::ShowWidget(text) => {
+                            state.notice = Some(sanitize_text(&text))
+                        }
+                        CommandEffect::InsertText(text) => {
+                            state.buffer.push_str(&sanitize_text(&text))
+                        }
                         CommandEffect::SubmitPrompt(text) => {
                             state.buffer = text;
                             return Action::Submit;
@@ -551,7 +555,7 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                     }
                     return Action::Continue;
                 }
-                state.notice = Some(format!("unknown command /{name}"));
+                state.notice = Some(sanitize_text(&format!("unknown command /{name}")));
                 return Action::Continue;
             }
             let submitted = std::mem::take(&mut state.buffer);
@@ -1027,7 +1031,7 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             prompt_rx = None;
             cancel_flag = None;
             if let Some(error) = &outcome.error {
-                state.notice = Some(error.clone());
+                state.notice = Some(sanitize_text(error));
             }
             state.usage.cost += outcome.usage.cost;
             continue;

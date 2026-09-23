@@ -2,3 +2,6 @@
 **/target
 phase0/matrix.log
 nohup.out
+fuzz/target
+fuzz/artifacts
+crash-*

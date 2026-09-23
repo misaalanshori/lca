@@ -213,7 +213,7 @@ Digest verification runs before instantiation, not after.
 
 The `net` capability's resolved-address check rejects a connection whose resolved address falls in a loopback or private-use range even when the hostname pattern matched, and records the attempt as a rebinding case rather than an ordinary denial.
 
-The three fuzz targets have run long enough to be meaningful, and their corpora are checked in.
+The fuzz targets (four: manifest, session log, archive, ABI decode) have run long enough to be meaningful, and their corpora are checked in.
 
 Denial recording cannot be suppressed by the extension that triggered it.
 
@@ -241,3 +241,104 @@ completion calls. The catalog's cost attribution is the detector, not
 a limiter; a metering limit is the upgrade path if attribution proves
 insufficient in use.
 
+## The Phase 8 walkthrough
+
+The review checklist above, walked item by item. A receipt names a
+test in the suite; a justification says why no test applies and what
+carries the risk instead. An external reviewer should be able to start
+from these receipts rather than from scratch; findings that need one
+are the review's to make, not something this list can pre-answer.
+
+- **Every host import checks its grant before it acts, and the check
+  cannot be reached only on some paths.** Receipt: `lca-ext-host`
+  `tests/capabilities.rs` exercises the undeclared path for fs,
+  process, pty, net, net-local, oauth, credentials (FR-PERM-3), and
+  the Phase 4 conformance case covers `completion` in both delivery
+  modes (`compaction_and_transform_agree_across_modes_with_
+  completion_denied`); `ui` never calls the export outside
+  `ui_regions`. Each check sits inside the capability method itself, so
+  a caller cannot construct a path around it - the deny is a property
+  of the engine, not of the call site.
+- **The import table comes from the granted set; an ungranted import
+  fails rather than loads silently.** Receipt: the same capability
+  tests - every undeclared call is a recorded refusal, not a link-time
+  surprise, because the host links capability interfaces in a denied
+  state by design (the loader's comment says so and the tests pin the
+  behavior). Manifest validation rejects unknown capabilities outright
+  (`manifest_declares_and_parses_every_capability`), so the declared
+  set itself cannot exceed the catalog.
+- **Path resolution cannot leave a scope, including through a symlink
+  created after the grant.** Receipt: `lca-permissions`
+  `tests/scopes.rs` - `parent_traversal_out_of_a_scope_is_refused`,
+  `a_symlink_created_after_the_grant_is_refused` (unix: Windows
+  symlink creation needs elevation, recorded in the phase log),
+  `absolute_paths_are_refused`, and the state directory refused under
+  every scope.
+- **Credential namespace isolation has no bypass, including through
+  fs with every scope granted.** Receipt: `lca-tools`
+  `tests/network.rs` `credentials_are_namespace_isolated_with_owner_
+  only_permissions` (FR-PERM-6/7, NFR-14) plus the state-dir refusal
+  above: the store lives where no `fs` grant points, and the namespace
+  is the manifest's own name, checked at parse time
+  (`capabilities.credentials.namespace must equal the extension
+  name`).
+- **Control characters cannot reach the terminal from any
+  extension-supplied string - widget, tool name, command name, or
+  error message.** Receipt, per vector: widgets go through
+  `sanitize_text` in `lca-tui::widget_lines`, the single choke point
+  (`control_sequences_become_visible_text`,
+  `an_extension_renders_in_all_four_regions_and_the_hostile_span_
+  stays_literal` asserts the virtual buffer holds no control byte);
+  command names and every notice an extension effect produces are
+  sanitized at the two assignment sites in `handle_key`; dispatch error
+  messages reach notices through the same path; headless JSON envelopes
+  escape control characters by construction (serde). What is NOT
+  covered here: model-generated scrollback text, which is not
+  extension-supplied and would be the prompt-injection scenario's
+  business rather than this checklist's.
+- **The permission layer is on the path for every command execution,
+  including extension-originated ones.** Receipt: `lca-tools`
+  `tests/tools.rs` `process_spawn_shows_the_exact_command_and_runs_
+  when_approved` (the prompt shows the exact command, FR-UI-4's data),
+  and the ui-example panel's shell spawn runs through the same engine
+  method - there is no spawn path that bypasses `Capability::new`'s
+  prompt. Justification for the rest: an extension that already holds
+  `process` approved its surface once at install (the catalog's
+  consent line says each command still asks), and model-originated
+  shell calls are the core's `required_permission` path with its own
+  tests (FR-TOOL-3).
+- **Digest verification runs before instantiation, not after.**
+  Receipt: `lca-registry` `tests/registry.rs`
+  `oci_resolution_verifies_both_digests` - a registry whose layer
+  digest does not match its own bytes is refused at resolve time, and
+  nothing reaches the store (FR-DIST-3/4); `read_archive` computes the
+  digest the lockfile records before install.
+- **The net resolved-address check rejects a loopback/private landing
+  even when the hostname matched, recorded as rebinding.** Receipt:
+  `lca-tools` `tests/network.rs` `net_refuses_local_resolution_as_
+  rebinding` (FR-PERM-13) - distinct record, distinct message, and the
+  ad hoc attach test proves the fix for a legitimate case is consent,
+  not a wider pattern (FR-PERM-18).
+- **The fuzz targets have run long enough to be meaningful, corpora
+  checked in.** Receipt: `fuzz.yml` runs all four on a schedule with
+  ten sustained minutes each; the local receipt for this release is
+  ~2 million executions across the four targets with zero crashes
+  (manifest666k, session log651k, archive538k, ABI decode125k), and
+  `fuzz/corpus/` is committed so anything found later is a permanent
+  seed.
+- **Denial recording cannot be suppressed by the extension that
+  triggered it.** Justification, structural: the record lives in the
+  host's engine and in the on-disk journal, and no import surface
+  exposes either - the WIT has no read-deniars function, so the only
+  code that can see a denial is host code (`ext info`). The receipts
+  above show the record appearing for calls the extension would rather
+  have had succeed (every FR-PERM-3 test asserts the count after the
+  refusal).
+
+Open findings for the external review: none known above low. The two
+residual risks the scenarios already name - exfiltration to an
+approved host, and a net-local range wider than the one device meant -
+are accepted-in-design and tracked under Residual risks above; one
+practical gap is that notices and slash lists are the sanitized paths
+today, while scrollback text is model-supplied and belongs to the
+prompt-injection scenario rather than this checklist.

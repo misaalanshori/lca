@@ -46,9 +46,10 @@ jobs:
       - name: cargo-deny
         if: runner.os == 'Linux'
         uses: EmbarkStudios/cargo-deny-action@v2
-      - name: requirements traceability (NFR-30, advisory before Phase 8)
+      # Verifies: NFR-30 (zero untagged requirements; required from
+      # Phase 8, so the advisory flag is gone).
+      - name: requirements traceability (NFR-30)
         shell: bash
-        continue-on-error: true
         run: bash scripts/traceability.sh
 
   # NFR-7: measure binary size and cold start, fail on a threshold breach.

@@ -1,0 +1,42 @@
+name: fuzz
+
+# The testing plan's dedicated schedule: fuzz targets run continuously
+# rather than on every push, with enough time per target to matter
+# (a crash becomes a checked-in corpus entry and a regression test).
+# The targets themselves: the manifest parser, the session-log decode
+# path, the plain-HTTPS archive reader, and Wasmtime's component decode
+# - the four boundaries testing-plan section12 names.
+
+on:
+  schedule:
+    - cron: "174 * * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly for fuzz instrumentation
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup component add rust-src --toolchain nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      # Verifies: the testing plan's fuzz schedule (section12): every
+      # named target gets a sustained run; libFuzzer exits non-zero on
+      # any crash, and the corpus under fuzz/corpus keeps what it found.
+      - name: Run every fuzz target
+        run: |
+          set -euo pipefail
+          mkdir -p fuzz/corpus
+          for target in manifest session_log archive abi_decode; do
+            echo "=== $target ==="
+            cargo +nightly fuzz run "$target" -- \
+              -max_total_time=600 -artifact_prefix=fuzz/artifacts/
+          done

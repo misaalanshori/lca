@@ -216,11 +216,13 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 .iter()
                 .map(|name| format!("/{name}"))
                 .collect();
+            // Extension command names reach completion (and the screen);
+            // sanitized because an extension chose these strings.
             names.extend(
                 registry
                     .command_names()
                     .into_iter()
-                    .map(|name| format!("/{name}")),
+                    .map(|name| format!("/{}", lca_tui::sanitize_text(&name))),
             );
             names
         },

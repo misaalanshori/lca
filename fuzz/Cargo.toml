@@ -1,0 +1,41 @@
+[package]
+name = "lca-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+lca-protocol = { path = "../crates/lca-protocol" }
+lca-ext-host = { path = "../crates/lca-ext-host" }
+lca-registry = { path = "../crates/lca-registry" }
+wasmtime = { version = "49.0.0", default-features = false, features = [
+    "component-model",
+    "runtime",
+    "cranelift",
+] }
+serde_json = "1"
+
+# Standalone: fuzz targets never join the release workspace (the
+# testing plan's schedule runs them, the gates do not).
+[workspace]
+
+[[bin]]
+name = "manifest"
+path = "fuzz_targets/manifest.rs"
+
+[[bin]]
+name = "session_log"
+path = "fuzz_targets/session_log.rs"
+
+[[bin]]
+name = "archive"
+path = "fuzz_targets/archive.rs"
+
+[[bin]]
+name = "abi_decode"
+path = "fuzz_targets/abi_decode.rs"
