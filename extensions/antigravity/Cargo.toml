@@ -1,0 +1,39 @@
+[package]
+name = "antigravity"
+description = "Google Antigravity models via subscription login: the OAuth reference provider (WASM by default, dual-mode source)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# rlib for the native twin, cdylib for the wasm32-wasip2 component.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+lca-protocol = { path = "../../crates/lca-protocol" }
+serde_json.workspace = true
+# PKCE S256 (RFC 7636): the code challenge is a SHA-256 of the verifier.
+sha2.workspace = true
+# The platform CSPRNG for the PKCE verifier and OAuth state, on every
+# target we ship - including wasm32-wasip2's wasi:random. Already in
+# Cargo.lock transitively (wasmtime and friends), so the addition is a
+# direct edge, not a new graph.
+getrandom = "0.3"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lca-ext-abi = { path = "../../crates/lca-ext-abi" }
+lca-tools = { path = "../../crates/lca-tools" }
+lca-permissions = { path = "../../crates/lca-permissions" }
+tokio.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = "0.41"
+
+[dev-dependencies]
+toml.workspace = true
+
+[lints]
+workspace = true

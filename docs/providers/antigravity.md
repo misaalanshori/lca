@@ -35,7 +35,7 @@ Carries image generation results and any Gemini-specific streaming detail the ty
 
 ## login, logout, usage
 
-`login` runs the OAuth flow above and stores the resulting tokens. `logout` clears them and, where the API supports it, revokes the token server-side rather than only discarding it locally. `usage` queries whatever usage or quota endpoint the API exposes and returns it in the standard usage-info shape ADR-0012 defines, which is what makes both `/antigravity.usage` and the generic `/usage`, when Antigravity is the active provider, work from the same implementation.
+`login` runs the OAuth flow above and stores the resulting tokens. The OAuth client pair itself is user configuration, read from `ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET` (the same names pi uses for its own override) and stored into this extension's namespace on success so both delivery modes share it; LCA embeds no third party's client credentials, and a login with nothing configured reports which variables to set before any flow starts. `logout` clears them and, where the API supports it, revokes the token server-side rather than only discarding it locally. `usage` queries whatever usage or quota endpoint the API exposes and returns it in the standard usage-info shape ADR-0012 defines, which is what makes both `/antigravity.usage` and the generic `/usage`, when Antigravity is the active provider, work from the same implementation.
 
 ## Cache behavior
 

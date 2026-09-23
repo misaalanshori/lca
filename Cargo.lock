@@ -89,6 +89,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "antigravity"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-tools",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "toml",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"

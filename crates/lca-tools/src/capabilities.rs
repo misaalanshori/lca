@@ -124,6 +124,9 @@ pub struct Capabilities {
     project: PathBuf,
     proposals: Option<Proposals>,
     denials: Arc<Mutex<Vec<Denial>>>,
+    /// Auth URLs the extension asked to open (host diagnostics; the
+    /// provider-flow tests read the state from here).
+    oauth_opened: Arc<Mutex<Vec<String>>>,
     handles: Arc<Mutex<HandleTable>>,
     client: HttpClient,
     flows: Arc<Mutex<HashMap<u32, OAuthFlow>>>,
@@ -160,6 +163,7 @@ impl Capabilities {
             project,
             proposals,
             denials: Arc::new(Mutex::new(Vec::new())),
+            oauth_opened: Arc::new(Mutex::new(Vec::new())),
             handles: Arc::new(Mutex::new(HandleTable::default())),
             client: Client::builder(hyper_util::rt::TokioExecutor::new()).build(https),
             flows: Arc::new(Mutex::new(HashMap::new())),
@@ -202,6 +206,12 @@ impl Capabilities {
     /// Every recorded refusal (FR-EXT-9's data).
     pub fn denials(&self) -> Vec<Denial> {
         self.denials.lock().expect("denial lock").clone()
+    }
+
+    /// Every URL this extension asked the host to open, in order: how
+    /// a test (or an audit) sees the authorization URL a login built.
+    pub fn oauth_opened(&self) -> Vec<String> {
+        self.oauth_opened.lock().expect("oauth lock").clone()
     }
 
     /// How many attempts were refused (FR-EXT-9).
@@ -1094,6 +1104,10 @@ connection: close
                 "refusing to open {url}: only the loopback flow or https"
             )));
         }
+        self.oauth_opened
+            .lock()
+            .expect("oauth lock")
+            .push(url.to_string());
         #[cfg(target_os = "linux")]
         let mut cmd = {
             let mut c = std::process::Command::new("xdg-open");
@@ -1280,4 +1294,65 @@ fn decode(value: &str) -> String {
         }
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// The shared capability traits (lca-protocol): native mode's side of
+// the provider world's imports
+// ---------------------------------------------------------------------------
+
+impl lca_protocol::ProviderCap for Capabilities {
+    fn net_request(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Option<&[u8]>,
+    ) -> Result<u32, CapabilityError> {
+        Capabilities::net_request(self, method, url, headers, body)
+    }
+
+    fn net_response_status(&self, handle: u32) -> Result<u16, CapabilityError> {
+        Capabilities::net_response_status(self, handle)
+    }
+
+    fn net_read_body(&self, handle: u32, max: usize) -> Result<Option<Vec<u8>>, CapabilityError> {
+        Capabilities::net_read_body(self, handle, max)
+    }
+
+    fn net_close_response(&self, handle: u32) -> Result<(), CapabilityError> {
+        Capabilities::net_close_response(self, handle)
+    }
+
+    fn credentials_get(&self, key: &str) -> Option<String> {
+        // Denial reads as absence (capability catalog): checking for an
+        // existing login needs no denial/absence distinction.
+        Capabilities::credentials_get(self, key).unwrap_or(None)
+    }
+
+    fn credentials_set(&self, key: &str, value: &str) -> Result<(), CapabilityError> {
+        Capabilities::credentials_set(self, key, value)
+    }
+
+    fn credentials_delete(&self, key: &str) -> Result<(), CapabilityError> {
+        Capabilities::credentials_delete(self, key)
+    }
+}
+
+impl lca_protocol::OauthCap for Capabilities {
+    fn oauth_begin(&self, redirect_path: &str) -> Result<(String, u32), CapabilityError> {
+        Capabilities::oauth_begin(self, redirect_path)
+    }
+
+    fn oauth_open(&self, url: &str) -> Result<(), CapabilityError> {
+        Capabilities::oauth_open(self, url)
+    }
+
+    fn oauth_await(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError> {
+        Capabilities::oauth_await(self, handle)
+    }
+
+    fn oauth_end(&self, handle: u32) -> Result<(), CapabilityError> {
+        Capabilities::oauth_end(self, handle)
+    }
 }

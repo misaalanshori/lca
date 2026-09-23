@@ -61,3 +61,55 @@ pub enum IdentityOutcome {
     /// The operation ran and failed; the string is shown to the user.
     Failed(String),
 }
+
+/// The capability surface every provider extension's transport runs on:
+/// exactly what the `provider` world's `net` and `credentials` imports
+/// expose, so neither delivery mode can reach a socket or a credential
+/// file directly (Phase 3 exit test). The native handle implements it
+/// with the shared capability engine, the WASM guest with the host's
+/// imports; the trait lives here so both sides and the contract crate
+/// speak one type (ADR-0019).
+pub trait ProviderCap: Send + Sync {
+    /// Start one HTTP request; the response body is read through
+    /// `net_read_body` until it returns `None`.
+    fn net_request(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Option<&[u8]>,
+    ) -> Result<u32, crate::CapabilityError>;
+    /// The response's status line.
+    fn net_response_status(&self, handle: u32) -> Result<u16, crate::CapabilityError>;
+    /// The next body chunk; `None` at end of stream.
+    fn net_read_body(
+        &self,
+        handle: u32,
+        max: usize,
+    ) -> Result<Option<Vec<u8>>, crate::CapabilityError>;
+    /// Release the response.
+    fn net_close_response(&self, handle: u32) -> Result<(), crate::CapabilityError>;
+    /// Read one credential; a denial reads as absence, exactly as the
+    /// capability catalog specifies.
+    fn credentials_get(&self, key: &str) -> Option<String>;
+    /// Store one credential in this extension's own namespace.
+    fn credentials_set(&self, key: &str, value: &str) -> Result<(), crate::CapabilityError>;
+    /// Delete one credential.
+    fn credentials_delete(&self, key: &str) -> Result<(), crate::CapabilityError>;
+}
+
+/// The loopback authorization flow, the other half of the `provider`
+/// world's imports (capability catalog `oauth`): the extension builds
+/// the authorization URL and PKCE challenge itself, the host owns the
+/// listener (FR-PROV-3, FR-PROV-4).
+pub trait OauthCap: Send + Sync {
+    /// Pick a port, bind the loopback listener, return the redirect URL
+    /// plus a flow handle.
+    fn oauth_begin(&self, redirect_path: &str) -> Result<(String, u32), crate::CapabilityError>;
+    /// Open a URL in the user's browser (best effort).
+    fn oauth_open(&self, url: &str) -> Result<(), crate::CapabilityError>;
+    /// Block until the callback arrives; its parsed query parameters.
+    fn oauth_await(&self, handle: u32) -> Result<Vec<(String, String)>, crate::CapabilityError>;
+    /// Abandon a flow and stop its listener.
+    fn oauth_end(&self, handle: u32) -> Result<(), crate::CapabilityError>;
+}

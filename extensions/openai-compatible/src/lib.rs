@@ -27,78 +27,10 @@ use lca_protocol::{
     ChatMessage, ContentBlock, IdentityOutcome, MessageRole, StreamEvent, ToolSpec, Usage,
 };
 
-/// The capability surface this provider runs on: exactly what the
-/// `provider` world's imports expose, so neither delivery mode can reach
-/// a socket or a credential file directly (Phase 3 exit test).
-pub trait ProviderCap {
-    /// Start one HTTP request; the response body is read through
-    /// `net_read_body` until it returns `None`.
-    fn net_request(
-        &self,
-        method: &str,
-        url: &str,
-        headers: &[(&str, &str)],
-        body: Option<&[u8]>,
-    ) -> Result<u32, lca_protocol::CapabilityError>;
-    /// The response's status line.
-    fn net_response_status(&self, handle: u32) -> Result<u16, lca_protocol::CapabilityError>;
-    /// The next body chunk; `None` at end of stream.
-    fn net_read_body(
-        &self,
-        handle: u32,
-        max: usize,
-    ) -> Result<Option<Vec<u8>>, lca_protocol::CapabilityError>;
-    /// Release the response.
-    fn net_close_response(&self, handle: u32) -> Result<(), lca_protocol::CapabilityError>;
-    /// Read one credential; a denial reads as absence, exactly as the
-    /// capability catalog specifies.
-    fn credentials_get(&self, key: &str) -> Option<String>;
-    /// Store one credential in this extension's own namespace.
-    fn credentials_set(&self, key: &str, value: &str) -> Result<(), lca_protocol::CapabilityError>;
-    /// Delete one credential.
-    fn credentials_delete(&self, key: &str) -> Result<(), lca_protocol::CapabilityError>;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl ProviderCap for lca_tools::Capabilities {
-    fn net_request(
-        &self,
-        method: &str,
-        url: &str,
-        headers: &[(&str, &str)],
-        body: Option<&[u8]>,
-    ) -> Result<u32, lca_protocol::CapabilityError> {
-        lca_tools::Capabilities::net_request(self, method, url, headers, body)
-    }
-
-    fn net_response_status(&self, handle: u32) -> Result<u16, lca_protocol::CapabilityError> {
-        lca_tools::Capabilities::net_response_status(self, handle)
-    }
-
-    fn net_read_body(
-        &self,
-        handle: u32,
-        max: usize,
-    ) -> Result<Option<Vec<u8>>, lca_protocol::CapabilityError> {
-        lca_tools::Capabilities::net_read_body(self, handle, max)
-    }
-
-    fn net_close_response(&self, handle: u32) -> Result<(), lca_protocol::CapabilityError> {
-        lca_tools::Capabilities::net_close_response(self, handle)
-    }
-
-    fn credentials_get(&self, key: &str) -> Option<String> {
-        lca_tools::Capabilities::credentials_get(self, key).unwrap_or(None)
-    }
-
-    fn credentials_set(&self, key: &str, value: &str) -> Result<(), lca_protocol::CapabilityError> {
-        lca_tools::Capabilities::credentials_set(self, key, value)
-    }
-
-    fn credentials_delete(&self, key: &str) -> Result<(), lca_protocol::CapabilityError> {
-        lca_tools::Capabilities::credentials_delete(self, key)
-    }
-}
+// The capability traits live with the protocol types now that more than
+// one provider shares them; re-exported so this crate's public surface
+// (`run_provider_stream(&dyn ProviderCap, ...)`) does not change.
+pub use lca_protocol::{OauthCap, ProviderCap};
 
 /// The manifest this form ships with (single source for the grants
 /// [`manifest_grants`] builds; a test keeps them in step with
