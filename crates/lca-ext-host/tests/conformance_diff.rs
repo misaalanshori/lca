@@ -153,9 +153,11 @@ fn pty_args(program: &str, marker: &str) -> String {
     }
 }
 
-// Verifies: NFR-25's substance and the SRDD Phase 2 exit test — the
-// conformance extension passes in native mode and WASM mode with
-// identical results.
+// Verifies: NFR-25's substance, FR-EXT-7 (the two delivery labels
+// differ by design), and the SRDD Phase 2 exit test - the conformance
+// extension passes in native mode and WASM mode with identical
+// results, plus NFR-21's byte-stable fixture loading under the current
+// runtime.
 #[tokio::test]
 async fn native_and_wasm_modes_produce_identical_results() {
     let fixture = Fixture::new("diff");

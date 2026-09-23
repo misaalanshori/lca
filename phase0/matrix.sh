@@ -1,4 +1,9 @@
 #!/bin/bash
+# Verifies: NFR-8 (linux x86_64 + aarch64 musl), NFR-9 (macOS
+# x86_64 + aarch64), and NFR-10 (Windows x86_64 + aarch64 MSVC): one
+# matrix, six targets, cross-compiled from Linux (docs/phase0-report.md
+# carries the receipt; re-run by hand, tagged here because the script is
+# the executable form of the check).
 # Phase 0 cross-compilation matrix: build the spike host for all six native
 # targets and record what each one needs. Results land in phase0/matrix.log.
 set -u

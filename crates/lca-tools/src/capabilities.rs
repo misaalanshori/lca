@@ -276,6 +276,35 @@ impl Capabilities {
         })
     }
 
+    /// The grant store this engine reads ad hoc grants from, shared so
+    /// the consent flow that attaches one mid-session writes to the
+    /// same instance the next request consults (FR-PERM-18).
+    pub fn grant_store(&self) -> Arc<Mutex<lca_permissions::GrantStore>> {
+        self.store.clone()
+    }
+
+    /// The ad hoc hosts for this session: the manifest's own plus
+    /// whatever the user has attached in the grant store for this
+    /// project (FR-PERM-18: an attachment during a session is honored
+    /// for subsequent calls without a restart). ponytail: parsed per
+    /// request; the set is tiny, cache it if a hot loop ever notices.
+    fn live_adhoc_net(&self) -> Vec<lca_permissions::NetPattern> {
+        let mut patterns = self.grants.adhoc_net.clone();
+        let stored = self
+            .store
+            .lock()
+            .expect("grant lock")
+            .net_patterns(&self.project);
+        for pattern in stored {
+            if let Ok(parsed) = lca_permissions::parse_net_pattern(&pattern)
+                && !patterns.contains(&parsed)
+            {
+                patterns.push(parsed);
+            }
+        }
+        patterns
+    }
+
     /// Note a `ui` ask for a region the manifest never declared
     /// (FR-EXT-9's journal; the render export itself is never called,
     /// capability catalog `ui`).
@@ -746,7 +775,7 @@ impl Capabilities {
     ) -> Result<u32, CapabilityError> {
         let has_any = !self.grants.net.is_empty()
             || !self.grants.net_local.is_empty()
-            || !self.grants.adhoc_net.is_empty();
+            || !self.live_adhoc_net().is_empty();
         if !has_any {
             return Err(self.refused(
                 "net",
@@ -787,7 +816,8 @@ impl Capabilities {
 
         // Tier1: named hosts (`net` grants plus ad hoc attachments).
         let declared_hit = self.grants.net.iter().find(|p| p.matches_host(&host));
-        let adhoc_hit = self.grants.adhoc_net.iter().find(|p| p.matches_host(&host));
+        let adhoc = self.live_adhoc_net();
+        let adhoc_hit = adhoc.iter().find(|p| p.matches_host(&host));
         if let Some(pattern) = declared_hit.or(adhoc_hit) {
             let is_adhoc = adhoc_hit.is_some();
             let local_named = host
@@ -862,7 +892,10 @@ impl Capabilities {
             let ip = normalize_ip(ip);
             if self.grants.net_local.iter().any(|p| p.matches_ip(ip))
                 || (is_local_address(ip)
-                    && self.grants.adhoc_net.iter().any(|p| p.matches(&host, port)))
+                    // An ad hoc grant naming a literal local address
+                    // consented to that address (FR-PERM-16): host match
+                    // only, exactly like tier1's ad hoc local rule.
+                    && self.live_adhoc_net().iter().any(|p| p.matches_host(&host)))
             {
                 return self.http_exchange(method, url, headers, body);
             }

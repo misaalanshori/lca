@@ -1,0 +1,23 @@
+# Requirements deferred out of1.0 under the SRDD risk table's sanctioned
+# lever ("Cut the web target and the UI world before cutting the
+# sandbox", effort-larger-than-planned row): the web target is cut, the
+# UI world shipped (Phase6 PASS), the sandbox is untouched. These ids
+# are excluded from the NFR-30 traceability gate BY NAME, printed by
+# scripts/traceability.sh as deferred rather than silently skipped, and
+# carried in the phase log and the final report. Restoring any of them
+# removes its line here and the gate demands a verifying test again.
+#
+# What the cut would have taken, for whoever picks it up: a
+# wasm32-wasip2 build of the agent facade (a new embed world for
+# lca-sdk), tokio feature surgery for the wasm target, the capability
+# engine's transport behind a trait the embedding JavaScript supplies
+# (platform-notes' host-delegated fs/net), a jco-transpiled orchestrator
+# instantiating agent and extension modules as siblings (ADR-0018), and
+# a browser fixture for the exit test. NFR-11 is the agent's own wasip2
+# build; the components' wasm32-wasip2 builds (conformance, skills,
+# compaction-default, antigravity, ui-example, openai-compatible) all
+# ship and are exercised by the native/WASM diffs.
+FR-WEB-1
+FR-WEB-2
+FR-WEB-3
+NFR-11

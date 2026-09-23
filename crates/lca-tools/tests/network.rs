@@ -338,8 +338,9 @@ fn oauth_without_a_grant_never_binds() {
 }
 
 // Verifies: FR-PERM-6 (each extension reads only its own namespace; the
-// namespace is its identity, never guest input) and NFR-14 (credentials
-// are stored with owner-only permissions).
+// namespace is its identity, never guest input), FR-PERM-7 (a foreign
+// namespace has no address to read: the attempt is denied), and
+// NFR-14 (credentials are stored with owner-only permissions).
 #[test]
 fn credentials_are_namespace_isolated_with_owner_only_permissions() {
     let sandbox = Sandbox::new("creds");
@@ -406,4 +407,45 @@ fn undeclared_net_is_a_recorded_permission_error() {
         .expect_err("denied");
     assert!(matches!(err, CapabilityError::NotGranted(_)), "{err:?}");
     assert_eq!(caps.denial_count(), 1);
+}
+
+// Verifies: FR-PERM-18 (an ad hoc grant attached during a session is
+// honored for subsequent calls without a restart) - the SAME engine
+// that just refused the host accepts it the moment the user approves
+// it in the grant store, because the store is read live (ADR-0022's
+// persistence half feeding FR-PERM-18's session half).
+#[test]
+fn an_adhoc_grant_attached_mid_session_takes_effect_without_a_restart() {
+    let sandbox = Sandbox::new("adhoc-live");
+    let (url, _server) = canned_server("hello");
+    let caps = sandbox.caps(CapabilityGrants {
+        net: vec![lca_permissions::parse_net_pattern("api.example.com").expect("pattern")],
+        ..Default::default()
+    });
+
+    // Before: loopback is not in any declared pattern, and there is no
+    // net-local grant, so the request is refused and recorded.
+    let err = caps
+        .net_request("GET", &url, &[], None)
+        .expect_err("refused before consent");
+    assert!(
+        err.to_string().contains("matches no granted")
+            || matches!(err, CapabilityError::NotGranted(_)),
+        "{err}"
+    );
+
+    // The user attaches it (what FR-PERM-16's modal will do): keyed by
+    // the engine's own project path, its workspace root here.
+    caps.grant_store()
+        .lock()
+        .expect("store")
+        .approve_net_pattern(&sandbox.root.join("workspace"), "127.0.0.1")
+        .expect("approve");
+
+    // ...and the SAME engine honors it immediately: no restart, no
+    // new process, next call only.
+    let handle = caps
+        .net_request("GET", &url, &[], None)
+        .expect("honored after consent");
+    caps.net_close_response(handle).expect("close");
 }

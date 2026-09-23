@@ -695,12 +695,13 @@ impl Sandbox {
 }
 
 // Verifies: the Phase 5 exit test end to end - OCI install with the
-// consent screen (the catalog's sentences, verbatim), HTTPS-archive
-// install with its own consent, both recorded in the lockfile
-// (FR-DIST-6), a turn that runs against the INSTALLED provider loaded
-// by digest (FR-DIST-8: no moving tag consulted), the denial journal
-// behind `ext info` (FR-EXT-9), an update that finds itself up to
-// date, and a remove (FR-DIST-1/2/5/9).
+// consent screen shown before anything is written and a decline
+// writing nothing (FR-PERM-2), HTTPS-archive install with its own
+// consent, both recorded in the lockfile (FR-DIST-6), a turn that runs
+// against the INSTALLED provider loaded by its recorded digest with no
+// moving tag consulted (FR-DIST-8), the denial journal behind
+// `ext info` (FR-EXT-9), an update that finds itself up to date, and a
+// remove (FR-DIST-1/2/5/9).
 #[test]
 fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
     let runtime = rt();

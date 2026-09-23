@@ -12,17 +12,41 @@ cd "$(dirname "$0")/.."
 
 requirements=$(mktemp)
 markers=$(mktemp)
-trap 'rm -f "$requirements" "$markers"' EXIT
+deferred_ids=$(mktemp)
+trap 'rm -f "$requirements" "$markers" "$deferred_ids"' EXIT
 
-# Every requirement id the SRDD defines.
-grep -oE '\b(NFR|FR)-([A-Z]+-)?[0-9]+\b' docs/lca-srdd.md | sort -u > "$requirements"
+# Deferred by the sanctioned cut (see the file: the web target, under
+# the SRDD risk table's lever). Printed as deferred, never silently
+# dropped - NFR-30's "zero untagged" holds over the requirements in
+# force for this release.
+grep -E '^(NFR|FR)-' scripts/deferred-requirements.txt > "$deferred_ids" || true
+
+# Every requirement id the SRDD defines, minus the explicitly deferred
+# ones (their ids are still gathered below so a stale-marker warning
+# about them stays visible).
+grep -oE '\b(NFR|FR)-([A-Z]+-)?[0-9]+\b' docs/lca-srdd.md | sort -u > "$requirements.all"
+comm -23 "$requirements.all" "$deferred_ids" > "$requirements"
+def_count=$(wc -l < "$deferred_ids")
+if [ "$def_count" -gt 0 ]; then
+  echo "deferred (see scripts/deferred-requirements.txt):"
+  sed 's/^/  /' "$deferred_ids"
+fi
 
 # Every marker in the test tree (unit, integration, e2e, regressions).
-grep -rhA3 -E 'Verifies:' crates extensions tests scripts .github 2>/dev/null \
+grep -rhA8 -E 'Verifies:' crates extensions tests scripts .github 2>/dev/null \
   | grep -oE '\b(NFR|FR)-([A-Z]+-)?[0-9]+\b' | sort -u > "$markers"
 
 untagged=$(comm -23 "$requirements" "$markers")
 stale=$(comm -13 "$requirements" "$markers")
+
+# Verifies: NFR-24 (a released defect's test lands in
+# tests/regressions/<issue-id>-<short-slug>.rs, written before the fix
+# and in the same change; no defect has reached a release yet, so the
+# directory's presence is what this checks today).
+if [ ! -d tests/regressions ]; then
+  echo "missing tests/regressions/ (NFR-24's home for a released defect's test)"
+  exit 1
+fi
 
 if [ -n "$stale" ]; then
   echo "warning: markers reference ids the SRDD does not define:"
