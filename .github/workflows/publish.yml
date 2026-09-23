@@ -103,7 +103,13 @@ jobs:
           - os: ubuntu-latest
             name: windows
             targets: x86_64-pc-windows-msvc aarch64-pc-windows-msvc
-          - os: macos-13
+          # The arm mac builds both darwin targets: Apple's SDK is
+          # universal, so rustup target add + a normal build cross the
+          # one remaining arch on the same runner. The Intel label sat
+          # queued for hours with no runner picking it up; this keeps
+          # NFR-9 (built natively on macOS) without betting the
+          # release queue on Intel hardware supply.
+          - os: macos-14
             name: darwin-x86_64
             targets: x86_64-apple-darwin
           - os: macos-14
