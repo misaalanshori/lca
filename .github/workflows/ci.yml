@@ -36,7 +36,15 @@ jobs:
         run: cargo doc --workspace --no-deps
 # Verifies: NFR-12 (the suite runs on Linux, macOS, and Windows).
       - name: tests (nextest)
-        run: cargo nextest run --workspace --no-fail-fast
+        # -j2: the debug suite at full parallelism wedged the hosted
+        # runners on the Linux and Windows pools - jobs sat mid-step
+        # for the better part of an hour and GitHub's own annotation
+        # blamed CPU/memory starvation of the runner agent - while the
+        # macOS pool, with more cores to spare, kept finishing in
+        # minutes. Same tests, same order, half the peak load; the
+        # steps after this one (nfr gates, cargo-deny, traceability)
+        # were what never got to run.
+        run: cargo nextest run --workspace --no-fail-fast --test-threads=2
       # Verifies: NFR-30 (advisory before Phase 8, required from Phase 8).
       # Verifies: NFR-5's real bound: hook overhead measured against a
       # release wasmtime (debug instrumentation dominates the1 ms).
