@@ -1,0 +1,77 @@
+name: publish
+
+# Phase 5's publication half: every tagged release publishes the
+# first-party components as OCI artifacts on ghcr.io (repo-scoped, so a
+# public repo means an anonymously pullable registry - the1.0 design
+# supports anonymous public pulls only) and attaches the HTTPS-archive
+# asset the plain-HTTPS source kind installs from (ADR-0010).
+#
+# The runner's GITHUB_TOKEN carries packages: write, which a personal
+# access token in this account does not - that is why publication lives
+# here instead of in scripts/publish-oci.sh run by hand.
+
+on:
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: |
+          rustup set profile minimal
+          rustup target add wasm32-wasip2
+      - name: Build the first-party components
+        run: |
+          cargo build --release --target wasm32-wasip2 \
+            -p openai-compatible -p skills -p compaction-default -p antigravity
+      - name: Refresh the committed fixtures
+        run: |
+          cp target/wasm32-wasip2/release/openai_compatible.wasm extensions/openai-compatible/fixtures/component.wasm
+          cp target/wasm32-wasip2/release/skills.wasm extensions/skills/fixtures/component.wasm
+      - name: Pack the HTTPS-archive asset (ADR-0010's zip)
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile("skills-abi-0.1.zip", "w") as z:
+              z.write("extensions/skills/extension.toml", "extension.toml")
+              z.write("extensions/skills/fixtures/component.wasm", "component.wasm")
+          PY
+      - name: Upload the archive to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" skills-abi-0.1.zip --clobber
+      - name: Publish the OCI artifacts (abi line tag + version tag)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LCA_OCI_USER: ${{ github.actor }}
+        run: |
+          publish() {
+            local image="$1" wasm="$2" manifest="$3" version
+            version=$(python3 -c "import sys;print(dict(l.split(' = ') for l in open(sys.argv[1]) if ' = ' in l)['version'].strip('\"'))" "$manifest")
+            bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "abi-0.1" "$wasm" "$manifest"
+            bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "${version}" "$wasm" "$manifest"
+          }
+          publish openai-compatible extensions/openai-compatible/fixtures/component.wasm extensions/openai-compatible/extension.toml
+          publish skills extensions/skills/fixtures/component.wasm extensions/skills/extension.toml
+          publish compaction-default target/wasm32-wasip2/release/compaction_default.wasm extensions/compaction-default/extension.toml
+          publish antigravity target/wasm32-wasip2/release/antigravity.wasm extensions/antigravity/extension.toml
+      # Best effort: repo-scoped packages follow the public repo's
+      # visibility, this just makes it explicit when the API allows.
+      - name: Ensure the packages are public
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for image in openai-compatible skills compaction-default antigravity; do
+            gh api --method PATCH "/user/packages/container/lca%2F${image}" -f visibility=public || true
+          done
