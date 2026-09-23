@@ -350,3 +350,70 @@ transform chain (FR-EXT-5 outranks FR-CTX-2 for a dead extension)
 instead of failing the turn - found by the Phase 2 trap test, which is
 exactly what regression tests are for.
 
+## Phase 5 — distribution: PASS
+
+The exit test clause by clause:
+
+- **`lca-registry` with OCI and plain-HTTPS resolvers sharing one
+  lockfile and one digest path (FR-DIST-1/3/4/9).** The OCI resolver
+  is the closed list's documented fallback - direct distribution calls
+  on the existing hyper client - and it does the full protocol dance
+  a real registry needs: `WWW-Authenticate` challenge, anonymous token
+  fetch, one authorized retry (ghcr requires this even for public
+  pulls), and redirect following (blobs307 to a CDN where the bearer
+  must NOT follow them cross-origin; release assets302). Both blobs'
+  digests verify before anything returns, so FR-DIST-4's delete is the
+  failure that cannot happen; a lying mock registry proves it. The
+  HTTPS resolver unpacks ADR-0010's zip - extension.toml and the
+  component, nothing else - and both it and a local path install
+  produce the identical verified pair (FR-DIST-5). Nine offline tests
+  against local mock servers.
+- **The manifest format and the consent screen.** Consent lines are
+  the capability catalog's sentences verbatim, reason-first where the
+  catalog says so (process, pty, completion); an unknown capability is
+  refused rather than silently skipped. Manifest limits parse against
+  the schema (memory64/fuel10M defaults, clamped to the host
+  maxima flows.md names).
+- **`ext install|update|remove|info|list` (FR-DIST-6/7/8, FR-EXT-9).**
+  Install validates through the same parser the loader uses, shows
+  consent, and writes nothing on a decline (EOF declines too). The
+  lockfile records digest, source, grant hash, version, and abi; the
+  component sits named by its digest. Update re-resolves the recorded
+  source, skips digest-pinned refs, reports "up to date" on a matching
+  digest, and prompts exactly when declarations widen what was
+  approved. info shows digest, source, consent, and the denial count
+  behind FR-EXT-9 - which now has a journal to count, since every
+  recorded refusal also lands in the extension's denials.jsonl.
+  Installed extensions load by digest at startup, ahead of the bundled
+  copies, so an installed extension shadows the one in the binary.
+- **Published to a public registry and a plain HTTPS host, installed
+  from both on a clean machine.** The account's personal token has no
+  package scope (pushing and even minting a push token fails with
+  "token provided does not match expected scopes"), so publication
+  runs from CI where the runner's GITHUB_TOKEN carries packages:
+  write - `.github/workflows/publish.yml`, dispatchable by tag. It
+  publishes four first-party components under
+  ghcr.io/misaalanshori/lca/<name> at both the abi-0.1 moving tag and
+  the immutable version tag (eight artifacts, all live and anonymously
+  pullable - the1.0 design supports anonymous public pulls only) and
+  attaches skills-abi-0.1.zip to release phase5-0.1.0. The exit test's
+  local-mock twin (`a_clean_machine_installs_from_oci_and_https_then_
+  runs_a_turn`) runs the whole story offline: both consent screens
+  verbatim, a first turn refused with the journal counting it in
+  `ext info`, the grant applied, a second turn running against the
+  INSTALLED provider, update reporting current, remove forgetting the
+  tree, and a declined install writing nothing. The live twin
+  (`LCA_REAL_REGISTRY=1` gated, NFR-23) pulls both published artifacts
+  over the real network into a clean sandbox and passes.
+
+Notes: the OCI convention (extension.toml as the config blob,
+component as layer0) is documented in the authoring guide's publishing
+section with the script that writes it; `zip` joined the dependency
+list with the SRDD's written justification; xtask (release packaging)
+stays for Phase8, which is where release automation needs it.
+
+Gates: fmt, clippy `-D warnings`, doc `-D warnings`,242 nextest
+tests green on Linux, windows-target clippy green. macOS pty failures
+remain the recorded lowest-priority platform follow-up (Linux, then
+Windows, then macOS, per instruction).
+

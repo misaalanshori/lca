@@ -532,37 +532,226 @@ fn http_client() -> Result<HttpsClient, Error> {
     )
 }
 
+/// The OCI token dance: registries answer an unauthenticated request
+/// with `WWW-Authenticate: Bearer realm=...,service=...`, the client
+/// fetches a (possibly anonymous) bearer token from that realm, and
+/// retries once. ghcr.io requires this even for public pulls; the local
+/// mock registries in the tests answer without it, which is why this
+/// rides along instead of a token being mandatory.
+async fn fetch_oci(
+    client: &HttpsClient,
+    url: &str,
+    accept: &str,
+    image: &str,
+    token: &mut Option<String>,
+) -> Result<(Vec<u8>, hyper::HeaderMap), Error> {
+    async fn attempt(
+        client: &HttpsClient,
+        url: &str,
+        accept: &str,
+        headers: &hyper::HeaderMap,
+    ) -> Result<hyper::Response<hyper::body::Incoming>, Error> {
+        let mut request = hyper::Request::builder()
+            .method("GET")
+            .uri(url)
+            .header(hyper::header::ACCEPT, accept);
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        let request = request
+            .body(http_body_util::Full::new(hyper::body::Bytes::new()))
+            .map_err(|err| Error::Fetch(err.to_string()))?;
+        client
+            .request(request)
+            .await
+            .map_err(|err| Error::Fetch(format!("{url}: {err}")))
+    }
+
+    let authorization = |token: &Option<String>| {
+        let mut headers = hyper::HeaderMap::new();
+        if let Some(value) = token {
+            headers.insert(
+                hyper::header::AUTHORIZATION,
+                hyper::header::HeaderValue::from_str(&format!("Bearer {value}"))
+                    .expect("bearer header"),
+            );
+        }
+        headers
+    };
+
+    // Follow redirects: ghcr answers blob GETs with a307 to its CDN,
+    // where the signed URL needs no bearer (and must not get this
+    // repository's token past its host).
+    let mut response = attempt(client, url, accept, &authorization(token)).await?;
+    let mut hops = 0;
+    while response.status().is_redirection() && hops < 5 {
+        hops += 1;
+        let location = response
+            .headers()
+            .get(hyper::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| Error::Fetch(format!("{url}: redirect with no location")))?
+            .to_string();
+        let next = if location.starts_with("http://") || location.starts_with("https://") {
+            location
+        } else {
+            // Relative: stay on this origin.
+            let origin_end = url.find("/v2/").unwrap_or(0);
+            format!("{}{}", &url[..origin_end], location)
+        };
+        let same_origin = next
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            == url
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .split('/')
+                .next();
+        let mut headers = authorization(token);
+        if !same_origin {
+            headers.remove(hyper::header::AUTHORIZATION);
+        }
+        response = attempt(client, &next, accept, &headers).await?;
+        let _ = &next;
+    }
+    if response.status() != hyper::StatusCode::UNAUTHORIZED {
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(Error::Fetch(format!("{url}: HTTP {status}")));
+        }
+        let headers = response.headers().clone();
+        let body = collect_body(response).await?;
+        return Ok((body, headers));
+    }
+
+    // Challenge -> token -> one retry, the spec's dance.
+    let challenge = response
+        .headers()
+        .get(hyper::header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    // The header starts with its auth scheme (`Bearer realm=...`); the
+    // parameters begin after it.
+    let parameters = challenge
+        .strip_prefix("Bearer ")
+        .unwrap_or(challenge.as_str());
+    let field = |name: &str| {
+        parameters.split(',').find_map(|part| {
+            let part = part.trim();
+            part.strip_prefix(&format!("{name}="))
+                .map(|value| value.trim().trim_matches('"').to_string())
+        })
+    };
+    let realm = field("realm")
+        .ok_or_else(|| Error::Fetch(format!("{url}: HTTP401 with no usable challenge")))?;
+    let service = field("service").unwrap_or_default();
+    let scope = format!("repository:{image}:pull");
+    let token_url = format!(
+        "{realm}{}service={service}&scope={scope}",
+        if realm.contains('?') { "&" } else { "?" }
+    );
+    let mut token_request = hyper::Request::builder().method("GET").uri(&token_url);
+    if let Some(value) = &token {
+        token_request = token_request.header(
+            hyper::header::AUTHORIZATION,
+            hyper::header::HeaderValue::from_str(&format!("Bearer {value}"))
+                .expect("bearer header"),
+        );
+    }
+    let token_request = token_request
+        .body(http_body_util::Full::new(hyper::body::Bytes::new()))
+        .map_err(|err| Error::Fetch(err.to_string()))?;
+    let token_response = client
+        .request(token_request)
+        .await
+        .map_err(|err| Error::Fetch(format!("{token_url}: {err}")))?;
+    if !token_response.status().is_success() {
+        return Err(Error::Fetch(format!(
+            "{url}: HTTP401 and the token endpoint answered {}",
+            token_response.status()
+        )));
+    }
+    let body = http_body_util::BodyExt::collect(token_response.into_body())
+        .await
+        .map_err(|err| Error::Fetch(format!("{token_url}: {err}")))?
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|err| Error::Fetch(format!("token endpoint is not JSON: {err}")))?;
+    *token = json
+        .get("token")
+        .and_then(|t| t.as_str())
+        .map(str::to_string);
+
+    let retry = attempt(client, url, accept, &authorization(token)).await?;
+    if !retry.status().is_success() {
+        let status = retry.status();
+        return Err(Error::Fetch(format!(
+            "{url}: HTTP {status} after authorization"
+        )));
+    }
+    let headers = retry.headers().clone();
+    let body = collect_body(retry).await?;
+    Ok((body, headers))
+}
+
+/// Read a response body to bytes.
+async fn collect_body(
+    mut response: hyper::Response<hyper::body::Incoming>,
+) -> Result<Vec<u8>, Error> {
+    let body = http_body_util::BodyExt::collect(response.body_mut())
+        .await
+        .map_err(|err| Error::Fetch(err.to_string()))?
+        .to_bytes()
+        .to_vec();
+    Ok(body)
+}
+
 async fn fetch_bytes(
     client: &HttpsClient,
     url: &str,
     accept: &str,
 ) -> Result<(Vec<u8>, hyper::HeaderMap), Error> {
-    let request = hyper::Request::builder()
-        .method("GET")
-        .uri(url)
-        .header(hyper::header::ACCEPT, accept)
-        .body(http_body_util::Full::new(hyper::body::Bytes::new()))
-        .map_err(|err| Error::Fetch(err.to_string()))?;
-    let response = client
-        .request(request)
-        .await
-        .map_err(|err| Error::Fetch(format!("{url}: {err}")))?;
-    let status = response.status();
-    let headers = response.headers().clone();
-    if !status.is_success() {
-        let hint = if status == hyper::StatusCode::UNAUTHORIZED {
-            " (the registry wants authentication; anonymous public pulls are all1.0 supports)"
-        } else {
-            ""
-        };
-        return Err(Error::Fetch(format!("{url}: HTTP {status}{hint}")));
+    // Follow redirects: a release asset answers302 to its CDN, a blob
+    // answers307 to the registry's store - both plain GETs with no
+    // credential to drop.
+    let mut url = url.to_string();
+    let mut hops = 0;
+    loop {
+        let request = hyper::Request::builder()
+            .method("GET")
+            .uri(&url)
+            .header(hyper::header::ACCEPT, accept)
+            .body(http_body_util::Full::new(hyper::body::Bytes::new()))
+            .map_err(|err| Error::Fetch(err.to_string()))?;
+        let response = client
+            .request(request)
+            .await
+            .map_err(|err| Error::Fetch(format!("{url}: {err}")))?;
+        if response.status().is_redirection() && hops < 10 {
+            hops += 1;
+            url = response
+                .headers()
+                .get(hyper::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| Error::Fetch(format!("{url}: redirect with no location")))?
+                .to_string();
+            continue;
+        }
+        let status = response.status();
+        let headers = response.headers().clone();
+        if !status.is_success() {
+            return Err(Error::Fetch(format!("{url}: HTTP {status}")));
+        }
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .map_err(|err| Error::Fetch(format!("{url}: {err}")))?
+            .to_bytes()
+            .to_vec();
+        return Ok((body, headers));
     }
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .map_err(|err| Error::Fetch(format!("{url}: {err}")))?
-        .to_bytes()
-        .to_vec();
-    Ok((body, headers))
 }
 
 /// Check a claimed digest against the bytes (FR-DIST-3/4).
@@ -675,10 +864,14 @@ pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
         "https"
     };
     let base = format!("{scheme}://{host}/v2/{name}");
-    let (manifest_bytes, _headers) = fetch_bytes(
+    let image = name;
+    let mut token: Option<String> = None;
+    let (manifest_bytes, _headers) = fetch_oci(
         &client,
         &format!("{base}/manifests/{tag}"),
         MANIFEST_MEDIA_TYPES,
+        image,
+        &mut token,
     )
     .await?;
     let manifest_json: serde_json::Value = serde_json::from_slice(&manifest_bytes)
@@ -699,21 +892,35 @@ pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
             .get("config")
             .unwrap_or(&serde_json::Value::Null),
     )?;
-    let (extension_toml, _) =
-        match fetch_bytes(&client, &format!("{base}/blobs/{config_digest}"), "*/*").await {
-            Ok(found) => found,
-            Err(config_err) => {
-                let layer = manifest_json
-                    .get("layers")
-                    .and_then(|l| l.as_array())
-                    .and_then(|layers| layers.get(1))
-                    .ok_or(config_err)?;
-                let digest = blob_digest(layer)?;
-                let found = fetch_bytes(&client, &format!("{base}/blobs/{digest}"), "*/*").await?;
-                verify_digest(&digest, &found.0)?;
-                found
-            }
-        };
+    let (extension_toml, _) = match fetch_oci(
+        &client,
+        &format!("{base}/blobs/{config_digest}"),
+        "*",
+        image,
+        &mut token,
+    )
+    .await
+    {
+        Ok(found) => found,
+        Err(config_err) => {
+            let layer = manifest_json
+                .get("layers")
+                .and_then(|l| l.as_array())
+                .and_then(|layers| layers.get(1))
+                .ok_or(config_err)?;
+            let digest = blob_digest(layer)?;
+            let found = fetch_oci(
+                &client,
+                &format!("{base}/blobs/{digest}"),
+                "*/*",
+                image,
+                &mut token,
+            )
+            .await?;
+            verify_digest(&digest, &found.0)?;
+            found
+        }
+    };
     verify_digest(&config_digest, &extension_toml)?;
     let extension_toml = String::from_utf8(extension_toml)
         .map_err(|_| Error::Invalid("the manifest blob is not UTF-8".to_string()))?;
@@ -738,8 +945,14 @@ pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
         )));
     }
     let layer_digest = blob_digest(layer)?;
-    let (component, _) =
-        fetch_bytes(&client, &format!("{base}/blobs/{layer_digest}"), "*/*").await?;
+    let (component, _) = fetch_oci(
+        &client,
+        &format!("{base}/blobs/{layer_digest}"),
+        "*/*",
+        image,
+        &mut token,
+    )
+    .await?;
     verify_digest(&layer_digest, &component)?;
 
     Ok(Resolved {

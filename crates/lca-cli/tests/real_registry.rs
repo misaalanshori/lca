@@ -61,7 +61,12 @@ fn installs_from_the_published_oci_reference_and_https_archive() {
         text
     });
     let archive = run(&["ext", "install", ARCHIVE_URL]);
-    assert_eq!(archive.status.code(), Some(0), "archive stderr: {}", String::from_utf8_lossy(&archive.stderr));
+    assert_eq!(
+        archive.status.code(),
+        Some(0),
+        "archive stderr: {}",
+        String::from_utf8_lossy(&archive.stderr)
+    );
 
     let list = run(&["ext", "list"]);
     assert_eq!(list.status.code(), Some(0));
@@ -69,10 +74,13 @@ fn installs_from_the_published_oci_reference_and_https_archive() {
     assert!(text.contains("openai-compatible"), "{text}");
     assert!(text.contains("skills"), "{text}");
 
-    let lock = std::fs::read_to_string(data.join("lca").join("lockfile.json"))
+    let lock = std::fs::read_to_string(data.join("lca").join("extensions").join("lockfile.json"))
         .expect("lockfile after both installs");
     assert!(lock.contains("sha256:"), "{lock}");
-    assert!(lock.contains("ghcr.io/misaalanshori/lca/openai-compatible"), "{lock}");
+    assert!(
+        lock.contains("ghcr.io/misaalanshori/lca/openai-compatible"),
+        "{lock}"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }
