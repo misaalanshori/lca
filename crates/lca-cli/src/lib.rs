@@ -85,7 +85,17 @@ pub enum Command {
     },
     /// Print the merged configuration and each value's source (FR-CFG-2).
     Config,
+    /// Manage extensions: install, update, remove, info, list
+    /// (SRDD command-line section, FR-DIST-*).
+    Ext {
+        /// What to do with extensions.
+        #[command(subcommand)]
+        cmd: ext::ExtCmd,
+    },
 }
+
+/// `lca ext ...`: resolve, consent, store (FR-DIST-*).
+pub mod ext;
 
 /// Interactive mode, wired to `lca-tui`.
 pub mod tui;
@@ -457,6 +467,13 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
     let stats_store = store.clone();
     let stats_session = session.clone();
     let mut registry = lca_core::ExtensionRegistry::new();
+    // Installed extensions first (FR-DIST-8's digest load; an installed
+    // copy shadows the bundled one of the same name).
+    crate::ext::load_installed(
+        &mut registry,
+        cwd,
+        config.extensions_log_limit_bytes() as usize,
+    );
     for handle in lca_ext_native::default_native_extensions(Arc::new(move || {
         crate::tui::session_stats(&stats_store, &stats_session)
     })) {
@@ -579,6 +596,8 @@ pub enum Route {
     },
     /// The merged-configuration printout (FR-CFG-2).
     Config,
+    /// An extension-management subcommand (FR-DIST-*).
+    Ext(ext::ExtCmd),
     /// The session listing (FR-SESS-2).
     ResumeList,
     /// Fork at a message (FR-SESS-3).
@@ -632,6 +651,7 @@ pub fn route(cli: &Cli) -> Route {
             session: session.clone(),
             audit: *audit,
         },
+        Some(Command::Ext { cmd }) => Route::Ext(cmd.clone()),
     }
 }
 
@@ -652,6 +672,7 @@ pub async fn run(cli: Cli) -> i32 {
         Route::Fork { session, message } => fork_command(&cwd, &session, &message),
         Route::Rename { session, title } => rename_command(&cwd, &session, &title),
         Route::Export { session, audit } => export_command(&cwd, &session, audit),
+        Route::Ext(cmd) => ext::run(cmd).await,
     }
 }
 

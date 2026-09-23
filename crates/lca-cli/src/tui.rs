@@ -57,6 +57,14 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     // provides the reference policy and fills the /stats built-in slot,
     // which is the Phase 2 move of that behavior out of the TUI.
     let mut registry = lca_core::ExtensionRegistry::new();
+    // Installed extensions first: an installed copy shadows the bundled
+    // one of the same name (the duplicate rule disables the later
+    // registration), and FR-DIST-8's load goes by the lockfile digest.
+    crate::ext::load_installed(
+        &mut registry,
+        cwd,
+        config.extensions_log_limit_bytes() as usize,
+    );
     for handle in lca_ext_native::default_native_extensions(Arc::new(move || {
         session_stats(&stats_store, &stats_session)
     })) {

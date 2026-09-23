@@ -977,7 +977,7 @@ mod wasm_mode {
             vec![WasmModel {
                 id: settings.model.clone(),
                 name: settings.model,
-                context_window: self.settings.context_window,
+                context_window: Settings::default().context_window,
                 max_tokens: 0,
                 extras: Vec::new(),
             }]

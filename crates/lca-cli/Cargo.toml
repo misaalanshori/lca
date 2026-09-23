@@ -26,6 +26,9 @@ skills = { path = "../../extensions/skills", optional = true }
 lca-protocol = { path = "../lca-protocol" }
 lca-config = { path = "../lca-config" }
 lca-session = { path = "../lca-session" }
+lca-registry = { path = "../lca-registry" }
+lca-ext-host = { path = "../lca-ext-host" }
+toml.workspace = true
 lca-permissions = { path = "../lca-permissions" }
 lca-provider = { path = "../lca-provider" }
 lca-tools = { path = "../lca-tools" }
@@ -41,6 +44,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# sha2 - digest display in the install e2e (the registry's own dep; test-side use).
+sha2.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true

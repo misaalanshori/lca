@@ -514,3 +514,328 @@ fn version_prints_all_four_facts() {
     assert!(text.contains("target"), "{text}");
     assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5 exit: a clean machine installs from an OCI reference and a
+// plain HTTPS archive, sees each consent screen, approves both, and
+// runs a turn (FR-DIST-1/2/5/6/9, the capability catalog's consent
+// surface, FR-EXT-9's denial count along the way).
+//
+// Fixtures: extensions/openai-compatible/fixtures/component.wasm and
+// extensions/skills/fixtures/component.wasm, rebuilt with
+// `cargo build -p <crate> --target wasm32-wasip2 --release` and copied
+// into place (same convention as conformance's).
+// ---------------------------------------------------------------------------
+
+const OPENAI_COMPONENT: &[u8] =
+    include_bytes!("../../../extensions/openai-compatible/fixtures/component.wasm");
+const OPENAI_MANIFEST: &str = include_str!("../../../extensions/openai-compatible/extension.toml");
+const SKILLS_COMPONENT: &[u8] =
+    include_bytes!("../../../extensions/skills/fixtures/component.wasm");
+const SKILLS_MANIFEST: &str = include_str!("../../../extensions/skills/extension.toml");
+
+/// An anonymous OCI registry serving the two-layer convention (config
+/// blob = extension.toml, layer0 = the component).
+async fn mock_registry() -> SocketAddr {
+    use sha2::{Digest, Sha256};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let config_digest = format!("sha256:{:x}", Sha256::digest(OPENAI_MANIFEST.as_bytes()));
+    let layer_digest = format!("sha256:{:x}", Sha256::digest(OPENAI_COMPONENT));
+    let image_manifest = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": { "mediaType": "text/plain", "digest": config_digest, "size": OPENAI_MANIFEST.len() },
+        "layers": [{ "mediaType": "application/wasm", "digest": layer_digest, "size": OPENAI_COMPONENT.len() }],
+    })
+    .to_string();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = vec![0u8; 16384];
+            let mut read = 0;
+            loop {
+                match stream.read(&mut buf[read..]).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        read += n;
+                        if buf[..read].windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let request = String::from_utf8_lossy(&buf[..read]).into_owned();
+            let target = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+            let (body, content_type) = if target.contains("/manifests/") {
+                (
+                    image_manifest.clone().into_bytes(),
+                    "application/vnd.oci.image.manifest.v1+json",
+                )
+            } else if target.contains(&config_digest) {
+                (OPENAI_MANIFEST.as_bytes().to_vec(), "text/plain")
+            } else {
+                (OPENAI_COMPONENT.to_vec(), "application/wasm")
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes()).await;
+            let _ = stream.write_all(&body).await;
+        }
+    });
+    addr
+}
+
+/// Any HTTPS-style host serving the skills zip (packed here from the
+/// committed component fixture).
+async fn mock_archive(zip: Vec<u8>) -> SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = vec![0u8; 8192];
+            let mut read = 0;
+            loop {
+                match stream.read(&mut buf[read..]).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        read += n;
+                        if buf[..read].windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/zip\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                zip.len()
+            );
+            let _ = stream.write_all(head.as_bytes()).await;
+            let _ = stream.write_all(&zip).await;
+        }
+    });
+    addr
+}
+
+impl Sandbox {
+    /// Run with piped stdin (the consent prompt reads it; EOF declines).
+    fn run_with_stdin(&self, mock: Option<&Mock>, args: &[&str], stdin: &str) -> Output {
+        use std::process::Stdio as Std;
+        let mut command = Command::new(env!("CARGO_BIN_EXE_lca"));
+        command
+            .args(args)
+            .current_dir(self.project())
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env("XDG_DATA_HOME", &self.data)
+            .env("XDG_CONFIG_HOME", self.home.join(".config"))
+            .env_remove("OPENAI_MODEL")
+            .env_remove("LCA_PROVIDER")
+            .stdin(Std::piped())
+            .stdout(Std::piped())
+            .stderr(Std::piped());
+        if let Some(mock) = mock {
+            command
+                .env("OPENAI_BASE_URL", mock.url())
+                .env("OPENAI_API_KEY", "test-key");
+        }
+        let mut child = command.spawn().expect("spawn lca");
+        {
+            use std::io::Write as _;
+            child
+                .stdin
+                .as_mut()
+                .expect("piped stdin")
+                .write_all(stdin.as_bytes())
+                .expect("write consent");
+        }
+        child.wait_with_output().expect("run lca")
+    }
+
+    /// The installed-extension tree under this sandbox's data dir.
+    fn extensions_root(&self) -> PathBuf {
+        self.data.join("lca").join("extensions")
+    }
+
+    /// Write the grant store (ad hoc loopback net consent, the stand-in
+    /// for FR-PERM-16's modal in this offline exit test). An empty file
+    /// first, so no consent exists until the test says so.
+    fn write_grants(&self, with_loopback_net: bool) {
+        let project = std::fs::canonicalize(self.project()).expect("canonical project");
+        let mut entry = serde_json::json!({ "trusted": true });
+        if with_loopback_net {
+            entry["net_patterns"] = serde_json::json!(["127.0.0.1"]);
+        }
+        let grants = serde_json::json!({
+            "version": 1,
+            "projects": { project.to_string_lossy(): entry },
+        });
+        std::fs::create_dir_all(self.data.join("lca")).expect("mkdir lca");
+        std::fs::write(
+            self.data.join("lca").join("grants.json"),
+            serde_json::to_vec_pretty(&grants).expect("grants serialize"),
+        )
+        .expect("write grants");
+    }
+}
+
+// Verifies: the Phase 5 exit test end to end - OCI install with the
+// consent screen (the catalog's sentences, verbatim), HTTPS-archive
+// install with its own consent, both recorded in the lockfile
+// (FR-DIST-6), a turn that runs against the INSTALLED provider loaded
+// by digest (FR-DIST-8: no moving tag consulted), the denial journal
+// behind `ext info` (FR-EXT-9), an update that finds itself up to
+// date, and a remove (FR-DIST-1/2/5/9).
+#[test]
+fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
+    let runtime = rt();
+    let registry_addr = runtime.block_on(mock_registry());
+    let zip = lca_registry::pack_archive(SKILLS_MANIFEST, SKILLS_COMPONENT).expect("pack zip");
+    let archive_addr = runtime.block_on(mock_archive(zip));
+    let model = runtime.block_on(start_mock(vec![Reply::Sse(sse_text(
+        "installed and chatting",
+    ))]));
+
+    let sandbox = sandbox("clean-machine");
+    // The grant store exists but consents to nothing yet: the first
+    // turn must be denied by the capability engine (no ad hoc net),
+    // which is what writes the journal `ext info` counts.
+    sandbox.write_grants(false);
+
+    // --- OCI install, consent shown and approved (FR-DIST-1).
+    // `registry_addr` already renders host:port.
+    let reference = format!("{registry_addr}/library/openai-compatible:abi-0.1");
+    let output = sandbox.run_with_stdin(Some(&model), &["ext", "install", &reference], "y\n");
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("Connect to api.openai.com"),
+        "the net consent sentence, verbatim: {text}"
+    );
+    assert!(
+        text.contains("Store and read its own saved credentials"),
+        "the credentials consent sentence: {text}"
+    );
+    assert!(text.contains("Allow these capabilities?"), "{text}");
+    assert!(text.contains("installed openai-compatible"), "{text}");
+
+    // The lockfile records digest + source (FR-DIST-6); the component
+    // sits beside its manifest, named by that digest.
+    let lock = sandbox.extensions_root().join("lockfile.json");
+    let lock_text = std::fs::read_to_string(&lock).expect("lockfile");
+    assert!(lock_text.contains(&reference), "{lock_text}");
+    assert!(lock_text.contains("sha256:"), "{lock_text}");
+    assert!(
+        sandbox
+            .extensions_root()
+            .join("openai-compatible")
+            .join("extension.toml")
+            .exists()
+    );
+    let component_dir: Vec<_> =
+        std::fs::read_dir(sandbox.extensions_root().join("openai-compatible"))
+            .expect("dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".wasm"))
+            .collect();
+    assert_eq!(component_dir.len(), 1, "one component, digest-named");
+
+    // --- HTTPS archive install with its own consent (FR-DIST-9).
+    let url = format!("http://{archive_addr}/skills-abi-0.1.zip");
+    let output = sandbox.run_with_stdin(Some(&model), &["ext", "install", &url], "yes\n");
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("Files: workspace (read)"),
+        "the fs consent sentence: {text}"
+    );
+    assert!(text.contains("installed skills"), "{text}");
+
+    // --- ext list shows both sources (the exit test's "sees ... each").
+    let output = sandbox.run(Some(&model), &["ext", "list"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("openai-compatible"), "{text}");
+    assert!(text.contains("skills"), "{text}");
+    assert!(text.contains(&reference), "{text}");
+    assert!(text.contains(&url), "{text}");
+
+    // --- ext info: digest, consent, denial count (FR-EXT-9). No
+    // denial yet: nothing has tried anything.
+    let output = sandbox.run(Some(&model), &["ext", "info", "openai-compatible"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("digest:   sha256:"), "{text}");
+    assert!(text.contains("denials:  0"), "{text}");
+
+    // --- Turn one, WITHOUT ad hoc consent: the installed provider
+    // reaches for127.0.0.1, the engine refuses and journals it.
+    let output = sandbox.run(Some(&model), &["-p", "hi"]);
+    assert_eq!(output.status.code(), Some(3), "stderr: {}", stderr(&output));
+    let text = stderr(&output);
+    assert!(
+        text.contains("matches no granted") || text.contains("permission denied"),
+        "{text}"
+    );
+
+    let output = sandbox.run(Some(&model), &["ext", "info", "openai-compatible"]);
+    let text = stdout(&output);
+    assert!(text.contains("denials:  1"), "the journal counted: {text}");
+
+    // --- Grant the loopback consent (FR-PERM-16's modal, standing in
+    // offline) and run the turn: the INSTALLED provider, loaded from
+    // its digest record, talks to the mocked model (FR-DIST-8).
+    sandbox.write_grants(true);
+    let output = sandbox.run(Some(&model), &["-p", "hi", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let lines = json_lines(&output);
+    let text_line = lines
+        .iter()
+        .find(|l| l["type"] == "text")
+        .expect("a text envelope");
+    assert_eq!(text_line["content"], "installed and chatting");
+    assert_eq!(model.request_count(), 1, "exactly one model call");
+
+    // --- ext update against the same source: already current.
+    let output = sandbox.run(Some(&model), &["ext", "update", "openai-compatible"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("up to date"), "{text}");
+
+    // --- ext remove forgets the tree and the record.
+    let output = sandbox.run(Some(&model), &["ext", "remove", "skills"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(!sandbox.extensions_root().join("skills").exists());
+    let output = sandbox.run(Some(&model), &["ext", "list"]);
+    let text = stdout(&output);
+    assert!(!text.contains("\nskills "), "gone from the list: {text}");
+
+    // Consent refused writes nothing at all: EOF at the prompt declines.
+    let archive2 = lca_registry::pack_archive(SKILLS_MANIFEST, SKILLS_COMPONENT).expect("pack");
+    let runtime2 = rt();
+    let archive_addr2 = runtime2.block_on(mock_archive(archive2));
+    let url2 = format!("http://{archive_addr2}/skills-abi-0.1.zip");
+    let output = sandbox.run_with_stdin(Some(&model), &["ext", "install", &url2], "");
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("aborted"), "{}", stdout(&output));
+    assert!(
+        !sandbox.extensions_root().join("skills").exists(),
+        "nothing written"
+    );
+}
