@@ -30,7 +30,7 @@ token_args=()
 if [[ -n "${GH_TOKEN:-}" ]]; then
   token_args=(-u "${LCA_OCI_USER:-oauth2}:${GH_TOKEN}")
 fi
-token=$(curl -fsS "${token_args[@]}" \
+token=$(curl -fsS --fail-with-body "${token_args[@]}" \
   "https://ghcr.io/token?service=ghcr.io&scope=repository:${image}:pull,push" \
   | json_get token)
 auth=(-H "Authorization: Bearer ${token}")
@@ -38,12 +38,12 @@ auth=(-H "Authorization: Bearer ${token}")
 upload_blob() {
   local file="$1" digest
   digest=$(sha "$file")
-  curl -fsS -X POST "${auth[@]}" \
+  curl -fsS --fail-with-body -X POST "${auth[@]}" \
     -H "Content-Type: application/octet-stream" \
     -H "Content-Length: $(wc -c < "$file")" \
     --data-binary "@${file}" \
     "https://ghcr.io/v2/${image}/blobs/uploads/?digest=${digest}" \
-    -o /dev/null
+    -o /tmp/lca-publish-blob.out || { cat /tmp/lca-publish-blob.out >&2; exit 1; }
   echo "${digest}"
 }
 
@@ -72,9 +72,9 @@ image_manifest=$(cat <<JSON
 JSON
 )
 
-curl -fsS -X PUT "${auth[@]}" \
+curl -fsS --fail-with-body -X PUT "${auth[@]}" \
   -H "Content-Type: application/vnd.oci.image.manifest.v1+json" \
   --data-binary "${image_manifest}" \
   "https://ghcr.io/v2/${image}/manifests/${tag}" \
-  -o /dev/null
+  -o /tmp/lca-publish-manifest.out || { cat /tmp/lca-publish-manifest.out >&2; exit 1; }
 echo "published ghcr.io/${image}:${tag} (${layer_digest})"

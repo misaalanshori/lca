@@ -232,7 +232,9 @@ wkg oci push ghcr.io/yourname/word-count:0.1.0 word_count.wasm
 wkg oci push ghcr.io/yourname/word-count:abi-0.1 word_count.wasm
 ```
 
-Push two tags. The version tag is immutable and identifies this exact release. The ABI line tag moves and is what the update resolver reads. A user's agent resolves the moving tag to a digest at update time and loads by digest afterward, so the moving tag never decides what runs on an already-installed machine.
+Push two tags. The version tag is immutable and identifies this exact release. The ABI line tag moves and is what the update resolver reads.
+
+`lca ext install` reads `extension.toml` from the artifact's OCI config blob, with the second layer as a fallback, and the component from layer0 (`application/wasm`). `scripts/publish-oci.sh` publishes exactly that layout, and the repository's release workflow runs it for the first-party extensions - a bare `wkg oci push` of the component alone produces an artifact with no manifest in it, so pack the manifest into the config blob the way the script does. A user's agent resolves the moving tag to a digest at update time and loads by digest afterward, so the moving tag never decides what runs on an already-installed machine.
 
 Users install with the reference.
 
