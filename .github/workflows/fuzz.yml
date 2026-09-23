@@ -40,6 +40,10 @@ jobs:
           mkdir -p fuzz/corpus
           for target in manifest session_log archive abi_decode; do
             echo "=== $target ==="
-            cargo +nightly fuzz run "$target" -- \
+            # --target spelled out: cargo-fuzz's default triple is
+            # whatever its own binary was built for, and the
+            # install-action release is a static musl build - runner
+            # has no musl std, sanitizer rejects crt-static, done.
+            cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$target" -- \
               -max_total_time=600 -artifact_prefix=fuzz/artifacts/
           done
