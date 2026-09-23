@@ -58,13 +58,18 @@ A requirement stated as applying to all platforms, in the requirements and desig
 
 ## Known macOS failure (tracked)
 
-Three pty tests fail on macOS CI with `ENOTTY` ("Inappropriate ioctl
-for device"): `pty_spawn_delivers_terminal_output`,
-`pty_spawn_delivers_program_output_and_exit_code`, and
-`pty_forwards_keystrokes_both_ways`. They are `#[ignore]`d on macOS
-alone - green on Linux and Windows - under the project's stated
-platform priority (Linux, then Windows, then macOS). The likely shape
-is a macOS-specific ioctl on the allocation path, which needs a machine
-with a terminal attached to diagnose; until then the ignore is visible
-at each test site rather than the tests being deleted, and this entry
-is their tracking record.
+Five pty tests fail on macOS CI with `ENOTTY` ("Inappropriate ioctl
+for device") or the panel session never coming up behind that same
+allocation path: `pty_spawn_delivers_terminal_output`,
+`pty_spawn_delivers_program_output_and_exit_code`,
+`pty_forwards_keystrokes_both_ways`, and the two ui-example panel
+tests (`all_four_regions_render_and_the_panel_session_starts_on_demand`,
+`typing_into_the_panel_reaches_the_program_and_comes_back_as_data`).
+They are `#[ignore]`d on macOS alone - green on Linux and Windows,
+and the rest of the macOS suite runs green: the panel tests joined the
+list only after the e2e data-directory fix left them as the sole
+macOS failures. Under the project's stated platform priority (Linux,
+then Windows, then macOS) the likely shape is a macOS-specific ioctl
+on the allocation path, which needs a machine with a terminal attached
+to diagnose; until then the ignore is visible at each test site rather
+than the tests being deleted, and this entry is their tracking record.

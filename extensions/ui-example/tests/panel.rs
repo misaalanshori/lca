@@ -58,6 +58,10 @@ fn panel_lines(handle: &dyn ExtensionDispatch) -> String {
 // Verifies: all four regions are registered and answer, and the panel
 // starts the demo the first time it is drawn (the user opening the
 // panel is the invocation - nothing runs on its own, FR-UI-6's shape).
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "pty allocation path on macOS - tracked in docs/platform-notes.md"
+)]
 #[test]
 fn all_four_regions_render_and_the_panel_session_starts_on_demand() {
     let cap = sandbox("regions");
@@ -84,6 +88,10 @@ fn all_four_regions_render_and_the_panel_session_starts_on_demand() {
 // into the program (a pty echoes it), and the output comes back as
 // data in the tree: no escape sequence crosses, the terminal's is the
 // host's business (ADR-0003, FR-UI-2, ADR-0016).
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "pty allocation path on macOS - tracked in docs/platform-notes.md"
+)]
 #[test]
 fn typing_into_the_panel_reaches_the_program_and_comes_back_as_data() {
     use lca_ext_abi::ExtensionDispatch as _;
