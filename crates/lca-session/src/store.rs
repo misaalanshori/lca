@@ -438,6 +438,9 @@ impl SessionStore {
     }
 }
 
+// The record variant is large by nature (it mirrors the log schema);
+// boxing it would tax every parse for a private type's lint comfort.
+#[allow(clippy::large_enum_variant)]
 enum Line {
     Record(lca_protocol::Record),
     Skipped { reason: String },

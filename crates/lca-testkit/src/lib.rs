@@ -32,6 +32,9 @@ pub fn fake_usage(input: u64, output: u64, cache_read: u64, cache_write: u64) ->
         cache_write,
         cache_write_1h: 0,
         cost: 0.0,
+        cost_input: 0.0,
+        cost_cache_read: 0.0,
+        cost_cache_write: 0.0,
         extras: Default::default(),
     }
 }

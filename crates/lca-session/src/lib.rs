@@ -7,12 +7,14 @@
 
 #![forbid(unsafe_code)]
 
+mod cache;
 mod ids;
 mod store;
 mod view;
 
 use std::path::PathBuf;
 
+pub use cache::{CacheMiss, CacheWasteTotals, collect_cache_misses, compute_cache_waste};
 pub use lca_protocol::{PermissionDecision, ToolResultStatus, ToolSource};
 pub use store::{ExportOptions, ReadOutcome, Session, SessionMeta, SessionStore, SessionSummary};
 pub use view::ViewMode;

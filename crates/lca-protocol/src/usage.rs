@@ -24,9 +24,24 @@ pub struct Usage {
     pub cache_write_1h: u64,
     /// Total cost in USD, as reported or computed by the provider extension.
     pub cost: f64,
+    /// Cost of the billed-input bucket (excluding cache reads), when the
+    /// provider breaks cost down; cache-waste measurement uses these to
+    /// compute a miss's dollar cost from the turn's own rates (ADR-0017).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cost_input: f64,
+    /// Cost of the cache-read bucket.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cost_cache_read: f64,
+    /// Cost of the cache-write bucket (including any write premium).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cost_cache_write: f64,
     /// Reserved map for non-structural extensions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: BTreeMap<String, String>,
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 impl Usage {

@@ -314,7 +314,12 @@ fn map_usage(value: &serde_json::Value) -> Usage {
         cache_read,
         cache_write,
         cache_write_1h: 0,
+        // OpenAI-shaped endpoints report no pricing; cost stays total0 and
+        // cache-waste dollar cost is0 until a provider reports buckets.
         cost: 0.0,
+        cost_input: 0.0,
+        cost_cache_read: 0.0,
+        cost_cache_write: 0.0,
         extras: BTreeMap::new(),
     }
 }
