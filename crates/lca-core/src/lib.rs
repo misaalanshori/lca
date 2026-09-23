@@ -13,7 +13,7 @@ pub mod ext_provider;
 pub use ext_provider::ExtensionProvider;
 pub use registry::{BUILTIN_COMMANDS, BUILTIN_TOOLS, CollisionReport, ExtensionRegistry};
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lca_ext_abi::ExtensionDispatch;
@@ -27,7 +27,7 @@ use lca_session::{Session, SessionStore, ViewMode};
 use lca_tools::{CancelFlag, ToolExecutor};
 
 /// Static configuration for the loop, built from merged configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentConfig {
     /// Active provider extension name (recorded on assistant records).
     pub provider: String,
@@ -44,6 +44,41 @@ pub struct AgentConfig {
     /// The dispatch table: loaded extensions in registration order
     /// (ADR-0019; empty by default).
     pub extensions: Arc<ExtensionRegistry>,
+    /// Context-window fraction that triggers compaction (FR-SESS-4,
+    /// `compaction.threshold`). At or below zero disables the check.
+    pub compaction_threshold: f64,
+    /// The active model's context window in tokens; `0` means unknown
+    /// and skips the threshold check entirely.
+    /// ponytail: an endpoint that publishes no window never compacts;
+    /// a fallback estimate is the upgrade path if that bites.
+    pub model_context_window: u32,
+    /// The backend behind the default strategy's `completion` call,
+    /// held so the compaction record can carry the summarization's
+    /// usage (capability catalog: spend shows in session cost). The
+    /// CLI wires the same Arc into the strategy's capability engine.
+    pub completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>>,
+    /// The full message list sent on the previous provider call, for
+    /// FR-CACHE-6's divergence check (`None` before the first call).
+    pub sent_stable: Arc<Mutex<Option<Vec<String>>>>,
+}
+
+impl std::fmt::Debug for AgentConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The completion backend is a trait object with no Debug of its
+        // own; presence is all a log line needs.
+        f.debug_struct("AgentConfig")
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("retry_limit", &self.retry_limit)
+            .field("retry_base_delay", &self.retry_base_delay)
+            .field("max_iterations", &self.max_iterations)
+            .field("system_prompt", &self.system_prompt)
+            .field("extensions", &self.extensions)
+            .field("compaction_threshold", &self.compaction_threshold)
+            .field("model_context_window", &self.model_context_window)
+            .field("completion_backend", &self.completion_backend.is_some())
+            .finish()
+    }
 }
 
 impl Default for AgentConfig {
@@ -59,6 +94,10 @@ impl Default for AgentConfig {
                  and run commands in the user's workspace."
                     .to_string(),
             extensions: Arc::new(ExtensionRegistry::new()),
+            compaction_threshold: 0.8,
+            model_context_window: 0,
+            completion_backend: None,
+            sent_stable: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -182,6 +221,8 @@ pub struct Assembled {
     pub messages: Vec<ChatMessage>,
     /// Count of leading messages inside the stable cache boundary.
     pub stable_prefix: usize,
+    /// Whether a compaction record appeared (FR-CACHE-5's anchor).
+    pub compaction_seen: bool,
 }
 
 /// Build the outbound message list from a session's resolved (display-view)
@@ -190,6 +231,7 @@ pub struct Assembled {
 pub fn assemble(records: &[Record], system_prompt: &str) -> Assembled {
     let mut messages = vec![ChatMessage::text(MessageRole::System, system_prompt)];
     let mut stable_prefix = 0usize;
+    let mut compaction_seen = false;
     for record in records {
         match record {
             Record::SessionStart { .. }
@@ -266,9 +308,13 @@ pub fn assemble(records: &[Record], system_prompt: &str) -> Assembled {
                 }
                 messages.push(ChatMessage::tool_result(call_id.clone(), text));
             }
-            Record::Compaction { .. } => {
-                // The compaction record marks the cache boundary: everything
-                // before it is the stable prefix (FR-CACHE-5, ADR-0017).
+            Record::Compaction { summary, .. } => {
+                compaction_seen = true;
+                // The summary stands in for the range it replaced
+                // (session-log-format: the reader substitutes it), and
+                // everything through it becomes the stable prefix
+                // (FR-CACHE-5, ADR-0017).
+                messages.push(ChatMessage::text(MessageRole::User, summary.clone()));
                 stable_prefix = messages.len();
             }
         }
@@ -276,7 +322,47 @@ pub fn assemble(records: &[Record], system_prompt: &str) -> Assembled {
     Assembled {
         messages,
         stable_prefix,
+        compaction_seen,
     }
+}
+
+/// One request's prompt token count, the number FR-CACHE-1 compares.
+fn usage_prompt_tokens(usage: &Usage) -> u64 {
+    usage.input + usage.cache_read + usage.cache_write + usage.cache_write_1h
+}
+
+/// All text a message carries (the comparison key for finding this
+/// turn's own user message).
+fn message_text(message: &ChatMessage) -> String {
+    message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            ContentBlock::Reasoning { reasoning } => Some(reasoning.as_str()),
+            ContentBlock::ToolCall { .. } => None,
+        })
+        .collect()
+}
+
+/// What one message looks like on the wire, for FR-CACHE-6's
+/// previous-versus-current comparison: role, text, and tool calls.
+fn stable_fingerprint(message: &ChatMessage) -> String {
+    let text: String = message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            ContentBlock::Reasoning { reasoning } => Some(reasoning.as_str()),
+            ContentBlock::ToolCall { .. } => None,
+        })
+        .collect();
+    let calls: Vec<String> = message
+        .tool_calls
+        .iter()
+        .map(|call| format!("{}:{}:{}", call.call_id, call.name, call.arguments))
+        .collect();
+    format!("{:?}|{}|{:?}", message.role, text, calls)
 }
 
 struct CallResponse {
@@ -388,12 +474,13 @@ impl<'a> Agent<'a> {
         cancel: &CancelFlag,
     ) -> TurnOutcome {
         let ts = lca_session::now_ms();
+        let turn_record_id = lca_session::new_record_id();
         if let Err(err) = self.store.append(
             self.session,
             Record::User {
                 v: FORMAT_VERSION,
                 ts,
-                id: lca_session::new_record_id(),
+                id: turn_record_id.clone(),
                 content: input.to_string(),
                 attachments: Vec::new(),
             },
@@ -420,13 +507,131 @@ impl<'a> Agent<'a> {
                 };
             }
 
-            let records = match self.store.read_with(self.session, ViewMode::Display) {
+            let mut records = match self.store.read_with(self.session, ViewMode::Display) {
                 Ok(outcome) => outcome.records,
                 Err(err) => {
                     return self.fail(StopReason::Error, format!("cannot read the session: {err}"));
                 }
             };
+            // FR-SESS-4: one threshold check per turn, before the first
+            // provider call; a strategy refusal leaves the turn running
+            // and lands in the log as an extension event.
+            if rounds == 0 && self.maybe_compact(&records, &turn_record_id, sink).await {
+                records = match self.store.read_with(self.session, ViewMode::Display) {
+                    Ok(outcome) => outcome.records,
+                    Err(err) => {
+                        return self
+                            .fail(StopReason::Error, format!("cannot re-read the log: {err}"));
+                    }
+                };
+            }
             let assembled = assemble(&records, &self.config.system_prompt);
+            // The boundary base (FR-CACHE-5): everything through the
+            // most recent compaction record, never reaching this turn's
+            // own user message - content sent for the first time this
+            // call cannot be claimed as cached. Without a record the
+            // base is unbounded and only the current message caps it,
+            // so the boundary grows turn by turn (what
+            // docs/providers/antigravity.md relies on) and resets to
+            // the summary when compaction lands. Computed before the
+            // transforms run, on the list where the record ids still
+            // line up with the messages.
+            let mut stable_cap = if assembled.compaction_seen {
+                assembled.stable_prefix
+            } else {
+                usize::MAX
+            };
+            stable_cap = stable_cap.min(assembled.messages.len());
+            if let Some(index) = assembled.messages.iter().rposition(|message| {
+                message.role == lca_protocol::MessageRole::User && message_text(message) == input
+            }) {
+                stable_cap = stable_cap.min(index);
+            }
+            // FR-CTX-2: every enabled transform, in installation order,
+            // before every provider call; a rejection ends the turn
+            // here, with no call (FR-CTX-3) and nothing persisted
+            // (FR-CTX-4).
+            let transformed = self.config.extensions.transform(assembled.messages).await;
+            let messages = match transformed {
+                Ok(messages) => messages,
+                Err(reason) => {
+                    sink.on_event(TurnEvent::Error {
+                        message: reason.clone(),
+                        class: "invalid".to_string(),
+                        retryable: false,
+                    });
+                    sink.on_event(TurnEvent::TurnEnded {
+                        status: TurnStatus::Error,
+                        stop_reason: StopReason::Error,
+                    });
+                    return TurnOutcome {
+                        status: TurnStatus::Error,
+                        stop_reason: StopReason::Error,
+                        usage: turn_usage,
+                        error: Some(reason),
+                    };
+                }
+            };
+            let mut stable_prefix = stable_cap.min(messages.len());
+            // FR-CACHE-6: content inside that boundary which differs
+            // from what actually went out on the previous call narrows
+            // it to end before the earliest differing message,
+            // recorded as an extension event - never a rejection.
+            {
+                let current: Vec<String> = messages
+                    .iter()
+                    .enumerate()
+                    .map(|(index, message)| {
+                        if index < stable_prefix {
+                            stable_fingerprint(message)
+                        } else {
+                            String::new()
+                        }
+                    })
+                    .collect();
+                let previous = self
+                    .config
+                    .sent_stable
+                    .lock()
+                    .expect("sent-stable lock")
+                    .clone();
+                if let Some(previous) = previous {
+                    let diverged = (0..stable_prefix).find(|&index| {
+                        previous
+                            .get(index)
+                            .map(|there| *there != current[index])
+                            .unwrap_or(true)
+                    });
+                    if let Some(index) = diverged {
+                        let before = stable_prefix;
+                        stable_prefix = index;
+                        let detail = format!(
+                            "stable region diverged at message {index} (boundary {before} -> {index})"
+                        );
+                        sink.on_event(TurnEvent::ExtensionEvent {
+                            extension: "host".to_string(),
+                            event: "cache-boundary-narrowed".to_string(),
+                            detail: detail.clone(),
+                        });
+                        let _ = self.store.append(
+                            self.session,
+                            Record::ExtensionEvent {
+                                v: FORMAT_VERSION,
+                                ts: lca_session::now_ms(),
+                                id: lca_session::new_record_id(),
+                                extension: "host".to_string(),
+                                event: "cache-boundary-narrowed".to_string(),
+                                detail,
+                            },
+                        );
+                    }
+                }
+                // Store the FULL list actually sent (the divergence
+                // basis is content, not the previous claim).
+                *self.config.sent_stable.lock().expect("sent-stable lock") =
+                    Some(messages.iter().map(stable_fingerprint).collect());
+                let _ = current;
+            }
             let mut tools = ToolExecutor::specs();
             tools.extend(self.config.extensions.tool_specs());
             let mut extras = std::collections::BTreeMap::new();
@@ -435,10 +640,10 @@ impl<'a> Agent<'a> {
             // header and every other endpoint ignores it.
             extras.insert("session-id".to_string(), self.session.id().to_string());
             let request = CompletionRequest {
-                messages: assembled.messages,
+                messages,
                 tools,
                 model: self.config.model.clone(),
-                stable_prefix: assembled.stable_prefix,
+                stable_prefix,
                 extras,
             };
 
@@ -832,6 +1037,106 @@ impl<'a> Agent<'a> {
 
     /// One completion call, with retry (FR-CORE-6) and cancellation
     /// (FR-CONC-3: dropping the producer stops the in-flight stream).
+    /// FR-SESS-4's threshold check and the compaction call itself.
+    /// Returns whether a record was written (the caller re-reads).
+    async fn maybe_compact(
+        &self,
+        records: &[Record],
+        turn_record_id: &str,
+        sink: &mut dyn TurnSink,
+    ) -> bool {
+        let threshold = self.config.compaction_threshold;
+        let window = self.config.model_context_window;
+        if window == 0 || threshold <= 0.0 {
+            // ponytail: no published window means no ratio to cross;
+            // see AgentConfig::model_context_window.
+            return false;
+        }
+        let Some(strategy) = self.config.extensions.compaction_strategy() else {
+            return false;
+        };
+        let last_prompt = records.iter().rev().find_map(|record| match record {
+            Record::Assistant {
+                usage: Some(usage), ..
+            } => Some(usage_prompt_tokens(usage)),
+            _ => None,
+        });
+        let Some(last_prompt) = last_prompt else {
+            return false;
+        };
+        if (last_prompt as f64) < (window as f64) * threshold {
+            return false;
+        }
+        // The candidate range: everything visible before this turn's
+        // own user record, minus records without ids (session-start).
+        let cut = records
+            .iter()
+            .position(|record| record.id() == Some(turn_record_id))
+            .unwrap_or(records.len());
+        let candidate: Vec<Record> = records[..cut]
+            .iter()
+            .filter(|record| record.id().is_some())
+            .cloned()
+            .collect();
+        if candidate.len() < 2 {
+            // Nothing worth replacing: a session-start-plus-one-message
+            // range would trade the whole conversation for a line.
+            return false;
+        }
+        let summary = match strategy.compact(&candidate).await {
+            Ok(summary) => summary,
+            Err(err) => {
+                let detail = format!("compaction strategy `{}` failed: {err}", strategy.name());
+                sink.on_event(TurnEvent::ExtensionEvent {
+                    extension: strategy.name().to_string(),
+                    event: "compaction-failed".to_string(),
+                    detail: detail.clone(),
+                });
+                let _ = self.store.append(
+                    self.session,
+                    Record::ExtensionEvent {
+                        v: FORMAT_VERSION,
+                        ts: lca_session::now_ms(),
+                        id: lca_session::new_record_id(),
+                        extension: strategy.name().to_string(),
+                        event: "compaction-failed".to_string(),
+                        detail,
+                    },
+                );
+                return false;
+            }
+        };
+        let usage = self
+            .config
+            .completion_backend
+            .as_ref()
+            .and_then(|backend| backend.take_usage());
+        let replaced_from = candidate.first().and_then(Record::id).unwrap_or_default();
+        let replaced_to = candidate.last().and_then(Record::id).unwrap_or_default();
+        if let Err(err) = self.store.append(
+            self.session,
+            Record::Compaction {
+                v: FORMAT_VERSION,
+                ts: lca_session::now_ms(),
+                id: lca_session::new_record_id(),
+                replaced_from: replaced_from.to_string(),
+                replaced_to: replaced_to.to_string(),
+                summary,
+                strategy: strategy.name().to_string(),
+                usage,
+            },
+        ) {
+            let detail = format!("cannot write the compaction record: {err}");
+            sink.on_event(TurnEvent::ExtensionEvent {
+                extension: strategy.name().to_string(),
+                event: "compaction-failed".to_string(),
+                detail: detail.clone(),
+            });
+            return false;
+        }
+        true
+    }
+
     async fn provider_call(
         &self,
         request: CompletionRequest,

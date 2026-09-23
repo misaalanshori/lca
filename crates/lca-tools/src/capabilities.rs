@@ -87,6 +87,14 @@ pub trait CompletionBackend: Send + Sync {
         &self,
         messages: &[lca_protocol::ChatMessage],
     ) -> Result<(String, lca_protocol::Usage), String>;
+
+    /// Usage summed from `complete` calls since the caller last drained
+    /// it; the caller writes it onto the session record it is about to
+    /// append (capability catalog: spend shows in session cost).
+    /// Backends that track nothing return `None`.
+    fn take_usage(&self) -> Option<lca_protocol::Usage> {
+        None
+    }
 }
 
 /// The runtime capability calls fall back to when no ambient runtime
@@ -142,9 +150,6 @@ pub struct Capabilities {
     project: PathBuf,
     proposals: Option<Proposals>,
     completion: Arc<Mutex<Option<Arc<dyn CompletionBackend>>>>,
-    /// Usage summed from `completion` calls since the caller last
-    /// drained it; the host attributes it to the causing record.
-    completion_usage: Arc<Mutex<Option<lca_protocol::Usage>>>,
     denials: Arc<Mutex<Vec<Denial>>>,
     /// Auth URLs the extension asked to open (host diagnostics; the
     /// provider-flow tests read the state from here).
@@ -185,7 +190,6 @@ impl Capabilities {
             project,
             proposals,
             completion: Arc::new(Mutex::new(None)),
-            completion_usage: Arc::new(Mutex::new(None)),
             denials: Arc::new(Mutex::new(Vec::new())),
             oauth_opened: Arc::new(Mutex::new(Vec::new())),
             handles: Arc::new(Mutex::new(HandleTable::default())),
@@ -265,33 +269,11 @@ impl Capabilities {
                 CapabilityError::Invalid("no active provider is available".to_string()),
             ));
         };
-        let (text, usage) = backend.complete(&messages).map_err(|detail| {
+        backend.complete(&messages).map_err(|detail| {
             let err = CapabilityError::Io(format!("completion failed: {detail}"));
             self.record("completion", &self.name, &err.to_string());
             err
-        })?;
-        let mut slot = self.completion_usage.lock().expect("completion lock");
-        let total = slot.get_or_insert_with(lca_protocol::Usage::default);
-        total.input += usage.input;
-        total.output += usage.output;
-        total.cache_read += usage.cache_read;
-        total.cache_write += usage.cache_write;
-        total.cache_write_1h += usage.cache_write_1h;
-        total.cost += usage.cost;
-        total.cost_input += usage.cost_input;
-        total.cost_cache_read += usage.cost_cache_read;
-        total.cost_cache_write += usage.cost_cache_write;
-        Ok((text, usage))
-    }
-
-    /// Usage accumulated by `completion` calls since the last drain;
-    /// the caller attributes it to the session record it is about to
-    /// write (capability catalog: spend shows in session cost).
-    pub fn take_completion_usage(&self) -> Option<lca_protocol::Usage> {
-        self.completion_usage
-            .lock()
-            .expect("completion lock")
-            .take()
+        })
     }
 
     /// Every URL this extension asked the host to open, in order: how

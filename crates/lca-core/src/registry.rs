@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};
 use lca_protocol::{
-    CommandEffect, DispatchError, HookAction, IdentityOutcome, PostToolObservation, ToolCall,
-    ToolSpec, Usage,
+    ChatMessage, CommandEffect, DispatchError, HookAction, IdentityOutcome, PostToolObservation,
+    ToolCall, ToolSpec, Usage,
 };
 
 /// Built-in tool names are reserved (FR-TOOL-1's set; an extension
@@ -502,6 +502,43 @@ impl ExtensionRegistry {
             Route::World { leaf, .. } => handle.invoke_command(leaf, argument).ok(),
             Route::Identity { op, .. } => Some(self.identity_effect(handle, *op)),
         }
+    }
+
+    /// The first enabled `compaction` strategy (FR-SESS-5): compaction
+    /// only ever happens through this world, and only one extension
+    /// owns a given turn's compact.
+    pub fn compaction_strategy(&self) -> Option<&Arc<dyn ExtensionDispatch>> {
+        self.entries
+            .iter()
+            .find(|entry| entry.enabled && entry.handle.worlds().contains(&World::Compaction))
+            .map(|entry| &entry.handle)
+    }
+
+    /// Apply every enabled `context-transform` extension in
+    /// installation order (FR-CTX-2), each output feeding the next. The
+    /// first rejection - or host-level failure, which must not let
+    /// unreviewed messages through either - stops the chain
+    /// (FR-CTX-3).
+    pub async fn transform(
+        &self,
+        mut messages: Vec<ChatMessage>,
+    ) -> Result<Vec<ChatMessage>, String> {
+        for handle in self
+            .enabled()
+            .filter(|handle| handle.worlds().contains(&World::ContextTransform))
+        {
+            match handle.transform_messages(messages).await {
+                Ok(Ok(list)) => messages = list,
+                Ok(Err(reason)) => return Err(reason),
+                Err(err) => {
+                    return Err(format!(
+                        "the context transform `{}` failed: {err}",
+                        handle.name()
+                    ));
+                }
+            }
+        }
+        Ok(messages)
     }
 
     /// Merge the `pre-turn` hook across every enabled extension
