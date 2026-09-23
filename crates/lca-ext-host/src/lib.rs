@@ -25,7 +25,9 @@ use std::sync::{Arc, Mutex};
 
 use lca_ext_abi::host::tool::{Tool, ToolPre};
 use lca_ext_abi::{DeliveryMode, World};
-use lca_permissions::{GrantStore, PermissionPrompt, Proposals, ScopeGrant, ScopeRoots};
+use lca_permissions::{
+    GrantStore, OAuthSettings, PermissionPrompt, Proposals, ScopeGrant, ScopeRoots,
+};
 use lca_protocol::{
     CapabilityError, CommandEffect, DispatchError, HookAction, PostToolObservation, ToolCall,
     ToolResultStatus, ToolSpec,
@@ -93,16 +95,6 @@ pub struct Manifest {
     /// The credential namespace, when declared; must equal `name`
     /// (FR-PERM-6, no cross-namespace read at any level, FR-PERM-7).
     pub credentials: bool,
-}
-
-/// The `oauth` capability's manifest parameters (capability catalog).
-#[derive(Debug, Clone)]
-pub struct OAuthSettings {
-    /// The redirect path the authorization server may use.
-    pub redirect_path: String,
-    /// Seconds to wait for the loopback callback (300 default, the
-    /// catalog's value).
-    pub timeout_seconds: u64,
 }
 
 fn reason_of(value: &toml::Value, key: &str) -> Result<String, LoadError> {
@@ -633,6 +625,12 @@ impl ExtHost {
                 fs_declared: !manifest.fs.is_empty(),
                 process: manifest.process,
                 pty: manifest.pty,
+                net: manifest.net.clone(),
+                net_local: manifest.net_local.clone(),
+                adhoc_net: Vec::new(), // Phase5's install flow attaches
+                // ad hoc grants (FR-PERM-16) from user consent.
+                oauth: manifest.oauth.clone(),
+                credentials: manifest.credentials,
             },
             self.env.roots.clone(),
             self.env.prompt.clone(),

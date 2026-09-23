@@ -44,17 +44,23 @@ pub struct NetPattern {
 }
 
 impl NetPattern {
-    /// Does this pattern grant `host:port`? Case-insensitive, trailing
-    /// dot tolerated.
-    pub fn matches(&self, host: &str, port: u16) -> bool {
+    /// Does this pattern cover the hostname, before port rules? A match
+    /// here puts the request under `net`'s rules even when the port then
+    /// fails them (FR-PERM-5 needs the distinction).
+    pub fn matches_host(&self, host: &str) -> bool {
         let host = host.to_ascii_lowercase().trim_end_matches('.').to_string();
-        let host_matches = if self.wildcard {
+        if self.wildcard {
             let suffix = &self.host; // stored with the leading dot: ".example.com"
             host.ends_with(suffix) && host.len() > suffix.len()
         } else {
             host == self.host
-        };
-        if !host_matches {
+        }
+    }
+
+    /// Does this pattern grant `host:port`? Case-insensitive, trailing
+    /// dot tolerated.
+    pub fn matches(&self, host: &str, port: u16) -> bool {
+        if !self.matches_host(host) {
             return false;
         }
         match self.port {
@@ -90,9 +96,7 @@ pub fn parse_net_pattern(value: &str) -> Result<NetPattern, PatternError> {
     };
     let wildcard = host_part.starts_with("*.");
     let host = host_part.trim_start_matches('*').to_ascii_lowercase();
-    if host.is_empty() || !host.contains('.') && !wildcard {
-        // A bare single label is not a hostname pattern we accept; names
-        // like `localhost` are `net-local`'s business anyway.
+    if host.is_empty() || host == "*" {
         return Err(invalid("not a hostname"));
     }
     if wildcard {

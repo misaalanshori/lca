@@ -506,6 +506,16 @@ pub enum ScopeViolationKind {
     StateDirectory,
 }
 
+/// The `oauth` capability's manifest parameters (capability catalog:
+/// `redirect_path`, and `timeout_seconds` defaulting to300).
+#[derive(Debug, Clone)]
+pub struct OAuthSettings {
+    /// The redirect path the authorization server may use.
+    pub redirect_path: String,
+    /// Seconds to wait for the loopback callback.
+    pub timeout_seconds: u64,
+}
+
 /// One granted scope: a vocabulary name plus a mode (the manifest's
 /// `capabilities.fs` entry, as approved).
 #[derive(Debug, Clone, PartialEq, Eq)]
