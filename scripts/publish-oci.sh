@@ -34,7 +34,9 @@ auth=(-H "Authorization: Bearer ${token}")
 # status-code check the old curl on some runners can manage
 put() { # put <url> <content-type> <file>
   local code
-  code=$(curl -sS "${auth[@]}" -H "Content-Type: $2" --data-binary "@$3" "$1" \
+  # -X PUT: --data-binary alone would make this a POST, which the
+  # manifests route answers with405.
+  code=$(curl -sS -X PUT "${auth[@]}" -H "Content-Type: $2" --data-binary "@$3" "$1" \
     -o /tmp/lca-publish-body.out -w "%{http_code}")
   if [[ "$code" != 2* ]]; then
     echo "request failed: HTTP $code ($1)" >&2
