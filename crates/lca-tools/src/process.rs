@@ -76,7 +76,9 @@ impl TreeChild {
                 .status();
         }
         #[cfg(windows)]
-        if let Tree::Job(job) = &self.tree {
+        {
+            // Single-variant on Windows: the Job Object kill is the tree kill.
+            let Tree::Job(job) = &self.tree;
             job.kill();
         }
         let _ = self.child.kill();

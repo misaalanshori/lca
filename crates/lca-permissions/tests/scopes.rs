@@ -78,6 +78,9 @@ fn parent_traversal_out_of_a_scope_is_refused() {
 
 // The boundary class this check exists for: a symlink created AFTER the
 // grant, pointing outside the scope (capability catalog, threat model).
+// Creating symlinks on Windows needs Developer Mode or elevation; the
+// requirement stays covered on unix, noted in the phase log.
+#[cfg(unix)]
 #[test]
 fn a_symlink_created_after_the_grant_is_refused() {
     let sandbox = Sandbox::new("symlink");

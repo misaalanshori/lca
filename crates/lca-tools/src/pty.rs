@@ -458,7 +458,7 @@ mod windows_conpty {
         }
         // SAFETY: STARTUPINFOW zeroed is the documented initialization.
         let zeroed_startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
-        let mut startup = STARTUPINFOEXW {
+        let startup = STARTUPINFOEXW {
             StartupInfo: STARTUPINFOW {
                 cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
                 ..zeroed_startup
