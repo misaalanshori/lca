@@ -162,6 +162,32 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          if [[ "${{ matrix.name }}" == "windows" ]]; then
+            # ring's aarch64-Windows path forces plain `clang` (its own
+            # FIXME), and cargo-xwin supplies MSVC-style flags. The shim
+            # translates them for the gcc-style driver: /imsvc <dir>
+            # becomes -I, --target= changes spelling, and CL-only linker
+            # flags drop (ring compiles objects; rustc links). Both
+            # windows targets build through it.
+            sudo tee /usr/local/bin/clang >/dev/null <<'SHIM'
+            #!/usr/bin/env bash
+            args=()
+            for ((i = 1; i <= $#; i++)); do
+              a="${!i}"
+              case "$a" in
+                /imsvc) i=$((i+1)); args+=("-I${!i}") ;;
+                --target=*) args+=("-target" "${a#--target=}") ;;
+                -fuse-ld=lld-link) ;;
+                -Xclang) i=$((i+1)) ;;
+                *) args+=("$a") ;;
+              esac
+            done
+            exec /usr/bin/clang "${args[@]}"
+            SHIM
+            sudo chmod +x /usr/local/bin/clang
+            export CC_x86_64_pc_windows_msvc=clang
+            export CC_aarch64_pc_windows_msvc=clang
+          fi
           for target in ${{ matrix.targets }}; do
             if [[ "$target" == *musl ]]; then
               cargo zigbuild --release --target "$target"
