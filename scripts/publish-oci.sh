@@ -33,16 +33,26 @@ auth=(-H "Authorization: Bearer ${token}")
 
 # status-code check the old curl on some runners can manage
 put() { # put <url> <content-type> <file>
-  local code
+  local code attempt=1
   # -X PUT: --data-binary alone would make this a POST, which the
-  # manifests route answers with405.
-  code=$(curl -sS -X PUT "${auth[@]}" -H "Content-Type: $2" --data-binary "@$3" "$1" \
-    -o /tmp/lca-publish-body.out -w "%{http_code}")
-  if [[ "$code" != 2* ]]; then
+  # manifests route answers with405. The first push to a new
+  # repository-scoped namespace can answer404 while the registry
+  # provisions it, so a404 gets a few retries before it is real.
+  while :; do
+    code=$(curl -sS -X PUT "${auth[@]}" -H "Content-Type: $2" --data-binary "@$3" "$1" \
+      -o /tmp/lca-publish-body.out -w "%{http_code}")
+    if [[ "$code" == 2* ]]; then
+      return 0
+    fi
+    if [[ "$code" == "404" && "$attempt" -lt 6 ]]; then
+      attempt=$((attempt + 1))
+      sleep 3
+      continue
+    fi
     echo "request failed: HTTP $code ($1)" >&2
     cat /tmp/lca-publish-body.out >&2
     exit 1
-  fi
+  done
 }
 post() { # post <url> <file>
   local code
