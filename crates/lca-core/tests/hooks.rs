@@ -418,6 +418,7 @@ async fn wasm_and_native_extension_tools_both_run_in_the_loop() {
             fs_declared: true,
             process: true,
             pty: true,
+            ..Default::default()
         },
         ScopeRoots {
             workspace: root.join("project"),

@@ -325,6 +325,7 @@ fn the_native_conformance_handle_registers_through_the_table() {
             fs_declared: true,
             process: true,
             pty: true,
+            ..Default::default()
         },
         roots,
         Arc::new(std::sync::Mutex::new(Allow)),

@@ -83,6 +83,7 @@ impl Fixture {
                 fs_declared: true,
                 process: true,
                 pty: true,
+                ..Default::default()
             },
             self.roots.clone(),
             self.prompt.clone(),
