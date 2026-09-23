@@ -414,6 +414,12 @@ pub fn run_provider_stream(
         retryable: false,
     })?;
     let mut headers: Vec<(&str, &str)> = vec![("content-type", "application/json")];
+    // ADR-0023: OpenCode Go refuses requests without a per-conversation
+    // routing header (verified against the live endpoint); unknown
+    // headers are ignored by every other OpenAI-shaped server.
+    if let Some(session) = request.extras.get("session-id") {
+        headers.push(("x-opencode-session", session.as_str()));
+    }
     let key = effective_key(cap, settings);
     let bearer;
     if let Some(key) = key.as_deref() {

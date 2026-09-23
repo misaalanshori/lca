@@ -429,12 +429,17 @@ impl<'a> Agent<'a> {
             let assembled = assemble(&records, &self.config.system_prompt);
             let mut tools = ToolExecutor::specs();
             tools.extend(self.config.extensions.tool_specs());
+            let mut extras = std::collections::BTreeMap::new();
+            // ADR-0023: the conversation's routing identity travels on
+            // every request; the OpenCode Go endpoint requires its
+            // header and every other endpoint ignores it.
+            extras.insert("session-id".to_string(), self.session.id().to_string());
             let request = CompletionRequest {
                 messages: assembled.messages,
                 tools,
                 model: self.config.model.clone(),
                 stable_prefix: assembled.stable_prefix,
-                extras: Default::default(),
+                extras,
             };
 
             let response = match self.provider_call(request, sink, cancel).await {

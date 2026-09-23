@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Verifies: NFR-1 (size threshold), NFR-3 (startup threshold), NFR-7
-# (the pipeline enforces both on every merge to main). Thresholds were fixed at the Phase 0 exit
-# test (docs/phase0-report.md) and only move with a recorded measurement.
+# (the pipeline enforces both on every merge to main), NFR-31 (the
+# cache-hit-ratio benchmark runs in this same gate). Thresholds were
+# fixed at the Phase 0 exit test (docs/phase0-report.md; the cache
+# ratio's0.90 at the Phase 3 exit) and only move with a recorded
+# measurement.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -36,3 +39,9 @@ else
   echo "NFR-3 proxy exceeded: startup slower than150 ms"
   exit 1
 fi
+
+# Verifies: NFR-31 - the canonical twenty-turn scripted conversation,
+# run in this same gate so a cache regression fails the build the way a
+# binary-size regression does (testing-plan section9).
+cargo test --release -p lca-core --test loop \
+  twenty_clean_turns_report_zero_cache_waste_and_hold_the_ratio

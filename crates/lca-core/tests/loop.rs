@@ -619,3 +619,88 @@ fn model_listings_flow_from_the_provider() {
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].id, "faux-1");
 }
+
+// Verifies: NFR-31 (the cache-hit-ratio benchmark) and the Phase 3
+// exit test's clause - a scripted clean twenty-turn conversation with
+// no compaction and no provider change reports zero cache waste from
+// the second turn onward (FR-CACHE-1's absence of misses, ADR-0017's
+// whole mechanism against the fake provider's scripted usage).
+//
+// The threshold was fixed at this Phase 3 exit test, as
+// `docs/testing-plan.md` section9 requires: the clean script scores
+// about0.97 (each turn's new tokens are paid, the rest comes from the
+// cache), so anything under0.90 means caching stopped working - which
+// produces a correct answer and a passing turn every time, and shows up
+// here instead of on the bill.
+const NFR31_MIN_CACHE_HIT_RATIO: f64 = 0.90;
+
+#[tokio::test]
+async fn twenty_clean_turns_report_zero_cache_waste_and_hold_the_ratio() {
+    // The canonical script: turn one writes the cache, every later turn
+    // reads the whole previous prompt and pays for a little new input.
+    let mut builder = FakeProvider::builder();
+    let mut previous_prompt = 0u64;
+    for turn in 0..20u64 {
+        let (input, cache_read, cache_write) = if turn == 0 {
+            (1000, 0, 500)
+        } else {
+            (50, previous_prompt, 0)
+        };
+        previous_prompt = input + cache_read + cache_write;
+        let usage = fake_usage(input, 10, cache_read, cache_write);
+        builder = builder.turn(move |t| t.text("ok").usage(usage));
+    }
+    let provider = builder.build();
+    let mut h = harness("cache-ratio", provider, default_config());
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: Vec::new(),
+        asked: Vec::new(),
+    };
+    for index in 0..20 {
+        let outcome = turn(&mut h, &format!("turn {index}"), &mut sink, &mut prompt).await;
+        assert_eq!(
+            outcome.status,
+            lca_core::TurnStatus::Ok,
+            "turn {index} completes"
+        );
+    }
+
+    let records = h
+        .store
+        .read_with(&h.session, ViewMode::Display)
+        .expect("records")
+        .records;
+
+    // Zero waste from the second turn onward: no miss anywhere (the
+    // first turn has no predecessor, so it can never count).
+    let totals = lca_session::compute_cache_waste(&records, 1024);
+    assert_eq!(totals.miss_count, 0, "no counted miss: {totals:?}");
+    assert_eq!(totals.missed_tokens, 0, "zero wasted tokens: {totals:?}");
+
+    // The ratio itself: cache reads over total prompt, turns2..20.
+    let mut reads = 0u64;
+    let mut prompts = 0u64;
+    let mut turns = 0u64;
+    for record in &records {
+        if let Record::Assistant {
+            usage: Some(usage), ..
+        } = record
+        {
+            let prompt = usage.input + usage.cache_read + usage.cache_write + usage.cache_write_1h;
+            if turns > 0 {
+                // skip the first turn (measured "from turn two onward")
+                reads += usage.cache_read;
+                prompts += prompt;
+            }
+            turns += 1;
+        }
+    }
+    assert!(turns >= 20, "twenty scripted turns recorded: {turns}");
+    assert!(prompts > 0, "the conversation had prompt tokens");
+    let ratio = reads as f64 / prompts as f64;
+    assert!(
+        ratio >= NFR31_MIN_CACHE_HIT_RATIO,
+        "cache-hit ratio {ratio:.4} below the NFR-31 threshold {NFR31_MIN_CACHE_HIT_RATIO}"
+    );
+}

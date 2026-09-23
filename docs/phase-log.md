@@ -212,3 +212,73 @@ the dispatch adapter onto `lca-provider::Provider`, the generic
 `/login`//logout`//usage` commands with auto-namespacing (FR-PROV-10/11),
 the OpenAI-compatible provider in dual mode, the Antigravity OAuth
 provider, and the NFR-31 clean-conversation benchmark.
+
+## Phase 3 — providers, network capabilities, credentials: PASS
+
+The exit test clause by clause, with receipts:
+
+- **Two provider extensions work, one API key and one OAuth.**
+  `openai-compatible` (native-linked, enabled by default) streams a
+  canned SSE body through the capability engine, refuses without a
+  grant and records it, and answers the identity trio; `antigravity`
+  (dual-mode, component builds for wasm32-wasip2) runs the full
+  loopback login against a mocked Google - PKCE, exchange, code-assist
+  handshake, stored namespace - plus refresh (FR-PROV-5), the stream,
+  catalog, quota usage, and revoke; eight offline tests each. The
+  antigravity WASM delivery is verified by its own component build and
+  by the conformance extension's provider-world WASM tests, which run
+  the same host imports (net/oauth/credentials) and the identity trio
+  through the identical plumbing; an end-to-end WASM antigravity run
+  against a mock lands with Phase 5's install flow, which is what
+  loads it in the first place. Nothing touches a socket or a credential
+  file directly in either mode: the native half speaks ProviderCap (the
+  engine), the guest half speaks host imports, and both are proven by
+  tests whose only path is a refusal.
+- **Generic and namespaced identity commands.** Seven core tests
+  (FR-PROV-10/11): every provider gets `<name>.login/logout/usage`
+  auto-namespaced, the generic `/login` lists installed providers and
+  invokes the chosen one, `/logout` and `/usage` follow the active
+  provider, zero enabled providers stays a valid state (FR-PROV-9,
+  grant-store enablement with its own round-trip test).
+- **Zero cache waste from the second turn onward.** Twenty scripted
+  turns through the real agent loop against the fake provider:
+  `compute_cache_waste` counts no misses and zero wasted tokens, and
+  the cache-hit ratio holds. The NFR-31 threshold is fixed here as the
+  testing plan required: **0.90** (the clean script scores about 0.97),
+  written into `docs/testing-plan.md` and enforced by `perf-gate.sh`,
+  which now runs the benchmark in the same gate as binary size and
+  cold start.
+- **Real-endpoint smoke (env-gated, NFR-23).** `real_provider.rs`
+  skips without `OPENCODE_API_KEY`. With the brief's key it verified
+  live, in order: the capability engine's ad hoc-consent path
+  (opencode.ai denied until the test wrote the grant the modal will
+  give), bearer auth, and the endpoint's required per-conversation
+  header - the quirk the brief predicted - which now ships as
+  ADR-0023 (`x-opencode-session` from `extras["session-id"]`). The
+  final hop is blocked by the account, not the code: all three cheap
+  models answer "This Go model requires Global regions. Select Global
+  in your workspace's Privacy settings" (HTTP 400, correctly
+  classified invalid/non-retryable). Owner action: set the opencode.ai
+  workspace Privacy setting to Global, then the same test completes
+  the turn. Not worked around, not skipped silently.
+- **ADRs written this phase:** 0021 (credential file backend for 1.0),
+  0022 (ad hoc net grants in the grant store), 0023 (the session
+  header). ProviderCap/OauthCap live in lca-protocol so every mode
+  shares one capability surface.
+
+Gates at the exit: fmt, clippy `-D warnings`, doc `-D warnings`, and
+218 nextest tests green on Linux; windows-target clippy and check
+green (the symlink-scope test stays unix-gated, Windows needs
+Developer Mode for symlinks); the antigravity component and both
+fixtures build for wasm32-wasip2. Known platform follow-ups, in the
+priority order set for this project (Linux, then Windows, then macOS):
+three macOS pty tests still fail in CI ("Inappropriate ioctl for
+device") - lowest priority by instruction, recorded here so they are
+not invisible. Note for whoever runs the suite under heavy parallel
+build load: a nextest run concurrent with release builds can transiently
+fail or stall one test; every clean rerun (three consecutive) was
+100% green, so treat a single failure under load as contention and
+rerun before chasing it.
+
+Phase 4 next: compaction and context-transform worlds, wiring the
+cache baseline reset to real compaction records.

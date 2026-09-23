@@ -115,7 +115,7 @@ A miss below the 1024-token noise floor, adopted from pi's own calibration, is n
 
 ### Why this belongs in the pipeline, not just in a developer's local run
 
-A cache-hit-ratio regression is invisible in ordinary functional testing: every one of these scenarios produces a correct answer from the model, a passing turn, and a happy user, right up until the bill or the latency reveals that caching silently stopped working days or weeks earlier. The clean-conversation scenario above is promoted to a benchmark, not just a test: it runs in the same pipeline gate that checks binary size and cold start, asserting the computed cache-hit ratio across a canonical twenty-turn scripted session stays above a threshold, and a regression here fails the build the same way a binary-size regression does.
+A cache-hit-ratio regression is invisible in ordinary functional testing: every one of these scenarios produces a correct answer from the model, a passing turn, and a happy user, right up until the bill or the latency reveals that caching silently stopped working days or weeks earlier. The clean-conversation scenario above is promoted to a benchmark, not just a test: it runs in the same pipeline gate that checks binary size and cold start, asserting the computed cache-hit ratio across a canonical twenty-turn scripted session stays above a threshold (fixed at the Phase 3 exit test: **0.90**; the clean script itself scores about 0.97, since each turn's new tokens are paid and the rest is cache-read), and a regression here fails the build the same way a binary-size regression does.
 
 ## 10. Snapshot testing for cache-relevant assembly
 
