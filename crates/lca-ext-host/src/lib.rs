@@ -23,14 +23,15 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use lca_ext_abi::host::provider::ProviderPre;
 use lca_ext_abi::host::tool::{Tool, ToolPre};
 use lca_ext_abi::{DeliveryMode, World};
 use lca_permissions::{
     GrantStore, OAuthSettings, PermissionPrompt, Proposals, ScopeGrant, ScopeRoots,
 };
 use lca_protocol::{
-    CapabilityError, CommandEffect, DispatchError, HookAction, PostToolObservation, ToolCall,
-    ToolResultStatus, ToolSpec,
+    CapabilityError, CommandEffect, CompletionRequest, DispatchError, EventSink, HookAction,
+    IdentityOutcome, ModelInfo, PostToolObservation, ToolCall, ToolResultStatus, ToolSpec, Usage,
 };
 use lca_tools::{Capabilities, CapabilityGrants, Denial};
 use wasmtime::component::{HasSelf, Linker, ResourceTable};
@@ -472,6 +473,294 @@ fn pty_error(err: CapabilityError) -> PtyError {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The provider world: capability imports the same engine serves, plus the
+// WIT <-> protocol mapping every provider event and record crosses.
+// ---------------------------------------------------------------------------
+
+use lca_ext_abi::host::provider::exports::lca::ext::provider_completion as wit_completion;
+use lca_ext_abi::host::provider::exports::lca::ext::provider_identity as wit_identity;
+use lca_ext_abi::host::provider::lca::host as provider_host;
+
+fn net_error(err: CapabilityError) -> provider_host::net::Error {
+    use provider_host::net::Error as E;
+    match err {
+        CapabilityError::Permission(detail) => E::Permission(detail),
+        CapabilityError::NotGranted(detail) => E::NotGranted(detail),
+        CapabilityError::NotFound(detail) => E::Invalid(detail),
+        CapabilityError::Io(detail) => E::Io(detail),
+        CapabilityError::Invalid(detail) => E::Invalid(detail),
+        CapabilityError::Timeout(detail) => E::Io(format!("timed out: {detail}")),
+    }
+}
+
+fn oauth_error(err: CapabilityError) -> provider_host::oauth::Error {
+    use provider_host::oauth::Error as E;
+    match err {
+        CapabilityError::Permission(detail) => E::Permission(detail),
+        CapabilityError::NotGranted(detail) => E::NotGranted(detail),
+        CapabilityError::NotFound(_) => E::Invalid("not found".to_string()),
+        CapabilityError::Io(detail) => E::Io(detail),
+        CapabilityError::Invalid(detail) => E::Invalid(detail),
+        CapabilityError::Timeout(detail) => E::Timeout(detail),
+    }
+}
+
+fn credentials_error(err: CapabilityError) -> provider_host::credentials::Error {
+    use provider_host::credentials::Error as E;
+    match err {
+        CapabilityError::Permission(detail) => E::Permission(detail),
+        CapabilityError::NotGranted(detail) => E::NotGranted(detail),
+        CapabilityError::NotFound(_) | CapabilityError::Timeout(_) => {
+            E::Io("unavailable".to_string())
+        }
+        CapabilityError::Io(detail) => E::Io(detail),
+        CapabilityError::Invalid(detail) => E::Invalid(detail),
+    }
+}
+
+impl provider_host::log::Host for HostState {
+    fn trace(&mut self, message: String) {
+        self.record_log(message);
+    }
+    fn debug(&mut self, message: String) {
+        self.record_log(message);
+    }
+    fn info(&mut self, message: String) {
+        self.record_log(message);
+    }
+    fn warn(&mut self, message: String) {
+        self.record_log(message);
+    }
+    fn error(&mut self, message: String) {
+        self.record_log(message);
+    }
+}
+
+impl lca_ext_abi::host::provider::lca::ext::types::Host for HostState {}
+
+impl provider_host::net::Host for HostState {
+    fn request(
+        &mut self,
+        method: String,
+        url: String,
+        headers: Vec<(String, String)>,
+        body: Option<Vec<u8>>,
+    ) -> Result<u32, provider_host::net::Error> {
+        let refs: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        self.cap
+            .net_request(&method, &url, &refs, body.as_deref())
+            .map_err(net_error)
+    }
+
+    fn response_status(&mut self, handle: u32) -> Result<u16, provider_host::net::Error> {
+        self.cap.net_response_status(handle).map_err(net_error)
+    }
+
+    fn response_headers(
+        &mut self,
+        handle: u32,
+    ) -> Result<Vec<(String, String)>, provider_host::net::Error> {
+        self.cap.net_response_headers(handle).map_err(net_error)
+    }
+
+    fn read_body(
+        &mut self,
+        handle: u32,
+        max: u64,
+    ) -> Result<Option<Vec<u8>>, provider_host::net::Error> {
+        self.cap
+            .net_read_body(handle, max as usize)
+            .map_err(net_error)
+    }
+
+    fn close_response(&mut self, handle: u32) -> Result<(), provider_host::net::Error> {
+        self.cap.net_close_response(handle).map_err(net_error)
+    }
+}
+
+impl provider_host::oauth::Host for HostState {
+    fn begin(
+        &mut self,
+        redirect_path: String,
+    ) -> Result<(String, u32), provider_host::oauth::Error> {
+        self.cap.oauth_begin(&redirect_path).map_err(oauth_error)
+    }
+
+    fn open(&mut self, url: String) -> Result<(), provider_host::oauth::Error> {
+        self.cap.oauth_open(&url).map_err(oauth_error)
+    }
+
+    fn await_callback(
+        &mut self,
+        handle: u32,
+    ) -> Result<Vec<(String, String)>, provider_host::oauth::Error> {
+        self.cap.oauth_await(handle).map_err(oauth_error)
+    }
+
+    fn end_flow(&mut self, handle: u32) -> Result<(), provider_host::oauth::Error> {
+        self.cap.oauth_end(handle).map_err(oauth_error)
+    }
+}
+
+impl provider_host::credentials::Host for HostState {
+    fn get(&mut self, key: String) -> Option<String> {
+        // Denial reads as absence (capability catalog): checking for an
+        // existing login needs no denial/absence distinction.
+        self.cap.credentials_get(&key).unwrap_or(None)
+    }
+
+    fn set(&mut self, key: String, value: String) -> Result<(), provider_host::credentials::Error> {
+        self.cap
+            .credentials_set(&key, &value)
+            .map_err(credentials_error)
+    }
+
+    fn delete(&mut self, key: String) -> Result<(), provider_host::credentials::Error> {
+        self.cap.credentials_delete(&key).map_err(credentials_error)
+    }
+}
+
+fn role_str(role: lca_protocol::MessageRole) -> &'static str {
+    use lca_protocol::MessageRole;
+    match role {
+        MessageRole::System => "system",
+        MessageRole::User => "user",
+        MessageRole::Assistant => "assistant",
+        MessageRole::Tool => "tool",
+    }
+}
+
+/// Protocol request -> the WIT record. Content is the concatenated text
+/// of the message's blocks, exactly what the WIT `message` record
+/// carries; reasoning blocks are model-internal and not resent.
+fn to_wit_request(request: &CompletionRequest) -> wit_completion::CompletionRequest {
+    use wit_completion::{
+        CompletionRequest as WitRequest, Message as WitMessage, ToolSpec as WitToolSpec,
+    };
+    let extra_pairs = |extras: &std::collections::BTreeMap<String, String>| {
+        extras
+            .iter()
+            .map(|(key, value)| wit_completion::ExtraPair {
+                key: key.clone(),
+                value: value.clone(),
+            })
+            .collect()
+    };
+    WitRequest {
+        messages: request
+            .messages
+            .iter()
+            .map(|message| WitMessage {
+                role: role_str(message.role).to_string(),
+                content: message
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        lca_protocol::ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+                tool_calls: message
+                    .tool_calls
+                    .iter()
+                    .map(
+                        |call| lca_ext_abi::host::provider::lca::ext::types::ToolCall {
+                            call_id: call.call_id.clone(),
+                            name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                            extras: Vec::new(),
+                        },
+                    )
+                    .collect(),
+                tool_call_id: message.tool_call_id.clone(),
+                extras: Vec::new(),
+            })
+            .collect(),
+        tools: request
+            .tools
+            .iter()
+            .map(|tool| WitToolSpec {
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                parameters: tool.parameters.to_string(),
+                extras: extra_pairs(&tool.extras),
+            })
+            .collect(),
+        model: request.model.clone(),
+        stable_prefix: request.stable_prefix as u32,
+        extras: extra_pairs(&request.extras),
+    }
+}
+
+/// The WIT stream event -> the protocol event, case per case
+/// (ADR-0004: one case each, `vendor-event` the reserved hatch).
+fn from_wit_event(event: wit_completion::StreamEvent) -> lca_protocol::StreamEvent {
+    use lca_protocol::StreamEvent as P;
+    match event {
+        wit_completion::StreamEvent::TextDelta(delta) => P::TextDelta { delta },
+        wit_completion::StreamEvent::ReasoningDelta(delta) => P::ReasoningDelta { delta },
+        wit_completion::StreamEvent::ToolCallStart((call_id, name)) => {
+            P::ToolCallStart { call_id, name }
+        }
+        wit_completion::StreamEvent::ToolCallArgDelta((call_id, delta)) => {
+            P::ToolCallArgDelta { call_id, delta }
+        }
+        wit_completion::StreamEvent::ToolCallEnd(call_id) => P::ToolCallEnd { call_id },
+        wit_completion::StreamEvent::Usage(usage) => P::Usage {
+            usage: from_wit_usage(usage),
+        },
+        wit_completion::StreamEvent::Error((message, retryable)) => P::Error { message, retryable },
+        wit_completion::StreamEvent::VendorEvent((kind, payload)) => P::VendorEvent {
+            kind,
+            payload: serde_json::from_str(&payload).unwrap_or(serde_json::Value::String(payload)),
+        },
+    }
+}
+
+fn f64_extra(extras: &std::collections::BTreeMap<String, String>, key: &str) -> f64 {
+    extras
+        .get(key)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.0)
+}
+
+/// WIT usage -> protocol usage. The cost buckets (ADR-0017) travel in
+/// `extras`, since the WIT record predates the bucket split; the reserved
+/// keys stay in `extras` too, where a consumer that does not know them
+/// ignores them safely.
+fn from_wit_usage(usage: wit_completion::Usage) -> Usage {
+    let extras: std::collections::BTreeMap<String, String> = usage
+        .extras
+        .into_iter()
+        .map(|pair| (pair.key, pair.value))
+        .collect();
+    Usage {
+        input: usage.input,
+        output: usage.output,
+        cache_read: usage.cache_read,
+        cache_write: usage.cache_write,
+        cache_write_1h: usage.cache_write_hour,
+        cost: usage.cost,
+        cost_input: f64_extra(&extras, "cost_input"),
+        cost_cache_read: f64_extra(&extras, "cost_cache_read"),
+        cost_cache_write: f64_extra(&extras, "cost_cache_write"),
+        extras,
+    }
+}
+
+fn from_wit_identity(outcome: wit_identity::IdentityOutcome) -> IdentityOutcome {
+    match outcome {
+        wit_identity::IdentityOutcome::Ok => IdentityOutcome::Ok,
+        wit_identity::IdentityOutcome::NotSupported => IdentityOutcome::NotSupported,
+        wit_identity::IdentityOutcome::Failed(reason) => IdentityOutcome::Failed(reason),
+    }
+}
+
 impl lca_ext_abi::host::tool::lca::host::fs::Host for HostState {
     fn read(&mut self, scope: String, path: String) -> Result<Vec<u8>, FsError> {
         self.cap.fs_read(&scope, &path).map_err(fs_error)
@@ -644,6 +933,19 @@ impl ExtHost {
         let mut linker: HostLinker = Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).expect("wasi imports");
         Tool::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state).expect("world imports");
+        let declares_provider = manifest.worlds.iter().any(|world| world == "provider");
+        if declares_provider {
+            // The provider world shares `lca:host/log` with the tool world
+            // (already defined above), so only the three interfaces the
+            // tool world does not carry get added here.
+            use lca_ext_abi::host::provider::lca::host as provider_host;
+            provider_host::net::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
+                .expect("net imports");
+            provider_host::oauth::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
+                .expect("oauth imports");
+            provider_host::credentials::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
+                .expect("credentials imports");
+        }
         let pre = linker
             .instantiate_pre(&component)
             .map_err(|err| LoadError::Link(err.to_string()))?;
@@ -661,6 +963,9 @@ impl ExtHost {
                 lca_ext_abi::host::command::CommandPre::new(pre.clone())
                     .map_err(|err| LoadError::Link(err.to_string()))
             })
+            .transpose()?;
+        let provider = declares_provider
+            .then(|| ProviderPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string())))
             .transpose()?;
         let hooks = manifest
             .worlds
@@ -680,6 +985,7 @@ impl ExtHost {
                 tool,
                 command,
                 hooks,
+                provider,
                 limits: self.limits.clone(),
                 enabled: Arc::new(AtomicBool::new(true)),
                 logs: Arc::new(Mutex::new(Vec::new())),
@@ -700,6 +1006,7 @@ struct Inner {
     tool: Option<ToolPre<HostState>>,
     command: Option<lca_ext_abi::host::command::CommandPre<HostState>>,
     hooks: Option<lca_ext_abi::host::hooks::HooksPre<HostState>>,
+    provider: Option<ProviderPre<HostState>>,
     limits: ExtensionLimits,
     enabled: Arc<AtomicBool>,
     logs: Arc<Mutex<Vec<String>>>,
@@ -984,6 +1291,133 @@ fn session_close_work(inner: &Inner) -> Result<(), CallError> {
         .map_err(|err| inner.classify(err))
 }
 
+// ---------------------------------------------------------------------------
+// Provider-world work: model listing, the streaming completion, identity
+// ---------------------------------------------------------------------------
+
+fn provider_missing_world() -> CallError {
+    CallError::InvalidArguments("no provider world".into())
+}
+
+fn provider_models_work(inner: &Inner) -> Result<Vec<ModelInfo>, CallError> {
+    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let models = instance
+        .lca_ext_provider_models()
+        .call_list_models(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    Ok(models
+        .into_iter()
+        .map(|model| ModelInfo {
+            id: model.id,
+            name: model.name,
+            context_window: model.context_window,
+            max_tokens: model.max_tokens,
+        })
+        .collect())
+}
+
+/// One streaming completion, run on a blocking thread: instantiate, call
+/// `stream-completion`, then poll the pull resource until it ends,
+/// pushing every event into `bridge` (ADR-0004's host-driven shape).
+fn provider_stream_work(
+    inner: &Inner,
+    request: CompletionRequest,
+    bridge: Arc<dyn EventSink>,
+) -> Result<(), CallError> {
+    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let wit_request = to_wit_request(&request);
+    let created = instance
+        .lca_ext_provider_completion()
+        .call_stream_completion(&mut store, &wit_request)
+        .map_err(|err| inner.classify(err))?;
+    let stream = created
+        .map_err(|detail| CallError::InvalidArguments(format!("stream-completion: {detail}")))?;
+    loop {
+        let next = instance
+            .lca_ext_provider_completion()
+            .completion_stream()
+            .call_next(&mut store, stream)
+            .map_err(|err| inner.classify(err))?;
+        match next {
+            Some(event) => {
+                if !bridge.push(from_wit_event(event)) {
+                    // The receiver is gone (FR-CONC-3): stop polling; the
+                    // stream resource is dropped with the store.
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+    // The handle indexes the guest's own table inside this store's
+    // instance; both die together at the end of this call (a fresh store
+    // per call), so nothing leaks even without an explicit delete.
+    let _ = stream;
+    Ok(())
+}
+
+enum IdentityOp {
+    Login,
+    Logout,
+}
+
+fn identity_simple_work(inner: &Inner, op: IdentityOp) -> Result<IdentityOutcome, CallError> {
+    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let outcome = match op {
+        IdentityOp::Login => instance
+            .lca_ext_provider_identity()
+            .call_login(&mut store)
+            .map_err(|err| inner.classify(err))?,
+        IdentityOp::Logout => instance
+            .lca_ext_provider_identity()
+            .call_logout(&mut store)
+            .map_err(|err| inner.classify(err))?,
+    };
+    Ok(from_wit_identity(outcome))
+}
+
+fn identity_usage_work(inner: &Inner) -> Result<Result<Usage, IdentityOutcome>, CallError> {
+    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let outcome = instance
+        .lca_ext_provider_identity()
+        .call_usage(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    Ok(match outcome {
+        Ok(usage) => Ok(from_wit_identity_usage(usage)),
+        Err(fallback) => Err(from_wit_identity(fallback)),
+    })
+}
+
+/// Identity `usage` returns the imported `types.usage` record
+/// (`token-usage`); convert it through the same WIT usage shape.
+fn from_wit_identity_usage(usage: wit_identity::TokenUsage) -> Usage {
+    from_wit_usage(wit_completion::Usage {
+        input: usage.input,
+        output: usage.output,
+        cache_read: usage.cache_read,
+        cache_write: usage.cache_write,
+        cache_write_hour: usage.cache_write_hour,
+        cost: usage.cost,
+        extras: usage.extras,
+    })
+}
+
 /// One loaded extension (ADR-0019's handle for the WASM mode).
 pub struct WasmExtension {
     inner: Arc<Inner>,
@@ -1106,6 +1540,7 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
                 "tool" => Some(World::Tool),
                 "command" => Some(World::Command),
                 "hooks" => Some(World::Hooks),
+                "provider" => Some(World::Provider),
                 _ => None,
             })
             .collect()
@@ -1248,6 +1683,145 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
             pool_call(inner, session_close_work)
                 .await
                 .map_err(|err| to_dispatch(err, &name))
+        })
+    }
+
+    fn provider_models(&self) -> Result<Vec<ModelInfo>, DispatchError> {
+        if !self.worlds().contains(&World::Provider) {
+            return Err(DispatchError::MissingWorld {
+                extension: self.name().to_string(),
+                world: "provider",
+            });
+        }
+        self.blocking(provider_models_work)
+            .map_err(|err| to_dispatch(err, self.name()))
+    }
+
+    fn stream_completion<'a>(
+        &'a self,
+        request: CompletionRequest,
+        sink: &'a dyn EventSink,
+    ) -> lca_ext_abi::DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(async move {
+            if !self.worlds().contains(&World::Provider) {
+                return Err(DispatchError::MissingWorld {
+                    extension: self.name().to_string(),
+                    world: "provider",
+                });
+            }
+            // The component call runs on the blocking pool (ADR-0014);
+            // events cross back through an unbounded bridge the async
+            // side drains into `sink` with real backpressure. A dropped
+            // `sink` (or a dropped future) ends the stream: the bridge
+            // send fails and the work loop stops (FR-CONC-3).
+            let (stx, mut srx) = tokio::sync::mpsc::unbounded_channel();
+            struct Bridge(tokio::sync::mpsc::UnboundedSender<lca_protocol::StreamEvent>);
+            impl EventSink for Bridge {
+                fn push(&self, event: lca_protocol::StreamEvent) -> bool {
+                    self.0.send(event).is_ok()
+                }
+            }
+            let engine = self.inner.engine.clone();
+            let work_inner = self.inner.clone();
+            let fail_inner = self.inner.clone();
+            let extension = self.inner.name.clone();
+            let mut join = tokio::task::spawn_blocking(move || {
+                provider_stream_work(&work_inner, request, Arc::new(Bridge(stx)))
+            });
+            let mut joined: Option<Result<Result<(), CallError>, tokio::task::JoinError>> = None;
+            loop {
+                if joined.is_some() {
+                    while let Some(event) = srx.recv().await {
+                        let _ = sink.push(event);
+                    }
+                    break;
+                }
+                tokio::select! {
+                    maybe = srx.recv() => match maybe {
+                        None => break,
+                        Some(event) => if !sink.push(event) {
+                            // Receiver gone: trap the guest so the blocking
+                            // work ends promptly, then drain the bridge.
+                            engine.increment_epoch();
+                            while srx.recv().await.is_some() {}
+                            break;
+                        },
+                    },
+                    result = &mut join => joined = Some(result),
+                }
+            }
+            let result = match joined {
+                Some(result) => result,
+                None => join.await,
+            };
+            match result {
+                Ok(inner_result) => inner_result.map_err(|err| to_dispatch(err, &extension)),
+                Err(_) => {
+                    fail_inner.disable();
+                    Err(DispatchError::Failed(format!(
+                        "{extension}: host call panicked"
+                    )))
+                }
+            }
+        })
+    }
+
+    fn identity_login(
+        &self,
+    ) -> lca_ext_abi::DispatchFuture<'static, Result<IdentityOutcome, DispatchError>> {
+        let inner = self.inner.clone();
+        let extension = inner.name.clone();
+        Box::pin(async move {
+            if !inner.worlds.contains(&"provider".to_string()) {
+                return Err(DispatchError::MissingWorld {
+                    extension,
+                    world: "provider",
+                });
+            }
+            pool_call(inner, |inner| {
+                identity_simple_work(inner, IdentityOp::Login)
+            })
+            .await
+            .map_err(|err| to_dispatch(err, &extension))
+        })
+    }
+
+    fn identity_logout(
+        &self,
+    ) -> lca_ext_abi::DispatchFuture<'static, Result<IdentityOutcome, DispatchError>> {
+        let inner = self.inner.clone();
+        let extension = inner.name.clone();
+        Box::pin(async move {
+            if !inner.worlds.contains(&"provider".to_string()) {
+                return Err(DispatchError::MissingWorld {
+                    extension,
+                    world: "provider",
+                });
+            }
+            pool_call(inner, |inner| {
+                identity_simple_work(inner, IdentityOp::Logout)
+            })
+            .await
+            .map_err(|err| to_dispatch(err, &extension))
+        })
+    }
+
+    fn identity_usage(
+        &self,
+    ) -> lca_ext_abi::DispatchFuture<'static, Result<Result<Usage, IdentityOutcome>, DispatchError>>
+    {
+        let inner = self.inner.clone();
+        let extension = inner.name.clone();
+        Box::pin(async move {
+            if !inner.worlds.contains(&"provider".to_string()) {
+                return Err(DispatchError::MissingWorld {
+                    extension,
+                    world: "provider",
+                });
+            }
+            pool_call(inner, identity_usage_work)
+                .await
+                .map_err(|err| to_dispatch(err, &extension))
         })
     }
 

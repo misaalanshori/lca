@@ -21,6 +21,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+lca-provider = { path = "../lca-provider" }
 conformance = { path = "../../extensions/conformance" }
 lca-ext-native = { path = "../lca-ext-native" }
 tokio.workspace = true

@@ -23,6 +23,9 @@ pub enum World {
     Command,
     /// Observe and gate the agent loop.
     Hooks,
+    /// Offer models, streamed completions, and account identity
+    /// (`provider` world, ADR-0004/ADR-0012).
+    Provider,
 }
 
 /// Whether this handle runs sandboxed (WASM) or in-process (native); the
@@ -62,8 +65,8 @@ pub mod dispatch {
 
     use crate::{DeliveryMode, World};
     use lca_protocol::{
-        CommandEffect, CommandSpec, DispatchError, HookAction, PostToolObservation, ToolCall,
-        ToolResult, ToolSpec,
+        CommandEffect, CommandSpec, CompletionRequest, DispatchError, EventSink, HookAction,
+        IdentityOutcome, ModelInfo, PostToolObservation, ToolCall, ToolResult, ToolSpec, Usage,
     };
 
     /// Boxed future bound for dispatch calls, tied to the handle's life.
@@ -141,6 +144,59 @@ pub mod dispatch {
         /// `session-close`: observe.
         fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>>;
 
+        /// Models this provider offers (`provider` world, FR-PROV-2).
+        /// Synchronous like `tool_specs`: the picker reads it at
+        /// registration time. The default answers `MissingWorld`, so a
+        /// handle without the provider world is rejected rather than
+        /// silently empty.
+        fn provider_models(&self) -> Result<Vec<ModelInfo>, DispatchError> {
+            Err(DispatchError::MissingWorld {
+                extension: self.name().to_string(),
+                world: "provider",
+            })
+        }
+
+        /// Stream one completion (`provider` world). Events are pushed
+        /// into `sink` as they arrive; `sink.push` returning `false`
+        /// cancels the stream (FR-CONC-3). Runs through the host's
+        /// blocking-pool bridge for WASM handles (ADR-0014).
+        fn stream_completion<'a>(
+            &'a self,
+            _request: CompletionRequest,
+            _sink: &'a dyn EventSink,
+        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+            Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
+                extension: self.name().to_string(),
+                world: "provider",
+            })))
+        }
+
+        /// `login` (`provider` world, ADR-0012). The default: this
+        /// provider has no login (the optional-export rule).
+        fn identity_login(
+            &self,
+        ) -> DispatchFuture<'static, Result<IdentityOutcome, DispatchError>> {
+            Box::pin(std::future::ready(Ok(IdentityOutcome::NotSupported)))
+        }
+
+        /// `logout` (`provider` world, ADR-0012).
+        fn identity_logout(
+            &self,
+        ) -> DispatchFuture<'static, Result<IdentityOutcome, DispatchError>> {
+            Box::pin(std::future::ready(Ok(IdentityOutcome::NotSupported)))
+        }
+
+        /// `usage` (`provider` world, ADR-0012): the standard usage shape,
+        /// or the outcome variant for a provider without one. The outer
+        /// `Result` separates host-level failures (trap, disabled) from
+        /// the provider's own outcome.
+        fn identity_usage(
+            &self,
+        ) -> DispatchFuture<'static, Result<Result<Usage, IdentityOutcome>, DispatchError>>
+        {
+            Box::pin(std::future::ready(Ok(Err(IdentityOutcome::NotSupported))))
+        }
+
         /// Force a running call to trap: Wasmtime epoch interruption for
         /// WASM handles (FR-CONC-1), a no-op for native code that shares
         /// the caller's cancellation flag.
@@ -169,5 +225,10 @@ pub mod host {
     /// The `hooks` world.
     pub mod hooks {
         wasmtime::component::bindgen!({ path: "../../wit", world: "hooks" });
+    }
+
+    /// The `provider` world (streaming, identity, model listing).
+    pub mod provider {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "provider" });
     }
 }

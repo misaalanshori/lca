@@ -253,7 +253,8 @@ fn manifest_parses_identity_fields() {
         vec![
             "tool".to_string(),
             "command".to_string(),
-            "hooks".to_string()
+            "hooks".to_string(),
+            "provider".to_string()
         ]
     );
     assert!(

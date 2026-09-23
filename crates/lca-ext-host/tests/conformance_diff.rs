@@ -155,7 +155,7 @@ async fn native_and_wasm_modes_produce_identical_results() {
     // Identity and shape.
     assert_eq!(wasm.name(), native.name());
     assert_eq!(wasm.worlds(), native.worlds());
-    assert_eq!(wasm.worlds().len(), 3, "tool, command, hooks");
+    assert_eq!(wasm.worlds().len(), 4, "tool, command, hooks, provider");
     assert_eq!(wasm.delivery(), DeliveryMode::Wasm);
     assert_eq!(native.delivery(), DeliveryMode::Native);
     // FR-EXT-7's labels differ BY DESIGN; everything else must not.

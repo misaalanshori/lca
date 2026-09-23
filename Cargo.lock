@@ -1328,6 +1328,7 @@ dependencies = [
  "lca-ext-native",
  "lca-permissions",
  "lca-protocol",
+ "lca-provider",
  "lca-tools",
  "serde_json",
  "thiserror",

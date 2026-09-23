@@ -273,6 +273,137 @@ pub fn outcome_to_result(call_id: &str, outcome: ModeOutcome) -> ToolResult {
 }
 
 // ---------------------------------------------------------------------------
+// Provider world: one script, both modes (the Phase 3 half of NFR-25)
+// ---------------------------------------------------------------------------
+
+/// The model list both modes return (FR-PROV-2).
+pub fn provider_models() -> Vec<lca_protocol::ModelInfo> {
+    vec![
+        lca_protocol::ModelInfo {
+            id: "conformance-a".to_string(),
+            name: "Conformance A".to_string(),
+            context_window: 4096,
+            max_tokens: 512,
+        },
+        lca_protocol::ModelInfo {
+            id: "conformance-b".to_string(),
+            name: "Conformance B".to_string(),
+            context_window: 8192,
+            max_tokens: 1024,
+        },
+    ]
+}
+
+/// The per-completion usage record every successful script ends with
+/// (testing plan: usage is mandatory on every turn).
+pub fn scripted_usage() -> lca_protocol::Usage {
+    lca_protocol::Usage {
+        input: 100,
+        output: 50,
+        cache_read: 1000,
+        cache_write: 20,
+        cache_write_1h: 0,
+        cost: 0.002,
+        cost_input: 0.0,
+        cost_cache_read: 0.0,
+        cost_cache_write: 0.0,
+        extras: Default::default(),
+    }
+}
+
+/// The event script, chosen by the request's model string. Both modes
+/// walk this same list, so their event streams are identical by
+/// construction (NFR-25).
+pub fn scripted_events(model: &str) -> Vec<lca_protocol::StreamEvent> {
+    use lca_protocol::StreamEvent as E;
+    let usage = || E::Usage {
+        usage: scripted_usage(),
+    };
+    match model {
+        // FR-PROV-7's shape: start strictly before every delta.
+        "conformance-tool" => vec![
+            E::ToolCallStart {
+                call_id: "c1".to_string(),
+                name: "read".to_string(),
+            },
+            E::ToolCallArgDelta {
+                call_id: "c1".to_string(),
+                delta: "{\"path\":\"".to_string(),
+            },
+            E::ToolCallArgDelta {
+                call_id: "c1".to_string(),
+                delta: "notes.txt\"}".to_string(),
+            },
+            E::ToolCallEnd {
+                call_id: "c1".to_string(),
+            },
+            usage(),
+        ],
+        // FR-PROV-8's shape: a delta with no open start, which the host's
+        // accumulator must discard and record as a protocol error.
+        "conformance-orphan-delta" => vec![
+            E::ToolCallArgDelta {
+                call_id: "ghost".to_string(),
+                delta: "{}".to_string(),
+            },
+            usage(),
+        ],
+        // The reserved escape hatch (ABI `vendor-event`).
+        "conformance-vendor" => vec![
+            E::VendorEvent {
+                kind: "image.generate".to_string(),
+                payload: serde_json::json!({ "size": "1024x1024" }),
+            },
+            usage(),
+        ],
+        // Ends with a typed error, so no usage follows.
+        "conformance-error" => vec![E::Error {
+            message: "scripted failure".to_string(),
+            retryable: false,
+        }],
+        // The default text/reasoning script.
+        _ => vec![
+            E::TextDelta {
+                delta: "Hel".to_string(),
+            },
+            E::TextDelta {
+                delta: "lo".to_string(),
+            },
+            E::ReasoningDelta {
+                delta: "reason".to_string(),
+            },
+            usage(),
+        ],
+    }
+}
+
+/// `login` succeeds (ADR-0012: conformance covers all three exports).
+pub fn scripted_login() -> lca_protocol::IdentityOutcome {
+    lca_protocol::IdentityOutcome::Ok
+}
+
+/// `logout` is this provider's not-supported case.
+pub fn scripted_logout() -> lca_protocol::IdentityOutcome {
+    lca_protocol::IdentityOutcome::NotSupported
+}
+
+/// The standard usage shape the generic `/usage` prints.
+pub fn scripted_usage_report() -> lca_protocol::Usage {
+    lca_protocol::Usage {
+        input: 700,
+        output: 70,
+        cache_read: 7000,
+        cache_write: 0,
+        cache_write_1h: 0,
+        cost: 0.007,
+        cost_input: 0.0,
+        cost_cache_read: 0.0,
+        cost_cache_write: 0.0,
+        extras: Default::default(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Native delivery mode (compiled into the host, unsandboxed, labeled so)
 // ---------------------------------------------------------------------------
 
@@ -381,7 +512,57 @@ mod native {
                 lca_ext_abi::World::Tool,
                 lca_ext_abi::World::Command,
                 lca_ext_abi::World::Hooks,
+                lca_ext_abi::World::Provider,
             ]
+        }
+
+        fn provider_models(
+            &self,
+        ) -> Result<Vec<lca_protocol::ModelInfo>, lca_protocol::DispatchError> {
+            Ok(crate::provider_models())
+        }
+
+        fn stream_completion<'a>(
+            &'a self,
+            request: lca_protocol::CompletionRequest,
+            sink: &'a dyn lca_protocol::EventSink,
+        ) -> lca_ext_abi::DispatchFuture<'a, Result<(), lca_protocol::DispatchError>> {
+            // The script is deterministic, so both modes push the same
+            // events in the same order before completing (NFR-25).
+            for event in crate::scripted_events(&request.model) {
+                sink.push(event);
+            }
+            Box::pin(std::future::ready(Ok(())))
+        }
+
+        fn identity_login(
+            &self,
+        ) -> lca_ext_abi::DispatchFuture<
+            'static,
+            Result<lca_protocol::IdentityOutcome, lca_protocol::DispatchError>,
+        > {
+            Box::pin(std::future::ready(Ok(crate::scripted_login())))
+        }
+
+        fn identity_logout(
+            &self,
+        ) -> lca_ext_abi::DispatchFuture<
+            'static,
+            Result<lca_protocol::IdentityOutcome, lca_protocol::DispatchError>,
+        > {
+            Box::pin(std::future::ready(Ok(crate::scripted_logout())))
+        }
+
+        fn identity_usage(
+            &self,
+        ) -> lca_ext_abi::DispatchFuture<
+            'static,
+            Result<
+                Result<lca_protocol::Usage, lca_protocol::IdentityOutcome>,
+                lca_protocol::DispatchError,
+            >,
+        > {
+            Box::pin(std::future::ready(Ok(Ok(crate::scripted_usage_report()))))
         }
 
         fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {
@@ -737,4 +918,158 @@ mod hooks_world {
     }
 
     export_hooks!(HooksComponent);
+}
+
+// ---------------------------------------------------------------------------
+// WASM delivery mode: the provider world
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod provider_world {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "provider",
+        export_macro_name: "export_provider",
+        with: {
+            "lca:host/log@0.1.0": generate,
+            "lca:host/net@0.1.0": generate,
+            "lca:host/oauth@0.1.0": generate,
+            "lca:host/credentials@0.1.0": generate,
+        },
+    });
+
+    use core::cell::RefCell;
+
+    use exports::lca::ext::provider_completion::{CompletionRequest, CompletionStream};
+    use exports::lca::ext::provider_completion::{
+        Guest as CompletionGuest, GuestCompletionStream, StreamEvent as WasmEvent,
+    };
+    use exports::lca::ext::provider_identity::{
+        Guest as IdentityGuest, IdentityOutcome as WasmOutcome, TokenUsage,
+    };
+    use exports::lca::ext::provider_models::{Guest as ModelsGuest, ModelInfo as WasmModel};
+    use lca::ext::types::{ExtraPair, Usage as WasmUsage};
+
+    /// Protocol usage -> the WIT record (cost buckets in reserved extras,
+    /// matching the host's conversion exactly for NFR-25 parity).
+    fn to_wit_usage(usage: &lca_protocol::Usage) -> WasmUsage {
+        let mut extras: Vec<ExtraPair> = usage
+            .extras
+            .iter()
+            .map(|(key, value)| ExtraPair {
+                key: key.clone(),
+                value: value.clone(),
+            })
+            .collect();
+        for (key, value) in [
+            ("cost_input", usage.cost_input),
+            ("cost_cache_read", usage.cost_cache_read),
+            ("cost_cache_write", usage.cost_cache_write),
+        ] {
+            if value != 0.0 {
+                extras.push(ExtraPair {
+                    key: key.to_string(),
+                    value: value.to_string(),
+                });
+            }
+        }
+        WasmUsage {
+            input: usage.input,
+            output: usage.output,
+            cache_read: usage.cache_read,
+            cache_write: usage.cache_write,
+            cache_write_hour: usage.cache_write_1h,
+            cost: usage.cost,
+            extras,
+        }
+    }
+
+    fn to_wit_event(event: lca_protocol::StreamEvent) -> WasmEvent {
+        use lca_protocol::StreamEvent as P;
+        match event {
+            P::TextDelta { delta } => WasmEvent::TextDelta(delta),
+            P::ReasoningDelta { delta } => WasmEvent::ReasoningDelta(delta),
+            P::ToolCallStart { call_id, name } => WasmEvent::ToolCallStart((call_id, name)),
+            P::ToolCallArgDelta { call_id, delta } => WasmEvent::ToolCallArgDelta((call_id, delta)),
+            P::ToolCallEnd { call_id } => WasmEvent::ToolCallEnd(call_id),
+            P::Usage { usage } => WasmEvent::Usage(to_wit_usage(&usage)),
+            P::Error { message, retryable } => WasmEvent::Error((message, retryable)),
+            P::VendorEvent { kind, payload } => WasmEvent::VendorEvent((kind, payload.to_string())),
+        }
+    }
+
+    pub struct ProviderComponent;
+
+    impl ModelsGuest for ProviderComponent {
+        fn list_models() -> Vec<WasmModel> {
+            crate::provider_models()
+                .into_iter()
+                .map(|model| WasmModel {
+                    id: model.id,
+                    name: model.name,
+                    context_window: model.context_window,
+                    max_tokens: model.max_tokens,
+                    extras: Vec::new(),
+                })
+                .collect()
+        }
+    }
+
+    /// The pull stream: the script precomputed, `next` walks it. The
+    /// host polls from a task; no thread is dedicated to the call
+    /// (ADR-0004).
+    pub struct ScriptedStream {
+        events: RefCell<std::vec::IntoIter<lca_protocol::StreamEvent>>,
+    }
+
+    impl GuestCompletionStream for ScriptedStream {
+        fn next(&self) -> Option<WasmEvent> {
+            self.events.borrow_mut().next().map(to_wit_event)
+        }
+    }
+
+    impl CompletionGuest for ProviderComponent {
+        type CompletionStream = ScriptedStream;
+
+        fn stream_completion(request: CompletionRequest) -> Result<CompletionStream, String> {
+            let events = crate::scripted_events(&request.model);
+            Ok(CompletionStream::new(ScriptedStream {
+                events: RefCell::new(events.into_iter()),
+            }))
+        }
+    }
+
+    impl IdentityGuest for ProviderComponent {
+        fn login() -> WasmOutcome {
+            match crate::scripted_login() {
+                lca_protocol::IdentityOutcome::Ok => WasmOutcome::Ok,
+                lca_protocol::IdentityOutcome::NotSupported => WasmOutcome::NotSupported,
+                lca_protocol::IdentityOutcome::Failed(reason) => WasmOutcome::Failed(reason),
+            }
+        }
+
+        fn logout() -> WasmOutcome {
+            match crate::scripted_logout() {
+                lca_protocol::IdentityOutcome::Ok => WasmOutcome::Ok,
+                lca_protocol::IdentityOutcome::NotSupported => WasmOutcome::NotSupported,
+                lca_protocol::IdentityOutcome::Failed(reason) => WasmOutcome::Failed(reason),
+            }
+        }
+
+        fn usage() -> Result<TokenUsage, WasmOutcome> {
+            let usage = to_wit_usage(&crate::scripted_usage_report());
+            Ok(TokenUsage {
+                input: usage.input,
+                output: usage.output,
+                cache_read: usage.cache_read,
+                cache_write: usage.cache_write,
+                cache_write_hour: usage.cache_write_hour,
+                cost: usage.cost,
+                extras: usage.extras,
+            })
+        }
+    }
+
+    export_provider!(ProviderComponent);
 }

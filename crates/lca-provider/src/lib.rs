@@ -8,11 +8,15 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
-use lca_protocol::{ChatMessage, StreamEvent, ToolCall, ToolSpec};
+use lca_protocol::{StreamEvent, ToolCall};
+
+// The provider-world data types live in the protocol crate now that the
+// dispatch trait needs them; re-exported here so existing call sites do
+// not change.
+pub use lca_protocol::{CompletionRequest, ModelInfo};
 
 /// A boxed future, the hand-rolled async surface that keeps this crate on
 /// the documented dependency list.
@@ -21,36 +25,6 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 /// Where a provider's events go: a bounded channel the host drains while
 /// rendering (streaming is host-driven polling, ADR-0004).
 pub type EventSender = tokio::sync::mpsc::Sender<StreamEvent>;
-
-/// One model a provider offers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelInfo {
-    /// Provider-specific model identifier.
-    pub id: String,
-    /// Display name for the picker.
-    pub name: String,
-    /// Context window in tokens.
-    pub context_window: u32,
-    /// Maximum output tokens.
-    pub max_tokens: u32,
-}
-
-/// One completion request as the core assembles it.
-#[derive(Debug, Clone, Default)]
-pub struct CompletionRequest {
-    /// The resolved message list (post-compaction, post-transform).
-    pub messages: Vec<ChatMessage>,
-    /// Tool specs advertised to the model.
-    pub tools: Vec<ToolSpec>,
-    /// Model identifier.
-    pub model: String,
-    /// Count of leading messages the host considers the stable, cacheable
-    /// prefix (FR-CACHE-5). Advisory: providers with no cache marker ignore
-    /// it safely.
-    pub stable_prefix: usize,
-    /// Reserved map for non-structural additions.
-    pub extras: BTreeMap<String, String>,
-}
 
 /// How a provider call failed. `retryable` decides whether the core retries
 /// (FR-CORE-6) and feeds the headless `error` envelope's class.
