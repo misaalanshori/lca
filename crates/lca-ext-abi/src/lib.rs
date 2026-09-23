@@ -32,6 +32,9 @@ pub enum World {
     /// Reshape the outgoing message list, or reject the turn
     /// (`context-transform` world, ADR-0015, FR-CTX-2/3).
     ContextTransform,
+    /// Draw in the four regions as a widget tree (`ui` world,
+    /// ADR-0003, FR-UI-1/2/6).
+    Ui,
 }
 
 /// Whether this handle runs sandboxed (WASM) or in-process (native); the
@@ -204,6 +207,37 @@ pub mod dispatch {
             Box::pin(std::future::ready(Ok(Err(IdentityOutcome::NotSupported))))
         }
 
+        /// The regions this handle registered under `capabilities.ui`
+        /// (the host only ever asks for these: the catalog's `ui`
+        /// table, deny-by-default). Empty by default - no rendering.
+        fn ui_regions(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        /// The tree for one region (`ui` world, ADR-0003, FR-UI-1).
+        /// Synchronous on purpose: this runs on a frame's clock, and a
+        /// native handle answers immediately while a WASM handle joins
+        /// its blocking call (registration-path pattern). `Ok(None)`
+        /// means nothing to draw for that region, which is also how an
+        /// ungranted ask is declined - the host never asks outside
+        /// `ui_regions`, so a hostile extension simply is not called
+        /// (capability catalog: its render export is never invoked).
+        fn render(&self, _region: &str) -> Result<Option<lca_protocol::WidgetTree>, DispatchError> {
+            Ok(None)
+        }
+
+        /// One user interaction in, one effect out (`ui` world,
+        /// FR-UI-6): the host delivers these only in response to real
+        /// user input, which is what makes "no modal without the user"
+        /// enforceable host-side.
+        fn on_ui_event(
+            &self,
+            _region: &str,
+            _input: &lca_protocol::UiInput,
+        ) -> Result<lca_protocol::UiEffect, DispatchError> {
+            Ok(lca_protocol::UiEffect::None)
+        }
+
         /// Compact a candidate range of the session into a replacement
         /// summary (`compaction` world, FR-SESS-5/FR-CTX-1). The host
         /// writes what comes back as a durable record and reuses it on
@@ -278,5 +312,10 @@ pub mod host {
     /// The `context-transform` world.
     pub mod context_transform {
         wasmtime::component::bindgen!({ path: "../../wit", world: "context-transform" });
+    }
+
+    /// The `ui` world.
+    pub mod ui {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "ui" });
     }
 }

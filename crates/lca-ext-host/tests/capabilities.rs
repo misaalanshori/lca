@@ -139,14 +139,39 @@ fn manifest_declares_and_parses_every_capability() {
         "reason must say something"
     );
 
-    // Unknown capability keys are rejected (schema additionalProperties);
-    // net and friends arrived with this phase, `completion` is Phase4's.
+    // `completion` (Phase4) and `ui` (Phase6) parse now, with the
+    // required reason and the region vocabulary enforced.
+    let with_completion = Manifest::parse(&manifest_with(
+        "\n[capabilities.completion]\nreason = \"Summarizes older parts of the conversation when compacting.\"\n",
+    ))
+    .expect("completion parses");
+    assert!(with_completion.completion, "completion declared");
     assert!(
         Manifest::parse(&manifest_with(
-            "\n[capabilities.completion]\nreason = \"too early for now\"\n"
+            "\n[capabilities.completion]\nreason = \"short\"\n"
         ))
         .is_err(),
-        "capabilities arrive phase by phase"
+        "a completion reason must say something"
+    );
+
+    let with_ui = Manifest::parse(&manifest_with(
+        "\n[capabilities.ui]\nregions = [\"status-line\", \"panel\"]\n",
+    ))
+    .expect("ui parses");
+    assert_eq!(with_ui.ui_regions, vec!["status-line", "panel"]);
+    assert!(
+        Manifest::parse(&manifest_with(
+            "\n[capabilities.ui]\nregions = [\"everywhere\"]\n"
+        ))
+        .is_err(),
+        "unknown regions are refused"
+    );
+
+    // Unknown capability keys are still rejected (schema
+    // additionalProperties).
+    assert!(
+        Manifest::parse(&manifest_with("\n[capabilities.mystery]\nreason = \"x\"\n")).is_err(),
+        "unknown capabilities stay refused"
     );
 }
 

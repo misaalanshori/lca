@@ -276,6 +276,13 @@ impl Capabilities {
         })
     }
 
+    /// Note a `ui` ask for a region the manifest never declared
+    /// (FR-EXT-9's journal; the render export itself is never called,
+    /// capability catalog `ui`).
+    pub fn note_ui_denial(&self, region: &str) {
+        self.record("ui", region, "the manifest does not declare this region");
+    }
+
     /// Every URL this extension asked the host to open, in order: how
     /// a test (or an audit) sees the authorization URL a login built.
     pub fn oauth_opened(&self) -> Vec<String> {

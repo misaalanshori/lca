@@ -51,5 +51,7 @@ interface interaction {
     submit-prompt(string),
   }
 
-  handle: func(input: input) -> effect;
+  /// The region the event belongs to, so one modal key and one panel
+  /// key never share a branch.
+  handle: func(region: string, input: input) -> effect;
 }

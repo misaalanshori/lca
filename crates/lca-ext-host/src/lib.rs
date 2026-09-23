@@ -27,6 +27,7 @@ use lca_ext_abi::host::compaction::CompactionPre;
 use lca_ext_abi::host::context_transform::ContextTransformPre;
 use lca_ext_abi::host::provider::ProviderPre;
 use lca_ext_abi::host::tool::{Tool, ToolPre};
+use lca_ext_abi::host::ui::UiPre;
 use lca_ext_abi::{DeliveryMode, World};
 use lca_permissions::{
     GrantStore, OAuthSettings, PermissionPrompt, Proposals, ScopeGrant, ScopeRoots,
@@ -100,6 +101,9 @@ pub struct Manifest {
     pub credentials: bool,
     /// The `completion` capability was declared (ADR-0015).
     pub completion: bool,
+    /// The `ui` regions this manifest declares (capability catalog's
+    /// four-region enum; empty means no rendering rights at all).
+    pub ui_regions: Vec<String>,
     /// The manifest's resource hints, clamped to the host's maxima at
     /// load (schema `limits`: memory64MB/fuel10M defaults,512MB/1B
     /// maximums; absent means the host's own values apply).
@@ -168,6 +172,7 @@ impl Manifest {
         let mut parsed_oauth: Option<OAuthSettings> = None;
         let mut parsed_credentials = false;
         let mut parsed_completion = false;
+        let mut parsed_ui_regions: Vec<String> = Vec::new();
         let mut parsed_limits: Option<ExtensionLimits> = None;
         if let Some(capabilities) = value.get("capabilities") {
             let table = capabilities.as_table().ok_or_else(|| {
@@ -175,7 +180,8 @@ impl Manifest {
             })?;
             for key in table.keys() {
                 match key.as_str() {
-                    "fs" | "process" | "pty" | "net" | "net-local" | "oauth" | "credentials" => {}
+                    "fs" | "process" | "pty" | "net" | "net-local" | "oauth" | "credentials"
+                    | "completion" | "ui" => {}
                     other => {
                         return Err(LoadError::InvalidManifest(format!(
                             "unknown capability `{other}`"
@@ -310,6 +316,34 @@ impl Manifest {
             parsed_oauth = oauth;
             parsed_credentials = credentials;
             parsed_completion = completion;
+            let mut ui_regions = Vec::new();
+            if let Some(cap) = table.get("ui") {
+                let regions = cap
+                    .get("regions")
+                    .and_then(|r| r.as_array())
+                    .ok_or_else(|| {
+                        LoadError::InvalidManifest(
+                            "`capabilities.ui.regions` must be a list".into(),
+                        )
+                    })?;
+                for region in regions {
+                    let region = region.as_str().ok_or_else(|| {
+                        LoadError::InvalidManifest("ui regions are strings".into())
+                    })?;
+                    if !matches!(region, "status-line" | "footer" | "panel" | "modal") {
+                        return Err(LoadError::InvalidManifest(format!(
+                            "`{region}` is not one of status-line, footer, panel, modal"
+                        )));
+                    }
+                    if ui_regions.contains(&region.to_string()) {
+                        return Err(LoadError::InvalidManifest(format!(
+                            "duplicate ui region `{region}`"
+                        )));
+                    }
+                    ui_regions.push(region.to_string());
+                }
+            }
+            parsed_ui_regions = ui_regions;
             parsed_limits = manifest_limits(&value)?;
         }
 
@@ -326,6 +360,7 @@ impl Manifest {
             oauth: parsed_oauth,
             credentials: parsed_credentials,
             completion: parsed_completion,
+            ui_regions: parsed_ui_regions,
             limits: parsed_limits,
         })
     }
@@ -1065,7 +1100,16 @@ impl ExtHost {
             .worlds
             .iter()
             .any(|world| world == "context-transform")
-            .then(|| ContextTransformPre::new(pre).map_err(|err| LoadError::Link(err.to_string())))
+            .then(|| {
+                ContextTransformPre::new(pre.clone())
+                    .map_err(|err| LoadError::Link(err.to_string()))
+            })
+            .transpose()?;
+        let ui = manifest
+            .worlds
+            .iter()
+            .any(|world| world == "ui")
+            .then(|| UiPre::new(pre).map_err(|err| LoadError::Link(err.to_string())))
             .transpose()?;
 
         Ok(WasmExtension {
@@ -1079,6 +1123,8 @@ impl ExtHost {
                 provider,
                 compaction,
                 context_transform,
+                ui,
+                ui_regions: manifest.ui_regions.clone(),
                 limits: effective_limits,
                 enabled: Arc::new(AtomicBool::new(true)),
                 logs: Arc::new(Mutex::new(Vec::new())),
@@ -1102,6 +1148,9 @@ struct Inner {
     provider: Option<ProviderPre<HostState>>,
     compaction: Option<CompactionPre<HostState>>,
     context_transform: Option<ContextTransformPre<HostState>>,
+    ui: Option<UiPre<HostState>>,
+    /// The manifest's granted ui regions (the host only asks these).
+    ui_regions: Vec<String>,
     limits: ExtensionLimits,
     enabled: Arc<AtomicBool>,
     logs: Arc<Mutex<Vec<String>>>,
@@ -1751,6 +1800,83 @@ fn transform_work(
     })
 }
 
+// ---------------------------------------------------------------------------
+// The ui world: widget trees out, interactions in (ADR-0003)
+// ---------------------------------------------------------------------------
+
+use lca_ext_abi::host::ui::exports::lca::ext as ui_exports;
+
+/// The WIT case -> protocol widget.
+fn from_wit_widget(widget: ui_exports::render::Widget) -> lca_protocol::Widget {
+    use lca_protocol::Widget as W;
+    use ui_exports::render::Widget as Wit;
+    match widget {
+        Wit::Text((content, role)) => W::Text { content, role },
+        Wit::Image((media_type, bytes)) => W::Image { media_type, bytes },
+        Wit::Boxed((title, child)) => W::Boxed { title, child },
+        Wit::Row(children) => W::Row(children),
+        Wit::Column(children) => W::Column(children),
+        Wit::Spinner(frames) => W::Spinner { frames },
+        Wit::Progress((label, fill)) => W::Progress { label, fill },
+        Wit::Keyvalue(pairs) => W::KeyValue(pairs),
+        Wit::Vendor(kind) => W::Vendor(kind),
+    }
+}
+
+fn render_work(inner: &Inner, region: &str) -> Result<Option<lca_protocol::WidgetTree>, CallError> {
+    let pre = inner
+        .ui
+        .as_ref()
+        .ok_or_else(|| CallError::InvalidArguments("no ui world".into()))?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let tree = instance
+        .lca_ext_render()
+        .call_render(&mut store, region)
+        .map_err(|err| inner.classify(err))?;
+    Ok(tree.map(|nodes| lca_protocol::WidgetTree {
+        nodes: nodes.into_iter().map(from_wit_widget).collect(),
+    }))
+}
+
+fn event_work(
+    inner: &Inner,
+    region: &str,
+    input: &lca_protocol::UiInput,
+) -> Result<lca_protocol::UiEffect, CallError> {
+    use lca_protocol::UiEffect;
+    use ui_exports::interaction::Input as WasmInput;
+    let pre = inner
+        .ui
+        .as_ref()
+        .ok_or_else(|| CallError::InvalidArguments("no ui world".into()))?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let wasm_input = match input {
+        lca_protocol::UiInput::Key { key } => WasmInput::Key(key.clone()),
+        lca_protocol::UiInput::Submit { text } => WasmInput::Submit(text.clone()),
+        lca_protocol::UiInput::Cancel => WasmInput::Cancel,
+    };
+    let effect = instance
+        .lca_ext_interaction()
+        .call_handle(&mut store, region, &wasm_input)
+        .map_err(|err| inner.classify(err))?;
+    use ui_exports::interaction::Effect;
+    let _ = region;
+    Ok(match effect {
+        Effect::None => UiEffect::None,
+        Effect::CloseModal => UiEffect::CloseModal,
+        Effect::OpenModal => UiEffect::OpenModal,
+        Effect::ShowNotice(text) => UiEffect::ShowNotice(text),
+        Effect::InsertText(text) => UiEffect::InsertText(text),
+        Effect::SubmitPrompt(text) => UiEffect::SubmitPrompt(text),
+    })
+}
+
 /// One loaded extension (ADR-0019's handle for the WASM mode).
 pub struct WasmExtension {
     inner: Arc<Inner>,
@@ -1876,6 +2002,7 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
                 "provider" => Some(World::Provider),
                 "compaction" => Some(World::Compaction),
                 "context-transform" => Some(World::ContextTransform),
+                "ui" => Some(World::Ui),
                 _ => None,
             })
             .collect()
@@ -2200,6 +2327,45 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
                 .await
                 .map_err(|err| to_dispatch(err, &extension))
         })
+    }
+
+    fn ui_regions(&self) -> Vec<String> {
+        self.inner.ui_regions.clone()
+    }
+
+    fn render(&self, region: &str) -> Result<Option<lca_protocol::WidgetTree>, DispatchError> {
+        if !self.worlds().contains(&World::Ui) || !self.inner.ui_regions.iter().any(|r| r == region)
+        {
+            if self.worlds().contains(&World::Ui) {
+                // Declared the world but not this region: the denial is
+                // recorded, the export is never called (catalog `ui`).
+                self.inner.cap.note_ui_denial(region);
+            }
+            return Ok(None);
+        }
+        let region = region.to_string();
+        // Frame-time call: the same blocking thread a registration call
+        // uses (Wasmtime's sync WASI needs no runtime poll). A small
+        // wasm component answers within the frame budget; ponytail:
+        // measure with NFR-4's numbers if a heavy extension ever
+        // misses it.
+        self.blocking(move |inner| render_work(inner, &region))
+            .map_err(|err| to_dispatch(err, self.name()))
+    }
+
+    fn on_ui_event(
+        &self,
+        region: &str,
+        input: &lca_protocol::UiInput,
+    ) -> Result<lca_protocol::UiEffect, DispatchError> {
+        if !self.worlds().contains(&World::Ui) || !self.inner.ui_regions.iter().any(|r| r == region)
+        {
+            return Ok(lca_protocol::UiEffect::None);
+        }
+        let region = region.to_string();
+        let input = input.clone();
+        self.blocking(move |inner| event_work(inner, &region, &input))
+            .map_err(|err| to_dispatch(err, self.name()))
     }
 
     fn interrupt(&self) {
