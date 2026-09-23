@@ -1204,6 +1204,15 @@ impl Capabilities {
                         // sends a query-carrying request line is a probe or
                         // a stray; it does not consume the flow, the loop
                         // just goes back to accepting.
+                        // BSD and Linux disagree about whether an
+                        // accepted socket inherits the listener's
+                        // nonblocking flag: macOS it does, so the first
+                        // read would come back WouldBlock before the
+                        // client had typed, get treated as "peer gone",
+                        // and close the connection under it. Explicitly
+                        // blocking, the read_timeout below is the only
+                        // clock in play on both platforms.
+                        let _ = stream.set_nonblocking(false);
                         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(60)));
                         let mut buf = vec![0u8; 8192];
                         let mut filled = 0usize;
