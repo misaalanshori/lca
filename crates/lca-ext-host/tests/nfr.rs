@@ -72,9 +72,16 @@ fn median(values: &[Duration]) -> Duration {
 #[test]
 fn instantiation_stays_within_twenty_milliseconds() {
     let (extension, _host) = load();
-    // Warm one call so the measure is steady-state, as ADR-0001's
-    // precompile-per-digest model assumes.
-    extension.schema().expect("warmup");
+    // Warm the call so the measure is steady-state, as ADR-0001's
+    // precompile-per-digest model assumes. Several warmups, not one:
+    // on Windows the first touches of freshly-mapped executable pages
+    // pass through endpoint scanning, which the median sees as
+    // instantiation cost (the first CI measurement on that platform
+    // was a44.7 ms median with one warmup - recorded here as the
+    // reason, not moved as a threshold).
+    for _ in 0..5 {
+        extension.schema().expect("warmup");
+    }
     let mut samples = Vec::new();
     for _ in 0..20 {
         let started = Instant::now();

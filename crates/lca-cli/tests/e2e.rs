@@ -662,6 +662,11 @@ impl Sandbox {
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
             .env("XDG_DATA_HOME", &self.data)
+            // The same Windows pin `run_env` carries: without it the
+            // child resolves data_dir() to the runner's real profile
+            // and the install lands outside the sandbox.
+            .env("APPDATA", &self.data)
+            .env("LOCALAPPDATA", &self.data)
             .env("XDG_CONFIG_HOME", self.home.join(".config"))
             .env_remove("OPENAI_MODEL")
             .env_remove("LCA_PROVIDER")

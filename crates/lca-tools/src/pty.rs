@@ -613,12 +613,40 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
         };
     }
     if available > 0 {
-        crate::process::read_up_to(&mut inner.output, max)
-    } else if inner.child.exited() {
-        Ok(None)
-    } else {
-        Ok(Some(Vec::new()))
+        return crate::process::read_up_to(&mut inner.output, max);
     }
+    if !inner.child.exited() {
+        return Ok(Some(Vec::new()));
+    }
+    // The child is gone and the pipe is empty - but ConPTY's own
+    // pipeline (conversion buffer to pipe) can lag the exit signal by
+    // milliseconds, and returning None before it lands throws the
+    // program's entire output away: cmd's echo arrived as nothing
+    // but the console's opening escape sequences. Give the final
+    // flush a bounded grace: poll for bytes, and only after200 ms of
+    // silence call it the end of the stream.
+    // ponytail: fixed200 ms grace, per-read, only after exit - raise
+    // it if a slow machine's ConPTY ever needs more.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let mut pending: u32 = 0;
+        // SAFETY: the file is an open pipe end; the out params are valid.
+        let ok = unsafe {
+            windows_sys::Win32::System::Pipes::PeekNamedPipe(
+                inner.output.as_raw_handle() as *mut _,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut pending,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok != 0 && pending > 0 {
+            return crate::process::read_up_to(&mut inner.output, max);
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(windows)]
