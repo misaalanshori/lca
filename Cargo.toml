@@ -30,6 +30,11 @@ anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["client", "server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+# tower-service - the tiny (std-only) `Service` trait the hyper-util
+# `HttpConnector` accepts as a custom DNS resolver. The `net` rebinding fix
+# pins the address it already checked so hyper cannot re-resolve to a local
+# address between the check and the connect; see capabilities.rs and ADR-0025.
+tower-service = "0.3"
 http-body-util = "0.1"
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "ring", "webpki-roots", "logging", "tls12"] }
 ratatui = "0.29"

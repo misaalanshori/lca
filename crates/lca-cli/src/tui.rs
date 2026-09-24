@@ -143,6 +143,10 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     let proposals: Option<Proposals> = trusted.then(|| config.permissions_proposals().clone());
     let stats_store = store.clone();
     let stats_session = session.clone();
+    // The one swappable prompt slot every capability engine shares; the turn
+    // runner installs the interface's modal into it, so an extension's own
+    // process/pty command asks the user exactly like a model command does.
+    let shared_prompt = lca_permissions::SharedPrompt::default();
     // First-party, native-linked extensions (ADR-0013): hooks-example
     // provides the reference policy and fills the /stats built-in slot,
     // which is the Phase 2 move of that behavior out of the TUI.
@@ -154,6 +158,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         &mut registry,
         cwd,
         config.extensions_log_limit_bytes() as usize,
+        shared_prompt.clone(),
     );
     for handle in lca_ext_native::default_native_extensions(Arc::new(move || {
         session_stats(&stats_store, &stats_session)
@@ -162,7 +167,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     }
     #[cfg(feature = "bundled-openai-compat")]
     registry.register(Arc::new(openai_compatible::OpenAiCompat::new(
-        crate::openai_capabilities(cwd),
+        crate::openai_capabilities(cwd, shared_prompt.clone()),
     )));
     crate::apply_enablement(&mut registry, |name| {
         grants.lock().expect("grants").extension_enabled(cwd, name) == Some(false)
@@ -209,6 +214,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             cwd,
             "compaction-default",
             compaction_default::manifest_grants(),
+            shared_prompt.clone(),
         );
         cap.set_completion(backend.clone());
         registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
@@ -221,7 +227,12 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         .map(|backend| backend as Arc<dyn lca_tools::CompletionBackend>);
     #[cfg(feature = "bundled-skills")]
     registry.register(Arc::new(skills::Skills::new(
-        crate::extension_capabilities(cwd, "skills", skills::manifest_grants()),
+        crate::extension_capabilities(
+            cwd,
+            "skills",
+            skills::manifest_grants(),
+            shared_prompt.clone(),
+        ),
     )));
     crate::apply_enablement(&mut registry, |name| {
         grants.lock().expect("grants").extension_enabled(cwd, name) == Some(false)
@@ -372,6 +383,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
 
     let runner_store = store.clone();
     let runner_session = session.clone();
+    let shared_prompt_for_runner = shared_prompt.clone();
     let runner: TurnRunner = Box::new(move |text, channels, cancel| {
         let tools = tools.clone();
         let grants = grants.clone();
@@ -381,10 +393,20 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         let agent_config = agent_config.clone();
         let proposals = proposals.clone();
         let model_cell = model_cell.clone();
+        let shared_prompt = shared_prompt_for_runner.clone();
         std::thread::spawn(move || {
             let mut sink = ChannelSink {
                 tx: channels.events.clone(),
             };
+            // Install this turn's modal into the shared slot before any
+            // extension call runs, so an extension's own process/pty command
+            // reaches the same permission prompt the model's tools do.
+            let turn_prompt: std::sync::Arc<
+                std::sync::Mutex<dyn lca_permissions::PermissionPrompt>,
+            > = std::sync::Arc::new(std::sync::Mutex::new(UiPrompt {
+                tx: channels.prompt.clone(),
+            }));
+            shared_prompt.set(turn_prompt);
             let mut prompt = UiPrompt {
                 tx: channels.prompt,
             };

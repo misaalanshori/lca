@@ -444,3 +444,40 @@ fn adhoc_net_grants_persist_per_project() {
     assert!(reopened.net_patterns(&other).is_empty(), "per project only");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Verifies: capability catalog `process`/`pty` - a capability engine's
+// swappable prompt routes to whatever the interface installed (so an
+// extension's command reaches the same modal the model's does), and denies
+// when nothing is installed (headless, or between turns).
+#[test]
+fn shared_prompt_routes_to_the_installed_prompt_or_denies() {
+    struct Allow;
+    impl PermissionPrompt for Allow {
+        fn ask(&mut self, _action: &Action) -> Decision {
+            Decision::Once
+        }
+        fn review_proposals(&mut self, _diff: &ProposalDiff) -> bool {
+            true
+        }
+    }
+
+    let mut shared = lca_permissions::SharedPrompt::default();
+    let action = Action::Shell {
+        command: "ls".to_string(),
+        cwd: PathBuf::from("/"),
+    };
+    assert_eq!(
+        shared.ask(&action),
+        Decision::Denied,
+        "nothing installed denies"
+    );
+    assert!(!shared.review_proposals(&ProposalDiff::default()));
+
+    shared.set(std::sync::Arc::new(std::sync::Mutex::new(Allow)));
+    assert_eq!(
+        shared.ask(&action),
+        Decision::Once,
+        "routes to the installed prompt"
+    );
+    assert!(shared.review_proposals(&ProposalDiff::default()));
+}

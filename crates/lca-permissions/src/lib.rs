@@ -36,6 +36,11 @@ pub enum Action {
         /// The exact target path.
         path: PathBuf,
     },
+    /// Read, list, or search a path outside the workspace (FR-TOOL-3).
+    ReadPath {
+        /// The exact target path.
+        path: PathBuf,
+    },
 }
 
 impl Action {
@@ -44,6 +49,7 @@ impl Action {
         match self {
             Action::Shell { command, cwd } => format!("{command} (in {})", cwd.display()),
             Action::WritePath { path } => format!("write {}", path.display()),
+            Action::ReadPath { path } => format!("read {}", path.display()),
         }
     }
 
@@ -52,6 +58,7 @@ impl Action {
         match self {
             Action::Shell { command, .. } => command.clone(),
             Action::WritePath { path } => path.display().to_string(),
+            Action::ReadPath { path } => path.display().to_string(),
         }
     }
 
@@ -96,6 +103,61 @@ pub trait PermissionPrompt: Send {
     fn ask(&mut self, action: &Action) -> Decision;
     /// Show the proposal difference; true applies the new set.
     fn review_proposals(&mut self, diff: &ProposalDiff) -> bool;
+}
+
+/// A swappable prompt slot. Every capability engine the host builds (WASM and
+/// native) gets one for its whole life; the interface installs the current
+/// turn's real prompt into it, so an extension's own `process`/`pty` commands
+/// reach the same modal the model's commands do (capability catalog: each
+/// command still asks for approval). With nothing installed it denies, which
+/// is the right answer headless and between turns.
+#[derive(Default, Clone)]
+pub struct SharedPrompt {
+    inner: SharedPromptSlot,
+}
+
+/// The interior of [`SharedPrompt`]: an optional prompt, swappable at runtime.
+type SharedPromptSlot = std::sync::Arc<
+    std::sync::Mutex<Option<std::sync::Arc<std::sync::Mutex<dyn PermissionPrompt>>>>,
+>;
+
+impl SharedPrompt {
+    /// Route subsequent asks to `prompt`.
+    pub fn set(&self, prompt: std::sync::Arc<std::sync::Mutex<dyn PermissionPrompt>>) {
+        *self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(prompt);
+    }
+
+    fn current(&self) -> Option<std::sync::Arc<std::sync::Mutex<dyn PermissionPrompt>>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
+impl PermissionPrompt for SharedPrompt {
+    fn ask(&mut self, action: &Action) -> Decision {
+        match self.current() {
+            Some(prompt) => prompt
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .ask(action),
+            None => Decision::Denied,
+        }
+    }
+
+    fn review_proposals(&mut self, diff: &ProposalDiff) -> bool {
+        match self.current() {
+            Some(prompt) => prompt
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .review_proposals(diff),
+            None => false,
+        }
+    }
 }
 
 /// Result of one authorize call.
@@ -683,7 +745,14 @@ impl ScopeRoots {
         let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         let canonical_state =
             std::fs::canonicalize(&self.state_dir).unwrap_or_else(|_| self.state_dir.clone());
-        if resolved.starts_with(&canonical_state) {
+        // The state-directory exclusion protects the sessions, the extension
+        // tree, and the credential store from every scope and every ad hoc
+        // grant. The `private` scope is the one sanctioned exception: its own
+        // root lives under the state directory (`<data>/private/<name>`) and
+        // is confined by the `starts_with(root)` check below, so it cannot
+        // reach those subtrees. Excluding all of the state directory made
+        // `private` unusable (ADR-0005 / capability catalog's `fs` table).
+        if scope != "private" && resolved.starts_with(&canonical_state) {
             return Err(violation(ScopeViolationKind::StateDirectory));
         }
         if !resolved.starts_with(&canonical_root) {

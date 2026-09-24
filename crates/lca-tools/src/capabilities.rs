@@ -9,18 +9,23 @@
 //! (`docs/flows.md`).
 
 use std::collections::HashMap;
-use std::net::{IpAddr, ToSocketAddrs};
+use std::future::Future;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 use http_body_util::Full;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::connect::dns::{GaiResolver, Name};
 use lca_permissions::{
     Action, GrantStore, PermissionPrompt, Proposals, ScopeGrant, ScopeRoots, authorize,
     is_local_address, normalize_ip,
 };
 use lca_protocol::CapabilityError;
+use tower_service::Service;
 
 /// One recorded attempt: identity, what was tried, and why it failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,7 +70,46 @@ pub struct CapabilityGrants {
     pub completion: bool,
 }
 
-type HttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<hyper::body::Bytes>>;
+type HttpClient =
+    Client<hyper_rustls::HttpsConnector<HttpConnector<PinnedResolver>>, Full<hyper::body::Bytes>>;
+
+/// A resolver that returns the address [`Capabilities::net_request`] already
+/// checked for a hostname, so hyper cannot re-resolve to a different address
+/// between the rebinding check and the connect (FR-PERM-13, ADR-0011). A name
+/// with no pin (an IP literal, an ad-hoc local name) falls through to the
+/// system resolver.
+#[derive(Clone)]
+struct PinnedResolver {
+    inner: GaiResolver,
+    pins: Arc<Mutex<HashMap<String, Vec<SocketAddr>>>>,
+}
+
+impl Service<Name> for PinnedResolver {
+    type Response = std::vec::IntoIter<SocketAddr>;
+    type Error = std::io::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, name: Name) -> Self::Future {
+        let pinned = self
+            .pins
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&name.as_str().to_ascii_lowercase())
+            .cloned();
+        if let Some(addrs) = pinned {
+            return Box::pin(async move { Ok(addrs.into_iter()) });
+        }
+        let future = self.inner.call(name);
+        Box::pin(async move {
+            let addrs = future.await?;
+            Ok(addrs.collect::<Vec<_>>().into_iter())
+        })
+    }
+}
 
 /// One in-flight loopback OAuth flow: the receiver half lives here, the
 /// listener runs on its own thread (FR-PROV-3; the extension never binds).
@@ -156,6 +200,9 @@ pub struct Capabilities {
     oauth_opened: Arc<Mutex<Vec<String>>>,
     handles: Arc<Mutex<HandleTable>>,
     client: HttpClient,
+    /// Addresses already checked for a hostname, consulted by
+    /// [`PinnedResolver`] so the connect uses the checked address.
+    pins: Arc<Mutex<HashMap<String, Vec<SocketAddr>>>>,
     flows: Arc<Mutex<HashMap<u32, OAuthFlow>>>,
     next_flow: std::sync::atomic::AtomicU32,
 }
@@ -176,11 +223,21 @@ impl Capabilities {
         let name = name.into();
         let mut roots = roots;
         roots.private = roots.private.join(&name);
+        // The per-extension private directory is the one scope the state-
+        // directory exclusion sanctions; create it up front so the first
+        // read resolves against a real root rather than a dangling path.
+        let _ = std::fs::create_dir_all(&roots.private);
+        let pins: Arc<Mutex<HashMap<String, Vec<SocketAddr>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let http = HttpConnector::new_with_resolver(PinnedResolver {
+            inner: GaiResolver::new(),
+            pins: pins.clone(),
+        });
         let https = hyper_rustls::HttpsConnectorBuilder::new()
             .with_webpki_roots()
             .https_or_http()
             .enable_http1()
-            .build();
+            .wrap_connector(http);
         Capabilities {
             name,
             grants,
@@ -194,6 +251,7 @@ impl Capabilities {
             oauth_opened: Arc::new(Mutex::new(Vec::new())),
             handles: Arc::new(Mutex::new(HandleTable::default())),
             client: Client::builder(hyper_util::rt::TokioExecutor::new()).build(https),
+            pins,
             flows: Arc::new(Mutex::new(HashMap::new())),
             next_flow: std::sync::atomic::AtomicU32::new(1),
         }
@@ -303,6 +361,18 @@ impl Capabilities {
             }
         }
         patterns
+    }
+
+    /// Remember the addresses checked for `host`, so the HTTP client's
+    /// resolver returns exactly these on connect instead of resolving again
+    /// (the TOCTOU the rebinding check otherwise has). Ports are filled in by
+    /// the connector from the request URI.
+    fn pin(&self, host: &str, addrs: &[IpAddr]) {
+        let entries: Vec<SocketAddr> = addrs.iter().map(|ip| SocketAddr::new(*ip, 0)).collect();
+        self.pins
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(host.to_ascii_lowercase(), entries);
     }
 
     /// Note a `ui` ask for a region the manifest never declared
@@ -863,6 +933,8 @@ impl Capabilities {
                         )),
                     ));
                 }
+                // Connect to the address just checked, not a fresh lookup.
+                self.pin(&host, &addrs);
             }
             return self.http_exchange(method, url, headers, body);
         }
@@ -923,6 +995,7 @@ impl Capabilities {
                     .iter()
                     .all(|addr| self.grants.net_local.iter().any(|p| p.matches_ip(*addr)))
             {
+                self.pin(&host, &addrs);
                 return self.http_exchange(method, url, headers, body);
             }
             return Err(self.refused(
@@ -1527,5 +1600,39 @@ impl lca_protocol::OauthCap for Capabilities {
 
     fn oauth_end(&self, handle: u32) -> Result<(), CapabilityError> {
         Capabilities::oauth_end(self, handle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GaiResolver, Name, PinnedResolver, Service};
+    use std::collections::HashMap;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::sync::{Arc, Mutex};
+
+    // Verifies: FR-PERM-13's pinning - a checked host resolves to exactly the
+    // addresses that were checked, so hyper cannot re-resolve to a local
+    // address between the rebinding check and the connect.
+    #[tokio::test]
+    async fn a_pinned_host_resolves_to_the_checked_address() {
+        let mut pins: HashMap<String, Vec<SocketAddr>> = HashMap::new();
+        pins.insert(
+            "example.com".to_string(),
+            vec![SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)),
+                0,
+            )],
+        );
+        let mut resolver = PinnedResolver {
+            inner: GaiResolver::new(),
+            pins: Arc::new(Mutex::new(pins)),
+        };
+        let addrs: Vec<SocketAddr> = resolver
+            .call("Example.COM".parse::<Name>().expect("name"))
+            .await
+            .expect("resolves")
+            .collect();
+        assert_eq!(addrs.len(), 1);
+        assert_eq!(addrs[0].ip().to_string(), "203.0.113.7");
     }
 }

@@ -150,6 +150,64 @@ fn the_state_directory_is_refused_under_every_scope() {
     );
 }
 
+// The production layout: `private` lives under the state directory and must
+// resolve (the one sanctioned exception), while the macOS/Windows overlap
+// where home-config contains the state directory still refuses the agent's
+// own subtrees. This is exactly the fixture drift the audit found: the tests
+// used separate private/state roots and never saw `private` be unusable.
+#[test]
+fn private_resolves_under_the_state_dir_and_home_config_still_cannot_reach_it() {
+    let root = std::env::temp_dir().join(format!("lca-scope-prod-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let home_config = root.join("app-support");
+    let data = home_config.join("lca");
+    let private = data.join("private").join("ext");
+    let workspace = root.join("ws");
+    for dir in [
+        &private,
+        &workspace,
+        &data.join("sessions"),
+        &data.join("credentials"),
+    ] {
+        std::fs::create_dir_all(dir).expect("mkdir");
+    }
+    let roots = ScopeRoots {
+        workspace,
+        private: private.clone(),
+        home_config: home_config.clone(),
+        temp: root.join("tmp"),
+        state_dir: data.clone(),
+    };
+
+    let private_grant = vec![ScopeGrant::parse("private", FsMode::ReadWrite).expect("grant")];
+    let resolved = roots
+        .resolve(&private_grant, "private", "cache.bin", true)
+        .expect("private must resolve on the production layout");
+    assert!(resolved.starts_with(&private), "{resolved:?}");
+
+    let home_grant = vec![ScopeGrant::parse("home-config", FsMode::Read).expect("grant")];
+    let refused = roots
+        .resolve(
+            &home_grant,
+            "home-config",
+            "lca/credentials/ext.json",
+            false,
+        )
+        .expect_err("the agent's own state is refused through home-config");
+    assert!(
+        matches!(refused.kind, ScopeViolationKind::StateDirectory),
+        "{refused:?}"
+    );
+
+    std::fs::write(home_config.join("other-tool.toml"), "x").expect("write");
+    assert!(
+        roots
+            .resolve(&home_grant, "home-config", "other-tool.toml", false)
+            .is_ok(),
+        "another tool's config still resolves"
+    );
+}
+
 // Deny by default: a scope absent from the granted set cannot be reached,
 // whatever the manifest (or component) says (NFR-13, capability catalog).
 #[test]

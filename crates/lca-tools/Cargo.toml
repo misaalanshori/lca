@@ -18,6 +18,7 @@ thiserror.workspace = true
 # host-side exactly like the OpenAI-compatible provider does.
 hyper.workspace = true
 hyper-util.workspace = true
+tower-service.workspace = true
 http-body-util.workspace = true
 hyper-rustls.workspace = true
 # Dependency justification (SRDD closed list + review): `regex` powers the

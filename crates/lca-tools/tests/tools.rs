@@ -405,8 +405,8 @@ async fn list_glob_and_grep_search_the_workspace() {
     );
 }
 
-// Verifies: FR-TOOL-3 (shell always asks; writes outside the workspace ask;
-// in-workspace writes do not)
+// Verifies: FR-TOOL-3 (shell always asks; reads and writes outside the
+// workspace ask; in-workspace calls do not)
 #[test]
 fn permission_surface_matches_the_requirement() {
     let ws = scratch("perm");
@@ -439,8 +439,30 @@ fn permission_surface_matches_the_requirement() {
         "outside the workspace asks first (FR-TOOL-3)"
     );
 
-    let read_anywhere = call("read", serde_json::json!({"path": "../neighbor/notes.md"}));
-    assert!(exec.required_permission(&read_anywhere).is_none());
+    // FR-TOOL-3 covers any tool call outside the workspace, not only writes.
+    let read_in = call("read", serde_json::json!({"path": "ok.txt"}));
+    assert!(exec.required_permission(&read_in).is_none());
+    let read_out = call("read", serde_json::json!({"path": "../neighbor/notes.md"}));
+    assert!(
+        matches!(
+            exec.required_permission(&read_out),
+            Some(Action::ReadPath { .. })
+        ),
+        "reads outside the workspace ask first"
+    );
+    let list_out = call("list", serde_json::json!({"path": "../neighbor"}));
+    assert!(matches!(
+        exec.required_permission(&list_out),
+        Some(Action::ReadPath { .. })
+    ));
+    let grep_out = call("grep", serde_json::json!({"pattern": "x", "path": ".."}));
+    assert!(matches!(
+        exec.required_permission(&grep_out),
+        Some(Action::ReadPath { .. })
+    ));
+    // `glob` only ever walks the workspace.
+    let glob = call("glob", serde_json::json!({"pattern": "**/*.rs"}));
+    assert!(exec.required_permission(&glob).is_none());
 }
 
 // Verifies: FR-TOOL-4 (output streams to the interface while running)

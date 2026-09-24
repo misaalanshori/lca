@@ -579,6 +579,7 @@ The dependency list stays short on purpose. Each entry below states what it does
 | wasm-pkg-client | OCI reference resolution and artifact fetch | Direct OCI Distribution API calls over the existing HTTP client |
 | tokio | Async runtime | None. This is a structural commitment. |
 | hyper with rustls | HTTPS transport | reqwest as a thicker alternative |
+| tower-service | The `Service` trait the hyper-util `HttpConnector` accepts as a custom DNS resolver; used to pin the `net` rebinding check's resolved address (ADR-0025) | Hand-written resolver behind a different connector, or accept the TOCTOU race ADR-0025 closes |
 | ratatui with crossterm | Terminal rendering and input | A renderer written in the project, over crossterm alone |
 | serde and serde_json | Serialization | None |
 | clap | Argument parsing | Hand-written parser |

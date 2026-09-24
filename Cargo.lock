@@ -1501,6 +1501,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tower-service",
  "windows-sys 0.61.2",
 ]
 

@@ -38,6 +38,12 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0016 | A pty capability for interactive terminal sessions | Accepted | Phase 2 |
 | 0017 | Prompt cache preservation and measurement | Accepted | Phase 3 |
 | 0018 | Web-embedded extension hosting through sibling instantiation | Accepted | Phase 7 |
+| 0019 | One dispatch trait for both delivery modes | Accepted | Phase 2 |
+| 0021 | The credential backend for 1.0 is a file, not a keychain | Accepted | Phase 3 |
+| 0022 | Ad hoc `net` grants live in the user grant store | Accepted | Phase 3 |
+| 0023 | The OpenAI-compatible provider sends `x-opencode-session` | Accepted | Phase 3 |
+| 0024 | The `/model` and `/compact` slots are host-side | Accepted | Phase 4 |
+| 0025 | Pin the checked address for `net` connections | Accepted | Phase 3 |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
 

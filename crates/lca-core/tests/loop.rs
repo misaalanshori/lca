@@ -550,6 +550,40 @@ async fn denied_commands_reach_the_model_as_denied_results() {
     );
 }
 
+// Verifies: FR-TOOL-3 - a read outside the workspace reaches the permission
+// prompt before it runs, and a denial returns to the model as a denied result.
+#[tokio::test]
+async fn reading_outside_the_workspace_asks_before_it_runs() {
+    let provider = FakeProvider::builder()
+        .turn(|t| {
+            t.tool_call("read", r#"{"path":"../outside.txt"}"#)
+                .usage(fake_usage(10, 10, 0, 10))
+        })
+        .turn(|t| t.text("cannot").usage(fake_usage(20, 5, 10, 0)))
+        .build();
+    let mut h = harness("read-out", provider, default_config());
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: vec![Decision::Denied],
+        asked: vec![],
+    };
+
+    let outcome = turn(&mut h, "read it", &mut sink, &mut prompt).await;
+    assert_eq!(outcome.status, lca_core::TurnStatus::Ok);
+    assert_eq!(prompt.asked.len(), 1, "the outside read asks first");
+    assert!(
+        prompt.asked[0].contains("outside.txt"),
+        "the exact path is shown: {:?}",
+        prompt.asked
+    );
+    assert!(
+        sink.events.iter().any(
+            |e| matches!(e, TurnEvent::ToolFinished(r) if r.status == ToolResultStatus::Denied)
+        ),
+        "the denial reaches the model"
+    );
+}
+
 // Verifies: FR-CACHE-5 (the stable-prefix boundary travels on every
 // completion call; without a compaction record the dynamic suffix starts at
 // the session start, so the prefix is zero)

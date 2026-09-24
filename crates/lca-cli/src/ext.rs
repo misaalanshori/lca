@@ -57,11 +57,8 @@ fn host_roots(cwd: &std::path::Path) -> lca_permissions::ScopeRoots {
     let data = crate::data_dir();
     lca_permissions::ScopeRoots {
         workspace: cwd.to_path_buf(),
-        private: data.join("extensions"),
-        home_config: crate::config_file()
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_else(|| data.clone()),
+        private: data.join("private"),
+        home_config: crate::config_dir(),
         temp: std::env::temp_dir(),
         state_dir: data,
     }
@@ -77,6 +74,7 @@ pub fn load_installed(
     registry: &mut lca_core::ExtensionRegistry,
     cwd: &std::path::Path,
     log_limit_bytes: usize,
+    prompt: lca_permissions::SharedPrompt,
 ) {
     let tree = install_tree();
     let entries = match tree.list() {
@@ -98,7 +96,7 @@ pub fn load_installed(
     };
     let env = std::sync::Arc::new(lca_ext_host::HostEnvironment {
         roots: host_roots(cwd),
-        prompt: std::sync::Arc::new(std::sync::Mutex::new(crate::HeadlessPrompt::default())),
+        prompt: std::sync::Arc::new(std::sync::Mutex::new(prompt)),
         grant_store: std::sync::Arc::new(std::sync::Mutex::new(store)),
         project: cwd.to_path_buf(),
         proposals: None,

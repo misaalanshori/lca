@@ -162,17 +162,15 @@ pub(crate) fn extension_capabilities(
     cwd: &Path,
     name: &str,
     grants: lca_tools::CapabilityGrants,
+    prompt: lca_permissions::SharedPrompt,
 ) -> std::sync::Arc<lca_tools::Capabilities> {
     use std::sync::{Arc, Mutex};
 
     let data = data_dir();
     let roots = lca_permissions::ScopeRoots {
         workspace: cwd.to_path_buf(),
-        private: data.join("extensions"),
-        home_config: config_file()
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| data.clone()),
+        private: data.join("private"),
+        home_config: config_dir(),
         temp: std::env::temp_dir(),
         state_dir: data.clone(),
     };
@@ -182,7 +180,7 @@ pub(crate) fn extension_capabilities(
         name,
         grants,
         roots,
-        Arc::new(Mutex::new(HeadlessPrompt::default())),
+        Arc::new(Mutex::new(prompt)),
         Arc::new(Mutex::new(store)),
         data,
         None,
@@ -190,7 +188,10 @@ pub(crate) fn extension_capabilities(
 }
 
 #[cfg(feature = "bundled-openai-compat")]
-pub(crate) fn openai_capabilities(cwd: &Path) -> std::sync::Arc<lca_tools::Capabilities> {
+pub(crate) fn openai_capabilities(
+    cwd: &Path,
+    prompt: lca_permissions::SharedPrompt,
+) -> std::sync::Arc<lca_tools::Capabilities> {
     let data = data_dir();
     let store =
         GrantStore::open(&data.join("grants.json")).expect("the grant store was read at startup");
@@ -200,7 +201,7 @@ pub(crate) fn openai_capabilities(cwd: &Path) -> std::sync::Arc<lca_tools::Capab
         .iter()
         .filter_map(|pattern| lca_permissions::parse_net_pattern(pattern).ok())
         .collect();
-    extension_capabilities(cwd, "openai-compatible", grants)
+    extension_capabilities(cwd, "openai-compatible", grants, prompt)
 }
 
 /// The user data directory for sessions, grants, and state.
@@ -208,10 +209,14 @@ pub fn data_dir() -> PathBuf {
     lca_session::default_data_dir()
 }
 
-/// The user configuration file path for this platform.
-pub fn config_file() -> PathBuf {
+/// The platform configuration directory `home-config` resolves to. This is
+/// the directory an extension reads *another tool's* saved login from, not
+/// the agent's own subdirectory; the state-directory exclusion keeps the
+/// agent's own tree (sessions, extensions, credentials) unreadable even on
+/// macOS and Windows, where it sits under this directory.
+pub fn config_dir() -> PathBuf {
     if cfg!(target_os = "linux") {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
+        std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
             .unwrap_or_else(|| {
@@ -219,19 +224,22 @@ pub fn config_file() -> PathBuf {
                     .map(PathBuf::from)
                     .unwrap_or_else(|| ".".into());
                 home.join(".config")
-            });
-        base.join("lca/config.toml")
+            })
     } else if cfg!(target_os = "macos") {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| ".".into());
-        home.join("Library/Application Support/lca/config.toml")
+        home.join("Library/Application Support")
     } else {
-        let base = std::env::var_os("APPDATA")
+        std::env::var_os("APPDATA")
             .map(PathBuf::from)
-            .unwrap_or_else(|| ".".into());
-        base.join("lca/config.toml")
+            .unwrap_or_else(|| ".".into())
     }
+}
+
+/// The user configuration file path for this platform.
+pub fn config_file() -> PathBuf {
+    config_dir().join("lca/config.toml")
 }
 
 /// Load merged configuration for `cwd`, honoring project-file trust
@@ -252,15 +260,21 @@ pub fn load_config(cwd: &Path, grants: &GrantStore, headless: bool) -> anyhow::R
 
 /// Headless mode cannot prompt: it denies and remembers that approval was
 /// needed, which becomes exit code 4 (`docs/headless.md`).
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct HeadlessPrompt {
+    needed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl HeadlessPrompt {
     /// Whether any action asked for approval.
-    pub needed_approval: bool,
+    pub fn needed_approval(&self) -> bool {
+        self.needed.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 impl PermissionPrompt for HeadlessPrompt {
     fn ask(&mut self, _action: &lca_permissions::Action) -> lca_permissions::Decision {
-        self.needed_approval = true;
+        self.needed.store(true, std::sync::atomic::Ordering::SeqCst);
         lca_permissions::Decision::Denied
     }
 
@@ -469,6 +483,12 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
     );
     let mut grants = grants;
     let mut prompt_impl = HeadlessPrompt::default();
+    // Extension-originated commands route through the same denying prompt, so a
+    // headless approval need still surfaces as exit code 4.
+    let shared_prompt = lca_permissions::SharedPrompt::default();
+    shared_prompt.set(std::sync::Arc::new(std::sync::Mutex::new(
+        prompt_impl.clone(),
+    )));
     // Hooks apply headless too: register the first-party native set with
     // a stats source over this session (ADR-0013).
     let stats_store = store.clone();
@@ -480,6 +500,7 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
         &mut registry,
         cwd,
         config.extensions_log_limit_bytes() as usize,
+        shared_prompt.clone(),
     );
     for handle in lca_ext_native::default_native_extensions(Arc::new(move || {
         crate::tui::session_stats(&stats_store, &stats_session)
@@ -488,7 +509,7 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
     }
     #[cfg(feature = "bundled-openai-compat")]
     registry.register(Arc::new(openai_compatible::OpenAiCompat::new(
-        openai_capabilities(cwd),
+        openai_capabilities(cwd, shared_prompt.clone()),
     )));
     // The grant store's disable wins before the provider resolves
     // (FR-PROV-9/FR-PERM-19); applied again after the two
@@ -529,6 +550,7 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
             cwd,
             "compaction-default",
             compaction_default::manifest_grants(),
+            shared_prompt.clone(),
         );
         cap.set_completion(backend.clone());
         registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
@@ -541,6 +563,7 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
         cwd,
         "skills",
         skills::manifest_grants(),
+        shared_prompt.clone(),
     ))));
     apply_enablement(&mut registry, |name| {
         grants.extension_enabled(cwd, name) == Some(false)
@@ -584,7 +607,7 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
     if !json && !sink.plain.is_empty() {
         println!("{}", sink.plain);
     }
-    exit_code(&outcome, prompt_impl.needed_approval, class.as_deref())
+    exit_code(&outcome, prompt_impl.needed_approval(), class.as_deref())
 }
 
 /// What a parsed command line asks for. Split out so the dispatch rule

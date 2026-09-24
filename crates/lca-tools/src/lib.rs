@@ -240,7 +240,8 @@ impl ToolExecutor {
     }
 
     /// What must be approved before this call runs (FR-TOOL-3): every shell
-    /// command, and any write whose resolved target leaves the workspace.
+    /// command, and any tool call whose resolved target leaves the workspace -
+    /// a write, or a read/list/search.
     pub fn required_permission(&self, call: &ToolCall) -> Option<Action> {
         let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.arguments) else {
             return None;
@@ -264,6 +265,15 @@ impl ToolExecutor {
                 } else {
                     Some(Action::WritePath { path: target })
                 }
+            }
+            // FR-TOOL-3 reads "a tool call targets a path outside the
+            // workspace root", not just a write; a read/list/grep outside the
+            // workspace asks first too. `glob` walks only the workspace, so it
+            // owns no out-of-workspace path.
+            "read" | "list" | "grep" => {
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                let target = resolve_target(&self.cwd, Path::new(path));
+                (!is_inside(&target, &self.workspace)).then_some(Action::ReadPath { path: target })
             }
             _ => None,
         }
