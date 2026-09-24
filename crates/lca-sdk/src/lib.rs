@@ -16,6 +16,8 @@
 //! still apply. Turns run one at a time per session: `send` waits for
 //! its turn, and the next `send` queues on the same lock.
 
+#![forbid(unsafe_code)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;

@@ -759,3 +759,22 @@ fn pty_forwards_keystrokes_both_ways() {
     assert!(out.contains("round-trip"), "got {out:?}");
     pty.kill();
 }
+
+// Verifies: a model-supplied huge `limit` cannot overflow the read tool's
+// offset arithmetic (offset.saturating_sub(1).saturating_add(limit)).
+#[tokio::test]
+async fn a_huge_read_limit_does_not_overflow() {
+    let ws = scratch("huge-limit");
+    std::fs::write(ws.join("a.txt"), "one\ntwo\n").expect("write");
+    let mut exec = executor(&ws);
+    let result = run(
+        &mut exec,
+        &call(
+            "read",
+            serde_json::json!({"path": "a.txt", "limit": u64::MAX}),
+        ),
+    )
+    .await;
+    assert_eq!(result.status, lca_protocol::ToolResultStatus::Ok);
+    assert!(result.content.contains("one"), "{}", result.content);
+}

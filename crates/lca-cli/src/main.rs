@@ -1,5 +1,7 @@
 //! The `lca` binary entry point (ADR-0002: `main` stays thin).
 
+#![forbid(unsafe_code)]
+
 use clap::Parser;
 
 fn main() {

@@ -341,7 +341,7 @@ impl ToolExecutor {
             .and_then(|v| v.as_u64())
             .map(|n| n as usize);
         let end = match limit {
-            Some(limit) => (offset - 1 + limit).min(total),
+            Some(limit) => (offset.saturating_sub(1)).saturating_add(limit).min(total),
             None => total,
         };
         let mut numbered = String::new();
@@ -352,7 +352,7 @@ impl ToolExecutor {
         let mut out = content;
         if truncated {
             let shown_lines = out.lines().count();
-            let last = offset - 1 + shown_lines;
+            let last = (offset.saturating_sub(1)).saturating_add(shown_lines);
             out.push_str(&format!(
                 "\n[Showing lines {offset}-{last} of {total} ({} limit). Use offset={} to continue.]",
                 format_bytes(self.result_limit_bytes),

@@ -158,6 +158,19 @@ pub(crate) fn apply_enablement(
 /// ponytail: opens a second grant-store instance per engine; nothing in
 /// these engines writes grants yet (ADR-0022's note applies to all of
 /// them), one shared owner comes back with the attach flow.
+/// Open the process grant store, or start fail-closed (an empty store grants
+/// nothing) if the file is unreadable: a bad store must not abort a session
+/// with a panic.
+fn open_grants(data: &Path) -> GrantStore {
+    match GrantStore::open(&data.join("grants.json")) {
+        Ok(store) => store,
+        Err(err) => {
+            eprintln!("warning: grant store unreadable ({err}); starting with no grants");
+            GrantStore::empty()
+        }
+    }
+}
+
 pub(crate) fn extension_capabilities(
     cwd: &Path,
     name: &str,
@@ -174,8 +187,7 @@ pub(crate) fn extension_capabilities(
         temp: session_temp(),
         state_dir: data.clone(),
     };
-    let store =
-        GrantStore::open(&data.join("grants.json")).expect("the grant store was read at startup");
+    let store = open_grants(&data);
     Arc::new(lca_tools::Capabilities::new(
         name,
         grants,
@@ -193,8 +205,7 @@ pub(crate) fn openai_capabilities(
     prompt: lca_permissions::SharedPrompt,
 ) -> std::sync::Arc<lca_tools::Capabilities> {
     let data = data_dir();
-    let store =
-        GrantStore::open(&data.join("grants.json")).expect("the grant store was read at startup");
+    let store = open_grants(&data);
     let mut grants = openai_compatible::manifest_grants();
     grants.adhoc_net = store
         .net_patterns(cwd)

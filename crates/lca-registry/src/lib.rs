@@ -639,22 +639,22 @@ async fn fetch_oci(
             .map_err(|err| Error::Fetch(format!("{url}: {err}")))
     }
 
-    let authorization = |token: &Option<String>| {
+    let authorization = |token: &Option<String>| -> Result<hyper::HeaderMap, Error> {
         let mut headers = hyper::HeaderMap::new();
         if let Some(value) = token {
-            headers.insert(
-                hyper::header::AUTHORIZATION,
-                hyper::header::HeaderValue::from_str(&format!("Bearer {value}"))
-                    .expect("bearer header"),
-            );
+            let header =
+                hyper::header::HeaderValue::from_str(&format!("Bearer {value}")).map_err(|_| {
+                    Error::Fetch("registry returned an invalid authorization token".to_string())
+                })?;
+            headers.insert(hyper::header::AUTHORIZATION, header);
         }
-        headers
+        Ok(headers)
     };
 
     // Follow redirects: ghcr answers blob GETs with a307 to its CDN,
     // where the signed URL needs no bearer (and must not get this
     // repository's token past its host).
-    let mut response = attempt(client, url, accept, &authorization(token)).await?;
+    let mut response = attempt(client, url, accept, &authorization(token)?).await?;
     let mut hops = 0;
     while response.status().is_redirection() && hops < 5 {
         hops += 1;
@@ -681,7 +681,7 @@ async fn fetch_oci(
                 .trim_start_matches("http://")
                 .split('/')
                 .next();
-        let mut headers = authorization(token);
+        let mut headers = authorization(token)?;
         if !same_origin {
             headers.remove(hyper::header::AUTHORIZATION);
         }
@@ -727,11 +727,11 @@ async fn fetch_oci(
     );
     let mut token_request = hyper::Request::builder().method("GET").uri(&token_url);
     if let Some(value) = &token {
-        token_request = token_request.header(
-            hyper::header::AUTHORIZATION,
-            hyper::header::HeaderValue::from_str(&format!("Bearer {value}"))
-                .expect("bearer header"),
-        );
+        let header =
+            hyper::header::HeaderValue::from_str(&format!("Bearer {value}")).map_err(|_| {
+                Error::Fetch("registry returned an invalid authorization token".to_string())
+            })?;
+        token_request = token_request.header(hyper::header::AUTHORIZATION, header);
     }
     let token_request = token_request
         .body(http_body_util::Full::new(hyper::body::Bytes::new()))
@@ -757,7 +757,7 @@ async fn fetch_oci(
         .and_then(|t| t.as_str())
         .map(str::to_string);
 
-    let retry = attempt(client, url, accept, &authorization(token)).await?;
+    let retry = attempt(client, url, accept, &authorization(token)?).await?;
     if !retry.status().is_success() {
         let status = retry.status();
         return Err(Error::Fetch(format!(

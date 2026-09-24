@@ -172,6 +172,20 @@ impl ToolOps for NativeOps {
     }
 }
 
+/// The most bytes the shell tool keeps for its final result. Output streams to
+/// the interface as it arrives; only the tail is buffered (and the result is
+/// truncated to the configured limit anyway), so a command that emits
+/// gigabytes cannot grow this buffer without bound.
+const OUTPUT_BUFFER_CAP: usize = 4 * 1024 * 1024;
+
+fn push_capped(buffer: &mut Vec<u8>, chunk: &[u8]) {
+    buffer.extend_from_slice(chunk);
+    if buffer.len() > OUTPUT_BUFFER_CAP {
+        let excess = buffer.len() - OUTPUT_BUFFER_CAP;
+        buffer.drain(..excess);
+    }
+}
+
 #[cfg(unix)]
 async fn platform_exec(
     command: &str,
@@ -220,12 +234,12 @@ async fn platform_exec(
             read = stdout.read(&mut out_buf), if stdout_open => {
                 let n = read?;
                 if n == 0 { stdout_open = false; }
-                else { on_output(&out_buf[..n]); collected.extend_from_slice(&out_buf[..n]); }
+                else { on_output(&out_buf[..n]); push_capped(&mut collected, &out_buf[..n]); }
             }
             read = stderr.read(&mut err_buf), if stderr_open => {
                 let n = read?;
                 if n == 0 { stderr_open = false; }
-                else { on_output(&err_buf[..n]); collected.extend_from_slice(&err_buf[..n]); }
+                else { on_output(&err_buf[..n]); push_capped(&mut collected, &err_buf[..n]); }
             }
             _ = tokio::time::sleep_until(deadline) => {
                 kill_group(pgid);
@@ -467,12 +481,12 @@ async fn platform_exec(
             read = stdout.read(&mut out_buf), if stdout_open => {
                 let n = read?;
                 if n == 0 { stdout_open = false; }
-                else { on_output(&out_buf[..n]); collected.extend_from_slice(&out_buf[..n]); }
+                else { on_output(&out_buf[..n]); push_capped(&mut collected, &out_buf[..n]); }
             }
             read = stderr.read(&mut err_buf), if stderr_open => {
                 let n = read?;
                 if n == 0 { stderr_open = false; }
-                else { on_output(&err_buf[..n]); collected.extend_from_slice(&err_buf[..n]); }
+                else { on_output(&err_buf[..n]); push_capped(&mut collected, &err_buf[..n]); }
             }
             _ = tokio::time::sleep_until(deadline) => {
                 if let Some(job) = job.as_ref() { job.kill(); } else { let _ = child.start_kill(); }

@@ -413,13 +413,21 @@ impl Capabilities {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_millis() as u64)
+            .unwrap_or(0);
+        // Built with serde, not string concatenation: a guest-supplied path or
+        // host can contain quotes, backslashes, or newlines, and this journal is
+        // counted line by line by `ext info`.
         let line = format!(
-            "{{\"capability\":\"{capability}\",\"parameter\":\"{}\",\"ts\":{}}}\n",
-            parameter.replace('"', "'"),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|since| since.as_millis() as u64)
-                .unwrap_or(0)
+            "{}\n",
+            serde_json::json!({
+                "capability": capability,
+                "parameter": parameter,
+                "reason": reason,
+                "ts": now,
+            })
         );
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
@@ -1444,9 +1452,44 @@ connection: close
     }
 
     fn load_credentials(&self, path: &Path) -> Result<serde_json::Value, CapabilityError> {
-        let text = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".to_string());
-        serde_json::from_str(&text)
-            .map_err(|err| CapabilityError::Io(format!("credential store corrupt: {err}")))
+        match std::fs::read_to_string(path) {
+            Ok(text) => serde_json::from_str(&text)
+                .map_err(|err| CapabilityError::Io(format!("credential store corrupt: {err}"))),
+            // Absence means "no login yet", not an error.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Ok(serde_json::Value::Object(serde_json::Map::new()))
+            }
+            // Any other read failure must surface: silently treating it as
+            // empty would let the next `set` overwrite stored credentials.
+            Err(err) => Err(CapabilityError::Io(format!(
+                "cannot read the credential store: {err}"
+            ))),
+        }
+    }
+
+    /// Write the namespace's credential file atomically with owner-only
+    /// permissions (NFR-14). Set and delete share this path, so both get the
+    /// same temp+rename and mode treatment (delete used to write in place,
+    /// leaving a file the process created with the default umask).
+    fn write_credentials(
+        &self,
+        path: &Path,
+        data: &serde_json::Value,
+    ) -> Result<(), CapabilityError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let bytes =
+            serde_json::to_vec_pretty(data).map_err(|err| CapabilityError::Io(err.to_string()))?;
+        let temp = path.with_extension("json.tmp");
+        std::fs::write(&temp, bytes)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
+        }
+        std::fs::rename(&temp, path)?;
+        Ok(())
     }
 
     /// Read one key from this extension's own namespace. Returns `None`
@@ -1465,32 +1508,21 @@ connection: close
     pub fn credentials_set(&self, key: &str, value: &str) -> Result<(), CapabilityError> {
         let path = self.credential_path()?;
         let mut data = self.load_credentials(&path)?;
+        if !data.is_object() {
+            data = serde_json::Value::Object(serde_json::Map::new());
+        }
         data[key] = serde_json::Value::String(value.to_string());
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let bytes =
-            serde_json::to_vec_pretty(&data).map_err(|err| CapabilityError::Io(err.to_string()))?;
-        let temp = path.with_extension("json.tmp");
-        std::fs::write(&temp, bytes)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
-        }
-        std::fs::rename(&temp, &path)?;
-        Ok(())
+        self.write_credentials(&path, &data)
     }
 
     /// Delete one key from this extension's own namespace.
     pub fn credentials_delete(&self, key: &str) -> Result<(), CapabilityError> {
         let path = self.credential_path()?;
         let mut data = self.load_credentials(&path)?;
-        data.as_object_mut().map(|map| map.remove(key));
-        let bytes =
-            serde_json::to_vec_pretty(&data).map_err(|err| CapabilityError::Io(err.to_string()))?;
-        std::fs::write(&path, bytes)?;
-        Ok(())
+        if let Some(map) = data.as_object_mut() {
+            map.remove(key);
+        }
+        self.write_credentials(&path, &data)
     }
 }
 

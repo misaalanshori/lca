@@ -481,3 +481,31 @@ fn shared_prompt_routes_to_the_installed_prompt_or_denies() {
     );
     assert!(shared.review_proposals(&ProposalDiff::default()));
 }
+
+// Verifies: an empty store is fail-closed (NFR-13) - used when the store file
+// cannot be read so a bad store does not panic the agent.
+#[test]
+fn an_empty_store_grants_nothing() {
+    let store = GrantStore::empty();
+    let action = Action::Shell {
+        command: "ls".to_string(),
+        cwd: PathBuf::from("/"),
+    };
+    assert!(!store.is_allowed(std::path::Path::new("/any"), &action));
+    assert!(!store.is_trusted(std::path::Path::new("/any")));
+}
+
+// Verifies: a bad ad-hoc `net` pattern is a validation error, not a fake
+// "corrupt store" error (the old type-abuse path through serde).
+#[test]
+fn approving_an_invalid_net_pattern_is_a_validation_error() {
+    let root = scratch("bad-pattern");
+    let mut store = GrantStore::open(&store_path(&root)).expect("open");
+    let err = store
+        .approve_net_pattern(&root, "*")
+        .expect_err("bare wildcard refused");
+    assert!(
+        matches!(err, lca_permissions::Error::Pattern(_)),
+        "got {err:?}"
+    );
+}

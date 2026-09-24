@@ -1915,9 +1915,11 @@ pub struct WasmExtension {
     inner: Arc<Inner>,
 }
 
-/// Run blocking component work on the runtime's blocking pool; a panic
-/// inside the call disables the extension instead of the caller
-/// (FR-EXT-3).
+/// Run blocking component work on the runtime's blocking pool. A panic in the
+/// host glue is caught here and disables the extension rather than the caller
+/// on unwind builds; the release profile sets `panic = "abort"`, so there a
+/// host panic is fatal and this guard is a test/debug safety net. Guest traps
+/// are ordinary `Error`s and are handled regardless (FR-EXT-3).
 async fn pool_call<T: Send + 'static>(
     inner: Arc<Inner>,
     work: impl FnOnce(&Inner) -> Result<T, CallError> + Send + 'static,
@@ -1935,9 +1937,9 @@ async fn pool_call<T: Send + 'static>(
 impl WasmExtension {
     /// Run blocking component work on a dedicated thread: synchronous
     /// WASI blocks on the ambient handle, which only exists where no
-    /// runtime is polling (ADR-0014's blocking-region rule). A panic
-    /// inside the call disables the extension instead of unwinding the
-    /// caller (FR-EXT-3).
+    /// runtime is polling (ADR-0014's blocking-region rule). A panic in the
+    /// host glue is caught on unwind builds (the release profile aborts, so
+    /// there it is fatal) and disables the extension rather than the caller.
     fn blocking<T: Send + 'static>(
         &self,
         work: impl FnOnce(&Inner) -> Result<T, CallError> + Send + 'static,

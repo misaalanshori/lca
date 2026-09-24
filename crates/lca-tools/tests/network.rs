@@ -497,3 +497,34 @@ fn an_adhoc_grant_attached_mid_session_takes_effect_without_a_restart() {
         .expect("honored after consent");
     caps.net_close_response(handle).expect("close");
 }
+
+// Verifies: the denial journal `ext info` counts is one valid JSON object per
+// line even when the denied parameter carries quotes and a newline (the old
+// hand-built line could be split or corrupted by guest input).
+#[test]
+fn denial_journal_escapes_hostile_parameters() {
+    let sandbox = Sandbox::new("journal");
+    let grants = CapabilityGrants {
+        fs: vec![
+            lca_permissions::ScopeGrant::parse("workspace", lca_permissions::FsMode::Read)
+                .expect("grant"),
+        ],
+        fs_declared: true,
+        ..Default::default()
+    };
+    let caps = sandbox.caps(grants);
+
+    let _ = caps.fs_read("workspace", "../escape\"\nsecond");
+    let journal = sandbox.root.join("data/extensions/probe/denials.jsonl");
+    let text = std::fs::read_to_string(&journal).expect("journal written");
+    assert_eq!(text.lines().count(), 1, "one denial, one line: {text:?}");
+    let value: serde_json::Value = serde_json::from_str(text.trim_end()).expect("valid JSON");
+    assert_eq!(value["capability"], "fs");
+    assert!(
+        value["parameter"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("escape"),
+        "{value}"
+    );
+}

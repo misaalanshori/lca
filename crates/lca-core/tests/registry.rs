@@ -358,3 +358,19 @@ fn the_native_conformance_handle_registers_through_the_table() {
     assert_eq!(registry.tool_specs().len(), 1);
     let _ = spec_name("unused");
 }
+
+// Verifies: the tool table handed to the provider is deterministic (sorted by
+// name), so prompt-cache bytes and the assembly snapshot do not depend on a
+// HashMap's iteration order.
+#[test]
+fn tool_specs_are_sorted_for_a_stable_request() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(FakeExt::new("zeta").with_tool("zebra")));
+    registry.register(Arc::new(FakeExt::new("alpha").with_tool("aardvark")));
+    let names: Vec<String> = registry
+        .tool_specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect();
+    assert_eq!(names, vec!["aardvark".to_string(), "zebra".to_string()]);
+}

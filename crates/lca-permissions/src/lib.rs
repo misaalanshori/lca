@@ -231,6 +231,16 @@ pub struct GrantStore {
 }
 
 impl GrantStore {
+    /// An empty in-memory store: grants nothing (NFR-13, deny by default).
+    /// Used when the store file cannot be read, so the agent starts
+    /// fail-closed rather than panicking.
+    pub fn empty() -> GrantStore {
+        GrantStore {
+            path: PathBuf::new(),
+            data: StoreData::default(),
+        }
+    }
+
     /// Open (or create) a store file.
     pub fn open(path: &Path) -> Result<GrantStore, Error> {
         let data = match std::fs::read_to_string(path) {
@@ -346,12 +356,7 @@ impl GrantStore {
 
     /// Record one ad hoc `net` grant for this project (FR-PERM-16).
     pub fn approve_net_pattern(&mut self, project_dir: &Path, pattern: &str) -> Result<(), Error> {
-        parse_net_pattern(pattern).map_err(|_| Error::Corrupt {
-            path: self.path.clone(),
-            source: <serde_json::Error as serde::de::Error>::custom(format!(
-                "not a net pattern: {pattern}"
-            )),
-        })?;
+        parse_net_pattern(pattern).map_err(|err| Error::Pattern(err.to_string()))?;
         self.data
             .projects
             .entry(canonical_key(project_dir))
@@ -567,15 +572,9 @@ pub enum Error {
         #[source]
         source: serde_json::Error,
     },
-}
-
-impl From<serde_json::Error> for Error {
-    fn from(source: serde_json::Error) -> Self {
-        Error::Corrupt {
-            path: PathBuf::from("<memory>"),
-            source,
-        }
-    }
+    /// A pattern value failed validation.
+    #[error("invalid pattern: {0}")]
+    Pattern(String),
 }
 
 // ---------------------------------------------------------------------------

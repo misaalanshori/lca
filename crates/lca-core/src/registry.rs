@@ -471,19 +471,23 @@ impl ExtensionRegistry {
         self.tool_schemas.get(name)
     }
 
-    /// Every extension tool spec, for the provider's tool list.
+    /// Every extension tool spec, for the provider's tool list. Sorted by
+    /// name: a provider's prompt cache and the request-assembly snapshot key
+    /// on stable bytes, and the registry's maps are unordered.
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
-        self.tools
-            .values()
-            .flat_map(|index| {
-                let entry = &self.entries[*index];
-                if entry.enabled {
-                    entry.handle.tool_specs().unwrap_or_default()
-                } else {
-                    Vec::new()
-                }
+        let mut specs: Vec<ToolSpec> = self
+            .tool_schemas
+            .iter()
+            .filter(|(name, _)| {
+                self.tools
+                    .get(*name)
+                    .map(|index| self.entries[*index].enabled)
+                    .unwrap_or(false)
             })
-            .collect()
+            .map(|(_, spec)| spec.clone())
+            .collect();
+        specs.sort_by(|a, b| a.name.cmp(&b.name));
+        specs
     }
 
     /// Full command names without the leading slash (the input editor
