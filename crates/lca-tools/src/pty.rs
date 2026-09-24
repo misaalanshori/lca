@@ -216,9 +216,10 @@ fn spawn_impl(
         .custom_flags(libc::O_NOCTTY)
         .open(&slave_path)?;
 
+    let cwd = crate::process::without_verbatim(cwd);
     let mut cmd = std::process::Command::new(program);
     cmd.args(args)
-        .current_dir(cwd)
+        .current_dir(&cwd)
         .stdin(std::process::Stdio::from(slave.try_clone()?))
         .stdout(std::process::Stdio::from(slave.try_clone()?))
         .stderr(std::process::Stdio::from(slave));
@@ -468,6 +469,7 @@ mod windows_conpty {
             cmdline.push_str(&quote(arg));
         }
         let mut cmdline_wide: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
+        let cwd = crate::process::without_verbatim(cwd);
         let cwd_wide: Vec<u16> = cwd
             .to_string_lossy()
             .encode_utf16()

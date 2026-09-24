@@ -182,6 +182,7 @@ async fn platform_exec(
 ) -> std::io::Result<(ExecOutcome, Vec<u8>)> {
     use tokio::io::AsyncReadExt;
 
+    let cwd = crate::process::without_verbatim(cwd);
     if !cwd.is_dir() {
         return Err(std::io::Error::other(format!(
             "working directory does not exist: {}",
@@ -191,7 +192,7 @@ async fn platform_exec(
     let mut cmd = tokio::process::Command::new("/bin/sh");
     cmd.arg("-c")
         .arg(command)
-        .current_dir(cwd)
+        .current_dir(&cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -359,6 +360,9 @@ async fn platform_exec(
 ) -> std::io::Result<(ExecOutcome, Vec<u8>)> {
     use tokio::io::AsyncReadExt;
 
+    // Same verbatim strip as everywhere else: cmd.exe refuses a
+    // \?\ working directory as UNC (platform-notes' class of bug).
+    let cwd = crate::process::without_verbatim(cwd);
     if !cwd.is_dir() {
         return Err(std::io::Error::other(format!(
             "working directory does not exist: {}",
@@ -368,7 +372,7 @@ async fn platform_exec(
     let mut cmd = tokio::process::Command::new("cmd.exe");
     cmd.arg("/C")
         .arg(command)
-        .current_dir(cwd)
+        .current_dir(&cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

@@ -8,7 +8,7 @@
 #![deny(unsafe_code)]
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// How a spawned tree is terminated as one unit.
 enum Tree {
@@ -108,6 +108,27 @@ fn exit_code(status: &std::process::ExitStatus) -> i32 {
     status.code().unwrap_or(1)
 }
 
+/// Drop Windows' verbatim prefix before a path becomes somebody
+/// else's working directory: `\?\C:\...` is legal for our own
+/// filesystem calls (the scope check canonicalizes into exactly that
+/// form), but cmd.exe reads it as a UNC path, refuses it, and defaults
+/// to C:\Windows - the platform-notes class of "subtly wrong rather
+/// than obviously wrong". `\?\UNC\server\share` keeps its meaning
+/// as `\server\share`.
+pub fn without_verbatim(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
+}
+
 /// Spawn `program` with an explicit argv in `cwd`, no shell, pipes for
 /// stdio, and a tree identity that dies together (FR-TOOL-5's process
 /// semantics without the shell layer).
@@ -118,9 +139,10 @@ pub fn spawn_direct(program: &str, args: &[String], cwd: &Path) -> std::io::Resu
             cwd.display()
         )));
     }
+    let cwd = without_verbatim(cwd);
     let mut cmd = std::process::Command::new(program);
     cmd.args(args)
-        .current_dir(cwd)
+        .current_dir(&cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
