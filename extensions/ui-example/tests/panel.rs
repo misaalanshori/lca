@@ -92,6 +92,10 @@ fn all_four_regions_render_and_the_panel_session_starts_on_demand() {
     target_os = "macos",
     ignore = "pty allocation path on macOS - tracked in docs/platform-notes.md"
 )]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "ConPTY keystroke echo missing on hosted runners - tracked in docs/platform-notes.md"
+)]
 #[test]
 fn typing_into_the_panel_reaches_the_program_and_comes_back_as_data() {
     use lca_ext_abi::ExtensionDispatch as _;

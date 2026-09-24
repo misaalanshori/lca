@@ -529,7 +529,6 @@ mod windows_conpty {
         if updated == 0 {
             return Err(std::io::Error::last_os_error());
         }
-        eprintln!("TEMP-DIAG spawn cmdline={cmdline:?} hpc={hpc_value:?}");
         let mut info = PROCESS_INFORMATION::default();
         // SAFETY: all pointers valid and owned across the call;
         // CreateProcessW may mutate the buffers we own.
@@ -628,14 +627,9 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
     }
     if available > 0 {
         let chunk = crate::process::read_up_to(&mut inner.output, max)?;
-        eprintln!(
-            "TEMP-DIAG read avail={available} got={:?}",
-            chunk.as_ref().map(|c| c.len())
-        );
         return Ok(chunk);
     }
     let exited = inner.child.exited();
-    eprintln!("TEMP-DIAG read avail=0 exited={exited}");
     if !exited {
         // Nothing yet: yield the CPU rather than hammering. The
         // ConPTY pump lives in this same process, and a reader in a
