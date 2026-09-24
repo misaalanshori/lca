@@ -143,6 +143,12 @@ Also stopped earlier by project trust. An untrusted project has its configuratio
 
 See ADR-0006 for why both layers exist.
 
+### The update check's answer is hostile
+
+The one request the agent makes without being asked (FR-CFG-6's daily update check) asks the hosting API which release is newest, and prints what comes back.
+
+Stopped: the answer is never executed and never installed - it is parsed as a tag string, passed through the display choke point (FR-UI-2's sanitizer), truncated, and rendered as text in the status line. The request runs on a background task with a five-second timeout, at most once a day, and makes no appearance in headless mode unless the user switched the option on, so a CI run stays silent. The transport is HTTPS to a single named host. Not stopped: the hosting service itself answering with a lie - the result would be a false notice, which is why the notice carries no link and offers no action.
+
 ### A compromised registry serves a different component
 
 Stopped for an installed extension by digest pinning. The lockfile records a digest and the host loads by digest, verifying before instantiation. A mismatch refuses the load and reports tampering.

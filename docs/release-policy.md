@@ -54,19 +54,19 @@ After 1.0, minor releases are cut when there is something worth shipping, and pa
 
 ## Artifact matrix
 
-Every release builds six native targets and one web target.
+Every release builds six native targets. The seventh row is deferred with NFR-11 (`scripts/deferred-requirements.txt`): until the web target ships, a release publishes no npm package.
 
 | Target | Notes |
 |---|---|
 | `x86_64-unknown-linux-musl` | Fully static |
 | `aarch64-unknown-linux-musl` | Fully static |
-| `x86_64-apple-darwin` | Signed and notarized |
-| `aarch64-apple-darwin` | Signed and notarized |
-| `x86_64-pc-windows-msvc` | Signed |
-| `aarch64-pc-windows-msvc` | Signed |
-| `wasm32-wasip2` | Published as an npm package after jco transpilation |
+| `x86_64-apple-darwin` | Unsigned; provenance-attested |
+| `aarch64-apple-darwin` | Unsigned; provenance-attested |
+| `x86_64-pc-windows-msvc` | Unsigned; provenance-attested |
+| `aarch64-pc-windows-msvc` | Unsigned; provenance-attested |
+| `wasm32-wasip2` | Deferred with NFR-11: no npm package exists until the web target ships |
 
-Linux and Windows targets cross-compile from Linux runners, using `cargo-zigbuild` and `cargo-xwin`. macOS targets cross-compile the same way and then move to a macOS runner for signing and notarization, because notarization needs Apple tooling and a real macOS host.
+Linux and Windows targets cross-compile from Linux runners, using `cargo-zigbuild` and `cargo-xwin`. macOS targets build natively on macOS runners, because Apple's toolchain wants a real macOS host. Nothing is code-signed or notarized in 0.1: trust rests on reproducibility plus the provenance attestation below.
 
 Each artifact ships with a SHA-256 checksum. The checksum file for the whole release is published alongside the artifacts.
 
@@ -76,11 +76,13 @@ A tagged commit produces byte-identical binaries for a given target. This is a r
 
 What this needs: a pinned Rust toolchain in `rust-toolchain.toml`, a committed `Cargo.lock`, no build-time timestamps, no embedded absolute paths, and a pinned Wasmtime version.
 
-Reproducibility is what lets someone verify that a published binary matches the source. Signing proves who built it. Reproducibility proves what they built.
+Reproducibility is what lets someone verify that a published binary matches the source. Signing proves who built it, and where no code signature exists, the provenance attestation carries that proof instead.
 
 ## Supply chain
 
 `cargo-deny` runs on every merge and on a weekly schedule. It checks licenses against an allow list and dependencies against the advisory database.
+
+Every artifact on a release also carries a GitHub artifact attestation (in-toto provenance, produced by the pipeline's `Sign the artifacts (provenance attestation)` step and verifiable through the repository's attestations endpoint). That attestation proves who built an artifact; reproducibility proves what they built.
 
 A new dependency needs a written justification in the pull request: what it does, why writing it is worse, and what it pulls in transitively. The reviewer checks the size delta against the binary size budget.
 

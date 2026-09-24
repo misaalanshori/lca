@@ -6,7 +6,7 @@ A lightweight, cross-platform coding agent, written in Rust, distributed as a si
 
 A small trusted core handles the agent loop, session storage, the built-in file and shell tools, the terminal interface, and the permission system. Everything else, model providers, compaction, slash commands, lifecycle hooks, custom rendering, is an extension: a WebAssembly component running under an enforced capability model, or, for a handful of first-party extensions that ship enabled by default, the same source compiled natively into the binary instead. The agent can run with zero providers installed as a valid state; it ships with one, speaking any OpenAI-compatible endpoint, so a fresh install has something to talk to.
 
-The binary targets Linux, macOS, and Windows natively, and also builds to `wasm32` for embedding in a browser or Node host. Extensions install from an OCI registry, a plain HTTPS-hosted archive, or a local path, no npm and no system package manager required.
+The binary targets Linux, macOS, and Windows natively. The `wasm32` build for embedding in a browser or Node host is designed and deferred: `scripts/deferred-requirements.txt` names it (NFR-11 with FR-WEB-1/2/3), and the traceability gate prints it as deferred on every run. Extensions install from an OCI registry, a plain HTTPS-hosted archive, or a local path, no npm and no system package manager required.
 
 ## Where this comes from
 
@@ -18,11 +18,13 @@ The full account of what's taken from where, including specific files worth read
 
 ## Status
 
-Design-complete, pre-implementation. Every decision here has been written down as a requirement, an architecture decision record, or both, specifically so implementation can proceed without re-litigating settled questions or guessing at intent.
+Implemented, gated, and released. Every phase exit test in `docs/lca-srdd.md` has passed in order, with the receipts in `docs/phase-log.md`; CI runs the full suite plus the timing, size, dependency, and traceability gates on Linux, macOS, and Windows, and the release pipeline builds, double-builds for reproducibility, and provenance-attests all six native targets (release `phase5-0.1.0` carries the binaries, `artifacts.sha256`, and the skills archive).
+
+What this release does not contain is named rather than implied: `scripts/deferred-requirements.txt` lists the deferred requirements (the web target), `docs/platform-notes.md` tracks the per-platform gaps, and the Phase 8 deviations paragraph in `docs/phase-log.md` records the rest, including the two slash slots left unclaimed.
 
 ## Reading order
 
-Start with `docs/lca-srdd.md`, which is the top-level requirements and architecture document and the index for everything else. From there: `docs/adr/` holds eighteen architecture decision records, one per real design choice with alternatives considered; `docs/capabilities.md` is the normative reference for every capability an extension can hold; `docs/testing-plan.md` specifies how this gets built test-first; `docs/glossary.md` disambiguates the terms that get overloaded across this many documents; `docs/platform-notes.md` has the specific, easy-to-get-wrong behavior per operating system; `docs/configuration.md` and `docs/headless.md` are the configuration key reference and the scripting contract; and `docs/providers/` documents each first-party model provider individually.
+Start with `docs/lca-srdd.md`, which is the top-level requirements and architecture document and the index for everything else. From there: `docs/adr/` holds twenty-three architecture decision records (0001 through 0023), one per real design choice with alternatives considered; `docs/capabilities.md` is the normative reference for every capability an extension can hold; `docs/testing-plan.md` specifies how this gets built test-first; `docs/glossary.md` disambiguates the terms that get overloaded across this many documents; `docs/platform-notes.md` has the specific, easy-to-get-wrong behavior per operating system; `docs/configuration.md` and `docs/headless.md` are the configuration key reference and the scripting contract; and `docs/providers/` documents each first-party model provider individually.
 
 ## If you are the agent implementing this
 

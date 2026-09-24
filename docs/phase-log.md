@@ -679,6 +679,14 @@ gives these two a numbered requirement of their own to tag a test
 against. `/login`, `/logout`, `/usage`, and `/stats` are registered
 and exercised (the Phase 3 exit test quotes three of them; the fourth
 comes from the native hooks extension that holds the stats source).
+`lca-sdk`, the embedding crate the architecture names - the crate
+decomposition's dependency direction and the Embedding SDK section's
+session handle, event stream, and input channel, native and WASM - is
+also not claimed: no numbered requirement covers it, its WASM half
+rides on the web target this release already deferred (FR-WEB-*,
+NFR-11), and a native half beside a deferred WASM half would be an
+empty API surface, so it is recorded here with the slash slots rather
+than shipped as scaffolding.
 Next: GitHub's hosted runner pool was sick for most of this phase - a dozen-plus runs wedged,
 several failed with the annotation "the hosted runner lost
 communication with the server", and logs for the affected jobs never
