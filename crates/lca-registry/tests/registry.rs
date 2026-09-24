@@ -68,6 +68,38 @@ fn the_grant_hash_is_canonical_and_value_sensitive() {
     assert_ne!(a, reason_changed, "a changed declaration changes the hash");
 }
 
+// Verifies: the install boundary never joins an attacker-supplied
+// manifest name onto the filesystem (FR-DIST-5 consent path; ADR-0010's
+// unzip). A path-traversal name is refused before any write, and no
+// directory escapes the tree.
+#[test]
+fn install_refuses_a_manifest_name_that_escapes_the_tree() {
+    let root = std::env::temp_dir().join(format!("lca-registry-traversal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let tree = lca_registry::InstallTree::new(root.clone());
+
+    let component = component();
+    let resolved = lca_registry::Resolved {
+        digest: lca_registry::Resolved::digest_of(&component),
+        source: "https://example.invalid/evil.zip".to_string(),
+        manifest: MANIFEST.replace("word-count", "../../escape"),
+        component,
+    };
+    let err = tree
+        .install(resolved)
+        .expect_err("traversal must be refused");
+    assert!(
+        err.to_string().contains("not a valid extension name"),
+        "{err}"
+    );
+    // Nothing was written two levels above the tree.
+    assert!(
+        !root.parent().expect("parent").join("escape").exists(),
+        "nothing escaped the install tree"
+    );
+}
+
 // Verifies: FR-DIST-6 (digest and source recorded, reused) and the
 // SRDD install tree: component named by content digest, manifest
 // beside it, lockfile at the top; remove forgets both (FR-DIST... the

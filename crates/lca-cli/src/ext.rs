@@ -241,27 +241,33 @@ fn install(resolved: Resolved, tree: InstallTree) -> i32 {
 
 /// (name, version, abi, description) out of the manifest, through the
 /// loader's parser so validation stays single-sourced.
+///
+/// `lca_ext_host::Manifest::parse` is the authority: it checks the
+/// identifier rules, the ABI line, every capability declaration, the
+/// credential namespace, and oauth-requires-net. An install that passes
+/// here loads later, and - critically - a manifest whose `name` is not a
+/// legal identifier is refused before `InstallTree::install` ever joins it
+/// onto the filesystem.
 fn parse_manifest_strict(manifest: &str) -> Result<(String, String, String, String), String> {
-    // The loader's parser is wasmtime-side but plain-TOML; the fields
-    // this screen shows are read here directly to avoid pulling the
-    // host into a display path.
-    let value: toml::Value = manifest
-        .parse()
-        .map_err(|err| format!("manifest does not parse: {err}"))?;
-    let get = |key: &str| {
-        value
-            .get(key)
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string()
-    };
-    if get("name").is_empty() {
-        return Err("manifest has no name".to_string());
+    let parsed = lca_ext_host::Manifest::parse(manifest).map_err(|err| err.to_string())?;
+    if !parsed.abi_in_window() {
+        return Err(format!(
+            "manifest targets ABI {}, outside this host's supported window",
+            parsed.abi
+        ));
     }
-    if get("abi").is_empty() {
-        return Err("manifest has no abi".to_string());
-    }
-    Ok((get("name"), get("version"), get("abi"), get("description")))
+    // `description` is display-only and not part of the loader's contract.
+    let description = manifest
+        .parse::<toml::Value>()
+        .ok()
+        .and_then(|value| {
+            value
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    Ok((parsed.name, parsed.version, parsed.abi, description))
 }
 
 async fn update(tree: &InstallTree, name: Option<String>, all: bool) -> i32 {
@@ -444,4 +450,77 @@ fn list(tree: &InstallTree) -> i32 {
         );
     }
     crate::exit::OK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_manifest_strict;
+
+    const VALID: &str = r#"name = "word-count"
+version = "1.0.0"
+abi = "1.0"
+worlds = ["tool"]
+description = "Counts words."
+
+[capabilities.fs]
+workspace = "read"
+"#;
+
+    // Verifies: FR-DIST-5's consent path validates through the loader's
+    // parser - a valid manifest yields the identity the screen shows.
+    #[test]
+    fn a_valid_manifest_yields_identity() {
+        let (name, version, abi, description) =
+            parse_manifest_strict(VALID).expect("valid manifest parses");
+        assert_eq!(name, "word-count");
+        assert_eq!(version, "1.0.0");
+        assert_eq!(abi, "1.0");
+        assert_eq!(description, "Counts words.");
+    }
+
+    // Verifies: the install screen cannot be shown for a name that would
+    // escape the install tree (FR-DIST-5; `InstallTree::install` refuses too).
+    #[test]
+    fn a_traversal_name_is_refused() {
+        let err = parse_manifest_strict(&VALID.replace("word-count", "../../escape"))
+            .expect_err("traversal refused");
+        assert!(
+            err.contains("name"),
+            "the refusal names the identifier: {err}"
+        );
+    }
+
+    // Verifies: manifest rules the loader enforces are enforced here too,
+    // before the consent screen: oauth needs net, and the credential
+    // namespace is the extension name (FR-PERM-6).
+    #[test]
+    fn invalid_capability_declarations_are_refused() {
+        let oauth_without_net = r#"name = "provider-x"
+version = "1.0.0"
+abi = "1.0"
+worlds = ["provider"]
+
+[capabilities.oauth]
+redirect_path = "/callback"
+"#;
+        assert!(parse_manifest_strict(oauth_without_net).is_err());
+
+        let wrong_namespace = VALID.replace(
+            "[capabilities.fs]\nworkspace = \"read\"",
+            "[capabilities.credentials]\nnamespace = \"other\"",
+        );
+        assert!(parse_manifest_strict(&wrong_namespace).is_err());
+    }
+
+    // Verifies: FR-EXT-8's window is checked at install, not only at load -
+    // an artifact this host can never run is refused up front.
+    #[test]
+    fn an_out_of_window_abi_is_refused() {
+        let err = parse_manifest_strict(&VALID.replace("abi = \"1.0\"", "abi = \"9.9\""))
+            .expect_err("out-of-window ABI refused");
+        assert!(
+            err.contains("outside this host's supported window"),
+            "{err}"
+        );
+    }
 }

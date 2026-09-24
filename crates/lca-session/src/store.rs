@@ -376,9 +376,10 @@ impl SessionStore {
             version: 1,
             sessions: sessions.clone(),
         };
-        if let Some(parent) = project_dir.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        // The project directory may not exist yet - a first `lca resume` on
+        // a project with no sessions must list an empty set, not fail with
+        // ENOENT while writing the index cache (FR-SESS-2).
+        std::fs::create_dir_all(project_dir)?;
         write_atomic(
             &project_dir.join("index.json"),
             &serde_json::to_vec_pretty(&index)?,
@@ -474,13 +475,21 @@ fn parse_line(line: &[u8]) -> Line {
             reason: format!("record version {version} is newer than this reader"),
         };
     }
+    // The type tag comes from the parsed value, not a fragile split of the
+    // raw text: a known record that fails to deserialize is corruption the
+    // reader must stop at (FR-SESS-6), while a genuinely unknown type is
+    // skipped so a newer agent's log stays readable.
+    let tag = value
+        .get("t")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
     match serde_json::from_value::<lca_protocol::Record>(value) {
         Ok(record) => Line::Record(record),
         Err(err) => {
-            let tag = text.split('"').nth(3).unwrap_or("").to_string();
             if KNOWN_TYPES.contains(&tag.as_str()) {
                 Line::Corrupt {
-                    reason: format!("known record type failed to parse: {err}"),
+                    reason: format!("known record type `{tag}` failed to parse: {err}"),
                 }
             } else {
                 Line::Skipped {

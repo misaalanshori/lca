@@ -443,6 +443,33 @@ fn text_node(content: &str, role: &str) -> lca_protocol::Widget {
     }
 }
 
+// Verifies: ADR-0003's rendering boundary against the widget-shaped
+// sibling attack - an untrusted arena whose child index points at an
+// ancestor (or at itself) renders each node once and terminates instead
+// of overflowing the stack (the phase-log's visited-set guard, real).
+#[test]
+fn a_cyclic_widget_arena_renders_once_and_terminates() {
+    use lca_protocol::Widget;
+    // node 0 boxes node 1; node 1 lists node 0 and itself again.
+    let nodes = vec![
+        Widget::Boxed {
+            title: Some("box".to_string()),
+            child: 1,
+        },
+        Widget::Column(vec![0, 1, 1]),
+    ];
+    let lines = lca_tui::widget_lines(&nodes);
+    assert_eq!(lines, vec!["[box]".to_string()], "each node renders once");
+
+    // A node that points at itself must also terminate.
+    let selfish = vec![Widget::Boxed {
+        title: Some("self".to_string()),
+        child: 0,
+    }];
+    let lines = lca_tui::widget_lines(&selfish);
+    assert_eq!(lines, vec!["[self]".to_string()]);
+}
+
 // Verifies: the Phase 6 exit clauses1 and2 at the interface level -
 // an extension renders in all four regions, and the hostile span in the
 // footer reaches the virtual terminal as literal characters (FR-UI-2,

@@ -92,10 +92,26 @@ pub fn sanitize_text(text: &str) -> String {
 /// One node's lines, arena-style: node0 is the root and children are
 /// indices. Every text node passes through [`sanitize_text`] - the one
 /// choke point for FR-UI-2.
+///
+/// A node is rendered at most once per call. The arena is supplied by an
+/// untrusted extension, so a child index that points at an ancestor (or
+/// at itself) must not recurse forever or expand exponentially; the
+/// `visited` set is the guard the widget-shaped sibling attack needs.
 pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
-    fn walk(nodes: &[lca_protocol::Widget], index: usize, out: &mut Vec<String>) {
+    fn walk(
+        nodes: &[lca_protocol::Widget],
+        index: usize,
+        out: &mut Vec<String>,
+        visited: &mut [bool],
+    ) {
         use lca_protocol::Widget;
         let Some(node) = nodes.get(index) else { return };
+        if visited.get(index) == Some(&true) {
+            return;
+        }
+        if let Some(seen) = visited.get_mut(index) {
+            *seen = true;
+        }
         match node {
             Widget::Text { content, .. } => out.push(sanitize_text(content)),
             Widget::Image { media_type, bytes } => {
@@ -105,7 +121,7 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
                 if let Some(title) = title {
                     out.push(format!("[{title}]"));
                 }
-                walk(nodes, *child as usize, out);
+                walk(nodes, *child as usize, out, visited);
             }
             Widget::Row(children) => {
                 // Side by side, first line of each (v1 layout; ponytail:
@@ -114,7 +130,7 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
                     .iter()
                     .filter_map(|child| {
                         let mut lines = Vec::new();
-                        walk(nodes, *child as usize, &mut lines);
+                        walk(nodes, *child as usize, &mut lines, visited);
                         lines.into_iter().next()
                     })
                     .collect();
@@ -122,7 +138,7 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
             }
             Widget::Column(children) => {
                 for child in children {
-                    walk(nodes, *child as usize, out);
+                    walk(nodes, *child as usize, out, visited);
                 }
             }
             Widget::Spinner { frames } => {
@@ -162,7 +178,8 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
     }
     let mut out = Vec::new();
     if !nodes.is_empty() {
-        walk(nodes, 0, &mut out);
+        let mut visited = vec![false; nodes.len()];
+        walk(nodes, 0, &mut out, &mut visited);
     }
     out
 }

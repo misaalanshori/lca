@@ -171,6 +171,50 @@ fn unknown_record_types_are_skipped_not_fatal() {
     assert_eq!(records[2].id(), Some("r3"));
 }
 
+// Verifies: FR-SESS-6 - a *known* record type that fails to deserialize is
+// corruption, so the reader stops and reports truncation rather than
+// silently dropping the record (the bug the old text-split tag classifier
+// hid, because it always yielded the key `t` instead of the type value).
+#[test]
+fn a_known_record_type_with_bad_fields_reports_truncation() {
+    let store = store("known-bad");
+    let project = scratch("known-bad-project");
+    let session = store.create_session(&project, "test").expect("create");
+    store
+        .append(&session, user_record("r1", "kept"))
+        .expect("append");
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(session.log_path())
+            .expect("open");
+        // `user` requires `content`; omitting it makes deserialization fail.
+        file.write_all(b"{\"v\":1,\"t\":\"user\",\"ts\":3,\"id\":\"r2\"}\n")
+            .expect("write");
+    }
+    store
+        .append(&session, user_record("r3", "after"))
+        .expect("append");
+
+    let ReadOutcome {
+        records,
+        truncated,
+        skipped_unknown,
+        warnings,
+    } = store.read(&session).expect("read");
+    assert!(truncated, "a known type with bad fields is corruption");
+    assert_eq!(skipped_unknown, 0, "it is not an unknown type");
+    assert_eq!(records.len(), 2, "records before the bad line are kept");
+    assert_eq!(records[1].id(), Some("r1"));
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("known record type")),
+        "the warning names the known type: {warnings:?}"
+    );
+}
+
 #[test]
 fn records_with_a_higher_version_are_skipped_with_a_warning() {
     let store = store("future-v");
@@ -197,6 +241,16 @@ fn records_with_a_higher_version_are_skipped_with_a_warning() {
     assert!(!truncated);
     assert_eq!(skipped_unknown, 1);
     assert_eq!(records.len(), 2);
+}
+
+// A project with no sessions yet must list an empty set, not fail while
+// creating the index cache (FR-SESS-2's first-run case).
+#[test]
+fn listing_a_project_with_no_sessions_is_empty_not_an_error() {
+    let store = store("empty-list");
+    let project = scratch("empty-list-project");
+    let listed = store.list_sessions(&project).expect("empty project lists");
+    assert!(listed.is_empty(), "no sessions yet: {listed:?}");
 }
 
 // Verifies: FR-SESS-2 (resume lists sessions for the project, newest first)

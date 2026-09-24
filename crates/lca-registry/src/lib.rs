@@ -281,6 +281,27 @@ pub struct InstallTree {
     root: PathBuf,
 }
 
+/// The extension identifier rules the loader's manifest parser enforces
+/// (`lca_ext_host::Manifest::parse`), mirrored at the install tree so the
+/// name - taken from an attacker-influenced manifest and then joined onto
+/// the filesystem - can never escape the tree. See [`InstallTree::install`].
+pub fn validate_extension_name(name: &str) -> Result<(), Error> {
+    let ok = name.starts_with(|c: char| c.is_ascii_lowercase())
+        && (2..=64).contains(&name.len())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !name.contains("--")
+        && !name.ends_with('-');
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::Invalid(format!(
+            "`{name}` is not a valid extension name (lowercase letters, digits, and single hyphens; 2-64 chars)"
+        )))
+    }
+}
+
 impl InstallTree {
     /// The tree under a root directory.
     pub fn new(root: impl Into<PathBuf>) -> InstallTree {
@@ -321,6 +342,12 @@ impl InstallTree {
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::Invalid("manifest has no name".to_string()))?
             .to_string();
+        // The name is joined onto the install tree, so it must satisfy the
+        // loader's identifier rules here, before any write: a manifest is
+        // attacker-influenced and `name = ".."` would otherwise escape the
+        // tree (the loader's `Manifest::parse` is the authority; this is the
+        // same rule, enforced at the write boundary too).
+        validate_extension_name(&name)?;
         let entry = LockEntry {
             digest: resolved.digest.clone(),
             source: resolved.source.clone(),
