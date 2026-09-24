@@ -207,6 +207,7 @@ async fn platform_exec(
 
     let mut collected: Vec<u8> = Vec::new();
     let mut outcome: Option<ExecOutcome> = None;
+    let exec_start = tokio::time::Instant::now();
     let deadline = tokio::time::Instant::now() + timeout;
     let mut out_buf = [0u8; 8192];
     let mut err_buf = [0u8; 8192];
@@ -227,6 +228,7 @@ async fn platform_exec(
                 else { on_output(&err_buf[..n]); collected.extend_from_slice(&err_buf[..n]); }
             }
             _ = tokio::time::sleep_until(deadline) => {
+                eprintln!("TEMP-DIAG timeout arm after {:?}", exec_start.elapsed());
                 kill_group(pgid);
                 let _ = child.wait().await;
                 outcome = Some(ExecOutcome::Timeout);
@@ -258,9 +260,10 @@ fn kill_group(pgid: u32) {
     // group stops the shell and everything it forked. `/bin/kill` exists on
     // every POSIX platform we target; using it avoids a `libc` dependency.
     // ponytail: swap to `libc::killpg` if a platform ships no /bin/kill.
-    let _ = std::process::Command::new("/bin/kill")
+    let status = std::process::Command::new("/bin/kill")
         .args(["-9", &format!("-{pgid}")])
         .status();
+    eprintln!("TEMP-DIAG kill_group pgid={pgid} status={status:?}");
 }
 
 #[cfg(windows)]
