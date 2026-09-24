@@ -228,15 +228,22 @@ async fn platform_exec(
                 else { on_output(&err_buf[..n]); collected.extend_from_slice(&err_buf[..n]); }
             }
             _ = tokio::time::sleep_until(deadline) => {
-                eprintln!("TEMP-DIAG timeout arm after {:?}", exec_start.elapsed());
+                eprintln!(
+                    "TEMP-DIAG timeout arm after {:?}",
+                    exec_start.elapsed()
+                );
                 kill_group(pgid);
-                let _ = child.wait().await;
+                wait_after_kill(&mut child, pgid, exec_start).await;
                 outcome = Some(ExecOutcome::Timeout);
                 break;
             }
             _ = cancel.wait_cancelled() => {
+                eprintln!(
+                    "TEMP-DIAG cancel arm after {:?}",
+                    exec_start.elapsed()
+                );
                 kill_group(pgid);
-                let _ = child.wait().await;
+                wait_after_kill(&mut child, pgid, exec_start).await;
                 outcome = Some(ExecOutcome::Cancelled);
                 break;
             }
@@ -264,6 +271,41 @@ fn kill_group(pgid: u32) {
         .args(["-9", &format!("-{pgid}")])
         .status();
     eprintln!("TEMP-DIAG kill_group pgid={pgid} status={status:?}");
+}
+
+/// Reap the child after a group kill, bounded: a process still alive
+/// two seconds after SIGKILL is worth seeing rather than awaiting
+/// into an unexplained thirty-second stall - print the group's state,
+/// then make sure. (TEMP-DIAG lines are the Linux evidence trail;
+/// remove once the hosted-runner stall is identified.)
+#[cfg(unix)]
+async fn wait_after_kill(
+    child: &mut tokio::process::Child,
+    pgid: u32,
+    since: tokio::time::Instant,
+) {
+    if tokio::time::timeout(std::time::Duration::from_secs(2), child.wait())
+        .await
+        .is_err()
+    {
+        let ps = std::process::Command::new("ps")
+            .args(["-eo", "pid,ppid,pgid,stat,cmd"])
+            .output()
+            .map(|out| {
+                let all = String::from_utf8_lossy(&out.stdout);
+                all.lines()
+                    .filter(|line| line.contains(&format!(" {pgid} ")))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        eprintln!(
+            "TEMP-DIAG child group {pgid} still alive2s after kill, {:?} since exec: {ps}",
+            since.elapsed()
+        );
+        let _ = child.start_kill();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
+    }
 }
 
 #[cfg(windows)]
