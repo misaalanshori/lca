@@ -1,0 +1,10 @@
+# A test that blocks forever must not take the pipeline down with it.
+# The hosted Linux and Windows runners spent a whole day wedged at the
+# nextest step with no logs stored (a job that never ends never stores
+# them), so every test gets a hard ceiling: slow after60s, killed
+# after two periods plus grace. Locally the slowest tests (trap
+# isolation, hooks) finish in about thirty seconds, so this fires only
+# for a real hang - and when it does, it fails with the test's name
+# instead of an anonymous job that lives for six hours.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 2, grace = "30s" }
