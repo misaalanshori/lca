@@ -16,12 +16,15 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # Diagnostic ceiling: wedged test jobs have been sitting at the
-    # nextest step for the better part of an hour on the Linux and
-    # Windows pools, and a killed job stores its logs while an
-    # eternally running one stores nothing - forty-five minutes is
-    # triple the healthy suite time and turns a wedge into evidence.
-    timeout-minutes: 45
+    # Diagnostic ceiling: wedged test jobs sat at the nextest step
+    # for the better part of an hour on the hosted pools, and a killed
+    # job stores its logs while an eternally running one stores
+    # nothing. Forty-five minutes once killed a suite that was simply
+    # slow (it has completed naturally in thirty-seven) on the same
+    # pool where another attempt never finished at all, so the ceiling
+    # is now ninety: generous for a slow day, still finite for a
+    # wedge.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
