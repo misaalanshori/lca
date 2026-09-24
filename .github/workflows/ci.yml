@@ -59,7 +59,17 @@ jobs:
         # hanging the step.
         run: |
           set -o pipefail
+          # The timing gates - NFR-4's instantiation, NFR-5's hook
+          # overhead, NFR-29's epoch tests - run in the dedicated step
+          # below on a release build with the machine to itself, which
+          # is where their thresholds were measured; inside the
+          # parallel debug suite they read whatever else is running
+          # (one Windows run measured a199 ms "instantiation" beside
+          # twenty other tests). They are excluded from this step by
+          # name only - never skipped, and the same predicate selects
+          # them in the gates step.
           cargo nextest run --workspace --no-fail-fast \
+            -E 'not test(/nfr|instantiation|hook|epoch/)' \
             2>&1 | tee nextest-output.log
       # Verifies: NFR-30 (advisory before Phase 8, required from Phase 8).
       # Verifies: NFR-5's real bound: hook overhead measured against a
@@ -68,7 +78,11 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo nextest run --release -p lca-ext-host -E 'test(/nfr|instantiation|hook|epoch/)' \
+          # One at a time: these five measure microseconds, and the
+          # epoch test's spinner thread alone can push the hook
+          # overhead test past its millisecond (it did, right here).
+          cargo nextest run --release -p lca-ext-host --test-threads=1 \
+            -E 'test(/nfr|instantiation|hook|epoch/)' \
             2>&1 | tee nfr-gates-output.log
       # Verifies: NFR-16 (dependency license and advisory checks on merge).
       - name: cargo-deny
