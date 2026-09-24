@@ -8,23 +8,36 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Three topologies, chosen by what each platform actually needs:
+#
+#   * test            - macOS and Windows, one job each, the whole
+#                       suite as it has run (and, since the Windows
+#                       round of fixes, passed).
+#   * test-ubuntu     - the Linux suite SPLIT into four bounded jobs
+#                       by package group. A monolithic Linux nextest
+#                       step aged past forty-five minutes and lost its
+#                       runner agent ("lost communication with the
+#                       server") repeatedly; no job here may outlive
+#                       thirty minutes, and every one of them keeps
+#                       its own log as an artifact whether it passed
+#                       or not.
+#   * ubuntu-gates    - the five timing tests (NFR-4, NFR-5, NFR-29),
+#                       serial on a release build with the machine to
+#                       itself - where their thresholds were measured
+#                       - plus cargo-deny and the traceability gate.
+#
+# The timing tests are excluded from every ordinary suite invocation
+# by the same predicate that selects them here: never skipped,
+# measured alone.
 jobs:
   test:
     name: test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # Diagnostic ceiling: wedged test jobs sat at the nextest step
-    # for the better part of an hour on the hosted pools, and a killed
-    # job stores its logs while an eternally running one stores
-    # nothing. Forty-five minutes once killed a suite that was simply
-    # slow (it has completed naturally in thirty-seven) on the same
-    # pool where another attempt never finished at all, so the ceiling
-    # is now ninety: generous for a slow day, still finite for a
-    # wedge.
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
@@ -43,56 +56,37 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps
-# Verifies: NFR-12 (the suite runs on Linux, macOS, and Windows).
+      # Verifies: NFR-12 (the suite runs on Linux, macOS, and Windows).
       - name: tests (nextest)
         # bash, not the runner's default shell: `set -o pipefail` and
         # `tee` do not exist in PowerShell, and a shell-level error
-        # would fail this step before a single test ran - which is
-        # exactly what the first tee'd Windows run did.
+        # would fail this step before a single test ran.
         shell: bash
-        # Full parallelism: a Linux suite stretched past forty-five
-        # minutes at half threads, and every run that crossed roughly
-        # that age lost the runner agent mid-step ("hosted runner lost
-        # communication"), twice in a row. Finishing sooner is the
-        # reliable defense; the per-test ceiling in
-        # .config/nextest.toml still stops any single test from
-        # hanging the step.
         run: |
           set -o pipefail
-          # The timing gates - NFR-4's instantiation, NFR-5's hook
-          # overhead, NFR-29's epoch tests - run in the dedicated step
-          # below on a release build with the machine to itself, which
-          # is where their thresholds were measured; inside the
-          # parallel debug suite they read whatever else is running
-          # (one Windows run measured a199 ms "instantiation" beside
-          # twenty other tests). They are excluded from this step by
-          # name only - never skipped, and the same predicate selects
-          # them in the gates step.
           cargo nextest run --workspace --no-fail-fast \
             -E 'not test(/nfr|instantiation|hook|epoch/)' \
             2>&1 | tee nextest-output.log
-      # Verifies: NFR-30 (advisory before Phase 8, required from Phase 8).
+          status=${PIPESTATUS[0]}
+          exit $status
       # Verifies: NFR-5's real bound: hook overhead measured against a
       # release wasmtime (debug instrumentation dominates the1 ms).
       - name: nfr release gates
         shell: bash
         run: |
           set -o pipefail
-          # One at a time: these five measure microseconds, and the
-          # epoch test's spinner thread alone can push the hook
-          # overhead test past its millisecond (it did, right here).
           cargo nextest run --release -p lca-ext-host --test-threads=1 \
             -E 'test(/nfr|instantiation|hook|epoch/)' \
             2>&1 | tee nfr-gates-output.log
-      # Verifies: NFR-16 (dependency license and advisory checks on merge).
-      - name: cargo-deny
-        if: runner.os == 'Linux'
-        uses: EmbarkStudios/cargo-deny-action@v2
-      # The suite's raw output survives a failed step as an artifact:
-      # GitHub's job-log storage spent a whole day failing to ingest,
-      # and a failure whose name exists nowhere is not evidence.
-      - name: Keep failing test output
-        if: failure()
+          status=${PIPESTATUS[0]}
+          exit $status
+      # Verifies: NFR-30 (zero untagged requirements; required from
+      # Phase 8, so the advisory flag is gone).
+      - name: requirements traceability (NFR-30)
+        shell: bash
+        run: bash scripts/traceability.sh
+      - name: Keep test output
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-output-${{ matrix.os }}
@@ -100,11 +94,119 @@ jobs:
             nextest-output.log
             nfr-gates-output.log
           if-no-files-found: ignore
+
+  # The Linux suite, split by package group. Each job: build its test
+  # binaries as its own timestamped phase, run one bounded nextest
+  # invocation at two threads inside an outer `timeout`, dump the
+  # process tree if that timeout (or the test run) fails, and always
+  # keep the log.
+  test-ubuntu:
+    name: test (ubuntu, ${{ matrix.group }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: core
+            expr: 'package(lca-protocol) or package(lca-permissions) or package(lca-session) or package(lca-config) or package(lca-provider) or package(lca-testkit) or package(lca-ext-abi)'
+          - group: engines
+            expr: 'package(lca-tools) or package(lca-core) or package(lca-ext-host) or package(lca-ext-native)'
+          - group: shell
+            expr: 'package(lca-cli) or package(lca-tui) or package(lca-registry)'
+          - group: extensions
+            expr: 'package(antigravity) or package(compaction-default) or package(conformance) or package(hooks-example) or package(openai-compatible) or package(skills) or package(ui-example)'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup set profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the test binaries (its own phase)
+        shell: bash
+        run: |
+          echo "[$(date -Is)] build start"
+          cargo test --workspace --no-run
+          echo "[$(date -Is)] build done"
+      - name: Run this group's tests (bounded)
+        shell: bash
+        run: |
+          set -o pipefail
+          echo "[$(date -Is)] run start (group ${{ matrix.group }}, two threads)"
+          # Outer bound shorter than the job timeout: a step that
+          # overruns dies with its own process tree printed - the
+          # evidence Linux has been missing - rather than as an
+          # anonymous agent that stops answering.
+          timeout -k 30s 22m cargo nextest run --workspace --no-fail-fast \
+            --test-threads=2 --failure-output immediate \
+            -E '(${{ matrix.expr }}) and not test(/nfr|instantiation|hook|epoch/)' \
+            2>&1 | tee "nextest-${{ matrix.group }}.log"
+          status=${PIPESTATUS[0]}
+          echo "[$(date -Is)] run end (status $status)"
+          if [ "$status" -ne 0 ]; then
+            echo "== process tree, oldest first (a stuck test shows its package by name) =="
+            ps -eo pid,ppid,etime,stat,cmd --sort=-etime | head -80 || true
+            echo "== pty / shell / sleep descendants =="
+            ps -eo pid,ppid,cmd | grep -E 'pty|/bin/sh|bin/sleep|nextest' | grep -v grep | head -40 || true
+          fi
+          exit $status
+      - name: Keep this group's log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-ubuntu-${{ matrix.group }}
+          path: nextest-*.log
+          if-no-files-found: ignore
+
+  ubuntu-gates:
+    name: ubuntu gates (timing, deny, traceability)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup set profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - uses: Swatinem/rust-cache@v2
+      # Verifies: NFR-4 (instantiation), NFR-5 (hook overhead against a
+      # release wasmtime), NFR-29 (epoch interruption) - and NFR-30's
+      # advisory predecessor lives in the deny step below (required
+      # from Phase 8).
+      - name: nfr release gates (serial)
+        shell: bash
+        run: |
+          set -o pipefail
+          # One at a time: these five measure microseconds, and the
+          # epoch test's spinner thread alone can push the hook
+          # overhead test past its millisecond (it did, right here).
+          timeout -k 30s 20m cargo nextest run --release -p lca-ext-host \
+            --test-threads=1 --failure-output immediate \
+            -E 'test(/nfr|instantiation|hook|epoch/)' \
+            2>&1 | tee nfr-gates-output.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            ps -eo pid,ppid,etime,stat,cmd --sort=-etime | head -60 || true
+          fi
+          exit $status
+      # Verifies: NFR-16 (dependency license and advisory checks on merge).
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
       # Verifies: NFR-30 (zero untagged requirements; required from
       # Phase 8, so the advisory flag is gone).
       - name: requirements traceability (NFR-30)
         shell: bash
         run: bash scripts/traceability.sh
+      - name: Keep gate output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gates-output-ubuntu
+          path: nfr-gates-output.log
+          if-no-files-found: ignore
 
   # NFR-7: measure binary size and cold start, fail on a threshold breach.
   size-and-startup:
