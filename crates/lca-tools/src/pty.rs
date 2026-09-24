@@ -506,18 +506,29 @@ mod windows_conpty {
             },
             lpAttributeList: attr_list.as_mut_ptr() as *mut _,
         };
-        // SAFETY: the attribute list is initialized; `hpc` is valid.
-        unsafe {
+        // The attribute's value parameter is a pointer TO an HPCON,
+        // not the handle itself: passing the handle's bits as an
+        // address made the call fail (its return was ignored), the
+        // list carried no pseudoconsole, and every child was born on
+        // the parent's own console - its output went to the runner's
+        // stdout instead of the pipe, which is why three Windows pty
+        // tests saw a program that ran and printed nothing they could
+        // read, and the panel's keystrokes echoed into the void.
+        let hpc_value = console.hpc.unwrap_or(0);
+        let updated = unsafe {
             UpdateProcThreadAttribute(
                 startup.lpAttributeList,
                 0,
                 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
-                console.hpc.unwrap_or(0) as *const HPCON as *const core::ffi::c_void,
+                &raw const hpc_value as *const core::ffi::c_void,
                 std::mem::size_of::<HPCON>(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             )
         };
+        if updated == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
         let mut info = PROCESS_INFORMATION::default();
         // SAFETY: all pointers valid and owned across the call;
         // CreateProcessW may mutate the buffers we own.
