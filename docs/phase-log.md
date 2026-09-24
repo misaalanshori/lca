@@ -664,8 +664,22 @@ between one and six hours with no log output - GitHub's runners were
 having a bad day) were cancelled as superseded; only runs for the
 current HEAD and the publish dispatch were kept.
 
-Deviations, written down rather than hidden: GitHub's hosted runner
-pool was sick for most of this phase - a dozen-plus runs wedged,
+Deviations, written down rather than hidden: two of the six built-in
+slash commands the requirements document names for the interactive
+screen are not claimed rather than hollowly answered. `/compact` was
+already recorded at the Phase 4 exit as unwired - the threshold
+compaction path is the one that shipped and is tested end to end,
+while a *manual* trigger needs the command effect to reach into the
+session's record pipeline, which is an interface question an ADR
+should answer before it is a slot on the screen. `/model` is the same
+shape: the provider world's model listing exists and is tested
+through the conformance and provider suites, but a picker command
+would add its own effect and its own UI surface, and neither document
+gives these two a numbered requirement of their own to tag a test
+against. `/login`, `/logout`, `/usage`, and `/stats` are registered
+and exercised (the Phase 3 exit test quotes three of them; the fourth
+comes from the native hooks extension that holds the stats source).
+Next: GitHub's hosted runner pool was sick for most of this phase - a dozen-plus runs wedged,
 several failed with the annotation "the hosted runner lost
 communication with the server", and logs for the affected jobs never
 made it to storage, so the receipt trail is run IDs and annotations
