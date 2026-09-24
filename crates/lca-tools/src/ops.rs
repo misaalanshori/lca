@@ -268,9 +268,40 @@ fn kill_group(pgid: u32) {
     // every POSIX platform we target; using it avoids a `libc` dependency.
     // ponytail: swap to `libc::killpg` if a platform ships no /bin/kill.
     let status = std::process::Command::new("/bin/kill")
-        .args(["-9", &format!("-{pgid}")])
+        .args(["-9", "--", &format!("-{pgid}")])
         .status();
     eprintln!("TEMP-DIAG kill_group pgid={pgid} status={status:?}");
+}
+
+/// The backstop: signal every surviving member by its own pid. The
+/// group form (`kill -9 -PGID`) reported success on a hosted Linux
+/// runner while both members sat alive - the dump of the group two
+/// seconds later is in the run artifacts - and a cancellation that
+/// does not cancel is exactly the failure FR-TOOL-5 exists to catch.
+/// Individual pids leave no parsing to get wrong.
+#[cfg(unix)]
+fn kill_members(pgid: u32) {
+    let out = std::process::Command::new("ps")
+        .args(["-eo", "pid=,pgid=,cmd="])
+        .output();
+    let Ok(out) = out else { return };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut sent = Vec::new();
+    for line in text.lines() {
+        let mut cols = line.split_whitespace();
+        let (Some(pid), Some(g)) = (cols.next(), cols.next()) else {
+            continue;
+        };
+        if g == pgid.to_string() && pid != pgid.to_string() || g == pgid.to_string() {
+            if let Ok(pid) = pid.parse::<i32>() {
+                let st = std::process::Command::new("/bin/kill")
+                    .args(["-9", &pid.to_string()])
+                    .status();
+                sent.push(format!("{pid}:{st.map(|s| s.code())}"));
+            }
+        }
+    }
+    eprintln!("TEMP-DIAG kill_members pgid={pgid} sent={sent:?}");
 }
 
 /// Reap the child after a group kill, bounded: a process still alive
@@ -303,6 +334,7 @@ async fn wait_after_kill(
             "TEMP-DIAG child group {pgid} still alive2s after kill, {:?} since exec: {ps}",
             since.elapsed()
         );
+        kill_members(pgid);
         let _ = child.start_kill();
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
     }
