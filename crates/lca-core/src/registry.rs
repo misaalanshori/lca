@@ -304,17 +304,16 @@ impl ExtensionRegistry {
     }
 
     /// Run one identity future to completion from the input editor's
-    /// thread: command invocation runs outside any async context (the
-    /// TUI is synchronous there), so a fresh current-thread runtime is
-    /// safe and needs no runtime handle plumbing.
-    /// ponytail: panics if a caller ever invokes this from inside an
-    /// async task; route such a caller through `spawn` + a channel.
-    fn drive<T>(&self, future: impl std::future::Future<Output = T>) -> T {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("identity runtime")
-            .block_on(future)
+    /// thread. That thread is driven by `main`'s runtime, where a
+    /// nested `block_on` panics - the old comment claiming command
+    /// invocation ran outside any async context was wrong, and the
+    /// audit's test inside a live runtime caught it; `drive_blocking`
+    /// owns the bridge (its own thread, its own runtime, joined).
+    fn drive<T: Send + 'static>(
+        &self,
+        future: impl std::future::Future<Output = T> + Send + 'static,
+    ) -> T {
+        crate::drive_blocking(future)
     }
 
     /// One identity operation rendered as a notice (the effect the

@@ -1567,3 +1567,119 @@ fn scratch_roots(name: &str) -> lca_permissions::ScopeRoots {
         state_dir: root.join("data"),
     }
 }
+
+// Verifies: FR-SESS-5 (the manual trigger - the /compact built-in's
+// engine - compacts exclusively through the compaction world: the
+// strategy runs, the durable record lands with its name, and no
+// threshold was crossed to get there - the window here is zero, which
+// disables the automatic path entirely).
+#[tokio::test]
+async fn the_manual_trigger_compacts_through_the_world_without_a_threshold() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("ok").usage(fake_usage(5000, 10, 0, 0)))
+        .build();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let registry = registry_with(PhaseDouble::strategy("phase-double", calls.clone()));
+    // window zero: the threshold path (FR-SESS-4) can never fire, so
+    // every invocation below is the manual one's doing.
+    let mut h = harness("manual-compact", provider, phase_config(registry, 0, 0.0));
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: Vec::new(),
+        asked: Vec::new(),
+    };
+    turn(&mut h, "first", &mut sink, &mut prompt).await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "zero window: no automatic compaction"
+    );
+
+    let store = std::sync::Arc::new(SessionStore::new(h.root.join("data")));
+    let session = store.session(&h.project, h.session.id()).expect("reattach");
+    let summary = lca_core::compact_now(
+        store.clone(),
+        session.clone(),
+        h.config.extensions.clone(),
+        h.config.completion_backend.clone(),
+    )
+    .expect("manual compaction runs");
+    assert!(
+        summary.contains("compacted"),
+        "the strategy's summary comes back: {summary}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the compaction world ran, once"
+    );
+
+    let records = store
+        .read_with(&session, ViewMode::Display)
+        .expect("read")
+        .records;
+    let named: Vec<&str> = records
+        .iter()
+        .filter_map(|record| match record {
+            Record::Compaction { strategy, .. } => Some(strategy.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(named, ["phase-double"], "FR-SESS-5's strategy name");
+
+    // A session with nothing worth replacing answers an error and
+    // never reaches the strategy.
+    let fresh = store.create_session(&h.project, "fresh").expect("fresh");
+    let err = lca_core::compact_now(
+        store.clone(),
+        fresh,
+        h.config.extensions.clone(),
+        h.config.completion_backend.clone(),
+    )
+    .expect_err("one message cannot compact into itself");
+    assert!(!err.is_empty(), "the refusal explains itself");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the empty session never reached the strategy"
+    );
+}
+
+// The completion backend asks whichever model the session currently
+// uses (ProviderBackend's own contract); /model changes that model for
+// the session, compaction included. Called sync, the way the
+// compaction strategy reaches it: through a blocking region
+// (ADR-0014), never from inside an async poll.
+#[test]
+fn the_completion_backend_follows_a_model_change() {
+    let fake = Arc::new(
+        FakeProvider::builder()
+            .turn(|t| t.text("hi").usage(fake_usage(10, 2, 0, 0)))
+            .turn(|t| t.text("hi again").usage(fake_usage(8, 2, 0, 0)))
+            .build(),
+    );
+    let backend =
+        lca_core::ext_provider::ProviderBackend::new(fake.clone(), "startup-model", "sess-1");
+    let messages = vec![lca_protocol::ChatMessage::text(
+        lca_protocol::MessageRole::User,
+        "hello",
+    )];
+    backend
+        .complete(&messages)
+        .expect("the scripted turn answers");
+    assert_eq!(
+        fake.last_request().expect("request").model,
+        "startup-model",
+        "before any change"
+    );
+
+    backend.set_model("switched-model");
+    backend
+        .complete(&messages)
+        .expect("the scripted turn answers");
+    assert_eq!(
+        fake.last_request().expect("request").model,
+        "switched-model",
+        "the session's model after /model"
+    );
+}

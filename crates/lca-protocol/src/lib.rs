@@ -13,6 +13,7 @@ pub mod provider;
 pub mod record;
 pub mod stream;
 pub mod tool;
+pub mod turn;
 pub mod ui;
 pub mod usage;
 
@@ -25,5 +26,6 @@ pub use provider::{
 pub use record::{FORMAT_VERSION, PermissionDecision, Record, ToolSource};
 pub use stream::StreamEvent;
 pub use tool::{ToolCall, ToolResult, ToolResultStatus, ToolSpec};
+pub use turn::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
 pub use ui::{UiEffect, UiInput, Widget, WidgetTree};
 pub use usage::Usage;

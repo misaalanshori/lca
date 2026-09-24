@@ -9,7 +9,6 @@ repository.workspace = true
 
 [dependencies]
 lca-protocol = { path = "../lca-protocol" }
-lca-core = { path = "../lca-core" }
 lca-permissions = { path = "../lca-permissions" }
 lca-tools = { path = "../lca-tools" }
 lca-config = { path = "../lca-config" }

@@ -12,6 +12,91 @@ use lca_session::{Session, SessionStore, ViewMode};
 use lca_tools::{NativeOps, ToolExecutor};
 use lca_tui::{PromptRequest, TurnRunner, UiOptions};
 
+/// The built-in slash slots the interface itself claims; the spec's
+/// sixth built-in, `/stats`, arrives from the native hooks extension
+/// that holds the stats source (ADR-0013).
+const BUILTIN_SLOTS: [&str; 5] = ["login", "logout", "usage", "model", "compact"];
+
+/// The session's live model: the runner reads it per turn, the
+/// status-line label follows it, and the compaction backend is moved
+/// with `set_model` - `/model` rewrites all three.
+#[derive(Clone, Debug)]
+struct ModelChoice {
+    /// The model identifier.
+    id: String,
+    /// Its context window (the threshold math needs it).
+    window: u32,
+}
+
+/// The model picker's text: every model the active provider offers,
+/// the active one marked (FR-PROV-2 at the interface).
+fn model_picker_text(models: &[lca_protocol::ModelInfo], current: &str) -> String {
+    if models.is_empty() {
+        return "no models are offered by the active provider".to_string();
+    }
+    let mut lines = vec![format!("model picker (active: {current}):")];
+    for model in models {
+        let marker = if model.id == current { " (active)" } else { "" };
+        lines.push(format!("  {}{} - {}", model.id, marker, model.name));
+    }
+    lines.push("set one with /model <id>".to_string());
+    lines.join("\n")
+}
+
+/// One `/model` invocation: no argument lists (the picker), a known
+/// argument switches the session's model everywhere it is read, an
+/// unknown one refuses with the real alternatives. The cells are
+/// optional only so the listing and refusal paths stay testable
+/// without a live session.
+fn model_effect_on(
+    models: &[lca_protocol::ModelInfo],
+    provider_name: &str,
+    argument: &str,
+    model_cell: Option<&Arc<Mutex<ModelChoice>>>,
+    label_cell: Option<&Arc<Mutex<String>>>,
+    backend: Option<&Arc<lca_core::ext_provider::ProviderBackend>>,
+) -> CommandEffect {
+    let argument = argument.trim();
+    if argument.is_empty() {
+        let current = model_cell
+            .map(|cell| {
+                cell.lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .id
+                    .clone()
+            })
+            .unwrap_or_default();
+        return CommandEffect::ShowWidget(model_picker_text(models, &current));
+    }
+    match models.iter().find(|model| model.id == argument) {
+        Some(model) => {
+            if let Some(cell) = model_cell {
+                let mut current = cell.lock().unwrap_or_else(|err| err.into_inner());
+                current.id = model.id.clone();
+                current.window = model.context_window;
+            }
+            if let Some(label) = label_cell {
+                *label.lock().unwrap_or_else(|err| err.into_inner()) =
+                    format!("{provider_name}/{}", model.id);
+            }
+            if let Some(backend) = backend {
+                backend.set_model(model.id.clone());
+            }
+            CommandEffect::ShowWidget(format!(
+                "model for this session: {provider_name}/{}",
+                model.id
+            ))
+        }
+        None => {
+            let offered: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+            CommandEffect::ShowWidget(format!(
+                "no model named `{argument}` for {provider_name}; offered: {}",
+                offered.join(", ")
+            ))
+        }
+    }
+}
+
 /// Enter the interactive interface for `cwd`, optionally resuming `resume`.
 pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     let data = crate::data_dir();
@@ -108,8 +193,13 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     // `completion` capability; the same backend Arc drains its usage
     // onto the compaction record (capability catalog: spend shows in
     // session cost).
+    // The default compaction strategy asks THIS provider through the
+    // `completion` capability; the same backend Arc drains its usage
+    // onto the compaction record (capability catalog: spend shows in
+    // session cost). It stays concrete, not just a trait object, so
+    // /model can move it with everything else the session reads.
     #[cfg(feature = "bundled-compaction-default")]
-    let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = {
+    let provider_backend: Option<Arc<lca_core::ext_provider::ProviderBackend>> = {
         let backend = Arc::new(lca_core::ext_provider::ProviderBackend::new(
             provider.clone(),
             model_id.clone(),
@@ -125,7 +215,10 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         Some(backend)
     };
     #[cfg(not(feature = "bundled-compaction-default"))]
-    let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = None;
+    let provider_backend: Option<Arc<lca_core::ext_provider::ProviderBackend>> = None;
+    let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = provider_backend
+        .clone()
+        .map(|backend| backend as Arc<dyn lca_tools::CompletionBackend>);
     #[cfg(feature = "bundled-skills")]
     registry.register(Arc::new(skills::Skills::new(
         crate::extension_capabilities(cwd, "skills", skills::manifest_grants()),
@@ -192,33 +285,75 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         ) as lca_tui::RegionInteractor)
     };
 
+    // The session's live model: /model rewrites the cell, the runner
+    // reads it per turn, the status line reads the label every frame.
+    let model_cell = Arc::new(Mutex::new(ModelChoice {
+        id: model_id.clone(),
+        window: agent_config.model_context_window,
+    }));
+    let label_cell = Arc::new(Mutex::new(format!("{provider_name}/{model_id}")));
     let options = UiOptions {
-        model_label: format!("{provider_name}/{model_id}"),
+        model_label: label_cell.clone(),
         initial_lines,
         plain: config.ui_color() == lca_config::ColorMode::Never,
         invoke_command: {
             let registry = registry.clone();
             let provider_name = provider_name.clone();
-            Arc::new(move |name, argument| {
+            let provider = provider.clone();
+            let model_cell = model_cell.clone();
+            let label_cell = label_cell.clone();
+            let provider_backend = provider_backend.clone();
+            let store = store.clone();
+            let session = session.clone();
+            let extensions = agent_config.extensions.clone();
+            let completion_backend = agent_config.completion_backend.clone();
+            Arc::new(move |name, argument| match name {
+                // The model picker and the manual compact: the two
+                // spec-named slots the host itself fills, both routed
+                // through surfaces that already exist (the provider
+                // world's listing; the compaction world's strategy).
+                "model" => {
+                    let models = provider.list_models();
+                    model_effect_on(
+                        &models,
+                        &provider_name,
+                        argument,
+                        Some(&model_cell),
+                        Some(&label_cell),
+                        provider_backend.as_ref(),
+                    )
+                }
+                "compact" => match lca_core::compact_now(
+                    store.clone(),
+                    session.clone(),
+                    extensions.clone(),
+                    completion_backend.clone(),
+                ) {
+                    Ok(summary) => CommandEffect::ShowWidget(format!("compacted: {summary}")),
+                    Err(detail) => {
+                        CommandEffect::ShowWidget(format!("nothing was compacted: {detail}"))
+                    }
+                },
                 // The generic identity commands dispatch across
                 // installed providers first (FR-PROV-11); with zero
                 // enabled providers FR-PROV-6's report shows instead.
-                if matches!(name, "login" | "logout" | "usage") {
+                "login" | "logout" | "usage" => {
                     if let Some(effect) = registry.invoke_generic(name, argument, &provider_name) {
-                        return effect;
+                        effect
+                    } else {
+                        CommandEffect::ShowWidget(crate::no_model_message(&provider_name))
                     }
-                    return CommandEffect::ShowWidget(crate::no_model_message(&provider_name));
                 }
-                registry
+                _ => registry
                     .invoke_command(name, argument)
-                    .unwrap_or(CommandEffect::None)
+                    .unwrap_or(CommandEffect::None),
             })
         },
         render_regions,
         ui_events,
         update_notice: Some(update_notice),
         slash_commands: {
-            let mut names: Vec<String> = ["login", "logout", "usage"]
+            let mut names: Vec<String> = BUILTIN_SLOTS
                 .iter()
                 .map(|name| format!("/{name}"))
                 .collect();
@@ -245,6 +380,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         let provider = provider.clone();
         let agent_config = agent_config.clone();
         let proposals = proposals.clone();
+        let model_cell = model_cell.clone();
         std::thread::spawn(move || {
             let mut sink = ChannelSink {
                 tx: channels.events.clone(),
@@ -269,6 +405,16 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             let mut tools = tools.lock().expect("tools lock");
             let mut grants = grants.lock().expect("grants lock");
             runtime.block_on(async {
+                // The session's model is whatever /model last set:
+                // the status line and the compaction backend follow
+                // the same cell, so every consumer agrees per turn.
+                let choice = model_cell
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let mut turn_config = agent_config;
+                turn_config.model = choice.id;
+                turn_config.model_context_window = choice.window;
                 let mut agent = Agent::new(
                     &runner_store,
                     &runner_session,
@@ -277,7 +423,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     &mut grants,
                     &mut prompt,
                     proposals.as_ref(),
-                    agent_config,
+                    turn_config,
                 );
                 agent.run_turn(&text, &mut sink, &cancel).await
             })
@@ -422,5 +568,64 @@ impl PermissionPrompt for UiPrompt {
             response.recv().unwrap_or(Decision::Denied),
             Decision::Denied
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lca_protocol::ModelInfo;
+
+    fn models(ids: &[&str]) -> Vec<ModelInfo> {
+        ids.iter()
+            .map(|id| ModelInfo {
+                id: (*id).to_string(),
+                name: format!("Model {id}"),
+                context_window: 100_000,
+                max_tokens: 8_192,
+            })
+            .collect()
+    }
+
+    // Verifies: FR-PROV-2 (the model picker lists every model the
+    // active provider offers - the /model built-in's listing half,
+    // the interface where the provider world's listing reaches a
+    // human).
+    #[test]
+    fn the_model_picker_lists_every_offered_model_and_marks_the_active_one() {
+        let text = model_picker_text(&models(&["alpha", "beta"]), "beta");
+        assert!(text.contains("alpha"), "first model listed:\n{text}");
+        assert!(text.contains("beta"), "second model listed:\n{text}");
+        assert!(
+            text.contains("beta") && text.contains("(active)"),
+            "the active model is marked:\n{text}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_model_is_refused_with_the_real_alternatives() {
+        let offered = models(&["alpha", "beta"]);
+        let effect = model_effect_on(&offered, "openai-compatible", "gamma", None, None, None);
+        let CommandEffect::ShowWidget(text) = effect else {
+            panic!("an unknown model answers with text, not an action")
+        };
+        assert!(text.contains("gamma"), "names the mistake: {text}");
+        assert!(
+            text.contains("alpha") && text.contains("beta"),
+            "offers the real list: {text}"
+        );
+    }
+
+    // SRDD's interface section: the six built-in slots, of which five
+    // live in this list and /stats arrives from the native hooks
+    // extension that holds the stats source.
+    #[test]
+    fn the_spec_named_builtins_are_claimed() {
+        for slot in ["login", "logout", "usage", "model", "compact"] {
+            assert!(
+                BUILTIN_SLOTS.contains(&slot),
+                "/{slot} is a built-in the interface claims"
+            );
+        }
     }
 }

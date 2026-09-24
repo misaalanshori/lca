@@ -44,6 +44,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+lca-testkit = { path = "../lca-testkit" }
 # sha2 - digest display in the install e2e (the registry's own dep; test-side use).
 sha2.workspace = true
 hyper.workspace = true

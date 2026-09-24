@@ -217,6 +217,9 @@ impl Sandbox {
             .env("APPDATA", &self.data)
             .env("LOCALAPPDATA", &self.data)
             .env("XDG_CONFIG_HOME", self.home.join(".config"))
+            // The suite asks for no outbound update check (FR-CFG-6's
+            // knob): spawned sessions must not phone home from CI.
+            .env("LCA_UPDATE_CHECK", "false")
             .env_remove("OPENAI_BASE_URL")
             .env_remove("OPENAI_API_KEY")
             .env_remove("OPENAI_MODEL")
@@ -668,6 +671,9 @@ impl Sandbox {
             .env("APPDATA", &self.data)
             .env("LOCALAPPDATA", &self.data)
             .env("XDG_CONFIG_HOME", self.home.join(".config"))
+            // The suite asks for no outbound update check (FR-CFG-6's
+            // knob): spawned sessions must not phone home from CI.
+            .env("LCA_UPDATE_CHECK", "false")
             .env_remove("OPENAI_MODEL")
             .env_remove("LCA_PROVIDER")
             .stdin(Std::piped())

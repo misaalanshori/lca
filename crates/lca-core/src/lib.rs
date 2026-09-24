@@ -12,6 +12,9 @@ mod registry;
 pub mod ext_provider;
 pub use ext_provider::ExtensionProvider;
 pub use registry::{BUILTIN_COMMANDS, BUILTIN_TOOLS, CollisionReport, ExtensionRegistry};
+// The turn types live in the protocol layer so the interface and the
+// embedding SDK can render them without depending on this crate.
+pub use lca_protocol::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -102,104 +105,6 @@ impl Default for AgentConfig {
     }
 }
 
-/// Whether a turn ended cleanly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TurnStatus {
-    /// The turn completed.
-    Ok,
-    /// The turn ended with an error.
-    Error,
-}
-
-/// Why a turn stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StopReason {
-    /// The model stopped without requesting a tool.
-    Stop,
-    /// The tool-call iteration limit was hit (FR-CORE-9).
-    IterationLimit,
-    /// The user cancelled (FR-CORE-5).
-    Cancelled,
-    /// A provider error after the retry limit (FR-CORE-7) or a rejection.
-    Error,
-}
-
-/// What one turn produced.
-#[derive(Debug, Clone)]
-pub struct TurnOutcome {
-    /// Clean or error.
-    pub status: TurnStatus,
-    /// Why it stopped.
-    pub stop_reason: StopReason,
-    /// The turn's usage, summed across provider calls (FR-CORE-8).
-    pub usage: Usage,
-    /// The surfaced error, when the turn ended in one.
-    pub error: Option<String>,
-}
-
-/// Events the interface and headless mode render. Owned copies, so sinks
-/// store them freely.
-#[derive(Debug, Clone)]
-pub enum TurnEvent {
-    /// A chunk of response text (FR-CORE-4).
-    TextDelta(String),
-    /// A chunk of reasoning text.
-    ReasoningDelta(String),
-    /// A completed response's text (headless `text` envelope).
-    AssistantText(String),
-    /// A response's usage (headless `usage` envelope, FR-CORE-8).
-    Usage(Usage),
-    /// A tool call is about to run (after permission).
-    ToolStarted(ToolCall),
-    /// A tool call finished (headless `tool-result` envelope).
-    ToolFinished(ToolResult),
-    /// A chunk of live shell output while a command runs (FR-TOOL-4).
-    ToolOutputChunk {
-        /// The running call.
-        call_id: String,
-        /// The chunk as text.
-        chunk: String,
-    },
-    /// A retry was scheduled (FR-CORE-6).
-    RetryScheduled {
-        ///1-based attempt number about to run.
-        attempt: u32,
-        /// The configured limit.
-        max: u32,
-        /// Delay before it runs.
-        delay_ms: u64,
-        /// The error that caused the retry.
-        error: String,
-    },
-    /// An error surfaced to the interface (headless `error` envelope).
-    Error {
-        /// What went wrong.
-        message: String,
-        /// Class from `lca_provider::ProviderError` or `internal`.
-        class: String,
-        /// Whether a retry could have helped.
-        retryable: bool,
-    },
-    /// An extension lifecycle event: load, disable, trap, capability
-    /// denial, or cache divergence (the headless `extension-event`
-    /// envelope, `docs/headless.md`).
-    ExtensionEvent {
-        /// The extension's identity.
-        extension: String,
-        /// The event kind: `disabled`, `error`, `collision`, ...
-        event: String,
-        /// Detail text.
-        detail: String,
-    },
-    /// The turn ended.
-    TurnEnded {
-        /// Clean or error.
-        status: TurnStatus,
-        /// Why.
-        stop_reason: StopReason,
-    },
-}
-
 /// Receives turn events as they happen.
 pub trait TurnSink: Send {
     /// Handle one event.
@@ -212,6 +117,133 @@ pub struct NullSink;
 
 impl TurnSink for NullSink {
     fn on_event(&mut self, _event: TurnEvent) {}
+}
+
+/// Run one future to completion from a synchronous thread that a
+/// runtime is already driving (the interface's command thread: `main`
+/// holds `Runtime::block_on`, where a nested `block_on` panics -
+/// measured, not guessed - so building a second runtime here is out).
+/// The future gets its own thread and its own current-thread runtime;
+/// this thread waits for it.
+/// ponytail: one thread per invocation; commands are human-paced, so
+/// the cost is invisible, and a concurrent caller just joins.
+pub fn drive_blocking<T: Send + 'static>(
+    future: impl std::future::Future<Output = T> + Send + 'static,
+) -> T {
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("command runtime")
+            .block_on(future)
+    })
+    .join()
+    .expect("command task ended")
+}
+
+/// The compaction call itself, shared by the threshold path
+/// (FR-SESS-4) and the manual `/compact` trigger: the summary always
+/// comes from the compaction world's strategy (FR-SESS-5 - there is no
+/// built-in summarizing path), the durable record is the host's, and
+/// the candidate range is the caller's to choose.
+async fn compact_candidate(
+    store: &SessionStore,
+    session: &Session,
+    extensions: &ExtensionRegistry,
+    completion_backend: Option<&Arc<dyn lca_tools::CompletionBackend>>,
+    candidate: Vec<Record>,
+    sink: &mut dyn TurnSink,
+) -> Result<String, String> {
+    let Some(strategy) = extensions.compaction_strategy().cloned() else {
+        return Err(
+            "no compaction extension is enabled: compaction runs through a compaction-world extension (FR-SESS-5)"
+                .to_string(),
+        );
+    };
+    if candidate.len() < 2 {
+        return Err("nothing to compact: fewer than two compactable records".to_string());
+    }
+    let summary = match strategy.compact(&candidate).await {
+        Ok(summary) => summary,
+        Err(err) => {
+            let detail = format!("compaction strategy `{}` failed: {err}", strategy.name());
+            sink.on_event(TurnEvent::ExtensionEvent {
+                extension: strategy.name().to_string(),
+                event: "compaction-failed".to_string(),
+                detail: detail.clone(),
+            });
+            let _ = store.append(
+                session,
+                Record::ExtensionEvent {
+                    v: FORMAT_VERSION,
+                    ts: lca_session::now_ms(),
+                    id: lca_session::new_record_id(),
+                    extension: strategy.name().to_string(),
+                    event: "compaction-failed".to_string(),
+                    detail: detail.clone(),
+                },
+            );
+            return Err(detail);
+        }
+    };
+    let usage = completion_backend.and_then(|backend| backend.take_usage());
+    let replaced_from = candidate.first().and_then(Record::id).unwrap_or_default();
+    let replaced_to = candidate.last().and_then(Record::id).unwrap_or_default();
+    if let Err(err) = store.append(
+        session,
+        Record::Compaction {
+            v: FORMAT_VERSION,
+            ts: lca_session::now_ms(),
+            id: lca_session::new_record_id(),
+            replaced_from: replaced_from.to_string(),
+            replaced_to: replaced_to.to_string(),
+            summary: summary.clone(),
+            strategy: strategy.name().to_string(),
+            usage,
+        },
+    ) {
+        let detail = format!("cannot write the compaction record: {err}");
+        sink.on_event(TurnEvent::ExtensionEvent {
+            extension: strategy.name().to_string(),
+            event: "compaction-failed".to_string(),
+            detail: detail.clone(),
+        });
+        return Err(detail);
+    }
+    Ok(summary)
+}
+
+/// The manual trigger behind the `/compact` built-in: compact now,
+/// every compactable record, no threshold involved - still through the
+/// compaction world only (FR-SESS-5). Synchronous by contract: the
+/// caller is the interface's command thread, and `drive_blocking`
+/// gives the work a thread of its own.
+pub fn compact_now(
+    store: Arc<SessionStore>,
+    session: Session,
+    extensions: Arc<ExtensionRegistry>,
+    completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>>,
+) -> Result<String, String> {
+    drive_blocking(async move {
+        let read = store
+            .read_with(&session, ViewMode::Display)
+            .map_err(|err| format!("cannot read the session: {err}"))?;
+        let candidate: Vec<Record> = read
+            .records
+            .iter()
+            .filter(|record| record.id().is_some())
+            .cloned()
+            .collect();
+        compact_candidate(
+            &store,
+            &session,
+            &extensions,
+            completion_backend.as_ref(),
+            candidate,
+            &mut NullSink,
+        )
+        .await
+    })
 }
 
 /// The resolved message list plus the stable-prefix boundary (FR-CACHE-5).
@@ -1037,7 +1069,7 @@ impl<'a> Agent<'a> {
 
     /// One completion call, with retry (FR-CORE-6) and cancellation
     /// (FR-CONC-3: dropping the producer stops the in-flight stream).
-    /// FR-SESS-4's threshold check and the compaction call itself.
+    /// FR-SESS-4's threshold check, then the shared compaction call.
     /// Returns whether a record was written (the caller re-reads).
     async fn maybe_compact(
         &self,
@@ -1052,9 +1084,9 @@ impl<'a> Agent<'a> {
             // see AgentConfig::model_context_window.
             return false;
         }
-        let Some(strategy) = self.config.extensions.compaction_strategy() else {
+        if self.config.extensions.compaction_strategy().is_none() {
             return false;
-        };
+        }
         let last_prompt = records.iter().rev().find_map(|record| match record {
             Record::Assistant {
                 usage: Some(usage), ..
@@ -1083,58 +1115,16 @@ impl<'a> Agent<'a> {
             // range would trade the whole conversation for a line.
             return false;
         }
-        let summary = match strategy.compact(&candidate).await {
-            Ok(summary) => summary,
-            Err(err) => {
-                let detail = format!("compaction strategy `{}` failed: {err}", strategy.name());
-                sink.on_event(TurnEvent::ExtensionEvent {
-                    extension: strategy.name().to_string(),
-                    event: "compaction-failed".to_string(),
-                    detail: detail.clone(),
-                });
-                let _ = self.store.append(
-                    self.session,
-                    Record::ExtensionEvent {
-                        v: FORMAT_VERSION,
-                        ts: lca_session::now_ms(),
-                        id: lca_session::new_record_id(),
-                        extension: strategy.name().to_string(),
-                        event: "compaction-failed".to_string(),
-                        detail,
-                    },
-                );
-                return false;
-            }
-        };
-        let usage = self
-            .config
-            .completion_backend
-            .as_ref()
-            .and_then(|backend| backend.take_usage());
-        let replaced_from = candidate.first().and_then(Record::id).unwrap_or_default();
-        let replaced_to = candidate.last().and_then(Record::id).unwrap_or_default();
-        if let Err(err) = self.store.append(
+        compact_candidate(
+            self.store,
             self.session,
-            Record::Compaction {
-                v: FORMAT_VERSION,
-                ts: lca_session::now_ms(),
-                id: lca_session::new_record_id(),
-                replaced_from: replaced_from.to_string(),
-                replaced_to: replaced_to.to_string(),
-                summary,
-                strategy: strategy.name().to_string(),
-                usage,
-            },
-        ) {
-            let detail = format!("cannot write the compaction record: {err}");
-            sink.on_event(TurnEvent::ExtensionEvent {
-                extension: strategy.name().to_string(),
-                event: "compaction-failed".to_string(),
-                detail: detail.clone(),
-            });
-            return false;
-        }
-        true
+            &self.config.extensions,
+            self.config.completion_backend.as_ref(),
+            candidate,
+            sink,
+        )
+        .await
+        .is_ok()
     }
 
     async fn provider_call(

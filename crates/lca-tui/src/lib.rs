@@ -12,9 +12,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender};
 
-use lca_core::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
 use lca_protocol::CommandEffect;
 use lca_protocol::Usage;
+use lca_protocol::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
 use ratatui::Frame;
 use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -169,8 +169,9 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
 
 /// Static inputs for the interface.
 pub struct UiOptions {
-    /// `provider/model` for the status line.
-    pub model_label: String,
+    /// `provider/model` for the status line - a cell, because the
+    /// status line shows the session's model and `/model` rewrites it.
+    pub model_label: std::sync::Arc<std::sync::Mutex<String>>,
     /// Conversation lines already resolved for display (resume).
     pub initial_lines: Vec<String>,
     /// Plain-text rendering (FR-UI-5).
@@ -836,9 +837,15 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
             .map(|status| status.text.clone())
             .unwrap_or_default()
     };
+    let model_label = state
+        .options
+        .model_label
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
     let mut status_spans = vec![
         Span::styled(
-            format!(" {} ", state.options.model_label),
+            format!(" {} ", model_label),
             theme(plain, Color::Cyan).add_modifier(Modifier::BOLD),
         ),
         Span::styled(

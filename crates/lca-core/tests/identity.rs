@@ -146,6 +146,21 @@ fn two_providers() -> ExtensionRegistry {
     registry
 }
 
+// Verifies: FR-PROV-11 (the generic command dispatches from the
+// interface's own thread - a thread a runtime is already driving,
+// where building a second runtime panics; the bridge must survive
+// that context, which a plain sync test never exercises).
+#[tokio::test]
+async fn the_generic_command_dispatches_from_inside_a_running_runtime() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(FakeProvider { label: "solo" }));
+    let effect = registry.invoke_generic("usage", "", "solo");
+    assert!(
+        effect.is_some(),
+        "the identity op answered from a live runtime"
+    );
+}
+
 fn widget(effect: Option<CommandEffect>) -> String {
     match effect {
         Some(CommandEffect::ShowWidget(text)) => text,

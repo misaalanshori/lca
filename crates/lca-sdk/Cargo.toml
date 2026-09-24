@@ -1,6 +1,6 @@
 [package]
-name = "lca-core"
-description = "The agent loop, dispatch, and compaction/context-transform dispatch."
+name = "lca-sdk"
+description = "The embedding API for host applications: a session handle, an event stream, and an input channel."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,21 +11,14 @@ repository.workspace = true
 lca-protocol = { path = "../lca-protocol" }
 lca-session = { path = "../lca-session" }
 lca-provider = { path = "../lca-provider" }
-lca-ext-abi = { path = "../lca-ext-abi" }
-lca-tools = { path = "../lca-tools" }
 lca-permissions = { path = "../lca-permissions" }
+lca-tools = { path = "../lca-tools" }
+lca-core = { path = "../lca-core" }
 tokio.workspace = true
-tracing.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-toml.workspace = true
-compaction-default = { path = "../../extensions/compaction-default" }
 lca-testkit = { path = "../lca-testkit" }
-lca-ext-host = { path = "../lca-ext-host" }
-lca-ext-native = { path = "../lca-ext-native" }
-conformance = { path = "../../extensions/conformance" }
-serde_json.workspace = true
 
 [lints]
 workspace = true

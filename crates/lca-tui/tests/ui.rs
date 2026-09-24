@@ -2,7 +2,7 @@
 //! virtual terminal buffer is the snapshot (testing plan section2).
 
 use crossterm::event::KeyCode;
-use lca_core::{StopReason, TurnEvent, TurnStatus};
+use lca_protocol::{StopReason, TurnEvent, TurnStatus};
 use lca_tui::render;
 use lca_tui::{Action, ColorMode, InputMode, TurnStatusLine, UiOptions, UiState, handle_key};
 use ratatui::Terminal;
@@ -10,7 +10,7 @@ use ratatui::backend::TestBackend;
 
 fn options() -> UiOptions {
     UiOptions {
-        model_label: "fake/faux-1".to_string(),
+        model_label: std::sync::Arc::new(std::sync::Mutex::new("fake/faux-1".to_string())),
         initial_lines: vec![
             "user: add a parser".to_string(),
             "assistant: working on it".to_string(),

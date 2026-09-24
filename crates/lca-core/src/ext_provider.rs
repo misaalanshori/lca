@@ -146,7 +146,9 @@ impl Provider for ExtensionProvider {
 /// compaction record that caused the spend.
 pub struct ProviderBackend {
     provider: std::sync::Arc<dyn lca_provider::Provider>,
-    model: String,
+    /// The session's current model: `/model` moves it, so compaction
+    /// keeps asking whichever model the conversation switched to.
+    model: std::sync::Mutex<String>,
     session_id: String,
     usage: std::sync::Mutex<Option<lca_protocol::Usage>>,
 }
@@ -162,10 +164,18 @@ impl ProviderBackend {
     ) -> ProviderBackend {
         ProviderBackend {
             provider,
-            model: model.into(),
+            model: std::sync::Mutex::new(model.into()),
             session_id: session_id.into(),
             usage: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Follow a session-scoped model change (`/model`).
+    pub fn set_model(&self, model: impl Into<String>) {
+        *self
+            .model
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = model.into();
     }
 }
 
@@ -176,10 +186,15 @@ impl lca_tools::CompletionBackend for ProviderBackend {
     ) -> Result<(String, lca_protocol::Usage), String> {
         let mut extras = std::collections::BTreeMap::new();
         extras.insert("session-id".to_string(), self.session_id.clone());
+        let model = self
+            .model
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let request = CompletionRequest {
             messages: messages.to_vec(),
             tools: Vec::new(),
-            model: self.model.clone(),
+            model,
             stable_prefix: 0,
             extras,
         };
