@@ -612,10 +612,49 @@ only macOS failures left after the data-dir fix, same ENOTTY family,
 same visible-per-site `#[ignore]` with `platform-notes.md` as the
 tracking record.
 
-**Stuck-run hygiene.** Roughly a dozen wedged CI runs (several aged
+**The CI topology that finally held, and what it took.** The
+three-OS suite spent a whole day proving that one monolithic Linux
+nextest step cannot be made to survive hosted runners: at full
+parallelism and at half, under a forty-five-minute ceiling and a
+ninety-minute one, every Linux run that crossed roughly forty-five
+minutes ended in the same annotation - "the hosted runner lost
+communication with the server" - while macOS and Windows finished the
+same suite in minutes and locally it took two. The workflow is now
+four bounded Linux jobs by package group (core, engines, shell,
+extensions - eighty-three, ninety-one, forty-eight and twenty-eight
+tests, summing to the suite's two hundred fifty exactly), each with
+its own thirty-minute job ceiling, a twenty-two-minute outer timeout
+around the run, timestamped build and run phases, PIPESTATUS-preserving
+output capture, a process-tree dump on any failure, and its log
+uploaded whether it passed or not; the five timing tests live in their
+own serial release gate beside cargo-deny and traceability; macOS and
+Windows keep the single-job shape that was already green. The receipt
+is one run in which all eight jobs pass.
+
+Splitting the suite is also what made the failures inside it
+visible - they had been drowning in an agent that died before
+producing a log. Three were real and are fixed at the root. The
+Linux group-kill: `kill -9` with a bare negative pid claimed success
+on a hosted runner while the sh *and* its sleep sat alive and
+printable two seconds later (the timeout arm had fired correctly at
+five hundred milliseconds - the group call simply did not deliver),
+so the operand now carries `--` and a backstop signals each surviving
+member by its own pid; FR-TOOL-5's two tests green on that. cargo-deny,
+which had never gotten far enough to run, found RUSTSEC-2024-0436 -
+`paste` archived, not vulnerable, reached only through ratatui's macro
+layer - and it joins `deny.toml`'s ignore list with its reason, the
+way the closed dependency list says to justify such a thing. And the
+timing gates, measured inside a parallel debug suite, read whatever
+else was running: one Windows run "instantiated" in one hundred
+ninety-nine milliseconds beside twenty other tests, and the epoch
+test's spinner thread alone pushed the hook-overhead test past its
+millisecond. They now run one at a time on a release build, where
+their thresholds were taken.
+
+**Stuck-run hygiene.** Roughly two dozen wedged CI runs (several aged
 between one and six hours with no log output - GitHub's runners were
-having a bad afternoon) were cancelled as superseded; only runs for
-the current HEAD and the publish dispatch are kept.
+having a bad day) were cancelled as superseded; only runs for the
+current HEAD and the publish dispatch were kept.
 
 Deviations, written down rather than hidden: GitHub's hosted runner
 pool was sick for most of this phase - a dozen-plus runs wedged,
@@ -632,6 +671,14 @@ listed in `scripts/deferred-requirements.txt` and printed by the
 traceability gate) remains the scope line this phase inherits.
 
 Gates at the exit: fmt, clippy `-D warnings`, doc `-D warnings`,
-256 nextest tests green on Linux, `cargo xwin clippy` green for the
-Windows target, workflow YAML validated, the perf gate green, and CI
-plus the publish dispatch recorded in the run history above.
+`cargo xwin clippy` green for the Windows target, `cargo deny check`
+green (advisories, bans, licenses, sources), the perf gate green,
+traceability reporting all one hundred twenty-nine requirements
+covered, workflow YAML validated, and the suite itself as two
+invocations that together account for every test: two hundred fifty
+in the ordinary suite jobs and the five timing tests in the serial
+release gates, with the four macOS and the three Windows pty
+quarantines skipped visibly and named in platform-notes. The
+three-platform receipt is one CI run with all eight jobs green, the
+release dispatch green end to end with its eight artifacts and
+attestation, and the fuzz schedule's first clean full pass.
