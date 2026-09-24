@@ -163,28 +163,37 @@ fn futures_executor_block_on<T>(future: lca_ext_abi::DispatchFuture<'_, T>) -> T
 // instance trapping).
 #[test]
 fn epoch_interruption_traps_within_fifty_milliseconds() {
-    let mut latency = attempt_epoch_latency();
-    // Two extra attempts at the same bound, each on a fresh engine.
-    // macOS and Windows CI both measured56-60 ms where the mechanism
-    // itself answers in low double digits: the spinning thread sits
-    // unrunnable in a scheduler quantum at the moment the epoch moves,
-    // and the words of the requirement are "within50 ms under normal
-    // load". Two misses in a row fail; the bound never moves.
-    for _ in 0..2 {
-        if latency <= Duration::from_millis(50) {
-            break;
+    // Up to three fresh-engine observations, each bounded: macOS and
+    // Windows CI both measured56-60 ms where the mechanism itself
+    // answers in low double digits (the spinning thread sits
+    // unrunnable in a scheduler quantum when the epoch moves), and a
+    // runner that stops scheduling the spinner at all has to be a
+    // miss, not a two-minute hang the CI ceiling eventually kills
+    // blind. The words of the requirement are "within50 ms under
+    // normal load"; the bound itself never moves.
+    let mut report = String::new();
+    let mut passed = false;
+    for attempt in 1..=3 {
+        match attempt_epoch_latency() {
+            Some(latency) => {
+                report.push_str(&format!("attempt {attempt}: {latency:?}; "));
+                if latency <= Duration::from_millis(50) {
+                    passed = true;
+                    break;
+                }
+            }
+            None => report.push_str(&format!("attempt {attempt}: spinner never ran; ")),
         }
-        latency = attempt_epoch_latency();
     }
     assert!(
-        latency <= Duration::from_millis(50),
-        "epoch increment to trap took {latency:?}, above NFR-29's50 ms bound"
+        passed,
+        "epoch increment to trap stayed above NFR-29's50 ms bound - {report}"
     );
 }
 
 /// One clean measurement: fresh engine (its epoch starts at zero, and
 /// every store's deadline of one is what the increment consumes).
-fn attempt_epoch_latency() -> Duration {
+fn attempt_epoch_latency() -> Option<Duration> {
     let (extension, host) = load();
     let engine = host.engine().clone();
 
@@ -197,8 +206,19 @@ fn attempt_epoch_latency() -> Duration {
 
     let started = Instant::now();
     engine.increment_epoch();
+    // Bounded join: a runner that stops scheduling the spinner thread
+    // is reported as a missed attempt rather than hanging the test
+    // into the CI ceiling. The thread self-heals - its store's epoch
+    // deadline is already passed, so its first check on resume traps.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !spinner.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    if !spinner.is_finished() {
+        return None;
+    }
     spinner.join().expect("spinner returns");
-    started.elapsed()
+    Some(started.elapsed())
 }
 
 fn call_loop() -> ToolCall {

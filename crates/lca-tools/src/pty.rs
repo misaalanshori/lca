@@ -529,6 +529,7 @@ mod windows_conpty {
         if updated == 0 {
             return Err(std::io::Error::last_os_error());
         }
+        eprintln!("TEMP-DIAG spawn cmdline={cmdline:?} hpc={hpc_value:?}");
         let mut info = PROCESS_INFORMATION::default();
         // SAFETY: all pointers valid and owned across the call;
         // CreateProcessW may mutate the buffers we own.
@@ -626,9 +627,16 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
         };
     }
     if available > 0 {
-        return crate::process::read_up_to(&mut inner.output, max);
+        let chunk = crate::process::read_up_to(&mut inner.output, max)?;
+        eprintln!(
+            "TEMP-DIAG read avail={available} got={:?}",
+            chunk.as_ref().map(|c| c.len())
+        );
+        return Ok(chunk);
     }
-    if !inner.child.exited() {
+    let exited = inner.child.exited();
+    eprintln!("TEMP-DIAG read avail=0 exited={exited}");
+    if !exited {
         return Ok(Some(Vec::new()));
     }
     // The child is gone and the pipe is empty - but ConPTY can hold
