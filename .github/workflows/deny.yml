@@ -1,0 +1,29 @@
+# NFR-16's schedule half: the dependency audit and license check run
+# weekly as well as on every merge (ci.yml's cargo-deny step is the
+# merge half). Same action, same checks - only the trigger differs.
+name: deny
+
+on:
+  schedule:
+    # Mondays at06:23 UTC: off the hour, off the push path, so a
+    # fresh advisory published over the weekend surfaces the same
+    # morning without queueing behind anyone's builds.
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    name: dependency audit and license check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup set profile minimal
+      # Verifies: NFR-16 (the audit runs on a schedule; the same
+      # action runs on every merge through ci.yml).
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2

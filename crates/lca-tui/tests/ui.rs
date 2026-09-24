@@ -26,6 +26,7 @@ fn options() -> UiOptions {
         workspace: std::path::PathBuf::new(),
         render_regions: None,
         ui_events: None,
+        update_notice: None,
         slash_commands: vec![
             "/login".into(),
             "/logout".into(),
@@ -126,7 +127,8 @@ fn renders_at_eighty_columns() {
     assert!(text.contains("x"), "content present");
 }
 
-// The status line shows the model, plus live turn state (SRDD status line).
+// The status line shows the model, live turn state, and the session
+// cost (SRDD status line: model, context use, session cost, segments).
 #[test]
 fn status_line_names_the_model_and_turn_state() {
     let mut state = UiState::new(options());
@@ -134,6 +136,7 @@ fn status_line_names_the_model_and_turn_state() {
         input: 1200,
         output: 40,
         cache_read: 1000,
+        cost: 0.075,
         ..Default::default()
     }));
     let mut term = terminal(80, 24);
@@ -141,6 +144,7 @@ fn status_line_names_the_model_and_turn_state() {
     let text = buffer_text(&mut term);
     assert!(text.contains("fake/faux-1"), "model shown:\n{text}");
     assert!(text.contains("1200"), "token counts shown: {text}");
+    assert!(text.contains("$0.0750"), "session cost shown: {text}");
 }
 
 // Verifies: FR-UI-5 (with color disabled everything renders as plain text:

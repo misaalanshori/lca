@@ -189,6 +189,9 @@ pub struct UiOptions {
     pub render_regions: Option<RegionRenderer>,
     /// User interactions routed to extensions (FR-UI-6's only source).
     pub ui_events: Option<RegionInteractor>,
+    /// The background update check's finding, set once a check finds a
+    /// newer release (FR-CFG-6; the status line reads it every frame).
+    pub update_notice: Option<std::sync::Arc<std::sync::OnceLock<String>>>,
 }
 
 /// The permission modal: what is being asked, and how to answer.
@@ -847,6 +850,27 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         ),
         Span::styled(format!("| {state_cue}"), theme(plain, Color::Green)),
     ];
+    // The session cost, once a turn has spent something (the status
+    // line shows model, context use, session cost, extension segments).
+    if state.usage.cost > 0.0 {
+        status_spans.push(Span::styled(
+            format!(" ${:.4} ", state.usage.cost),
+            theme(plain, Color::Gray),
+        ));
+    }
+    // The update check's notice, once today's check finds a newer tag;
+    // the loop's50 ms redraw tick shows it without a wakeup of its own.
+    if let Some(notice) = state
+        .options
+        .update_notice
+        .as_ref()
+        .and_then(|cell| cell.get())
+    {
+        status_spans.push(Span::styled(
+            format!(" {notice} "),
+            theme(plain, Color::Yellow),
+        ));
+    }
     // Extension status segments join the line (FR-UI-1: their trees,
     // our spans).
     if let Some(render) = &state.options.render_regions {

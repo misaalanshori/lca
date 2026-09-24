@@ -20,6 +20,11 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         .map_err(|err| anyhow::anyhow!("cannot open the grant store: {err}"))?;
     let trusted = grants.is_trusted(cwd);
     let config = crate::load_config(cwd, &grants, false)?;
+    // Today's update check, if enabled and due: stamped, then spawned
+    // - the startup path never waits on it (FR-CFG-6), and the status
+    // line picks the finding up from the shared cell once it lands.
+    let update_notice = std::sync::Arc::new(std::sync::OnceLock::new());
+    crate::update::spawn(config.update_check(false), Some(update_notice.clone()));
 
     let session = match resume {
         Some(id) => match store.session(cwd, id) {
@@ -211,6 +216,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         },
         render_regions,
         ui_events,
+        update_notice: Some(update_notice),
         slash_commands: {
             let mut names: Vec<String> = ["login", "logout", "usage"]
                 .iter()

@@ -100,6 +100,9 @@ pub mod ext;
 /// Interactive mode, wired to `lca-tui`.
 pub mod tui;
 
+/// The daily background update check (FR-CFG-6).
+pub mod update;
+
 /// Exit codes from `docs/headless.md`.
 pub mod exit {
     /// The turn completed.
@@ -438,6 +441,10 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
             return exit::USAGE;
         }
     };
+    // Headless makes no request unless the option was switched on
+    // (the config default is off); when it was, there is no status
+    // line to report through, so stderr carries the notice.
+    crate::update::spawn(config.update_check(true), None);
     let provider_name = config.provider().to_string();
     let title: String = prompt.chars().take(60).collect();
     let session =

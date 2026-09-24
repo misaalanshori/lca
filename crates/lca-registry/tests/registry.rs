@@ -410,3 +410,36 @@ fn oci_references_split_host_name_and_tag() {
         .expect_err("no host");
     assert!(err.to_string().contains("not an OCI reference"), "{err}");
 }
+
+// Verifies: FR-CFG-6 (the update check's transport: plain_get fetches
+// over the same closed-stack client the OCI path uses, with the header
+// the API demands; the check's once-a-day decisions are covered in
+// crates/lca-cli/tests/update_check.rs).
+#[tokio::test]
+async fn plain_get_fetches_a_body_over_the_shared_client() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = vec![0u8; 8192];
+            let _ = stream.read(&mut buf).await;
+            let payload = br#"{"tag_name":"phase6-0.2.0"}"#;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                payload.len()
+            );
+            let _ = stream.write_all(head.as_bytes()).await;
+            let _ = stream.write_all(payload).await;
+        }
+    });
+    let body = lca_registry::plain_get(&format!("http://{addr}/latest"))
+        .await
+        .expect("get");
+    assert_eq!(body, br#"{"tag_name":"phase6-0.2.0"}"#);
+}

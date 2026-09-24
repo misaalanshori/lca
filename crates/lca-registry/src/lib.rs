@@ -532,6 +532,37 @@ fn http_client() -> Result<HttpsClient, Error> {
     )
 }
 
+/// A plain GET for callers outside the OCI dance (the agent's daily
+/// update check is the only one today): the same client stack, no
+/// auth, the body as bytes. The User-Agent header is not optional at
+/// the API that answers it - a request without one is refused.
+pub async fn plain_get(url: &str) -> Result<Vec<u8>, Error> {
+    let client = http_client()?;
+    let request = hyper::Request::builder()
+        .method(hyper::Method::GET)
+        .uri(url)
+        .header(
+            hyper::header::USER_AGENT,
+            concat!("lca/", env!("CARGO_PKG_VERSION")),
+        )
+        .header(hyper::header::ACCEPT, "application/json")
+        .body(http_body_util::Full::new(hyper::body::Bytes::new()))
+        .map_err(|err| Error::Fetch(err.to_string()))?;
+    let response = client
+        .request(request)
+        .await
+        .map_err(|err| Error::Fetch(err.to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(Error::Fetch(format!("GET {url} answered {status}")));
+    }
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .map_err(|err| Error::Fetch(err.to_string()))?
+        .to_bytes();
+    Ok(body.to_vec())
+}
+
 /// The OCI token dance: registries answer an unauthenticated request
 /// with `WWW-Authenticate: Bearer realm=...,service=...`, the client
 /// fetches a (possibly anonymous) bearer token from that realm, and
