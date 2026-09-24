@@ -629,8 +629,8 @@ minutes ended in the same annotation - "the hosted runner lost
 communication with the server" - while macOS and Windows finished the
 same suite in minutes and locally it took two. The workflow is now
 four bounded Linux jobs by package group (core, engines, shell,
-extensions - eighty-three, ninety-one, forty-eight and twenty-eight
-tests, summing to the suite's two hundred fifty exactly), each with
+extensions - eighty-three, ninety-seven, fifty-seven and twenty-eight
+tests, summing to the suite's two hundred sixty-five exactly), each with
 its own thirty-minute job ceiling, a twenty-two-minute outer timeout
 around the run, timestamped build and run phases, PIPESTATUS-preserving
 output capture, a process-tree dump on any failure, and its log
@@ -664,29 +664,47 @@ between one and six hours with no log output - GitHub's runners were
 having a bad day) were cancelled as superseded; only runs for the
 current HEAD and the publish dispatch were kept.
 
-Deviations, written down rather than hidden: two of the six built-in
-slash commands the requirements document names for the interactive
-screen are not claimed rather than hollowly answered. `/compact` was
-already recorded at the Phase 4 exit as unwired - the threshold
-compaction path is the one that shipped and is tested end to end,
-while a *manual* trigger needs the command effect to reach into the
-session's record pipeline, which is an interface question an ADR
-should answer before it is a slot on the screen. `/model` is the same
-shape: the provider world's model listing exists and is tested
-through the conformance and provider suites, but a picker command
-would add its own effect and its own UI surface, and neither document
-gives these two a numbered requirement of their own to tag a test
-against. `/login`, `/logout`, `/usage`, and `/stats` are registered
-and exercised (the Phase 3 exit test quotes three of them; the fourth
-comes from the native hooks extension that holds the stats source).
-`lca-sdk`, the embedding crate the architecture names - the crate
-decomposition's dependency direction and the Embedding SDK section's
-session handle, event stream, and input channel, native and WASM - is
-also not claimed: no numbered requirement covers it, its WASM half
-rides on the web target this release already deferred (FR-WEB-*,
-NFR-11), and a native half beside a deferred WASM half would be an
-empty API surface, so it is recorded here with the slash slots rather
-than shipped as scaffolding.
+Deviations, written down rather than hidden - and then closed, one by
+one, in the audit that finished this phase. Two of the six built-in
+slash commands the interface names were recorded above as "not claimed
+rather than hollowly answered"; they are claimed now. `/compact` runs
+the compaction world's own strategy over every compactable record with
+no threshold in the way (FR-SESS-5 holds: there is no built-in
+summarizing path, and the test proves the strategy ran exactly once
+while the window was zero), and `/model` lists what the provider
+offers (FR-PROV-2 at the interface) and moves the session's model
+everywhere it is read - the runner's per-turn config, the status-line
+label, and the compaction backend. The interface question the Phase 4
+entry deferred is answered in ADR-0024: both slots are host-side,
+through surfaces that already existed, so neither `CommandEffect` nor
+the frozen WIT world changed - and the tests carry FR-SESS-5 and
+FR-PROV-2 rather than a requirement anyone had to invent. The
+spec-named list itself is asserted by test (`BUILTIN_SLOTS`);
+`/stats` still arrives from the native hooks extension, and
+`/login`, `/logout`, `/usage` keep their Phase 3 receipts - now with
+a test that dispatches them from inside a live runtime, because the
+audit found `registry::drive` building a nested runtime on the
+interface's thread: every `/login`, `/logout`, and `/usage` typed
+into the real TUI would have panicked ("cannot start a runtime from
+within a runtime" - reproduced by that test first, then fixed with
+`drive_blocking`, own thread, own runtime, join). The same audit
+found `lca-tui` depending on `lca-core`, which the architecture
+reserves for `lca-sdk` and `lca-cli`: the turn types moved down into
+`lca-protocol`, where the no-I/O rule says they belong, and
+`crates/lca-core/tests/architecture.rs` now fails any manifest that
+breaks the graph (it also pins the bottom layer's workspace-free
+status and the nothing-depends-on-the-binary rule). And `lca-sdk`
+exists: fifteen crates, the count ADR-0002 named, with a session
+handle, an event stream, and an input channel tested end to end
+(create, subscribe, send, records on disk); its WASM half still
+rides the deferred web target (FR-WEB-*, NFR-11), so the Embedding
+SDK section's "native and WASM" is half-kept and half-named-as-
+deferred, not silently whole. One stale sentence stays untouched on
+purpose: the requirements document's opening enumeration still says
+"eighteen ... numbered 0001 through 0018" - ADRs now run through
+0024, and by that same paragraph the ADRs are the current statement
+of reasoning while the requirements text, which no ADR changed,
+keeps its own count.
 Next: GitHub's hosted runner pool was sick for most of this phase - a dozen-plus runs wedged,
 several failed with the annotation "the hosted runner lost
 communication with the server", and logs for the affected jobs never
@@ -705,10 +723,10 @@ Gates at the exit: fmt, clippy `-D warnings`, doc `-D warnings`,
 green (advisories, bans, licenses, sources), the perf gate green,
 traceability reporting all one hundred twenty-nine requirements
 covered, workflow YAML validated, and the suite itself as two
-invocations that together account for every test: two hundred fifty
-in the ordinary suite jobs and the five timing tests in the serial
-release gates, with the four macOS and the three Windows pty
-quarantines skipped visibly and named in platform-notes. The
+invocations that together account for every test: two hundred
+sixty-five in the ordinary suite jobs and the seven timing tests in
+the serial release gates, with the five macOS and the three Windows
+pty quarantines skipped visibly and named in platform-notes. The
 three-platform receipt is one CI run with all eight jobs green, the
 release dispatch green end to end with its eight artifacts and
 attestation, and the fuzz schedule's first clean full pass.
