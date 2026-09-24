@@ -50,16 +50,34 @@ jobs:
         # minutes. Same tests, same order, half the peak load; the
         # steps after this one (nfr gates, cargo-deny, traceability)
         # were what never got to run.
-        run: cargo nextest run --workspace --no-fail-fast --test-threads=2
+        run: |
+          set -o pipefail
+          cargo nextest run --workspace --no-fail-fast --test-threads=2 \
+            2>&1 | tee nextest-output.log
       # Verifies: NFR-30 (advisory before Phase 8, required from Phase 8).
       # Verifies: NFR-5's real bound: hook overhead measured against a
       # release wasmtime (debug instrumentation dominates the1 ms).
       - name: nfr release gates
-        run: cargo nextest run --release -p lca-ext-host -E 'test(/nfr|instantiation|hook|epoch/)'
+        run: |
+          set -o pipefail
+          cargo nextest run --release -p lca-ext-host -E 'test(/nfr|instantiation|hook|epoch/)' \
+            2>&1 | tee nfr-gates-output.log
       # Verifies: NFR-16 (dependency license and advisory checks on merge).
       - name: cargo-deny
         if: runner.os == 'Linux'
         uses: EmbarkStudios/cargo-deny-action@v2
+      # The suite's raw output survives a failed step as an artifact:
+      # GitHub's job-log storage spent a whole day failing to ingest,
+      # and a failure whose name exists nowhere is not evidence.
+      - name: Keep failing test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-${{ matrix.os }}
+          path: |
+            nextest-output.log
+            nfr-gates-output.log
+          if-no-files-found: ignore
       # Verifies: NFR-30 (zero untagged requirements; required from
       # Phase 8, so the advisory flag is gone).
       - name: requirements traceability (NFR-30)
