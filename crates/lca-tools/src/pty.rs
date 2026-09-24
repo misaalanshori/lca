@@ -637,6 +637,12 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
     let exited = inner.child.exited();
     eprintln!("TEMP-DIAG read avail=0 exited={exited}");
     if !exited {
+        // Nothing yet: yield the CPU rather than hammering. The
+        // ConPTY pump lives in this same process, and a reader in a
+        // tight loop on a loaded runner can crowd out the very thread
+        // whose output it is waiting for. Two milliseconds is
+        // imperceptible to a frame poll.
+        std::thread::sleep(std::time::Duration::from_millis(2));
         return Ok(Some(Vec::new()));
     }
     // The child is gone and the pipe is empty - but ConPTY can hold

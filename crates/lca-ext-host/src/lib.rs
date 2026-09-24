@@ -20,7 +20,7 @@
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lca_ext_abi::host::compaction::CompactionPre;
@@ -1133,6 +1133,7 @@ impl ExtHost {
                 ui_regions: manifest.ui_regions.clone(),
                 limits: effective_limits,
                 enabled: Arc::new(AtomicBool::new(true)),
+                in_flight: AtomicU64::new(0),
                 logs: Arc::new(Mutex::new(Vec::new())),
                 cap,
             }),
@@ -1161,9 +1162,23 @@ struct Inner {
     enabled: Arc<AtomicBool>,
     logs: Arc<Mutex<Vec<String>>>,
     cap: Arc<Capabilities>,
+    /// Calls currently inside the guest: incremented the moment the
+    /// component is instantiated and the run begins, decremented when
+    /// it returns. Cancellation semantics are about interrupting a
+    /// *running* call, so a test that must know the guest is running
+    /// (rather than still building its store) watches this.
+    in_flight: AtomicU64,
 }
 
 impl Inner {
+    /// Count this call as inside the guest until the guard drops -
+    /// including on the error and panic paths, which is exactly when
+    /// the count must go back down.
+    fn in_flight_guard(&self) -> InFlightGuard<'_> {
+        self.in_flight.fetch_add(1, Ordering::SeqCst);
+        InFlightGuard { inner: self }
+    }
+
     fn disable(&self) {
         self.enabled.store(false, Ordering::SeqCst);
     }
@@ -1254,6 +1269,16 @@ fn schema_work(inner: &Inner) -> Result<ToolSpec, CallError> {
     })
 }
 
+struct InFlightGuard<'a> {
+    inner: &'a Inner,
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.inner.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 fn execute_work(inner: &Inner, call: ToolCall) -> Result<lca_protocol::ToolResult, CallError> {
     let pre = inner
         .tool
@@ -1269,6 +1294,7 @@ fn execute_work(inner: &Inner, call: ToolCall) -> Result<lca_protocol::ToolResul
         arguments: call.arguments,
         extras: Vec::new(),
     };
+    let _inside_guest = inner.in_flight_guard();
     let guest_result = instance
         .lca_ext_execute()
         .call_run(&mut store, &guest_call)
@@ -1884,6 +1910,7 @@ fn event_work(
 }
 
 /// One loaded extension (ADR-0019's handle for the WASM mode).
+#[derive(Clone)]
 pub struct WasmExtension {
     inner: Arc<Inner>,
 }
@@ -1971,6 +1998,13 @@ impl WasmExtension {
     /// or test use).
     pub fn schema(&self) -> Result<ToolSpec, CallError> {
         self.blocking(schema_work)
+    }
+
+    /// How many calls are inside the guest right now: the component
+    /// is instantiated and running, not still being built. Cancellation
+    /// (NFR-29) acts on calls this counter covers.
+    pub fn in_flight(&self) -> u64 {
+        self.inner.in_flight.load(Ordering::SeqCst)
     }
 
     /// Execute one call (blocking; tests use this, the loop awaits

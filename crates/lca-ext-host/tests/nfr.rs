@@ -197,12 +197,26 @@ fn attempt_epoch_latency() -> Option<Duration> {
     let (extension, host) = load();
     let engine = host.engine().clone();
 
+    let watch = extension.clone();
     let spinner = std::thread::spawn(move || {
         // A spinning call on its own blocking thread, fuel unlimited.
         let _ = extension.execute(&call_loop());
     });
-    // Let it get well into the spin.
-    std::thread::sleep(Duration::from_millis(80));
+    // The requirement is about cancelling a *running* call: wait
+    // until the guest actually is running (the component can take
+    // longer than any fixed sleep to instantiate on a loaded runner,
+    // and incrementing the epoch before the guest's first check just
+    // measures the rest of instantiation - which is where the
+    // systematic56-79 ms readings on CI came from). Ten seconds is
+    // the patience for instantiation under load; no spin by then is a
+    // miss.
+    let patience = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while watch.in_flight() == 0 {
+        if std::time::Instant::now() >= patience {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
 
     let started = Instant::now();
     engine.increment_epoch();
