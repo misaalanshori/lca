@@ -198,6 +198,21 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Write the clean-exit `session-end` marker (`docs/session-log-format.md`:
+    /// its absence means the session ended without one, normal after a crash).
+    /// The CLI calls this when a session ends.
+    pub fn close(&self, session: &Session) -> Result<()> {
+        let now = ids::now_ms();
+        self.append(
+            session,
+            lca_protocol::Record::SessionEnd {
+                v: lca_protocol::FORMAT_VERSION,
+                ts: now,
+                id: ids::record_id(now),
+            },
+        )
+    }
+
     /// Read this session's raw log: records until the first failure, then a
     /// truncation report (FR-SESS-6).
     pub fn read(&self, session: &Session) -> Result<ReadOutcome> {

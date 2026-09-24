@@ -559,3 +559,20 @@ fn renaming_updates_meta_and_the_index() {
     let listed = store.list_sessions(&project).expect("list");
     assert_eq!(listed[0].title, "new title");
 }
+
+// Verifies: session-log-format - a clean exit writes a `session-end` marker
+// (its absence means the session ended without one, normal after a crash).
+#[test]
+fn close_writes_the_session_end_marker() {
+    let store = store("session-end");
+    let project = scratch("session-end-project");
+    let session = store.create_session(&project, "test").expect("create");
+    store.close(&session).expect("close");
+    let read = store.read(&session).expect("read");
+    assert!(
+        read.records
+            .iter()
+            .any(|r| matches!(r, lca_protocol::Record::SessionEnd { .. })),
+        "session-end is on record"
+    );
+}

@@ -478,15 +478,29 @@ pub fn read_archive(bytes: &[u8]) -> Result<(String, Vec<u8>), Error> {
             .by_name(&name)
             .map_err(|err| Error::Invalid(err.to_string()))?;
         if name == "extension.toml" {
+            if manifest.is_some() {
+                return Err(Error::Invalid(
+                    "the archive carries more than one extension.toml".to_string(),
+                ));
+            }
             let mut text = String::new();
             file.read_to_string(&mut text)?;
             manifest = Some(text);
-        } else if name == "component.wasm" || name.ends_with(".wasm") {
+        } else if name.ends_with(".wasm") {
+            if component.is_some() {
+                return Err(Error::Invalid(
+                    "the archive carries more than one component".to_string(),
+                ));
+            }
             let mut buffer = Vec::new();
             file.read_to_end(&mut buffer)?;
             component = Some(buffer);
+        } else {
+            // ADR-0010: extension.toml and the component, nothing else.
+            return Err(Error::Invalid(format!(
+                "unexpected archive entry `{name}` (ADR-0010 allows only extension.toml and the component)"
+            )));
         }
-        // Anything else does not belong (ADR-0010: nothing else added).
     }
     match (manifest, component) {
         (Some(manifest), Some(component)) => Ok((manifest, component)),

@@ -171,7 +171,7 @@ pub(crate) fn extension_capabilities(
         workspace: cwd.to_path_buf(),
         private: data.join("private"),
         home_config: config_dir(),
-        temp: std::env::temp_dir(),
+        temp: session_temp(),
         state_dir: data.clone(),
     };
     let store =
@@ -207,6 +207,44 @@ pub(crate) fn openai_capabilities(
 /// The user data directory for sessions, grants, and state.
 pub fn data_dir() -> PathBuf {
     lca_session::default_data_dir()
+}
+
+/// The per-session temporary directory the `temp` scope resolves to (FR-PERM
+/// via the capability catalog: a per-session dir, removed at exit). Set once
+/// when the session starts.
+static SESSION_TEMP: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The current session's temp root, or the system temp dir before one is set.
+pub(crate) fn session_temp() -> PathBuf {
+    SESSION_TEMP
+        .get()
+        .cloned()
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+/// Create and remember the session's temp directory (`<data>/tmp/<id>`).
+pub(crate) fn init_session_temp(session_id: &str) -> PathBuf {
+    let path = data_dir().join("tmp").join(session_id);
+    let _ = std::fs::create_dir_all(&path);
+    let _ = SESSION_TEMP.set(path.clone());
+    path
+}
+
+/// Remove the session's temp directory at a clean exit.
+pub(crate) fn cleanup_session_temp() {
+    if let Some(path) = SESSION_TEMP.get() {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+/// Removes the session temp directory on drop, so every exit path after the
+/// session starts cleans up.
+pub(crate) struct SessionTempGuard;
+
+impl Drop for SessionTempGuard {
+    fn drop(&mut self) {
+        cleanup_session_temp();
+    }
 }
 
 /// The platform configuration directory `home-config` resolves to. This is
@@ -473,6 +511,8 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
         .read(&session)
         .map(|read| read.truncated)
         .unwrap_or(false);
+    let _temp_guard = crate::SessionTempGuard;
+    crate::init_session_temp(session.id());
 
     let mut tools = ToolExecutor::new(
         std::sync::Arc::new(NativeOps),
@@ -590,6 +630,7 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
         None
     };
     let mut sink = HeadlessSink::new(json, session_truncated);
+    let close_registry = agent_config.extensions.clone();
     let outcome = {
         let mut agent = Agent::new(
             &store,
@@ -603,6 +644,11 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
         );
         agent.run_turn(prompt, &mut sink, &CancelFlag::new()).await
     };
+    // `session-close`: the session is about to end (SRDD hook points).
+    lca_core::drive_blocking(async move {
+        close_registry.on_session_close().await;
+    });
+    let _ = store.close(&session);
     let class = sink.error_class().map(str::to_string);
     if !json && !sink.plain.is_empty() {
         println!("{}", sink.plain);

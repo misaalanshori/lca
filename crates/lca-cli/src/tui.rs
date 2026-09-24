@@ -123,6 +123,8 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             .create_session(cwd, "session")
             .map_err(|err| anyhow::anyhow!("cannot start a session: {err}"))?,
     };
+    let _temp_guard = crate::SessionTempGuard;
+    crate::init_session_temp(session.id());
 
     let provider_name = config.provider().to_string();
 
@@ -452,7 +454,14 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         })
     });
 
-    lca_tui::run(options, runner)
+    // `session-close`: the interface is done; let hooks flush state.
+    let close_registry = registry.clone();
+    let result = lca_tui::run(options, runner);
+    lca_core::drive_blocking(async move {
+        close_registry.on_session_close().await;
+    });
+    let _ = store.close(&session);
+    result
 }
 
 /// One conversation line for the scrollback.

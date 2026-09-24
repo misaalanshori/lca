@@ -491,6 +491,15 @@ impl<'a> Agent<'a> {
         if let Some(watcher) = watcher {
             let _ = watcher.join();
         }
+        // `attention-required`: the turn failed and the user should look. The
+        // reason is the same text the interface surfaced.
+        if outcome.status == TurnStatus::Error {
+            let reason = outcome
+                .error
+                .clone()
+                .unwrap_or_else(|| "the turn ended with an error".to_string());
+            self.config.extensions.on_attention_required(&reason).await;
+        }
         let status = match outcome.status {
             TurnStatus::Ok => "ok",
             TurnStatus::Error => "error",
@@ -522,6 +531,10 @@ impl<'a> Agent<'a> {
                 format!("cannot write to the session log: {err}"),
             );
         }
+
+        // `pre-turn` fires once, after the user record and before any provider
+        // or compaction work (SRDD hook points; `docs/flows.md`).
+        self.config.extensions.on_pre_turn().await;
 
         let mut turn_usage = Usage::default();
         let mut rounds = 0u32;
@@ -987,6 +1000,28 @@ impl<'a> Agent<'a> {
     ) -> Result<ToolResult, TurnOutcome> {
         // Phase 2 seam note: hooks have already run by the time this is
         // called (FR-CORE-10: hook before permission).
+        //
+        // Validate the arguments against the schema the model saw before the
+        // tool runs (extension authoring guide); an invalid call never reaches
+        // the tool. Extension schemas come from the registry, built-ins from
+        // the executor's own table.
+        let schema = registry
+            .tool_schema(&call.name)
+            .map(|spec| spec.parameters.clone())
+            .or_else(|| {
+                ToolExecutor::specs()
+                    .into_iter()
+                    .find(|spec| spec.name == call.name)
+                    .map(|spec| spec.parameters)
+            });
+        if let Some(schema) = schema
+            && let Err(reason) = lca_provider::validate_against_schema(&schema, &call.arguments)
+        {
+            return Ok(ToolResult::error(
+                call.call_id.clone(),
+                format!("invalid arguments for `{}`: {reason}", call.name),
+            ));
+        }
         if let Some(action) = self.tools.required_permission(call) {
             let outcome = match lca_permissions::authorize(
                 self.grants,

@@ -78,6 +78,9 @@ pub struct ExtensionRegistry {
     entries: Vec<Registered>,
     /// Bare tool name -> entry index.
     tools: HashMap<String, usize>,
+    /// The kept spec per registered tool name, so arguments can be validated
+    /// against the schema the model saw before `execute` runs.
+    tool_schemas: HashMap<String, ToolSpec>,
     /// Full command name (`ext.command`, a claimed built-in leaf, or an
     /// auto-namespaced identity export) -> where it leads.
     commands: HashMap<String, Route>,
@@ -121,7 +124,7 @@ impl ExtensionRegistry {
             return;
         }
 
-        let mut pending_tools: Vec<String> = Vec::new();
+        let mut pending_tools: Vec<ToolSpec> = Vec::new();
         let mut pending_commands: Vec<(String, PendingRoute)> = Vec::new();
         let native_claim = handle.delivery() == DeliveryMode::Native;
         let slots = handle.builtin_command_slots();
@@ -219,7 +222,7 @@ impl ExtensionRegistry {
                             None => {
                                 // The entry index is not pushed yet: patch
                                 // after push via the pending name below.
-                                pending_tools.push(spec.name);
+                                pending_tools.push(spec);
                             }
                         }
                     }
@@ -236,8 +239,9 @@ impl ExtensionRegistry {
         }
 
         let entry_index = self.entries.len();
-        for tool in pending_tools {
-            self.tools.insert(tool, entry_index);
+        for spec in pending_tools {
+            self.tools.insert(spec.name.clone(), entry_index);
+            self.tool_schemas.insert(spec.name.clone(), spec);
         }
         for (full, pending) in pending_commands {
             let route = match pending {
@@ -461,6 +465,12 @@ impl ExtensionRegistry {
             .map(|index| &self.entries[*index].handle)
     }
 
+    /// The schema of a registered tool, for validating its arguments before
+    /// dispatch (extension authoring guide: the host validates, then calls).
+    pub fn tool_schema(&self, name: &str) -> Option<&ToolSpec> {
+        self.tool_schemas.get(name)
+    }
+
     /// Every extension tool spec, for the provider's tool list.
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
         self.tools
@@ -606,6 +616,17 @@ impl ExtensionRegistry {
             .filter(|h| h.worlds().contains(&World::Hooks))
         {
             let _ = handle.on_post_turn_end(status).await;
+        }
+    }
+
+    /// `attention-required`: the turn failed and the user should look. The
+    /// reason is the same text the interface surfaced.
+    pub async fn on_attention_required(&self, reason: &str) {
+        for handle in self
+            .enabled()
+            .filter(|h| h.worlds().contains(&World::Hooks))
+        {
+            let _ = handle.on_attention_required(reason).await;
         }
     }
 

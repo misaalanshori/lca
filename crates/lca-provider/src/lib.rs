@@ -204,3 +204,64 @@ impl ToolCallAccumulator {
 pub fn validate_arguments(call: &ToolCall) -> Result<serde_json::Value, serde_json::Error> {
     serde_json::from_str(&call.arguments)
 }
+
+/// Validate a tool call's arguments against its JSON-schema `parameters`
+/// before the host calls `execute` (extension authoring guide). Covers the
+/// subset the project's tools declare - `object`/`array`/`string`/`integer`/
+/// `number`/`boolean` types, `required`, and `items` - and names the offending
+/// field. Unknown type keywords are ignored rather than rejected.
+pub fn validate_against_schema(schema: &serde_json::Value, arguments: &str) -> Result<(), String> {
+    let value: serde_json::Value =
+        serde_json::from_str(arguments).map_err(|err| format!("not valid JSON: {err}"))?;
+    validate_value(schema, &value, "$")
+}
+
+fn validate_value(
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+    path: &str,
+) -> Result<(), String> {
+    let Some(expected) = schema.get("type").and_then(serde_json::Value::as_str) else {
+        return Ok(());
+    };
+    let matches = match expected {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "integer" => value.is_i64() || value.is_u64(),
+        "number" => value.is_number(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => true,
+    };
+    if !matches {
+        return Err(format!("{path} must be {expected}"));
+    }
+    match (expected, value) {
+        ("object", serde_json::Value::Object(map)) => {
+            if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+                for key in required.iter().filter_map(serde_json::Value::as_str) {
+                    if !map.contains_key(key) {
+                        return Err(format!("{path}.{key} is required"));
+                    }
+                }
+            }
+            if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+                for (key, subschema) in properties {
+                    if let Some(sub) = map.get(key) {
+                        validate_value(subschema, sub, &format!("{path}.{key}"))?;
+                    }
+                }
+            }
+        }
+        ("array", serde_json::Value::Array(items)) => {
+            if let Some(item_schema) = schema.get("items") {
+                for (index, item) in items.iter().enumerate() {
+                    validate_value(item_schema, item, &format!("{path}[{index}]"))?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}

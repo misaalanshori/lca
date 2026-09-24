@@ -59,7 +59,7 @@ fn host_roots(cwd: &std::path::Path) -> lca_permissions::ScopeRoots {
         workspace: cwd.to_path_buf(),
         private: data.join("private"),
         home_config: crate::config_dir(),
-        temp: std::env::temp_dir(),
+        temp: crate::session_temp(),
         state_dir: data,
     }
 }
@@ -317,6 +317,23 @@ async fn update(tree: &InstallTree, name: Option<String>, all: bool) -> i32 {
                 continue;
             }
         };
+        // Refuse a rename: installing under a different name would leave the
+        // old lockfile entry (and its tree) orphaned.
+        match parse_manifest_strict(&resolved.manifest) {
+            Ok((resolved_name, ..)) if resolved_name == name => {}
+            Ok((resolved_name, ..)) => {
+                eprintln!(
+                    "error: {name}: the update's manifest is named `{resolved_name}`; refusing to install under a different name"
+                );
+                code = crate::exit::USAGE;
+                continue;
+            }
+            Err(err) => {
+                eprintln!("error: {name}: {err}");
+                code = crate::exit::USAGE;
+                continue;
+            }
+        }
         if resolved.digest == entry.digest {
             println!("{name}: up to date ({})", short_digest(&entry.digest));
             continue;

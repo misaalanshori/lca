@@ -91,6 +91,9 @@ struct PolicyExt {
     /// Replace the arguments of `shell` calls with this command.
     replace_shell_with: Option<String>,
     calls: Mutex<usize>,
+    pre_turn_calls: Mutex<usize>,
+    attention_calls: Mutex<usize>,
+    close_calls: Mutex<usize>,
 }
 
 impl PolicyExt {
@@ -100,6 +103,9 @@ impl PolicyExt {
             deny_prefix: Some(prefix),
             replace_shell_with: None,
             calls: Mutex::new(0),
+            pre_turn_calls: Mutex::new(0),
+            attention_calls: Mutex::new(0),
+            close_calls: Mutex::new(0),
         }
     }
 
@@ -109,11 +115,26 @@ impl PolicyExt {
             deny_prefix: None,
             replace_shell_with: Some(command.to_string()),
             calls: Mutex::new(0),
+            pre_turn_calls: Mutex::new(0),
+            attention_calls: Mutex::new(0),
+            close_calls: Mutex::new(0),
         }
     }
 
     fn calls(&self) -> usize {
         *self.calls.lock().expect("calls")
+    }
+
+    fn pre_turn_calls(&self) -> usize {
+        *self.pre_turn_calls.lock().expect("pre-turn")
+    }
+
+    fn attention_calls(&self) -> usize {
+        *self.attention_calls.lock().expect("attention")
+    }
+
+    fn close_calls(&self) -> usize {
+        *self.close_calls.lock().expect("close")
     }
 }
 
@@ -144,6 +165,7 @@ impl ExtensionDispatch for PolicyExt {
     }
 
     fn on_pre_turn(&self) -> lca_ext_abi::DispatchFuture<'static, Result<(), DispatchError>> {
+        *self.pre_turn_calls.lock().expect("pre-turn") += 1;
         Box::pin(std::future::ready(Ok(())))
     }
 
@@ -165,10 +187,12 @@ impl ExtensionDispatch for PolicyExt {
         &'a self,
         _reason: &'a str,
     ) -> lca_ext_abi::DispatchFuture<'a, Result<(), DispatchError>> {
+        *self.attention_calls.lock().expect("attention") += 1;
         Box::pin(std::future::ready(Ok(())))
     }
 
     fn on_session_close(&self) -> lca_ext_abi::DispatchFuture<'static, Result<(), DispatchError>> {
+        *self.close_calls.lock().expect("close") += 1;
         Box::pin(std::future::ready(Ok(())))
     }
     fn command_specs(&self) -> Result<Vec<CommandSpec>, DispatchError> {
@@ -706,4 +730,58 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
             .any(|r| matches!(r, Record::User { .. })),
         "completed records are kept (FR-CONC-3)"
     );
+}
+
+// Verifies: the SRDD hook points - `pre-turn` fires once per turn before any
+// provider work, and `attention-required` fires when a turn ends in error.
+#[tokio::test]
+async fn pre_turn_and_attention_hooks_fire() {
+    let policy = Arc::new(PolicyExt::deny("observed", "deny-"));
+
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("hi").usage(fake_usage(10, 5, 0, 10)))
+        .build();
+    let mut registry = ExtensionRegistry::new();
+    registry.register(policy.clone());
+    let mut h = harness("hooks-pre-turn", provider, registry);
+    let mut sink = CollectingSink::default();
+    let outcome = turn(&mut h, "hello", &mut sink).await;
+    assert_eq!(outcome.status, TurnStatus::Ok);
+    assert_eq!(policy.pre_turn_calls(), 1, "pre-turn fires once per turn");
+    assert_eq!(
+        policy.attention_calls(),
+        0,
+        "a successful turn needs no attention"
+    );
+
+    let failing = FakeProvider::builder()
+        .turn(|t| t.error("boom", false).usage(fake_usage(1, 1, 0, 0)))
+        .build();
+    let mut registry = ExtensionRegistry::new();
+    registry.register(policy.clone());
+    let mut h = harness("hooks-attention", failing, registry);
+    let mut sink = CollectingSink::default();
+    let outcome = turn(&mut h, "fail please", &mut sink).await;
+    assert_eq!(outcome.status, TurnStatus::Error);
+    assert_eq!(
+        policy.attention_calls(),
+        1,
+        "a failed turn asks for attention"
+    );
+    assert_eq!(
+        policy.pre_turn_calls(),
+        2,
+        "the failing turn ran pre-turn too"
+    );
+}
+
+// The registry's `session-close` fans out to every hooks handle; the CLI
+// calls it on exit (headless and after the interface).
+#[tokio::test]
+async fn session_close_hook_fires_when_called() {
+    let policy = Arc::new(PolicyExt::deny("closer", "deny-"));
+    let mut registry = ExtensionRegistry::new();
+    registry.register(policy.clone());
+    registry.on_session_close().await;
+    assert_eq!(policy.close_calls(), 1);
 }

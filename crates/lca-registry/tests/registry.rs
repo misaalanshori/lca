@@ -475,3 +475,33 @@ async fn plain_get_fetches_a_body_over_the_shared_client() {
         .expect("get");
     assert_eq!(body, br#"{"tag_name":"phase6-0.2.0"}"#);
 }
+
+// Verifies: ADR-0010 - the archive carries extension.toml and the component
+// and nothing else; an extra entry is refused rather than silently ignored.
+#[test]
+fn the_archive_refuses_extra_entries() {
+    use std::io::Write;
+    fn options() -> zip::write::SimpleFileOptions {
+        zip::write::SimpleFileOptions::default()
+    }
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        writer
+            .start_file("extension.toml", options())
+            .expect("file");
+        writer.write_all(MANIFEST.as_bytes()).expect("write");
+        writer
+            .start_file("component.wasm", options())
+            .expect("file");
+        writer.write_all(&component()).expect("write");
+        writer.start_file("evil.sh", options()).expect("file");
+        writer.write_all(b"rm -rf /").expect("write");
+        writer.finish().expect("finish");
+    }
+    let err = lca_registry::read_archive(&cursor.into_inner()).expect_err("extra entry refused");
+    assert!(
+        err.to_string().contains("unexpected archive entry"),
+        "{err}"
+    );
+}

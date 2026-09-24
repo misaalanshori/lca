@@ -1717,3 +1717,43 @@ fn the_completion_backend_follows_a_model_change() {
         "the session's model after /model"
     );
 }
+
+// Verifies: the host validates a tool call's arguments against its schema
+// before executing it (extension authoring guide) - an invalid call never
+// reaches the tool and no permission prompt is shown for it.
+#[tokio::test]
+async fn invalid_tool_arguments_never_reach_the_tool() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.tool_call("read", "{}").usage(fake_usage(10, 10, 0, 10)))
+        .turn(|t| t.text("ok").usage(fake_usage(20, 5, 10, 0)))
+        .build();
+    let mut h = harness("schema", provider, default_config());
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: vec![],
+        asked: vec![],
+    };
+
+    let outcome = turn(&mut h, "read nothing", &mut sink, &mut prompt).await;
+    assert_eq!(outcome.status, lca_core::TurnStatus::Ok);
+    assert!(
+        prompt.asked.is_empty(),
+        "no prompt for an invalid call: {:?}",
+        prompt.asked
+    );
+    let results: Vec<_> = sink
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            TurnEvent::ToolFinished(result) => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status, ToolResultStatus::Error);
+    assert!(
+        results[0].content.contains("invalid arguments"),
+        "{}",
+        results[0].content
+    );
+}

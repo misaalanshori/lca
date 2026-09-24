@@ -364,12 +364,19 @@ impl GrantStore {
     /// Difference between the project's proposals and the approved set
     /// (FR-PERM-10).
     pub fn proposal_diff(&self, project_dir: &Path, proposals: &Proposals) -> ProposalDiff {
-        let approved = self
-            .data
-            .projects
-            .get(&canonical_key(project_dir))
-            .map(|entry| &entry.approved_proposals)
-            .cloned()
+        let key = canonical_key(project_dir);
+        let entry = self.data.projects.get(&key);
+        // ADR-0006: the hash of the approved set is the change detector. A
+        // match means nothing changed, so no prompt is needed; only a
+        // mismatch computes the difference to show.
+        let hash = proposal_hash(proposals);
+        if let Some(entry) = entry
+            && entry.approved_hash.as_deref() == Some(hash.as_str())
+        {
+            return ProposalDiff::default();
+        }
+        let approved = entry
+            .map(|entry| entry.approved_proposals.clone())
             .unwrap_or_default();
         ProposalDiff {
             added: proposals
