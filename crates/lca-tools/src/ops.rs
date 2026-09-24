@@ -292,13 +292,14 @@ fn kill_members(pgid: u32) {
         let (Some(pid), Some(g)) = (cols.next(), cols.next()) else {
             continue;
         };
-        if g == pgid.to_string() && pid != pgid.to_string() || g == pgid.to_string() {
-            if let Ok(pid) = pid.parse::<i32>() {
-                let st = std::process::Command::new("/bin/kill")
-                    .args(["-9", &pid.to_string()])
-                    .status();
-                sent.push(format!("{pid}:{st.map(|s| s.code())}"));
-            }
+        if g == pgid.to_string()
+            && let Ok(pid) = pid.parse::<i32>()
+        {
+            let st = std::process::Command::new("/bin/kill")
+                .args(["-9", &pid.to_string()])
+                .status();
+            let code = st.map(|s| s.code());
+            sent.push(format!("{pid}:{code:?}"));
         }
     }
     eprintln!("TEMP-DIAG kill_members pgid={pgid} sent={sent:?}");
