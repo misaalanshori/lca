@@ -228,20 +228,12 @@ async fn platform_exec(
                 else { on_output(&err_buf[..n]); collected.extend_from_slice(&err_buf[..n]); }
             }
             _ = tokio::time::sleep_until(deadline) => {
-                eprintln!(
-                    "TEMP-DIAG timeout arm after {:?}",
-                    exec_start.elapsed()
-                );
                 kill_group(pgid);
                 wait_after_kill(&mut child, pgid, exec_start).await;
                 outcome = Some(ExecOutcome::Timeout);
                 break;
             }
             _ = cancel.wait_cancelled() => {
-                eprintln!(
-                    "TEMP-DIAG cancel arm after {:?}",
-                    exec_start.elapsed()
-                );
                 kill_group(pgid);
                 wait_after_kill(&mut child, pgid, exec_start).await;
                 outcome = Some(ExecOutcome::Cancelled);
@@ -267,10 +259,9 @@ fn kill_group(pgid: u32) {
     // group stops the shell and everything it forked. `/bin/kill` exists on
     // every POSIX platform we target; using it avoids a `libc` dependency.
     // ponytail: swap to `libc::killpg` if a platform ships no /bin/kill.
-    let status = std::process::Command::new("/bin/kill")
+    let _ = std::process::Command::new("/bin/kill")
         .args(["-9", "--", &format!("-{pgid}")])
         .status();
-    eprintln!("TEMP-DIAG kill_group pgid={pgid} status={status:?}");
 }
 
 /// The backstop: signal every surviving member by its own pid. The
@@ -286,7 +277,6 @@ fn kill_members(pgid: u32) {
         .output();
     let Ok(out) = out else { return };
     let text = String::from_utf8_lossy(&out.stdout);
-    let mut sent = Vec::new();
     for line in text.lines() {
         let mut cols = line.split_whitespace();
         let (Some(pid), Some(g)) = (cols.next(), cols.next()) else {
@@ -295,21 +285,22 @@ fn kill_members(pgid: u32) {
         if g == pgid.to_string()
             && let Ok(pid) = pid.parse::<i32>()
         {
-            let st = std::process::Command::new("/bin/kill")
+            let _ = std::process::Command::new("/bin/kill")
                 .args(["-9", &pid.to_string()])
                 .status();
-            let code = st.map(|s| s.code());
-            sent.push(format!("{pid}:{code:?}"));
         }
     }
-    eprintln!("TEMP-DIAG kill_members pgid={pgid} sent={sent:?}");
 }
 
 /// Reap the child after a group kill, bounded: a process still alive
 /// two seconds after SIGKILL is worth seeing rather than awaiting
 /// into an unexplained thirty-second stall - print the group's state,
-/// then make sure. (TEMP-DIAG lines are the Linux evidence trail;
-/// remove once the hosted-runner stall is identified.)
+/// then make sure. The evidence trail that led here: the timeout arm
+/// fired on time, `/bin/kill` reported success, and both processes -
+/// the sh and its sleep - were still alive and printable two seconds
+/// later on a hosted Linux runner (macOS and Windows never showed it).
+/// The group call now uses `--` to make the operand unambiguous, and
+/// this backstop signals each surviving member by its own pid.
 #[cfg(unix)]
 async fn wait_after_kill(
     child: &mut tokio::process::Child,
@@ -332,7 +323,7 @@ async fn wait_after_kill(
             })
             .unwrap_or_default();
         eprintln!(
-            "TEMP-DIAG child group {pgid} still alive2s after kill, {:?} since exec: {ps}",
+            "process group {pgid} still alive2s after SIGKILL, {:?} since exec, killing members by pid: {ps}",
             since.elapsed()
         );
         kill_members(pgid);
