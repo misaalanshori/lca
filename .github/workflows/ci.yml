@@ -42,6 +42,11 @@ jobs:
         run: cargo doc --workspace --no-deps
 # Verifies: NFR-12 (the suite runs on Linux, macOS, and Windows).
       - name: tests (nextest)
+        # bash, not the runner's default shell: `set -o pipefail` and
+        # `tee` do not exist in PowerShell, and a shell-level error
+        # would fail this step before a single test ran - which is
+        # exactly what the first tee'd Windows run did.
+        shell: bash
         # -j2: the debug suite at full parallelism wedged the hosted
         # runners on the Linux and Windows pools - jobs sat mid-step
         # for the better part of an hour and GitHub's own annotation
@@ -58,6 +63,7 @@ jobs:
       # Verifies: NFR-5's real bound: hook overhead measured against a
       # release wasmtime (debug instrumentation dominates the1 ms).
       - name: nfr release gates
+        shell: bash
         run: |
           set -o pipefail
           cargo nextest run --release -p lca-ext-host -E 'test(/nfr|instantiation|hook|epoch/)' \
