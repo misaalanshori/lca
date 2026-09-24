@@ -1,0 +1,74 @@
+{
+  "compaction_seen": false,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "You are the LCA coding agent. Follow the repository's instructions.\n\n# skill: commit-style\nWrite commit messages as one intent-bearing sentence.\n\nRules:\n- answer in English\n- never invent file paths",
+          "type": "text"
+        }
+      ],
+      "role": "system"
+    },
+    {
+      "content": [
+        {
+          "text": "List the Rust files in src/.",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "reasoning": "The user wants a listing; the shell tool fits.",
+          "type": "reasoning"
+        },
+        {
+          "arguments": "{\"command\":[\"ls\",\"src\"]}",
+          "call_id": "call-1",
+          "name": "shell",
+          "type": "tool-call"
+        }
+      ],
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "arguments": "{\"command\":[\"ls\",\"src\"]}",
+          "call_id": "call-1",
+          "name": "shell"
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "text": "main.rs\nlib.rs\n",
+          "type": "text"
+        }
+      ],
+      "role": "tool",
+      "tool_call_id": "call-1"
+    },
+    {
+      "content": [
+        {
+          "text": "src/ holds main.rs and lib.rs.",
+          "type": "text"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "text": "Thanks.",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "stable_prefix": 0
+}
