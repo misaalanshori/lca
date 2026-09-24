@@ -65,6 +65,14 @@ Subsequent phases continue building against the Linux-green suite; no
 later phase may claim the Phase 1 exit test passed until option1 or2 is
 resolved above.
 
+**Closure, recorded in Phase 8:** option1 happened - the workflow
+runs with the required permission and the three-OS pipeline is green,
+all three platforms passing in single runs of the final topology
+(eight jobs: the macOS and Windows suites, the four Linux package
+groups, the serial timing gates, the size gate). The exit test's own
+condition is met, and this entry stays as written because it is the
+record of why it was ever open.
+
 Additional platform evidence gathered locally (does not substitute for
 the missing pipeline runs):
 
