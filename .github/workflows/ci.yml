@@ -50,17 +50,16 @@ jobs:
         # would fail this step before a single test ran - which is
         # exactly what the first tee'd Windows run did.
         shell: bash
-        # -j2: the debug suite at full parallelism wedged the hosted
-        # runners on the Linux and Windows pools - jobs sat mid-step
-        # for the better part of an hour and GitHub's own annotation
-        # blamed CPU/memory starvation of the runner agent - while the
-        # macOS pool, with more cores to spare, kept finishing in
-        # minutes. Same tests, same order, half the peak load; the
-        # steps after this one (nfr gates, cargo-deny, traceability)
-        # were what never got to run.
+        # Full parallelism: a Linux suite stretched past forty-five
+        # minutes at half threads, and every run that crossed roughly
+        # that age lost the runner agent mid-step ("hosted runner lost
+        # communication"), twice in a row. Finishing sooner is the
+        # reliable defense; the per-test ceiling in
+        # .config/nextest.toml still stops any single test from
+        # hanging the step.
         run: |
           set -o pipefail
-          cargo nextest run --workspace --no-fail-fast --test-threads=2 \
+          cargo nextest run --workspace --no-fail-fast \
             2>&1 | tee nextest-output.log
       # Verifies: NFR-30 (advisory before Phase 8, required from Phase 8).
       # Verifies: NFR-5's real bound: hook overhead measured against a
