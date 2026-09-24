@@ -757,7 +757,20 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
     // The lockfile records digest + source (FR-DIST-6); the component
     // sits beside its manifest, named by that digest.
     let lock = sandbox.extensions_root().join("lockfile.json");
-    let lock_text = std::fs::read_to_string(&lock).expect("lockfile");
+    let root = sandbox.extensions_root();
+    let lock_text = std::fs::read_to_string(&lock).unwrap_or_else(|err| {
+        panic!(
+            "lockfile at {}: {err} (root exists: {}, entries: {:?})",
+            lock.display(),
+            root.exists(),
+            std::fs::read_dir(&root)
+                .map(|entries| entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name())
+                    .collect::<Vec<_>>())
+                .unwrap_or_default()
+        )
+    });
     assert!(lock_text.contains(&reference), "{lock_text}");
     assert!(lock_text.contains("sha256:"), "{lock_text}");
     assert!(

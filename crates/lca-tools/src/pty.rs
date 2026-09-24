@@ -397,6 +397,17 @@ mod windows_conpty {
     }
 
     impl ProcessHandle {
+        /// Whether the process has exited, without waiting on it: a
+        /// zero-time Wait on the handle answers in microseconds.
+        pub fn exited(&self) -> bool {
+            // WAIT_OBJECT_0 is zero: the object is signaled.
+            // SAFETY: the handle is open for this process's lifetime.
+            let signaled = unsafe {
+                windows_sys::Win32::System::Threading::WaitForSingleObject(self.handle, 0)
+            };
+            signaled == 0
+        }
+
         /// The spawned process id, for Job Object attachment.
         pub fn pid(&self) -> Option<u32> {
             (self.pid != 0).then_some(self.pid)
@@ -566,8 +577,48 @@ fn spawn_impl(
 }
 
 #[cfg(windows)]
+// The crate exemption for raw handles covers this function the same
+// way it covers `windows_conpty`: the peek is over an owned pipe end.
+#[allow(unsafe_code)]
 fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> {
-    crate::process::read_up_to(&mut inner.output, max)
+    // The ConPTY output pipe reaches EOF only when the console is
+    // closed, and the console is closed after the child is waited -
+    // which callers do after this function reports the end of the
+    // stream. A reader waiting for that EOF was therefore waiting on
+    // its own next call: every Windows pty consumer deadlocked into a
+    // timeout (conformance, the ui panel, the conformance diff all
+    // tripped over it). Peek first, so no data is "nothing yet" like
+    // the nonblocking master on POSIX, and report the end of the
+    // stream when the child has exited and the pipe has drained.
+    use std::os::windows::io::AsRawHandle;
+    let mut available: u32 = 0;
+    // SAFETY: the file is an open pipe end; the out params are valid.
+    let ok = unsafe {
+        windows_sys::Win32::System::Pipes::PeekNamedPipe(
+            inner.output.as_raw_handle() as *mut _,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            &mut available,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        let err = std::io::Error::last_os_error();
+        return match err.kind() {
+            // Broken pipe: the console side is gone; that is EOF.
+            std::io::ErrorKind::BrokenPipe => Ok(None),
+            std::io::ErrorKind::UnexpectedEof => Ok(None),
+            _ => Err(err),
+        };
+    }
+    if available > 0 {
+        crate::process::read_up_to(&mut inner.output, max)
+    } else if inner.child.exited() {
+        Ok(None)
+    } else {
+        Ok(Some(Vec::new()))
+    }
 }
 
 #[cfg(windows)]

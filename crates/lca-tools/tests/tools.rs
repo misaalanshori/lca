@@ -484,7 +484,13 @@ async fn shell_reports_exit_codes_with_output() {
         &mut exec,
         &call(
             "shell",
-            serde_json::json!({"command": "echo partial; exit 3"}),
+            serde_json::json!({
+                "command": if cfg!(target_os = "windows") {
+                    "echo partial & exit /b 3"
+                } else {
+                    "echo partial; exit 3"
+                }
+            }),
         ),
     )
     .await;
@@ -593,7 +599,13 @@ async fn shell_output_truncates_and_marks() {
         &mut exec,
         &call(
             "shell",
-            serde_json::json!({"command": "for i in $(seq 1 500); do echo \"line $i\"; done"}),
+            serde_json::json!({
+                "command": if cfg!(target_os = "windows") {
+                    "for /L %i in (1,1,500) do @echo line %i"
+                } else {
+                    "for i in $(seq 1 500); do echo \"line $i\"; done"
+                }
+            }),
         ),
     )
     .await;

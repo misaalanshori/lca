@@ -305,7 +305,7 @@ fn process_spawn_shows_the_exact_command_and_runs_when_approved() {
     let (program, args_json) = if cfg!(unix) {
         ("echo", r#"["cap-echo-ok"]"#)
     } else {
-        ("cmd", r#"[\"/C\",\"echo\",\"cap-echo-ok\"]"#)
+        ("cmd", r#"["/C","echo","cap-echo-ok"]"#)
     };
     let result = extension
         .execute(&call_json(&format!(
@@ -342,7 +342,7 @@ fn declined_process_spawn_is_refused_and_recorded() {
     let (program, args_json) = if cfg!(unix) {
         ("echo", r#"["never"]"#)
     } else {
-        ("cmd", r#"[\"/C\",\"echo\",\"never\"]"#)
+        ("cmd", r#"["/C","echo","never"]"#)
     };
     let result = extension
         .execute(&call_json(&format!(
@@ -380,7 +380,7 @@ fn pty_spawn_delivers_terminal_output() {
     let (program, args_json) = if cfg!(unix) {
         ("echo", r#"["pty-ok"]"#)
     } else {
-        ("cmd", r#"[\"/C\",\"echo\",\"pty-ok\"]"#)
+        ("cmd", r#"["/C","echo","pty-ok"]"#)
     };
     let result = extension
         .execute(&call_json(&format!(
