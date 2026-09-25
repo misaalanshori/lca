@@ -183,7 +183,10 @@ async fn model_listing_is_identical_across_modes() {
 }
 
 // Verifies: ADR-0004's typed stream, NFR-25's exact-equality promise for
-// every scripted event kind, and FR-PROV-7's start-before-delta shape.
+// every scripted event kind, FR-PROV-7's start-before-delta shape, and
+// NFR-21 - the committed component's scripted output is a golden fixture, so
+// a pinned-runtime upgrade that changes extension behavior fails here even
+// inside one ABI version (the Wasmtime version is pinned in Cargo.lock).
 #[tokio::test]
 async fn streamed_events_match_the_script_and_each_other() {
     let fixture = Fixture::new("stream");

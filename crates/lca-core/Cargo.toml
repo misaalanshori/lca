@@ -20,6 +20,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 toml.workspace = true
+proptest.workspace = true
 compaction-default = { path = "../../extensions/compaction-default" }
 lca-testkit = { path = "../lca-testkit" }
 lca-ext-host = { path = "../lca-ext-host" }

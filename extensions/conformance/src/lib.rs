@@ -25,6 +25,10 @@ use lca_protocol::{CapabilityError, ToolResult, ToolResultStatus};
 pub trait Cap {
     /// Read a file inside a granted scope.
     fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, CapabilityError>;
+    /// Write a file inside a granted scope.
+    fn fs_write(&self, scope: &str, path: &str, bytes: &[u8]) -> Result<(), CapabilityError>;
+    /// Stat a path inside a granted scope; returns `(is_dir, len)`.
+    fn fs_stat(&self, scope: &str, path: &str) -> Result<(bool, u64), CapabilityError>;
     /// List a directory inside a granted scope.
     fn fs_list(&self, scope: &str, path: &str) -> Result<Vec<String>, CapabilityError>;
     /// Spawn a program in a granted scope.
@@ -40,6 +44,14 @@ pub trait Cap {
         handle: u32,
         max: usize,
     ) -> Result<Option<Vec<u8>>, CapabilityError>;
+    /// Read stderr until EOF.
+    fn process_read_stderr(
+        &self,
+        handle: u32,
+        max: usize,
+    ) -> Result<Option<Vec<u8>>, CapabilityError>;
+    /// Write to the child's stdin.
+    fn process_write_stdin(&self, handle: u32, bytes: &[u8]) -> Result<u64, CapabilityError>;
     /// Wait for exit.
     fn process_wait(&self, handle: u32) -> Result<i32, CapabilityError>;
     /// Release the handle.
@@ -55,6 +67,10 @@ pub trait Cap {
     ) -> Result<u32, CapabilityError>;
     /// Read terminal bytes until EOF.
     fn pty_read(&self, handle: u32, max: usize) -> Result<Option<Vec<u8>>, CapabilityError>;
+    /// Forward keystrokes to the program.
+    fn pty_write(&self, handle: u32, bytes: &[u8]) -> Result<u64, CapabilityError>;
+    /// Resize the terminal.
+    fn pty_resize(&self, handle: u32, rows: u16, cols: u16) -> Result<(), CapabilityError>;
     /// Wait for exit.
     fn pty_wait(&self, handle: u32) -> Result<i32, CapabilityError>;
     /// Release the handle.
@@ -214,6 +230,77 @@ pub fn run_shared(cap: &dyn Cap, mode: &str, args: &serde_json::Value) -> ModeOu
             ModeOutcome {
                 ok: code == 0,
                 text: format!("exit {code} {}", String::from_utf8_lossy(&output).trim()),
+            }
+        }
+        "fs-write" => {
+            let (Some(scope), Some(path)) = (
+                args.get("scope").and_then(|v| v.as_str()),
+                args.get("path").and_then(|v| v.as_str()),
+            ) else {
+                return fail(CapabilityError::Invalid(
+                    "fs-write needs scope and path".to_string(),
+                ));
+            };
+            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            match cap
+                .fs_write(scope, path, content.as_bytes())
+                .and_then(|()| cap.fs_stat(scope, path))
+            {
+                Ok((is_dir, len)) => ModeOutcome {
+                    ok: true,
+                    text: format!("fs-write: dir={is_dir} len={len}"),
+                },
+                Err(err) => fail(err),
+            }
+        }
+        // Exercises `process.write-stdin` and `read-stderr` alongside spawn;
+        // the report is boolean so the two delivery modes agree regardless of
+        // how much the child printed.
+        "process-io" => {
+            let (Some(program), Some(cwd)) = (
+                args.get("program").and_then(|v| v.as_str()),
+                args.get("cwd").and_then(|v| v.as_str()),
+            ) else {
+                return fail(CapabilityError::Invalid(
+                    "process-io needs program and cwd".to_string(),
+                ));
+            };
+            let program_args = string_list(args.get("args"));
+            let stdin = args.get("stdin").and_then(|v| v.as_str()).unwrap_or("");
+            let handle = match cap.process_spawn(program, &program_args, cwd) {
+                Ok(handle) => handle,
+                Err(err) => return fail(err),
+            };
+            let wrote = cap.process_write_stdin(handle, stdin.as_bytes()).is_ok();
+            let read_err = cap.process_read_stderr(handle, 4096).is_ok();
+            let _ = cap.process_kill(handle);
+            ModeOutcome {
+                ok: true,
+                text: format!("process-io stdin={wrote} stderr={read_err}"),
+            }
+        }
+        // Exercises `pty.write` and `pty.resize`; no output is read or waited
+        // on, so the two modes agree without depending on terminal timing.
+        "pty-io" => {
+            let (Some(program), Some(cwd)) = (
+                args.get("program").and_then(|v| v.as_str()),
+                args.get("cwd").and_then(|v| v.as_str()),
+            ) else {
+                return fail(CapabilityError::Invalid(
+                    "pty-io needs program and cwd".to_string(),
+                ));
+            };
+            let program_args = string_list(args.get("args"));
+            let handle = match cap.pty_spawn(program, &program_args, cwd, 24, 80) {
+                Ok(handle) => handle,
+                Err(err) => return fail(err),
+            };
+            let resized = cap.pty_resize(handle, 30, 100).is_ok();
+            let wrote = cap.pty_write(handle, b"\r").is_ok();
+            let _ = cap.pty_kill(handle);
+            ModeOutcome {
+                ok: true,
+                text: format!("pty-io resize={resized} write={wrote}"),
             }
         }
         _ => ModeOutcome {
@@ -553,6 +640,12 @@ mod native {
         fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, CapabilityError> {
             self.0.fs_read(scope, path)
         }
+        fn fs_write(&self, scope: &str, path: &str, bytes: &[u8]) -> Result<(), CapabilityError> {
+            self.0.fs_write(scope, path, bytes)
+        }
+        fn fs_stat(&self, scope: &str, path: &str) -> Result<(bool, u64), CapabilityError> {
+            self.0.fs_stat(scope, path)
+        }
         fn fs_list(&self, scope: &str, path: &str) -> Result<Vec<String>, CapabilityError> {
             self.0.fs_list(scope, path)
         }
@@ -570,6 +663,16 @@ mod native {
             max: usize,
         ) -> Result<Option<Vec<u8>>, CapabilityError> {
             self.0.process_read_stdout(handle, max)
+        }
+        fn process_read_stderr(
+            &self,
+            handle: u32,
+            max: usize,
+        ) -> Result<Option<Vec<u8>>, CapabilityError> {
+            self.0.process_read_stderr(handle, max)
+        }
+        fn process_write_stdin(&self, handle: u32, bytes: &[u8]) -> Result<u64, CapabilityError> {
+            self.0.process_write_stdin(handle, bytes)
         }
         fn process_wait(&self, handle: u32) -> Result<i32, CapabilityError> {
             self.0.process_wait(handle)
@@ -589,6 +692,12 @@ mod native {
         }
         fn pty_read(&self, handle: u32, max: usize) -> Result<Option<Vec<u8>>, CapabilityError> {
             self.0.pty_read(handle, max)
+        }
+        fn pty_write(&self, handle: u32, bytes: &[u8]) -> Result<u64, CapabilityError> {
+            self.0.pty_write(handle, bytes)
+        }
+        fn pty_resize(&self, handle: u32, rows: u16, cols: u16) -> Result<(), CapabilityError> {
+            self.0.pty_resize(handle, rows, cols)
         }
         fn pty_wait(&self, handle: u32) -> Result<i32, CapabilityError> {
             self.0.pty_wait(handle)
@@ -921,6 +1030,18 @@ mod tool_world {
         fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, crate::CapabilityError> {
             fs::read(scope, path).map_err(map_fs)
         }
+        fn fs_write(
+            &self,
+            scope: &str,
+            path: &str,
+            bytes: &[u8],
+        ) -> Result<(), crate::CapabilityError> {
+            fs::write(scope, path, bytes).map_err(map_fs)
+        }
+        fn fs_stat(&self, scope: &str, path: &str) -> Result<(bool, u64), crate::CapabilityError> {
+            let info = fs::stat(scope, path).map_err(map_fs)?;
+            Ok((info.is_dir, info.len))
+        }
         fn fs_list(&self, scope: &str, path: &str) -> Result<Vec<String>, crate::CapabilityError> {
             fs::list_entries(scope, path).map_err(map_fs)
         }
@@ -938,6 +1059,20 @@ mod tool_world {
             max: usize,
         ) -> Result<Option<Vec<u8>>, crate::CapabilityError> {
             process::read_stdout(handle, max as u64).map_err(map_process)
+        }
+        fn process_read_stderr(
+            &self,
+            handle: u32,
+            max: usize,
+        ) -> Result<Option<Vec<u8>>, crate::CapabilityError> {
+            process::read_stderr(handle, max as u64).map_err(map_process)
+        }
+        fn process_write_stdin(
+            &self,
+            handle: u32,
+            bytes: &[u8],
+        ) -> Result<u64, crate::CapabilityError> {
+            process::write_stdin(handle, bytes).map_err(map_process)
         }
         fn process_wait(&self, handle: u32) -> Result<i32, crate::CapabilityError> {
             process::wait(handle).map_err(map_process)
@@ -961,6 +1096,17 @@ mod tool_world {
             max: usize,
         ) -> Result<Option<Vec<u8>>, crate::CapabilityError> {
             pty::read(handle, max as u64).map_err(map_pty)
+        }
+        fn pty_write(&self, handle: u32, bytes: &[u8]) -> Result<u64, crate::CapabilityError> {
+            pty::write(handle, bytes).map_err(map_pty)
+        }
+        fn pty_resize(
+            &self,
+            handle: u32,
+            rows: u16,
+            cols: u16,
+        ) -> Result<(), crate::CapabilityError> {
+            pty::resize(handle, rows, cols).map_err(map_pty)
         }
         fn pty_wait(&self, handle: u32) -> Result<i32, crate::CapabilityError> {
             pty::wait(handle).map_err(map_pty)

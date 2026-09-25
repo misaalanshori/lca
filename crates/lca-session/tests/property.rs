@@ -144,3 +144,62 @@ proptest! {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
+
+// Verifies: the testing plan's compaction-range invariant - a compaction's
+// declared replaced range, applied to any generated session history, never
+// hides a record outside that range and always hides the ones inside it.
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn compaction_never_hides_a_record_outside_its_range(
+        count in 2usize..10,
+        start in 0usize..10,
+        len in 1usize..10,
+    ) {
+        use lca_session::ViewMode;
+        let dir = scratch("compaction-range");
+        let store = SessionStore::new(dir.clone());
+        let project = dir.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let session = store.create_session(&project, "prop").expect("create");
+        let ids: Vec<String> = (0..count).map(|n| format!("r{n}")).collect();
+        for (n, id) in ids.iter().enumerate() {
+            store.append(&session, Record::User {
+                v: FORMAT_VERSION,
+                ts: n as u64,
+                id: id.clone(),
+                content: format!("message {n}"),
+                attachments: vec![],
+            }).expect("append");
+        }
+        let start = start.min(count - 1);
+        let end = (start + len - 1).min(count - 1);
+        store.append(&session, Record::Compaction {
+            v: FORMAT_VERSION,
+            ts: 0,
+            id: "c0".into(),
+            replaced_from: ids[start].clone(),
+            replaced_to: ids[end].clone(),
+            summary: "summary".into(),
+            strategy: "test".into(),
+            usage: None,
+        }).expect("append compaction");
+
+        let view = store.read_with(&session, ViewMode::Display).expect("read");
+        let present: std::collections::BTreeSet<String> = view
+            .records
+            .iter()
+            .filter_map(|r| r.id().map(str::to_string))
+            .collect();
+        for (n, id) in ids.iter().enumerate() {
+            if n < start || n > end {
+                prop_assert!(present.contains(id), "record {id} outside [{start},{end}] must survive");
+            } else {
+                prop_assert!(!present.contains(id), "record {id} inside [{start},{end}] is hidden");
+            }
+        }
+        prop_assert!(present.contains("c0"), "the compaction record itself survives");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

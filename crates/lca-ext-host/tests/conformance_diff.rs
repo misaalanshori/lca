@@ -156,8 +156,7 @@ fn pty_args(program: &str, marker: &str) -> String {
 // Verifies: NFR-25's substance, FR-EXT-7 (the two delivery labels
 // differ by design), and the SRDD Phase 2 exit test - the conformance
 // extension passes in native mode and WASM mode with identical
-// results, plus NFR-21's byte-stable fixture loading under the current
-// runtime.
+// results.
 #[tokio::test]
 async fn native_and_wasm_modes_produce_identical_results() {
     let fixture = Fixture::new("diff");
@@ -189,8 +188,14 @@ async fn native_and_wasm_modes_produce_identical_results() {
         r#"{"mode":"fs-read","scope":"workspace","path":"../../etc/passwd"}"#.to_string(),
         r#"{"mode":"fs-read","scope":"private","path":"x"}"#.to_string(),
         r#"{"mode":"fs-list","scope":"workspace","path":"."}"#.to_string(),
+        r#"{"mode":"fs-write","scope":"workspace","path":"written.txt","content":"hello"}"#
+            .to_string(),
         spawn_args("echo", "diff-marker"),
         pty_args("echo", "pty-marker"),
+        // The io modes reuse the same program/args as spawn/pty above, so a
+        // platform where one runs is a platform where both run.
+        spawn_args("echo", "diff-marker").replace("\"mode\":\"spawn\"", "\"mode\":\"process-io\""),
+        pty_args("echo", "pty-marker").replace("\"mode\":\"pty\"", "\"mode\":\"pty-io\""),
     ];
     for scenario in &scenarios {
         let wasm_result = wasm.execute_tool(&call(scenario)).await.expect("wasm");

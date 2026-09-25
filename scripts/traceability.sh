@@ -32,9 +32,48 @@ if [ "$def_count" -gt 0 ]; then
   sed 's/^/  /' "$deferred_ids"
 fi
 
-# Every marker in the test tree (unit, integration, e2e, regressions).
-grep -rhA8 -E 'Verifies:' crates extensions tests scripts .github 2>/dev/null \
-  | grep -oE '\b(NFR|FR)-([A-Z]+-)?[0-9]+\b' | sort -u > "$markers"
+# Every marker in the test tree. A Rust marker counts only when it sits in
+# the contiguous comment block that names the requirement, so a sentence in a
+# neighbouring test cannot claim one; a shell/workflow marker counts when it
+# sits within the 8 lines after a `Verifies` mention, where it names a named
+# pipeline check rather than a test function.
+python3 - "$markers" <<'PY'
+import pathlib, re, sys
+
+ids = set()
+pattern = re.compile(r'\b(?:FR|NFR)-[A-Z]*-?\d+\b')
+
+for root in ("crates", "extensions", "tests"):
+    base = pathlib.Path(root)
+    if not base.exists():
+        continue
+    for path in base.rglob("*.rs"):
+        lines = path.read_text(errors="ignore").splitlines()
+        i = 0
+        while i < len(lines):
+            if "Verifies:" in lines[i]:
+                start = i
+                while start > 0 and lines[start - 1].lstrip().startswith("//"):
+                    start -= 1
+                end = i
+                while end + 1 < len(lines) and lines[end + 1].lstrip().startswith("//"):
+                    end += 1
+                ids.update(pattern.findall("\n".join(lines[start:end + 1])))
+                i = end
+            i += 1
+
+pipeline = list(pathlib.Path("scripts").glob("*.sh"))
+pipeline += list(pathlib.Path(".github").rglob("*.yml"))
+for path in pipeline:
+    lines = path.read_text(errors="ignore").splitlines()
+    for i, line in enumerate(lines):
+        if "Verifies" in line:
+            ids.update(pattern.findall("\n".join(lines[i:i + 9])))
+
+with open(sys.argv[1], "w") as out:
+    for value in sorted(ids):
+        out.write(value + "\n")
+PY
 
 untagged=$(comm -23 "$requirements" "$markers")
 stale=$(comm -13 "$requirements" "$markers")
