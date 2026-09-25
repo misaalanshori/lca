@@ -24,7 +24,7 @@ A patch version change fixes documentation, comments, or tooling. The interface 
 
 The manifest declares a line as `major.minor`. An extension declaring `abi = "1.0"` targets any 1.0.x (plus the freeze grandfather,0.1, per the amnesty below).
 
-During 0.x, the minor position behaves as the breaking position, which is the normal semver convention for pre-1.0 and is why the ABI freezes at 1.0 in Phase 8.
+During 0.x, the minor position behaves as the breaking position, which is the normal semver convention for pre-1.0 and is why the ABI freezes at 1.0 in Phase 8. **Amended 2026-09-25 (ADR-0028):** that Phase 8 freeze proved premature while the product is still in active development; the ABI sits in a *development window* on the 0.x line, where the 0.x breaking-minor rule is the active law, and freezes for good when ADR-0028's criteria are met and the owner judges the interface mature. The freeze is deferred, not cancelled.
 
 ## What breaks and what does not
 
@@ -97,6 +97,14 @@ The host exposes the same information to extensions through the always-granted l
 
 ## Freezing at 1.0
 
+> **Amended 2026-09-25 (ADR-0028):** the freeze described in this section was
+> executed on 2026-09-23 and **reopened** two days later for a development
+> window. The manifest line moves back to 0.x with the first window change;
+> the post-freeze rules below describe the *final* freeze, which happens when
+> ADR-0028's criteria are met — the owner judging the ABI mature after the
+> planned feature work. Everything in this section remains the target state;
+> only its timing moved.
+
 Phase 8 freezes the ABI at 1.0 (executed 2026-09-23: the WIT package and the `lca:host` imports both carry `@1.0.0`, `lca-ext-abi::ABI_VERSION` reads `1.0`, every first-party manifest declares `abi = "1.0"`, and `wit/CHANGELOG.md` opens with the freeze entry). After the freeze, no breaking change ships without a 2.0, and a 2.0 is a serious undertaking that needs its own plan for dual-loading or migration.
 
 One amnesty comes with the bump: the line that was current at the freeze, 0.1, keeps loading on a 1.0 host. The window accepts it alongside the current line and the previous minor, so an extension published the week before the freeze does not die to a version change that altered no bytes. Nothing older than that line loads, and nothing about it applies to a future major.
@@ -106,6 +114,8 @@ Everything that should be a variant case, an extension point, or a string vocabu
 The known punch list going into Phase 8, each already decided and awaiting implementation rather than still open: the `provider` world gains `login`, `logout`, and `usage` as defined optional exports, per ADR-0012. Two new worlds, `compaction` and `context-transform`, join the five already specified, per ADR-0015. The `completion` capability, and the `net-local` and `pty` capabilities, join the catalog, per ADR-0015, ADR-0011, and ADR-0016 respectively. The `usage` event also gains `cost`, every ABI-crossing record gains `extras`, the widget vocabulary gains `image`, and the hook points are fixed at `pre-turn`, `pre-tool-use`, `post-tool-use`, `post-turn-end`, `attention-required`, and `session-close`. None of these are open questions; they are scoped work items the freeze gate checks for completeness, not decisions the freeze itself needs to make.
 
 ## Pre-1.0 reality
+
+**This is the active regime during the ADR-0028 development window.**
 
 Before 1.0, minor versions break. The support window still applies, so 0.2 loads 0.1 extensions, but an author should expect to rebuild each cycle.
 

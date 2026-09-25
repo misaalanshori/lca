@@ -4,6 +4,13 @@ Status: accepted.
 
 Date: 2026-09-24.
 
+> **Annotation, 2026-09-25 (ADR-0028):** this record's refusal leaned partly on
+> the Phase 8 freeze. ADR-0028 reopened the ABI for a development window, so
+> that argument no longer bars a world function on freeze grounds. The
+> decision itself stands unchanged — host-side slots remain the better design
+> on their own merits (see Alternatives considered) — and a future export is
+> now an ordinary window question, not a freeze exception.
+
 ## Context
 
 The requirements document's interface section names six built-in slash commands, and `/model` and `/compact` were among them. The Phase 4 log recorded `/compact` as unwired precisely because the trigger needs an interface: a manual compact must reach the session's record pipeline, and a model switch must reach the code that builds every request - and *which* interface those live behind is a design decision the log deferred to an ADR. The final audit then confirmed both slots were still unclaimed in the binary, and that no numbered requirement exists for either (their neighbors are tagged FR-PROV-2 for the picker's listing half and FR-SESS-5 for the compaction mechanism).

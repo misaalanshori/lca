@@ -814,6 +814,8 @@ Fill the test gaps. Turn on the requirements-traceability check from NFR-30 as a
 
 Exit test: the ABI is frozen at 1.0, the pipeline publishes signed and checksummed artifacts for all six native targets, the requirements-traceability check passes with zero untagged requirements, and the security review has no open findings above low severity.
 
+*Amended 2026-09-25 (ADR-0028):* this exit test passed as written on 2026-09-23, and the record stands. Two days later the ABI freeze was reopened for a development window, because freezing an interface during active development proved premature; `lca:ext` returns to the 0.x breaking-minor line and freezes for good when ADR-0028's criteria are met. The Phase 8 artifact is the *versioning policy and its enforcement*, which remain in force; the freeze's timing moved, not the discipline.
+
 ## Open questions and decisions
 
 Each question below carries a recommended decision, the options that were considered, and what the decision changes elsewhere in the document. A decision holds until the phase that owns it produces evidence against it. The phase that forces each one is named.

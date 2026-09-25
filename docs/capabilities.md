@@ -1,6 +1,6 @@
 # Capability catalog
 
-Version 0.1, 2026-09-20. Targets ABI 1.0.
+Version 0.1, 2026-09-20. Targets the current ABI line (0.x development window per ADR-0028; the declared line follows each release).
 
 This is the reference for every capability an extension can hold. It covers what each one grants, how a manifest declares it, what the host imports look like, what the user sees at install time, and what happens on denial.
 

@@ -10,7 +10,7 @@ Three things version independently, and conflating them causes confusion that is
 
 The agent version is what `lca --version` reports first and what a user names in a bug report. It covers the binary and everything in it.
 
-The ABI version governs the extension interface. It moves slowly and freezes at 1.0 in Phase 8. See the ABI versioning policy.
+The ABI version governs the extension interface. It moves slowly. It froze at 1.0 in Phase 8, that freeze was reopened by the ADR-0028 development window, and it freezes for good at product 1.0. See the ABI versioning policy.
 
 Crate versions govern the workspace crates. Only `lca-ext-abi` is published to a registry, so only it needs a version an outsider reads. The others carry the workspace version and move together.
 
@@ -37,6 +37,8 @@ Before 1.0, minor versions may break things. This is the normal semver conventio
 The changelog says plainly which minor releases break what. A user pinning a version is a supported choice.
 
 1.0 ships at the end of Phase 8, at the same time the ABI freezes. Neither happens without the other, because an unfrozen ABI under a 1.0 binary is a promise the project cannot keep.
+
+*Amended 2026-09-25 (ADR-0028):* the joint-ship rule stands, but "the ABI freezes" now means the ADR-0028 re-freeze — the freeze-for-good on the owner's judgment that the interface is mature. Phase 8's initial freeze was reopened for a development window while the product is still in active development, so product 1.0 waits for the re-freeze. Neither ships without the other.
 
 ## Branching
 

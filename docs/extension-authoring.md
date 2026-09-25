@@ -1,6 +1,6 @@
 # Extension authoring guide
 
-Version 0.1, 2026-09-20. Targets ABI 1.0.
+Version 0.1, 2026-09-20. Targets the current ABI line (0.x development window per ADR-0028; examples below show the line current at writing).
 
 This guide builds an extension from nothing to a published artifact. It uses Rust for the examples because the tooling is furthest along there. The ABI is language-neutral, and the section on other languages covers what changes.
 
