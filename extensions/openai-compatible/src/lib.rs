@@ -379,104 +379,158 @@ pub fn parse_sse(body: &[u8], emit: &mut dyn FnMut(StreamEvent)) {
 /// The effective base URL: a stored one (saved by `login`) wins over the
 /// environment default, so the WASM form and the native form share one
 /// configured endpoint through `credentials`.
-fn effective_base_url(cap: &dyn ProviderCap, settings: &Settings) -> String {
+fn effective_base_url<C: ProviderCap + ?Sized>(cap: &C, settings: &Settings) -> String {
     cap.credentials_get("base_url")
         .filter(|url| !url.is_empty())
         .unwrap_or_else(|| settings.base_url.clone())
 }
 
 /// The effective bearer token: stored key first, environment second.
-fn effective_key(cap: &dyn ProviderCap, settings: &Settings) -> Option<String> {
+fn effective_key<C: ProviderCap + ?Sized>(cap: &C, settings: &Settings) -> Option<String> {
     cap.credentials_get("api_key")
         .filter(|key| !key.is_empty())
         .or_else(|| settings.api_key.clone())
 }
 
+/// A pull-based driver over one streaming completion: [`next_event`] returns
+/// one typed event at a time, reading more of the response body only when its
+/// buffer is empty. The native form drains it in a loop; the WASM form drives
+/// it from the `completion-stream` resource's `next`, so a sandboxed provider
+/// streams chunk by chunk instead of buffering the whole response
+/// (`docs/deferred_workplan.md` C1).
+///
+/// [`next_event`]: StreamDriver::next_event
+pub struct StreamDriver<'a, C: ProviderCap + ?Sized> {
+    cap: &'a C,
+    handle: u32,
+    decoder: SseDecoder,
+    pending: std::collections::VecDeque<StreamEvent>,
+    finished: bool,
+}
+
+impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
+    /// Build the request, send it, and check the status. A non-2xx response
+    /// is read (bounded) and reported as a [`StreamFailure`].
+    pub fn open(
+        cap: &'a C,
+        settings: &Settings,
+        request: &CompletionRequest,
+    ) -> Result<StreamDriver<'a, C>, StreamFailure> {
+        let base = effective_base_url(cap, settings);
+        let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+        let mut body = serde_json::json!({
+            "model": if request.model.is_empty() { settings.model.clone() } else { request.model.clone() },
+            "messages": to_wire(&request.messages),
+            "stream": true,
+            "stream_options": { "include_usage": true },
+        });
+        let tools = tools_wire(&request.tools);
+        if !tools.is_empty() {
+            body["tools"] = serde_json::Value::Array(tools);
+        }
+        let body_bytes = serde_json::to_vec(&body).map_err(|err| StreamFailure {
+            message: format!("cannot build request: {err}"),
+            class: "invalid",
+            retryable: false,
+        })?;
+        let mut headers: Vec<(&str, &str)> = vec![("content-type", "application/json")];
+        // ADR-0023: OpenCode Go refuses requests without a per-conversation
+        // routing header (verified against the live endpoint); unknown
+        // headers are ignored by every other OpenAI-shaped server.
+        if let Some(session) = request.extras.get("session-id") {
+            headers.push(("x-opencode-session", session.as_str()));
+        }
+        let key = effective_key(cap, settings);
+        let bearer;
+        if let Some(key) = key.as_deref() {
+            bearer = format!("Bearer {key}");
+            headers.push(("authorization", bearer.as_str()));
+        }
+        let handle = cap.net_request("POST", &url, &headers, Some(&body_bytes))?;
+        let status = cap.net_response_status(handle)?;
+        if !(200..300).contains(&status) {
+            let mut detail = Vec::new();
+            while let Some(chunk) = cap.net_read_body(handle, 64 * 1024)? {
+                detail.extend_from_slice(&chunk);
+                if detail.len() > 1024 * 1024 {
+                    break;
+                }
+            }
+            let _ = cap.net_close_response(handle);
+            let text = String::from_utf8_lossy(&detail);
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+            let message = json
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown error")
+                .to_string();
+            return Err(StreamFailure {
+                message: format!("provider returned HTTP {status}: {message}"),
+                class: class_for_status(status),
+                retryable: classify_status(status),
+            });
+        }
+        Ok(StreamDriver {
+            cap,
+            handle,
+            decoder: SseDecoder::default(),
+            pending: std::collections::VecDeque::new(),
+            finished: false,
+        })
+    }
+
+    /// The next typed event, reading more of the body when the buffer is
+    /// empty; `None` at end of stream.
+    pub fn next_event(&mut self) -> Option<Result<StreamEvent, StreamFailure>> {
+        loop {
+            if let Some(event) = self.pending.pop_front() {
+                return Some(Ok(event));
+            }
+            if self.finished {
+                return None;
+            }
+            match self.cap.net_read_body(self.handle, 64 * 1024) {
+                Ok(Some(chunk)) => {
+                    let mut events = Vec::new();
+                    self.decoder.feed(&chunk, &mut |event| events.push(event));
+                    self.pending.extend(events);
+                }
+                Ok(None) => {
+                    self.finished = true;
+                    let mut events = Vec::new();
+                    self.decoder.finish(&mut |event| events.push(event));
+                    self.pending.extend(events);
+                }
+                Err(err) => {
+                    self.finished = true;
+                    return Some(Err(StreamFailure::from(err)));
+                }
+            }
+        }
+    }
+}
+
+impl<C: ProviderCap + ?Sized> Drop for StreamDriver<'_, C> {
+    fn drop(&mut self) {
+        let _ = self.cap.net_close_response(self.handle);
+    }
+}
+
 /// The whole completion call, over capabilities only. `emit` returning
 /// `false` stops the read (the receiver went away, FR-CONC-3).
-/// ponytail: chunks are decoded as they arrive, but a single call's
-/// error body is read to its end first; an endpoint that stalls between
-/// chunks holds the call until the capability's read timeout.
 pub fn run_provider_stream(
     cap: &dyn ProviderCap,
     settings: &Settings,
     request: &CompletionRequest,
     emit: &mut dyn FnMut(StreamEvent) -> bool,
 ) -> Result<(), StreamFailure> {
-    let base = effective_base_url(cap, settings);
-    let url = format!("{}/chat/completions", base.trim_end_matches('/'));
-    let mut body = serde_json::json!({
-        "model": if request.model.is_empty() { settings.model.clone() } else { request.model.clone() },
-        "messages": to_wire(&request.messages),
-        "stream": true,
-        "stream_options": { "include_usage": true },
-    });
-    let tools = tools_wire(&request.tools);
-    if !tools.is_empty() {
-        body["tools"] = serde_json::Value::Array(tools);
-    }
-    let body_bytes = serde_json::to_vec(&body).map_err(|err| StreamFailure {
-        message: format!("cannot build request: {err}"),
-        class: "invalid",
-        retryable: false,
-    })?;
-    let mut headers: Vec<(&str, &str)> = vec![("content-type", "application/json")];
-    // ADR-0023: OpenCode Go refuses requests without a per-conversation
-    // routing header (verified against the live endpoint); unknown
-    // headers are ignored by every other OpenAI-shaped server.
-    if let Some(session) = request.extras.get("session-id") {
-        headers.push(("x-opencode-session", session.as_str()));
-    }
-    let key = effective_key(cap, settings);
-    let bearer;
-    if let Some(key) = key.as_deref() {
-        bearer = format!("Bearer {key}");
-        headers.push(("authorization", bearer.as_str()));
-    }
-    let handle = cap.net_request("POST", &url, &headers, Some(&body_bytes))?;
-    let status = cap.net_response_status(handle)?;
-    if !(200..300).contains(&status) {
-        let mut detail = Vec::new();
-        while let Some(chunk) = cap.net_read_body(handle, 64 * 1024)? {
-            detail.extend_from_slice(&chunk);
-            if detail.len() > 1024 * 1024 {
-                break;
-            }
-        }
-        let _ = cap.net_close_response(handle);
-        let text = String::from_utf8_lossy(&detail);
-        let json: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-        let message = json
-            .get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown error")
-            .to_string();
-        return Err(StreamFailure {
-            message: format!("provider returned HTTP {status}: {message}"),
-            class: class_for_status(status),
-            retryable: classify_status(status),
-        });
-    }
-
-    let mut decoder = SseDecoder::default();
-    let mut stopped = false;
-    while let Some(chunk) = cap.net_read_body(handle, 64 * 1024)? {
-        decoder.feed(&chunk, &mut |event| {
-            if !emit(event) {
-                stopped = true;
-            }
-        });
-        if stopped {
+    let mut driver = StreamDriver::open(cap, settings, request)?;
+    while let Some(event) = driver.next_event() {
+        if !emit(event?) {
             break;
         }
     }
-    if !stopped {
-        decoder.finish(&mut |event| {
-            let _ = emit(event);
-        });
-    }
-    let _ = cap.net_close_response(handle);
     Ok(())
 }
 
@@ -776,6 +830,10 @@ mod wasm_mode {
     /// The guest's capability view: host imports, no sockets, no files.
     struct GuestCap;
 
+    /// A `'static` instance so the streaming driver can borrow the capability
+    /// view for as long as its resource lives (a unit struct, so this is free).
+    static GUEST_CAP: GuestCap = GuestCap;
+
     impl ProviderCap for GuestCap {
         fn net_request(
             &self,
@@ -963,13 +1021,28 @@ mod wasm_mode {
 
     pub struct OpenAiCompatWasm;
 
-    pub struct ScriptedStream {
-        events: RefCell<std::vec::IntoIter<StreamEvent>>,
+    /// The `completion-stream` resource: a pull stream over the driver, so
+    /// events leave as the host yields body chunks instead of after the whole
+    /// response (C1).
+    pub struct WasmStream {
+        driver: RefCell<Option<crate::StreamDriver<'static, GuestCap>>>,
     }
 
-    impl GuestCompletionStream for ScriptedStream {
+    impl GuestCompletionStream for WasmStream {
         fn next(&self) -> Option<WasmEvent> {
-            self.events.borrow_mut().next().map(to_wit_event)
+            let mut slot = self.driver.borrow_mut();
+            let driver = slot.as_mut()?;
+            match driver.next_event() {
+                None => {
+                    *slot = None;
+                    None
+                }
+                Some(Ok(event)) => Some(to_wit_event(event)),
+                Some(Err(failure)) => {
+                    *slot = None;
+                    Some(WasmEvent::Error((failure.message, failure.retryable)))
+                }
+            }
         }
     }
 
@@ -987,30 +1060,17 @@ mod wasm_mode {
     }
 
     impl CompletionGuest for OpenAiCompatWasm {
-        type CompletionStream = ScriptedStream;
+        type CompletionStream = WasmStream;
 
         fn stream_completion(
             request: provider_completion::CompletionRequest,
         ) -> Result<CompletionStream, String> {
             let protocol_request = from_wit_request(request);
-            // ponytail: the sandboxed form fetches the whole response
-            // before handing events out (the resource is precomputed);
-            // the native form streams chunk by chunk. Same events, same
-            // order (NFR-25's property applies beyond the conformance
-            // extension's own scripts).
-            let mut events: Vec<StreamEvent> = Vec::new();
-            crate::run_provider_stream(
-                &GuestCap,
-                &Settings::default(),
-                &protocol_request,
-                &mut |event| {
-                    events.push(event);
-                    true
-                },
-            )
-            .map_err(|failure| failure.message)?;
-            Ok(CompletionStream::new(ScriptedStream {
-                events: RefCell::new(events.into_iter()),
+            let driver =
+                crate::StreamDriver::open(&GUEST_CAP, &Settings::default(), &protocol_request)
+                    .map_err(|failure| failure.message)?;
+            Ok(CompletionStream::new(WasmStream {
+                driver: RefCell::new(Some(driver)),
             }))
         }
     }
