@@ -993,6 +993,15 @@ mod native {
             Box::pin(std::future::ready(Ok(Ok(crate::scripted_usage_report()))))
         }
 
+        fn interrupt(&self) {
+            // A native call shares the caller's thread, so there is no epoch
+            // to bump: flag the capability engine directly, and a blocked
+            // host wait (the oauth callback) polls its way out (FR-CONC-1,
+            // NFR-21). This is the pattern a native extension with a
+            // blocking host wait must follow.
+            self.cap.cancel();
+        }
+
         fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {
             Ok(vec![self.schema()])
         }

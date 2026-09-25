@@ -383,6 +383,47 @@ async fn interrupting_a_blocked_oauth_wait_returns_promptly() {
     );
 }
 
+// Verifies: NFR-21 in the native delivery mode (the same rule as the WASM
+// case, exercised through the native handle's `interrupt`): a native call
+// blocked in `oauth.await-callback` returns promptly when the host
+// interrupts it, because `Capabilities::cancel` is what the wait polls and
+// `NativeConformance::interrupt` sets it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupting_a_blocked_native_oauth_wait_returns_promptly() {
+    let fixture = Fixture::new("oauth-cancel-native");
+    let cap = fixture.capabilities();
+    let native: Arc<dyn ExtensionDispatch> =
+        Arc::new(conformance::NativeConformance::new(cap.clone()));
+
+    let before = cap.oauth_begun().len();
+    let login_handle = native.clone();
+    let task = tokio::spawn(async move { login_handle.identity_login().await });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while cap.oauth_begun().len() == before {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the native login never bound an oauth flow"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let start = std::time::Instant::now();
+    native.interrupt();
+    let joined = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .expect("the cancelled native login returns in under 5s, not the 30s window")
+        .expect("the login task joins");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "native cancellation returns within the NFR-21 neighbourhood, took {:?}",
+        start.elapsed()
+    );
+    assert!(
+        matches!(joined, Ok(IdentityOutcome::Failed(_))),
+        "the cancelled native login did not report a cancellation: {joined:?}"
+    );
+}
+
 /// Drive one identity-login call to completion: spawn it (the call blocks in
 /// `oauth.await-callback`), wait for the flow to bind, inject the loopback
 /// callback, and return the outcome.

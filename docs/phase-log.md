@@ -797,3 +797,25 @@ Known deviations left in place, named rather than implied:
   default ACL. `docs/platform-notes.md` records this.
 - **`panic = "abort"`.** The release profile aborts, so the host-glue panic
   guards are a test/debug safety net only; the comments and this note say so.
+
+## Cycle 2 — the stable base (ADR-0028 window)
+
+The development cycle after 1.0, working the six phases in the cycle-2 worker
+brief. Landed items are noted here as they land; the full cycle report is kept
+out of tree.
+
+### P1 — cancellation reaches blocking host waits
+
+`oauth.await-callback` used to block in one long `mpsc::recv_timeout`. A
+Wasmtime epoch bump only fires at a guest code point, so it could not reach
+host code already blocked inside the import: a user cancel waited out the
+whole callback window (300 s by default, 30 s in the conformance manifest).
+The wait now polls `Capabilities::cancel` in short slices, and both delivery
+modes set it - `WasmExtension::interrupt` bumps the epoch *and* flags the
+engine, and `NativeConformance::interrupt` flags the engine, the pattern a
+native extension with a blocking wait must follow. The general rule is
+recorded in `docs/capabilities.md`: **any host import that can wait beyond the
+~50 ms NFR-21 budget must poll the cancellation flag, never block for the
+whole window.** The `net` request paths are the remaining instance of the
+rule. Tests: `interrupting_a_blocked_oauth_wait_returns_promptly` (WASM) and
+`interrupting_a_blocked_native_oauth_wait_returns_promptly` (native).
