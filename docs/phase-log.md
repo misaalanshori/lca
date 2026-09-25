@@ -871,3 +871,22 @@ second rather than accepting the first. The rest of the checklist holds: the
 first turn's text renders before compaction runs, the compaction record's
 replaced range starts at the first turn and ends before the resumed one, and
 the test skips (never fails) when tmux is absent.
+
+### P5 — Windows surface
+
+The ConPTY TUI tests and the `PtyChild::spawn` environment parameter landed
+earlier (`38c5681`, quarantined `968af7d`). This cycle closed B5: the
+credential file now gets an explicit owner-only DACL on Windows instead of
+relying on the user-profile directory's inherited ACL. `write_credentials`
+calls a `#[cfg(windows)]` `windows_acl` module that reads the current user's
+SID from the process token, builds one `EXPLICIT_ACCESS_W` ACE
+(`SetEntriesInAclW`), and applies it with
+`SetNamedSecurityInfoW(... PROTECTED_DACL_SECURITY_INFORMATION ...)` before
+the temp file is renamed into place. It is the crate's second documented
+`unsafe` exemption (the pty module is the other) and the `windows-sys`
+feature set grew by `Win32_Security_Authorization` and
+`Win32_Storage_FileSystem` (already in the lock file). A Windows-only test
+asserts the resulting DACL is protected; `docs/platform-notes.md` records the
+change. The Windows code type-checks and lints clean under
+`cargo clippy --target x86_64-pc-windows-gnu -p lca-tools --all-targets`;
+the `windows-latest` leg is the runtime judge.
