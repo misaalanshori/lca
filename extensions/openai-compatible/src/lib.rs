@@ -136,7 +136,10 @@ impl From<lca_protocol::CapabilityError> for StreamFailure {
 }
 
 /// Map the resolved message list onto the OpenAI chat shape. Reasoning
-/// blocks are model-internal and are not resent.
+/// blocks are model-internal and are not resent. Text and image blocks both
+/// map: text becomes the string content, and a message with an image becomes
+/// the content-part array OpenAI uses for vision (the "cannot carry images"
+/// case is the text stub the attach path already put in the message).
 fn to_wire(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
     messages
         .iter()
@@ -154,9 +157,34 @@ fn to_wire(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
                     ContentBlock::Text { text } => Some(text.as_str()),
                     ContentBlock::Reasoning { .. } => None,
                     ContentBlock::ToolCall { .. } => None,
+                    ContentBlock::Image { .. } => None,
                 })
                 .collect();
             let mut wire = serde_json::json!({ "role": role, "content": text });
+            if message
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::Image { .. }))
+            {
+                let mut parts = Vec::new();
+                if !text.is_empty() {
+                    parts.push(serde_json::json!({ "type": "text", "text": text }));
+                }
+                for block in &message.content {
+                    if let ContentBlock::Image { media_type, bytes } = block {
+                        parts.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!(
+                                    "data:{media_type};base64,{}",
+                                    lca_protocol::base64_encode(bytes)
+                                ),
+                            },
+                        }));
+                    }
+                }
+                wire["content"] = serde_json::Value::Array(parts);
+            }
             if !message.tool_calls.is_empty() {
                 let calls: Vec<serde_json::Value> = message
                     .tool_calls
@@ -796,10 +824,10 @@ mod wasm_mode {
         world: "provider",
         export_macro_name: "export_provider",
         with: {
-            "lca:host/log@1.0.0": generate,
-            "lca:host/net@1.0.0": generate,
-            "lca:host/oauth@1.0.0": generate,
-            "lca:host/credentials@1.0.0": generate,
+            "lca:host/log@0.2.0": generate,
+            "lca:host/net@0.2.0": generate,
+            "lca:host/oauth@0.2.0": generate,
+            "lca:host/credentials@0.2.0": generate,
         },
     });
 
@@ -953,8 +981,8 @@ mod wasm_mode {
 
     /// The WIT request -> the protocol shape the shared logic expects.
     /// The host already converted on its side; this is the exact inverse
-    /// (concatenated text becomes the message's text block; reasoning
-    /// never crossed the boundary in the first place).
+    /// (typed content blocks become protocol blocks; reasoning never crossed
+    /// the boundary in the first place).
     fn from_wit_request(request: provider_completion::CompletionRequest) -> CompletionRequest {
         let messages = request
             .messages
@@ -966,13 +994,21 @@ mod wasm_mode {
                     "assistant" => MessageRole::Assistant,
                     _ => MessageRole::Tool,
                 },
-                content: if message.content.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![ContentBlock::Text {
-                        text: message.content.clone(),
-                    }]
-                },
+                content: message
+                    .content
+                    .iter()
+                    .map(|block| match block {
+                        lca::ext::types::ContentBlock::Text(text) => {
+                            ContentBlock::Text { text: text.clone() }
+                        }
+                        lca::ext::types::ContentBlock::Image((media_type, bytes)) => {
+                            ContentBlock::Image {
+                                media_type: media_type.clone(),
+                                bytes: bytes.clone(),
+                            }
+                        }
+                    })
+                    .collect(),
                 tool_calls: message
                     .tool_calls
                     .iter()
@@ -1090,4 +1126,43 @@ mod wasm_mode {
     }
 
     export_provider!(OpenAiCompatWasm);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Verifies: ADR-0029 - a message with an image maps to the OpenAI
+    // content-part array with a base64 data URI; a text-only message keeps
+    // the plain string content (no behavior change for the common case).
+    #[test]
+    fn an_image_maps_to_the_vision_content_array() {
+        let message = ChatMessage {
+            role: MessageRole::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "look".to_string(),
+                },
+                ContentBlock::Image {
+                    media_type: "image/png".to_string(),
+                    bytes: vec![1, 2, 3],
+                },
+            ],
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            usage: None,
+            extras: Default::default(),
+        };
+        let wire = to_wire(&[message]);
+        let parts = wire[0]["content"].as_array().expect("array content");
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(parts[1]["image_url"]["url"], "data:image/png;base64,AQID");
+
+        let text_only = to_wire(&[ChatMessage::text(MessageRole::User, "hi")]);
+        assert_eq!(
+            text_only[0]["content"], "hi",
+            "no image keeps the string form"
+        );
+    }
 }

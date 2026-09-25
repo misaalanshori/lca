@@ -15,7 +15,7 @@ use lca_tui::{PromptRequest, TurnRunner, UiOptions};
 /// The built-in slash slots the interface itself claims; the spec's
 /// sixth built-in, `/stats`, arrives from the native hooks extension
 /// that holds the stats source (ADR-0013).
-const BUILTIN_SLOTS: [&str; 5] = ["login", "logout", "usage", "model", "compact"];
+const BUILTIN_SLOTS: [&str; 6] = ["login", "logout", "usage", "model", "compact", "attach"];
 
 /// The session's live model: the runner reads it per turn, the
 /// status-line label follows it, and the compaction backend is moved
@@ -442,6 +442,8 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             }
         })
     };
+    let pending_attachments: Arc<std::sync::Mutex<Vec<lca_core::StagedAttachment>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
     let options = UiOptions {
         model_label: label_cell.clone(),
         initial_lines,
@@ -457,7 +459,27 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             let session = session.clone();
             let extensions = agent_config.extensions.clone();
             let completion_backend = agent_config.completion_backend.clone();
+            let pending = pending_attachments.clone();
             Arc::new(move |name, argument| match name {
+                // `/attach <path>`: stage an image for the next turn
+                // (ADR-0029). The bytes land in the session's attachment
+                // store; the stub text rides with the next user message.
+                "attach" => {
+                    match lca_core::stage_image(&session, std::path::Path::new(argument.trim())) {
+                        Ok(staged) => {
+                            let note = format!(
+                                "attached {} - it goes with your next message",
+                                &staged.hash[..8]
+                            );
+                            pending
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .push(staged);
+                            CommandEffect::ShowWidget(note)
+                        }
+                        Err(err) => CommandEffect::ShowWidget(format!("attach failed: {err}")),
+                    }
+                }
                 // The model picker and the manual compact: the two
                 // spec-named slots the host itself fills, both routed
                 // through surfaces that already exist (the provider
@@ -532,11 +554,13 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     let runner_store = store.clone();
     let runner_session = session.clone();
     let shared_prompt_for_runner = shared_prompt.clone();
+    let runner_pending = pending_attachments.clone();
     let runner: TurnRunner = Box::new(move |text, channels, cancel| {
         let tools = tools.clone();
         let grants = grants.clone();
         let runner_store = runner_store.clone();
         let runner_session = runner_session.clone();
+        let pending = runner_pending.clone();
         let provider = provider.clone();
         let agent_config = agent_config.clone();
         let proposals = proposals.clone();
@@ -573,6 +597,20 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 }
             };
             let mut tools = tools.lock().expect("tools lock");
+            // Drain anything `/attach` staged: append each stub to the
+            // message text and pass the hashes as the user record's
+            // attachments.
+            let staged = pending
+                .lock()
+                .map(|mut guard| std::mem::take(&mut *guard))
+                .unwrap_or_default();
+            let mut turn_text = text;
+            let mut turn_attachments = Vec::new();
+            for attachment in &staged {
+                turn_text.push('\n');
+                turn_text.push_str(&attachment.stub);
+                turn_attachments.push(attachment.hash.clone());
+            }
             runtime.block_on(async {
                 // The session's model is whatever /model last set:
                 // the status line and the compaction backend follow
@@ -594,7 +632,9 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     proposals.as_ref(),
                     turn_config,
                 );
-                agent.run_turn(&text, &mut sink, &cancel).await
+                agent
+                    .run_turn_with_attachments(&turn_text, &turn_attachments, &mut sink, &cancel)
+                    .await
             })
         })
     });
@@ -622,6 +662,9 @@ fn display_line(record: &Record) -> Option<String> {
                         Some(format!("[{name} requested]"))
                     }
                     lca_protocol::ContentBlock::Reasoning { .. } => None,
+                    lca_protocol::ContentBlock::Image { media_type, bytes } => {
+                        Some(format!("[image {media_type}, {} bytes]", bytes.len()))
+                    }
                 })
                 .collect::<Vec<String>>()
                 .join(" ");
@@ -792,12 +835,12 @@ mod tests {
         );
     }
 
-    // SRDD's interface section: the six built-in slots, of which five
-    // live in this list and /stats arrives from the native hooks
-    // extension that holds the stats source.
+    // SRDD's interface section: the built-in slots, of which the five
+    // spec-named ones live in this list alongside `/attach`, and /stats
+    // arrives from the native hooks extension that holds the stats source.
     #[test]
     fn the_spec_named_builtins_are_claimed() {
-        for slot in ["login", "logout", "usage", "model", "compact"] {
+        for slot in ["login", "logout", "usage", "model", "compact", "attach"] {
             assert!(
                 BUILTIN_SLOTS.contains(&slot),
                 "/{slot} is a built-in the interface claims"

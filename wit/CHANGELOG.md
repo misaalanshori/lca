@@ -4,6 +4,25 @@ Written for extension authors. Each entry names the version, the date, and
 every change grouped as added, deprecated, removed, or fixed, with a
 migration note for anything breaking (docs/abi-versioning.md).
 
+##0.2.0 — 2026-09-25
+
+The first line of the ADR-0028 development window, and the window's first
+**breaking** change. The host loads this line, the previous one (0.1), and
+the 1.0 freeze line, so nothing installed stops loading.
+
+### Changed
+
+- `types.message.content` is now `list<content-block>` instead of a joined
+  `string`, and the new `content-block` variant carries `text(string)` or
+  `image(tuple<string, list<u8>>)`. A provider can carry a typed image
+  instead of text only (ADR-0029). **Migration:** read each block in order;
+  the `text` blocks join to the old string, and `image` blocks are new. A
+  rebuilt component must declare `abi = "0.2"`.
+
+### Added
+
+- The `content-block` variant in the `types` interface.
+
 ##1.0.0 — 2026-09-23
 
 The freeze release: the ABI is now stable under semver, no breaking

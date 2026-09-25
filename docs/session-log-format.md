@@ -29,7 +29,7 @@ Sessions live under the user data directory, grouped by project.
 
 `log.jsonl` is the record log. It is the authority for everything.
 
-`attachments/` holds content too large for the log, stored by content hash. Images, large tool outputs, and pasted files go here. A record references an attachment by hash. The built-in tools truncate their display at `tool.result_limit_bytes` and spill the untruncated text here as `attachments/<sha256>`; the `tool-result` record's `attachment` field carries that hash. (Images are still out of scope: the provider message ABI carries text only.)
+`attachments/` holds content too large for the log, stored by content hash. Images, large tool outputs, and pasted files go here. A record references an attachment by hash. The built-in tools truncate their display at `tool.result_limit_bytes` and spill the untruncated text here as `attachments/<sha256>`; the `tool-result` record's `attachment` field carries that hash. A user message's `attachments` list carries image hashes: `/attach` (or headless `--attach`) stages the file here, the message text gets a `[image attachment <hash8>, <media>, <n> bytes]` stub, and assembly sends the bytes as a typed image block to a provider that carries vision (ADR-0029).
 
 ## Record framing
 
@@ -90,6 +90,8 @@ Nested compaction is allowed. A second compaction may replace a range that inclu
 A fork creates a new session directory. Its `meta.json` names the parent and the record identifier. Its log starts with a `session-start` and a `fork-point`, then continues with new records.
 
 The parent's records are not copied. A reader follows the fork chain backward to assemble full history. This makes a fork cheap and makes the parent immutable from the child's side.
+
+Attachments follow the same rule. A forked session's records reference the content the home session wrote, so resolution walks the fork chain to find `attachments/<hash>`, and an export names the ancestor's path (`../<owner>/attachments/<hash>`) rather than copying the bytes. `lca session gc <id>` is the mark-and-sweep: it walks the session's whole fork tree, marks every hash any member's resolved record list references, and deletes the rest. Compaction only ever drops references, so an orphan is collected and a referenced attachment is never deleted; the tree-wide scope is what keeps a sibling branch's content safe when one member is swept.
 
 A parent that is deleted leaves the child with a broken chain. The reader reports a truncated session and shows what it has, which is the same behavior as a corrupt record.
 

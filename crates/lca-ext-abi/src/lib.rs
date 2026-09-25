@@ -9,7 +9,11 @@
 
 /// The ABI version this build implements (`major.minor`, per the manifest's
 /// `abi` field and the support window in docs/abi-versioning.md).
-pub const ABI_VERSION: &str = "1.0";
+///
+/// `0.2` is the first line of the ADR-0028 development window: the typed
+/// image content is a breaking change, and 0.x makes the minor the breaking
+/// position (docs/abi-versioning.md § Pre-1.0 reality).
+pub const ABI_VERSION: &str = "0.2";
 
 /// The WIT package name that crosses every manifest and registry tag.
 pub const PACKAGE: &str = "lca:ext";

@@ -851,9 +851,10 @@ pub fn is_inside(path: &Path, root: &Path) -> bool {
     path.starts_with(&root)
 }
 
-/// Truncate at a line boundary, keeping the head (FR-TOOL-7).
-/// Lowercase hex SHA-256 of `bytes`: the attachment content address.
-fn sha256_hex(bytes: &[u8]) -> String {
+/// Lowercase hex SHA-256 of `bytes`: the attachment content address. Public
+/// so the core's attach path can address a file by the same function the
+/// spill path uses (one hash, no second implementation).
+pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(digest.len() * 2);
@@ -863,6 +864,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
+/// Truncate at a line boundary, keeping the head (FR-TOOL-7).
 fn truncate_head(content: &str, limit: usize) -> (String, bool) {
     if content.len() <= limit {
         return (content.to_string(), false);

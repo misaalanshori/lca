@@ -22,7 +22,7 @@ A minor version change adds surface. Existing extensions keep working. New exten
 
 A patch version change fixes documentation, comments, or tooling. The interface bytes do not change.
 
-The manifest declares a line as `major.minor`. An extension declaring `abi = "1.0"` targets any 1.0.x (plus the freeze grandfather,0.1, per the amnesty below).
+The manifest declares a line as `major.minor`. An extension declaring `abi = "0.2"` targets any 0.2.x. During the ADR-0028 development window the host also loads the previous line (0.1) and the 1.0 freeze line, so an extension installed against the released host keeps loading across the window's first change.
 
 During 0.x, the minor position behaves as the breaking position, which is the normal semver convention for pre-1.0 and is why the ABI freezes at 1.0 in Phase 8. **Amended 2026-09-25 (ADR-0028):** that Phase 8 freeze proved premature while the product is still in active development; the ABI sits in a *development window* on the 0.x line, where the 0.x breaking-minor rule is the active law, and freezes for good when ADR-0028's criteria are met and the owner judges the interface mature. The freeze is deferred, not cancelled.
 

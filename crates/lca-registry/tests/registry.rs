@@ -569,7 +569,7 @@ fn the_archive_refuses_extra_entries() {
 fn the_fs_consent_sentence_matches_the_granted_mode() {
     let read_only = r#"name = "r"
 version = "1.0.0"
-abi = "1.0"
+abi = "0.2"
 worlds = ["context-transform"]
 description = "x"
 

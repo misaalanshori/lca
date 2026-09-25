@@ -516,7 +516,7 @@ mod tests {
 
     const VALID: &str = r#"name = "word-count"
 version = "1.0.0"
-abi = "1.0"
+abi = "0.2"
 worlds = ["tool"]
 description = "Counts words."
 
@@ -532,7 +532,7 @@ workspace = "read"
             parse_manifest_strict(VALID).expect("valid manifest parses");
         assert_eq!(name, "word-count");
         assert_eq!(version, "1.0.0");
-        assert_eq!(abi, "1.0");
+        assert_eq!(abi, "0.2");
         assert_eq!(description, "Counts words.");
     }
 
@@ -555,7 +555,7 @@ workspace = "read"
     fn invalid_capability_declarations_are_refused() {
         let oauth_without_net = r#"name = "provider-x"
 version = "1.0.0"
-abi = "1.0"
+abi = "0.2"
 worlds = ["provider"]
 
 [capabilities.oauth]
@@ -574,7 +574,7 @@ redirect_path = "/callback"
     // an artifact this host can never run is refused up front.
     #[test]
     fn an_out_of_window_abi_is_refused() {
-        let err = parse_manifest_strict(&VALID.replace("abi = \"1.0\"", "abi = \"9.9\""))
+        let err = parse_manifest_strict(&VALID.replace("abi = \"0.2\"", "abi = \"9.9\""))
             .expect_err("out-of-window ABI refused");
         assert!(
             err.contains("outside this host's supported window"),

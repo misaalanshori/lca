@@ -1096,10 +1096,10 @@ mod tool_world {
         world: "tool",
         export_macro_name: "export_tool",
         with: {
-            "lca:host/log@1.0.0": generate,
-            "lca:host/fs@1.0.0": generate,
-            "lca:host/process@1.0.0": generate,
-            "lca:host/pty@1.0.0": generate,
+            "lca:host/log@0.2.0": generate,
+            "lca:host/fs@0.2.0": generate,
+            "lca:host/process@0.2.0": generate,
+            "lca:host/pty@0.2.0": generate,
         },
     });
 
@@ -1406,10 +1406,10 @@ mod provider_world {
         world: "provider",
         export_macro_name: "export_provider",
         with: {
-            "lca:host/log@1.0.0": generate,
-            "lca:host/net@1.0.0": generate,
-            "lca:host/oauth@1.0.0": generate,
-            "lca:host/credentials@1.0.0": generate,
+            "lca:host/log@0.2.0": generate,
+            "lca:host/net@0.2.0": generate,
+            "lca:host/oauth@0.2.0": generate,
+            "lca:host/credentials@0.2.0": generate,
         },
     });
 
@@ -1617,9 +1617,9 @@ mod compaction_world {
         world: "compaction",
         export_macro_name: "export_compaction",
         with: {
-            "lca:host/log@1.0.0": generate,
-            "lca:host/completion@1.0.0": generate,
-            "lca:host/types@1.0.0": generate,
+            "lca:host/log@0.2.0": generate,
+            "lca:host/completion@0.2.0": generate,
+            "lca:host/types@0.2.0": generate,
         },
     });
 
@@ -1674,8 +1674,8 @@ mod transform_world {
         world: "context-transform",
         export_macro_name: "export_transform",
         with: {
-            "lca:host/log@1.0.0": generate,
-            "lca:host/fs@1.0.0": generate,
+            "lca:host/log@0.2.0": generate,
+            "lca:host/fs@0.2.0": generate,
         },
     });
 
@@ -1695,13 +1695,21 @@ mod transform_world {
                         "assistant" => lca_protocol::MessageRole::Assistant,
                         _ => lca_protocol::MessageRole::Tool,
                     },
-                    content: if message.content.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![lca_protocol::ContentBlock::Text {
-                            text: message.content.clone(),
-                        }]
-                    },
+                    content: message
+                        .content
+                        .iter()
+                        .map(|block| match block {
+                            lca::ext::types::ContentBlock::Text(text) => {
+                                lca_protocol::ContentBlock::Text { text: text.clone() }
+                            }
+                            lca::ext::types::ContentBlock::Image((media_type, bytes)) => {
+                                lca_protocol::ContentBlock::Image {
+                                    media_type: media_type.clone(),
+                                    bytes: bytes.clone(),
+                                }
+                            }
+                        })
+                        .collect(),
                     tool_calls: message
                         .tool_calls
                         .iter()
@@ -1730,11 +1738,21 @@ mod transform_world {
                         .content
                         .iter()
                         .filter_map(|block| match block {
-                            lca_protocol::ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
+                            lca_protocol::ContentBlock::Text { text } => {
+                                Some(lca::ext::types::ContentBlock::Text(text.clone()))
+                            }
+                            lca_protocol::ContentBlock::Image { media_type, bytes } => {
+                                Some(lca::ext::types::ContentBlock::Image((
+                                    media_type.clone(),
+                                    bytes.clone(),
+                                )))
+                            }
+                            // Reasoning and tool-call blocks never cross (the
+                            // host filters them); drop them here too.
+                            lca_protocol::ContentBlock::Reasoning { .. }
+                            | lca_protocol::ContentBlock::ToolCall { .. } => None,
                         })
-                        .collect::<Vec<_>>()
-                        .join(""),
+                        .collect(),
                     tool_calls: message
                         .tool_calls
                         .iter()
@@ -1767,8 +1785,8 @@ mod ui_world {
         world: "ui",
         export_macro_name: "export_ui",
         with: {
-            "lca:host/log@1.0.0": generate,
-            "lca:host/ui@1.0.0": generate,
+            "lca:host/log@0.2.0": generate,
+            "lca:host/ui@0.2.0": generate,
         },
     });
 

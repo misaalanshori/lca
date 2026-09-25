@@ -350,8 +350,8 @@ mod wasm_mode {
         world: "context-transform",
         export_macro_name: "export_transform",
         with: {
-            "lca:host/log@1.0.0": generate,
-            "lca:host/fs@1.0.0": generate,
+            "lca:host/log@0.2.0": generate,
+            "lca:host/fs@0.2.0": generate,
         },
     });
 
@@ -386,13 +386,21 @@ mod wasm_mode {
                         "assistant" => lca_protocol::MessageRole::Assistant,
                         _ => lca_protocol::MessageRole::Tool,
                     },
-                    content: if message.content.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![lca_protocol::ContentBlock::Text {
-                            text: message.content.clone(),
-                        }]
-                    },
+                    content: message
+                        .content
+                        .iter()
+                        .map(|block| match block {
+                            lca::ext::types::ContentBlock::Text(text) => {
+                                lca_protocol::ContentBlock::Text { text: text.clone() }
+                            }
+                            lca::ext::types::ContentBlock::Image((media_type, bytes)) => {
+                                lca_protocol::ContentBlock::Image {
+                                    media_type: media_type.clone(),
+                                    bytes: bytes.clone(),
+                                }
+                            }
+                        })
+                        .collect(),
                     tool_calls: message
                         .tool_calls
                         .iter()
@@ -421,11 +429,19 @@ mod wasm_mode {
                         .content
                         .iter()
                         .filter_map(|block| match block {
-                            lca_protocol::ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
+                            lca_protocol::ContentBlock::Text { text } => {
+                                Some(lca::ext::types::ContentBlock::Text(text.clone()))
+                            }
+                            lca_protocol::ContentBlock::Image { media_type, bytes } => {
+                                Some(lca::ext::types::ContentBlock::Image((
+                                    media_type.clone(),
+                                    bytes.clone(),
+                                )))
+                            }
+                            lca_protocol::ContentBlock::Reasoning { .. }
+                            | lca_protocol::ContentBlock::ToolCall { .. } => None,
                         })
-                        .collect::<Vec<_>>()
-                        .join(""),
+                        .collect(),
                     tool_calls: message
                         .tool_calls
                         .iter()

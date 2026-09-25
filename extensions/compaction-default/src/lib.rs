@@ -312,9 +312,9 @@ mod wasm_mode {
         world: "compaction",
         export_macro_name: "export_compaction",
         with: {
-            "lca:host/log@1.0.0": generate,
-            "lca:host/completion@1.0.0": generate,
-            "lca:host/types@1.0.0": generate,
+            "lca:host/log@0.2.0": generate,
+            "lca:host/completion@0.2.0": generate,
+            "lca:host/types@0.2.0": generate,
         },
     });
 

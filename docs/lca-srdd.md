@@ -201,7 +201,7 @@ Every extension ships a manifest next to the component. The format is TOML. It d
 ```toml
 name = "example-provider"
 version = "0.3.1"
-abi = "1.0"
+abi = "0.2"
 worlds = ["provider", "command"]
 description = "Model provider for Example Cloud."
 
@@ -222,7 +222,7 @@ A local provider's manifest looks different in a telling way: no `credentials`, 
 ```toml
 name = "lmstudio"
 version = "1.0.0"
-abi = "1.0"
+abi = "0.2"
 worlds = ["provider", "command"]
 description = "Connects to a local LM Studio server."
 
@@ -232,7 +232,7 @@ addresses = ["127.0.0.1", "192.168.0.0/16", "*.local"]
 
 ### Command line
 
-`lca` with no arguments opens the interactive TUI in the current directory. `lca -p "prompt"` runs one turn headless and prints the result. `lca resume` lists sessions and reopens one. `lca fork <session> <message>`, `lca rename <session> <title>`, and `lca export <session> [--audit]` fork at a message, rename, and export a session. `lca ext list`, `lca ext install <ref>`, `lca ext update <name>`, `lca ext remove <name>`, and `lca ext info <name>` manage extensions. `lca ext update --all` updates every installed extension. `lca config` prints the merged configuration and its sources. `lca --version` prints the agent version, the ABI version, the crate version, and the build target.
+`lca` with no arguments opens the interactive TUI in the current directory. `lca -p "prompt"` runs one turn headless and prints the result. `lca resume` lists sessions and reopens one. `lca fork <session> <message>`, `lca rename <session> <title>`, and `lca export <session> [--audit]` fork at a message, rename, and export a session. `lca session gc <id>` deletes attachments in a session's fork tree that no resolved record references. `lca ext list`, `lca ext install <ref>`, `lca ext update <name>`, `lca ext remove <name>`, and `lca ext info <name>` manage extensions. `lca ext update --all` updates every installed extension. `lca config` prints the merged configuration and its sources. `lca --version` prints the agent version, the ABI version, the crate version, and the build target.
 
 Headless mode supports `--json` for machine-readable output: one JSON object per line, each with a type field. The envelope shape and the exit-code table are in `docs/headless.md`.
 

@@ -19,7 +19,7 @@ pub mod usage;
 
 pub use capability::CapabilityError;
 pub use dispatch::{CommandEffect, CommandSpec, DispatchError, HookAction, PostToolObservation};
-pub use message::{ChatMessage, ContentBlock, MessageRole};
+pub use message::{ChatMessage, ContentBlock, MessageRole, base64_encode, sniff_image_media_type};
 pub use provider::{
     CompletionRequest, EventSink, IdentityOutcome, ModelInfo, OauthCap, ProviderCap,
 };

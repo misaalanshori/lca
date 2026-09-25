@@ -49,6 +49,17 @@ fn fork_routes_to_the_fork_command() {
     );
 }
 
+// Verifies: D5 (the attachment GC is a host-side session subcommand)
+#[test]
+fn session_gc_routes_to_the_gc_command() {
+    assert_eq!(
+        route(&parse(&["session", "gc", "s1"])),
+        Route::Gc {
+            session: "s1".into()
+        }
+    );
+}
+
 // Exit-code mapping, docs/headless.md.
 #[test]
 fn exit_codes_follow_the_documented_table() {

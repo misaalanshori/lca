@@ -410,6 +410,51 @@ async fn compaction_and_transform_agree_across_modes_with_completion_denied() {
     assert_eq!(injected.len(), 2, "one appended message");
 }
 
+// Verifies: ADR-0029 and NFR-25 - a typed image content block crosses the
+// ABI byte for byte in both delivery modes. This is the window's first
+// breaking minor: `message.content` went from a joined string to a list of
+// `content-block`s, and the native twin and the WASM component must agree.
+#[tokio::test]
+async fn image_content_round_trips_identically_across_modes() {
+    let fixture = Fixture::new("diff-image");
+    let (wasm, native, _) = fixture.both_modes();
+    // A tiny PNG-shaped byte string: the point is byte-exact transport, not a
+    // decodable image.
+    let png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4];
+    let message = lca_protocol::ChatMessage {
+        role: lca_protocol::MessageRole::User,
+        content: vec![
+            lca_protocol::ContentBlock::Text {
+                text: "what is in this image?".to_string(),
+            },
+            lca_protocol::ContentBlock::Image {
+                media_type: "image/png".to_string(),
+                bytes: png.clone(),
+            },
+        ],
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        usage: None,
+        extras: Default::default(),
+    };
+    let wasm_out = wasm
+        .transform_messages(vec![message.clone()])
+        .await
+        .expect("wasm transform")
+        .expect("no rejection");
+    let native_out = native
+        .transform_messages(vec![message.clone()])
+        .await
+        .expect("native transform")
+        .expect("no rejection");
+    assert_eq!(wasm_out, native_out, "the image survives identically");
+    assert_eq!(
+        wasm_out,
+        vec![message],
+        "the echo transform returns the image block unchanged"
+    );
+}
+
 // Verifies: the Phase 6 conformance cases - both modes return the same
 // tree for every region (NFR-25 over ADR-0003's arena), the hostile
 // span crosses byte for byte so the host is the one that must defang

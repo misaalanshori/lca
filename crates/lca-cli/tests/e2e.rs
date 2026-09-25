@@ -519,6 +519,65 @@ fn sessions_persist_and_resume_lists_them() {
     );
 }
 
+// Verifies: D5 — `lca session gc <id>` runs against a real session and
+// reports a clean tree when nothing is orphaned.
+#[test]
+fn session_gc_reports_when_nothing_is_orphaned() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("stored"))]));
+    let box_ = sandbox("session-gc");
+    let output = box_.run(Some(&mock), &["-p", "hi"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+
+    let listing = stdout(&box_.run(None, &["resume"]));
+    let id = listing
+        .lines()
+        .next()
+        .expect("one session at least")
+        .split_whitespace()
+        .next()
+        .expect("session id")
+        .to_string();
+    let output = box_.run(None, &["session", "gc", &id]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("no unreferenced attachments"),
+        "stdout: {}",
+        stdout(&output)
+    );
+}
+
+// Verifies: ADR-0029 - `--attach` stages an image into the session store, the
+// user record carries the content hash, and the model-visible stub rides in
+// the message text (so a provider without vision still sees the image exists).
+#[test]
+fn attach_flag_stages_an_image_on_the_user_record() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("seen"))]));
+    let box_ = sandbox("attach");
+    let png = box_.project().join("shot.png");
+    std::fs::write(
+        &png,
+        [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3],
+    )
+    .expect("write image");
+    let output = box_.run(
+        Some(&mock),
+        &["-p", "look", "--attach", png.to_str().expect("utf-8 path")],
+    );
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let log = find_session_log(&box_.state_dir()).expect("a session log");
+    let text = std::fs::read_to_string(log).expect("read log");
+    assert!(
+        text.contains("[image attachment"),
+        "the stub text is on the user record: {text}"
+    );
+    assert!(
+        text.contains("\"attachments\":[\""),
+        "the content hash is on the user record: {text}"
+    );
+}
+
 // Verifies: FR-CFG-2 (the config command prints each resolved value and the
 // source that set it)
 #[test]
@@ -544,7 +603,10 @@ fn version_prints_all_four_facts() {
     let output = box_.run(None, &["--version"]);
     assert_eq!(output.status.code(), Some(0));
     let text = stdout(&output);
-    assert!(text.contains("abi 1.0"), "the frozen ABI line: {text}");
+    assert!(
+        text.contains("abi 0.2"),
+        "the window's live ABI line: {text}"
+    );
     assert!(text.contains("target"), "{text}");
     assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
 }

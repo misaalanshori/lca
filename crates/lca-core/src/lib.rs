@@ -257,10 +257,94 @@ pub struct Assembled {
     pub compaction_seen: bool,
 }
 
+/// One resolved attachment: a media type and the bytes a provider carries.
+#[derive(Debug, Clone)]
+pub struct Attachment {
+    /// IANA media type (`image/png`, ...), from magic-byte sniffing.
+    pub media_type: String,
+    /// Raw bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// The result of staging one image file as a session attachment.
+#[derive(Debug, Clone)]
+pub struct StagedAttachment {
+    /// The content hash (`sha256`), the record's attachment reference.
+    pub hash: String,
+    /// The text stub a provider (or a model without vision) can read.
+    pub stub: String,
+}
+
+/// Read `path`, reject anything whose magic bytes are not a known image, and
+/// write it into the session's content-addressed attachment store
+/// (owner-only). Returns the hash and the model-visible stub text.
+///
+/// This is the `/attach`/`--attach` input path (ADR-0029). D8's rules hold:
+/// the file name is the digest (no traversal), the media type is sniffed and
+/// never taken from a user-controlled name, and the bytes are never
+/// executable. A non-image is refused rather than attached as opaque text.
+pub fn stage_image(session: &Session, path: &std::path::Path) -> Result<StagedAttachment, String> {
+    let bytes =
+        std::fs::read(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+    let Some(media_type) = lca_protocol::sniff_image_media_type(&bytes) else {
+        return Err(format!(
+            "{} is not a recognized image (png, jpeg, gif, or webp)",
+            path.display()
+        ));
+    };
+    let hash = lca_tools::sha256_hex(&bytes);
+    let dir = session.dir().join("attachments");
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+    let target = dir.join(&hash);
+    if !target.exists() {
+        write_attachment(&target, &bytes)?;
+    }
+    let stub = format!(
+        "[image attachment {}, {media_type}, {} bytes]",
+        &hash[..8],
+        bytes.len()
+    );
+    Ok(StagedAttachment { hash, stub })
+}
+
+/// Write one attachment file owner-only (0600 on Unix), never executable.
+fn write_attachment(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|err| format!("cannot create {}: {err}", path.display()))?;
+    file.write_all(bytes)
+        .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
+    Ok(())
+}
+
 /// Build the outbound message list from a session's resolved (display-view)
-/// records: compaction applied, forks followed, transforms not yet run
-/// (they arrive with the `context-transform` world in Phase 4).
+/// records, with no attachment resolver: image attachments appear only as
+/// the text stub the attach path recorded in the message content.
 pub fn assemble(records: &[Record], system_prompt: &str) -> Assembled {
+    assemble_with(records, system_prompt, &|_| None)
+}
+
+/// Build the outbound message list from a session's resolved (display-view)
+/// records: compaction applied, forks followed, transforms not yet run.
+///
+/// `resolve` turns an attachment hash into the bytes a provider needs; a
+/// `user` record's image attachments become `ContentBlock::Image` blocks
+/// after their text (ADR-0029). A hash the resolver does not know is skipped
+/// rather than an error: the message's text stub already says it exists.
+pub fn assemble_with(
+    records: &[Record],
+    system_prompt: &str,
+    resolve: &dyn Fn(&str) -> Option<Attachment>,
+) -> Assembled {
     let mut messages = vec![ChatMessage::text(MessageRole::System, system_prompt)];
     let mut stable_prefix = 0usize;
     let mut compaction_seen = false;
@@ -271,8 +355,21 @@ pub fn assemble(records: &[Record], system_prompt: &str) -> Assembled {
             | Record::ForkPoint { .. }
             | Record::Permission { .. }
             | Record::ExtensionEvent { .. } => {}
-            Record::User { content, .. } => {
-                messages.push(ChatMessage::text(MessageRole::User, content.clone()));
+            Record::User {
+                content,
+                attachments,
+                ..
+            } => {
+                let mut message = ChatMessage::text(MessageRole::User, content.clone());
+                for hash in attachments {
+                    if let Some(attachment) = resolve(hash) {
+                        message.content.push(ContentBlock::Image {
+                            media_type: attachment.media_type,
+                            bytes: attachment.bytes,
+                        });
+                    }
+                }
+                messages.push(message);
             }
             Record::Assistant {
                 content, reasoning, ..
@@ -373,6 +470,8 @@ fn message_text(message: &ChatMessage) -> String {
             ContentBlock::Text { text } => Some(text.as_str()),
             ContentBlock::Reasoning { reasoning } => Some(reasoning.as_str()),
             ContentBlock::ToolCall { .. } => None,
+            // The image's stub text is already in the message content.
+            ContentBlock::Image { .. } => None,
         })
         .collect()
 }
@@ -384,11 +483,18 @@ fn stable_fingerprint(message: &ChatMessage) -> String {
         .content
         .iter()
         .filter_map(|block| match block {
-            ContentBlock::Text { text } => Some(text.as_str()),
-            ContentBlock::Reasoning { reasoning } => Some(reasoning.as_str()),
+            ContentBlock::Text { text } => Some(text.clone()),
+            ContentBlock::Reasoning { reasoning } => Some(reasoning.clone()),
+            // An image changes the wire bytes, so its content hash belongs in
+            // the fingerprint (a length-only key would miss a same-size swap).
+            ContentBlock::Image { media_type, bytes } => Some(format!(
+                "[image {media_type} {}]",
+                lca_tools::sha256_hex(bytes)
+            )),
             ContentBlock::ToolCall { .. } => None,
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .join("\n");
     let calls: Vec<String> = message
         .tool_calls
         .iter()
@@ -468,6 +574,19 @@ impl<'a> Agent<'a> {
         sink: &mut dyn TurnSink,
         cancel: &CancelFlag,
     ) -> TurnOutcome {
+        self.run_turn_with_attachments(input, &[], sink, cancel)
+            .await
+    }
+
+    /// Like [`Agent::run_turn`], with attachment hashes written onto the
+    /// turn's user record (the `/attach`/`--attach` path; ADR-0029).
+    pub async fn run_turn_with_attachments(
+        &mut self,
+        input: &str,
+        attachments: &[String],
+        sink: &mut dyn TurnSink,
+        cancel: &CancelFlag,
+    ) -> TurnOutcome {
         let handles: Vec<Arc<dyn ExtensionDispatch>> =
             self.config.extensions.enabled().cloned().collect();
         // A plain thread, not a task: a synchronous WASM call blocks the
@@ -492,7 +611,7 @@ impl<'a> Agent<'a> {
                 }
             }))
         };
-        let outcome = self.turn_body(input, sink, cancel).await;
+        let outcome = self.turn_body(input, attachments, sink, cancel).await;
         shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(watcher) = watcher {
             let _ = watcher.join();
@@ -517,6 +636,7 @@ impl<'a> Agent<'a> {
     async fn turn_body(
         &mut self,
         input: &str,
+        attachments: &[String],
         sink: &mut dyn TurnSink,
         cancel: &CancelFlag,
     ) -> TurnOutcome {
@@ -529,7 +649,7 @@ impl<'a> Agent<'a> {
                 ts,
                 id: turn_record_id.clone(),
                 content: input.to_string(),
-                attachments: Vec::new(),
+                attachments: attachments.to_vec(),
             },
         ) {
             return self.fail(
@@ -576,7 +696,15 @@ impl<'a> Agent<'a> {
                     }
                 };
             }
-            let assembled = assemble(&records, &self.config.system_prompt);
+            let assembled = assemble_with(&records, &self.config.system_prompt, &|hash| {
+                let path = self.store.attachment_path(self.session, hash)?;
+                let bytes = std::fs::read(path).ok()?;
+                let media_type = lca_protocol::sniff_image_media_type(&bytes)?;
+                Some(Attachment {
+                    media_type: media_type.to_string(),
+                    bytes,
+                })
+            });
             // The boundary base (FR-CACHE-5): everything through the
             // most recent compaction record, never reaching this turn's
             // own user message - content sent for the first time this

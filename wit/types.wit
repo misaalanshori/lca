@@ -1,4 +1,4 @@
-package lca:ext@1.0.0;
+package lca:ext@0.2.0;
 
 /// Types shared by every world. Every record that crosses the ABI carries
 /// a reserved `extras` map so non-structural data can travel without a
@@ -37,13 +37,23 @@ interface types {
     extras: list<extra-pair>,
   }
 
+  /// One block of message content. Text is the common case; an image is a
+  /// typed block so a provider that carries vision can send the bytes
+  /// without a side channel (ADR-0029, the ABI 0.2 window change).
+  variant content-block {
+    /// Plain text.
+    text(string),
+    /// An image: media type plus raw bytes.
+    image(tuple<string, list<u8>>),
+  }
+
   /// A message crossing into an extension (compaction, context-transform,
   /// provider).
   record message {
     /// `system`, `user`, `assistant`, or `tool`.
     role: string,
-    /// Concatenated text content.
-    content: string,
+    /// Content blocks in order.
+    content: list<content-block>,
     /// Tool calls this message carries, for assistant messages.
     tool-calls: list<tool-call>,
     /// `tool_call_id` this message answers, for tool messages.

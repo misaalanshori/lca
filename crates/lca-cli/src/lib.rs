@@ -48,6 +48,10 @@ pub struct Cli {
     /// Print one JSON object per line, for scripts.
     #[arg(long)]
     pub json: bool,
+    // ADR-0029: attach an image to the one-shot turn.
+    /// Attach an image file to the turn (repeat for several).
+    #[arg(long = "attach", value_name = "PATH")]
+    pub attach: Vec<std::path::PathBuf>,
     #[command(subcommand)]
     /// A subcommand, when one is present.
     pub command: Option<Command>,
@@ -86,6 +90,13 @@ pub enum Command {
         #[arg(long)]
         audit: bool,
     },
+    // The session-maintenance subcommands (D5's attachment GC).
+    /// Session maintenance.
+    Session {
+        /// What to do with the session.
+        #[command(subcommand)]
+        cmd: SessionCmd,
+    },
     // FR-CFG-2.
     /// Show the merged configuration and where each value came from.
     Config,
@@ -100,6 +111,16 @@ pub enum Command {
 
 /// `lca ext ...`: resolve, consent, store (FR-DIST-*).
 pub mod ext;
+
+/// `lca session ...`: maintenance that does not open the interface.
+#[derive(Subcommand, Debug)]
+pub enum SessionCmd {
+    /// Delete attachments that no resolved record list references.
+    Gc {
+        /// The session whose fork tree to sweep.
+        session: String,
+    },
+}
 
 /// Interactive mode, wired to `lca-tui`.
 pub mod tui;
@@ -603,7 +624,12 @@ fn stop_reason_name(reason: StopReason) -> &'static str {
 }
 
 /// Run one headless turn (FR-CORE-3) and return the exit code.
-pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
+pub async fn headless(
+    prompt: &str,
+    json: bool,
+    cwd: &Path,
+    attachments: &[std::path::PathBuf],
+) -> i32 {
     let data = data_dir();
     let store = SessionStore::new(data.clone());
     let grants = match GrantStore::open(&data.join("grants.json")) {
@@ -767,6 +793,24 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
     };
     let mut sink = HeadlessSink::new(json, session_truncated);
     let close_registry = agent_config.extensions.clone();
+    // Stage `--attach` images before the turn: content-addressed, owner-only,
+    // magic-byte sniffed (ADR-0029). The stub text rides in the user message
+    // so a provider without vision still sees that the image exists.
+    let mut turn_text = prompt.to_string();
+    let mut attach_hashes = Vec::new();
+    for path in attachments {
+        match lca_core::stage_image(&session, path) {
+            Ok(staged) => {
+                turn_text.push('\n');
+                turn_text.push_str(&staged.stub);
+                attach_hashes.push(staged.hash);
+            }
+            Err(err) => {
+                eprintln!("error: {err}");
+                return exit::USAGE;
+            }
+        }
+    }
     let outcome = {
         let mut agent = Agent::new(
             &store,
@@ -778,7 +822,9 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
             proposals.as_ref(),
             agent_config,
         );
-        agent.run_turn(prompt, &mut sink, &CancelFlag::new()).await
+        agent
+            .run_turn_with_attachments(&turn_text, &attach_hashes, &mut sink, &CancelFlag::new())
+            .await
     };
     // `session-close`: the session is about to end (SRDD hook points).
     lca_core::drive_blocking(async move {
@@ -833,6 +879,11 @@ pub enum Route {
         /// Keep audit records.
         audit: bool,
     },
+    /// Delete a session's unreferenced attachments (D5).
+    Gc {
+        /// Session id.
+        session: String,
+    },
 }
 
 /// Resolve a parsed command line to a route.
@@ -863,6 +914,11 @@ pub fn route(cli: &Cli) -> Route {
             session: session.clone(),
             audit: *audit,
         },
+        Some(Command::Session { cmd }) => match cmd {
+            SessionCmd::Gc { session } => Route::Gc {
+                session: session.clone(),
+            },
+        },
         Some(Command::Ext { cmd }) => Route::Ext(cmd.clone()),
     }
 }
@@ -877,13 +933,14 @@ pub async fn run(cli: Cli) -> i32 {
         }
     };
     match route(&cli) {
-        Route::Headless { prompt } => headless(&prompt, cli.json, &cwd).await,
+        Route::Headless { prompt } => headless(&prompt, cli.json, &cwd, &cli.attach).await,
         Route::Interactive { resume } => interactive(&cwd, resume.as_deref()),
         Route::Config => config_command(&cwd),
         Route::ResumeList => resume_list(&cwd),
         Route::Fork { session, message } => fork_command(&cwd, &session, &message),
         Route::Rename { session, title } => rename_command(&cwd, &session, &title),
         Route::Export { session, audit } => export_command(&cwd, &session, audit),
+        Route::Gc { session } => gc_command(&cwd, &session),
         Route::Ext(cmd) => ext::run(cmd).await,
     }
 }
@@ -1025,6 +1082,37 @@ fn export_command(cwd: &Path, id: &str, audit: bool) -> i32 {
                 exit::SESSION
             }
         },
+        Err(err) => {
+            eprintln!("error: {err}");
+            exit::SESSION
+        }
+    }
+}
+
+/// `lca session gc <id>`: mark-and-sweep over the session's fork tree (D5).
+/// Prints one deleted hash per line, or a line saying nothing was collected.
+fn gc_command(cwd: &Path, id: &str) -> i32 {
+    let Ok((store, _)) = open_store() else {
+        return exit::INTERNAL;
+    };
+    let session = match store.session(cwd, id) {
+        Ok(session) => session,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return exit::SESSION;
+        }
+    };
+    match store.gc(&session) {
+        Ok(deleted) => {
+            if deleted.is_empty() {
+                println!("no unreferenced attachments");
+            } else {
+                for hash in deleted {
+                    println!("{hash}");
+                }
+            }
+            exit::OK
+        }
         Err(err) => {
             eprintln!("error: {err}");
             exit::SESSION

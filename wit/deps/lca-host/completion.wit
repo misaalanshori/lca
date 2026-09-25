@@ -1,4 +1,4 @@
-package lca:host@1.0.0;
+package lca:host@0.2.0;
 
 /// The `completion` capability: ask the host for a response from
 /// whichever provider is currently active, instead of the extension

@@ -43,7 +43,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 /// The ABI lines this host loads: the current minor and the one before it
 /// (NFR-19).
-pub const SUPPORTED_ABI_WINDOW: &str = "0.1..=1.0";
+pub const SUPPORTED_ABI_WINDOW: &str = "0.1..=0.2, plus the 1.0 freeze line";
 
 /// Resource limits applied to every call, resolved from the manifest and
 /// clamped to host maximums (`docs/flows.md`).
@@ -378,11 +378,14 @@ impl Manifest {
             return declared_minor == current_minor
                 || (current_minor > 0 && declared_minor == current_minor - 1);
         }
-        // The freeze grandfather: artifacts published against the line
-        // that was current when the ABI froze (0.1) keep loading on a
-        // 1.0 host, one cycle of amnesty so nobody's installed
-        // extension dies to a version bump that changed no bytes.
-        (declared_major, declared_minor) == (0, 1) && (current_major, current_minor) == (1, 0)
+        // The freeze line's amnesty: the 1.0 release shipped with the ABI
+        // frozen, and every extension installed against it declares `1.0`.
+        // When ADR-0028 reopened the interface on the 0.x line, that line
+        // would otherwise stop loading the moment the window's first change
+        // (0.2) landed, breaking every installed extension with no rebuild
+        // cycle. It keeps loading for the window, exactly as the pre-freeze
+        // 0.1 line kept loading on a 1.0 host.
+        (declared_major, declared_minor) == (1, 0) && (current_major, current_minor) == (0, 2)
     }
 }
 
@@ -729,9 +732,9 @@ fn role_str(role: lca_protocol::MessageRole) -> &'static str {
     }
 }
 
-/// Protocol request -> the WIT record. Content is the concatenated text
-/// of the message's blocks, exactly what the WIT `message` record
-/// carries; reasoning blocks are model-internal and not resent.
+/// Protocol request -> the WIT record. Text and image blocks travel as
+/// typed content (the ABI 0.2 `content-block` variant); reasoning blocks are
+/// model-internal and not resent.
 fn to_wit_request(request: &CompletionRequest) -> wit_completion::CompletionRequest {
     use wit_completion::{
         CompletionRequest as WitRequest, Message as WitMessage, ToolSpec as WitToolSpec,
@@ -755,11 +758,23 @@ fn to_wit_request(request: &CompletionRequest) -> wit_completion::CompletionRequ
                     .content
                     .iter()
                     .filter_map(|block| match block {
-                        lca_protocol::ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
+                        lca_protocol::ContentBlock::Text { text } => Some(
+                            lca_ext_abi::host::provider::lca::ext::types::ContentBlock::Text(
+                                text.clone(),
+                            ),
+                        ),
+                        lca_protocol::ContentBlock::Image { media_type, bytes } => Some(
+                            lca_ext_abi::host::provider::lca::ext::types::ContentBlock::Image((
+                                media_type.clone(),
+                                bytes.clone(),
+                            )),
+                        ),
+                        // Reasoning is model-internal and tool calls travel in
+                        // their own field, so neither is resent as content.
+                        lca_protocol::ContentBlock::Reasoning { .. }
+                        | lca_protocol::ContentBlock::ToolCall { .. } => None,
                     })
-                    .collect::<Vec<_>>()
-                    .join(""),
+                    .collect(),
                 tool_calls: message
                     .tool_calls
                     .iter()
@@ -1752,11 +1767,20 @@ fn to_wit_messages(
                 .content
                 .iter()
                 .filter_map(|block| match block {
-                    lca_protocol::ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
+                    lca_protocol::ContentBlock::Text { text } => Some(
+                        lca_ext_abi::host::context_transform::lca::ext::types::ContentBlock::Text(
+                            text.clone(),
+                        ),
+                    ),
+                    lca_protocol::ContentBlock::Image { media_type, bytes } => Some(
+                        lca_ext_abi::host::context_transform::lca::ext::types::ContentBlock::Image(
+                            (media_type.clone(), bytes.clone()),
+                        ),
+                    ),
+                    lca_protocol::ContentBlock::Reasoning { .. }
+                    | lca_protocol::ContentBlock::ToolCall { .. } => None,
                 })
-                .collect::<Vec<_>>()
-                .join(""),
+                .collect(),
             tool_calls: message
                 .tool_calls
                 .iter()
@@ -1787,13 +1811,18 @@ fn from_wit_messages(
                 "assistant" => lca_protocol::MessageRole::Assistant,
                 _ => lca_protocol::MessageRole::Tool,
             },
-            content: if message.content.is_empty() {
-                Vec::new()
-            } else {
-                vec![lca_protocol::ContentBlock::Text {
-                    text: message.content,
-                }]
-            },
+            content: message
+                .content
+                .into_iter()
+                .map(|block| match block {
+                    lca_ext_abi::host::context_transform::lca::ext::types::ContentBlock::Text(
+                        text,
+                    ) => lca_protocol::ContentBlock::Text { text },
+                    lca_ext_abi::host::context_transform::lca::ext::types::ContentBlock::Image(
+                        (media_type, bytes),
+                    ) => lca_protocol::ContentBlock::Image { media_type, bytes },
+                })
+                .collect(),
             tool_calls: message
                 .tool_calls
                 .iter()

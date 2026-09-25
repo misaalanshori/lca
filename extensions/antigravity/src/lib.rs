@@ -746,6 +746,16 @@ fn build_request(request: &lca_protocol::CompletionRequest, system: &str) -> ser
             if !text.is_empty() {
                 parts.push(serde_json::json!({ "text": text }));
             }
+            for block in &message.content {
+                if let lca_protocol::ContentBlock::Image { media_type, bytes } = block {
+                    parts.push(serde_json::json!({
+                        "inlineData": {
+                            "mimeType": media_type,
+                            "data": lca_protocol::base64_encode(bytes),
+                        }
+                    }));
+                }
+            }
             for call in &message.tool_calls {
                 let args: serde_json::Value = serde_json::from_str(&call.arguments)
                     .unwrap_or_else(|_| serde_json::json!({ "arguments": call.arguments }));
@@ -1246,10 +1256,10 @@ mod wasm_mode {
         world: "provider",
         export_macro_name: "export_provider",
         with: {
-            "lca:host/log@1.0.0": generate,
-            "lca:host/net@1.0.0": generate,
-            "lca:host/oauth@1.0.0": generate,
-            "lca:host/credentials@1.0.0": generate,
+            "lca:host/log@0.2.0": generate,
+            "lca:host/net@0.2.0": generate,
+            "lca:host/oauth@0.2.0": generate,
+            "lca:host/credentials@0.2.0": generate,
         },
     });
 
@@ -1496,13 +1506,21 @@ mod wasm_mode {
                         "assistant" => lca_protocol::MessageRole::Assistant,
                         _ => lca_protocol::MessageRole::Tool,
                     },
-                    content: if message.content.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![lca_protocol::ContentBlock::Text {
-                            text: message.content.clone(),
-                        }]
-                    },
+                    content: message
+                        .content
+                        .iter()
+                        .map(|block| match block {
+                            lca::ext::types::ContentBlock::Text(text) => {
+                                lca_protocol::ContentBlock::Text { text: text.clone() }
+                            }
+                            lca::ext::types::ContentBlock::Image((media_type, bytes)) => {
+                                lca_protocol::ContentBlock::Image {
+                                    media_type: media_type.clone(),
+                                    bytes: bytes.clone(),
+                                }
+                            }
+                        })
+                        .collect(),
                     tool_calls: message
                         .tool_calls
                         .iter()
@@ -1587,4 +1605,42 @@ mod wasm_mode {
     }
 
     export_provider!(AntigravityWasm);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Verifies: ADR-0029 - an image maps to Gemini's `inlineData` part with
+    // the base64 payload; text stays a `text` part.
+    #[test]
+    fn an_image_maps_to_an_inline_data_part() {
+        let request = lca_protocol::CompletionRequest {
+            messages: vec![lca_protocol::ChatMessage {
+                role: lca_protocol::MessageRole::User,
+                content: vec![
+                    lca_protocol::ContentBlock::Text {
+                        text: "look".to_string(),
+                    },
+                    lca_protocol::ContentBlock::Image {
+                        media_type: "image/png".to_string(),
+                        bytes: vec![1, 2, 3],
+                    },
+                ],
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                usage: None,
+                extras: Default::default(),
+            }],
+            tools: Vec::new(),
+            model: "gemini".to_string(),
+            stable_prefix: 0,
+            extras: Default::default(),
+        };
+        let body = build_request(&request, "sys");
+        let parts = body["contents"][0]["parts"].as_array().expect("parts");
+        assert_eq!(parts[0]["text"], "look");
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(parts[1]["inlineData"]["data"], "AQID");
+    }
 }

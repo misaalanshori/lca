@@ -1,4 +1,4 @@
-package lca:ext@1.0.0;
+package lca:ext@0.2.0;
 
 /// The `command` world: a slash command.
 world command {

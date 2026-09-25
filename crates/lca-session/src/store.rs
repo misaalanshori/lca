@@ -1,6 +1,7 @@
 //! The session store: layout on disk, append-only writes, listing, forking,
 //! and export.
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
@@ -241,6 +242,125 @@ impl SessionStore {
         Ok(outcome)
     }
 
+    /// The ancestor chain of `session`, nearest first: the session itself,
+    /// then its parent, and so on to the root. A missing parent ends the
+    /// chain (the reader reports truncation for that same case); a cycle is
+    /// an error (`docs/session-log-format.md` § Fork).
+    fn ancestors(&self, session: &Session) -> Result<Vec<Session>> {
+        let mut chain = vec![session.clone()];
+        let mut visited = BTreeSet::new();
+        visited.insert(session.id().to_string());
+        let mut current = session.clone();
+        while let Some(parent_id) = self.meta(&current)?.parent_session {
+            if !visited.insert(parent_id.clone()) {
+                return Err(crate::Error::ForkCycle { session: parent_id });
+            }
+            let dir = current
+                .dir()
+                .parent()
+                .expect("session lives under a project dir")
+                .join(&parent_id);
+            if !dir.is_dir() {
+                break;
+            }
+            let parent = Session::new(parent_id, dir);
+            chain.push(parent.clone());
+            current = parent;
+        }
+        Ok(chain)
+    }
+
+    /// The file holding `hash`, walking the fork chain from `session` back
+    /// to the root. A fork copies records but not the content they
+    /// reference, so a record's attachment lives in the home session that
+    /// wrote it (`docs/session-log-format.md` § Fork).
+    pub fn attachment_path(&self, session: &Session, hash: &str) -> Option<PathBuf> {
+        for handle in self.ancestors(session).ok()? {
+            let candidate = handle.dir().join("attachments").join(hash);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    /// Every session sharing `session`'s fork root: the ancestors, the
+    /// session, and every descendant in the project. The GC and the export
+    /// both need the whole tree, because an attachment in one member's
+    /// directory can be referenced by any member's resolved records.
+    pub fn fork_tree(&self, session: &Session) -> Result<Vec<Session>> {
+        let ancestors = self.ancestors(session)?;
+        let root = ancestors
+            .last()
+            .expect("the session itself is in the chain");
+        let project_dir = root
+            .dir()
+            .parent()
+            .expect("session lives under a project dir")
+            .to_path_buf();
+        let summaries = self.rebuild_index_from_key(&project_dir)?;
+        let mut tree = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut queue = vec![root.id().to_string()];
+        while let Some(id) = queue.pop() {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let dir = project_dir.join(&id);
+            if !dir.is_dir() {
+                continue;
+            }
+            for summary in &summaries {
+                if summary.parent_session.as_deref() == Some(id.as_str()) {
+                    queue.push(summary.id.clone());
+                }
+            }
+            tree.push(Session::new(id, dir));
+        }
+        Ok(tree)
+    }
+
+    /// Delete attachment files that no resolved record list in `session`'s
+    /// fork tree references (D5, `docs/session-log-format.md`). Returns the
+    /// deleted hashes, sorted.
+    ///
+    /// The mark is the **display** view: a record a compaction replaced is
+    /// gone from what a reader sees, so its attachment is an orphan. As the
+    /// sweep touches every member's directory, asking for any member cleans
+    /// the whole tree (the cascade the plan calls for when children exist).
+    /// The tree's reachable set is computed first and deletion second, so
+    /// the sweep never mistakes its own deletions for reachability.
+    // ponytail: manual, whole-tree sweep; an automatic sweep at compaction
+    // and fork-prune can replace the explicit command once disk use matters.
+    pub fn gc(&self, session: &Session) -> Result<Vec<String>> {
+        let tree = self.fork_tree(session)?;
+        let mut reachable = BTreeSet::new();
+        for member in &tree {
+            let outcome = self.read_with(member, ViewMode::Display)?;
+            collect_referenced(&outcome.records, &mut reachable);
+        }
+        let mut deleted = Vec::new();
+        for member in &tree {
+            let dir = member.dir().join("attachments");
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue; // no attachments directory: nothing to sweep
+            };
+            for entry in entries {
+                let entry = entry?;
+                if !entry.file_type()?.is_file() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !reachable.contains(&name) {
+                    std::fs::remove_file(entry.path())?;
+                    deleted.push(name);
+                }
+            }
+        }
+        deleted.sort();
+        Ok(deleted)
+    }
+
     /// Read this session's records in the requested view.
     pub fn resolved(&self, session: &Session, mode: ViewMode) -> Result<ReadOutcome> {
         self.read_with(session, mode)
@@ -403,16 +523,18 @@ impl SessionStore {
     }
 
     /// The export's `attachments` map: every hash a record references,
-    /// mapped to its sidecar path under the session directory. Only files
-    /// that exist are listed; the format allows inline base64 too, but the
-    /// sidecar keeps large tool output out of the JSON
+    /// mapped to its sidecar path. A fork's resolved records reference the
+    /// ancestor's files, so the search walks the fork chain and the path is
+    /// relative to the export file: `attachments/<hash>` when the session
+    /// owns the file, `../<owner>/attachments/<hash>` when an ancestor does.
+    /// Only files that exist are listed; the format allows inline base64
+    /// too, but the sidecar keeps large tool output out of the JSON
     /// (`docs/session-log-format.md`).
     fn attachment_map(
         &self,
         session: &Session,
         records: &[lca_protocol::Record],
     ) -> serde_json::Map<String, serde_json::Value> {
-        let dir = session.dir().join("attachments");
         let mut map = serde_json::Map::new();
         for record in records {
             let hashes: Vec<&String> = match record {
@@ -424,12 +546,25 @@ impl SessionStore {
                 _ => Vec::new(),
             };
             for hash in hashes {
-                if dir.join(hash).exists() {
-                    map.insert(
-                        hash.clone(),
-                        serde_json::Value::String(format!("attachments/{hash}")),
-                    );
+                if map.contains_key(hash) {
+                    continue;
                 }
+                let Some(path) = self.attachment_path(session, hash) else {
+                    continue;
+                };
+                let own = session.dir().join("attachments").join(hash);
+                let value = if path == own {
+                    format!("attachments/{hash}")
+                } else {
+                    let owner = path
+                        .parent()
+                        .and_then(Path::parent)
+                        .and_then(Path::file_name)
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    format!("../{owner}/attachments/{hash}")
+                };
+                map.insert(hash.clone(), serde_json::Value::String(value));
             }
         }
         map
@@ -571,4 +706,23 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     std::fs::rename(&temp, path)?;
     Ok(())
+}
+
+/// Every attachment hash a resolved record list references: the GC's mark
+/// set. A `user` message carries a list, a `tool-result` carries at most one.
+fn collect_referenced(records: &[lca_protocol::Record], out: &mut BTreeSet<String>) {
+    for record in records {
+        match record {
+            lca_protocol::Record::User { attachments, .. } => {
+                out.extend(attachments.iter().cloned());
+            }
+            lca_protocol::Record::ToolResult {
+                attachment: Some(hash),
+                ..
+            } => {
+                out.insert(hash.clone());
+            }
+            _ => {}
+        }
+    }
 }

@@ -819,3 +819,44 @@ recorded in `docs/capabilities.md`: **any host import that can wait beyond the
 whole window.** The `net` request paths are the remaining instance of the
 rule. Tests: `interrupting_a_blocked_oauth_wait_returns_promptly` (WASM) and
 `interrupting_a_blocked_native_oauth_wait_returns_promptly` (native).
+
+### P2 — attachment chain semantics and GC
+
+Attachments now follow the fork rule that records already followed: a fork
+copies records, not the content they reference, so resolution walks the fork
+chain to the home session that wrote `attachments/<hash>`
+(`SessionStore::attachment_path`), and a forked session's export names the
+ancestor's path instead of the (nonexistent) local one. `lca session gc <id>`
+is the chain-aware mark-and-sweep: it walks the session's whole fork tree,
+marks every hash any member's resolved (display) record list references, and
+deletes the rest, so a compaction orphan is collected and a file a sibling
+branch needs is not. The sweep is manual and tree-wide by deliberate choice,
+marked with a `ponytail:` comment naming the auto-sweep upgrade path. Tests:
+`a_forks_records_resolve_the_parents_attachment`,
+`gc_collects_compaction_orphans_and_keeps_referenced_files`,
+`gc_from_a_child_keeps_an_ancestors_referenced_attachment`, and the CLI
+route/e2e pair.
+
+### P4 — typed image content (the window's first breaking minor)
+
+`types.message.content` changed from a joined `string` to a list of
+`content-block`s (`text` or `image`), `ContentBlock::Image { media_type,
+bytes }` joined the protocol, and the ABI moved to `0.2` under ADR-0028: the
+WIT packages and every first-party manifest now declare `0.2`, `ABI_VERSION`
+reads `0.2`, `wit/CHANGELOG.md` opens with the migration note, and the four
+committed components were rebuilt from source. The host loads `0.2`, the
+previous line `0.1`, and the `1.0` freeze line, so an extension installed
+against the released host keeps loading across the change.
+
+The image travels the whole path: `lca session`'s attach path (`/attach` in
+the interface, `--attach` headless) sniffs the media type from magic bytes,
+stores the file content-addressed and owner-only, and puts a stub in the
+message text; `assemble_with` turns the record's attachment hash into a typed
+`ContentBlock::Image`; `openai-compatible` maps it to a base64 `image_url`
+data URI and `antigravity` to an `inlineData` part. The native twin and the
+WASM component are diffed byte for byte
+(`image_content_round_trips_identically_across_modes`). Tests:
+`crates/lca-protocol/tests/content.rs` (sniffing, base64, serde),
+`crates/lca-core/tests/attachments.rs` (staging, assembly), the two provider
+inline tests, and the headless `attach_flag_stages_an_image_on_the_user_record`.
+The TUI keeps the placeholder render (D7 stays out of scope).

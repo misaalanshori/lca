@@ -69,6 +69,7 @@ fn opencode_go_completes_one_turn() {
         "Reply with exactly one word: pong",
         true,
         &project,
+        &[],
     ));
     assert_eq!(
         code, 0,

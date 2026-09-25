@@ -35,7 +35,7 @@ fn canonical_records() -> Vec<Record> {
             v: 1,
             ts: 1_700_000_000_000,
             agent_version: "lca-1.0.0".into(),
-            abi_version: "1.0".into(),
+            abi_version: "0.2".into(),
             working_dir: "/workspace/project".into(),
         },
         Record::User {
