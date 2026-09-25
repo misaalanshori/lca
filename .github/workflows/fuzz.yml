@@ -18,6 +18,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# A new scheduled run replaces a stuck older one.
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   fuzz:
     runs-on: ubuntu-latest
@@ -47,3 +52,12 @@ jobs:
             cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$target" -- \
               -max_total_time=600 -artifact_prefix=fuzz/artifacts/
           done
+      # A crash found at04:17 UTC must not be stranded on the runner: the
+      # artifact is the file that becomes the corpus entry / regression.
+      - name: Keep any crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

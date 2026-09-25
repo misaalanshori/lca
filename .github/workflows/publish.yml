@@ -22,6 +22,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# A release is deliberate: queue a second publish rather than cancel one
+# mid-upload and leave partial assets on the tag.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
