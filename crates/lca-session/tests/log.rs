@@ -576,3 +576,20 @@ fn close_writes_the_session_end_marker() {
         "session-end is on record"
     );
 }
+
+// Verifies: session-log-format - the session-start record carries the
+// extension ABI version from the contract crate. It used to be a stale local
+// "0.1" while `lca:ext` was frozen at "1.0".
+#[test]
+fn session_start_records_the_contract_abi_version() {
+    let store = store("abi-version");
+    let project = scratch("abi-version-project");
+    let session = store.create_session(&project, "test").expect("create");
+    match store.raw_start(&session).expect("start") {
+        lca_protocol::Record::SessionStart { abi_version, .. } => {
+            assert_eq!(abi_version, lca_ext_abi::ABI_VERSION);
+            assert_eq!(abi_version, "1.0");
+        }
+        other => panic!("not a session-start: {other:?}"),
+    }
+}

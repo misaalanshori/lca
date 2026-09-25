@@ -531,8 +531,7 @@ fn version_prints_all_four_facts() {
     let output = box_.run(None, &["--version"]);
     assert_eq!(output.status.code(), Some(0));
     let text = stdout(&output);
-    assert!(text.contains("abi"), "{text}");
-    assert!(text.contains("0.1"), "{text}");
+    assert!(text.contains("abi 1.0"), "the frozen ABI line: {text}");
     assert!(text.contains("target"), "{text}");
     assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
 }

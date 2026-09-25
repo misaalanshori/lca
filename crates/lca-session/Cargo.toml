@@ -9,6 +9,10 @@ repository.workspace = true
 
 [dependencies]
 lca-protocol = { path = "../lca-protocol" }
+# The session log records the extension ABI version in its `session-start`
+# record; source it from the one contract crate so it cannot drift from the
+# frozen `lca:ext` version (no `host` feature, so no wasmtime).
+lca-ext-abi = { path = "../lca-ext-abi" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

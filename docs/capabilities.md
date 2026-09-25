@@ -1,6 +1,6 @@
 # Capability catalog
 
-Version 0.1, 2026-09-20. Targets ABI 0.1.
+Version 0.1, 2026-09-20. Targets ABI 1.0.
 
 This is the reference for every capability an extension can hold. It covers what each one grants, how a manifest declares it, what the host imports look like, what the user sees at install time, and what happens on denial.
 

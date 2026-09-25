@@ -19,9 +19,10 @@ pub use lca_protocol::{PermissionDecision, ToolResultStatus, ToolSource};
 pub use store::{ExportOptions, ReadOutcome, Session, SessionMeta, SessionStore, SessionSummary};
 pub use view::ViewMode;
 
-/// The extension ABI version recorded in new session logs until `lca-ext-abi`
-/// owns the constant (Phase 2 moves this into the contract crate).
-pub const ABI_VERSION: &str = "0.1";
+/// The extension ABI version recorded in a `session-start` record, sourced
+/// from the contract crate so it cannot drift from the frozen `lca:ext`
+/// version (`docs/session-log-format.md`: "the ABI version").
+pub use lca_ext_abi::ABI_VERSION;
 
 /// Resolve the user data directory the way each platform documents it
 /// (`docs/platform-notes.md`): `$XDG_DATA_HOME` or `~/.local/share` on
