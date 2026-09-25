@@ -1236,9 +1236,10 @@ fn the_logins_secret_prompt_masks_input_in_a_real_terminal() {
 // Verifies: the SRDD's restart exit test, FR-SESS-4/FR-SESS-5, and
 // FR-CACHE-5/FR-CACHE-6 across a process boundary: a session created in one
 // process is resumed in another, the resumed run crosses the compaction
-// threshold, and the compaction record's replaced range ends before the
-// resumed turn (the in-process analogue is
-// `after_compaction_a_new_turn_stays_outside_the_stable_prefix`).
+// threshold, the compaction record's replaced range ends before the resumed
+// turn (the in-process analogue is
+// `after_compaction_a_new_turn_stays_outside_the_stable_prefix`), and the
+// clean quit closes the resumed session with its own `session-end`.
 #[cfg(unix)]
 #[test]
 fn a_resumed_session_compacts_at_the_turn_boundary() {
@@ -1289,6 +1290,21 @@ fn a_resumed_session_compacts_at_the_turn_boundary() {
     session.send(&["second turn", "Enter"]);
     session.wait_for("second reply", std::time::Duration::from_secs(30));
     session.send(&["/exit", "Enter"]);
+    // The resumed process writes its own clean-exit marker before it goes
+    // away; run 1 already wrote one, so the log now holds two (FR-SESS-6's
+    // clean-exit shape across the restart).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.matches("\"t\":\"session-end\"").count() >= 2 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the resumed run did not write its own session-end"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
 
     // The compaction record lands at the boundary: its replaced range starts
     // at the first turn's user record and ends before the resumed turn, so

@@ -860,3 +860,14 @@ WASM component are diffed byte for byte
 `crates/lca-core/tests/attachments.rs` (staging, assembly), the two provider
 inline tests, and the headless `attach_flag_stages_an_image_on_the_user_record`.
 The TUI keeps the placeholder render (D7 stays out of scope).
+
+### P3 — resume across a restart
+
+The e2e already existed (`a_resumed_session_compacts_at_the_turn_boundary`,
+committed `3656441`); this cycle added the missing clean-exit assertion. The
+resumed process writes its own `session-end` on `/exit`, so the log holds the
+headless run's marker and the resumed run's, and the test now waits for the
+second rather than accepting the first. The rest of the checklist holds: the
+first turn's text renders before compaction runs, the compaction record's
+replaced range starts at the first turn and ends before the resumed one, and
+the test skips (never fails) when tmux is absent.
