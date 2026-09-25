@@ -82,7 +82,7 @@ for path in pipeline:
         if "Verifies" in line:
             ids.update(pattern.findall("\n".join(lines[i:i + 9])))
 
-with open(sys.argv[1], "w") as out:
+with open(sys.argv[1], "w", newline="\n") as out:
     for value in sorted(ids):
         out.write(value + "\n")
 PY
