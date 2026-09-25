@@ -1233,6 +1233,53 @@ fn the_logins_secret_prompt_masks_input_in_a_real_terminal() {
     assert!(pane.contains("input hidden"), "still the masked prompt");
 }
 
+// Verifies: ADR-0029 - the interface's `/attach` stages an image and the next
+// user message carries its hash and stub.
+#[cfg(unix)]
+#[test]
+fn attach_in_the_tui_stages_an_image_for_the_next_message() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("seen"))]));
+    let sandbox = sandbox("tui-attach");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+    let png = sandbox.project().join("shot.png");
+    std::fs::write(
+        &png,
+        [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3],
+    )
+    .expect("write image");
+
+    let session = Tmux::new("attach");
+    session.spawn(&sandbox, Some(&mock), true, &[], &[]);
+    session.wait_for(
+        "openai-compatible/gpt-4o-mini",
+        std::time::Duration::from_secs(20),
+    );
+
+    let attach_command = format!("/attach {}", png.display());
+    session.send(&[attach_command.as_str(), "Enter"]);
+    session.wait_for("attached", std::time::Duration::from_secs(15));
+    session.send(&["look at this", "Enter"]);
+    session.wait_for("seen", std::time::Duration::from_secs(25));
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+
+    let log = find_session_log(&sandbox.state_dir()).expect("a session log");
+    let text = std::fs::read_to_string(log).expect("read log");
+    assert!(
+        text.contains("\"attachments\":[\""),
+        "the staged hash is on the user record: {text}"
+    );
+    assert!(
+        text.contains("[image attachment"),
+        "the stub is in the message text: {text}"
+    );
+}
+
 // Verifies: the SRDD's restart exit test, FR-SESS-4/FR-SESS-5, and
 // FR-CACHE-5/FR-CACHE-6 across a process boundary: a session created in one
 // process is resumed in another, the resumed run crosses the compaction

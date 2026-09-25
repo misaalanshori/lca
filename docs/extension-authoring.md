@@ -229,7 +229,7 @@ An extension is an OCI artifact. Any registry that implements the OCI distributi
 
 ```
 wkg oci push ghcr.io/yourname/word-count:0.1.0 word_count.wasm
-wkg oci push ghcr.io/yourname/word-count:abi-1.0 word_count.wasm
+wkg oci push ghcr.io/yourname/word-count:abi-0.2 word_count.wasm
 ```
 
 Push two tags. The version tag is immutable and identifies this exact release. The ABI line tag moves and is what the update resolver reads.
@@ -239,10 +239,10 @@ Push two tags. The version tag is immutable and identifies this exact release. T
 Users install with the reference.
 
 ```
-lca ext install ghcr.io/yourname/word-count:abi-1.0
+lca ext install ghcr.io/yourname/word-count:abi-0.2
 ```
 
-An OCI registry is not the only option. Any HTTPS host works: zip the component and `extension.toml` together with nothing else added, publish two URLs the same way, one for the fixed version and one that always points at the current release, and a user installs with `lca ext install https://yourhost.example/word-count-abi-1.0.zip`. The update mechanics are identical either way; see ADR-0010.
+An OCI registry is not the only option. Any HTTPS host works: zip the component and `extension.toml` together with nothing else added, publish two URLs the same way, one for the fixed version and one that always points at the current release, and a user installs with `lca ext install https://yourhost.example/word-count-abi-0.2.zip`. The update mechanics are identical either way; see ADR-0010.
 
 ## Versioning
 
