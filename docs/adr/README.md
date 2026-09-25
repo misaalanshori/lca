@@ -47,6 +47,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0026 | Capability interfaces link in a denied state | Accepted | Post-release review |
 | 0027 | Unsigned release artifacts, provenance-attested | Accepted | Post-release review |
 | 0028 | The ABI development window — unfrozen now, frozen for good later | Accepted | Post-release review |
+| 0029 | Typed image content for provider messages | Accepted | Post-release review (cycle 2) |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
 
