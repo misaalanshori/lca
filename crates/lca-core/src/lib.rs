@@ -420,7 +420,7 @@ pub struct Agent<'a> {
     session: &'a Session,
     provider: &'a dyn Provider,
     tools: &'a mut ToolExecutor,
-    grants: &'a mut GrantStore,
+    grants: Arc<Mutex<GrantStore>>,
     prompt: &'a mut dyn PermissionPrompt,
     proposals: Option<&'a Proposals>,
     config: AgentConfig,
@@ -434,7 +434,7 @@ impl<'a> Agent<'a> {
         session: &'a Session,
         provider: &'a dyn Provider,
         tools: &'a mut ToolExecutor,
-        grants: &'a mut GrantStore,
+        grants: Arc<Mutex<GrantStore>>,
         prompt: &'a mut dyn PermissionPrompt,
         proposals: Option<&'a Proposals>,
         config: AgentConfig,
@@ -1023,8 +1023,22 @@ impl<'a> Agent<'a> {
             ));
         }
         if let Some(action) = self.tools.required_permission(call) {
+            // The grant store is shared with every capability engine and the
+            // login flow, so it is locked for the authorize call only, never
+            // for the whole turn: an extension's own permission check during
+            // this turn re-enters through the same Arc.
+            let grants = self.grants.clone();
+            let mut guard = match grants.lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    return Err(self.fail(
+                        StopReason::Error,
+                        "permission store lock is poisoned".to_string(),
+                    ));
+                }
+            };
             let outcome = match lca_permissions::authorize(
-                self.grants,
+                &mut guard,
                 self.tools.workspace(),
                 &action,
                 self.proposals,

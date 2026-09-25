@@ -192,7 +192,7 @@ pub(crate) fn store_provider_secret(
         Arc::new(std::sync::Mutex::new(
             lca_permissions::SharedPrompt::default(),
         )),
-        Arc::new(std::sync::Mutex::new(open_grants(data))),
+        open_grants(data),
         cwd.to_path_buf(),
         None,
     );
@@ -237,9 +237,16 @@ pub(crate) fn ad_hoc_host_from_authority(rest: &str) -> Option<String> {
 }
 
 /// Persist an ad hoc `net` grant the user approved at login (FR-PERM-16).
-pub(crate) fn store_ad_hoc_grant(data: &Path, cwd: &Path, host: &str) -> Result<(), String> {
-    let path = data.join("grants.json");
-    let mut store = GrantStore::open(&path).map_err(|err| err.to_string())?;
+/// It writes through the shared grant-store handle so the running session's
+/// capability engines and the turn loop see it and cannot clobber it.
+pub(crate) fn store_ad_hoc_grant(
+    store: &std::sync::Arc<std::sync::Mutex<GrantStore>>,
+    cwd: &Path,
+    host: &str,
+) -> Result<(), String> {
+    let mut store = store
+        .lock()
+        .map_err(|_| "the grant store lock is poisoned".to_string())?;
     store
         .approve_net_pattern(cwd, host)
         .map_err(|err| err.to_string())
@@ -258,30 +265,22 @@ pub(crate) fn apply_enablement(
     }
 }
 
-/// The capability environment for the bundled native provider: the
-/// manifest's grants plus this project's ad hoc `net` patterns
-/// (FR-PERM-16), over the user's own scope roots.
-/// ponytail: opens a second grant-store instance; nothing in the
-/// capability engine writes grants yet, so there is no writer conflict,
-/// and one shared owner comes back with the ad hoc attach flow (ADR-0022).
-/// One capability engine for a bundled extension: the platform's scope
-/// roots, this user's grant store, and a prompt that denies - only a
-/// net ad hoc attach ever asks, and that flow arrives with the install
-/// and login modals (Phases 5-7, ADR-0022).
-/// ponytail: opens a second grant-store instance per engine; nothing in
-/// these engines writes grants yet (ADR-0022's note applies to all of
-/// them), one shared owner comes back with the attach flow.
-/// Open the process grant store, or start fail-closed (an empty store grants
-/// nothing) if the file is unreadable: a bad store must not abort a session
-/// with a panic.
-fn open_grants(data: &Path) -> GrantStore {
-    match GrantStore::open(&data.join("grants.json")) {
+/// The capability environment for a bundled extension: the platform's scope
+/// roots, the shared grant store, and the caller's prompt. Every engine and
+/// the turn loop share one `Arc<Mutex<GrantStore>>` so a grant written by
+/// one path is visible to (and never clobbered by) another.
+/// Open (or create) the process grant store, or start fail-closed (an empty
+/// store grants nothing) if the file is unreadable: a bad store must not
+/// abort a session with a panic.
+fn open_grants(data: &Path) -> std::sync::Arc<std::sync::Mutex<GrantStore>> {
+    let store = match GrantStore::open(&data.join("grants.json")) {
         Ok(store) => store,
         Err(err) => {
             eprintln!("warning: grant store unreadable ({err}); starting with no grants");
             GrantStore::empty()
         }
-    }
+    };
+    std::sync::Arc::new(std::sync::Mutex::new(store))
 }
 
 pub(crate) fn extension_capabilities(
@@ -289,6 +288,7 @@ pub(crate) fn extension_capabilities(
     name: &str,
     grants: lca_tools::CapabilityGrants,
     prompt: lca_permissions::SharedPrompt,
+    store: std::sync::Arc<std::sync::Mutex<GrantStore>>,
 ) -> std::sync::Arc<lca_tools::Capabilities> {
     use std::sync::{Arc, Mutex};
 
@@ -300,13 +300,12 @@ pub(crate) fn extension_capabilities(
         temp: session_temp(),
         state_dir: data.clone(),
     };
-    let store = open_grants(&data);
     Arc::new(lca_tools::Capabilities::new(
         name,
         grants,
         roots,
         Arc::new(Mutex::new(prompt)),
-        Arc::new(Mutex::new(store)),
+        store,
         data,
         None,
     ))
@@ -316,16 +315,20 @@ pub(crate) fn extension_capabilities(
 pub(crate) fn openai_capabilities(
     cwd: &Path,
     prompt: lca_permissions::SharedPrompt,
+    store: std::sync::Arc<std::sync::Mutex<GrantStore>>,
 ) -> std::sync::Arc<lca_tools::Capabilities> {
-    let data = data_dir();
-    let store = open_grants(&data);
     let mut grants = openai_compatible::manifest_grants();
     grants.adhoc_net = store
-        .net_patterns(cwd)
-        .iter()
-        .filter_map(|pattern| lca_permissions::parse_net_pattern(pattern).ok())
-        .collect();
-    extension_capabilities(cwd, "openai-compatible", grants, prompt)
+        .lock()
+        .map(|store| {
+            store
+                .net_patterns(cwd)
+                .iter()
+                .filter_map(|pattern| lca_permissions::parse_net_pattern(pattern).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    extension_capabilities(cwd, "openai-compatible", grants, prompt, store)
 }
 
 /// The user data directory for sessions, grants, and state.
@@ -604,13 +607,13 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
     let data = data_dir();
     let store = SessionStore::new(data.clone());
     let grants = match GrantStore::open(&data.join("grants.json")) {
-        Ok(grants) => grants,
+        Ok(grants) => std::sync::Arc::new(std::sync::Mutex::new(grants)),
         Err(err) => {
             eprintln!("error: cannot open the grant store: {err}");
             return exit::INTERNAL;
         }
     };
-    let config = match load_config(cwd, &grants, true) {
+    let config = match load_config(cwd, &grants.lock().expect("grant store"), true) {
         Ok(config) => config,
         Err(err) => {
             eprintln!("error: {err}");
@@ -645,7 +648,6 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
         config.tool_result_limit_bytes() as usize,
         std::time::Duration::from_secs(config.tool_timeout_seconds()),
     );
-    let mut grants = grants;
     let mut prompt_impl = HeadlessPrompt::default();
     // Extension-originated commands route through the same denying prompt, so a
     // headless approval need still surfaces as exit code 4.
@@ -673,13 +675,17 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
     }
     #[cfg(feature = "bundled-openai-compat")]
     registry.register(Arc::new(openai_compatible::OpenAiCompat::new(
-        openai_capabilities(cwd, shared_prompt.clone()),
+        openai_capabilities(cwd, shared_prompt.clone(), grants.clone()),
     )));
     // The grant store's disable wins before the provider resolves
     // (FR-PROV-9/FR-PERM-19); applied again after the two
     // completion-dependent handles register below.
     apply_enablement(&mut registry, |name| {
-        grants.extension_enabled(cwd, name) == Some(false)
+        grants
+            .lock()
+            .expect("grant store")
+            .extension_enabled(cwd, name)
+            == Some(false)
     });
     // FR-PROV-6: the configured provider must resolve to an enabled
     // handle; zero providers is an ordinary, reportable state. Resolved
@@ -715,6 +721,7 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
             "compaction-default",
             compaction_default::manifest_grants(),
             shared_prompt.clone(),
+            grants.clone(),
         );
         cap.set_completion(backend.clone());
         registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
@@ -728,9 +735,14 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
         "skills",
         skills::manifest_grants(),
         shared_prompt.clone(),
+        grants.clone(),
     ))));
     apply_enablement(&mut registry, |name| {
-        grants.extension_enabled(cwd, name) == Some(false)
+        grants
+            .lock()
+            .expect("grant store")
+            .extension_enabled(cwd, name)
+            == Some(false)
     });
     let agent_config = AgentConfig {
         provider: provider_name.clone(),
@@ -748,7 +760,7 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
         completion_backend,
         ..AgentConfig::default()
     };
-    let proposals = if grants.is_trusted(cwd) {
+    let proposals = if grants.lock().expect("grant store").is_trusted(cwd) {
         Some(config.permissions_proposals().clone())
     } else {
         None
@@ -761,7 +773,7 @@ pub async fn headless(prompt: &str, json: bool, cwd: &Path) -> i32 {
             &session,
             provider.as_ref(),
             &mut tools,
-            &mut grants,
+            grants.clone(),
             &mut prompt_impl,
             proposals.as_ref(),
             agent_config,

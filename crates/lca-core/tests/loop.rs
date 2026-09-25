@@ -2,7 +2,7 @@
 //! every FR it verifies named on the test.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lca_core::{
@@ -68,7 +68,7 @@ struct Harness {
     root: PathBuf,
     store: SessionStore,
     session: lca_session::Session,
-    grants: GrantStore,
+    grants: Arc<Mutex<GrantStore>>,
     project: PathBuf,
     tools: ToolExecutor,
     provider: Arc<FakeProvider>,
@@ -81,7 +81,9 @@ fn harness(name: &str, provider: FakeProvider, config: AgentConfig) -> Harness {
     std::fs::create_dir_all(&project).expect("mkdir");
     let store = SessionStore::new(root.join("data"));
     let session = store.create_session(&project, "test").expect("session");
-    let grants = GrantStore::open(&root.join("grants.json")).expect("grants");
+    let grants = Arc::new(Mutex::new(
+        GrantStore::open(&root.join("grants.json")).expect("grants"),
+    ));
     let tools = ToolExecutor::new(
         Arc::new(NativeOps),
         project.clone(),
@@ -123,7 +125,7 @@ async fn turn(
         &h.session,
         h.provider.as_ref(),
         &mut h.tools,
-        &mut h.grants,
+        h.grants.clone(),
         prompt,
         None,
         h.config.clone(),
@@ -465,7 +467,7 @@ async fn cancellation_stops_the_stream_and_keeps_completed_records() {
         &h.session,
         h.provider.as_ref(),
         &mut h.tools,
-        &mut h.grants,
+        h.grants.clone(),
         &mut prompt,
         None,
         h.config.clone(),
@@ -1050,7 +1052,7 @@ async fn crossing_the_threshold_compacts_once_and_the_summary_survives_a_restart
         &session2,
         h.provider.as_ref(),
         &mut h.tools,
-        &mut h.grants,
+        h.grants.clone(),
         &mut prompt,
         None,
         h.config.clone(),
@@ -1442,7 +1444,9 @@ async fn the_default_strategy_compacts_through_the_real_completion_backend() {
     std::fs::create_dir_all(&project).expect("mkdir");
     let store = SessionStore::new(root.join("data"));
     let session = store.create_session(&project, "test").expect("session");
-    let grants = GrantStore::open(&root.join("grants.json")).expect("grants");
+    let grants = Arc::new(Mutex::new(
+        GrantStore::open(&root.join("grants.json")).expect("grants"),
+    ));
     let mut tools = ToolExecutor::new(
         Arc::new(NativeOps),
         project.clone(),
@@ -1450,7 +1454,6 @@ async fn the_default_strategy_compacts_through_the_real_completion_backend() {
         65536,
         Duration::from_secs(30),
     );
-    let mut grants = grants;
     let mut sink = CollectingSink::default();
     let mut prompt = Prompt {
         answers: Vec::new(),
@@ -1464,7 +1467,7 @@ async fn the_default_strategy_compacts_through_the_real_completion_backend() {
             &session,
             provider.as_ref(),
             &mut tools,
-            &mut grants,
+            grants.clone(),
             &mut prompt,
             None,
             config.clone(),
@@ -1488,7 +1491,7 @@ async fn the_default_strategy_compacts_through_the_real_completion_backend() {
             &session,
             provider.as_ref(),
             &mut tools,
-            &mut grants,
+            grants.clone(),
             &mut prompt,
             None,
             config.clone(),
@@ -1558,7 +1561,7 @@ async fn the_default_strategy_compacts_through_the_real_completion_backend() {
             &session,
             provider.as_ref(),
             &mut tools,
-            &mut grants,
+            grants.clone(),
             &mut prompt,
             None,
             config.clone(),

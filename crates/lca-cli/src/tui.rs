@@ -108,10 +108,12 @@ fn model_effect_on(
 pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     let data = crate::data_dir();
     let store = Arc::new(SessionStore::new(data.clone()));
-    let grants = GrantStore::open(&data.join("grants.json"))
-        .map_err(|err| anyhow::anyhow!("cannot open the grant store: {err}"))?;
-    let trusted = grants.is_trusted(cwd);
-    let config = crate::load_config(cwd, &grants, false)?;
+    let grants = Arc::new(Mutex::new(
+        GrantStore::open(&data.join("grants.json"))
+            .map_err(|err| anyhow::anyhow!("cannot open the grant store: {err}"))?,
+    ));
+    let trusted = grants.lock().expect("grant store").is_trusted(cwd);
+    let config = crate::load_config(cwd, &grants.lock().expect("grant store"), false)?;
     // Today's update check, if enabled and due: stamped, then spawned
     // - the startup path never waits on it (FR-CFG-6), and the status
     // line picks the finding up from the shared cell once it lands.
@@ -148,7 +150,6 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         config.tool_result_limit_bytes() as usize,
         std::time::Duration::from_secs(config.tool_timeout_seconds()),
     )));
-    let grants = Arc::new(Mutex::new(grants));
     let proposals: Option<Proposals> = trusted.then(|| config.permissions_proposals().clone());
     let stats_store = store.clone();
     let stats_session = session.clone();
@@ -176,7 +177,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     }
     #[cfg(feature = "bundled-openai-compat")]
     registry.register(Arc::new(openai_compatible::OpenAiCompat::new(
-        crate::openai_capabilities(cwd, shared_prompt.clone()),
+        crate::openai_capabilities(cwd, shared_prompt.clone(), grants.clone()),
     )));
     crate::apply_enablement(&mut registry, |name| {
         grants.lock().expect("grants").extension_enabled(cwd, name) == Some(false)
@@ -230,6 +231,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             "compaction-default",
             compaction_default::manifest_grants(),
             shared_prompt.clone(),
+            grants.clone(),
         );
         cap.set_completion(backend.clone());
         registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
@@ -247,6 +249,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             "skills",
             skills::manifest_grants(),
             shared_prompt.clone(),
+            grants.clone(),
         ),
     )));
     crate::apply_enablement(&mut registry, |name| {
@@ -430,10 +433,10 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         })
     };
     let login_confirm: lca_tui::LoginConfirm = {
-        let data = data.clone();
+        let grants = grants.clone();
         let cwd = cwd.to_path_buf();
         Arc::new(move |provider: &str, host: &str| -> String {
-            match crate::store_ad_hoc_grant(&data, &cwd, host) {
+            match crate::store_ad_hoc_grant(&grants, &cwd, host) {
                 Ok(()) => format!("{provider} may now reach {host}"),
                 Err(err) => format!("could not store the ad hoc grant: {err}"),
             }
@@ -570,7 +573,6 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 }
             };
             let mut tools = tools.lock().expect("tools lock");
-            let mut grants = grants.lock().expect("grants lock");
             runtime.block_on(async {
                 // The session's model is whatever /model last set:
                 // the status line and the compaction backend follow
@@ -587,7 +589,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     &runner_session,
                     provider.as_ref(),
                     &mut tools,
-                    &mut grants,
+                    grants.clone(),
                     &mut prompt,
                     proposals.as_ref(),
                     turn_config,
@@ -848,12 +850,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let project = root.join("project");
         std::fs::create_dir_all(&project).expect("mkdir");
-        crate::store_ad_hoc_grant(&root, &project, "llm.example.com").expect("store");
-        let store = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open");
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
+        ));
+        crate::store_ad_hoc_grant(&store, &project, "llm.example.com").expect("store");
+        let reread = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open");
         assert_eq!(
-            store.net_patterns(&project),
+            reread.net_patterns(&project),
             vec!["llm.example.com".to_string()]
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: FR-PERM-16 (the ad hoc net grant and an engine-persisted
+    // `always` pattern share one store, so neither save clobbers the other
+    // - deferred plan E1). Before the single-owner wiring, the login seam
+    // opened its own handle and its save dropped the engine's pattern.
+    #[test]
+    fn one_grant_store_holds_the_login_grant_and_an_engine_pattern() {
+        let root = std::env::temp_dir().join(format!("lca-shared-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
+        ));
+        // The login flow writes the ad hoc net grant ...
+        crate::store_ad_hoc_grant(&store, &project, "llm.example.com").expect("net grant");
+        // ... then the engine (or the turn loop) persists an `always`.
+        store
+            .lock()
+            .expect("store")
+            .approve_pattern(&project, "cargo test")
+            .expect("pattern");
+        let reread = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open");
+        assert_eq!(
+            reread.net_patterns(&project),
+            vec!["llm.example.com".to_string()]
+        );
+        assert!(reread.is_allowed(
+            &project,
+            &lca_permissions::Action::Shell {
+                command: "cargo test".to_string(),
+                cwd: project.clone(),
+            }
+        ));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

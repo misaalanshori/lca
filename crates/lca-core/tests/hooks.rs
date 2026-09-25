@@ -234,7 +234,7 @@ impl ExtensionDispatch for PolicyExt {
 struct Harness {
     store: lca_session::SessionStore,
     session: lca_session::Session,
-    grants: GrantStore,
+    grants: Arc<Mutex<GrantStore>>,
     tools: lca_tools::ToolExecutor,
     provider: Arc<FakeProvider>,
     prompt: Arc<PromptSpy>,
@@ -246,7 +246,9 @@ fn harness(name: &str, provider: FakeProvider, registry: ExtensionRegistry) -> H
     let project = root.join("project");
     let store = lca_session::SessionStore::new(root.join("data"));
     let session = store.create_session(&project, "test").expect("session");
-    let grants = GrantStore::open(&root.join("grants.json")).expect("grants");
+    let grants = Arc::new(Mutex::new(
+        GrantStore::open(&root.join("grants.json")).expect("grants"),
+    ));
     let tools = lca_tools::ToolExecutor::new(
         Arc::new(lca_tools::NativeOps),
         project.clone(),
@@ -279,7 +281,7 @@ async fn turn(h: &mut Harness, input: &str, sink: &mut CollectingSink) -> TurnOu
         &h.session,
         h.provider.as_ref(),
         &mut h.tools,
-        &mut h.grants,
+        h.grants.clone(),
         &mut prompt,
         None,
         h.config.clone(),
@@ -703,7 +705,7 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
         &h.session,
         h.provider.as_ref(),
         &mut h.tools,
-        &mut h.grants,
+        h.grants.clone(),
         &mut prompt,
         None,
         h.config.clone(),

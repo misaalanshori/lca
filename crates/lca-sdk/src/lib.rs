@@ -49,9 +49,11 @@ pub struct Session {
     provider: Arc<dyn lca_provider::Provider>,
     /// The session's model (empty resolves to the provider's first).
     model: String,
-    /// Standing grants; held for a whole turn, which also serializes
-    /// turns - one session, one conversation, in order.
-    grants: tokio::sync::Mutex<GrantStore>,
+    /// Standing grants, shared with every capability engine; the store is
+    /// locked per authorize call, never for a whole turn.
+    grants: Arc<std::sync::Mutex<GrantStore>>,
+    /// Serializes turns: one session, one conversation, in order.
+    turn: tokio::sync::Mutex<()>,
     /// The event stream's fan-out point.
     events: tokio::sync::broadcast::Sender<TurnEvent>,
 }
@@ -123,7 +125,8 @@ impl Session {
             session,
             provider,
             model,
-            grants: tokio::sync::Mutex::new(grants),
+            grants: Arc::new(std::sync::Mutex::new(grants)),
+            turn: tokio::sync::Mutex::new(()),
             events,
         })
     }
@@ -144,7 +147,7 @@ impl Session {
     /// subscriber while the turn runs, records land in the log before
     /// this returns, and the outcome answers like headless mode's.
     pub async fn send(&self, input: &str) -> TurnOutcome {
-        let mut grants = self.grants.lock().await;
+        let _turn = self.turn.lock().await;
         let mut tools = ToolExecutor::new(
             Arc::new(NativeOps),
             self.cwd.clone(),
@@ -165,7 +168,7 @@ impl Session {
             &self.session,
             self.provider.as_ref(),
             &mut tools,
-            &mut grants,
+            self.grants.clone(),
             &mut prompt,
             None,
             config,
