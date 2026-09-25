@@ -184,16 +184,22 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             return Ok(crate::exit::USAGE);
         }
     };
+    // No configured model and no credential for this provider: stay in the
+    // honest "no model" state rather than auto-selecting a model that will
+    // fail on the first turn. `/model` or `/login` moves the session on.
+    let provider_is_ready = crate::provider_ready(&provider_name, &data);
     let model_id = {
         let configured = config.model().unwrap_or_default();
-        if configured.is_empty() {
+        if !configured.is_empty() {
+            configured.to_string()
+        } else if provider_is_ready {
             provider
                 .list_models()
                 .first()
                 .map(|model| model.id.clone())
-                .unwrap_or_else(|| provider_name.clone())
+                .unwrap_or_default()
         } else {
-            configured.to_string()
+            String::new()
         }
     };
     // The default compaction strategy asks THIS provider through the
@@ -304,7 +310,11 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         id: model_id.clone(),
         window: agent_config.model_context_window,
     }));
-    let label_cell = Arc::new(Mutex::new(format!("{provider_name}/{model_id}")));
+    let label_cell = Arc::new(Mutex::new(if model_id.is_empty() {
+        String::new()
+    } else {
+        format!("{provider_name}/{model_id}")
+    }));
     let options = UiOptions {
         model_label: label_cell.clone(),
         initial_lines,
@@ -370,6 +380,12 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 .iter()
                 .map(|name| format!("/{name}"))
                 .collect();
+            // Interface-level commands: `/help` lists everything (answered
+            // by the interface itself, so it works with no extension), and
+            // `/exit`/`/quit` leave. They lead the list so completion shows
+            // them first.
+            names.insert(0, "/help".to_string());
+            names.insert(1, "/exit".to_string());
             // Extension command names reach completion (and the screen);
             // sanitized because an extension chose these strings.
             names.extend(

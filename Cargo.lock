@@ -1309,6 +1309,7 @@ dependencies = [
  "anyhow",
  "clap",
  "compaction-default",
+ "crossterm",
  "http-body-util",
  "hyper",
  "hyper-util",

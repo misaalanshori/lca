@@ -197,6 +197,19 @@ impl Sandbox {
         self.root.join("project")
     }
 
+    /// Seed a provider's credential namespace, the way `/login` would for a
+    /// sandboxed (WASM) extension: it cannot see the host environment, so
+    /// its endpoint and key live in its own store.
+    fn write_credentials(&self, namespace: &str, values: serde_json::Value) {
+        let dir = self.state_dir().join("credentials");
+        std::fs::create_dir_all(&dir).expect("mkdir credentials");
+        std::fs::write(
+            dir.join(format!("{namespace}.json")),
+            serde_json::to_vec_pretty(&values).expect("credentials serialize"),
+        )
+        .expect("write credentials");
+    }
+
     fn run(&self, mock: Option<&Mock>, args: &[&str]) -> Output {
         self.run_env(mock, args, &[])
     }
@@ -826,6 +839,16 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
     let text = stdout(&output);
     assert!(text.contains("digest:   sha256:"), "{text}");
     assert!(text.contains("denials:  0"), "{text}");
+
+    // The installed WASM provider cannot read the host environment
+    // (sandboxing is the point), so its endpoint and key live in its own
+    // credential namespace - exactly what `/login` writes for a real
+    // install. Without this the WASM provider would default to
+    // api.openai.com and the turn would fail with a connect error.
+    sandbox.write_credentials(
+        "openai-compatible",
+        serde_json::json!({ "api_key": "test-key", "base_url": model.url() }),
+    );
 
     // --- Turn one, WITHOUT ad hoc consent: the installed provider
     // reaches for127.0.0.1, the engine refuses and journals it.

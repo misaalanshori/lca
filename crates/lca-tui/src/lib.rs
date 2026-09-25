@@ -226,6 +226,10 @@ pub struct UiState {
     pub options: UiOptions,
     /// The input buffer.
     pub buffer: String,
+    /// Where the cursor sits, in bytes. `None` means the end of the buffer,
+    /// which is the default so text assigned directly still appends; a
+    /// movement key pins it to an explicit index.
+    pub cursor: Option<usize>,
     /// Submitted lines, newest last (input editor history).
     pub history: Vec<String>,
     /// History browsing position.
@@ -274,6 +278,7 @@ impl UiState {
             options,
             scrollback: initial_lines,
             buffer: String::new(),
+            cursor: None,
             history: Vec::new(),
             history_index: None,
             active: String::new(),
@@ -294,6 +299,80 @@ impl UiState {
     /// Record a terminal resize (FR-UI-3: nothing is lost).
     pub fn resize(&mut self, width: u16, height: u16) {
         self.size = (width, height);
+    }
+
+    /// The cursor's byte offset into `buffer`, clamped to a char boundary.
+    pub fn cursor_index(&self) -> usize {
+        let end = self.buffer.len();
+        let Some(mut index) = self.cursor else {
+            return end;
+        };
+        index = index.min(end);
+        while index > 0 && !self.buffer.is_char_boundary(index) {
+            index -= 1;
+        }
+        index
+    }
+
+    fn set_cursor(&mut self, index: usize) {
+        self.cursor = (index < self.buffer.len()).then_some(index);
+    }
+
+    /// Insert `text` at the cursor and leave the cursor after it.
+    pub fn insert_at_cursor(&mut self, text: &str) {
+        let at = self.cursor_index();
+        self.buffer.insert_str(at, text);
+        self.set_cursor(at + text.len());
+    }
+
+    fn backspace(&mut self) {
+        let at = self.cursor_index();
+        if at == 0 {
+            return;
+        }
+        let prev = prev_char_boundary(&self.buffer, at);
+        self.buffer.replace_range(prev..at, "");
+        self.set_cursor(prev);
+    }
+
+    fn delete_at_cursor(&mut self) {
+        let at = self.cursor_index();
+        if at >= self.buffer.len() {
+            return;
+        }
+        let next = next_char_boundary(&self.buffer, at);
+        self.buffer.replace_range(at..next, "");
+        self.set_cursor(at);
+    }
+
+    fn move_left(&mut self) {
+        let at = self.cursor_index();
+        if at > 0 {
+            self.set_cursor(prev_char_boundary(&self.buffer, at));
+        }
+    }
+
+    fn move_right(&mut self) {
+        let at = self.cursor_index();
+        if at >= self.buffer.len() {
+            self.cursor = None;
+        } else {
+            self.set_cursor(next_char_boundary(&self.buffer, at));
+        }
+    }
+
+    fn move_home(&mut self) {
+        let at = self.cursor_index();
+        let start = self.buffer[..at].rfind('\n').map_or(0, |index| index + 1);
+        self.set_cursor(start);
+    }
+
+    fn move_end(&mut self) {
+        let at = self.cursor_index();
+        let end = self.buffer[at..]
+            .find('\n')
+            .map_or(self.buffer.len(), |index| at + index);
+        self.set_cursor(end);
     }
 
     /// Open the permission modal (FR-UI-4).
@@ -389,7 +468,7 @@ fn short_call(call_id: &str) -> String {
 /// What a key press asks the loop to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Nothing外 external; keep editing.
+    /// Nothing external; keep editing.
     Continue,
     /// Submit the buffer as a user turn.
     Submit,
@@ -538,7 +617,7 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
 
     match key.code {
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            state.buffer.push('\n');
+            state.insert_at_cursor("\n");
             Action::Continue
         }
         KeyCode::Enter => {
@@ -554,6 +633,17 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                 state.history.push(submitted);
                 state.history_index = None;
                 state.buffer.clear();
+                state.cursor = None;
+                // Host-level commands the interface answers itself, so they
+                // work with no extension installed.
+                match name.as_str() {
+                    "help" => {
+                        state.notice = Some(help_notice(&state.options.slash_commands));
+                        return Action::Continue;
+                    }
+                    "quit" | "exit" => return Action::Exit,
+                    _ => {}
+                }
                 let full = format!("/{name}");
                 if state
                     .options
@@ -566,10 +656,11 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                             state.notice = Some(sanitize_text(&text))
                         }
                         CommandEffect::InsertText(text) => {
-                            state.buffer.push_str(&sanitize_text(&text))
+                            state.insert_at_cursor(&sanitize_text(&text))
                         }
                         CommandEffect::SubmitPrompt(text) => {
                             state.buffer = text;
+                            state.cursor = None;
                             return Action::Submit;
                         }
                         CommandEffect::None => {}
@@ -579,7 +670,26 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                 state.notice = Some(sanitize_text(&format!("unknown command /{name}")));
                 return Action::Continue;
             }
+            // A turn needs a model; say so rather than letting it fail deep
+            // inside the provider with a transport error.
+            if state
+                .options
+                .model_label
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .trim()
+                .is_empty()
+            {
+                state.buffer.clear();
+                state.cursor = None;
+                state.notice = Some(
+                    "No model is active. Use /login to sign in, or /model to choose one."
+                        .to_string(),
+                );
+                return Action::Continue;
+            }
             let submitted = std::mem::take(&mut state.buffer);
+            state.cursor = None;
             state.history.push(submitted);
             state.history_index = None;
             Action::Submit
@@ -604,6 +714,7 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                 };
                 state.history_index = Some(index);
                 state.buffer = state.history[index].clone();
+                state.cursor = None;
             }
             Action::Continue
         }
@@ -616,6 +727,7 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                 Some(_) => state.buffer.clear(),
                 None => {}
             }
+            state.cursor = None;
             Action::Continue
         }
         KeyCode::Tab => {
@@ -623,15 +735,31 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
             Action::Continue
         }
         KeyCode::Backspace => {
-            state.buffer.pop();
+            state.backspace();
             Action::Continue
         }
-        KeyCode::Left if !state.buffer.is_empty() => {
-            state.buffer.pop();
+        KeyCode::Delete => {
+            state.delete_at_cursor();
+            Action::Continue
+        }
+        KeyCode::Left => {
+            state.move_left();
+            Action::Continue
+        }
+        KeyCode::Right => {
+            state.move_right();
+            Action::Continue
+        }
+        KeyCode::Home => {
+            state.move_home();
+            Action::Continue
+        }
+        KeyCode::End => {
+            state.move_end();
             Action::Continue
         }
         KeyCode::Char(c) => {
-            state.buffer.push(c);
+            state.insert_at_cursor(&c.to_string());
             state.ctrl_c_armed = false;
             Action::Continue
         }
@@ -639,17 +767,65 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
     }
 }
 
+/// The byte offset of the previous character boundary before `index`.
+fn prev_char_boundary(text: &str, index: usize) -> usize {
+    let mut previous = index.saturating_sub(1);
+    while previous > 0 && !text.is_char_boundary(previous) {
+        previous -= 1;
+    }
+    previous
+}
+
+/// The byte offset of the next character boundary after `index`.
+fn next_char_boundary(text: &str, index: usize) -> usize {
+    let mut next = index + 1;
+    while next < text.len() && !text.is_char_boundary(next) {
+        next += 1;
+    }
+    next
+}
+
+/// The `/help` text: the commands the interface offers, then the keys.
+fn help_notice(commands: &[String]) -> String {
+    let mut sorted: Vec<&String> = commands.iter().collect();
+    sorted.sort();
+    sorted.dedup();
+    let mut out = String::from("commands:\n");
+    for command in sorted {
+        out.push_str("  ");
+        out.push_str(command);
+        out.push('\n');
+    }
+    out.push_str("Enter sends, Shift+Enter adds a line, Tab completes, Ctrl+C cancels");
+    out
+}
+
 fn complete(state: &mut UiState) {
     if state.buffer.starts_with('/') && !state.buffer.contains(char::is_whitespace) {
-        let prefix = state.buffer.as_str();
-        let matches: Vec<&String> = state
+        let prefix = state.buffer.clone();
+        let mut matches: Vec<String> = state
             .options
             .slash_commands
             .iter()
-            .filter(|command| command.starts_with(prefix))
+            .filter(|command| command.starts_with(&prefix))
+            .cloned()
             .collect();
-        if matches.len() == 1 {
-            state.buffer = matches[0].clone();
+        matches.sort();
+        match matches.len() {
+            0 => {}
+            1 => {
+                state.buffer = matches[0].clone();
+                state.cursor = None;
+            }
+            _ => {
+                if let Some(common) = common_prefix(&matches)
+                    && common.len() > prefix.len()
+                {
+                    state.buffer = common;
+                    state.cursor = None;
+                }
+                state.notice = Some(format!("completions: {}", matches.join("  ")));
+            }
         }
         return;
     }
@@ -700,10 +876,14 @@ fn complete(state: &mut UiState) {
     matches.sort();
     if matches.len() == 1 {
         state.buffer = format!("{head}{}", matches[0]);
+        state.cursor = None;
     } else if let Some(common) = common_prefix(&matches)
         && common.len() > dir_part.len() + file_prefix.len()
     {
         state.buffer = format!("{head}{common}");
+        state.cursor = None;
+    } else if matches.len() > 1 {
+        state.notice = Some(format!("completions: {}", matches.join("  ")));
     }
 }
 
@@ -799,6 +979,11 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         (frame.area(), None)
     };
 
+    let input_rows = wrapped_rows(
+        &format!("> {}", state.buffer),
+        main_area.width.saturating_sub(2).max(1) as usize,
+    );
+    let input_height = (input_rows + 2).clamp(3, 12);
     let mut vertical = vec![Constraint::Min(3), Constraint::Min(3)];
     if !footer_lines.is_empty() {
         // The footer draws with a border: two rows of chrome around its
@@ -806,7 +991,7 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         vertical.push(Constraint::Length(footer_lines.len() as u16 + 2));
     }
     vertical.push(Constraint::Length(1));
-    vertical.push(Constraint::Length(3));
+    vertical.push(Constraint::Length(input_height));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(vertical)
@@ -815,7 +1000,12 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
     let status_row = chunks[chunks.len() - 2];
     let input_row = chunks[chunks.len() - 1];
 
-    let scroll_text = state.scrollback.join("\n");
+    let scroll_text = if state.scrollback.is_empty() {
+        // First run: say what the interface is for instead of a blank box.
+        "Type a message to start. /help lists commands, /login signs in.".to_string()
+    } else {
+        state.scrollback.join("\n")
+    };
     let scroll_lines = scroll_text.lines().count() as u16;
     let scroll_height = chunks[0].height.saturating_sub(2);
     let scroll_offset = scroll_lines.saturating_sub(scroll_height);
@@ -860,6 +1050,13 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
+    // An empty label is the "no provider is signed in yet" state (the CLI
+    // leaves it empty rather than pretending a default model is active).
+    let model_label = if model_label.trim().is_empty() {
+        "no model".to_string()
+    } else {
+        model_label
+    };
     let mut status_spans = vec![
         Span::styled(
             format!(" {} ", model_label),
@@ -1010,16 +1207,83 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn cursor_position(input_area: Rect, state: &UiState) -> (u16, u16) {
-    // Single-line view of the buffer: the cursor sits after the last char.
-    let (last_line, row) = match state.buffer.rfind('\n') {
-        Some(index) => (&state.buffer[index + 1..], 1u16),
-        None => (state.buffer.as_str(), 0u16),
-    };
-    let inner_x = last_line.chars().count() as u16;
-    (
-        input_area.x + 1 + inner_x.min(input_area.width.saturating_sub(3)),
-        input_area.y + 1 + row,
-    )
+    let inner_width = input_area.width.saturating_sub(2).max(1) as usize;
+    let at = state.cursor_index();
+    // The rendered text is "> " plus the buffer up to the cursor. Walking
+    // it - not just counting characters - makes explicit newlines and soft
+    // wrapping both land the cursor in the right cell.
+    let mut row = 0usize;
+    let mut col = 0usize;
+    for ch in "> ".chars().chain(state.buffer[..at].chars()) {
+        if ch == '\n' {
+            row += 1;
+            col = 0;
+        } else {
+            col += 1;
+            if col >= inner_width {
+                row += 1;
+                col = 0;
+            }
+        }
+    }
+    let max_row = input_area.height.saturating_sub(2) as usize;
+    let row = row.min(max_row);
+    (input_area.x + 1 + col as u16, input_area.y + 1 + row as u16)
+}
+
+/// How many terminal rows `text` occupies at `width` columns, counting
+/// explicit newlines and soft wrapping.
+fn wrapped_rows(text: &str, width: usize) -> u16 {
+    let width = width.max(1);
+    let mut rows = 1usize;
+    let mut col = 0usize;
+    for ch in text.chars() {
+        if ch == '\n' {
+            rows += 1;
+            col = 0;
+        } else {
+            col += 1;
+            if col >= width {
+                rows += 1;
+                col = 0;
+            }
+        }
+    }
+    rows.min(u16::MAX as usize) as u16
+}
+
+/// Restores the terminal (raw mode off, main screen, cursor visible) when
+/// dropped, so every ordinary exit and early error leaves the console usable.
+struct TerminalRestore;
+
+impl Drop for TerminalRestore {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture,
+            crossterm::cursor::Show,
+        );
+    }
+}
+
+/// Restore the terminal even when a panic aborts the process: the release
+/// profile sets `panic = "abort"`, which skips destructors. A Windows
+/// console left in raw mode outlives the process, and that is what made the
+/// next command - `ext install`'s consent prompt - look frozen.
+fn install_terminal_restore_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture,
+            crossterm::cursor::Show,
+        );
+        previous(info);
+    }));
 }
 
 /// Run the interface until the user exits; returns the process exit code.
@@ -1029,8 +1293,10 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     use ratatui::Terminal;
     use ratatui::backend::CrosstermBackend;
 
+    install_terminal_restore_hook();
     let mut stdout = std::io::stdout();
     crossterm::terminal::enable_raw_mode()?;
+    let _restore = TerminalRestore;
     execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
@@ -1162,13 +1428,6 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     if let Some(handle) = active_turn {
         let _ = handle.join();
     }
-    crossterm::terminal::disable_raw_mode()?;
-    execute!(
-        std::io::stdout(),
-        crossterm::terminal::LeaveAlternateScreen,
-        crossterm::event::DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
 
     result.map(|()| 0)
 }

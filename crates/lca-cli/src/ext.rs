@@ -6,38 +6,41 @@
 //! capability catalog's words before anything is written, and a "no"
 //! writes nothing at all.
 
-use std::io::Write as _;
-
 use lca_registry::{InstallTree, Resolved};
 
 /// The `lca ext ...` subcommands (SRDD command-line section).
 #[derive(clap::Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum ExtCmd {
-    /// Install from an OCI reference, an HTTPS archive URL, or a local path.
+    /// Install an extension from a registry, a URL, or a local file.
     Install {
-        /// `host/repo/name:tag`, `https://host/file.zip`, or a path.
+        /// A registry reference (`host/repo/name:tag`), an https archive
+        /// URL, or a path to a component.
         reference: String,
-        /// The manifest beside a local component (default: sibling
-        /// `extension.toml`; FR-DIST-5's shape).
+        /// The manifest next to a local component (defaults to
+        /// `extension.toml` beside it).
         #[arg(long)]
         manifest: Option<std::path::PathBuf>,
+        /// Answer yes to the capability prompt (for scripts).
+        #[arg(long)]
+        yes: bool,
     },
-    /// Re-resolve an installed extension's source and apply it
-    /// (FR-DIST-7's prompt covers a widened capability set).
+    /// Re-fetch an installed extension and apply the new version.
     Update {
-        /// The extension to update, or every installed one.
+        /// The extension to update.
         name: Option<String>,
-        /// Update every installed extension (`ext update --all`).
+        /// Update every installed extension.
         #[arg(long)]
         all: bool,
+        /// Answer yes to the capability prompt (for scripts).
+        #[arg(long)]
+        yes: bool,
     },
-    /// Uninstall an extension and forget its record.
+    /// Uninstall an extension.
     Remove {
         /// The extension to remove.
         name: String,
     },
-    /// Show one extension's manifest, digest, source, consent lines,
-    /// and recorded denial count (FR-EXT-9).
+    /// Show an extension's manifest, source, and digest.
     Info {
         /// The extension to inspect.
         name: String,
@@ -127,12 +130,51 @@ pub fn load_installed(
 }
 
 fn confirm(prompt: &str) -> bool {
+    use std::io::{IsTerminal, Write as _};
     print!("{prompt}");
     let _ = std::io::stdout().flush();
-    let mut line = String::new();
-    match std::io::stdin().read_line(&mut line) {
-        Ok(0) | Err(_) => false, // EOF declines: nothing written
-        Ok(_) => matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
+    if !std::io::stdin().is_terminal() {
+        // Piped input (tests, scripts): read a line. Nothing on stdin is a
+        // decline, so an unattended install never writes without consent.
+        let mut line = String::new();
+        return match std::io::stdin().read_line(&mut line) {
+            Ok(0) | Err(_) => false,
+            Ok(_) => matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
+        };
+    }
+    // Interactive: one key, no Enter needed. Raw mode also works when a
+    // previous process left the console raw, where `read_line` would wait
+    // forever for a newline that never completes.
+    let _ = crossterm::terminal::enable_raw_mode();
+    let raw = RawModeGuard;
+    let answer = loop {
+        match crossterm::event::read() {
+            Ok(crossterm::event::Event::Key(key))
+                if key.kind == crossterm::event::KeyEventKind::Press =>
+            {
+                match key.code {
+                    crossterm::event::KeyCode::Char('y' | 'Y') => break true,
+                    crossterm::event::KeyCode::Char('n' | 'N')
+                    | crossterm::event::KeyCode::Esc
+                    | crossterm::event::KeyCode::Enter => break false,
+                    _ => {}
+                }
+            }
+            Ok(_) => {}
+            Err(_) => break false,
+        }
+    };
+    drop(raw);
+    println!("{}", if answer { "y" } else { "n" });
+    answer
+}
+
+/// Turns raw mode back off when dropped, including on the error paths.
+struct RawModeGuard;
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
     }
 }
 
@@ -157,14 +199,15 @@ pub async fn run(cmd: ExtCmd) -> i32 {
         ExtCmd::Install {
             reference,
             manifest,
+            yes,
         } => match lca_registry::resolve(&reference, manifest.as_deref()).await {
-            Ok(resolved) => install(resolved, tree),
+            Ok(resolved) => install(resolved, tree, yes),
             Err(err) => {
                 eprintln!("error: {err}");
                 error_code(&err)
             }
         },
-        ExtCmd::Update { name, all } => update(&tree, name, all).await,
+        ExtCmd::Update { name, all, yes } => update(&tree, name, all, yes).await,
         ExtCmd::Remove { name } => match tree.remove(&name) {
             Ok(true) => {
                 println!("removed {name}");
@@ -186,7 +229,7 @@ pub async fn run(cmd: ExtCmd) -> i32 {
 
 /// Validate, show consent, then write (FR-DIST-4's delete never needs
 /// to fire: resolution verified before we got here).
-fn install(resolved: Resolved, tree: InstallTree) -> i32 {
+fn install(resolved: Resolved, tree: InstallTree, yes: bool) -> i32 {
     // Manifest validation is the same parser the loader uses, so an
     // install that passes here loads later (one parser, one truth).
     let parsed = match parse_manifest_strict(&resolved.manifest) {
@@ -216,7 +259,7 @@ fn install(resolved: Resolved, tree: InstallTree) -> i32 {
             println!("  - {line}");
         }
     }
-    if !confirm("Allow these capabilities? [y/N] ") {
+    if !yes && !confirm("Allow these capabilities? [y/N] ") {
         println!("aborted; nothing was written");
         return crate::exit::OK;
     }
@@ -268,7 +311,7 @@ fn parse_manifest_strict(manifest: &str) -> Result<(String, String, String, Stri
     Ok((parsed.name, parsed.version, parsed.abi, description))
 }
 
-async fn update(tree: &InstallTree, name: Option<String>, all: bool) -> i32 {
+async fn update(tree: &InstallTree, name: Option<String>, all: bool, yes: bool) -> i32 {
     let names: Vec<String> = if all {
         match tree.list() {
             Ok(entries) => entries.into_iter().map(|(name, _)| name).collect(),
@@ -356,7 +399,7 @@ async fn update(tree: &InstallTree, name: Option<String>, all: bool) -> i32 {
                 for line in &lines {
                     println!("  - {line}");
                 }
-                if confirm(&format!("Apply the new capabilities for {name}? [y/N] ")) {
+                if yes || confirm(&format!("Apply the new capabilities for {name}? [y/N] ")) {
                     if let Err(err) = tree.install(resolved) {
                         eprintln!("error: {err}");
                         code = error_code(&err);

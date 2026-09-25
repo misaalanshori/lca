@@ -315,3 +315,42 @@ async fn a_closed_receiver_ends_the_stream_and_keeps_the_extension() {
         .stream_completion(request("conformance-defaults"), &sink)
         .await;
 }
+
+/// A committed first-party component must export every world its manifest
+/// declares: the manifest schema says the host verifies each one, and a
+/// drift is exactly the defect that shipped an `antigravity` artifact the
+/// host refused to link (`no exported instance named
+/// lca:ext/command-spec@1.0.0`). The loader's own world-link step is the
+/// assertion - a component missing a declared world fails to load.
+#[test]
+fn every_first_party_component_exports_the_worlds_its_manifest_declares() {
+    let cases: [(&str, &[u8], &str); 2] = [
+        (
+            "openai-compatible",
+            include_bytes!("../../../extensions/openai-compatible/fixtures/component.wasm"),
+            include_str!("../../../extensions/openai-compatible/extension.toml"),
+        ),
+        (
+            "antigravity",
+            include_bytes!("../../../extensions/antigravity/fixtures/component.wasm"),
+            include_str!("../../../extensions/antigravity/extension.toml"),
+        ),
+    ];
+    for (name, bytes, manifest) in cases {
+        let mut host = ExtHost::new(
+            ExtensionLimits {
+                memory_bytes: 64 * 1024 * 1024,
+                fuel_per_call: 100_000_000,
+                log_limit_bytes: 4096,
+            },
+            Fixture::new(&format!("manifest-{name}")).env(),
+        );
+        let handle = host
+            .load(bytes, manifest)
+            .unwrap_or_else(|err| panic!("`{name}` must link against its manifest: {err}"));
+        assert!(
+            handle.worlds().contains(&World::Provider),
+            "`{name}` exports the provider world"
+        );
+    }
+}

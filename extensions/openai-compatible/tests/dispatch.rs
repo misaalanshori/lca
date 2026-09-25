@@ -245,16 +245,16 @@ fn manifest_toml_and_native_grants_agree() {
     );
     assert!(grants.credentials);
     assert!(grants.fs.is_empty() && !grants.process && !grants.pty);
-    for world in ["provider", "command"] {
-        assert!(
-            manifest["worlds"]
-                .as_array()
-                .expect("worlds")
-                .iter()
-                .any(|value| value.as_str() == Some(world)),
-            "{world} declared"
-        );
-    }
+    // The component exports only the provider world (the manifest schema
+    // requires every declared world to be exported), so `command` is not
+    // declared: this provider ships no slash commands of its own.
+    let worlds: Vec<&str> = manifest["worlds"]
+        .as_array()
+        .expect("worlds")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect();
+    assert_eq!(worlds, vec!["provider"]);
 }
 
 // Helpers -----------------------------------------------------------------

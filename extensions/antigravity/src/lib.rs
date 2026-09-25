@@ -1020,7 +1020,7 @@ mod native {
         }
 
         fn worlds(&self) -> Vec<World> {
-            vec![World::Provider, World::Command]
+            vec![World::Provider]
         }
 
         fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, DispatchError> {

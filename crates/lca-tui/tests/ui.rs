@@ -620,3 +620,89 @@ fn key_event(
 ) -> crossterm::event::KeyEvent {
     crossterm::event::KeyEvent::new(code, modifiers)
 }
+
+// The input editor keeps a cursor: Left/Right move it without deleting, and
+// typing inserts where it sits. (Left used to pop the last character, which
+// made editing the middle of a line impossible.)
+#[test]
+fn left_right_move_the_cursor_and_typing_inserts_where_it_sits() {
+    let mut state = UiState::new(options());
+    state.buffer = "helo".to_string();
+    assert_eq!(
+        state.cursor_index(),
+        4,
+        "a fresh buffer has the cursor at the end"
+    );
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Left));
+    assert_eq!(state.cursor_index(), 3, "Left moves one back");
+    assert_eq!(state.buffer, "helo", "Left deletes nothing");
+    handle_key(
+        &mut state,
+        crossterm::event::KeyEvent::from(KeyCode::Char('l')),
+    );
+    assert_eq!(state.buffer, "hello", "the character lands at the cursor");
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Home));
+    assert_eq!(state.cursor_index(), 0);
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::End));
+    assert_eq!(state.cursor_index(), 5);
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Home));
+    handle_key(
+        &mut state,
+        crossterm::event::KeyEvent::from(KeyCode::Delete),
+    );
+    assert_eq!(
+        state.buffer, "ello",
+        "Delete removes the char at the cursor"
+    );
+}
+
+// `/help` is answered by the interface itself, so it works with no
+// extension installed and lists the commands and keys.
+#[test]
+fn help_lists_the_commands_without_an_extension() {
+    let mut state = UiState::new(options());
+    state.buffer = "/help".to_string();
+    assert_eq!(
+        handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter)),
+        Action::Continue
+    );
+    let notice = state.notice.as_deref().unwrap_or_default();
+    assert!(notice.contains("/stats"), "lists a known command: {notice}");
+    assert!(notice.contains("Enter sends"), "shows the keys: {notice}");
+}
+
+// With no model active the interface says so rather than letting the turn
+// fail deep inside the provider with a transport error.
+#[test]
+fn submitting_with_no_model_asks_for_one_instead_of_running() {
+    let mut options = options();
+    options.model_label = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut state = UiState::new(options);
+    state.buffer = "hello".to_string();
+    assert_eq!(
+        handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter)),
+        Action::Continue,
+        "no turn starts without a model"
+    );
+    assert!(
+        state
+            .notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("No model"),
+        "the reason is shown: {:?}",
+        state.notice
+    );
+}
+
+// Tab on a prefix with several commands lists them rather than doing
+// nothing.
+#[test]
+fn tab_lists_multiple_command_matches() {
+    let mut state = UiState::new(options());
+    state.buffer = "/lo".to_string();
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Tab));
+    let notice = state.notice.as_deref().unwrap_or_default();
+    assert!(notice.contains("/login"), "{notice}");
+    assert!(notice.contains("/logout"), "{notice}");
+}

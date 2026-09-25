@@ -14,7 +14,7 @@ Google's Antigravity API, using the loopback OAuth flow described in `docs/flows
 name = "antigravity"
 version = "1.0.0"
 abi = "1.0"
-worlds = ["provider", "command"]
+worlds = ["provider"]
 description = "Google Antigravity models, including image generation, via subscription login."
 
 [capabilities.net]

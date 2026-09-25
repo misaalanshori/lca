@@ -41,6 +41,7 @@ jobs:
       - name: Refresh the committed fixtures
         run: |
           cp target/wasm32-wasip2/release/openai_compatible.wasm extensions/openai-compatible/fixtures/component.wasm
+          cp target/wasm32-wasip2/release/antigravity.wasm extensions/antigravity/fixtures/component.wasm
           cp target/wasm32-wasip2/release/skills.wasm extensions/skills/fixtures/component.wasm
       - name: Pack the HTTPS-archive asset (ADR-0010's zip)
         run: |

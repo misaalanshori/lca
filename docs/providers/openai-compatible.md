@@ -19,7 +19,7 @@ compacts). Authentication is a bearer token in the request header, read from the
 name = "openai-compatible"
 version = "1.0.0"
 abi = "1.0"
-worlds = ["provider", "command"]
+worlds = ["provider"]
 description = "Any OpenAI-compatible chat completions endpoint. Configurable base URL and key."
 
 [capabilities.net]

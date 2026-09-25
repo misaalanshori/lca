@@ -37,14 +37,15 @@ pub fn version_text() -> String {
 #[command(
     name = "lca",
     version = version_static(),
-    about = "A lightweight, cross-platform, WASM-extensible coding agent"
+    about = "A lightweight, cross-platform, extensible coding agent for the terminal"
 )]
 pub struct Cli {
-    /// Run one turn without an interactive interface (FR-CORE-3).
+    // FR-CORE-3: one turn, no interface.
+    /// Run a single prompt and print the reply, without the interface.
     #[arg(short = 'p', long = "prompt", value_name = "PROMPT")]
     pub prompt: Option<String>,
-    /// Machine-readable output: one JSON object per line
-    /// (`docs/headless.md`).
+    // `docs/headless.md`: the JSON-lines envelope.
+    /// Print one JSON object per line, for scripts.
     #[arg(long)]
     pub json: bool,
     #[command(subcommand)]
@@ -55,38 +56,41 @@ pub struct Cli {
 /// The session and configuration subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// List this project's sessions, newest first; with an id, reopen one
-    /// interactively (FR-SESS-2).
+    // FR-SESS-2: list or reopen.
+    /// List this project's sessions, or reopen one by id.
     Resume {
-        /// The session to reopen.
+        /// The session id to reopen; omit it to list.
         id: Option<String>,
     },
-    /// Fork a session at a message (FR-SESS-3).
+    // FR-SESS-3.
+    /// Copy a session up to a message into a new session.
     Fork {
-        /// The parent session id.
+        /// The session to fork from.
         session: String,
         /// The record id to fork at.
         message: String,
     },
-    /// Rename a session.
+    /// Give a session a new title.
     Rename {
-        /// The session id.
+        /// The session to rename.
         session: String,
         /// The new title.
         title: String,
     },
-    /// Export a session (`docs/session-log-format.md`, FR-SESS-7).
+    // FR-SESS-7, `docs/session-log-format.md`.
+    /// Write a session out for sharing or inspection.
     Export {
-        /// The session id.
+        /// The session to export.
         session: String,
-        /// Keep permission and extension-event records.
+        /// Include permission and extension-event records.
         #[arg(long)]
         audit: bool,
     },
-    /// Print the merged configuration and each value's source (FR-CFG-2).
+    // FR-CFG-2.
+    /// Show the merged configuration and where each value came from.
     Config,
-    /// Manage extensions: install, update, remove, info, list
-    /// (SRDD command-line section, FR-DIST-*).
+    // The SRDD's command-line section, FR-DIST-*.
+    /// Install, update, remove, and inspect extensions.
     Ext {
         /// What to do with extensions.
         #[command(subcommand)]
@@ -130,6 +134,35 @@ pub(crate) fn no_model_message(provider: &str) -> String {
         "No model is available (provider `{provider}` is not enabled). \
          Install one with `lca ext install <reference>`."
     )
+}
+
+/// Whether the configured provider looks ready to answer: a stored
+/// credential for its namespace (`<data>/credentials/<name>.json`, whose
+/// value is the extension identity per FR-PERM-6/7), or - for the bundled
+/// `openai-compatible` provider - one of its documented environment keys.
+/// When it is not ready the interface starts with no model and says how to
+/// sign in, instead of offering a model whose first turn will fail with a
+/// transport error.
+pub(crate) fn provider_ready(name: &str, data: &Path) -> bool {
+    if name == "openai-compatible"
+        && ["OPENAI_API_KEY", "OPENCODE_API_KEY"]
+            .iter()
+            .any(|key| std::env::var(key).is_ok_and(|value| !value.is_empty()))
+    {
+        return true;
+    }
+    let Ok(text) = std::fs::read_to_string(data.join("credentials").join(format!("{name}.json")))
+    else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    value.as_object().is_some_and(|object| {
+        object
+            .values()
+            .any(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+    })
 }
 
 /// FR-PROV-9's disable knob (FR-PERM-19's storage): every handle the

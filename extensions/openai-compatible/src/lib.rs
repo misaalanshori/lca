@@ -499,8 +499,8 @@ pub fn run_login(cap: &dyn ProviderCap, settings: &Settings) -> IdentityOutcome 
     }
     let Some(key) = settings.api_key.clone() else {
         return IdentityOutcome::Failed(
-            "no key stored and neither OPENAI_API_KEY nor OPENCODE_API_KEY is set; \
-             the interactive setup modal arrives with the ui world"
+            "no API key is configured. Set OPENAI_API_KEY (or OPENCODE_API_KEY) \
+             and run /login again."
                 .to_string(),
         );
     };
@@ -579,7 +579,7 @@ mod native {
         }
 
         fn worlds(&self) -> Vec<World> {
-            vec![World::Provider, World::Command]
+            vec![World::Provider]
         }
 
         fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, DispatchError> {
@@ -600,9 +600,11 @@ mod native {
         }
 
         fn command_specs(&self) -> Result<Vec<lca_protocol::CommandSpec>, DispatchError> {
-            // Declared per the provider template; the identity trio is
-            // namespaced by the host (FR-PROV-10), and this provider
-            // documents no extra commands of its own.
+            // This provider ships no slash commands of its own; the
+            // identity trio (`/login`, `/logout`, `/usage`) is namespaced
+            // by the host through the provider world (FR-PROV-10). The
+            // manifest lists only the `provider` world for the same reason:
+            // the schema requires every declared world to be exported.
             Ok(Vec::new())
         }
 
