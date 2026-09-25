@@ -10,7 +10,7 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Build-time backend.** In the sense of ADR-0013, code with more than one implementation, all supplied by the project and chosen when the binary or web bundle is built: no manifest, no consent screen. The read, write, and shell tools are the clearest case. Distinct from both fixed core and a runtime extension.
 
-**Capability.** A named, manifest-declared grant an extension holds: `net`, `net-local`, `fs`, `credentials`, `oauth`, `process`, `pty`, `ui`, or `completion`. Absent from an extension's granted set means absent from its import table entirely, not merely denied at call time, except where the catalog specifies an explicit permission-error return instead. See `docs/capabilities.md`.
+**Capability.** A named, manifest-declared grant an extension holds: `net`, `net-local`, `fs`, `credentials`, `oauth`, `process`, `pty`, `ui`, or `completion`. The host links every capability interface a world carries in a denied state; an ungranted call returns a recorded permission error (FR-PERM-3), and an interface a world does not import at all is absent from the link. See `docs/capabilities.md`.
 
 **Compaction.** The mechanism that replaces an old range of session records with a summary when usage crosses a threshold, implemented by a `compaction`-world extension and written back as a durable log record. Not a general synonym for shrinking data; a `context-transform` extension also shrinks what goes out on the wire but is never called compaction, because it touches nothing durable. See ADR-0015.
 

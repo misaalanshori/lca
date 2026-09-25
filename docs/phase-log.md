@@ -235,10 +235,15 @@ The exit test clause by clause, with receipts:
   catalog, quota usage, and revoke; eight offline tests each. The
   antigravity WASM delivery is verified by its own component build and
   by the conformance extension's provider-world WASM tests, which run
-  the same host imports (net/oauth/credentials) and the identity trio
-  through the identical plumbing; an end-to-end WASM antigravity run
-  against a mock lands with Phase 5's install flow, which is what
-  loads it in the first place. Nothing touches a socket or a credential
+  the exported provider functions and the identity trio through the
+  identical plumbing. The `net` and `credentials` host imports are
+  exercised through the native capability engine by the antigravity and
+  network tests, and `net` plus `credentials.get` at the WASM boundary by
+  the OpenAI-compatible component's end-to-end install test; `oauth` and
+  `credentials.set/delete` at the WASM boundary are covered by the native
+  engine only (the residual NFR-25 gap the audit noted). An end-to-end WASM
+  antigravity run against a mock lands with Phase 5's install flow, which
+  is what loads it in the first place. Nothing touches a socket or a credential
   file directly in either mode: the native half speaks ProviderCap (the
   engine), the guest half speaks host imports, and both are proven by
   tests whose only path is a refusal.
@@ -730,3 +735,64 @@ pty quarantines skipped visibly and named in platform-notes. The
 three-platform receipt is one CI run with all eight jobs green, the
 release dispatch green end to end with its eight artifacts and
 attestation, and the fuzz schedule's first clean full pass.
+
+## Post-release audit: the review pass and its fixes
+
+A code-and-test review after the 1.0 release produced a ranked issue list
+(kept out of tree during the pass). Every finding was fixed in order, each
+with a test that fails against the old code; the suite grew from 272 to 298
+and stayed green, and the doc claims the audit found false were corrected.
+
+Fixed, by severity:
+
+- **Critical.** A cyclic widget arena overflowed the stack and aborted the
+  process; `widget_lines` now renders each node once. `InstallTree::install`
+  joined an attacker-supplied manifest `name` onto the filesystem; the name
+  is validated at the write boundary, and the consent path validates the
+  whole manifest through the loader's parser.
+- **High.** `fs private` was unreachable because its root sat under the
+  state-directory exclusion; `home-config` resolved to the agent's own
+  subdirectory rather than the platform config base. Extension-originated
+  `process`/`pty` commands always auto-denied because the capability engine
+  held a deny-only prompt; a shared, swappable prompt now carries the TUI's
+  modal. A known record type with bad fields was classified as an unknown
+  type and silently skipped; it is corruption (truncation) now. The `net`
+  rebinding check was a time-of-check/time-of-use hole because hyper
+  re-resolved at connect; the checked address is pinned (ADR-0025). Reads,
+  lists, and greps outside the workspace now ask for approval, matching
+  FR-TOOL-3.
+- **Medium.** Three of six hook points never fired; `pre-turn`,
+  `attention-required`, and `session-close` are wired. Tool arguments are
+  validated against the schema before `execute`. `temp` is a real
+  per-session directory removed at exit. A clean exit writes `session-end`.
+  The HTTPS archive refuses extra or duplicate entries. The proposal-set
+  hash is used as the change detector. An update that renames the extension
+  is refused. The conformance extension now exercises `fs.write`/`stat`,
+  `process.read-stderr`/`write-stdin`, and `pty.write`/`resize` in both
+  delivery modes; the two missing property tests (compaction range,
+  transform-chain ordering) exist; NFR-21 has a real test; the traceability
+  extractor reads only the comment block that names a requirement.
+- **Low.** The grant store fails closed instead of panicking; an invalid
+  bearer token is a fetch error; read offsets saturate; credential set and
+  delete share one atomic, owner-only writer and no longer swallow read
+  errors; the denial journal is built with serde; the tool list is sorted;
+  the shell result buffer is capped; a bad `net` pattern is a validation
+  error; `lca-sdk` and the binary forbid unsafe code.
+
+Known deviations left in place, named rather than implied:
+
+- **Attachments.** `docs/session-log-format.md` defines an `attachments/`
+  tree, and the record schema reserves an attachment hash, but 1.0 bounds
+  content at the source (tools truncate to `tool.result_limit_bytes`), so no
+  attachment is written yet; the field is forward-compatible. The image
+  widget renders as a labeled placeholder for the same reason.
+- **NFR-25 residual.** The conformance extension and the OpenAI-compatible
+  end-to-end test cover every host import except `oauth.*` and
+  `credentials.set`/`delete` at the WASM boundary; those two are covered
+  through the native capability engine only. Closing it needs an offline
+  OAuth fixture.
+- **Windows credential ACL.** `credentials.set`/`delete` set owner-only mode
+  on Unix; on Windows the file relies on the user-profile directory's
+  default ACL. `docs/platform-notes.md` records this.
+- **`panic = "abort"`.** The release profile aborts, so the host-glue panic
+  guards are a test/debug safety net only; the comments and this note say so.

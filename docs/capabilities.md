@@ -10,9 +10,9 @@ A capability is a named grant attached to an extension instance. The manifest de
 
 The declared set resolves once, at instantiation. An extension cannot declare new capabilities during a session. It can gain an ad hoc grant during a session, one specific host or path the user attaches through extension settings or a login flow, and that grant takes effect for subsequent calls without re-instantiation (FR-PERM-18). It can lose a grant, because the user can revoke one; revocation takes effect at the next instantiation, and calls already in flight finish.
 
-The model is deny by default. A capability that is not granted is not in the import table. A component that calls a missing import traps at link time rather than at call time, which means a mismatch between a manifest and its code fails loudly on the first load instead of silently at an unlucky moment.
+The model is deny by default. A capability that is not granted is enforced at the import boundary: the host links every capability interface a world carries, in a denied state, and refuses an ungranted call with a recorded permission error (FR-PERM-3). An interface a world does not import at all is absent from the link, so reaching for it fails at load. This keeps a manifest/code mismatch loud without denying an extension the ability to handle a missing grant at runtime.
 
-Two kinds of failure look different to an extension. A capability that was never granted produces a link failure. A capability that was granted but whose parameters do not cover a specific call produces a runtime permission error, which the extension can handle. A network call to an unlisted host is the second kind.
+Two kinds of failure look different to an extension. An interface the world does not carry is a link failure. A capability that was never granted, or was granted but whose parameters do not cover a specific call, produces a runtime permission error the extension can handle. A network call to an unlisted host is the second kind.
 
 Every denial is recorded. The record holds the extension identity, the capability, the attempted parameter, and the time. `lca ext info <name>` shows the denial count, which is how a user notices an extension trying things it never declared.
 

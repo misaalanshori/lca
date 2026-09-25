@@ -29,7 +29,7 @@ Sessions live under the user data directory, grouped by project.
 
 `log.jsonl` is the record log. It is the authority for everything.
 
-`attachments/` holds content too large for the log, stored by content hash. Images, large tool outputs, and pasted files go here. A record references an attachment by hash.
+`attachments/` holds content too large for the log, stored by content hash. Images, large tool outputs, and pasted files go here. A record references an attachment by hash. 1.0 bounds content at the source (tools truncate at `tool.result_limit_bytes`), so no attachment is written yet; the tree and the record fields exist and are forward-compatible.
 
 ## Record framing
 

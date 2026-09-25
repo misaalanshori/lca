@@ -174,7 +174,7 @@ sequenceDiagram
 
 Notes.
 
-The import table is built from the granted set, not from the declared set. An extension whose manifest declares more than the user approved gets the intersection. If it needs an import that is missing, it fails at link time, on the first load, rather than at an unlucky moment later.
+The granted set, not the declared set, governs every call: the host links each capability interface the world carries in a denied state and raises it to the granted state, so an extension whose manifest declares more than the user approved gets the intersection and an ungranted call is refused with a recorded permission error (FR-PERM-3). An interface the world does not import at all is absent from the link, so it fails at load rather than at an unlucky moment later.
 
 Native-linked extensions skip everything from the digest check through instantiation. They register directly and carry an unsandboxed label. This is the only path where the capability resolution does not run, and it is reserved for code that ships in the binary.
 

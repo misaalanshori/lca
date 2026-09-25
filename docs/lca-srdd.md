@@ -46,7 +46,7 @@ Built-in tools cover the common file and shell operations. The read tool returns
 
 Model access comes from provider extensions. The core knows nothing about any specific vendor. It knows the provider interface: list models, start a completion, stream events, handle authentication, and report login, logout, and usage in a common shape so the host can offer a generic picker and an aliased `/usage` alongside each provider's own namespaced commands. A provider extension can run an OAuth flow through a host capability, so subscription logins work without giving the extension raw socket access.
 
-The permission system sits between every sensitive action and the thing that performs it. Shell commands, writes outside the workspace, network calls from extensions, and credential reads all pass through it. The user can pre-approve patterns, approve once, or deny. Approval state is per project and persists.
+The permission system sits between every sensitive action and the thing that performs it. Shell commands, reads and writes outside the workspace, network calls from extensions, and credential reads all pass through it. The user can pre-approve patterns, approve once, or deny. Approval state is per project and persists.
 
 Extension management happens inside the agent. The user can list installed extensions, install one from an OCI reference, a plain HTTPS archive, or a local file, inspect what it asks for, enable or disable it per project, and remove it.
 
@@ -701,7 +701,7 @@ This is a summary. The full threat model, with the complete actor list, the trus
 
 At the summary level: the user is trusted. The model is untrusted and may be manipulated through prompt injection in file content or tool output. An extension is untrusted unless the user installed it knowingly, and even then the capability set limits it.
 
-The model cannot take a sensitive action directly. Every shell command, every write outside the workspace, and every network call from an extension passes through the permission layer. A prompt injection can ask for a dangerous action. It cannot perform one without a user grant or a pre-approved pattern.
+The model cannot take a sensitive action directly. Every shell command, every read and write outside the workspace, and every network call from an extension passes through the permission layer. A prompt injection can ask for a dangerous action. It cannot perform one without a user grant or a pre-approved pattern.
 
 An extension holds only what its manifest declared and the user approved. The network allow list is enforced by the host, not by the extension. This matters most for provider extensions, which handle credentials and talk to remote endpoints. A compromised provider extension cannot send tokens to an unlisted host, because the import refuses the request.
 
@@ -754,7 +754,7 @@ Exit test: the size, startup, and streaming numbers exist and the team has picke
 
 Six to ten weeks. Build the agent that works without any extension at all.
 
-This covers `lca-protocol`, `lca-config`, `lca-session`, `lca-tools`, `lca-permissions`, `lca-tui`, `lca-cli`, and `lca-testkit`. `lca-testkit`'s fake provider and sandboxed test harness, per `docs/testing-plan.md`, are built alongside the very first feature rather than retrofitted once real work has piled up untested, since every other phase's exit test depends on it existing. The OpenAI-compatible provider is built and compiled in directly, behind the `lca-provider` trait, so the loop has something to call from the start; this is also the first proof of the build-time-backend-versus-runtime-extension distinction from ADR-0013 in practice. The permission layer works for shell and out-of-workspace writes. Sessions save, resume, and fork. The TUI renders, streams, and cancels.
+This covers `lca-protocol`, `lca-config`, `lca-session`, `lca-tools`, `lca-permissions`, `lca-tui`, `lca-cli`, and `lca-testkit`. `lca-testkit`'s fake provider and sandboxed test harness, per `docs/testing-plan.md`, are built alongside the very first feature rather than retrofitted once real work has piled up untested, since every other phase's exit test depends on it existing. The OpenAI-compatible provider is built and compiled in directly, behind the `lca-provider` trait, so the loop has something to call from the start; this is also the first proof of the build-time-backend-versus-runtime-extension distinction from ADR-0013 in practice. The permission layer works for shell and out-of-workspace reads and writes. Sessions save, resume, and fork. The TUI renders, streams, and cancels.
 
 Exit test: a user can hold a working coding session on Linux, macOS, and Windows, resume it the next day, and the test suite passes on all three in the pipeline.
 

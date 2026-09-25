@@ -205,7 +205,7 @@ The Phase 8 review covers, at minimum:
 
 Every host import function checks its grant before it acts, and the check cannot be reached only on some paths.
 
-The import table is built from the granted set rather than the declared set, and a component needing an ungranted import fails at link time.
+The granted set rather than the declared set governs every capability call, and an ungranted call is refused with a recorded permission error (FR-PERM-3); an interface a world does not carry fails at link time.
 
 Path resolution cannot leave a scope, including through a symlink created after the grant.
 
