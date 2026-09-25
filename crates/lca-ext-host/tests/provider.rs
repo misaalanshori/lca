@@ -339,6 +339,50 @@ async fn oauth_and_credentials_match_across_modes() {
     );
 }
 
+// Verifies: NFR-21 (cancellation reaches a running extension call) at the
+// blocking host boundary: an extension waiting in `oauth.await-callback`
+// returns promptly when the host interrupts it, instead of sitting until the
+// callback window elapses. An epoch bump alone cannot reach blocked host
+// code, so this is the case that closes NFR-21 for host waits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupting_a_blocked_oauth_wait_returns_promptly() {
+    let fixture = Fixture::new("oauth-cancel");
+    let wasm = fixture.wasm_mode();
+    let cap = wasm.capabilities();
+
+    let before = cap.oauth_begun().len();
+    let task = tokio::spawn(wasm.identity_login());
+    // Wait until the login is actually blocked in `oauth_await` (its flow has
+    // bound the listener); interrupting earlier would trap at the call site
+    // and prove nothing about the blocked wait.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while cap.oauth_begun().len() == before {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the login never bound an oauth flow"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let start = std::time::Instant::now();
+    wasm.interrupt();
+    let joined = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .expect("the cancelled login returns in under 5s, not the 30s window")
+        .expect("the login task joins");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "cancellation returns within the NFR-21 neighbourhood, took {:?}",
+        start.elapsed()
+    );
+    // Either the guest handled the cancelled host call (`Failed`) or the
+    // epoch trap surfaced as a dispatch error; both are prompt returns.
+    assert!(
+        matches!(joined, Err(_) | Ok(IdentityOutcome::Failed(_))),
+        "the cancelled login did not report a cancellation: {joined:?}"
+    );
+}
+
 /// Drive one identity-login call to completion: spawn it (the call blocks in
 /// `oauth.await-callback`), wait for the flow to bind, inject the loopback
 /// callback, and return the outcome.

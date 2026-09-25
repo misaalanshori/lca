@@ -2416,5 +2416,9 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
     fn interrupt(&self) {
         // FR-CONC-1: epoch interruption, independent of the fuel budget.
         self.inner.engine.increment_epoch();
+        // An epoch bump only fires at a guest code point, so a host import
+        // blocked in a long wait would never see it: flag the capability
+        // engine too, and the wait polls its way out (FR-CONC-1, NFR-21).
+        self.inner.cap.cancel();
     }
 }

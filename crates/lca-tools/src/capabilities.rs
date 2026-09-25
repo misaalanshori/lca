@@ -209,6 +209,11 @@ pub struct Capabilities {
     /// Overrides the platform browser launch (tests record the URL instead
     /// of spawning a browser). `None` uses `xdg-open`/`open`/`cmd start`.
     browser_opener: Arc<Mutex<Option<BrowserOpener>>>,
+    /// Set when the host cancels this extension's in-flight work. Blocking
+    /// host imports poll it (the OAuth callback today) so a cancelled turn
+    /// does not wait out their window: an epoch bump cannot interrupt host
+    /// code that is already blocked (FR-CONC-1, NFR-21).
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
     handles: Arc<Mutex<HandleTable>>,
     client: HttpClient,
     /// Addresses already checked for a hostname, consulted by
@@ -262,6 +267,7 @@ impl Capabilities {
             oauth_opened: Arc::new(Mutex::new(Vec::new())),
             oauth_begun: Arc::new(Mutex::new(Vec::new())),
             browser_opener: Arc::new(Mutex::new(None)),
+            cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             handles: Arc::new(Mutex::new(HandleTable::default())),
             client: Client::builder(hyper_util::rt::TokioExecutor::new()).build(https),
             pins,
@@ -410,6 +416,20 @@ impl Capabilities {
     /// URL instead of opening one); `None` restores the platform default.
     pub fn set_browser_opener(&self, opener: Option<BrowserOpener>) {
         *self.browser_opener.lock().expect("opener lock") = opener;
+    }
+
+    /// Signal that this extension's in-flight work is cancelled. Blocking
+    /// host waits poll this so a cancelled turn returns within the NFR-21
+    /// window instead of waiting out their window. Called from the host's
+    /// interrupt path (a WASM epoch bump cannot reach a blocked host call).
+    pub fn cancel(&self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether [`Capabilities::cancel`] fired for the current work.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// How many attempts were refused (FR-EXT-9).
@@ -1266,6 +1286,10 @@ impl Capabilities {
     /// serves exactly one callback before handing its parsed parameters
     /// back (FR-PROV-3).
     pub fn oauth_begin(&self, redirect_path: &str) -> Result<(String, u32), CapabilityError> {
+        // A new flow starts uncancelled: a cancel from earlier work must not
+        // poison this wait (the host's interrupt is what sets it).
+        self.cancelled
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         let Some(_settings) = self.grants.oauth.clone() else {
             return Err(self.refused(
                 "oauth",
@@ -1419,9 +1443,9 @@ connection: close
         Ok(())
     }
 
-    /// Wait for the flow's callback; returns its parsed query parameters
-    /// or a timeout (the catalog's300-second default comes from the
-    /// manifest; the per-thread deadline above is the hard ceiling).
+    /// Wait for the flow's callback; returns its parsed query parameters,
+    /// a timeout (the catalog's300-second default comes from the manifest;
+    /// the per-thread deadline above is the hard ceiling), or a cancellation.
     pub fn oauth_await(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError> {
         let timeout = self
             .grants
@@ -1436,12 +1460,35 @@ connection: close
                 .and_then(|flow| flow.rx.take())
                 .ok_or_else(|| CapabilityError::NotFound(format!("unknown oauth flow {handle}")))?
         };
-        receiver
-            .recv_timeout(std::time::Duration::from_secs(timeout))
-            .map_err(|_| {
+        // Poll in short slices rather than one long receive: a host wait must
+        // observe the cancellation flag within NFR-21's window, and the epoch
+        // bump that cancels a WASM call cannot interrupt blocked host code.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
+        loop {
+            if self.is_cancelled() {
                 let _ = self.oauth_end(handle);
-                CapabilityError::Timeout(format!("no callback within {timeout}s on flow {handle}"))
-            })
+                return Err(CapabilityError::Io(format!(
+                    "oauth flow {handle} cancelled"
+                )));
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                let _ = self.oauth_end(handle);
+                return Err(CapabilityError::Timeout(format!(
+                    "no callback within {timeout}s on flow {handle}"
+                )));
+            }
+            match receiver.recv_timeout(remaining.min(std::time::Duration::from_millis(50))) {
+                Ok(params) => return Ok(params),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = self.oauth_end(handle);
+                    return Err(CapabilityError::Io(format!(
+                        "oauth flow {handle} listener ended"
+                    )));
+                }
+            }
+        }
     }
 
     /// Abandon a flow and stop its listener.
