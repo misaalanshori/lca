@@ -98,6 +98,10 @@ The thresholds start at the values in the requirements and are ratcheted down wh
 
 A pull request that needs a threshold raised states why in its description and needs explicit approval. This is the main defense against the core growing past the point of the project.
 
+## Manual release gate
+
+Before a release tag, a human runs the release candidate's TUI for a couple of minutes on a real terminal and checks the transcript, a resize, and each modal (`/login`, the permission prompt, the model picker). Snapshot tests cover rendering logic; they do not catch a terminal-version or platform-specific break, which is what this gate is for.
+
 ## Changelog
 
 `CHANGELOG.md` at the repository root, written for users. Grouped as added, changed, fixed, and security. Each entry says what changed from the user's point of view, not which function was edited.
