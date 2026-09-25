@@ -60,6 +60,40 @@ pub struct TurnStatusLine {
 /// How the input editor invokes a registered slash command.
 pub type CommandInvoker = Arc<dyn Fn(&str, &str) -> CommandEffect + Send + Sync>;
 
+/// What `/login <provider>` should do next, decided by the CLI.
+pub enum LoginNext {
+    /// The CLI already handled it (OAuth, already signed in, refusal); show
+    /// this text.
+    Message(String),
+    /// Ask the user for a secret through a masked modal; the answer goes to
+    /// the [`LoginComplete`] seam.
+    Secret {
+        /// The provider the secret belongs to.
+        provider: String,
+        /// The prompt to show, e.g. "API key for openai-compatible".
+        label: String,
+    },
+}
+
+/// The host's login seam: `/login` calls this to choose between a message
+/// and a masked secret prompt. The CLI owns provider knowledge; the
+/// interface owns the modal (`docs/deferred_workplan.md` B2).
+pub type LoginRequest = Arc<dyn Fn(&str) -> LoginNext + Send + Sync>;
+
+/// Store a secret the user typed for `provider`; returns the message to
+/// show. The secret is never echoed into scrollback or history.
+pub type LoginComplete = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
+
+/// A masked single-line secret prompt (the `/login` flow).
+pub struct SecretPrompt {
+    /// The provider the secret belongs to.
+    pub provider: String,
+    /// What the user is being asked for.
+    pub label: String,
+    /// The characters typed so far - rendered masked, never logged.
+    pub input: String,
+}
+
 /// Which extensions draw in a region: the CLI's view over the registry
 /// (ADR-0003's pull model - the host asks, the extension answers).
 pub type RegionRenderer =
@@ -227,6 +261,11 @@ pub struct UiOptions {
     /// The background update check's finding, set once a check finds a
     /// newer release (FR-CFG-6; the status line reads it every frame).
     pub update_notice: Option<std::sync::Arc<std::sync::OnceLock<String>>>,
+    /// The host's `/login` seam; `None` falls back to the registry's own
+    /// identity command.
+    pub login: Option<LoginRequest>,
+    /// Stores a secret the user typed for `/login`.
+    pub complete_login: Option<LoginComplete>,
 }
 
 /// The permission modal: what is being asked, and how to answer.
@@ -269,6 +308,8 @@ pub struct UiState {
     pub mode: InputMode,
     /// The open permission modal, if any.
     pub permission: Option<PermissionModal>,
+    /// The open masked secret prompt, if any (`/login`).
+    pub secret: Option<SecretPrompt>,
     /// Ctrl+C seen once on an idle prompt.
     pub ctrl_c_armed: bool,
     /// The extension side panel is open.
@@ -306,6 +347,7 @@ impl UiState {
             usage: Usage::default(),
             mode: InputMode::Normal,
             permission: None,
+            secret: None,
             ctrl_c_armed: false,
             panel_open: false,
             modal_open: false,
@@ -549,6 +591,35 @@ fn key_input(key: crossterm::event::KeyEvent) -> lca_protocol::UiInput {
 pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Action {
     use crossterm::event::{KeyCode, KeyModifiers};
 
+    // The masked secret prompt (`/login`) owns the keyboard while open. The
+    // typed characters live only here - never in the buffer, history, or
+    // session log - and are moved out on submit.
+    if let Some(mut prompt) = state.secret.take() {
+        use crossterm::event::KeyCode as SK;
+        match key.code {
+            SK::Esc => state.notice = Some("login cancelled".to_string()),
+            SK::Enter => {
+                let secret = std::mem::take(&mut prompt.input);
+                if secret.is_empty() {
+                    state.notice = Some("nothing was entered".to_string());
+                } else if let Some(complete) = &state.options.complete_login {
+                    let message = complete(&prompt.provider, &secret);
+                    state.notice = Some(sanitize_block(&message));
+                }
+            }
+            SK::Backspace => {
+                prompt.input.pop();
+                state.secret = Some(prompt);
+            }
+            SK::Char(c) => {
+                prompt.input.push(c);
+                state.secret = Some(prompt);
+            }
+            _ => state.secret = Some(prompt),
+        }
+        return Action::Continue;
+    }
+
     // The modal swallows every key while open.
     if let Some(modal) = state.permission.take() {
         use lca_permissions::Decision;
@@ -660,6 +731,25 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                     }
                     "quit" | "exit" => return Action::Exit,
                     _ => {}
+                }
+                // `/login` goes through the host seam when one is installed:
+                // the CLI decides between a message and a masked prompt.
+                if name == "login"
+                    && let Some(login) = &state.options.login
+                {
+                    match login(&argument) {
+                        LoginNext::Message(text) => {
+                            state.notice = Some(sanitize_block(&text));
+                        }
+                        LoginNext::Secret { provider, label } => {
+                            state.secret = Some(SecretPrompt {
+                                provider,
+                                label,
+                                input: String::new(),
+                            });
+                        }
+                    }
+                    return Action::Continue;
                 }
                 let full = format!("/{name}");
                 if state
@@ -1175,7 +1265,30 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
     );
     frame.set_cursor_position(cursor_position(input_row, state));
 
-    if let Some(modal) = &state.permission {
+    if let Some(secret) = &state.secret {
+        // Masked: one asterisk per character, never the characters.
+        let masked = "*".repeat(secret.input.chars().count());
+        let shown = if masked.is_empty() {
+            "(type the secret)"
+        } else {
+            masked.as_str()
+        };
+        let body = format!(
+            "{}\n\n  {}\n\nEnter stores it (hidden); Esc cancels.",
+            secret.label, shown
+        );
+        let area = centered(frame.area(), 70, 7);
+        frame.render_widget(Clear, area);
+        let dialog = Paragraph::new(body)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(theme(plain, Color::Cyan))
+                    .title(format!("login: {}", secret.provider)),
+            )
+            .wrap(Wrap { trim: false });
+        frame.render_widget(dialog, area);
+    } else if let Some(modal) = &state.permission {
         let area = centered(frame.area(), 70, 9);
         frame.render_widget(Clear, area);
         let body = format!(

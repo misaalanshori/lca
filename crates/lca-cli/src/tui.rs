@@ -322,6 +322,78 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     } else {
         format!("{provider_name}/{model_id}")
     }));
+
+    // The host login seam (`/login`): the CLI decides per provider whether to
+    // ask for a secret, then stores it through the same atomic, owner-only
+    // credential writer extensions use. Antigravity's OAuth path needs no
+    // prompt; the key-based provider asks only when nothing is configured.
+    let login_seam: lca_tui::LoginRequest = {
+        let registry = registry.clone();
+        let provider_name = provider_name.clone();
+        let data = data.clone();
+        Arc::new(move |argument: &str| -> lca_tui::LoginNext {
+            let names = registry.provider_names();
+            if names.is_empty() {
+                return lca_tui::LoginNext::Message(crate::no_model_message(&provider_name));
+            }
+            let target = if !argument.is_empty() {
+                if names.iter().any(|name| name == argument) {
+                    argument.to_string()
+                } else {
+                    return lca_tui::LoginNext::Message(format!(
+                        "no provider named `{argument}`; installed: {}",
+                        names.join(", ")
+                    ));
+                }
+            } else if names.len() == 1 {
+                names[0].clone()
+            } else {
+                return lca_tui::LoginNext::Message(format!(
+                    "{} installed: {}. Choose: /login <name>",
+                    names.len(),
+                    names.join(", ")
+                ));
+            };
+            if target == "openai-compatible" && !crate::provider_ready(&target, &data) {
+                return lca_tui::LoginNext::Secret {
+                    provider: target,
+                    label: "API key for openai-compatible (input hidden)".to_string(),
+                };
+            }
+            match registry.invoke_generic("login", &target, &provider_name) {
+                Some(CommandEffect::ShowWidget(text)) => lca_tui::LoginNext::Message(text),
+                Some(_) => lca_tui::LoginNext::Message(format!("{target}: login finished")),
+                None => lca_tui::LoginNext::Message(format!("`{target}` cannot log in")),
+            }
+        })
+    };
+    let login_complete: lca_tui::LoginComplete = {
+        let data = data.clone();
+        let cwd = cwd.to_path_buf();
+        let label_cell = label_cell.clone();
+        let model_cell = model_cell.clone();
+        let provider = provider.clone();
+        let provider_name = provider_name.clone();
+        Arc::new(move |target: &str, secret: &str| -> String {
+            match crate::store_provider_secret(&data, &cwd, target, "api_key", secret) {
+                Ok(()) => {
+                    // Light the session up now that the provider can answer.
+                    if target == provider_name
+                        && let Some(model) = provider.list_models().first()
+                    {
+                        *model_cell.lock().unwrap_or_else(|p| p.into_inner()) = ModelChoice {
+                            id: model.id.clone(),
+                            window: model.context_window,
+                        };
+                        *label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
+                            format!("{target}/{}", model.id);
+                    }
+                    format!("signed in {target}; the key is stored under its namespace")
+                }
+                Err(err) => format!("could not store the key for {target}: {err}"),
+            }
+        })
+    };
     let options = UiOptions {
         model_label: label_cell.clone(),
         initial_lines,
@@ -382,6 +454,8 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         render_regions,
         ui_events,
         update_notice: Some(update_notice),
+        login: Some(login_seam),
+        complete_login: Some(login_complete),
         slash_commands: {
             let mut names: Vec<String> = BUILTIN_SLOTS
                 .iter()
@@ -681,5 +755,26 @@ mod tests {
                 "/{slot} is a built-in the interface claims"
             );
         }
+    }
+
+    // The `/login` secret is stored through the same writer extensions use,
+    // in the provider's own namespace, owner-only on Unix (B2).
+    #[test]
+    fn store_provider_secret_writes_the_namespace_credential() {
+        let root = std::env::temp_dir().join(format!("lca-login-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        crate::store_provider_secret(&root, &root, "openai-compatible", "api_key", "sk-x")
+            .expect("store the secret");
+        let path = root.join("credentials").join("openai-compatible.json");
+        let text = std::fs::read_to_string(&path).expect("read the credential file");
+        assert!(text.contains("sk-x"), "{text}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "owner-only credential file");
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

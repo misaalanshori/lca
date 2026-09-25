@@ -27,6 +27,8 @@ fn options() -> UiOptions {
         render_regions: None,
         ui_events: None,
         update_notice: None,
+        login: None,
+        complete_login: None,
         slash_commands: vec![
             "/login".into(),
             "/logout".into(),
@@ -735,4 +737,101 @@ fn block_output_keeps_newlines_and_still_hides_control_bytes() {
     let text = lca_tui::sanitize_block("first\nsecond\tthird\u{1b}[0m");
     assert!(text.contains("first\nsecond"), "newlines kept: {text:?}");
     assert!(!text.contains('\u{1b}'), "no raw escape: {text:?}");
+}
+
+// The `/login` flow collects a secret in a masked prompt. The secret is
+// handed straight to the host seam and never lands in the buffer, history,
+// scrollback, or the rendered frame (B2: the key must not be logged).
+#[test]
+fn login_collects_a_secret_in_a_masked_prompt_and_never_logs_it() {
+    use std::sync::{Arc, Mutex};
+    let captured: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+    let mut options = options();
+    options.login = Some(Arc::new(|argument: &str| {
+        assert_eq!(argument, "openai-compatible");
+        lca_tui::LoginNext::Secret {
+            provider: "openai-compatible".to_string(),
+            label: "API key".to_string(),
+        }
+    }));
+    let sink = captured.clone();
+    options.complete_login = Some(Arc::new(move |provider: &str, secret: &str| {
+        *sink.lock().unwrap() = Some((provider.to_string(), secret.to_string()));
+        "signed in".to_string()
+    }));
+    let mut state = UiState::new(options);
+    state.buffer = "/login openai-compatible".to_string();
+    assert_eq!(
+        handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter)),
+        Action::Continue
+    );
+    assert!(state.secret.is_some(), "the masked prompt opened");
+    for c in "sk-secret".chars() {
+        handle_key(
+            &mut state,
+            crossterm::event::KeyEvent::from(KeyCode::Char(c)),
+        );
+    }
+    let mut term = terminal(80, 24);
+    render(&mut term, &state).expect("render");
+    let text = buffer_text(&mut term);
+    assert!(text.contains("****"), "rendered masked:\n{text}");
+    assert!(
+        !text.contains("sk-secret"),
+        "the secret is not drawn:\n{text}"
+    );
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    assert_eq!(
+        *captured.lock().unwrap(),
+        Some(("openai-compatible".to_string(), "sk-secret".to_string()))
+    );
+    assert!(state.secret.is_none(), "the prompt closes on submit");
+    assert!(
+        !state.buffer.contains("sk-secret"),
+        "not left in the buffer"
+    );
+    assert!(
+        !state.history.iter().any(|line| line.contains("sk-secret")),
+        "not left in history"
+    );
+    assert!(
+        !state
+            .scrollback
+            .iter()
+            .any(|line| line.contains("sk-secret")),
+        "not left in scrollback"
+    );
+    assert!(
+        state
+            .notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("signed in"),
+        "{:?}",
+        state.notice
+    );
+}
+
+// Escape dismisses the secret prompt without storing anything.
+#[test]
+fn escaping_the_secret_prompt_cancels_without_storing() {
+    use std::sync::{Arc, Mutex};
+    let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let mut options = options();
+    options.login = Some(Arc::new(|_argument: &str| lca_tui::LoginNext::Secret {
+        provider: "openai-compatible".to_string(),
+        label: "API key".to_string(),
+    }));
+    let sink = captured.clone();
+    options.complete_login = Some(Arc::new(move |_provider: &str, secret: &str| {
+        *sink.lock().unwrap() = Some(secret.to_string());
+        "stored".to_string()
+    }));
+    let mut state = UiState::new(options);
+    state.buffer = "/login openai-compatible".to_string();
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    assert!(state.secret.is_some());
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Esc));
+    assert!(state.secret.is_none(), "Escape closes the prompt");
+    assert!(captured.lock().unwrap().is_none(), "nothing stored");
 }

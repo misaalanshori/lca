@@ -165,6 +165,42 @@ pub(crate) fn provider_ready(name: &str, data: &Path) -> bool {
     })
 }
 
+/// Store one secret in a provider's credential namespace (the `/login`
+/// flow): the same atomic, owner-only writer extensions use. The namespace
+/// is the provider identity, never guest input (FR-PERM-6).
+pub(crate) fn store_provider_secret(
+    data: &Path,
+    cwd: &Path,
+    provider: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
+    let roots = lca_permissions::ScopeRoots {
+        workspace: cwd.to_path_buf(),
+        private: data.join("private"),
+        home_config: config_dir(),
+        temp: session_temp(),
+        state_dir: data.to_path_buf(),
+    };
+    let capabilities = lca_tools::Capabilities::new(
+        provider,
+        lca_tools::CapabilityGrants {
+            credentials: true,
+            ..Default::default()
+        },
+        roots,
+        Arc::new(std::sync::Mutex::new(
+            lca_permissions::SharedPrompt::default(),
+        )),
+        Arc::new(std::sync::Mutex::new(open_grants(data))),
+        cwd.to_path_buf(),
+        None,
+    );
+    capabilities
+        .credentials_set(key, value)
+        .map_err(|err| err.to_string())
+}
+
 /// FR-PROV-9's disable knob (FR-PERM-19's storage): every handle the
 /// grant store has disabled for this project leaves the registry.
 pub(crate) fn apply_enablement(
