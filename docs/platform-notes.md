@@ -62,6 +62,12 @@ The extension hosting mechanism itself, sibling instantiation through `jco` rath
 
 A requirement stated as applying to all platforms, in the requirements and design document, means the behavior is identical from the perspective of the agent's own logic and the extension ABI; it does not mean the underlying mechanism is identical. The `fs` scope-escape check is one function with one contract everywhere and two different, platform-specific canonicalization implementations underneath it. The cancellation flow is one behavior, kill everything a turn started, with a process-group kill on POSIX and a Job Object kill on Windows underneath it. Extension authors and first-party contributors alike should write to the contract, not to a mechanism, and platform-specific tests, not just platform-specific code, are what keeps the two from drifting apart silently; the Windows CI job being non-optional, per the testing plan, is the concrete enforcement of that principle rather than a formality.
 
+## Real-terminal tests: platform gating
+
+The real-terminal tests (testing plan section 14) drive the TUI in an actual terminal, so a leaked secret, a stale resize row, or a hostile escape sequence is visible where a virtual-buffer test cannot see it. The harness is platform-native: Unix runs under `tmux` and asserts through `capture-pane`; Windows will run under a pseudo-console (ConPTY), the same mechanism the `pty` capability uses, and assert through the console buffer.
+
+The gating is part of the contract, not an afterthought. `tmux` has no Windows build, so the Unix tests carry `#[cfg(unix)]` and probe `tmux -V` at runtime: a machine without `tmux` skips them with a named reason and never reports a failure for the tooling's absence. Windows builds simply do not contain the Unix tests, and the ConPTY tests, when they land, are `#[cfg(windows)]` in the same way. The Linux CI job carries `tmux` preinstalled and runs the Unix set; the macOS job may skip and may be quarantined if pane driving proves flaky (testing-plan section 13), so an absent run is always a documented state rather than a silent gap.
+
 ## Known macOS failure (tracked)
 
 Five pty tests fail on macOS CI with `ENOTTY` ("Inappropriate ioctl

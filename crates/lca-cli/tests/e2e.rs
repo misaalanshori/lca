@@ -905,3 +905,252 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
         "nothing written"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Real-terminal tests (docs/testing-plan.md section 14): the TUI in a tmux
+// pane, asserting what is on screen. Unix only; a machine without tmux
+// skips rather than fails.
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+fn tmux_available() -> bool {
+    Command::new("tmux")
+        .arg("-V")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// One tmux session on its own socket name; dropping it kills only that
+/// session, never the server or anyone else's panes.
+#[cfg(unix)]
+struct Tmux {
+    name: String,
+}
+
+#[cfg(unix)]
+impl Tmux {
+    fn new(tag: &str) -> Tmux {
+        let name = format!("lca-smoke-{}-{tag}", std::process::id());
+        let _ = Command::new("tmux")
+            .args(["kill-session", "-t", &name])
+            .status();
+        Tmux { name }
+    }
+
+    fn tmux(args: &[&str]) -> Output {
+        Command::new("tmux").args(args).output().expect("run tmux")
+    }
+
+    fn capture(&self) -> String {
+        let out = Self::tmux(&["capture-pane", "-t", &self.name, "-p"]);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    fn spawn(&self, sandbox: &Sandbox, mock: Option<&Mock>, with_key: bool) {
+        let key = if with_key {
+            " OPENAI_API_KEY=test-key"
+        } else {
+            ""
+        };
+        let endpoint = mock
+            .map(|mock| format!(" OPENAI_BASE_URL={}", mock.url()))
+            .unwrap_or_default();
+        let command = format!(
+            "cd {project} && HOME={home} USERPROFILE={home} XDG_DATA_HOME={data} \
+             APPDATA={data} LOCALAPPDATA={data} XDG_CONFIG_HOME={config} \
+             LCA_UPDATE_CHECK=false{endpoint}{key} {bin}",
+            project = sandbox.project().display(),
+            home = sandbox.home.display(),
+            data = sandbox.data.display(),
+            config = sandbox.home.join(".config").display(),
+            bin = env!("CARGO_BIN_EXE_lca"),
+        );
+        let out = Self::tmux(&[
+            "new-session",
+            "-d",
+            "-s",
+            &self.name,
+            "-x",
+            "140",
+            "-y",
+            "40",
+            &command,
+        ]);
+        assert!(
+            out.status.success(),
+            "tmux new-session: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn send(&self, keys: &[&str]) {
+        let mut args = vec!["send-keys", "-t", &self.name];
+        args.extend_from_slice(keys);
+        let out = Self::tmux(&args);
+        assert!(
+            out.status.success(),
+            "tmux send-keys: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn wait_for(&self, needle: &str, timeout: std::time::Duration) -> String {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let pane = self.capture();
+            if pane.contains(needle) {
+                return pane;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("`{needle}` never appeared in the pane:\n{pane}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+    }
+
+    fn resize(&self, cols: u32, rows: u32) -> String {
+        let out = Self::tmux(&[
+            "resize-window",
+            "-t",
+            &self.name,
+            "-x",
+            &cols.to_string(),
+            "-y",
+            &rows.to_string(),
+        ]);
+        assert!(
+            out.status.success(),
+            "tmux resize-window: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        self.capture()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Tmux {
+    fn drop(&mut self) {
+        let _ = Command::new("tmux")
+            .args(["kill-session", "-t", &self.name])
+            .status();
+    }
+}
+
+#[cfg(unix)]
+fn find_session_end(state: &std::path::Path) -> Option<String> {
+    fn walk(dir: &std::path::Path, found: &mut Option<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.file_name().is_some_and(|name| name == "log.jsonl")
+                && let Ok(text) = std::fs::read_to_string(&path)
+                && text.contains("\"t\":\"session-end\"")
+            {
+                *found = Some(text);
+            }
+        }
+    }
+    let mut found = None;
+    walk(state, &mut found);
+    found
+}
+
+#[cfg(unix)]
+fn wait_for_session_end(state: &std::path::Path, timeout: std::time::Duration) -> String {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Some(text) = find_session_end(state) {
+            return text;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("no session-end record under {}", state.display());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+}
+
+// Verifies: the real-terminal checklist (docs/testing-plan.md section 14):
+// startup renders, a scripted turn streams and renders, the permission modal
+// asks and answers, a resize re-renders, and a clean quit writes
+// `session-end`.
+#[cfg(unix)]
+#[test]
+fn the_tui_renders_a_turn_in_a_real_terminal() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_tool_call("shell", r#"{"command":"echo smoke-ok"}"#)),
+        Reply::Sse(sse_text_with_usage("turn complete", 20, 0)),
+    ]));
+    let sandbox = sandbox("tui-smoke");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    let session = Tmux::new("turn");
+    session.spawn(&sandbox, Some(&mock), true);
+
+    // 1. Startup renders the frame with the configured model.
+    session.wait_for(
+        "openai-compatible/gpt-4o-mini",
+        std::time::Duration::from_secs(20),
+    );
+
+    // 2. A prompt asks the permission question for the shell call.
+    session.send(&["do a thing", "Enter"]);
+    session.wait_for("Allow this action?", std::time::Duration::from_secs(25));
+
+    // 3. Answering it lets the turn complete and render the reply.
+    session.send(&["o"]);
+    session.wait_for("turn complete", std::time::Duration::from_secs(25));
+
+    // 4. A resize re-renders without losing the frame.
+    let resized = session.resize(100, 30);
+    assert!(
+        resized.contains("openai-compatible") || resized.contains("turn complete"),
+        "the frame survives a resize:\n{resized}"
+    );
+
+    // 5. A clean quit writes the session-end marker.
+    session.send(&["/exit", "Enter"]);
+    let log = wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    assert!(log.contains("\"t\":\"session-end\""), "session-end written");
+}
+
+// Verifies: the real-terminal checklist's secret-prompt case - what the user
+// types into `/login` never reaches the visible frame.
+#[cfg(unix)]
+#[test]
+fn the_logins_secret_prompt_masks_input_in_a_real_terminal() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("tui-login-mask");
+    let session = Tmux::new("mask");
+    // No key: `/login` asks for the secret.
+    session.spawn(&sandbox, None, false);
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+
+    session.send(&["/login", "Enter"]);
+    session.wait_for("input hidden", std::time::Duration::from_secs(15));
+    let secret = "sk-super-secret-value";
+    session.send(&[secret]);
+    // Give the frame a beat to render; the secret must not be visible.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    let pane = session.capture();
+    assert!(
+        !pane.contains(secret),
+        "the secret never appears in the frame:\n{pane}"
+    );
+    assert!(pane.contains("input hidden"), "still the masked prompt");
+}
