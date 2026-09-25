@@ -44,9 +44,12 @@ jobs:
           cp target/wasm32-wasip2/release/skills.wasm extensions/skills/fixtures/component.wasm
       - name: Pack the HTTPS-archive asset (ADR-0010's zip)
         run: |
-          python3 - <<'PY'
-          import zipfile
-          with zipfile.ZipFile("skills-abi-0.1.zip", "w") as z:
+          abi=$(python3 -c "import sys;v=dict(l.split(' = ') for l in open(sys.argv[1]) if ' = ' in l)['abi'];print(v.strip().strip('\"'))" extensions/skills/extension.toml)
+          echo "SKILLS_ABI=$abi" >> "$GITHUB_ENV"
+          python3 - "$abi" <<'PY'
+          import sys, zipfile
+          abi = sys.argv[1]
+          with zipfile.ZipFile(f"skills-abi-{abi}.zip", "w") as z:
               z.write("extensions/skills/extension.toml", "extension.toml")
               z.write("extensions/skills/fixtures/component.wasm", "component.wasm")
           PY
@@ -55,7 +58,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release-tag }}
         run: |
-          gh release upload "${RELEASE_TAG}" skills-abi-0.1.zip --clobber
+          gh release upload "${RELEASE_TAG}" "skills-abi-${SKILLS_ABI}.zip" --clobber
       - name: Publish the OCI artifacts (abi line tag + version tag)
         env:
           GH_TOKEN: ${{ github.token }}
