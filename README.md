@@ -18,7 +18,7 @@ The full account of what's taken from where, including specific files worth read
 
 ## Status
 
-Implemented, gated, and released. Every phase exit test in `docs/lca-srdd.md` has passed in order, with the receipts in `docs/phase-log.md`; CI runs the full suite plus the timing, size, dependency, and traceability gates on Linux, macOS, and Windows, and the release pipeline builds, double-builds for reproducibility, and provenance-attests all six native targets (release `phase5-0.1.2` carries the binaries, `artifacts.sha256`, and the skills archive).
+Implemented, gated, and released. Every phase exit test in `docs/lca-srdd.md` has passed in order, with the receipts in `docs/phase-log.md`; CI runs the full suite plus the timing, size, dependency, and traceability gates on Linux, macOS, and Windows, and the release pipeline builds, double-builds for reproducibility, and provenance-attests all six native targets (release `phase5-0.1.3` carries the binaries, `artifacts.sha256`, and the skills archive).
 
 What this release does not contain is named rather than implied: `scripts/deferred-requirements.txt` lists the deferred requirements (the web target), `docs/platform-notes.md` tracks the per-platform gaps, and the Phase 8 deviations paragraph in `docs/phase-log.md` records the rest.
 
