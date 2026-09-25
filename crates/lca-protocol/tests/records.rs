@@ -4,7 +4,7 @@
 use lca_protocol::record::{PermissionDecision, ToolSource};
 use lca_protocol::{
     ChatMessage, ContentBlock, FORMAT_VERSION, MessageRole, Record, StreamEvent, ToolCall,
-    ToolResult, ToolResultStatus, Usage,
+    ToolResult, ToolResultStatus, ToolSpec, Usage,
 };
 
 // Verifies: FR-CORE-8 (usage record carries cache counts separately)
@@ -73,130 +73,186 @@ fn documented_user_record_example_parses() {
     }
 }
 
+/// Every record variant with its spec type tag, for the tests below.
+fn sample_records() -> Vec<(Record, &'static str)> {
+    let ts = 0;
+    vec![
+        (
+            Record::SessionStart {
+                v: 1,
+                ts,
+                agent_version: "0.1.0".into(),
+                abi_version: "0.1".into(),
+                working_dir: "/w".into(),
+            },
+            "session-start",
+        ),
+        (
+            Record::User {
+                v: 1,
+                ts,
+                id: "a".into(),
+                content: String::new(),
+                attachments: vec![],
+            },
+            "user",
+        ),
+        (
+            Record::Assistant {
+                v: 1,
+                ts,
+                id: "a".into(),
+                content: vec![],
+                reasoning: None,
+                model: None,
+                provider: None,
+                usage: None,
+            },
+            "assistant",
+        ),
+        (
+            Record::ToolCall {
+                v: 1,
+                ts,
+                id: "a".into(),
+                call_id: "c".into(),
+                name: "n".into(),
+                arguments: "{}".into(),
+                source: ToolSource::Builtin,
+            },
+            "tool-call",
+        ),
+        (
+            Record::ToolResult {
+                v: 1,
+                ts,
+                id: "a".into(),
+                call_id: "c".into(),
+                status: ToolResultStatus::Ok,
+                content: None,
+                attachment: None,
+                truncated: false,
+            },
+            "tool-result",
+        ),
+        (
+            Record::Permission {
+                v: 1,
+                ts,
+                id: "a".into(),
+                action: "run ls".into(),
+                decision: PermissionDecision::Once,
+                pattern: None,
+            },
+            "permission",
+        ),
+        (
+            Record::ExtensionEvent {
+                v: 1,
+                ts,
+                id: "a".into(),
+                extension: "e".into(),
+                event: "load".into(),
+                detail: String::new(),
+            },
+            "extension-event",
+        ),
+        (
+            Record::Compaction {
+                v: 1,
+                ts,
+                id: "a".into(),
+                replaced_from: "1".into(),
+                replaced_to: "2".into(),
+                summary: "s".into(),
+                strategy: "compaction-default".into(),
+                usage: None,
+            },
+            "compaction",
+        ),
+        (
+            Record::ForkPoint {
+                v: 1,
+                ts,
+                id: "a".into(),
+                parent_session: "p".into(),
+                record_id: "r".into(),
+            },
+            "fork-point",
+        ),
+        (
+            Record::SessionEnd {
+                v: 1,
+                ts,
+                id: "a".into(),
+            },
+            "session-end",
+        ),
+    ]
+}
+
 #[test]
 fn record_type_tags_match_the_spec() {
-    let ts = 0;
+    for (record, tag) in sample_records() {
+        assert_eq!(record.type_tag(), tag, "{record:?}");
+    }
+}
+
+// The log is the authority for everything (docs/session-log-format.md):
+// what is written must read back as the same record, for every variant.
+#[test]
+fn every_record_variant_round_trips_through_json() {
+    for (record, _) in sample_records() {
+        let json = serde_json::to_string(&record).expect("serialize");
+        let back: Record = serde_json::from_str(&json).expect("parse");
+        assert_eq!(back, record, "round trip for {}", record.type_tag());
+    }
+}
+
+// Verifies: the ABI freeze gate (docs/abi-versioning.md): every type that
+// crosses the extension boundary carries a reserved `extras` map, and it
+// round-trips, so new non-structural data rides without a shape change.
+#[test]
+fn abi_crossing_types_round_trip_their_extras() {
+    let mut spec = ToolSpec {
+        name: "t".into(),
+        description: "d".into(),
+        parameters: serde_json::json!({"type": "object"}),
+        extras: Default::default(),
+    };
+    spec.extras.insert("key".into(), "value".into());
+    let back: ToolSpec = round_trip(&spec);
+    assert_eq!(back, spec);
+    assert_eq!(back.extras.get("key").map(String::as_str), Some("value"));
+
+    let call = ToolCall {
+        call_id: "c".into(),
+        name: "t".into(),
+        arguments: "{}".into(),
+    };
+    assert_eq!(round_trip::<ToolCall>(&call), call);
+
+    let mut result = ToolResult::ok("c", "out");
+    result.extras.insert("attachment".into(), "deadbeef".into());
+    let back: ToolResult = round_trip(&result);
+    assert_eq!(back, result);
     assert_eq!(
-        Record::SessionStart {
-            v: 1,
-            ts,
-            agent_version: "0.1.0".into(),
-            abi_version: "0.1".into(),
-            working_dir: "/w".into()
-        }
-        .type_tag(),
-        "session-start"
+        back.extras.get("attachment").map(String::as_str),
+        Some("deadbeef")
     );
-    assert_eq!(
-        Record::User {
-            v: 1,
-            ts,
-            id: "a".into(),
-            content: String::new(),
-            attachments: vec![]
-        }
-        .type_tag(),
-        "user"
-    );
-    assert_eq!(
-        Record::Assistant {
-            v: 1,
-            ts,
-            id: "a".into(),
-            content: vec![],
-            reasoning: None,
-            model: None,
-            provider: None,
-            usage: None
-        }
-        .type_tag(),
-        "assistant"
-    );
-    assert_eq!(
-        Record::ToolCall {
-            v: 1,
-            ts,
-            id: "a".into(),
-            call_id: "c".into(),
-            name: "n".into(),
-            arguments: "{}".into(),
-            source: ToolSource::Builtin
-        }
-        .type_tag(),
-        "tool-call"
-    );
-    assert_eq!(
-        Record::ToolResult {
-            v: 1,
-            ts,
-            id: "a".into(),
-            call_id: "c".into(),
-            status: ToolResultStatus::Ok,
-            content: None,
-            attachment: None,
-            truncated: false
-        }
-        .type_tag(),
-        "tool-result"
-    );
-    assert_eq!(
-        Record::Permission {
-            v: 1,
-            ts,
-            id: "a".into(),
-            action: "run ls".into(),
-            decision: PermissionDecision::Once,
-            pattern: None
-        }
-        .type_tag(),
-        "permission"
-    );
-    assert_eq!(
-        Record::ExtensionEvent {
-            v: 1,
-            ts,
-            id: "a".into(),
-            extension: "e".into(),
-            event: "load".into(),
-            detail: String::new()
-        }
-        .type_tag(),
-        "extension-event"
-    );
-    assert_eq!(
-        Record::Compaction {
-            v: 1,
-            ts,
-            id: "a".into(),
-            replaced_from: "1".into(),
-            replaced_to: "2".into(),
-            summary: "s".into(),
-            strategy: "compaction-default".into(),
-            usage: None
-        }
-        .type_tag(),
-        "compaction"
-    );
-    assert_eq!(
-        Record::ForkPoint {
-            v: 1,
-            ts,
-            id: "a".into(),
-            parent_session: "p".into(),
-            record_id: "r".into()
-        }
-        .type_tag(),
-        "fork-point"
-    );
-    assert_eq!(
-        Record::SessionEnd {
-            v: 1,
-            ts,
-            id: "a".into()
-        }
-        .type_tag(),
-        "session-end"
-    );
+
+    let mut message = ChatMessage::text(MessageRole::User, "hi");
+    message.extras.insert("key".into(), "value".into());
+    assert_eq!(round_trip::<ChatMessage>(&message), message);
+
+    let mut usage = Usage::default();
+    usage.extras.insert("provider_region".into(), "eu".into());
+    assert_eq!(round_trip::<Usage>(&usage), usage);
+}
+
+fn round_trip<T: serde::Serialize + serde::de::DeserializeOwned>(value: &T) -> T {
+    let json = serde_json::to_string(value).expect("serialize");
+    serde_json::from_str(&json).expect("parse")
 }
 
 #[test]
