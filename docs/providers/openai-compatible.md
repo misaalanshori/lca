@@ -37,7 +37,9 @@ None. The OpenAI chat completions shape is what the typed provider stream cases 
 
 ## login, logout, usage
 
-`login` is not OAuth-shaped for this provider; it opens a modal, through the `ui` capability, prompting for a base URL and a key, writes the key through `credentials` on submission, and, if the submitted host differs from the default, prompts for the ad hoc `net` grant that host needs at that same moment rather than asking for it separately. `logout` clears the stored key; it does not revoke the ad hoc host grant, since a user is more likely to log back in with the same endpoint than to want the grant quietly removed. `usage` returns "not supported," since there is no single usage endpoint this provider can assume exists across arbitrary OpenAI-compatible servers.
+`login` is not OAuth-shaped for this provider. It reads `OPENAI_BASE_URL` (default `https://api.openai.com/v1`) and, when no key is configured, the host prompts for the API key in a masked modal and stores it through this extension's `credentials` namespace; `OPENAI_API_KEY`/`OPENCODE_API_KEY` remain the non-interactive path. `logout` clears the stored key; it does not revoke an ad hoc host grant, since a user is more likely to log back in with the same endpoint than to want the grant quietly removed. `usage` returns "not supported," since there is no single usage endpoint this provider can assume exists across arbitrary OpenAI-compatible servers.
+
+A base URL whose host is not covered by the manifest's fixed hosts needs an ad hoc `net` grant (FR-PERM-16); the login-time prompt for that grant is tracked as deferred work B1, so a custom endpoint configured only through the environment is refused until the grant is attached.
 
 ## Cache behavior
 

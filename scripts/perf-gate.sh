@@ -4,7 +4,7 @@
 # (the pipeline enforces all on every merge to main), NFR-15 (the
 # interpreter build carries no compiler), and NFR-31 (the cache-hit-
 # ratio benchmark runs in this same gate too). Thresholds were fixed at
-# the Phase 0 exit test (docs/phase0-report.md; the cache ratio's0.90
+# the Phase 0 exit test (docs/phase0-report.md; the cache ratio's 0.90
 # at the Phase 3 exit) and only move with a recorded measurement.
 set -euo pipefail
 cd "$(dirname "$0")/.."

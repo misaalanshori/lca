@@ -30,7 +30,15 @@ Nine categories. Each has a home in the crate layout, a tool, and a place in the
 
 **Snapshot tests** verify that a piece of generated output, a rendered terminal frame or an assembled request, matches a reviewed golden file, so a change to either shows up as a diff a human approves rather than as a passing test that silently started asserting something different. Section 10 covers the specific and unusual use of this technique for catching cache-breaking regressions.
 
-**Performance and benchmark tests**, using `criterion`, verify the numeric NFRs: binary size, cold start, instantiation time, hook call overhead, idle memory, and cancellation latency. These run in the pipeline's size-and-startup gate described in the release policy, and a threshold breach fails the build the same way a failing test does.
+**Performance and benchmark tests** verify the numeric NFRs. Binary size,
+interpreter-host size, cold start, idle memory, the interpreter build's
+no-compiler property, and the cache-hit ratio are measured by
+`scripts/perf-gate.sh` in the pipeline's size-and-startup gate, and a
+threshold breach fails the build the same way a failing test does. The
+remaining numeric budgets are asserted as ordinary tests with a `// Verifies:`
+marker (instantiation time, hook-call overhead at 1 ms, cancellation latency),
+so each threshold lives in exactly one place. There is no `criterion` harness;
+the gate script and those tests are the measurement.
 
 **End-to-end tests** drive the actual `lca` binary as a subprocess, exercising the real CLI, the real filesystem, and the real terminal rendering path, still against the fake provider rather than a real model. These are the slowest and fewest tests in the suite and exist specifically to catch the class of defect that only shows up when every layer is real except the model.
 
