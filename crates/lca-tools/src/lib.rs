@@ -899,3 +899,53 @@ fn segment_match(pattern: &[u8], value: &[u8]) -> bool {
     }
     pi == pattern.len()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{glob_match, is_inside, resolve_target, truncate_head, truncate_tail};
+    use std::path::Path;
+
+    #[test]
+    fn head_truncation_keeps_a_clean_line_boundary() {
+        let (text, truncated) = truncate_head("a\nbb\nccc\n", 5);
+        assert!(truncated);
+        assert!(text.len() <= 5);
+        assert!(!text.ends_with('\n'));
+    }
+
+    #[test]
+    fn tail_truncation_keeps_the_end() {
+        let content = format!("{}\nKEEP\n", "x".repeat(100));
+        let (text, truncated) = truncate_tail(&content, 10);
+        assert!(truncated);
+        assert!(text.contains("KEEP"), "{text}");
+        assert!(text.contains("truncated"));
+    }
+
+    #[test]
+    fn glob_matches_segments_and_double_star() {
+        assert!(glob_match("src/**/*.rs", "src/a/b/main.rs"));
+        assert!(glob_match("**/*.rs", "main.rs"));
+        assert!(glob_match("*.rs", "main.rs"));
+        assert!(!glob_match("*.rs", "src/main.rs"));
+        assert!(glob_match("a?c", "abc"));
+        assert!(!glob_match("a?c", "ac"));
+    }
+
+    #[test]
+    fn inside_is_component_wise_not_a_string_prefix() {
+        assert!(is_inside(Path::new("/ws/src/x"), Path::new("/ws")));
+        assert!(!is_inside(Path::new("/ws-evil/x"), Path::new("/ws")));
+    }
+
+    #[test]
+    fn resolve_target_normalizes_parent_traversal() {
+        let root = std::env::temp_dir().join(format!("lca-resolve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("ws")).expect("mkdir");
+        let resolved = resolve_target(&root.join("ws"), Path::new("../outside.txt"));
+        let canonical_root = std::fs::canonicalize(&root).expect("canonical");
+        assert_eq!(resolved, canonical_root.join("outside.txt"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
