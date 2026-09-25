@@ -41,6 +41,13 @@ pub enum Action {
         /// The exact target path.
         path: PathBuf,
     },
+    /// Reach a named host outside every declared grant, the ad hoc attach
+    /// FR-PERM-16 defines. Offered by the login/setup flow, never by an
+    /// extension's own call, so the user attaches it deliberately.
+    Net {
+        /// The exact host being added.
+        host: String,
+    },
 }
 
 impl Action {
@@ -50,6 +57,7 @@ impl Action {
             Action::Shell { command, cwd } => format!("{command} (in {})", cwd.display()),
             Action::WritePath { path } => format!("write {}", path.display()),
             Action::ReadPath { path } => format!("read {}", path.display()),
+            Action::Net { host } => format!("connect to {host}"),
         }
     }
 
@@ -59,6 +67,7 @@ impl Action {
             Action::Shell { command, .. } => command.clone(),
             Action::WritePath { path } => path.display().to_string(),
             Action::ReadPath { path } => path.display().to_string(),
+            Action::Net { host } => host.clone(),
         }
     }
 
@@ -269,12 +278,23 @@ impl GrantStore {
         let Some(entry) = self.data.projects.get(&canonical_key(project_dir)) else {
             return false;
         };
-        let value = action.match_value();
-        entry
-            .patterns
-            .iter()
-            .chain(entry.proposal_patterns.iter())
-            .any(|pattern| wildcard_match(pattern, &value))
+        match action {
+            // The ad hoc `net` vocabulary is its own, host-shaped set
+            // (ADR-0022); it never consults the shell/path wildcards.
+            Action::Net { host } => entry
+                .net_patterns
+                .iter()
+                .filter_map(|pattern| parse_net_pattern(pattern).ok())
+                .any(|pattern| pattern.matches_host(host)),
+            _ => {
+                let value = action.match_value();
+                entry
+                    .patterns
+                    .iter()
+                    .chain(entry.proposal_patterns.iter())
+                    .any(|pattern| wildcard_match(pattern, &value))
+            }
+        }
     }
 
     /// Persist a directly approved pattern for this project (FR-PERM-8).
@@ -489,7 +509,12 @@ pub fn authorize(
         }),
         Decision::Always => {
             let pattern = action.suggested_pattern();
-            store.approve_pattern(project_dir, pattern.clone())?;
+            // A `net` approval goes into the host vocabulary (ADR-0022),
+            // everything else into the shell/path patterns set.
+            match action {
+                Action::Net { .. } => store.approve_net_pattern(project_dir, &pattern)?,
+                _ => store.approve_pattern(project_dir, pattern.clone())?,
+            }
             Ok(Outcome {
                 allowed: true,
                 prompted: true,

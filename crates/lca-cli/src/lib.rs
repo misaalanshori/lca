@@ -201,6 +201,50 @@ pub(crate) fn store_provider_secret(
         .map_err(|err| err.to_string())
 }
 
+/// The endpoint host an openai-compatible login would need an ad hoc `net`
+/// grant for: the configured base URL's host when it is not the manifest's
+/// fixed `api.openai.com` (FR-PERM-16, ADR-0022). `None` when the default
+/// endpoint is in use.
+pub(crate) fn openai_ad_hoc_host(data: &Path) -> Option<String> {
+    let base = std::env::var("OPENAI_BASE_URL")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let path = data.join("credentials").join("openai-compatible.json");
+            let text = std::fs::read_to_string(path).ok()?;
+            let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+            value
+                .get("base_url")
+                .and_then(|url| url.as_str())
+                .map(str::to_string)
+        })?;
+    let rest = base.split("://").nth(1).unwrap_or(&base);
+    ad_hoc_host_from_authority(rest)
+}
+
+/// The host in a URL authority, or `None` when it is the default endpoint.
+pub(crate) fn ad_hoc_host_from_authority(rest: &str) -> Option<String> {
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or(authority)
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    (!host.is_empty() && host != "api.openai.com").then_some(host)
+}
+
+/// Persist an ad hoc `net` grant the user approved at login (FR-PERM-16).
+pub(crate) fn store_ad_hoc_grant(data: &Path, cwd: &Path, host: &str) -> Result<(), String> {
+    let path = data.join("grants.json");
+    let mut store = GrantStore::open(&path).map_err(|err| err.to_string())?;
+    store
+        .approve_net_pattern(cwd, host)
+        .map_err(|err| err.to_string())
+}
+
 /// FR-PROV-9's disable knob (FR-PERM-19's storage): every handle the
 /// grant store has disabled for this project leaves the registry.
 pub(crate) fn apply_enablement(

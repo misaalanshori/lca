@@ -73,6 +73,17 @@ pub enum LoginNext {
         /// The prompt to show, e.g. "API key for openai-compatible".
         label: String,
     },
+    /// Offer an ad hoc `net` grant for the endpoint host the login flow
+    /// just named (FR-PERM-16); the answer goes to the [`LoginConfirm`]
+    /// seam.
+    Grant {
+        /// The provider whose endpoint this is.
+        provider: String,
+        /// The exact host being added.
+        host: String,
+        /// The consent text naming the host.
+        prompt: String,
+    },
 }
 
 /// The host's login seam: `/login` calls this to choose between a message
@@ -80,9 +91,14 @@ pub enum LoginNext {
 /// interface owns the modal (`docs/deferred_workplan.md` B2).
 pub type LoginRequest = Arc<dyn Fn(&str) -> LoginNext + Send + Sync>;
 
-/// Store a secret the user typed for `provider`; returns the message to
-/// show. The secret is never echoed into scrollback or history.
-pub type LoginComplete = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
+/// Store a secret the user typed for `provider`; returns what to do next
+/// (a message, or an ad hoc-grant offer). The secret is never echoed into
+/// scrollback or history.
+pub type LoginComplete = Arc<dyn Fn(&str, &str) -> LoginNext + Send + Sync>;
+
+/// Persist an ad hoc `net` grant the user approved at login; returns the
+/// message to show.
+pub type LoginConfirm = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
 
 /// A masked single-line secret prompt (the `/login` flow).
 pub struct SecretPrompt {
@@ -92,6 +108,16 @@ pub struct SecretPrompt {
     pub label: String,
     /// The characters typed so far - rendered masked, never logged.
     pub input: String,
+}
+
+/// A yes/no confirm for an ad hoc `net` grant the login flow offers.
+pub struct GrantPrompt {
+    /// The provider whose endpoint this is.
+    pub provider: String,
+    /// The exact host being added.
+    pub host: String,
+    /// The consent text naming the host.
+    pub prompt: String,
 }
 
 /// Which extensions draw in a region: the CLI's view over the registry
@@ -266,6 +292,8 @@ pub struct UiOptions {
     pub login: Option<LoginRequest>,
     /// Stores a secret the user typed for `/login`.
     pub complete_login: Option<LoginComplete>,
+    /// Persists an ad hoc `net` grant the user approved at login.
+    pub confirm_login_grant: Option<LoginConfirm>,
 }
 
 /// The permission modal: what is being asked, and how to answer.
@@ -310,6 +338,8 @@ pub struct UiState {
     pub permission: Option<PermissionModal>,
     /// The open masked secret prompt, if any (`/login`).
     pub secret: Option<SecretPrompt>,
+    /// The open ad hoc-grant confirm, if any (`/login`).
+    pub grant: Option<GrantPrompt>,
     /// Ctrl+C seen once on an idle prompt.
     pub ctrl_c_armed: bool,
     /// The extension side panel is open.
@@ -348,6 +378,7 @@ impl UiState {
             mode: InputMode::Normal,
             permission: None,
             secret: None,
+            grant: None,
             ctrl_c_armed: false,
             panel_open: false,
             modal_open: false,
@@ -603,8 +634,22 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                 if secret.is_empty() {
                     state.notice = Some("nothing was entered".to_string());
                 } else if let Some(complete) = &state.options.complete_login {
-                    let message = complete(&prompt.provider, &secret);
-                    state.notice = Some(sanitize_block(&message));
+                    match complete(&prompt.provider, &secret) {
+                        LoginNext::Message(text) => state.notice = Some(sanitize_block(&text)),
+                        LoginNext::Grant {
+                            provider,
+                            host,
+                            prompt,
+                        } => {
+                            state.grant = Some(GrantPrompt {
+                                provider,
+                                host,
+                                prompt,
+                            });
+                        }
+                        // A login step never asks for a second secret.
+                        LoginNext::Secret { .. } => {}
+                    }
                 }
             }
             SK::Backspace => {
@@ -616,6 +661,27 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                 state.secret = Some(prompt);
             }
             _ => state.secret = Some(prompt),
+        }
+        return Action::Continue;
+    }
+
+    // The ad hoc-grant confirm (`/login`) owns the keyboard while open.
+    if let Some(prompt) = state.grant.take() {
+        use crossterm::event::KeyCode as GK;
+        match key.code {
+            GK::Char('y' | 'Y') | GK::Enter => {
+                let message = state
+                    .options
+                    .confirm_login_grant
+                    .as_ref()
+                    .map(|confirm| confirm(&prompt.provider, &prompt.host))
+                    .unwrap_or_else(|| "nothing was changed".to_string());
+                state.notice = Some(sanitize_block(&message));
+            }
+            GK::Char('n' | 'N') | GK::Esc => {
+                state.notice = Some(format!("kept {} without the ad hoc grant", prompt.host));
+            }
+            _ => state.grant = Some(prompt),
         }
         return Action::Continue;
     }
@@ -746,6 +812,17 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                                 provider,
                                 label,
                                 input: String::new(),
+                            });
+                        }
+                        LoginNext::Grant {
+                            provider,
+                            host,
+                            prompt,
+                        } => {
+                            state.grant = Some(GrantPrompt {
+                                provider,
+                                host,
+                                prompt,
                             });
                         }
                     }
@@ -1265,7 +1342,23 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
     );
     frame.set_cursor_position(cursor_position(input_row, state));
 
-    if let Some(secret) = &state.secret {
+    if let Some(grant) = &state.grant {
+        let area = centered(frame.area(), 74, 8);
+        frame.render_widget(Clear, area);
+        let body = format!(
+            "{}\n\n  connect to {}\n\nAllow [y] / Deny [n]",
+            grant.prompt, grant.host
+        );
+        let dialog = Paragraph::new(body)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(theme(plain, Color::Yellow))
+                    .title(format!("ad hoc grant: {}", grant.provider)),
+            )
+            .wrap(Wrap { trim: false });
+        frame.render_widget(dialog, area);
+    } else if let Some(secret) = &state.secret {
         // Masked: one asterisk per character, never the characters.
         let masked = "*".repeat(secret.input.chars().count());
         let shown = if masked.is_empty() {

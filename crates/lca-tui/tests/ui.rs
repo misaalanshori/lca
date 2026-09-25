@@ -29,6 +29,7 @@ fn options() -> UiOptions {
         update_notice: None,
         login: None,
         complete_login: None,
+        confirm_login_grant: None,
         slash_commands: vec![
             "/login".into(),
             "/logout".into(),
@@ -757,7 +758,7 @@ fn login_collects_a_secret_in_a_masked_prompt_and_never_logs_it() {
     let sink = captured.clone();
     options.complete_login = Some(Arc::new(move |provider: &str, secret: &str| {
         *sink.lock().unwrap() = Some((provider.to_string(), secret.to_string()));
-        "signed in".to_string()
+        lca_tui::LoginNext::Message("signed in".to_string())
     }));
     let mut state = UiState::new(options);
     state.buffer = "/login openai-compatible".to_string();
@@ -825,7 +826,7 @@ fn escaping_the_secret_prompt_cancels_without_storing() {
     let sink = captured.clone();
     options.complete_login = Some(Arc::new(move |_provider: &str, secret: &str| {
         *sink.lock().unwrap() = Some(secret.to_string());
-        "stored".to_string()
+        lca_tui::LoginNext::Message("stored".to_string())
     }));
     let mut state = UiState::new(options);
     state.buffer = "/login openai-compatible".to_string();
@@ -834,4 +835,117 @@ fn escaping_the_secret_prompt_cancels_without_storing() {
     handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Esc));
     assert!(state.secret.is_none(), "Escape closes the prompt");
     assert!(captured.lock().unwrap().is_none(), "nothing stored");
+}
+
+// The login flow offers an ad hoc `net` grant for a non-default endpoint
+// host; approving calls the persist seam with the exact host, denying does
+// not (FR-PERM-16 / deferred plan B1).
+#[test]
+fn login_offers_and_confirms_an_ad_hoc_grant() {
+    use std::sync::{Arc, Mutex};
+    let confirmed: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+    let mut options = options();
+    options.login = Some(Arc::new(|_argument: &str| lca_tui::LoginNext::Grant {
+        provider: "openai-compatible".to_string(),
+        host: "llm.example.com".to_string(),
+        prompt: "add it?".to_string(),
+    }));
+    let sink = confirmed.clone();
+    options.confirm_login_grant = Some(Arc::new(move |provider: &str, host: &str| {
+        *sink.lock().unwrap() = Some((provider.to_string(), host.to_string()));
+        "granted".to_string()
+    }));
+    let mut state = UiState::new(options);
+    state.buffer = "/login openai-compatible".to_string();
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    assert!(state.grant.is_some(), "the grant prompt opened");
+    let mut term = terminal(80, 24);
+    render(&mut term, &state).expect("render");
+    let text = buffer_text(&mut term);
+    assert!(text.contains("llm.example.com"), "names the host:\n{text}");
+    handle_key(
+        &mut state,
+        crossterm::event::KeyEvent::from(KeyCode::Char('y')),
+    );
+    assert_eq!(
+        *confirmed.lock().unwrap(),
+        Some((
+            "openai-compatible".to_string(),
+            "llm.example.com".to_string()
+        ))
+    );
+    assert!(state.grant.is_none(), "the prompt closes");
+    assert!(
+        state
+            .notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("granted"),
+        "{:?}",
+        state.notice
+    );
+}
+
+#[test]
+fn denying_the_ad_hoc_grant_stores_nothing() {
+    use std::sync::{Arc, Mutex};
+    let called: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    let mut options = options();
+    options.login = Some(Arc::new(|_argument: &str| lca_tui::LoginNext::Grant {
+        provider: "openai-compatible".to_string(),
+        host: "llm.example.com".to_string(),
+        prompt: "add it?".to_string(),
+    }));
+    let flag = called.clone();
+    options.confirm_login_grant = Some(Arc::new(move |_provider: &str, _host: &str| {
+        *flag.lock().unwrap() = true;
+        "granted".to_string()
+    }));
+    let mut state = UiState::new(options);
+    state.buffer = "/login openai-compatible".to_string();
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    handle_key(
+        &mut state,
+        crossterm::event::KeyEvent::from(KeyCode::Char('n')),
+    );
+    assert!(!*called.lock().unwrap(), "deny stores nothing");
+    assert!(state.grant.is_none());
+}
+
+// The realistic B1 path: the secret is stored first, and only then does the
+// host offer the ad hoc grant for the configured non-default endpoint.
+#[test]
+fn a_grant_needed_after_the_secret_opens_the_grant_prompt() {
+    use std::sync::Arc;
+    let mut options = options();
+    options.login = Some(Arc::new(|_argument: &str| lca_tui::LoginNext::Secret {
+        provider: "openai-compatible".to_string(),
+        label: "API key".to_string(),
+    }));
+    options.complete_login = Some(Arc::new(|_provider: &str, _secret: &str| {
+        lca_tui::LoginNext::Grant {
+            provider: "openai-compatible".to_string(),
+            host: "llm.example.com".to_string(),
+            prompt: "add it?".to_string(),
+        }
+    }));
+    options.confirm_login_grant = Some(Arc::new(|_provider: &str, _host: &str| {
+        "granted".to_string()
+    }));
+    let mut state = UiState::new(options);
+    state.buffer = "/login openai-compatible".to_string();
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    assert!(state.secret.is_some());
+    for c in "sk-x".chars() {
+        handle_key(
+            &mut state,
+            crossterm::event::KeyEvent::from(KeyCode::Char(c)),
+        );
+    }
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    assert!(state.secret.is_none(), "the secret prompt closed");
+    assert!(
+        state.grant.is_some(),
+        "the ad hoc grant follows the stored secret"
+    );
 }

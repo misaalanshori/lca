@@ -509,3 +509,51 @@ fn approving_an_invalid_net_pattern_is_a_validation_error() {
         "got {err:?}"
     );
 }
+
+// FR-PERM-16 / ADR-0022: an "always" on a `Net` action lands in the net
+// vocabulary (not the shell/path patterns set) and is allowed on the next
+// call without another prompt.
+#[test]
+fn an_always_net_approval_persists_as_an_adhoc_grant() {
+    struct Always;
+    impl PermissionPrompt for Always {
+        fn ask(&mut self, _action: &Action) -> Decision {
+            Decision::Always
+        }
+        fn review_proposals(&mut self, _diff: &ProposalDiff) -> bool {
+            false
+        }
+    }
+    let root = scratch("net-adhoc");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).expect("mkdir");
+    let mut store = GrantStore::open(&store_path(&root)).expect("store");
+    let action = Action::Net {
+        host: "llm.example.com".to_string(),
+    };
+
+    let outcome =
+        lca_permissions::authorize(&mut store, &project, &action, None, &mut Always).expect("auth");
+    assert!(outcome.allowed);
+    assert_eq!(outcome.stored_pattern.as_deref(), Some("llm.example.com"));
+    assert_eq!(
+        store.net_patterns(&project),
+        vec!["llm.example.com".to_string()],
+        "stored in the net vocabulary"
+    );
+
+    // The next identical call is allowed without prompting.
+    struct Panic;
+    impl PermissionPrompt for Panic {
+        fn ask(&mut self, _action: &Action) -> Decision {
+            panic!("a granted host must not re-prompt")
+        }
+        fn review_proposals(&mut self, _diff: &ProposalDiff) -> bool {
+            false
+        }
+    }
+    let again = lca_permissions::authorize(&mut store, &project, &action, None, &mut Panic)
+        .expect("authorize");
+    assert!(again.allowed);
+    assert!(!again.prompted, "the stored grant already covers it");
+}

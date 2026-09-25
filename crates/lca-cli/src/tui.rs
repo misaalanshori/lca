@@ -362,7 +362,24 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             }
             match registry.invoke_generic("login", &target, &provider_name) {
                 Some(CommandEffect::ShowWidget(text)) => lca_tui::LoginNext::Message(text),
-                Some(_) => lca_tui::LoginNext::Message(format!("{target}: login finished")),
+                Some(_) => {
+                    // Login succeeded: if the configured endpoint is outside
+                    // the manifest's fixed hosts, offer the ad hoc grant now,
+                    // at the moment the user names it (FR-PERM-16).
+                    if target == "openai-compatible"
+                        && let Some(host) = crate::openai_ad_hoc_host(&data)
+                    {
+                        return lca_tui::LoginNext::Grant {
+                            provider: target.clone(),
+                            host: host.clone(),
+                            prompt: format!(
+                                "{target}'s endpoint is {host}, which its manifest does not cover; \
+                                 add it as an ad hoc grant?"
+                            ),
+                        };
+                    }
+                    lca_tui::LoginNext::Message(format!("{target}: login finished"))
+                }
                 None => lca_tui::LoginNext::Message(format!("`{target}` cannot log in")),
             }
         })
@@ -374,7 +391,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         let model_cell = model_cell.clone();
         let provider = provider.clone();
         let provider_name = provider_name.clone();
-        Arc::new(move |target: &str, secret: &str| -> String {
+        Arc::new(move |target: &str, secret: &str| -> lca_tui::LoginNext {
             match crate::store_provider_secret(&data, &cwd, target, "api_key", secret) {
                 Ok(()) => {
                     // Light the session up now that the provider can answer.
@@ -388,9 +405,37 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                         *label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
                             format!("{target}/{}", model.id);
                     }
-                    format!("signed in {target}; the key is stored under its namespace")
+                    // A non-default endpoint needs its ad hoc `net` grant,
+                    // offered now that the user is signed in (FR-PERM-16).
+                    if target == "openai-compatible"
+                        && let Some(host) = crate::openai_ad_hoc_host(&data)
+                    {
+                        return lca_tui::LoginNext::Grant {
+                            provider: target.to_string(),
+                            host: host.clone(),
+                            prompt: format!(
+                                "{target}'s endpoint is {host}, which its manifest does not cover; \
+                                 add it as an ad hoc grant?"
+                            ),
+                        };
+                    }
+                    lca_tui::LoginNext::Message(format!(
+                        "signed in {target}; the key is stored under its namespace"
+                    ))
                 }
-                Err(err) => format!("could not store the key for {target}: {err}"),
+                Err(err) => lca_tui::LoginNext::Message(format!(
+                    "could not store the key for {target}: {err}"
+                )),
+            }
+        })
+    };
+    let login_confirm: lca_tui::LoginConfirm = {
+        let data = data.clone();
+        let cwd = cwd.to_path_buf();
+        Arc::new(move |provider: &str, host: &str| -> String {
+            match crate::store_ad_hoc_grant(&data, &cwd, host) {
+                Ok(()) => format!("{provider} may now reach {host}"),
+                Err(err) => format!("could not store the ad hoc grant: {err}"),
             }
         })
     };
@@ -456,6 +501,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         update_notice: Some(update_notice),
         login: Some(login_seam),
         complete_login: Some(login_complete),
+        confirm_login_grant: Some(login_confirm),
         slash_commands: {
             let mut names: Vec<String> = BUILTIN_SLOTS
                 .iter()
@@ -775,6 +821,39 @@ mod tests {
             let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "owner-only credential file");
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // The ad hoc host is the base URL's host, unless it is the manifest's
+    // fixed default (FR-PERM-16: only a non-default endpoint needs the grant).
+    #[test]
+    fn the_ad_hoc_host_is_the_non_default_endpoint_host() {
+        assert_eq!(
+            crate::ad_hoc_host_from_authority("llm.example.com:8443/v1"),
+            Some("llm.example.com".to_string())
+        );
+        assert_eq!(
+            crate::ad_hoc_host_from_authority("user@internal.local/v1"),
+            Some("internal.local".to_string())
+        );
+        assert_eq!(crate::ad_hoc_host_from_authority("api.openai.com/v1"), None);
+        assert_eq!(crate::ad_hoc_host_from_authority(""), None);
+    }
+
+    // The approved grant is persisted for this project, so the next run's
+    // capability environment picks it up (ADR-0022).
+    #[test]
+    fn the_ad_hoc_grant_is_persisted_for_the_project() {
+        let root = std::env::temp_dir().join(format!("lca-adhoc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        crate::store_ad_hoc_grant(&root, &project, "llm.example.com").expect("store");
+        let store = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open");
+        assert_eq!(
+            store.net_patterns(&project),
+            vec!["llm.example.com".to_string()]
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
