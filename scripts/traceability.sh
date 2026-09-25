@@ -92,8 +92,10 @@ stale=$(comm -13 "$requirements" "$markers")
 
 # Verifies: NFR-24 (a released defect's test lands in
 # tests/regressions/<issue-id>-<short-slug>.rs, written before the fix
-# and in the same change; no defect has reached a release yet, so the
-# directory's presence is what this checks today).
+# and in the same change). The directory exists, and the released defects
+# are backfilled; the release-tag build additionally requires
+# tests/regressions/ to gain a file whenever the released changelog carries
+# a '### Fixed' section (`.github/workflows/publish.yml`).
 if [ ! -d tests/regressions ]; then
   echo "missing tests/regressions/ (NFR-24's home for a released defect's test)"
   exit 1

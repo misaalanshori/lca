@@ -30,6 +30,32 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history and tags: the regression-backfill check needs the
+          # previous release tag to diff tests/regressions/.
+          fetch-depth: 0
+      - name: Check the regression backfill
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          prev=$(git describe --tags --abbrev=0 "${RELEASE_TAG}^" 2>/dev/null || true)
+          if [ -z "$prev" ]; then
+            echo "no previous tag; first release, nothing to check"
+            exit 0
+          fi
+          fixed=$(git diff "$prev..$RELEASE_TAG" -- CHANGELOG.md | grep -c '^+.*### Fixed' || true)
+          if [ "$fixed" -eq 0 ]; then
+            echo "no '### Fixed' changelog section in this release"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$prev..$RELEASE_TAG" -- tests/regressions/)
+          if [ -z "$changed" ]; then
+            echo "::error::the release changelog has a '### Fixed' section but tests/regressions/ gained no file since $prev (docs/testing-plan.md section 7, NFR-24)"
+            exit 1
+          fi
+          echo "regression backfill present:"
+          echo "$changed"
       - name: Install the pinned toolchain
         run: |
           rustup set profile minimal

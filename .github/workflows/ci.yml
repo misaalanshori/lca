@@ -113,7 +113,7 @@ jobs:
           - group: engines
             expr: 'package(lca-tools) or package(lca-core) or package(lca-ext-host) or package(lca-ext-native)'
           - group: shell
-            expr: 'package(lca-cli) or package(lca-tui) or package(lca-registry) or package(lca-sdk)'
+            expr: 'package(lca-cli) or package(lca-tui) or package(lca-registry) or package(lca-sdk) or package(lca-regressions)'
           - group: extensions
             expr: 'package(antigravity) or package(compaction-default) or package(conformance) or package(hooks-example) or package(openai-compatible) or package(skills) or package(ui-example)'
     steps:
