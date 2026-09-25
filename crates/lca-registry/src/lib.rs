@@ -211,11 +211,15 @@ pub fn consent_lines(manifest: &str) -> Result<Vec<String>, Error> {
         match name.as_str() {
             "fs" => {
                 let mut scopes = Vec::new();
+                let mut writable = false;
                 if let Some(table) = value.as_table() {
                     let mut keys: Vec<&String> = table.keys().collect();
                     keys.sort();
                     for scope in keys {
                         let mode = table[scope].as_str().unwrap_or("read");
+                        if mode == "read-write" {
+                            writable = true;
+                        }
                         scopes.push(match mode {
                             "read-write" => format!("{scope} (read and write)"),
                             other => format!("{scope} ({other})"),
@@ -223,8 +227,13 @@ pub fn consent_lines(manifest: &str) -> Result<Vec<String>, Error> {
                     }
                 }
                 lines.push(format!(
-                    "Files: {}. This lets it read and write those files.",
-                    scopes.join(", ")
+                    "Files: {}. {}",
+                    scopes.join(", "),
+                    if writable {
+                        "It can read and write those files."
+                    } else {
+                        "It can read those files."
+                    }
                 ));
             }
             "process" => lines.push(format!(

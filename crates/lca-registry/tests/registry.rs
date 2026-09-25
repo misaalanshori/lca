@@ -505,3 +505,34 @@ fn the_archive_refuses_extra_entries() {
         "{err}"
     );
 }
+
+// The fs consent sentence matches the mode: a read-only grant must not
+// claim it can write (the install screen is the user's only warning).
+#[test]
+fn the_fs_consent_sentence_matches_the_granted_mode() {
+    let read_only = r#"name = "r"
+version = "1.0.0"
+abi = "1.0"
+worlds = ["context-transform"]
+description = "x"
+
+[capabilities.fs]
+workspace = "read"
+"#;
+    let files_line = |manifest: &str| {
+        lca_registry::consent_lines(manifest)
+            .expect("lines")
+            .into_iter()
+            .find(|line| line.starts_with("Files:"))
+            .expect("an fs line")
+    };
+    assert_eq!(
+        files_line(read_only),
+        "Files: workspace (read). It can read those files."
+    );
+    let read_write = read_only.replace("workspace = \"read\"", "workspace = \"read-write\"");
+    assert_eq!(
+        files_line(&read_write),
+        "Files: workspace (read and write). It can read and write those files."
+    );
+}
