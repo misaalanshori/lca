@@ -889,66 +889,112 @@ fn handle_chunk(
     true
 }
 
-/// The whole completion call over capabilities: refresh if needed
-/// (FR-PROV-5), stream the SSE body chunk by chunk, decode each frame.
-/// `emit` returning `false` stops the read (FR-CONC-3).
-pub fn run_provider_stream(
-    cap: &dyn ProviderCap,
-    request: &lca_protocol::CompletionRequest,
-    emit: &mut dyn FnMut(lca_protocol::StreamEvent) -> bool,
-) -> Result<(), StreamFailure> {
-    let token = access_token(cap).map_err(StreamFailure::from)?;
-    let api_base = endpoint(cap, "api_base", DEFAULT_API_BASE);
-    let system: String = request
-        .messages
-        .iter()
-        .filter(|message| message.role == lca_protocol::MessageRole::System)
-        .flat_map(|message| {
-            message.content.iter().filter_map(|block| match block {
-                lca_protocol::ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
+/// A pull-based driver over one Antigravity streaming completion: the
+/// sandboxed form drives it from the `completion-stream` resource's `next`,
+/// so events leave as the host yields body chunks instead of after the whole
+/// response (`docs/deferred_workplan.md` C1). The native form drains it in a
+/// loop.
+pub struct StreamDriver<'a> {
+    cap: &'a dyn ProviderCap,
+    handle: u32,
+    buffer: String,
+    open_calls: Vec<String>,
+    pending: std::collections::VecDeque<lca_protocol::StreamEvent>,
+    finished: bool,
+}
+
+impl<'a> StreamDriver<'a> {
+    /// Authenticate, build the request, send it, and check the status.
+    pub fn open(
+        cap: &'a dyn ProviderCap,
+        request: &lca_protocol::CompletionRequest,
+    ) -> Result<StreamDriver<'a>, StreamFailure> {
+        let token = access_token(cap).map_err(StreamFailure::from)?;
+        let api_base = endpoint(cap, "api_base", DEFAULT_API_BASE);
+        let system: String = request
+            .messages
+            .iter()
+            .filter(|message| message.role == lca_protocol::MessageRole::System)
+            .flat_map(|message| {
+                message.content.iter().filter_map(|block| match block {
+                    lca_protocol::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
             })
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let body = build_request(request, &system);
-    let body_bytes = serde_json::to_vec(&body).map_err(|err| StreamFailure {
-        message: format!("cannot build request: {err}"),
-        class: "invalid",
-        retryable: false,
-    })?;
-    let url = format!(
-        "{}/v1internal:streamGenerateContent?alt=sse",
-        api_base.trim_end_matches('/')
-    );
-    let bearer = format!("Bearer {token}");
-    let headers = [
-        ("content-type", "application/json"),
-        ("authorization", bearer.as_str()),
-        ("user-agent", "lca-antigravity/1.0"),
-    ];
-    let handle = cap.net_request("POST", &url, &headers, Some(&body_bytes))?;
-    let status = cap.net_response_status(handle)?;
-    if !(200..300).contains(&status) {
-        let mut detail = Vec::new();
-        while let Some(chunk) = cap.net_read_body(handle, 64 * 1024)? {
-            detail.extend_from_slice(&chunk);
-            if detail.len() > 1024 * 1024 {
-                break;
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = build_request(request, &system);
+        let body_bytes = serde_json::to_vec(&body).map_err(|err| StreamFailure {
+            message: format!("cannot build request: {err}"),
+            class: "invalid",
+            retryable: false,
+        })?;
+        let url = format!(
+            "{}/v1internal:streamGenerateContent?alt=sse",
+            api_base.trim_end_matches('/')
+        );
+        let bearer = format!("Bearer {token}");
+        let headers = [
+            ("content-type", "application/json"),
+            ("authorization", bearer.as_str()),
+            ("user-agent", "lca-antigravity/1.0"),
+        ];
+        let handle = cap.net_request("POST", &url, &headers, Some(&body_bytes))?;
+        let status = cap.net_response_status(handle)?;
+        if !(200..300).contains(&status) {
+            let mut detail = Vec::new();
+            while let Some(chunk) = cap.net_read_body(handle, 64 * 1024)? {
+                detail.extend_from_slice(&chunk);
+                if detail.len() > 1024 * 1024 {
+                    break;
+                }
             }
+            let _ = cap.net_close_response(handle);
+            let text = String::from_utf8_lossy(&detail);
+            return Err(failure_for_status(status, &json_error_message(&text)));
         }
-        let _ = cap.net_close_response(handle);
-        let text = String::from_utf8_lossy(&detail);
-        return Err(failure_for_status(status, &json_error_message(&text)));
+        Ok(StreamDriver {
+            cap,
+            handle,
+            buffer: String::new(),
+            open_calls: Vec::new(),
+            pending: std::collections::VecDeque::new(),
+            finished: false,
+        })
     }
 
-    let mut buffer = String::new();
-    let mut open_calls: Vec<String> = Vec::new();
-    let mut stopped = false;
-    while let Some(chunk) = cap.net_read_body(handle, 64 * 1024)? {
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(end) = buffer.find("\n\n") {
-            let frame: String = buffer.drain(..end + 2).collect();
+    /// The next typed event, reading more of the body when the frame buffer
+    /// is empty; `None` at end of stream.
+    pub fn next_event(&mut self) -> Option<Result<lca_protocol::StreamEvent, StreamFailure>> {
+        loop {
+            if let Some(event) = self.pending.pop_front() {
+                return Some(Ok(event));
+            }
+            if self.finished {
+                return None;
+            }
+            match self.cap.net_read_body(self.handle, 64 * 1024) {
+                Ok(Some(chunk)) => {
+                    self.buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    self.drain_frames();
+                }
+                Ok(None) => self.finished = true,
+                Err(err) => {
+                    self.finished = true;
+                    return Some(Err(StreamFailure::from(err)));
+                }
+            }
+        }
+    }
+
+    /// Decode every complete `\n\n`-terminated frame currently buffered.
+    fn drain_frames(&mut self) {
+        loop {
+            let Some(end) = self.buffer.find("\n\n") else {
+                return;
+            };
+            let frame: String = self.buffer.drain(..end + 2).collect();
+            let mut events = Vec::new();
             for line in frame.lines() {
                 let line = line.trim_end_matches('\r');
                 let Some(payload) = line.strip_prefix("data:").map(str::trim) else {
@@ -960,20 +1006,36 @@ pub fn run_provider_stream(
                 let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
                     continue; // a malformed frame drops; the stream continues
                 };
-                if !handle_chunk(&value, &mut open_calls, emit) {
-                    stopped = true;
-                    break;
-                }
+                handle_chunk(&value, &mut self.open_calls, &mut |event| {
+                    events.push(event);
+                    true
+                });
             }
-            if stopped {
-                break;
-            }
+            self.pending.extend(events);
         }
-        if stopped {
+    }
+}
+
+impl Drop for StreamDriver<'_> {
+    fn drop(&mut self) {
+        let _ = self.cap.net_close_response(self.handle);
+    }
+}
+
+/// The whole completion call over capabilities: refresh if needed
+/// (FR-PROV-5), then stream the SSE body chunk by chunk. `emit` returning
+/// `false` stops the read (FR-CONC-3).
+pub fn run_provider_stream(
+    cap: &dyn ProviderCap,
+    request: &lca_protocol::CompletionRequest,
+    emit: &mut dyn FnMut(lca_protocol::StreamEvent) -> bool,
+) -> Result<(), StreamFailure> {
+    let mut driver = StreamDriver::open(cap, request)?;
+    while let Some(event) = driver.next_event() {
+        if !emit(event?) {
             break;
         }
     }
-    let _ = cap.net_close_response(handle);
     Ok(())
 }
 
@@ -1229,6 +1291,10 @@ mod wasm_mode {
     /// The guest's capability view: host imports only.
     struct GuestCap;
 
+    /// A `'static` view so the streaming driver can borrow the capability
+    /// view for as long as its resource lives (a unit struct: free).
+    static GUEST_CAP: GuestCap = GuestCap;
+
     impl ProviderCap for GuestCap {
         fn net_request(
             &self,
@@ -1372,13 +1438,28 @@ mod wasm_mode {
 
     pub struct AntigravityWasm;
 
+    /// The `completion-stream` resource: a pull stream over the driver, so
+    /// events leave as the host yields body chunks instead of after the whole
+    /// response (C1).
     pub struct QueuedStream {
-        events: RefCell<std::vec::IntoIter<lca_protocol::StreamEvent>>,
+        driver: RefCell<Option<crate::StreamDriver<'static>>>,
     }
 
     impl GuestCompletionStream for QueuedStream {
         fn next(&self) -> Option<WasmEvent> {
-            self.events.borrow_mut().next().map(to_wit_event)
+            let mut slot = self.driver.borrow_mut();
+            let driver = slot.as_mut()?;
+            match driver.next_event() {
+                None => {
+                    *slot = None;
+                    None
+                }
+                Some(Ok(event)) => Some(to_wit_event(event)),
+                Some(Err(failure)) => {
+                    *slot = None;
+                    Some(WasmEvent::Error((failure.message, failure.retryable)))
+                }
+            }
         }
     }
 
@@ -1462,18 +1543,10 @@ mod wasm_mode {
                     .map(|pair| (pair.key.clone(), pair.value.clone()))
                     .collect(),
             };
-            // ponytail: the sandboxed form fetches the whole response
-            // before handing events out (the resource is precomputed);
-            // the native form streams chunk by chunk. Same events, same
-            // order (the dual-mode promise, NFR-25's property).
-            let mut events: Vec<lca_protocol::StreamEvent> = Vec::new();
-            crate::run_provider_stream(&GuestCap, &protocol_request, &mut |event| {
-                events.push(event);
-                true
-            })
-            .map_err(|failure| failure.message)?;
+            let driver = crate::StreamDriver::open(&GUEST_CAP, &protocol_request)
+                .map_err(|failure| failure.message)?;
             Ok(CompletionStream::new(QueuedStream {
-                events: RefCell::new(events.into_iter()),
+                driver: RefCell::new(Some(driver)),
             }))
         }
     }
