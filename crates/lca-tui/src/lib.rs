@@ -18,7 +18,7 @@ use lca_protocol::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
 use ratatui::Frame;
 use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
@@ -82,6 +82,23 @@ pub fn sanitize_text(text: &str) -> String {
     for character in text.chars() {
         match character {
             '\n' | '\t' | '\r' => out.push(' '),
+            c if (c as u32) < 0x20 || c == '\x7f' => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Like [`sanitize_text`], but keeps newlines: for block output whose
+/// layout the host decided (a command's multi-line result, a notice). Tabs
+/// and carriage returns become spaces; other control characters become
+/// visible text, so an escape sequence still cannot reach the terminal.
+pub fn sanitize_block(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '\n' => out.push('\n'),
+            '\t' | '\r' => out.push(' '),
             c if (c as u32) < 0x20 || c == '\x7f' => out.push_str(&format!("\\x{:02x}", c as u32)),
             c => out.push(c),
         }
@@ -497,11 +514,11 @@ fn apply_ui_effect(state: &mut UiState, effect: lca_protocol::UiEffect) -> Optio
             None
         }
         UiEffect::ShowNotice(text) => {
-            state.notice = Some(sanitize_text(&text));
+            state.notice = Some(sanitize_block(&text));
             None
         }
         UiEffect::InsertText(text) => {
-            state.buffer.push_str(&sanitize_text(&text));
+            state.insert_at_cursor(&sanitize_block(&text));
             None
         }
         UiEffect::SubmitPrompt(text) => {
@@ -653,10 +670,10 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                 {
                     match (state.options.invoke_command)(&name, &argument) {
                         CommandEffect::ShowWidget(text) => {
-                            state.notice = Some(sanitize_text(&text))
+                            state.notice = Some(sanitize_block(&text))
                         }
                         CommandEffect::InsertText(text) => {
-                            state.insert_at_cursor(&sanitize_text(&text))
+                            state.insert_at_cursor(&sanitize_block(&text))
                         }
                         CommandEffect::SubmitPrompt(text) => {
                             state.buffer = text;
@@ -953,6 +970,8 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         }
     };
 
+    let dim = theme(plain, Color::DarkGray);
+
     // Extension content this frame: pulled from the registry's view
     // (ADR-0003's model - the host asks, never the other way round).
     let footer_trees = state
@@ -979,57 +998,74 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         (frame.area(), None)
     };
 
+    // The composer grows with what is typed; no heavy frame around it.
     let input_rows = wrapped_rows(
         &format!("> {}", state.buffer),
-        main_area.width.saturating_sub(2).max(1) as usize,
+        main_area.width.max(1) as usize,
     );
-    let input_height = (input_rows + 2).clamp(3, 12);
-    let mut vertical = vec![Constraint::Min(3), Constraint::Min(3)];
+    let input_height = input_rows.clamp(1, 12);
+
+    let mut vertical = vec![Constraint::Min(3)];
     if !footer_lines.is_empty() {
-        // The footer draws with a border: two rows of chrome around its
-        // lines (the catalog's "up to three lines" plus the frame).
-        vertical.push(Constraint::Length(footer_lines.len() as u16 + 2));
+        vertical.push(Constraint::Length(footer_lines.len() as u16));
     }
-    vertical.push(Constraint::Length(1));
+    vertical.push(Constraint::Length(1)); // separator
     vertical.push(Constraint::Length(input_height));
+    vertical.push(Constraint::Length(1)); // status
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(vertical)
         .split(main_area);
-    let footer_row = (!footer_lines.is_empty()).then_some(chunks[2]);
-    let status_row = chunks[chunks.len() - 2];
-    let input_row = chunks[chunks.len() - 1];
-
-    let scroll_text = if state.scrollback.is_empty() {
-        // First run: say what the interface is for instead of a blank box.
-        "Type a message to start. /help lists commands, /login signs in.".to_string()
+    let transcript_row = chunks[0];
+    let mut next = 1;
+    let footer_row = if footer_lines.is_empty() {
+        None
     } else {
-        state.scrollback.join("\n")
+        let row = chunks[next];
+        next += 1;
+        Some(row)
     };
-    let scroll_lines = scroll_text.lines().count() as u16;
-    let scroll_height = chunks[0].height.saturating_sub(2);
-    let scroll_offset = scroll_lines.saturating_sub(scroll_height);
-    let scrollback = Paragraph::new(scroll_text)
-        .block(Block::default().borders(Borders::ALL).title("conversation"))
-        .wrap(Wrap { trim: false })
-        .scroll((scroll_offset, 0));
-    frame.render_widget(scrollback, chunks[0]);
+    let separator_row = chunks[next];
+    let input_row = chunks[next + 1];
+    let status_row = chunks[next + 2];
 
-    let mut active_text = String::new();
+    // The transcript and the live turn are one flowing block, not two
+    // boxes: scrollback, then any notice, then streaming text and the
+    // running tool line.
+    let mut transcript = state.scrollback.join("\n");
     if let Some(notice) = &state.notice {
-        active_text.push_str(&format!("* {notice}\n"));
+        if !transcript.is_empty() {
+            transcript.push('\n');
+        }
+        transcript.push_str("• ");
+        transcript.push_str(notice);
     }
-    active_text.push_str(&state.active);
+    if !state.active.is_empty() {
+        if !transcript.is_empty() {
+            transcript.push('\n');
+        }
+        transcript.push_str(&state.active);
+    }
     if let Some(tool) = &state.tool_line {
-        active_text.push_str(&format!("\n{tool}"));
+        if !transcript.is_empty() {
+            transcript.push('\n');
+        }
+        transcript.push_str(tool);
     }
-    if state.turn_running && active_text.is_empty() {
-        active_text.push_str("...");
+    if state.turn_running && transcript.is_empty() {
+        transcript.push('…');
     }
-    let active = Paragraph::new(active_text)
-        .block(Block::default().borders(Borders::ALL).title("active"))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(active, chunks[1]);
+    if transcript.is_empty() {
+        transcript = "Type a message to start.  /help for commands, /login to sign in.".to_string();
+    }
+    let transcript_rows = wrapped_rows(&transcript, transcript_row.width.max(1) as usize);
+    let offset = transcript_rows.saturating_sub(transcript_row.height);
+    frame.render_widget(
+        Paragraph::new(transcript)
+            .wrap(Wrap { trim: false })
+            .scroll((offset, 0)),
+        transcript_row,
+    );
 
     let state_cue = if state.turn_running {
         state
@@ -1058,29 +1094,28 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         model_label
     };
     let mut status_spans = vec![
-        Span::styled(
-            format!(" {} ", model_label),
-            theme(plain, Color::Cyan).add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(model_label, theme(plain, Color::Cyan)),
         Span::styled(
             format!(
-                "in {} cache {} out {} ",
+                "  in {} · cache {} · out {}",
                 state.usage.input, state.usage.cache_read, state.usage.output
             ),
-            theme(plain, Color::Gray),
+            dim,
         ),
-        Span::styled(format!("| {state_cue}"), theme(plain, Color::Green)),
     ];
     // The session cost, once a turn has spent something (the status
     // line shows model, context use, session cost, extension segments).
     if state.usage.cost > 0.0 {
+        status_spans.push(Span::styled(format!(" · ${:.4}", state.usage.cost), dim));
+    }
+    if !state_cue.is_empty() {
         status_spans.push(Span::styled(
-            format!(" ${:.4} ", state.usage.cost),
-            theme(plain, Color::Gray),
+            format!("  · {state_cue}"),
+            theme(plain, Color::Green),
         ));
     }
     // The update check's notice, once today's check finds a newer tag;
-    // the loop's50 ms redraw tick shows it without a wakeup of its own.
+    // the loop's 50 ms redraw tick shows it without a wakeup of its own.
     if let Some(notice) = state
         .options
         .update_notice
@@ -1088,7 +1123,7 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         .and_then(|cell| cell.get())
     {
         status_spans.push(Span::styled(
-            format!(" {notice} "),
+            format!("  · {notice}"),
             theme(plain, Color::Yellow),
         ));
     }
@@ -1098,7 +1133,7 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         for (_name, tree) in render("status-line") {
             for line in widget_lines(&tree.nodes).into_iter().take(1) {
                 status_spans.push(Span::styled(
-                    format!(" {line} "),
+                    format!("  · {line}"),
                     theme(plain, Color::Magenta),
                 ));
             }
@@ -1108,8 +1143,7 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
 
     if let Some(footer_row) = footer_row {
         frame.render_widget(
-            Paragraph::new(footer_lines.join("\n"))
-                .block(Block::default().borders(Borders::ALL).title("footer")),
+            Paragraph::new(footer_lines.join("\n")).style(dim),
             footer_row,
         );
     }
@@ -1132,15 +1166,13 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
         );
     }
 
-    let input_text = if state.buffer.is_empty() {
-        "> ".to_string()
-    } else {
-        format!("> {}", state.buffer)
-    };
-    let input = Paragraph::new(input_text)
-        .block(Block::default().borders(Borders::ALL).title("input"))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(input, input_row);
+    // A single rule separates the transcript from the composer; no boxes.
+    let separator = "─".repeat(separator_row.width as usize);
+    frame.render_widget(Paragraph::new(separator).style(dim), separator_row);
+    frame.render_widget(
+        Paragraph::new(format!("> {}", state.buffer)).wrap(Wrap { trim: false }),
+        input_row,
+    );
     frame.set_cursor_position(cursor_position(input_row, state));
 
     if let Some(modal) = &state.permission {
@@ -1207,7 +1239,7 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn cursor_position(input_area: Rect, state: &UiState) -> (u16, u16) {
-    let inner_width = input_area.width.saturating_sub(2).max(1) as usize;
+    let width = input_area.width.max(1) as usize;
     let at = state.cursor_index();
     // The rendered text is "> " plus the buffer up to the cursor. Walking
     // it - not just counting characters - makes explicit newlines and soft
@@ -1220,15 +1252,17 @@ fn cursor_position(input_area: Rect, state: &UiState) -> (u16, u16) {
             col = 0;
         } else {
             col += 1;
-            if col >= inner_width {
+            if col >= width {
                 row += 1;
                 col = 0;
             }
         }
     }
-    let max_row = input_area.height.saturating_sub(2) as usize;
-    let row = row.min(max_row);
-    (input_area.x + 1 + col as u16, input_area.y + 1 + row as u16)
+    let max_row = input_area.height.saturating_sub(1) as usize;
+    (
+        input_area.x + col as u16,
+        input_area.y + row.min(max_row) as u16,
+    )
 }
 
 /// How many terminal rows `text` occupies at `width` columns, counting

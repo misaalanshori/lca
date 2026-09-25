@@ -34,10 +34,17 @@ fn model_picker_text(models: &[lca_protocol::ModelInfo], current: &str) -> Strin
     if models.is_empty() {
         return "no models are offered by the active provider".to_string();
     }
-    let mut lines = vec![format!("model picker (active: {current}):")];
+    let active = if current.is_empty() { "none" } else { current };
+    let mut lines = vec![format!("models offered (active: {active}):")];
     for model in models {
         let marker = if model.id == current { " (active)" } else { "" };
-        lines.push(format!("  {}{} - {}", model.id, marker, model.name));
+        // The bundled provider's name repeats its id; don't print it twice.
+        let label = if model.name == model.id {
+            String::new()
+        } else {
+            format!(" - {}", model.name)
+        };
+        lines.push(format!("  {}{marker}{label}", model.id));
     }
     lines.push("set one with /model <id>".to_string());
     lines.join("\n")

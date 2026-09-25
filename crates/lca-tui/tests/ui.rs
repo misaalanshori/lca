@@ -502,10 +502,10 @@ fn an_extension_renders_in_all_four_regions_and_the_hostile_span_stays_literal()
     render(&mut terminal, &state).expect("draw");
     let text = buffer_text(&mut terminal);
     assert!(text.contains("session output here"), "panel: {text}");
-    assert!(text.contains("footer"), "footer border: {text}");
 
-    // The footer carries the hostile span, and the buffer holds no raw
-    // control byte anywhere: the escape sequence is visible text.
+    // The footer carries the hostile span (the region renders as plain
+    // lines now, no border), and the buffer holds no raw control byte
+    // anywhere: the escape sequence is visible text.
     assert!(
         text.contains("\\x1b[31mNOT A PROMPT\\x1b[0m"),
         "hostile span rendered literally: {text:?}"
@@ -705,4 +705,34 @@ fn tab_lists_multiple_command_matches() {
     let notice = state.notice.as_deref().unwrap_or_default();
     assert!(notice.contains("/login"), "{notice}");
     assert!(notice.contains("/logout"), "{notice}");
+}
+
+// The view is content, not chrome: no boxes around the transcript or the
+// composer, just one separator rule above the input and a status line at
+// the very bottom (Pi-inspired). Only the panel and the modals keep a
+// border, and neither is open here.
+#[test]
+fn the_layout_has_no_boxes_around_the_transcript_or_composer() {
+    let state = UiState::new(options());
+    let mut term = terminal(80, 24);
+    render(&mut term, &state).expect("render");
+    let text = buffer_text(&mut term);
+    assert!(
+        !text.contains('┌') && !text.contains('└') && !text.contains('│'),
+        "no boxes in the default view:\n{text}"
+    );
+    assert!(text.contains("────"), "one separator rule:\n{text}");
+    assert!(
+        text.lines().any(|line| line.starts_with("> ")),
+        "a plain composer prompt:\n{text}"
+    );
+}
+
+// Block output keeps its newlines (the model picker, /help) while other
+// control characters still become visible text, never reaching the TUI.
+#[test]
+fn block_output_keeps_newlines_and_still_hides_control_bytes() {
+    let text = lca_tui::sanitize_block("first\nsecond\tthird\u{1b}[0m");
+    assert!(text.contains("first\nsecond"), "newlines kept: {text:?}");
+    assert!(!text.contains('\u{1b}'), "no raw escape: {text:?}");
 }
