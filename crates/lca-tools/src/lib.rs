@@ -16,7 +16,7 @@ mod pty;
 
 pub use bridge::{BridgeError, bridge_stream};
 pub use capabilities::CompletionBackend;
-pub use capabilities::{Capabilities, CapabilityGrants, Denial};
+pub use capabilities::{BrowserOpener, Capabilities, CapabilityGrants, Denial};
 pub use ops::{Entry, ExecOutcome, NativeOps, Stat, ToolOps};
 pub use process::{TreeChild, read_up_to, spawn_direct, write_all};
 pub use pty::PtyChild;

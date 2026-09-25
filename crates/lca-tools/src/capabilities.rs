@@ -184,6 +184,10 @@ struct HandleTable {
     entries: HashMap<u32, HandleEntry>,
 }
 
+/// A browser launcher override for [`Capabilities::set_browser_opener`].
+/// The default is the platform launcher (`xdg-open`/`open`/`cmd start`).
+pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
 /// The engine: one per loaded extension.
 pub struct Capabilities {
     name: String,
@@ -198,6 +202,13 @@ pub struct Capabilities {
     /// Auth URLs the extension asked to open (host diagnostics; the
     /// provider-flow tests read the state from here).
     oauth_opened: Arc<Mutex<Vec<String>>>,
+    /// Redirect URLs `oauth_begin` bound. Both delivery modes' tests read
+    /// the flow's URL from here: the guest cannot report it back, and the
+    /// native `identity_login` blocks inside `oauth_await`.
+    oauth_begun: Arc<Mutex<Vec<String>>>,
+    /// Overrides the platform browser launch (tests record the URL instead
+    /// of spawning a browser). `None` uses `xdg-open`/`open`/`cmd start`.
+    browser_opener: Arc<Mutex<Option<BrowserOpener>>>,
     handles: Arc<Mutex<HandleTable>>,
     client: HttpClient,
     /// Addresses already checked for a hostname, consulted by
@@ -249,6 +260,8 @@ impl Capabilities {
             completion: Arc::new(Mutex::new(None)),
             denials: Arc::new(Mutex::new(Vec::new())),
             oauth_opened: Arc::new(Mutex::new(Vec::new())),
+            oauth_begun: Arc::new(Mutex::new(Vec::new())),
+            browser_opener: Arc::new(Mutex::new(None)),
             handles: Arc::new(Mutex::new(HandleTable::default())),
             client: Client::builder(hyper_util::rt::TokioExecutor::new()).build(https),
             pins,
@@ -386,6 +399,17 @@ impl Capabilities {
     /// a test (or an audit) sees the authorization URL a login built.
     pub fn oauth_opened(&self) -> Vec<String> {
         self.oauth_opened.lock().expect("oauth lock").clone()
+    }
+
+    /// Redirect URLs `oauth_begin` bound, oldest first.
+    pub fn oauth_begun(&self) -> Vec<String> {
+        self.oauth_begun.lock().expect("oauth lock").clone()
+    }
+
+    /// Replace the browser launcher `oauth_open` uses (tests record the
+    /// URL instead of opening one); `None` restores the platform default.
+    pub fn set_browser_opener(&self, opener: Option<BrowserOpener>) {
+        *self.browser_opener.lock().expect("opener lock") = opener;
     }
 
     /// How many attempts were refused (FR-EXT-9).
@@ -1347,6 +1371,10 @@ connection: close
             .lock()
             .expect("flow lock")
             .insert(id, OAuthFlow { rx: Some(rx), stop });
+        self.oauth_begun
+            .lock()
+            .expect("oauth lock")
+            .push(redirect_url.clone());
         Ok((redirect_url, id))
     }
 
@@ -1362,6 +1390,9 @@ connection: close
             .lock()
             .expect("oauth lock")
             .push(url.to_string());
+        if let Some(opener) = self.browser_opener.lock().expect("opener lock").clone() {
+            return opener(url).map_err(CapabilityError::Io);
+        }
         #[cfg(target_os = "linux")]
         let mut cmd = {
             let mut c = std::process::Command::new("xdg-open");

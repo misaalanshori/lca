@@ -1051,11 +1051,13 @@ impl ExtHost {
             |state| state,
         )
         .expect("completion imports");
-        let declares_provider = manifest.worlds.iter().any(|world| world == "provider");
-        if declares_provider {
-            // The provider world shares `lca:host/log` with the tool world
-            // (already defined above), so only the three interfaces the
-            // tool world does not carry get added here.
+        // The provider world's remaining imports link unconditionally, in a
+        // denied state until the manifest declares them - the same rule the
+        // compaction world's `completion` follows (FR-PERM-3). A component
+        // that references them keeps them in its import section even when
+        // the manifest declares only the tool world (the conformance probe
+        // is exactly that), so the grant does the gating, not the linker.
+        {
             use lca_ext_abi::host::provider::lca::host as provider_host;
             provider_host::net::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
                 .expect("net imports");
@@ -1064,6 +1066,7 @@ impl ExtHost {
             provider_host::credentials::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
                 .expect("credentials imports");
         }
+        let declares_provider = manifest.worlds.iter().any(|world| world == "provider");
         let pre = linker
             .instantiate_pre(&component)
             .map_err(|err| LoadError::Link(err.to_string()))?;

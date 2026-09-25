@@ -77,6 +77,41 @@ pub trait Cap {
     fn pty_kill(&self, handle: u32) -> Result<(), CapabilityError>;
 }
 
+/// The identity probe's capability surface: credentials plus the loopback
+/// oauth flow, one impl per delivery mode (the [`Cap`] pattern; NFR-25).
+/// The generic `lca_protocol::ProviderCap`/`OauthCap` pair does not fit
+/// here because `ProviderCap` also bundles the net methods this probe never
+/// uses.
+pub trait IdentityCap {
+    /// Set a key in this extension's own credential namespace.
+    fn credentials_set(&self, key: &str, value: &str) -> Result<(), CapabilityError>;
+    /// Read a key back (`None` when absent, or when the capability is denied).
+    fn credentials_get(&self, key: &str) -> Result<Option<String>, CapabilityError>;
+    /// Delete a key.
+    fn credentials_delete(&self, key: &str) -> Result<(), CapabilityError>;
+    /// Bind the loopback listener; returns `(redirect_url, handle)`.
+    fn oauth_begin(&self, redirect_path: &str) -> Result<(String, u32), CapabilityError>;
+    /// Ask the host to open a URL in the browser (best effort).
+    fn oauth_open(&self, url: &str) -> Result<(), CapabilityError>;
+    /// Block for the callback's parsed query parameters.
+    fn oauth_await(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError>;
+    /// Abandon a flow.
+    fn oauth_end(&self, handle: u32) -> Result<(), CapabilityError>;
+}
+
+/// The redirect path the identity probe's oauth flow uses (the manifest
+/// declares the same).
+pub const CALLBACK_PATH: &str = "/callback";
+
+/// The code the test injects into the callback. The probe accepts only
+/// this exact value, so the outcome is deterministic across modes (no port
+/// or URL leaks into the parity comparison).
+pub const FIXTURE_CODE: &str = "fixture-code";
+
+/// The authorization URL the probe asks the host to open. It is never
+/// fetched; a test replaces the browser launcher with a recorder.
+pub const AUTHORIZE_URL: &str = "https://conformance.example.com/authorize";
+
 /// What a mode produced: success plus the deterministic text both modes
 /// must agree on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -596,9 +631,60 @@ pub fn ui_event_script(region: &str, input: &lca_protocol::UiInput) -> lca_proto
     UiEffect::None
 }
 
-/// `login` succeeds (ADR-0012: conformance covers all three exports).
-pub fn scripted_login() -> lca_protocol::IdentityOutcome {
-    lca_protocol::IdentityOutcome::Ok
+/// `login`: exercise the credentials round trip and the full oauth
+/// begin/await/end flow through whichever mode's [`IdentityCap`] is supplied,
+/// then report a deterministic outcome (NFR-25: both modes produce the same
+/// `IdentityOutcome` for the same injected callback).
+pub fn scripted_login(cap: &dyn IdentityCap) -> lca_protocol::IdentityOutcome {
+    use lca_protocol::IdentityOutcome;
+    let credentials = (|| -> Result<(), CapabilityError> {
+        cap.credentials_set("probe", "1")?;
+        match cap.credentials_get("probe")? {
+            Some(value) if value == "1" => {}
+            other => {
+                return Err(CapabilityError::Io(format!(
+                    "credential read back {other:?}, expected \"1\""
+                )));
+            }
+        }
+        cap.credentials_delete("probe")?;
+        if cap.credentials_get("probe")?.is_some() {
+            return Err(CapabilityError::Io(
+                "credential survived delete".to_string(),
+            ));
+        }
+        Ok(())
+    })();
+    if let Err(err) = credentials {
+        return IdentityOutcome::Failed(err.to_string());
+    }
+    let (url, handle) = match cap.oauth_begin(CALLBACK_PATH) {
+        Ok(pair) => pair,
+        Err(err) => return IdentityOutcome::Failed(err.to_string()),
+    };
+    if let Err(err) = cap.oauth_open(AUTHORIZE_URL) {
+        let _ = cap.oauth_end(handle);
+        return IdentityOutcome::Failed(err.to_string());
+    }
+    let params = match cap.oauth_await(handle) {
+        Ok(params) => params,
+        Err(err) => {
+            let _ = cap.oauth_end(handle);
+            return IdentityOutcome::Failed(err.to_string());
+        }
+    };
+    if let Err(err) = cap.oauth_end(handle) {
+        return IdentityOutcome::Failed(err.to_string());
+    }
+    let code = params
+        .iter()
+        .find(|(key, _)| key == "code")
+        .map(|(_, value)| value.as_str());
+    if url.starts_with("http://127.0.0.1:") && code == Some(FIXTURE_CODE) {
+        IdentityOutcome::Ok
+    } else {
+        IdentityOutcome::Failed(format!("unexpected oauth callback at {url}: {params:?}"))
+    }
 }
 
 /// `logout` is this provider's not-supported case.
@@ -704,6 +790,30 @@ mod native {
         }
         fn pty_kill(&self, handle: u32) -> Result<(), CapabilityError> {
             self.0.pty_kill(handle)
+        }
+    }
+
+    impl crate::IdentityCap for NativeCap {
+        fn credentials_set(&self, key: &str, value: &str) -> Result<(), CapabilityError> {
+            self.0.credentials_set(key, value)
+        }
+        fn credentials_get(&self, key: &str) -> Result<Option<String>, CapabilityError> {
+            self.0.credentials_get(key)
+        }
+        fn credentials_delete(&self, key: &str) -> Result<(), CapabilityError> {
+            self.0.credentials_delete(key)
+        }
+        fn oauth_begin(&self, redirect_path: &str) -> Result<(String, u32), CapabilityError> {
+            self.0.oauth_begin(redirect_path)
+        }
+        fn oauth_open(&self, url: &str) -> Result<(), CapabilityError> {
+            self.0.oauth_open(url)
+        }
+        fn oauth_await(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError> {
+            self.0.oauth_await(handle)
+        }
+        fn oauth_end(&self, handle: u32) -> Result<(), CapabilityError> {
+            self.0.oauth_end(handle)
         }
     }
 
@@ -856,7 +966,10 @@ mod native {
             'static,
             Result<lca_protocol::IdentityOutcome, lca_protocol::DispatchError>,
         > {
-            Box::pin(std::future::ready(Ok(crate::scripted_login())))
+            let cap = self.cap.clone();
+            // Lazy: the oauth flow blocks in `oauth_await`, so the caller
+            // must be able to run this future off the test thread.
+            Box::pin(async move { Ok(crate::scripted_login(&NativeCap(cap))) })
         }
 
         fn identity_logout(
@@ -1302,6 +1415,63 @@ mod provider_world {
     };
     use exports::lca::ext::provider_models::{Guest as ModelsGuest, ModelInfo as WasmModel};
     use lca::ext::types::{ExtraPair, Usage as WasmUsage};
+    use lca::host::{credentials, oauth};
+
+    fn map_credentials(err: credentials::Error) -> crate::CapabilityError {
+        use crate::CapabilityError as E;
+        match err {
+            credentials::Error::Permission(d) => E::Permission(d),
+            credentials::Error::NotGranted(d) => E::NotGranted(d),
+            credentials::Error::Io(d) => E::Io(d),
+            credentials::Error::Invalid(d) => E::Invalid(d),
+        }
+    }
+
+    fn map_oauth(err: oauth::Error) -> crate::CapabilityError {
+        use crate::CapabilityError as E;
+        match err {
+            oauth::Error::Permission(d) => E::Permission(d),
+            oauth::Error::NotGranted(d) => E::NotGranted(d),
+            oauth::Error::Timeout(d) => E::Timeout(d),
+            oauth::Error::Io(d) => E::Io(d),
+            oauth::Error::Invalid(d) => E::Invalid(d),
+        }
+    }
+
+    /// The guest's credentials/oauth view: the provider world's host
+    /// imports behind every call (the [`crate::IdentityCap`] counterpart of
+    /// the tool world's `GuestCap`).
+    struct GuestIdentityCap;
+
+    impl crate::IdentityCap for GuestIdentityCap {
+        fn credentials_set(&self, key: &str, value: &str) -> Result<(), crate::CapabilityError> {
+            credentials::set(key, value).map_err(map_credentials)
+        }
+        fn credentials_get(&self, key: &str) -> Result<Option<String>, crate::CapabilityError> {
+            Ok(credentials::get(key))
+        }
+        fn credentials_delete(&self, key: &str) -> Result<(), crate::CapabilityError> {
+            credentials::delete(key).map_err(map_credentials)
+        }
+        fn oauth_begin(
+            &self,
+            redirect_path: &str,
+        ) -> Result<(String, u32), crate::CapabilityError> {
+            oauth::begin(redirect_path).map_err(map_oauth)
+        }
+        fn oauth_open(&self, url: &str) -> Result<(), crate::CapabilityError> {
+            oauth::open(url).map_err(map_oauth)
+        }
+        fn oauth_await(
+            &self,
+            handle: u32,
+        ) -> Result<Vec<(String, String)>, crate::CapabilityError> {
+            oauth::await_callback(handle).map_err(map_oauth)
+        }
+        fn oauth_end(&self, handle: u32) -> Result<(), crate::CapabilityError> {
+            oauth::end_flow(handle).map_err(map_oauth)
+        }
+    }
 
     /// Protocol usage -> the WIT record (cost buckets in reserved extras,
     /// matching the host's conversion exactly for NFR-25 parity).
@@ -1394,7 +1564,7 @@ mod provider_world {
 
     impl IdentityGuest for ProviderComponent {
         fn login() -> WasmOutcome {
-            match crate::scripted_login() {
+            match crate::scripted_login(&GuestIdentityCap) {
                 lca_protocol::IdentityOutcome::Ok => WasmOutcome::Ok,
                 lca_protocol::IdentityOutcome::NotSupported => WasmOutcome::NotSupported,
                 lca_protocol::IdentityOutcome::Failed(reason) => WasmOutcome::Failed(reason),

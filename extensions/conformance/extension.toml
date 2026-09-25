@@ -14,5 +14,18 @@ reason = "Runs probe programs for conformance."
 [capabilities.pty]
 reason = "Runs interactive probe programs for conformance."
 
+# The manifest schema requires `net` when `oauth` is declared (the token
+# exchange uses it). The probe never calls net; the grant exists only so the
+# oauth flow can be exercised at the WASM boundary.
+[capabilities.net]
+hosts = ["conformance.example.com"]
+
+[capabilities.oauth]
+redirect_path = "/callback"
+timeout_seconds = 30
+
+[capabilities.credentials]
+namespace = "conformance"
+
 [capabilities.ui]
 regions = ["status-line", "footer", "panel", "modal"]

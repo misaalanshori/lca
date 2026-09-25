@@ -786,11 +786,11 @@ Known deviations left in place, named rather than implied:
   content at the source (tools truncate to `tool.result_limit_bytes`), so no
   attachment is written yet; the field is forward-compatible. The image
   widget renders as a labeled placeholder for the same reason.
-- **NFR-25 residual.** The conformance extension and the OpenAI-compatible
-  end-to-end test cover every host import except `oauth.*` and
-  `credentials.set`/`delete` at the WASM boundary; those two are covered
-  through the native capability engine only. Closing it needs an offline
-  OAuth fixture.
+- **NFR-25 residual - closed.** The conformance extension now drives
+  `credentials.set/get/delete` and `oauth.begin/open/await-callback/end-flow`
+  through the WASM host imports (the test injects the loopback callback
+  itself), the native twin reaches the same outcome, and the denied path is
+  covered at both boundaries. No host import is native-only any more.
 - **Windows credential ACL.** `credentials.set`/`delete` set owner-only mode
   on Unix; on Windows the file relies on the user-profile directory's
   default ACL. `docs/platform-notes.md` records this.
