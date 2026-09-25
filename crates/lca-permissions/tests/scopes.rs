@@ -183,7 +183,10 @@ fn private_resolves_under_the_state_dir_and_home_config_still_cannot_reach_it() 
     let resolved = roots
         .resolve(&private_grant, "private", "cache.bin", true)
         .expect("private must resolve on the production layout");
-    assert!(resolved.starts_with(&private), "{resolved:?}");
+    // Compare canonically: temp_dir is a symlink on macOS, and the resolved
+    // path is canonical.
+    let canonical_private = std::fs::canonicalize(&private).expect("canonical private");
+    assert!(resolved.starts_with(&canonical_private), "{resolved:?}");
 
     let home_grant = vec![ScopeGrant::parse("home-config", FsMode::Read).expect("grant")];
     let refused = roots
