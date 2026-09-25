@@ -14,15 +14,15 @@ This has a direct consequence for how tests get written: a test should be tracea
 
 ## 2. Test taxonomy
 
-Nine categories. Each has a home in the crate layout, a tool, and a place in the CI pipeline described in section 13.
+Ten categories. Each has a home in the crate layout, a tool, and a place in the CI pipeline described in section 13.
 
-**Unit tests** verify one function or one small module in isolation, live beside the code they test in the same file under `#[cfg(test)]`, following the Rust convention, and run in milliseconds. Every crate has them; there is no crate where unit tests are optional.
+**Unit tests** verify one function or one small module in isolation and run in milliseconds. They live beside the code they test in the same file under `#[cfg(test)]` when they test non-public internals, and in per-crate `tests/` binaries when the behavior is reachable through the crate's public API; both placements are unit tests in this plan. Every crate with behavior has them; there is no crate where unit tests are optional.
 
 **Integration tests** verify a flow that crosses module or crate boundaries within a single process, live under each crate's `tests/` directory, and use `lca-testkit`'s harness and fake provider rather than a real model or real network access. The six flows diagrammed in `docs/flows.md` are the primary integration test targets: a turn with a tool call, context assembly with compaction and transform, extension instantiation and capability resolution, the OAuth loopback flow, the streaming pipeline, and cancellation reaching a running extension call.
 
 **Conformance tests** verify the extension ABI itself, not any particular extension. The conformance extension under `extensions/conformance/` exports and imports every surface defined in every WIT world and every host capability, and is run in both native-linked and WASM mode with an assertion that the two produce identical results, per FR-EXT-6. It is also built against the previous ABI minor version and loaded by the current host, verifying the support window in NFR-19 actually holds rather than being an assumption nobody checks.
 
-**Regression tests** exist because a defect that reached a release and got fixed should never come back silently. Each one is named after the defect's tracking identifier, following pi's convention of naming regression test files directly after the issue number they close, and lives under `tests/regressions/`. NFR-24 already requires one per released defect; this document specifies the naming and location.
+**Regression tests** exist because a defect that reached a release and got fixed should never come back silently. Each one is named after the defect's tracking identifier, following pi's convention of naming regression test files directly after the issue number they close, and lives under `tests/regressions/`. NFR-24 already requires one per released defect; this document specifies the naming and location. The file is written in the same change as its fix, and it is the permanent named guard even where the fix also carries tests elsewhere in the suite.
 
 **Property-based tests**, using `proptest`, verify an invariant across a generated range of inputs rather than one hand-picked example. This project has several state-machine-shaped invariants well suited to it: session log round-tripping, compaction never dropping a record outside its replaced range, the context-transform chain preserving message order except where a transform explicitly changes it, and the permission store's proposal-hash comparison detecting any single-byte change to the approved set.
 
@@ -40,7 +40,9 @@ marker (instantiation time, hook-call overhead at 1 ms, cancellation latency),
 so each threshold lives in exactly one place. There is no `criterion` harness;
 the gate script and those tests are the measurement.
 
-**End-to-end tests** drive the actual `lca` binary as a subprocess, exercising the real CLI, the real filesystem, and the real terminal rendering path, still against the fake provider rather than a real model. These are the slowest and fewest tests in the suite and exist specifically to catch the class of defect that only shows up when every layer is real except the model.
+**End-to-end tests** drive the actual `lca` binary as a subprocess, exercising the real CLI and the real filesystem, still against the fake provider rather than a real model. Rendering is exercised two ways: through ratatui's virtual buffer in unit and integration tests, and on real terminals by the tenth category below. These are the slowest and fewest tests in the suite and exist specifically to catch the class of defect that only shows up when every layer is real except the model.
+
+**Real-terminal tests** drive the agent inside an actual terminal emulator and assert what is on screen. They exist because virtual-buffer rendering cannot see the terminal-shaped failure class: a secret that leaks into the visible frame, a resize that leaves a stale row, a control sequence from hostile content that corrupts the display. Unix runs them under tmux; Windows runs them under a pseudo-console (ConPTY). The checklist is identical across both harnesses: startup renders, a scripted turn streams and renders, the permission modal works, the secret prompt masks its input, resize re-renders, a clean quit writes `session-end`. A platform without its harness skips these tests and never fails them. Section 14 has the details.
 
 ## 3. The fake provider
 
@@ -83,7 +85,7 @@ This runs in native-linked mode and WASM mode on every pipeline run, with the tw
 
 ## 7. Regression test policy in depth
 
-A defect that reaches a released build gets a test that reproduces the minimal case, named after the issue that tracks it, and placed under `tests/regressions/`, following pi's own directory of numbered regression files directly. The file name carries the issue identifier and a short description, for example `1842-compaction-drops-tool-result.rs`, so the file itself documents which bug it guards against without needing to open it.
+A defect that reaches a released build gets a test that reproduces the minimal case, named after the issue that tracks it, and placed under `tests/regressions/`, following pi's own directory of numbered regression files directly. The file name carries the issue identifier and a short description, for example `1842-compaction-drops-tool-result.rs`, so the file itself documents which bug it guards against without needing to open it. When a defect has no issue number — a finding in a review report, for instance — the report's finding number is the identifier. A fix for a defect that reached any release ships with its regression file in the same change; an ordinary-suite test may exist alongside it, but the named file is the guard that survives refactors.
 
 A regression test is written before the fix, following the same red-green discipline as any other TDD work: the test reproduces the defect and fails against the unfixed code, then the fix makes it pass. A pull request that fixes a defect without a regression test in the same change does not merge; this is a coding-standards rule, not a suggestion.
 
@@ -145,6 +147,16 @@ A change is done when: a failing test existed before the implementation and now 
 
 ## 13. CI execution strategy
 
-Unit and integration tests run on every push, on Linux, macOS, and Windows, using `cargo-nextest`. Conformance tests run on every push in both delivery modes. Property-based tests run a bounded case count on every push and an extended case count on a nightly schedule, since `proptest`'s value scales with iteration count and a full run on every push would slow the everyday feedback loop for no proportionate benefit. Fuzz targets run continuously on a dedicated schedule, not per push, with their corpora checked into the repository so a crash found once is a regression test forever after, not a one-time discovery. The cache-hit-ratio benchmark and the binary-size and cold-start gates run on every push to `main` and fail the build on a threshold breach, per the release policy. End-to-end tests, being the slowest category, run on every push to `main` and on every pull request marked ready for review, not on every intermediate commit.
+Unit and integration tests run on every push, on Linux, macOS, and Windows, using `cargo-nextest`. Conformance tests run on every push in both delivery modes. Property-based tests run a bounded case count on every push and an extended case count on a nightly schedule, since `proptest`'s value scales with iteration count and a full run on every push would slow the everyday feedback loop for no proportionate benefit. Fuzz targets run continuously on a dedicated schedule, not per push, with their corpora checked into the repository so a crash found once is a regression test forever after, not a one-time discovery. The cache-hit-ratio benchmark and the binary-size and cold-start gates run on every push to `main` and fail the build on a threshold breach, per the release policy. End-to-end tests, being the slowest category, run on every push to `main` and on every pull request marked ready for review, not on every intermediate commit. Real-terminal tests run only on the platform that owns their harness — the tmux suite on the Linux job, the ConPTY suite on the Windows job — and everywhere else they skip with a named reason rather than fail; see section 14.
 
 A flaky test is quarantined, not ignored: it is marked and excluded from the required check within one working day of being identified, with a tracking issue, and a quarantined test past a set age without a fix blocks new quarantines from the same crate until it is resolved, so quarantining doesn't quietly become the normal way tests are handled.
+
+## 14. Real-terminal testing in depth
+
+Virtual-buffer tests cannot see the terminal-shaped failure class: a secret that leaks into the visible frame, a resize that leaves a stale row, a control sequence from hostile content that corrupts the display. Real-terminal tests close that gap by driving the agent inside an actual terminal and asserting what is on the screen.
+
+Two harnesses, one checklist. Unix runs the agent in a tmux pane and asserts through `capture-pane`. Windows runs it under a pseudo-console (ConPTY) and asserts through the console buffer; ConPTY is chosen deliberately, because its quirks are the known breakage surface of the Windows terminal path. Both harnesses assert the same behaviors: startup renders the frame; a scripted turn streams and renders; the permission modal appears and answers; the secret prompt masks its input (no key bytes in the visible frame); a resize re-renders; a clean quit writes `session-end` and leaves the session resumable.
+
+Platform gating is part of the contract, not an afterthought. tmux has no Windows build, so the Unix suite is `#[cfg(unix)]` with a runtime probe for tmux, and the Windows suite is `#[cfg(windows)]`. A machine without its harness skips these tests with a named reason and never reports a failure for the tooling's absence; a platform that lacks a harness is recorded in `docs/platform-notes.md`, so an absent run is always a documented state.
+
+These tests use the fake provider, like every category except the env-gated live smoke: a real terminal does not require a real model.
