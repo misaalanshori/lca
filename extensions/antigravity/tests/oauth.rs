@@ -5,6 +5,7 @@
 
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use lca_permissions::{Decision, GrantStore, PermissionPrompt, ProposalDiff, ScopeRoots};
 use lca_protocol::IdentityOutcome;
@@ -181,64 +182,70 @@ fn login_without_a_client_pair_says_what_to_set() {
 /// parsed parameters to the extension).
 fn drive_login(cap: &Arc<lca_tools::Capabilities>) -> Result<IdentityOutcome, String> {
     let for_thread = cap.clone();
-    let join = std::thread::spawn(move || {
-        antigravity::run_login(for_thread.as_ref(), for_thread.as_ref()).map_err(|err| err.0)
+    let result: Arc<Mutex<Option<Result<IdentityOutcome, String>>>> = Arc::new(Mutex::new(None));
+    let slot = result.clone();
+    std::thread::spawn(move || {
+        let outcome =
+            antigravity::run_login(for_thread.as_ref(), for_thread.as_ref()).map_err(|err| err.0);
+        *slot.lock().expect("slot") = Some(outcome);
     });
-    // The engine records every URL the extension asked to open.
-    let mut auth_url = None;
-    for _ in 0..200 {
-        if let Some(url) = cap.oauth_opened().last() {
-            auth_url = Some(url.clone());
-            break;
+
+    // The engine records the redirect URL inside `oauth.begin` (before the
+    // extension asks the host to open the authorization URL), so both are
+    // available once `oauth_open` lands; `oauth_begun` gives the redirect
+    // without the auth URL's percent-encoding to undo.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let (redirect, auth_url) = loop {
+        if let (Some(redirect), Some(auth)) = (
+            cap.oauth_begun().last().cloned(),
+            cap.oauth_opened().last().cloned(),
+        ) {
+            break (redirect, auth);
         }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
-    let auth_url =
-        auth_url.ok_or_else(|| "the login never opened an authorization URL".to_string())?;
+        if Instant::now() > deadline {
+            return Err("the login never bound a redirect URL".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
     let state = auth_url
         .split('&')
         .find_map(|pair| pair.strip_prefix("state="))
         .ok_or_else(|| "the authorization URL carries no state".to_string())?
         .to_string();
-    // The redirect URL comes from `oauth.begin`; find it by connecting
-    // to whatever loopback port the flow bound: the auth URL's
-    // redirect_uri parameter names it.
-    let redirect = auth_url
-        .split('&')
-        .find_map(|pair| pair.strip_prefix("redirect_uri="))
-        .ok_or_else(|| "the authorization URL carries no redirect_uri".to_string())?;
-    let redirect = percent_decode(redirect);
+
+    // Send the callback, retrying while the login is still running: the
+    // loopback listener occasionally misses the first connection on a busy
+    // runner (the macOS CI flake this guards). Once the listener delivers its
+    // one callback it stops accepting, so the extra connects are no-ops.
     let callback = format!("{redirect}?code=mock-code&state={state}");
-    let host_path = callback.trim_start_matches("http://").to_string();
-    let (hostport, path) = host_path.split_once('/').expect("redirect has a path");
-    let mut stream = std::net::TcpStream::connect(hostport)
-        .map_err(|err| format!("connecting to the loopback listener: {err}"))?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut attempts = 0;
+    loop {
+        if let Some(outcome) = result.lock().expect("slot").take() {
+            return outcome;
+        }
+        if attempts < 5 {
+            let _ = send_callback(&callback);
+            attempts += 1;
+        }
+        if Instant::now() > deadline {
+            return Err("the login never finished after the callback was sent".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+/// One loopback GET to the flow's redirect URL. Errors are the caller's to
+/// ignore; a retry follows.
+fn send_callback(callback: &str) -> Result<(), String> {
+    let host_path = callback.trim_start_matches("http://");
+    let (hostport, path) = host_path.split_once('/').ok_or("no redirect path")?;
+    let mut stream = std::net::TcpStream::connect(hostport).map_err(|err| err.to_string())?;
     write!(
         stream,
         "GET /{path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\n\r\n"
     )
-    .map_err(|err| format!("sending the callback: {err}"))?;
-    join.join()
-        .map_err(|_| "the login thread panicked".to_string())?
-}
-
-fn percent_decode(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%'
-            && index + 2 < bytes.len()
-            && let Ok(byte) = u8::from_str_radix(&value[index + 1..index + 3], 16)
-        {
-            out.push(byte);
-            index += 3;
-            continue;
-        }
-        out.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    .map_err(|err| err.to_string())
 }
 
 /// The engine's inherent `credentials_get` returns a `Result`; this
