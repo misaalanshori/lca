@@ -32,7 +32,7 @@ provider that does not still reads the `[image attachment …]` stub the attach
 path put in the text. `openai-compatible` maps the block to a base64
 `image_url` data URI and `antigravity` to an `inlineData` part.
 
-This is a breaking change, made as the ADR-0028 window's first minor: the WIT
+This is a breaking change, made as the ADR-0028 window's first breaking change on the 0.2 line: the WIT
 packages, every first-party manifest, and `ABI_VERSION` move to `0.2`, the
 conformance extension is updated in the same change, and the support window
 keeps the previous line loading.

@@ -24,7 +24,7 @@ A patch version change fixes documentation, comments, or tooling. The interface 
 
 The manifest declares a line as `major.minor`. An extension declaring `abi = "0.2"` targets any 0.2.x. During the ADR-0028 development window the host also loads the previous line (0.1) and the 1.0 freeze line, so an extension installed against the released host keeps loading across the window's first change.
 
-During 0.x, the minor position behaves as the breaking position, which is the normal semver convention for pre-1.0 and is why the ABI freezes at 1.0 in Phase 8. **Amended 2026-09-25 (ADR-0028):** that Phase 8 freeze proved premature while the product is still in active development; the ABI sits in a *development window* on the 0.x line, where the 0.x breaking-minor rule is the active law, and freezes for good when ADR-0028's criteria are met and the owner judges the interface mature. The freeze is deferred, not cancelled.
+During 0.x, the minor position is normally the breaking position. **Amended 2026-09-25 (ADR-0028):** the ABI sits in a *development window*, and the window's line, 0.2, is a single **in-place** line — breaking changes land inside it without a minor bump. The WIT package stays `@0.2.0`, every manifest stays `abi = "0.2"`, and the ABI changelog carries a running "0.2 development" section. The line moves (to 0.3) only if a checkpoint or an external extension needs the signal, never per change. The discipline is unchanged: a breaking change still updates the conformance extension in the same change, and a real interface decision still gets an ADR. The ABI freezes for good at 1.0, which is a snapshot-and-relabel of the final 0.2 — no interface bytes differ between them (ADR-0028's annotation).
 
 ## What breaks and what does not
 
@@ -59,6 +59,8 @@ Record growth has its own rule. Records that cross the ABI boundary, messages, u
 
 The host loads extensions built against the current ABI minor version and the one immediately before it.
 
+**Named limitation during the 0.2 window (accepted 2026-09-25).** Because 0.2 is a single in-place line, the window cannot distinguish a 0.2 build from an earlier 0.2 build: both declare `abi = "0.2"` and both load. The current-plus-previous guarantee therefore protects cross-line moves (0.1 → 0.2), not same-line changes inside 0.2. NFR-19's test keeps running and still checks the cross-line window; for 0.2.x it guarantees less than it did across 0.1 → 0.2. This is accepted knowingly — there is no third-party ecosystem yet, so no installed extension can be whiplashed by a same-line change it cannot see.
+
 This gives an author one minor cycle to rebuild and publish. It gives a user a host upgrade that does not silently disable half their extensions.
 
 An extension targeting an older version than the window allows is refused at load time. The host disables it for the session, reports on a best-effort non-blocking check whether a compatible version exists in the registry, names the command that fixes it, and continues. A stale extension does not stop the agent from starting.
@@ -83,11 +85,11 @@ The changelog is updated in the same pull request as the WIT change. A separate 
 
 ## Making a change
 
-A change to the ABI needs, in one pull request: the WIT edit, the regenerated bindings, a changelog entry, an update to the conformance extension covering the new or changed surface, an update to the manifest schema if the manifest is affected, and a version bump following the table above.
+A change to the ABI needs, in one pull request: the WIT edit, the regenerated bindings, a changelog entry, an update to the conformance extension covering the new or changed surface, an update to the manifest schema if the manifest is affected, and a version bump following the table above. **During the ADR-0028 window there is no version bump per change:** 0.2 is a single in-place line, and the changelog's running "0.2 development" section is the record. The rest of the list still applies to every change.
 
 An ABI change also needs an ADR when it changes a design decision rather than filling in an agreed shape. Adding a capability is an ADR. Adding a field to a capability that an ADR already described is not.
 
-The reviewer checks one thing above the rest: whether the change is breaking under the table, and whether the version bump matches. A breaking change with a minor bump is the failure mode that costs the most later.
+The reviewer checks one thing above the rest: whether the change is breaking under the table, and — outside the window — whether the version bump matches. A breaking change with a minor bump is the failure mode that costs the most later. Inside the window the reviewer instead checks that the conformance update and the changelog entry landed in the same change.
 
 ## Host version reporting
 
@@ -99,11 +101,15 @@ The host exposes the same information to extensions through the always-granted l
 
 > **Amended 2026-09-25 (ADR-0028):** the freeze described in this section was
 > executed on 2026-09-23 and **reopened** two days later for a development
-> window. The manifest line moves back to 0.x with the first window change;
+> window. The manifest line moved to 0.2 with the first window change;
 > the post-freeze rules below describe the *final* freeze, which happens when
 > ADR-0028's criteria are met — the owner judging the ABI mature after the
 > planned feature work. Everything in this section remains the target state;
-> only its timing moved.
+> only its timing moved. When the freeze returns it is a snapshot-and-relabel
+> of the final 0.2: 1.0 differs from 0.2 in no interface bytes, and 0.2 keeps
+> loading on the 1.0 host as the boundary amnesty (as 0.1 did at the
+> 2026-09-23 freeze). The post-freeze rules below need no re-labelling; they
+> become true again as written.
 
 Phase 8 freezes the ABI at 1.0 (executed 2026-09-23: the WIT package and the `lca:host` imports both carry `@1.0.0`, `lca-ext-abi::ABI_VERSION` reads `1.0`, every first-party manifest declares `abi = "1.0"`, and `wit/CHANGELOG.md` opens with the freeze entry). After the freeze, no breaking change ships without a 2.0, and a 2.0 is a serious undertaking that needs its own plan for dual-loading or migration.
 
@@ -118,5 +124,7 @@ The known punch list going into Phase 8, each already decided and awaiting imple
 **This is the active regime during the ADR-0028 development window.**
 
 Before 1.0, minor versions break. The support window still applies, so 0.2 loads 0.1 extensions, but an author should expect to rebuild each cycle.
+
+During the ADR-0028 window, 0.2 is a single **in-place** line: breaking changes land inside it without a minor bump, and the changelog's running "0.2 development" section is the record of what changed. An author should expect to rebuild after a same-line change, but the host cannot tell an early 0.2 build from a late one (the named limitation above). The registry tag for this line is `abi-0.2`; a rebuild is a new push under the same tag until the line moves.
 
 Authors publishing during 0.x should track the changelog and push a rebuilt artifact within one cycle of each minor release. The ABI line tag in the registry makes this mechanical: a rebuild is a new push under a new `abi-0.N` tag.

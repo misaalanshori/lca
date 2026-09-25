@@ -412,7 +412,7 @@ async fn compaction_and_transform_agree_across_modes_with_completion_denied() {
 
 // Verifies: ADR-0029 and NFR-25 - a typed image content block crosses the
 // ABI byte for byte in both delivery modes. This is the window's first
-// breaking minor: `message.content` went from a joined string to a list of
+// breaking change: `message.content` went from a joined string to a list of
 // `content-block`s, and the native twin and the WASM component must agree.
 #[tokio::test]
 async fn image_content_round_trips_identically_across_modes() {

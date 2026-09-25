@@ -4,20 +4,24 @@ Written for extension authors. Each entry names the version, the date, and
 every change grouped as added, deprecated, removed, or fixed, with a
 migration note for anything breaking (docs/abi-versioning.md).
 
-##0.2.0 — 2026-09-25
+##0.2 development — open (started 2026-09-25)
 
-The first line of the ADR-0028 development window, and the window's first
-**breaking** change. The host loads this line, the previous one (0.1), and
-the 1.0 freeze line, so nothing installed stops loading.
+The ADR-0028 development window's single **in-place** line. Breaking changes
+land here without a minor bump (ADR-0028's annotation): the package stays
+`@0.2.0`, every manifest stays `abi = "0.2"`, and this section is the running
+record rather than one entry per change. The host loads 0.2, the previous line
+(0.1), and the 1.0 freeze line, so nothing installed stops loading. The 1.0
+entry below is the freeze's; 1.0 is a snapshot-and-relabel of the final 0.2
+with no interface change between them.
 
-### Changed
+### Changed (breaking)
 
 - `types.message.content` is now `list<content-block>` instead of a joined
   `string`, and the new `content-block` variant carries `text(string)` or
   `image(tuple<string, list<u8>>)`. A provider can carry a typed image
   instead of text only (ADR-0029). **Migration:** read each block in order;
   the `text` blocks join to the old string, and `image` blocks are new. A
-  rebuilt component must declare `abi = "0.2"`.
+  rebuilt component declares `abi = "0.2"`.
 
 ### Added
 

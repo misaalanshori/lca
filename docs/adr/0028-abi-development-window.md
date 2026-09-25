@@ -83,3 +83,37 @@ freeze-based argument softens under this record, while the host-side slot
 decision stands on its own merits. `docs/abi-versioning.md`, the requirements
 document's Phase 8 note, and the release policy carry the dated amendment;
 the Phase 8 exit test recorded its pass as written on the day it passed.
+
+## Annotation — 2026-09-25 (cycle 2): 0.2 is a single in-place development line
+
+The decision above stands; this narrows how its window is versioned. It does
+not change what a breaking change *is*, only whether the number moves for each
+one.
+
+**0.2 is one line.** Breaking changes land inside it without a minor bump: the
+WIT package stays `@0.2.0`, every manifest stays `abi = "0.2"`, and
+`wit/CHANGELOG.md` carries a running "0.2 development" section instead of a
+per-minor entry. The line moves only if a checkpoint or an external extension
+needs the signal (then `0.3`); it does not move per change. This is deliberate:
+there is no published third-party ecosystem, so the per-change version churn
+buys nothing and the interface is still being discovered.
+
+**What does not drop.** Every breaking change still lands its conformance
+update in the same change, and a real interface decision still gets an ADR.
+The version churn is dropped, not the discipline.
+
+**The support window narrows, knowingly.** Because same-line builds are
+indistinguishable, the current-plus-previous guarantee protects cross-line
+moves (0.1 → 0.2) but not same-line changes inside 0.2. NFR-19's test keeps
+running and still checks the cross-line window; for 0.2.x it guarantees less.
+`docs/abi-versioning.md` names this as a limitation.
+
+**The refreeze is a snapshot-and-relabel to 1.0, not a new line.** Zero
+interface bytes change between the final 0.2 and 1.0; 1.0 *is* 0.2's end
+state, and 0.2 keeps loading on the 1.0 host as the boundary amnesty — the
+same shape as the 0.1 amnesty at the 2026-09-23 freeze. This is why the
+freeze label is 1.0 and not 0.3: under 0.3 the first post-freeze break would
+be 0.4, a minor bump mechanically identical to the churn this annotation
+removes, and the "breaking is heavy" signal would vanish exactly when it
+matters. At 1.0 the post-freeze "breaking = major" rule becomes true again as
+written, so no re-labelling is needed.

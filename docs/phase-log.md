@@ -837,7 +837,7 @@ marked with a `ponytail:` comment naming the auto-sweep upgrade path. Tests:
 `gc_from_a_child_keeps_an_ancestors_referenced_attachment`, and the CLI
 route/e2e pair.
 
-### P4 — typed image content (the window's first breaking minor)
+### P4 — typed image content (the window's first breaking change)
 
 `types.message.content` changed from a joined `string` to a list of
 `content-block`s (`text` or `image`), `ContentBlock::Image { media_type,
