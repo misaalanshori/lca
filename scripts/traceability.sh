@@ -36,8 +36,20 @@ fi
 # the contiguous comment block that names the requirement, so a sentence in a
 # neighbouring test cannot claim one; a shell/workflow marker counts when it
 # sits within the 8 lines after a `Verifies` mention, where it names a named
-# pipeline check rather than a test function.
-python3 - "$markers" <<'PY'
+# pipeline check rather than a test function. The extractor needs a Python
+# interpreter; GitHub's Windows runners expose `python`, not `python3`.
+PYTHON=""
+for candidate in python3 python py; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    PYTHON="$candidate"
+    break
+  fi
+done
+if [ -z "$PYTHON" ]; then
+  echo "traceability: no python interpreter found (tried python3, python, py)" >&2
+  exit 2
+fi
+"$PYTHON" - "$markers" <<'PY'
 import pathlib, re, sys
 
 ids = set()
