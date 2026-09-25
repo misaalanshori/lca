@@ -949,7 +949,14 @@ impl Tmux {
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
-    fn spawn(&self, sandbox: &Sandbox, mock: Option<&Mock>, with_key: bool) {
+    fn spawn(
+        &self,
+        sandbox: &Sandbox,
+        mock: Option<&Mock>,
+        with_key: bool,
+        extra_env: &[(&str, &str)],
+        args: &[&str],
+    ) {
         let key = if with_key {
             " OPENAI_API_KEY=test-key"
         } else {
@@ -958,10 +965,15 @@ impl Tmux {
         let endpoint = mock
             .map(|mock| format!(" OPENAI_BASE_URL={}", mock.url()))
             .unwrap_or_default();
+        let extra: String = extra_env
+            .iter()
+            .map(|(key, value)| format!(" {key}={value}"))
+            .collect();
+        let arguments: String = args.iter().map(|arg| format!(" {arg}")).collect();
         let command = format!(
             "cd {project} && HOME={home} USERPROFILE={home} XDG_DATA_HOME={data} \
              APPDATA={data} LOCALAPPDATA={data} XDG_CONFIG_HOME={config} \
-             LCA_UPDATE_CHECK=false{endpoint}{key} {bin}",
+             LCA_UPDATE_CHECK=false{endpoint}{key}{extra} {bin}{arguments}",
             project = sandbox.project().display(),
             home = sandbox.home.display(),
             data = sandbox.data.display(),
@@ -1041,8 +1053,8 @@ impl Drop for Tmux {
 }
 
 #[cfg(unix)]
-fn find_session_end(state: &std::path::Path) -> Option<String> {
-    fn walk(dir: &std::path::Path, found: &mut Option<String>) {
+fn find_session_log(state: &std::path::Path) -> Option<std::path::PathBuf> {
+    fn walk(dir: &std::path::Path, found: &mut Option<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -1050,17 +1062,21 @@ fn find_session_end(state: &std::path::Path) -> Option<String> {
             let path = entry.path();
             if path.is_dir() {
                 walk(&path, found);
-            } else if path.file_name().is_some_and(|name| name == "log.jsonl")
-                && let Ok(text) = std::fs::read_to_string(&path)
-                && text.contains("\"t\":\"session-end\"")
-            {
-                *found = Some(text);
+            } else if path.file_name().is_some_and(|name| name == "log.jsonl") {
+                *found = Some(path);
             }
         }
     }
     let mut found = None;
     walk(state, &mut found);
     found
+}
+
+#[cfg(unix)]
+fn find_session_end(state: &std::path::Path) -> Option<String> {
+    let path = find_session_log(state)?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    text.contains("\"t\":\"session-end\"").then_some(text)
 }
 
 #[cfg(unix)]
@@ -1097,7 +1113,7 @@ fn the_tui_renders_a_turn_in_a_real_terminal() {
     sandbox.approve_loopback_net(serde_json::json!({}));
 
     let session = Tmux::new("turn");
-    session.spawn(&sandbox, Some(&mock), true);
+    session.spawn(&sandbox, Some(&mock), true, &[], &[]);
 
     // 1. Startup renders the frame with the configured model.
     session.wait_for(
@@ -1138,7 +1154,7 @@ fn the_logins_secret_prompt_masks_input_in_a_real_terminal() {
     let sandbox = sandbox("tui-login-mask");
     let session = Tmux::new("mask");
     // No key: `/login` asks for the secret.
-    session.spawn(&sandbox, None, false);
+    session.spawn(&sandbox, None, false, &[], &[]);
     session.wait_for("no model", std::time::Duration::from_secs(20));
 
     session.send(&["/login", "Enter"]);
@@ -1153,4 +1169,101 @@ fn the_logins_secret_prompt_masks_input_in_a_real_terminal() {
         "the secret never appears in the frame:\n{pane}"
     );
     assert!(pane.contains("input hidden"), "still the masked prompt");
+}
+
+// Verifies: the SRDD's restart exit test, FR-SESS-4/FR-SESS-5, and
+// FR-CACHE-5/FR-CACHE-6 across a process boundary: a session created in one
+// process is resumed in another, the resumed run crosses the compaction
+// threshold, and the compaction record's replaced range ends before the
+// resumed turn (the in-process analogue is
+// `after_compaction_a_new_turn_stays_outside_the_stable_prefix`).
+#[cfg(unix)]
+#[test]
+fn a_resumed_session_compacts_at_the_turn_boundary() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_text_with_usage("first reply", 50, 0)),
+        Reply::Sse(sse_text_with_usage("compaction summary", 5, 0)),
+        Reply::Sse(sse_text_with_usage("second reply", 30, 0)),
+    ]));
+    let sandbox = sandbox("resume-compact");
+    // Documented knobs only: `compaction.threshold` is a configuration key
+    // (`LCA_COMPACTION_THRESHOLD`), and the provider's window is
+    // `OPENAI_CONTEXT_WINDOW` (docs/providers/openai-compatible.md). A
+    // 1000-token window at 1% compacts once a turn reports 10 prompt tokens.
+    let budget = [
+        ("OPENAI_CONTEXT_WINDOW", "1000"),
+        ("LCA_COMPACTION_THRESHOLD", "0.01"),
+    ];
+
+    // Run 1: create the session in one process, then exit.
+    let output = sandbox.run_env(Some(&mock), &["-p", "first turn"], &budget);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("first reply"),
+        "{}",
+        stdout(&output)
+    );
+
+    // The session outlives the process.
+    let log = find_session_log(&sandbox.state_dir()).expect("a session log");
+    let id = log
+        .parent()
+        .expect("session directory")
+        .file_name()
+        .expect("session id")
+        .to_string_lossy()
+        .to_string();
+
+    // Run 2: resume it in a real terminal; the transcript loads from the log
+    // before compaction runs.
+    let session = Tmux::new("resume");
+    session.spawn(&sandbox, Some(&mock), true, &budget, &["resume", &id]);
+    session.wait_for("first reply", std::time::Duration::from_secs(25));
+    session.send(&["second turn", "Enter"]);
+    session.wait_for("second reply", std::time::Duration::from_secs(30));
+    session.send(&["/exit", "Enter"]);
+
+    // The compaction record lands at the boundary: its replaced range starts
+    // at the first turn's user record and ends before the resumed turn, so
+    // the resumed turn stays outside the cached prefix.
+    let records: Vec<serde_json::Value> = std::fs::read_to_string(&log)
+        .expect("read the session log")
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_str(line).expect("record json"))
+        .collect();
+    let compaction = records
+        .iter()
+        .position(|record| record["t"] == "compaction")
+        .expect("a compaction record (FR-SESS-4)");
+    let resumed_user = records
+        .iter()
+        .rposition(|record| record["t"] == "user")
+        .expect("the resumed turn's user record");
+    let first_user = records
+        .iter()
+        .find(|record| record["t"] == "user")
+        .expect("the first turn's user record");
+    assert_eq!(
+        records[compaction]["replaced_from"], first_user["id"],
+        "the replaced range starts at the first turn"
+    );
+    assert_ne!(
+        records[compaction]["replaced_to"], records[resumed_user]["id"],
+        "the resumed turn is not inside the replaced range"
+    );
+    let range_end = records
+        .iter()
+        .position(|record| record["id"] == records[compaction]["replaced_to"])
+        .expect("the replaced range's end is a real record");
+    assert!(
+        range_end < resumed_user,
+        "the replaced range ends before the resumed turn: {records:#?}"
+    );
+    assert_eq!(records[compaction]["summary"], "compaction summary");
 }
