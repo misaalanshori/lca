@@ -765,7 +765,7 @@ fn direct_spawn_runs_a_program_without_a_shell() {
 fn pty_spawn_delivers_program_output_and_exit_code() {
     let ws = scratch("pty-spawn");
     let mut pty = if cfg!(unix) {
-        lca_tools::PtyChild::spawn("echo", &["hello-pty".into()], &ws, 24, 80).expect("spawn")
+        lca_tools::PtyChild::spawn("echo", &["hello-pty".into()], &ws, 24, 80, &[]).expect("spawn")
     } else {
         lca_tools::PtyChild::spawn(
             "cmd",
@@ -773,6 +773,7 @@ fn pty_spawn_delivers_program_output_and_exit_code() {
             &ws,
             24,
             80,
+            &[],
         )
         .expect("spawn")
     };
@@ -801,7 +802,7 @@ fn pty_spawn_delivers_program_output_and_exit_code() {
 #[test]
 fn pty_forwards_keystrokes_both_ways() {
     let ws = scratch("pty-keys");
-    let mut pty = lca_tools::PtyChild::spawn("cat", &[], &ws, 24, 80).expect("spawn");
+    let mut pty = lca_tools::PtyChild::spawn("cat", &[], &ws, 24, 80, &[]).expect("spawn");
     pty.write(b"round-trip\n").expect("write");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut out = String::new();

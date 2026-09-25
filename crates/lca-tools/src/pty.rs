@@ -50,13 +50,16 @@ struct Inner {
 
 impl PtyChild {
     /// Spawn `program` with `args` in `cwd` attached to a new
-    /// pseudo-terminal sized `rows` x `cols`.
+    /// pseudo-terminal sized `rows` x `cols`. `envs` mirrors
+    /// [`std::process::Command::envs`]: each entry is added to (or replaces a
+    /// key in) the inherited environment.
     pub fn spawn(
         program: &str,
         args: &[String],
         cwd: &Path,
         rows: u16,
         cols: u16,
+        envs: &[(&str, &str)],
     ) -> std::io::Result<PtyChild> {
         if !cwd.is_dir() {
             return Err(std::io::Error::other(format!(
@@ -64,7 +67,7 @@ impl PtyChild {
                 cwd.display()
             )));
         }
-        spawn_impl(program, args, cwd, rows, cols).map(|inner| PtyChild { inner })
+        spawn_impl(program, args, cwd, rows, cols, envs).map(|inner| PtyChild { inner })
     }
 
     /// Read up to `max` terminal bytes; `None` means the session ended.
@@ -202,6 +205,7 @@ fn spawn_impl(
     cwd: &Path,
     rows: u16,
     cols: u16,
+    envs: &[(&str, &str)],
 ) -> std::io::Result<Inner> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::process::CommandExt;
@@ -220,6 +224,7 @@ fn spawn_impl(
     let mut cmd = std::process::Command::new(program);
     cmd.args(args)
         .current_dir(&cwd)
+        .envs(envs.iter().copied())
         .stdin(std::process::Stdio::from(slave.try_clone()?))
         .stdout(std::process::Stdio::from(slave.try_clone()?))
         .stderr(std::process::Stdio::from(slave));
@@ -449,12 +454,40 @@ mod windows_conpty {
         }
     }
 
-    /// Spawn `program args` in `cwd` attached to `console`.
+    /// A `CreateProcessW` Unicode environment block: the inherited variables
+    /// with `envs` merged over them, each `KEY=VALUE` NUL-terminated and the
+    /// whole block NUL-terminated. Empty when there are no overrides, so the
+    /// caller passes `nullptr` and inherits as before.
+    fn environment_block(envs: &[(&str, &str)]) -> Vec<u16> {
+        if envs.is_empty() {
+            return Vec::new();
+        }
+        let mut merged: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString> =
+            std::env::vars_os().collect();
+        for (key, value) in envs {
+            merged.insert((*key).to_string().into(), (*value).to_string().into());
+        }
+        let mut block = Vec::new();
+        for (key, value) in merged {
+            let mut entry = key.to_string_lossy().into_owned();
+            entry.push('=');
+            entry.push_str(&value.to_string_lossy());
+            block.extend(entry.encode_utf16());
+            block.push(0);
+        }
+        block.push(0);
+        block
+    }
+
+    /// Spawn `program args` in `cwd` attached to `console`, with `envs`
+    /// merged over the inherited environment (the same contract as
+    /// [`std::process::Command::envs`]).
     pub fn spawn_with_console(
         program: &str,
         args: &[String],
         cwd: &Path,
         console: &Console,
+        envs: &[(&str, &str)],
     ) -> std::io::Result<ProcessHandle> {
         let quote = |arg: &str| {
             if arg.contains(' ') || arg.contains('"') {
@@ -530,6 +563,15 @@ mod windows_conpty {
             return Err(std::io::Error::last_os_error());
         }
         let mut info = PROCESS_INFORMATION::default();
+        // An empty override list inherits the parent environment (the
+        // documented `lpEnvironment = null` case); otherwise build a merged
+        // Unicode block, since `CreateProcessW` replaces rather than merges.
+        let mut env_block = environment_block(envs);
+        let env_ptr: *const core::ffi::c_void = if env_block.is_empty() {
+            std::ptr::null()
+        } else {
+            env_block.as_mut_ptr() as *const core::ffi::c_void
+        };
         // SAFETY: all pointers valid and owned across the call;
         // CreateProcessW may mutate the buffers we own.
         let created = unsafe {
@@ -540,7 +582,7 @@ mod windows_conpty {
                 std::ptr::null_mut(),
                 0,
                 EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
-                std::ptr::null_mut(),
+                env_ptr,
                 cwd_wide.as_ptr(),
                 &startup.StartupInfo,
                 &mut info,
@@ -574,11 +616,12 @@ fn spawn_impl(
     cwd: &Path,
     rows: u16,
     cols: u16,
+    envs: &[(&str, &str)],
 ) -> std::io::Result<Inner> {
     let (console, input_write, output_read) = windows_conpty::Console::new(rows, cols)?;
     let input = windows_conpty::file_from_pipe(input_write);
     let output = windows_conpty::file_from_pipe(output_read);
-    let child = windows_conpty::spawn_with_console(program, args, cwd, &console)?;
+    let child = windows_conpty::spawn_with_console(program, args, cwd, &console, envs)?;
     let job = child.pid().and_then(crate::ops::windows_job::Job::attach);
     Ok(Inner {
         input,

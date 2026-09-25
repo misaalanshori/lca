@@ -1052,7 +1052,7 @@ impl Drop for Tmux {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn find_session_log(state: &std::path::Path) -> Option<std::path::PathBuf> {
     fn walk(dir: &std::path::Path, found: &mut Option<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -1266,4 +1266,185 @@ fn a_resumed_session_compacts_at_the_turn_boundary() {
         "the replaced range ends before the resumed turn: {records:#?}"
     );
     assert_eq!(records[compaction]["summary"], "compaction summary");
+}
+
+// ---------------------------------------------------------------------------
+// Real-terminal tests on Windows (docs/testing-plan.md section 14): the TUI
+// under a pseudo-console (ConPTY). The checklist is the same as the tmux
+// suite; the driver is not.
+// ---------------------------------------------------------------------------
+
+/// Read the pseudo-console until `needle` appears in the accumulated screen,
+/// or the deadline passes. ConPTY's read is a non-blocking peek, so this
+/// polls.
+#[cfg(windows)]
+fn read_until(
+    pty: &mut lca_tools::PtyChild,
+    screen: &mut String,
+    needle: &str,
+    timeout: std::time::Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if screen.contains(needle) {
+            return true;
+        }
+        if std::time::Instant::now() > deadline {
+            return false;
+        }
+        match pty.read(65536) {
+            Ok(Some(chunk)) if !chunk.is_empty() => {
+                screen.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            _ => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    }
+}
+
+/// The sandbox environment the TUI process needs, as `PtyChild::envs`.
+#[cfg(windows)]
+fn console_env(sandbox: &Sandbox, mock: &Mock, with_key: bool) -> Vec<(&'static str, String)> {
+    let home = sandbox.home.to_string_lossy().into_owned();
+    let data = sandbox.data.to_string_lossy().into_owned();
+    let config = sandbox.home.join(".config").to_string_lossy().into_owned();
+    let mut envs = vec![
+        ("HOME", home.clone()),
+        ("USERPROFILE", home),
+        ("XDG_DATA_HOME", data.clone()),
+        ("APPDATA", data.clone()),
+        ("LOCALAPPDATA", data.clone()),
+        ("XDG_CONFIG_HOME", config),
+        ("LCA_UPDATE_CHECK", "false".to_string()),
+        ("OPENAI_BASE_URL", mock.url()),
+    ];
+    if with_key {
+        envs.push(("OPENAI_API_KEY", "test-key".to_string()));
+    }
+    envs
+}
+
+#[cfg(windows)]
+fn spawn_console(sandbox: &Sandbox, envs: &[(&'static str, String)]) -> lca_tools::PtyChild {
+    let borrowed: Vec<(&str, &str)> = envs
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+    lca_tools::PtyChild::spawn(
+        env!("CARGO_BIN_EXE_lca"),
+        &[],
+        &sandbox.project(),
+        40,
+        140,
+        &borrowed,
+    )
+    .expect("spawn the TUI on a ConPTY")
+}
+
+// Verifies: the real-terminal checklist (docs/testing-plan.md section 14) on
+// the Windows harness: startup renders, a scripted turn streams and renders,
+// and a clean quit writes `session-end`.
+#[cfg(windows)]
+#[test]
+fn the_tui_renders_a_turn_in_a_windows_console() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text_with_usage(
+        "console smoke ok",
+        20,
+        0,
+    ))]));
+    let sandbox = sandbox("tui-conpty");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    let envs = console_env(&sandbox, &mock, true);
+    let mut pty = spawn_console(&sandbox, &envs);
+    let mut screen = String::new();
+
+    assert!(
+        read_until(
+            &mut pty,
+            &mut screen,
+            "openai-compatible",
+            std::time::Duration::from_secs(60)
+        ),
+        "startup renders the frame: {screen:?}"
+    );
+
+    pty.write(b"hello console\r").expect("write the prompt");
+    assert!(
+        read_until(
+            &mut pty,
+            &mut screen,
+            "console smoke ok",
+            std::time::Duration::from_secs(60)
+        ),
+        "the reply renders: {screen:?}"
+    );
+
+    pty.write(b"/exit\r").expect("write /exit");
+    let log = find_session_log(&sandbox.state_dir()).expect("a session log");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("\"t\":\"session-end\"") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a clean quit writes session-end"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+// Verifies: the real-terminal checklist's secret-prompt case on Windows -
+// what the user types into `/login` never reaches the visible screen.
+#[cfg(windows)]
+#[test]
+fn the_logins_secret_prompt_masks_input_in_a_windows_console() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
+    let sandbox = sandbox("tui-conpty-mask");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    // No key: `/login` asks for the secret.
+    let envs = console_env(&sandbox, &mock, false);
+    let mut pty = spawn_console(&sandbox, &envs);
+    let mut screen = String::new();
+
+    assert!(
+        read_until(
+            &mut pty,
+            &mut screen,
+            "no model",
+            std::time::Duration::from_secs(60)
+        ),
+        "the no-model state renders: {screen:?}"
+    );
+    pty.write(b"/login\r").expect("write /login");
+    assert!(
+        read_until(
+            &mut pty,
+            &mut screen,
+            "input hidden",
+            std::time::Duration::from_secs(30)
+        ),
+        "the masked prompt renders: {screen:?}"
+    );
+
+    let secret = "sk-super-secret-value";
+    pty.write(secret.as_bytes()).expect("write the secret");
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    let mut settle = String::new();
+    let _ = read_until(
+        &mut pty,
+        &mut settle,
+        "\u{0}",
+        std::time::Duration::from_millis(800),
+    );
+    screen.push_str(&settle);
+    assert!(
+        !screen.contains(secret),
+        "the secret never appears on the ConPTY screen: {screen:?}"
+    );
 }

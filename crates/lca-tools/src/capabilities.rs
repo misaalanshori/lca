@@ -769,7 +769,7 @@ impl Capabilities {
             }
         }
         let child =
-            crate::pty::PtyChild::spawn(program, args, &dir, rows, cols).map_err(|err| {
+            crate::pty::PtyChild::spawn(program, args, &dir, rows, cols, &[]).map_err(|err| {
                 let err = CapabilityError::from(err);
                 self.record("pty", &display, &err.to_string());
                 err
