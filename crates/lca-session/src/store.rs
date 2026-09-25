@@ -402,6 +402,39 @@ impl SessionStore {
         Ok(sessions)
     }
 
+    /// The export's `attachments` map: every hash a record references,
+    /// mapped to its sidecar path under the session directory. Only files
+    /// that exist are listed; the format allows inline base64 too, but the
+    /// sidecar keeps large tool output out of the JSON
+    /// (`docs/session-log-format.md`).
+    fn attachment_map(
+        &self,
+        session: &Session,
+        records: &[lca_protocol::Record],
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let dir = session.dir().join("attachments");
+        let mut map = serde_json::Map::new();
+        for record in records {
+            let hashes: Vec<&String> = match record {
+                lca_protocol::Record::User { attachments, .. } => attachments.iter().collect(),
+                lca_protocol::Record::ToolResult {
+                    attachment: Some(hash),
+                    ..
+                } => vec![hash],
+                _ => Vec::new(),
+            };
+            for hash in hashes {
+                if dir.join(hash).exists() {
+                    map.insert(
+                        hash.clone(),
+                        serde_json::Value::String(format!("attachments/{hash}")),
+                    );
+                }
+            }
+        }
+        map
+    }
+
     /// Export the resolved record list with metadata
     /// (`docs/session-log-format.md`); `permission` and `extension-event`
     /// records are stripped unless `audit` is set (FR-SESS-7).
@@ -423,10 +456,11 @@ impl SessionStore {
                 .collect()
         };
         let meta = self.meta(session)?;
+        let attachments = self.attachment_map(session, &records);
         let document = serde_json::json!({
             "meta": meta,
             "records": records,
-            "attachments": serde_json::Map::new(),
+            "attachments": attachments,
         });
         let out = session.dir().join(if options.audit {
             "export-audit.json"

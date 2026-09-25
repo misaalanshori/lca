@@ -281,6 +281,53 @@ async fn runs_tool_calls_sequentially_until_the_model_stops() {
     );
 }
 
+// Verifies: FR-TOOL-7 and session-log-format's attachment rule: an
+// over-limit tool result is spilled to the session's attachment directory
+// and the record references its hash, so nothing the model saw is lost.
+#[tokio::test]
+async fn over_limit_tool_output_is_recorded_as_an_attachment() {
+    let provider = FakeProvider::builder()
+        .turn(|t| {
+            t.tool_call("read", r#"{"path":"big.txt"}"#)
+                .usage(fake_usage(100, 20, 0, 100))
+        })
+        .turn(|t| t.text("read it").usage(fake_usage(200, 30, 100, 100)))
+        .build();
+    let mut h = harness("attachment-spill", provider, default_config());
+    let big: String = (1..=20_000).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(h.project.join("big.txt"), &big).expect("write");
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: vec![],
+        asked: vec![],
+    };
+    let outcome = turn(&mut h, "read big.txt", &mut sink, &mut prompt).await;
+    assert_eq!(outcome.status, lca_core::TurnStatus::Ok);
+
+    let read = h
+        .store
+        .read_with(&h.session, ViewMode::Audit)
+        .expect("read");
+    let (hash, truncated) = read
+        .records
+        .iter()
+        .find_map(|record| match record {
+            Record::ToolResult {
+                attachment: Some(hash),
+                truncated,
+                ..
+            } => Some((hash.clone(), *truncated)),
+            _ => None,
+        })
+        .expect("the spilled result references an attachment");
+    assert!(truncated, "the display was cut");
+    assert_eq!(hash.len(), 64, "SHA-256 hex");
+    let spilled = std::fs::read_to_string(h.session.dir().join("attachments").join(&hash))
+        .expect("the attachment file exists");
+    assert!(spilled.contains("line 20000"));
+    assert!(spilled.contains("line 1\n"), "the head is preserved");
+}
+
 // Verifies: FR-CONC-2 (tool calls within a turn run sequentially, in the
 // order the model emitted them)
 #[tokio::test]

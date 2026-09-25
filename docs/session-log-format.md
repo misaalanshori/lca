@@ -29,7 +29,7 @@ Sessions live under the user data directory, grouped by project.
 
 `log.jsonl` is the record log. It is the authority for everything.
 
-`attachments/` holds content too large for the log, stored by content hash. Images, large tool outputs, and pasted files go here. A record references an attachment by hash. 1.0 bounds content at the source (tools truncate at `tool.result_limit_bytes`), so no attachment is written yet; the tree and the record fields exist and are forward-compatible.
+`attachments/` holds content too large for the log, stored by content hash. Images, large tool outputs, and pasted files go here. A record references an attachment by hash. The built-in tools truncate their display at `tool.result_limit_bytes` and spill the untruncated text here as `attachments/<sha256>`; the `tool-result` record's `attachment` field carries that hash. (Images are still out of scope: the provider message ABI carries text only.)
 
 ## Record framing
 
@@ -55,7 +55,7 @@ The `v` field is per record, not per file. A file written across a format upgrad
 
 `tool-call` holds one call the model requested. Fields: `id`, `call_id`, `name`, `arguments` as a JSON string, and `source` naming whether the tool is built in or comes from an extension.
 
-`tool-result` holds the outcome. Fields: `id`, `call_id` matching the call, `status` of ok, error, denied, or timeout, `content` or an attachment hash, and `truncated` as a boolean.
+`tool-result` holds the outcome. Fields: `id`, `call_id` matching the call, `status` of ok, error, denied, or timeout, `content` or an attachment hash, and `truncated` as a boolean. `truncated = true` with an `attachment` means the display shown to the model was cut and the full text is in that attachment; `truncated = true` with no attachment means the content was dropped (no session was attached, as in one-shot use).
 
 `permission` records a grant decision made during the session. Fields: `action`, `decision` of once, always, or denied, and `pattern` when the decision was always. This is a record of what happened, not the grant store itself.
 

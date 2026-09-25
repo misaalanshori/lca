@@ -782,10 +782,11 @@ Fixed, by severity:
 Known deviations left in place, named rather than implied:
 
 - **Attachments.** `docs/session-log-format.md` defines an `attachments/`
-  tree, and the record schema reserves an attachment hash, but 1.0 bounds
-  content at the source (tools truncate to `tool.result_limit_bytes`), so no
-  attachment is written yet; the field is forward-compatible. The image
-  widget renders as a labeled placeholder for the same reason.
+  tree. The built-in tools now spill over-limit output there by content
+  hash and the `tool-result` record references it; export lists the
+  sidecars that exist. Still out of scope: images (the provider message ABI
+  carries text only) and collection of attachments a fork or compaction no
+  longer references. The image widget renders as a labeled placeholder.
 - **NFR-25 residual - closed.** The conformance extension now drives
   `credentials.set/get/delete` and `oauth.begin/open/await-callback/end-flow`
   through the WASM host imports (the test injects the loopback callback

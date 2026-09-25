@@ -513,6 +513,56 @@ fn export_strips_sensitive_records_unless_audited() {
     assert!(text.contains("tried credentials"));
 }
 
+// Verifies: docs/session-log-format.md's attachments sidecar: a record's
+// attachment hash is listed in the export's `attachments` map with its
+// sidecar path, and a hash with no file on disk is not listed.
+#[test]
+fn export_lists_attachment_hashes_that_exist() {
+    let store = store("export-attachments");
+    let project = scratch("export-attachments-project");
+    let session = store.create_session(&project, "test").expect("create");
+    let dir = session.dir().join("attachments");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let present = "a".repeat(64);
+    let missing = "b".repeat(64);
+    std::fs::write(dir.join(&present), "full text").expect("write");
+    for (id, call_id, hash) in [("t1", "c1", &present), ("t2", "c2", &missing)] {
+        store
+            .append(
+                &session,
+                Record::ToolResult {
+                    v: FORMAT_VERSION,
+                    ts: 2,
+                    id: id.into(),
+                    call_id: call_id.into(),
+                    status: lca_protocol::ToolResultStatus::Ok,
+                    content: Some("truncated".into()),
+                    attachment: Some(hash.clone()),
+                    truncated: true,
+                },
+            )
+            .expect("append");
+    }
+
+    let path = store
+        .export(&session, ExportOptions::default())
+        .expect("export");
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("read")).expect("json");
+    let attachments = value
+        .get("attachments")
+        .and_then(|v| v.as_object())
+        .expect("the export carries an attachments map");
+    assert_eq!(
+        attachments.get(&present).and_then(|v| v.as_str()),
+        Some(format!("attachments/{present}").as_str())
+    );
+    assert!(
+        attachments.get(&missing).is_none(),
+        "a referenced hash with no file is not listed"
+    );
+}
+
 // Verifies: FR-CFG-5 (nothing in the credential store path is written to the
 // session log; guards the export shape against regressions)
 #[test]

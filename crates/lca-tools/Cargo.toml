@@ -27,6 +27,10 @@ hyper-rustls.workspace = true
 # without regex is a materially worse tool for a coding agent. Footprint:
 # regex-automata, aho-corasick, memchr, memchr2 — no transitive C code.
 regex = "1"
+# Dependency justification (SRDD closed-list row: sha2 - digest
+# verification): attachment content addresses are SHA-256, matching the
+# proposal hash (`lca-permissions`) and keeping one hash vocabulary.
+sha2.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # Dependency justification (SRDD closed list + review): `libc` exposes the

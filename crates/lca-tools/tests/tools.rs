@@ -640,6 +640,62 @@ async fn shell_output_truncates_and_marks() {
     assert!(!result.content.contains("line 1\n"), "head dropped");
 }
 
+// Verifies: FR-TOOL-7 and the session-log-format attachment rule: an
+// over-limit result spills the full text by content hash and names it in
+// `extras` (the record's `attachment` source), so the model knows the rest
+// exists and the session can retrieve it.
+#[tokio::test]
+async fn over_limit_output_spills_by_content_hash() {
+    let ws = scratch("spill");
+    std::fs::write(
+        ws.join("big.txt"),
+        (1..=500).map(|i| format!("line {i}\n")).collect::<String>(),
+    )
+    .expect("write");
+    let spill = ws.join("attachments");
+    let mut exec = ToolExecutor::new(
+        Arc::new(NativeOps),
+        ws.clone(),
+        ws.clone(),
+        256,
+        Duration::from_secs(30),
+    );
+    exec.set_spill_dir(Some(spill.clone()));
+
+    let result = run(
+        &mut exec,
+        &call("read", serde_json::json!({"path": "big.txt"})),
+    )
+    .await;
+    assert!(result.truncated, "over the limit is marked");
+    let hash = result
+        .extras
+        .get("attachment")
+        .expect("the attachment hash rides in extras")
+        .clone();
+    assert_eq!(hash.len(), 64, "SHA-256 hex: {hash}");
+    assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(
+        result.content.contains(&format!("attachment {hash}")),
+        "the model is told the rest exists: {}",
+        result.content
+    );
+
+    let spilled = std::fs::read_to_string(spill.join(&hash)).expect("spilled file");
+    assert!(spilled.contains("line 500"), "the full text is kept");
+    assert!(spilled.contains("line 1\n"), "including the dropped head");
+
+    // Dedup: a second read reuses the same content address, one file.
+    let again = run(
+        &mut exec,
+        &call("read", serde_json::json!({"path": "big.txt"})),
+    )
+    .await;
+    assert_eq!(again.extras.get("attachment"), Some(&hash));
+    let files = std::fs::read_dir(&spill).expect("dir").count();
+    assert_eq!(files, 1, "one file per content hash");
+}
+
 // Cancellation stops a running command promptly (FR-CONC-3's shell branch).
 #[tokio::test]
 async fn cancellation_stops_a_running_command() {

@@ -439,6 +439,12 @@ impl<'a> Agent<'a> {
         proposals: Option<&'a Proposals>,
         config: AgentConfig,
     ) -> Agent<'a> {
+        // Over-limit tool output spills into the session's attachment
+        // directory, content-addressed (FR-TOOL-7 / session-log-format).
+        // ponytail: attachments are never collected; forks and compaction
+        // only drop references, so an on-demand reachability sweep
+        // (`lca session gc`) is the upgrade path when disk use matters.
+        tools.set_spill_dir(Some(session.dir().join("attachments")));
         Agent {
             store,
             session,
@@ -974,7 +980,7 @@ impl<'a> Agent<'a> {
                 call_id: result.call_id.clone(),
                 status: result.status,
                 content: Some(result.content.clone()),
-                attachment: None,
+                attachment: result.extras.get("attachment").cloned(),
                 truncated: result.truncated,
             },
         ) {

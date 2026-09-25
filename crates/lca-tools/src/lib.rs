@@ -118,6 +118,10 @@ pub struct ToolExecutor {
     result_limit_bytes: usize,
     default_timeout: Duration,
     tracker: ReadTracker,
+    /// Where over-limit output is spilled, content-addressed, when a
+    /// session is attached (`<session>/attachments`); `None` keeps
+    /// today's truncate-and-drop behavior (tests, one-shot use).
+    spill_dir: Option<PathBuf>,
 }
 
 impl ToolExecutor {
@@ -136,7 +140,69 @@ impl ToolExecutor {
             result_limit_bytes,
             default_timeout,
             tracker: ReadTracker::default(),
+            spill_dir: None,
         }
+    }
+
+    /// Point the executor at the session's attachment directory. Set by the
+    /// agent loop per turn (the session owns the directory).
+    pub fn set_spill_dir(&mut self, dir: Option<PathBuf>) {
+        self.spill_dir = dir;
+    }
+
+    /// Write `full` under the spill dir by content hash, returning the hash.
+    /// `None` when no session is attached or the write fails; the caller
+    /// then keeps today's truncate-only behavior.
+    fn spill(&self, full: &str) -> Option<String> {
+        let dir = self.spill_dir.as_ref()?;
+        let digest = sha256_hex(full.as_bytes());
+        let path = dir.join(&digest);
+        if path.exists() {
+            return Some(digest);
+        }
+        if std::fs::create_dir_all(dir).is_err() {
+            return None;
+        }
+        let temp = path.with_extension("tmp");
+        std::fs::write(&temp, full).ok()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600));
+        }
+        std::fs::rename(&temp, &path).ok()?;
+        Some(digest)
+    }
+
+    /// Build a result, spilling the untruncated text when the display was
+    /// cut (FR-TOOL-7). The hash rides in `extras` (the ABI's non-structural
+    /// extension point) and the model gets a one-line stub naming it.
+    fn spilled(
+        &self,
+        call_id: &str,
+        full: &str,
+        mut content: String,
+        truncated: bool,
+        status: ToolResultStatus,
+    ) -> ToolResult {
+        let attachment = truncated.then(|| self.spill(full)).flatten();
+        if let Some(hash) = &attachment {
+            content.push_str(&format!(
+                "\n[full output: {} bytes, attachment {hash}]",
+                full.len()
+            ));
+        }
+        let mut result = ToolResult {
+            call_id: call_id.to_string(),
+            status,
+            content,
+            truncated,
+            extras: Default::default(),
+        };
+        if let Some(hash) = attachment {
+            result.extras.insert("attachment".to_string(), hash);
+        }
+        result
     }
 
     /// The workspace root this executor serves.
@@ -365,13 +431,13 @@ impl ToolExecutor {
                 end + 1
             ));
         }
-        ToolResult {
-            call_id: call.call_id.clone(),
-            status: ToolResultStatus::Ok,
-            content: out,
+        self.spilled(
+            &call.call_id,
+            &numbered,
+            out,
             truncated,
-            extras: Default::default(),
-        }
+            ToolResultStatus::Ok,
+        )
     }
 
     async fn write(&mut self, call: &ToolCall, args: &serde_json::Value) -> ToolResult {
@@ -524,13 +590,13 @@ impl ToolExecutor {
             out.push_str("(empty directory)\n");
         }
         let (content, truncated) = truncate_head(&out, self.result_limit_bytes);
-        ToolResult {
-            call_id: call.call_id.clone(),
-            status: ToolResultStatus::Ok,
+        self.spilled(
+            &call.call_id,
+            &out,
             content,
             truncated,
-            extras: Default::default(),
-        }
+            ToolResultStatus::Ok,
+        )
     }
 
     async fn glob(&mut self, call: &ToolCall, args: &serde_json::Value) -> ToolResult {
@@ -556,13 +622,13 @@ impl ToolExecutor {
         let mut out = matches.join("\n");
         out.push('\n');
         let (content, truncated) = truncate_head(&out, self.result_limit_bytes);
-        ToolResult {
-            call_id: call.call_id.clone(),
-            status: ToolResultStatus::Ok,
+        self.spilled(
+            &call.call_id,
+            &out,
             content,
             truncated,
-            extras: Default::default(),
-        }
+            ToolResultStatus::Ok,
+        )
     }
 
     async fn grep(&mut self, call: &ToolCall, args: &serde_json::Value) -> ToolResult {
@@ -666,13 +732,13 @@ impl ToolExecutor {
             ));
         }
         let (content, bytes_truncated) = truncate_head(&out, self.result_limit_bytes);
-        ToolResult {
-            call_id: call.call_id.clone(),
-            status: ToolResultStatus::Ok,
+        self.spilled(
+            &call.call_id,
+            &out,
             content,
-            truncated: truncated || bytes_truncated,
-            extras: Default::default(),
-        }
+            truncated || bytes_truncated,
+            ToolResultStatus::Ok,
+        )
     }
 
     async fn shell(
@@ -704,45 +770,34 @@ impl ToolExecutor {
                 );
             }
         };
-        let (content, truncated) =
-            truncate_tail(&String::from_utf8_lossy(&full), self.result_limit_bytes);
-        match outcome {
-            ExecOutcome::Exit { code: 0 } => ToolResult {
-                call_id: call.call_id.clone(),
-                status: ToolResultStatus::Ok,
-                content: if content.is_empty() {
+        let full_text = String::from_utf8_lossy(&full);
+        let (content, truncated) = truncate_tail(&full_text, self.result_limit_bytes);
+        let (status, content) = match outcome {
+            ExecOutcome::Exit { code: 0 } => (
+                ToolResultStatus::Ok,
+                if content.is_empty() {
                     "(no output)".to_string()
                 } else {
                     content
                 },
-                truncated,
-                extras: Default::default(),
-            },
-            ExecOutcome::Exit { code } => ToolResult {
-                call_id: call.call_id.clone(),
-                status: ToolResultStatus::Error,
-                content: format!("{content}\nCommand exited with code {code}"),
-                truncated,
-                extras: Default::default(),
-            },
-            ExecOutcome::Timeout => ToolResult {
-                call_id: call.call_id.clone(),
-                status: ToolResultStatus::Timeout,
-                content: format!(
+            ),
+            ExecOutcome::Exit { code } => (
+                ToolResultStatus::Error,
+                format!("{content}\nCommand exited with code {code}"),
+            ),
+            ExecOutcome::Timeout => (
+                ToolResultStatus::Timeout,
+                format!(
                     "{content}\nCommand timed out after {} seconds",
                     timeout.as_secs()
                 ),
-                truncated,
-                extras: Default::default(),
-            },
-            ExecOutcome::Cancelled => ToolResult {
-                call_id: call.call_id.clone(),
-                status: ToolResultStatus::Error,
-                content: format!("{content}\nCommand cancelled"),
-                truncated,
-                extras: Default::default(),
-            },
-        }
+            ),
+            ExecOutcome::Cancelled => (
+                ToolResultStatus::Error,
+                format!("{content}\nCommand cancelled"),
+            ),
+        };
+        self.spilled(&call.call_id, &full_text, content, truncated, status)
     }
 }
 
@@ -797,6 +852,17 @@ pub fn is_inside(path: &Path, root: &Path) -> bool {
 }
 
 /// Truncate at a line boundary, keeping the head (FR-TOOL-7).
+/// Lowercase hex SHA-256 of `bytes`: the attachment content address.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
 fn truncate_head(content: &str, limit: usize) -> (String, bool) {
     if content.len() <= limit {
         return (content.to_string(), false);
