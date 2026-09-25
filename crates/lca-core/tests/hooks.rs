@@ -92,6 +92,8 @@ struct PolicyExt {
     replace_shell_with: Option<String>,
     calls: Mutex<usize>,
     pre_turn_calls: Mutex<usize>,
+    post_tool_calls: Mutex<usize>,
+    post_turn_calls: Mutex<usize>,
     attention_calls: Mutex<usize>,
     close_calls: Mutex<usize>,
 }
@@ -104,6 +106,8 @@ impl PolicyExt {
             replace_shell_with: None,
             calls: Mutex::new(0),
             pre_turn_calls: Mutex::new(0),
+            post_tool_calls: Mutex::new(0),
+            post_turn_calls: Mutex::new(0),
             attention_calls: Mutex::new(0),
             close_calls: Mutex::new(0),
         }
@@ -116,6 +120,8 @@ impl PolicyExt {
             replace_shell_with: Some(command.to_string()),
             calls: Mutex::new(0),
             pre_turn_calls: Mutex::new(0),
+            post_tool_calls: Mutex::new(0),
+            post_turn_calls: Mutex::new(0),
             attention_calls: Mutex::new(0),
             close_calls: Mutex::new(0),
         }
@@ -127,6 +133,14 @@ impl PolicyExt {
 
     fn pre_turn_calls(&self) -> usize {
         *self.pre_turn_calls.lock().expect("pre-turn")
+    }
+
+    fn post_tool_calls(&self) -> usize {
+        *self.post_tool_calls.lock().expect("post-tool")
+    }
+
+    fn post_turn_calls(&self) -> usize {
+        *self.post_turn_calls.lock().expect("post-turn")
     }
 
     fn attention_calls(&self) -> usize {
@@ -173,6 +187,7 @@ impl ExtensionDispatch for PolicyExt {
         &'a self,
         _observation: &'a PostToolObservation,
     ) -> lca_ext_abi::DispatchFuture<'a, Result<(), DispatchError>> {
+        *self.post_tool_calls.lock().expect("post-tool") += 1;
         Box::pin(std::future::ready(Ok(())))
     }
 
@@ -180,6 +195,7 @@ impl ExtensionDispatch for PolicyExt {
         &'a self,
         _status: &'a str,
     ) -> lca_ext_abi::DispatchFuture<'a, Result<(), DispatchError>> {
+        *self.post_turn_calls.lock().expect("post-turn") += 1;
         Box::pin(std::future::ready(Ok(())))
     }
 
@@ -786,4 +802,51 @@ async fn session_close_hook_fires_when_called() {
     registry.register(policy.clone());
     registry.on_session_close().await;
     assert_eq!(policy.close_calls(), 1);
+}
+
+// Verifies: all six hook points fire in one session - the "three of six
+// never fired" class the audit found. Before the post-audit wiring,
+// pre-turn, attention-required, and session-close were registered but never
+// called.
+#[tokio::test]
+async fn all_six_hook_points_fire_in_one_session() {
+    let policy = Arc::new(PolicyExt::deny("all-six", "deny-"));
+
+    // Four provider calls across three agent turns: a plain reply, a tool
+    // call plus its follow-up reply, then an error that asks for attention.
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("one").usage(fake_usage(10, 5, 0, 10)))
+        .turn(|t| {
+            t.tool_call("read", r#"{"path":"notes.md"}"#)
+                .usage(fake_usage(20, 5, 10, 10))
+        })
+        .turn(|t| t.text("two").usage(fake_usage(30, 5, 20, 10)))
+        .turn(|t| t.error("boom", false).usage(fake_usage(1, 1, 0, 0)))
+        .build();
+    let mut registry = ExtensionRegistry::new();
+    registry.register(policy.clone());
+    let mut h = harness("hooks-all-six", provider, registry);
+    std::fs::write(h.tools.workspace().join("notes.md"), "notes").expect("write");
+    let mut sink = CollectingSink::default();
+
+    for input in ["one", "two", "three"] {
+        let _ = turn(&mut h, input, &mut sink).await;
+    }
+    // The CLI calls this when the session ends (headless and after the TUI).
+    h.config.extensions.on_session_close().await;
+
+    assert_eq!(policy.pre_turn_calls(), 3, "pre-turn once per turn");
+    assert_eq!(policy.calls(), 1, "pre-tool-use for the model's read call");
+    assert_eq!(policy.post_tool_calls(), 1, "post-tool-use after the read");
+    assert_eq!(policy.post_turn_calls(), 3, "post-turn-end once per turn");
+    assert_eq!(
+        policy.attention_calls(),
+        1,
+        "attention-required on the error turn"
+    );
+    assert_eq!(
+        policy.close_calls(),
+        1,
+        "session-close when the session ends"
+    );
 }

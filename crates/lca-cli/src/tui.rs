@@ -897,4 +897,37 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    // Verifies: FR-PERM-16 (an approved ad hoc net grant is persisted and
+    // project-scoped: it survives a restart, and another project never sees
+    // it). Automates the manual tmux check B1 carried.
+    #[test]
+    fn an_ad_hoc_grant_survives_a_restart_and_stays_project_scoped() {
+        let root = std::env::temp_dir().join(format!("lca-adhoc-persist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project_a = root.join("a");
+        let project_b = root.join("b");
+        std::fs::create_dir_all(&project_a).expect("mkdir");
+        std::fs::create_dir_all(&project_b).expect("mkdir");
+        let path = root.join("grants.json");
+        // The login flow's handle is dropped here: the store on disk is all
+        // that survives a restart.
+        {
+            let store = std::sync::Arc::new(std::sync::Mutex::new(
+                lca_permissions::GrantStore::open(&path).expect("open"),
+            ));
+            crate::store_ad_hoc_grant(&store, &project_a, "llm.example.com").expect("grant");
+        }
+
+        let reloaded = lca_permissions::GrantStore::open(&path).expect("reopen");
+        assert_eq!(
+            reloaded.net_patterns(&project_a),
+            vec!["llm.example.com".to_string()]
+        );
+        assert!(
+            reloaded.net_patterns(&project_b).is_empty(),
+            "the grant never leaks to another project"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

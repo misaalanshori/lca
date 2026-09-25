@@ -133,3 +133,79 @@ fn the_request_assembly_snapshot_never_drifts_silently() {
          review what changed and refresh deliberately with UPDATE_SNAPSHOT=1"
     );
 }
+
+// Verifies: FR-CACHE-5/FR-CACHE-6 (the stable prefix ends at the compaction
+// summary; a turn after the compaction stays in the dynamic suffix, so the
+// new user message does not invalidate the cached prefix). A regression here
+// is expensive and invisible in functional tests.
+#[test]
+fn after_compaction_a_new_turn_stays_outside_the_stable_prefix() {
+    fn text(message: &lca_protocol::ChatMessage) -> String {
+        message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                lca_protocol::ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    let records = vec![
+        Record::User {
+            v: 1,
+            ts: 1,
+            id: "u1".into(),
+            content: "old".into(),
+            attachments: vec![],
+        },
+        Record::Assistant {
+            v: 1,
+            ts: 2,
+            id: "a1".into(),
+            content: vec![],
+            reasoning: None,
+            model: None,
+            provider: None,
+            usage: None,
+        },
+        Record::Compaction {
+            v: 1,
+            ts: 3,
+            id: "c1".into(),
+            replaced_from: "u1".into(),
+            replaced_to: "a1".into(),
+            summary: "the summary".into(),
+            strategy: "compaction-default".into(),
+            usage: None,
+        },
+        Record::User {
+            v: 1,
+            ts: 4,
+            id: "u2".into(),
+            content: "new turn".into(),
+            attachments: vec![],
+        },
+    ];
+    let assembled = assemble(&records, "sys");
+    let summary = assembled
+        .messages
+        .iter()
+        .position(|message| text(message) == "the summary")
+        .expect("the summary is on the wire");
+    let new_turn = assembled
+        .messages
+        .iter()
+        .position(|message| text(message) == "new turn")
+        .expect("the new turn is on the wire");
+    assert_eq!(
+        assembled.stable_prefix,
+        summary + 1,
+        "everything through the summary is the stable prefix"
+    );
+    assert!(
+        new_turn >= assembled.stable_prefix,
+        "the new turn is in the dynamic suffix, not the cached prefix"
+    );
+}

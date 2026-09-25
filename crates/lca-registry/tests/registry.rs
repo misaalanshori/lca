@@ -310,6 +310,63 @@ async fn an_archive_url_resolves_through_the_shared_path() {
     assert_eq!(via_dispatch, resolved);
 }
 
+// Verifies: FR-DIST-2/FR-DIST-4 (a download that cannot finish leaves the
+// installed version working: resolution returns a whole component or an
+// error, and only a complete resolve reaches the tree).
+#[tokio::test]
+async fn an_interrupted_download_leaves_the_installed_version_working() {
+    let packed = lca_registry::pack_archive(MANIFEST, &component()).expect("pack");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = vec![0u8; 8192];
+            let _ = stream.read(&mut buf).await;
+            // Promise the whole archive, deliver half, then close.
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/zip\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                packed.len()
+            );
+            let _ = stream.write_all(head.as_bytes()).await;
+            let _ = stream.write_all(&packed[..packed.len() / 2]).await;
+            let _ = stream.shutdown().await;
+        }
+    });
+
+    // Install v1 from a complete copy.
+    let root =
+        std::env::temp_dir().join(format!("lca-registry-interrupted-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let tree = lca_registry::InstallTree::new(root);
+    let digest = lca_registry::Resolved::digest_of(&component());
+    tree.install(lca_registry::Resolved {
+        digest: digest.clone(),
+        source: "https://example.invalid/word-count.zip".to_string(),
+        manifest: MANIFEST.to_string(),
+        component: component(),
+    })
+    .expect("install v1");
+
+    // The interrupted update fails without touching the tree.
+    let url = format!("http://{addr}/word-count-abi-0.1.zip");
+    let err = resolve_archive(&url)
+        .await
+        .expect_err("the interrupted download fails");
+    assert!(!err.to_string().is_empty(), "a real error, not a panic");
+    let entry = tree
+        .entry("word-count")
+        .expect("entry")
+        .expect("the old version is still installed");
+    assert_eq!(entry.digest, digest, "the installed version is untouched");
+}
+
 /// A local anonymous OCI registry: config blob carries the manifest,
 /// layer0 the component, digests honored (our publishing convention).
 async fn mock_oci(broken_digests: bool) -> (String, tokio::task::JoinHandle<()>) {
