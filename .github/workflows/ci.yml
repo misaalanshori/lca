@@ -17,17 +17,19 @@ concurrency:
 
 # Three topologies, chosen by what each platform actually needs:
 #
-#   * test            - macOS and Windows, one job each, the whole
-#                       suite as it has run (and, since the Windows
-#                       round of fixes, passed).
-#   * test-ubuntu     - the Linux suite SPLIT into four bounded jobs
-#                       by package group. A monolithic Linux nextest
-#                       step aged past forty-five minutes and lost its
-#                       runner agent ("lost communication with the
-#                       server") repeatedly; no job here may outlive
-#                       thirty minutes, and every one of them keeps
-#                       its own log as an artifact whether it passed
-#                       or not.
+#   * test-split     - the suite SPLIT into four bounded jobs by package
+#                       group, on Linux AND macOS. A monolithic Linux nextest
+#                       step aged past forty-five minutes and lost its runner
+#                       agent ("lost communication with the server")
+#                       repeatedly; macOS runs the same groups so the heavy
+#                       WASM and loopback packages do not compete with the
+#                       whole suite for a three-core runner (an intermittent
+#                       `antigravity` loopback timeout motivated it). No job
+#                       here may outlive thirty minutes, and every one keeps
+#                       its own log as an artifact whether it passed or not.
+#   * test           - Windows, the whole suite in one job (the split bought
+#                       nothing there and the platform needs the full matrix
+#                       signal).
 #   * ubuntu-gates    - the five timing tests (NFR-4, NFR-5, NFR-29),
 #                       serial on a release build with the machine to
 #                       itself - where their thresholds were measured
@@ -42,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -97,18 +99,23 @@ jobs:
             nfr-gates-output.log
           if-no-files-found: ignore
 
-  # The Linux suite, split by package group. Each job: build its test
-  # binaries as its own timestamped phase, run one bounded nextest
-  # invocation at two threads inside an outer `timeout`, dump the
-  # process tree if that timeout (or the test run) fails, and always
-  # keep the log.
-  test-ubuntu:
-    name: test (ubuntu, ${{ matrix.group }})
-    runs-on: ubuntu-latest
+  # The test suite, split by package group, on Linux and macOS. Each job:
+  # build its test binaries as its own timestamped phase, run one bounded
+  # nextest invocation at two threads (inside an outer `timeout` where the
+  # platform has one), dump the process tree if that timeout (or the test
+  # run) fails, and always keep the log. Linux is split because a monolithic
+  # nextest step aged past forty-five minutes and lost its runner agent;
+  # macOS runs the same groups so the heavy WASM and loopback packages do not
+  # compete with the whole suite for a three-core runner.
+  test-split:
+    name: test (${{ matrix.os }}, ${{ matrix.group }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
+        group: [core, engines, shell, extensions]
         include:
           - group: core
             packages: '-p lca-protocol -p lca-permissions -p lca-session -p lca-config -p lca-provider -p lca-testkit -p lca-ext-abi'
@@ -126,28 +133,45 @@ jobs:
         with:
           tool: cargo-nextest
       - uses: Swatinem/rust-cache@v2
+      - name: clippy and docs (once per OS, warnings denied)
+        # The plan keeps clippy and doc per-OS (they compile cfg-gated code);
+        # running them on the `core` group of each OS gives Linux and macOS
+        # the signal without repeating it in every group. Windows carries its
+        # own in the `test` job.
+        if: matrix.group == 'core'
+        shell: bash
+        run: |
+          rustup component add clippy
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
       - name: Build the test binaries (its own phase)
         shell: bash
         run: |
-          echo "[$(date -Is)] build start"
+          echo "[$(date -u +%FT%TZ)] build start"
           cargo test --no-run ${{ matrix.packages }}
-          echo "[$(date -Is)] build done"
+          echo "[$(date -u +%FT%TZ)] build done"
       - name: Run this group's tests (bounded)
         shell: bash
         run: |
           set -o pipefail
-          echo "[$(date -Is)] run start (group ${{ matrix.group }}, two threads)"
-          # Outer bound shorter than the job timeout: a step that
-          # overruns dies with its own process tree printed - the
-          # evidence Linux has been missing - rather than as an
-          # anonymous agent that stops answering.
-          timeout -k 30s 22m cargo nextest run ${{ matrix.packages }} --no-fail-fast \
+          echo "[$(date -u +%FT%TZ)] run start (group ${{ matrix.group }}, two threads)"
+          # Outer bound shorter than the job timeout where the platform has
+          # `timeout`: a step that overruns dies with its own process tree
+          # printed rather than as an anonymous agent that stops answering.
+          # macOS has no `timeout` by default; nextest's slow-timeout and the
+          # job timeout cover it there.
+          if command -v timeout >/dev/null 2>&1; then
+            WRAP=(timeout -k 30s 22m)
+          else
+            WRAP=()
+          fi
+          "${WRAP[@]}" cargo nextest run ${{ matrix.packages }} --no-fail-fast \
             --test-threads=2 --failure-output immediate \
             -E 'not test(/nfr|instantiation|hook|epoch/)' \
             2>&1 | tee "nextest-${{ matrix.group }}.log"
           status=${PIPESTATUS[0]}
-          echo "[$(date -Is)] run end (status $status)"
-          if [ "$status" -ne 0 ]; then
+          echo "[$(date -u +%FT%TZ)] run end (status $status)"
+          if [ "$status" -ne 0 ] && [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             echo "== process tree, oldest first (a stuck test shows its package by name) =="
             ps -eo pid,ppid,etime,stat,cmd --sort=-etime | head -80 || true
             echo "== pty / shell / sleep descendants =="
@@ -158,7 +182,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nextest-ubuntu-${{ matrix.group }}
+          name: nextest-${{ matrix.os }}-${{ matrix.group }}
           path: nextest-*.log
           if-no-files-found: ignore
 
