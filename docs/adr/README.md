@@ -44,6 +44,8 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0023 | The OpenAI-compatible provider sends `x-opencode-session` | Accepted | Phase 3 |
 | 0024 | The `/model` and `/compact` slots are host-side | Accepted | Phase 4 |
 | 0025 | Pin the checked address for `net` connections | Accepted | Phase 3 |
+| 0026 | Capability interfaces link in a denied state | Accepted | Post-release review |
+| 0027 | Unsigned release artifacts, provenance-attested | Accepted | Post-release review |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
 
