@@ -121,6 +121,30 @@ Consent text: "Store and read its own saved credentials."
 
 On denial: get returns an empty result rather than an error, so an extension checking for an existing login does not need to distinguish denial from absence. Set and delete return a permission error.
 
+### resources
+
+Always granted. Never declared in a manifest and never shown at install time (like `log`). This is the extension's own read-only package data bag (ADR-0030), not an `fs` grant: the path resolves inside the calling extension's own `resources/` tree only.
+
+Import interface: `lca:host/resources`. `list-resources(prefix)` returns `(path, size)` entries; `read(path)` returns the file's bytes.
+
+Gating: no traversal (`..`, absolute, NUL), no symlink escape, no cross-extension read. A path that leaves the tree is a recorded permission error. A per-call read cap (1 MB) keeps a hostile package from pulling the host into memory games. Both delivery modes serve the same bytes from the same engine seam: an installed package reads its files, a compiled-in extension serves its embedded `include_bytes!` table (ADR-0032).
+
+Conventions (ADR-0030): the host also reads some resource kinds for host-side features - `resources/skills/<name>/SKILL.md` is the standard Claude skill format, merged into the prompt with attribution. The manifest declares kinds (`resources = ["skills", "provider-presets"]`); the installer refuses an undeclared kind and shows the counts in consent.
+
+On denial: a traversal, absolute path, or missing file returns a permission or not-found error; the attempt is recorded.
+
+### state
+
+Always granted. Never declared in a manifest and never shown at install time (like `log`). The extension's own mutable, non-secret data bag (ADR-0030) - caches, last-used values, counters.
+
+Import interface: `lca:host/state`. `read(key)` returns `option<list<u8>>` (absence is `none`, like `credentials.get`); `write(key, value)`; `delete(key)`; `list-keys()`.
+
+Gating: the namespace is the extension's own identity, never guest input, so a cross-extension read has no address to take (FR-PERM-6/7). Keys are restricted to a safe filename charset. A per-value cap (4 MB) and a per-namespace cap (16 MB) bound it. State is wiped on uninstall, shown in `ext info`, and cleared with `lca ext state clear <name>`.
+
+State is **not secret-grade**: secrets go in `credentials`. It never enters a session log or an export.
+
+On denial: a bad key or an over-cap write returns an invalid error; a read of an absent key returns `none`.
+
 ### oauth
 
 Grants the loopback authorization flow. The extension never binds a port.

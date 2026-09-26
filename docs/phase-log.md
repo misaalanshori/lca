@@ -957,3 +957,52 @@ live-smoke workflow (`6638500`).
 **Process:** `dogfood-journal.md` (out of tree) records every session;
 `try-it-yourself.md` is the cold walkthrough, run against the released
 binary. The suite grew from 376 to 402 tests.
+
+## Cycle 4 — the extension data model and provider login
+
+Started 2026-09-26. Executes `extension-resources-plan.md` and
+`api-key-login-plan.md` under ADR-0030 (three bags), ADR-0031 (login
+surface, presets are extension data), ADR-0032 (embedded resources), and
+ADR-0033 (the provider-world login surface). All ABI work lands on the 0.2
+in-place development line (ADR-0028): additive or breaking as the design
+requires, with the changelog and conformance updated in the same change.
+
+**P0 — kink close-out.** A fork's listing counts its resolved history
+(regression 16); a compaction summary carries pi's self-describing framing
+(regression 17); the unknown-provider message, the exhausted-retry wording,
+and the raw-key paste redraw are fixed; the publish pipeline asserts the
+`lca` binary exists and regression 18 encodes the workspace shape that
+broke.
+
+**P1 — the `resources` bag.** `lca:host/resources` (`list-resources`/
+`read`), always available, own-tree only, traversal/symlink/cross-extension
+refused, size-capped; the same engine seam serves an installed directory and
+a compiled-in table (ADR-0032). The archive allowlist accepts
+`resources/**`; the manifest declares kinds and the installer refuses an
+undeclared one; the install writes the bag.
+
+**P2 — the `state` bag.** `lca:host/state` (`read`/`write`/`delete`/
+`list-keys`), identity-namespaced, size-capped, wiped on uninstall, shown
+in `ext info`, cleared with `lca ext state clear`.
+
+**P3 — skills from resources.** The host reads the three sources (project,
+user, extension `resources/skills`) with precedence and attribution; the
+built-in `skills` context-transform is no longer registered (one injector,
+one merge).
+
+**P4 — data-only extensions.** `worlds = []` plus a `resources` bag
+installs and removes through the same pipeline, no component.
+
+**P6 — wire identity.** `prompt_cache_key` (the clamped session id) in the
+openai-compatible body; a generic host `User-Agent` at the `net` gate.
+
+**P5 — the login surface.** The provider world exports `provider-login`
+(ADR-0033); openai-compatible ships `resources/provider-presets.toml`
+(~19 endpoints) and maps them to picker options; the host drives the WASM
+export and conformance proves both delivery modes agree. **The host-side
+picker UI is not yet wired** - the ABI, data, and extension sides are done.
+
+Suite grew from 407 to 429 tests. Commits: `1973e76` (P0), `3804c23` (P1),
+`a2724f6` (P2), `3013519` (P3), `756e46b` (P4), `c5f1123` (P6), `a3b0680`
+(P5 ABI). See `cycle4-report.md` (out of tree) for the full account and the
+deviations.

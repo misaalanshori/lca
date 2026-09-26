@@ -153,6 +153,26 @@ A transform that modifies content early in the message list, rather than only ap
 
 The `provider` world exports model listing, a completion call that returns a stream resource, and the authentication functions, plus `login`, `logout`, and `usage`, each always exported and each returning a defined "not supported" result when a provider doesn't have one. Promoting these three to world-level exports, rather than leaving them as ad hoc commands each author names differently, is what lets the host offer a generic `/login` picker across every installed provider and a `/usage` that follows whichever one is currently active, alongside the automatically namespaced per-provider form. See ADR-0012. It is the largest surface and the one with the most failure modes. Read the next section before attempting one.
 
+## Resources and state
+
+An extension package may carry a `resources/` folder: its own read-only data (presets, `SKILL.md` docs, templates, any bytes). The extension reads it through `lca:host/resources` - `list-resources(prefix)` and `read(path)` - and sees only its own tree, never the filesystem. Declare the kinds in the manifest:
+
+```toml
+resources = ["provider-presets", "skills"]
+```
+
+The installer refuses a kind the manifest does not declare and shows the counts at consent. The host reads `resources/skills/<name>/SKILL.md` (standard Claude format) into the prompt with attribution; other kinds are the extension's own business.
+
+For mutable, non-secret data, use `lca:host/state` - `read`/`write`/`delete`/`list-keys`, keyed by your own identity, size-capped, wiped on uninstall. Secrets go in `credentials`, never `state`.
+
+```rust
+let bytes = lca::host::resources::read("provider-presets.toml")?;
+let preset_text = String::from_utf8_lossy(&bytes);
+lca::host::state::write("last-model", b"gpt-4o")?;
+```
+
+A data-only extension declares `worlds = []` and ships only a manifest and a `resources/` bag; it installs through the same pipeline (a skill pack needs no component).
+
 ## Writing a provider
 
 A provider extension lists models, streams completions, and handles authentication.
@@ -170,6 +190,8 @@ Use `vendor-event` for anything the typed cases do not cover. It carries a kind 
 The completion call carries a cache-boundary hint alongside the message list: a count of leading messages the host considers the stable, cacheable prefix, per ADR-0017. If the vendor has an explicit cache-marking mechanism, place it at that boundary rather than guessing from the message shape. If the vendor has no such mechanism, or relies on automatic prefix caching with nothing to mark, ignore the hint; it is advisory, and a provider that doesn't use it is not doing anything wrong. Report `cache_read` and `cache_write` token counts on the `usage` event whenever the vendor's response includes them; this is what makes cache behavior testable at all, per `docs/testing-plan.md`.
 
 For authentication with an API key, read it from the `credentials` capability, and fall back to an environment variable the user can set. For a subscription login, use the `oauth` capability. The extension builds the authorization URL and the code challenge, calls begin to get a redirect URL, waits for the callback, and exchanges the code over the `net` capability. The extension never binds a port.
+
+A provider may also export `provider-login` (ADR-0033): `login-options` returns the picker choices the host renders (load them from your own `resources/provider-presets.toml` through `lca:host/resources`), and `login-submit` consumes the chosen id and the field values, stores the secret in your `credentials` namespace, and returns opaque `setting: value` pairs for the host to persist. The host never parses provider-shaped data; it renders the picker, masks the secret, persists the settings, and runs the ad hoc `net` grant when the chosen host is outside the manifest's vocabulary. A provider whose login is self-contained (an OAuth flow) exports `provider-login` returning no options and keeps its flow in `login`.
 
 Refresh expired tokens before the next call, not on failure. Waiting for a 401 costs a round trip and produces a confusing error if the refresh also fails.
 
