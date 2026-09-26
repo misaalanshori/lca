@@ -2,6 +2,10 @@
 resolver = "2"
 members = ["crates/*", "extensions/*"]
 exclude = ["phase0"]
+# The root package is the regression-suite target only. Without this, a bare
+# `cargo build --release` builds that target and nothing else, which is what
+# the publish workflow needs the `lca` binary from.
+default-members = ["crates/*", "extensions/*"]
 
 # The regression suite (docs/testing-plan.md section 7, NFR-24) lives at the
 # workspace root so every released defect's guard sits in one named home

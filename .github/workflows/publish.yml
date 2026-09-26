@@ -197,10 +197,10 @@ jobs:
           common="--remap-path-prefix=$PWD=/src --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
           CARGO_TARGET_DIR=target/repro-a \
             RUSTFLAGS="$common --remap-path-prefix=$PWD/target/repro-a=/out" \
-            cargo zigbuild --release --target x86_64-unknown-linux-musl
+            cargo zigbuild --release --target x86_64-unknown-linux-musl -p lca-cli
           CARGO_TARGET_DIR=target/repro-b \
             RUSTFLAGS="$common --remap-path-prefix=$PWD/target/repro-b=/out" \
-            cargo zigbuild --release --target x86_64-unknown-linux-musl
+            cargo zigbuild --release --target x86_64-unknown-linux-musl -p lca-cli
           a=target/repro-a/x86_64-unknown-linux-musl/release/lca
           b=target/repro-b/x86_64-unknown-linux-musl/release/lca
           sha_a=$(sha256sum "$a" | cut -d" " -f1)
@@ -231,13 +231,13 @@ jobs:
           fi
           for target in ${{ matrix.targets }}; do
             if [[ "$target" == *musl ]]; then
-              cargo zigbuild --release --target "$target"
+              cargo zigbuild --release --target "$target" -p lca-cli
               cp "target/$target/release/lca" "dist/lca-$target"
             elif [[ "$target" == *windows-msvc ]]; then
-              cargo xwin build --release --target "$target"
+              cargo xwin build --release --target "$target" -p lca-cli
               cp "target/$target/release/lca.exe" "dist/lca-$target.exe"
             else
-              cargo build --release --target "$target"
+              cargo build --release --target "$target" -p lca-cli
               cp "target/$target/release/lca" "dist/lca-$target"
             fi
           done
