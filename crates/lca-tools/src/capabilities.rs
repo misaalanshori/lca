@@ -245,10 +245,16 @@ impl Capabilities {
         let _ = std::fs::create_dir_all(&roots.private);
         let pins: Arc<Mutex<HashMap<String, Vec<SocketAddr>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let http = HttpConnector::new_with_resolver(PinnedResolver {
+        let mut http = HttpConnector::new_with_resolver(PinnedResolver {
             inner: GaiResolver::new(),
             pins: pins.clone(),
         });
+        // The wrapped connector must accept `https`: hyper-rustls's
+        // `build()` clears this on the connector it creates, but
+        // `wrap_connector` leaves a caller-supplied one as-is, and the
+        // default `enforce_http` rejects the scheme before TLS is even
+        // considered.
+        http.enforce_http(false);
         let https = hyper_rustls::HttpsConnectorBuilder::new()
             .with_webpki_roots()
             .https_or_http()
@@ -1091,8 +1097,20 @@ impl Capabilities {
                 body.unwrap_or(&[]),
             )))
             .map_err(|err| CapabilityError::Invalid(format!("bad request: {err}")))?;
-        let response = Self::drive(self.client.request(request))
-            .map_err(|err| CapabilityError::Io(format!("request failed: {err}")))?;
+        let response = Self::drive(self.client.request(request)).map_err(|err| {
+            // hyper's Display stops at "client error (Connect)"; walk the
+            // source chain so the actual connect/TLS cause is visible
+            // (a pinned-DNS failure and a refused socket look identical
+            // otherwise).
+            let mut chain = err.to_string();
+            let mut source = std::error::Error::source(&err);
+            while let Some(cause) = source {
+                chain.push_str(": ");
+                chain.push_str(&cause.to_string());
+                source = cause.source();
+            }
+            CapabilityError::Io(format!("request failed: {chain}"))
+        })?;
         let status = response.status().as_u16();
         let response_headers = response
             .headers()

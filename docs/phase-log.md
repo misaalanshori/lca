@@ -890,3 +890,22 @@ asserts the resulting DACL is protected; `docs/platform-notes.md` records the
 change. The Windows code type-checks and lints clean under
 `cargo clippy --target x86_64-pc-windows-gnu -p lca-tools --all-targets`;
 the `windows-latest` leg is the runtime judge.
+
+### Post-cycle fix — extension HTTPS requests were rejected (released defect)
+
+Found by actually running the env-gated real-provider smoke with the OpenCode
+key rather than trusting the mock suite: every `https` `net` request failed
+with "invalid URL, scheme is not http". ADR-0025's pinned-DNS connector wraps
+a caller-supplied `HttpConnector`, and `hyper-rustls`'s `wrap_connector` does
+not clear `enforce_http` the way its `build()` does, so the inner connector
+rejected the scheme before TLS was considered. The bundled provider could not
+reach a real endpoint, and antigravity's token exchange over `net` would have
+failed the same way. The mock-provider tests speak `http://127.0.0.1`, which
+`enforce_http` allows, so CI never exercised an extension's HTTPS path; the
+real-provider smoke is the only test that did, and it is not in CI.
+
+`enforce_http(false)` is now set before wrapping, and the connect error walks
+its source chain (hyper's Display stops at "client error (Connect)"), which is
+how the cause was found. Regression:
+`tests/regressions/09-https-net-scheme-rejected.rs`. The real-provider smoke
+passes against `deepseek-v4-flash`.

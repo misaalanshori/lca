@@ -30,3 +30,6 @@ mod net_dns_rebinding_pinned;
 // released 0.1.3 defect: a cancel could not reach a blocked `oauth.await`.
 #[path = "08-cancel-reaches-blocked-oauth-wait.rs"]
 mod cancel_reaches_blocked_oauth_wait;
+// released 0.1.1-0.1.3 defect: HTTPS `net` requests were rejected as non-http.
+#[path = "09-https-net-scheme-rejected.rs"]
+mod https_net_scheme_rejected;
