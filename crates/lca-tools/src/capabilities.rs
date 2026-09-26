@@ -1758,9 +1758,19 @@ connection: close
                 Ok(entries)
             }
             ResourceSource::Dir(root) => {
-                let base = self.resource_dir(root, &prefix)?;
+                // Canonicalize once and list against it: on macOS the
+                // scratch path is a symlink (`/var` -> `/private/var`), so a
+                // non-canonical root makes every `strip_prefix` fail and the
+                // listing lose its relative paths.
+                let canonical_root = std::fs::canonicalize(root)
+                    .map_err(|_| CapabilityError::NotFound("no resources".into()))?;
+                let base = if prefix.is_empty() {
+                    canonical_root.clone()
+                } else {
+                    self.resource_dir(root, &prefix)?
+                };
                 let mut entries = Vec::new();
-                collect_resources(root, &base, &mut entries)?;
+                collect_resources(&canonical_root, &base, &mut entries)?;
                 entries.sort();
                 Ok(entries)
             }
