@@ -295,3 +295,15 @@ fn futures_lite_block_on<T>(future: impl std::future::Future<Output = T>) -> T {
         .expect("runtime")
         .block_on(future)
 }
+
+// Verifies: FR-CONC-1, NFR-21 (a native provider's `interrupt` reaches its
+// capability engine, so a blocked `net` request is cancelled - the epoch
+// bump only fires at a guest code point).
+#[test]
+fn interrupt_flags_the_capability_engine() {
+    let cap = sandbox("interrupt", false);
+    let ext = openai_compatible::OpenAiCompat::new(cap.clone());
+    assert!(!cap.is_cancelled());
+    ext.interrupt();
+    assert!(cap.is_cancelled(), "the engine is flagged for the net wait");
+}

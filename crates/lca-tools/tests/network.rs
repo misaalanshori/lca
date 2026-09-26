@@ -240,6 +240,41 @@ fn response_bodies_stream_before_the_server_finishes() {
     caps.net_close_response(handle).expect("close");
 }
 
+// Verifies: NFR-21 (a `net` host wait polls cancellation). A request whose
+// server accepts and never answers must return promptly after `cancel`
+// instead of waiting out the connect/read window - the remaining instance
+// the oauth fix closed for `oauth.await`.
+#[test]
+fn cancelling_a_hung_net_request_returns_promptly() {
+    let sandbox = Sandbox::new("net-cancel");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let port = addr.port();
+    // Accept the connection and never answer: the request blocks waiting for
+    // the response head until the socket closes.
+    std::thread::spawn(move || {
+        let _conn = listener.incoming().flatten().next();
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    });
+
+    let caps = std::sync::Arc::new(sandbox.caps(local_grants(&["127.0.0.1"])));
+    let canceller = caps.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        canceller.cancel();
+    });
+    let url = format!("http://127.0.0.1:{port}/hang");
+    let started = std::time::Instant::now();
+    let err = caps
+        .net_request("GET", &url, &[], None)
+        .expect_err("the hung request is cancelled");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "cancel did not reach the net wait: {elapsed:?} ({err})"
+    );
+}
+
 // Verifies: FR-PERM-16 (a grant beyond the fixed vocabulary attaches as
 // an ad hoc grant whose consent names the specific host, not a pattern
 // the manifest asked for).

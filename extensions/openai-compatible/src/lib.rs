@@ -664,6 +664,13 @@ mod native {
             vec![World::Provider]
         }
 
+        fn interrupt(&self) {
+            // A native call shares the caller's thread, so there is no epoch
+            // to bump: flag the capability engine directly, and a blocked
+            // `net` request polls its way out (FR-CONC-1, NFR-21).
+            self.cap.cancel();
+        }
+
         fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, DispatchError> {
             Err(DispatchError::MissingWorld {
                 extension: "openai-compatible".to_string(),

@@ -145,6 +145,22 @@ pub trait CompletionBackend: Send + Sync {
 /// exists (see [`Capabilities::drive`]).
 static SHARED_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
 
+/// Resolve once `flag` is set. `notify_one` stores a permit when no waiter
+/// is registered, and the flag is re-checked, so a cancel that lands before
+/// the wait registers still returns.
+async fn wait_cancelled(flag: &std::sync::atomic::AtomicBool, notify: &tokio::sync::Notify) {
+    loop {
+        if flag.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let notified = notify.notified();
+        if flag.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        notified.await;
+    }
+}
+
 enum HandleEntry {
     Response {
         status: u16,
@@ -214,6 +230,11 @@ pub struct Capabilities {
     /// does not wait out their window: an epoch bump cannot interrupt host
     /// code that is already blocked (FR-CONC-1, NFR-21).
     cancelled: Arc<std::sync::atomic::AtomicBool>,
+    /// Wakes a blocked `net` wait the moment [`Capabilities::cancel`] fires.
+    /// A `Notify`, not a sleep timer: the wait runs on a caller-owned
+    /// runtime that the caller may drop mid-request, and a timer on a
+    /// shutting-down runtime panics.
+    cancelled_notify: Arc<tokio::sync::Notify>,
     handles: Arc<Mutex<HandleTable>>,
     client: HttpClient,
     /// Addresses already checked for a hostname, consulted by
@@ -274,6 +295,7 @@ impl Capabilities {
             oauth_begun: Arc::new(Mutex::new(Vec::new())),
             browser_opener: Arc::new(Mutex::new(None)),
             cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cancelled_notify: Arc::new(tokio::sync::Notify::new()),
             handles: Arc::new(Mutex::new(HandleTable::default())),
             client: Client::builder(hyper_util::rt::TokioExecutor::new()).build(https),
             pins,
@@ -307,6 +329,27 @@ impl Capabilities {
                 .handle()
                 .block_on(future),
         }
+    }
+
+    /// Drive a future, but return as soon as this extension is cancelled
+    /// instead of waiting it out (NFR-21 for `net` waits: a hung request
+    /// must return within the polling window). The future is dropped on
+    /// cancellation, which aborts the in-flight request.
+    fn drive_cancellable<F: std::future::Future>(
+        &self,
+        future: F,
+    ) -> Result<F::Output, CapabilityError> {
+        let cancelled = self.cancelled.clone();
+        let notify = self.cancelled_notify.clone();
+        Self::drive(async move {
+            tokio::select! {
+                biased;
+                () = wait_cancelled(&cancelled, &notify) => {
+                    Err(CapabilityError::Io("request cancelled by the user".into()))
+                }
+                output = future => Ok(output),
+            }
+        })
     }
 
     /// The extension's identity.
@@ -431,6 +474,11 @@ impl Capabilities {
     pub fn cancel(&self) {
         self.cancelled
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        // Wake a `net` wait blocked on the notify (the flag alone is
+        // polled only by waits that slice their own timeouts). `notify_one`
+        // stores a permit when no waiter is registered yet, so a cancel
+        // that lands just before the wait registers is not lost.
+        self.cancelled_notify.notify_one();
     }
 
     /// Whether [`Capabilities::cancel`] fired for the current work.
@@ -1097,20 +1145,24 @@ impl Capabilities {
                 body.unwrap_or(&[]),
             )))
             .map_err(|err| CapabilityError::Invalid(format!("bad request: {err}")))?;
-        let response = Self::drive(self.client.request(request)).map_err(|err| {
-            // hyper's Display stops at "client error (Connect)"; walk the
-            // source chain so the actual connect/TLS cause is visible
-            // (a pinned-DNS failure and a refused socket look identical
-            // otherwise).
-            let mut chain = err.to_string();
-            let mut source = std::error::Error::source(&err);
-            while let Some(cause) = source {
-                chain.push_str(": ");
-                chain.push_str(&cause.to_string());
-                source = cause.source();
+        let response = match self.drive_cancellable(self.client.request(request)) {
+            Ok(Ok(response)) => response,
+            Ok(Err(err)) => {
+                // hyper's Display stops at "client error (Connect)"; walk the
+                // source chain so the actual connect/TLS cause is visible
+                // (a pinned-DNS failure and a refused socket look identical
+                // otherwise).
+                let mut chain = err.to_string();
+                let mut source = std::error::Error::source(&err);
+                while let Some(cause) = source {
+                    chain.push_str(": ");
+                    chain.push_str(&cause.to_string());
+                    source = cause.source();
+                }
+                return Err(CapabilityError::Io(format!("request failed: {chain}")));
             }
-            CapabilityError::Io(format!("request failed: {chain}"))
-        })?;
+            Err(cancelled) => return Err(cancelled),
+        };
         let status = response.status().as_u16();
         let response_headers = response
             .headers()
@@ -1232,20 +1284,25 @@ impl Capabilities {
             let frame = {
                 // The timeout is constructed where it is polled: inside
                 // the runtime `drive` establishes, never before it.
-                let pulled =
-                    Self::drive(async { tokio::time::timeout(READ_TIMEOUT, body.frame()).await });
+                let pulled = self.drive_cancellable(async {
+                    tokio::time::timeout(READ_TIMEOUT, body.frame()).await
+                });
                 match pulled {
-                    Ok(Some(Ok(frame))) => frame,
-                    Ok(Some(Err(err))) => {
+                    Ok(Ok(Some(Ok(frame)))) => frame,
+                    Ok(Ok(Some(Err(err)))) => {
                         failure = Some(format!("reading the response: {err}"));
                         break;
                     }
-                    Ok(None) => {
+                    Ok(Ok(None)) => {
                         reached_eof = true;
                         break;
                     }
-                    Err(_) => {
+                    Ok(Err(_)) => {
                         failure = Some("timed out waiting for the response body".to_string());
+                        break;
+                    }
+                    Err(cancelled) => {
+                        failure = Some(cancelled.to_string());
                         break;
                     }
                 }
