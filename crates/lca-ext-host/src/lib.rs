@@ -700,6 +700,7 @@ fn pty_error(err: CapabilityError) -> PtyError {
 use lca_ext_abi::host::provider::exports::lca::ext::provider_completion as wit_completion;
 use lca_ext_abi::host::provider::exports::lca::ext::provider_identity as wit_identity;
 use lca_ext_abi::host::provider::exports::lca::ext::provider_login as wit_login;
+use lca_ext_abi::host::provider::exports::lca::ext::provider_models as wit_models;
 use lca_ext_abi::host::provider::lca::host as provider_host;
 
 fn net_error(err: CapabilityError) -> provider_host::net::Error {
@@ -1736,15 +1737,27 @@ fn provider_missing_world() -> CallError {
     CallError::InvalidArguments("no provider world".into())
 }
 
-fn provider_models_work(inner: &Inner) -> Result<Vec<ModelInfo>, CallError> {
+fn provider_models_work(
+    inner: &Inner,
+    settings: &[(String, String)],
+) -> Result<Vec<ModelInfo>, CallError> {
     let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
     let mut store = inner.build_store()?;
     let instance = pre
         .instantiate(&mut store)
         .map_err(|err| inner.classify(err))?;
+    // The same opaque settings `complete` gets in its request `extras`
+    // (ADR-0035): one source of truth for the extension's configuration.
+    let pairs: Vec<wit_models::ExtraPair> = settings
+        .iter()
+        .map(|(key, value)| wit_models::ExtraPair {
+            key: key.clone(),
+            value: value.clone(),
+        })
+        .collect();
     let models = instance
         .lca_ext_provider_models()
-        .call_list_models(&mut store)
+        .call_list_models(&mut store, &pairs)
         .map_err(|err| inner.classify(err))?;
     Ok(models
         .into_iter()
@@ -2424,14 +2437,18 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
         })
     }
 
-    fn provider_models(&self) -> Result<Vec<ModelInfo>, DispatchError> {
+    fn provider_models(
+        &self,
+        settings: &[(String, String)],
+    ) -> Result<Vec<ModelInfo>, DispatchError> {
         if !self.worlds().contains(&World::Provider) {
             return Err(DispatchError::MissingWorld {
                 extension: self.name().to_string(),
                 world: "provider",
             });
         }
-        self.blocking(provider_models_work)
+        let settings = settings.to_vec();
+        self.blocking(move |inner| provider_models_work(inner, &settings))
             .map_err(|err| to_dispatch(err, self.name()))
     }
 

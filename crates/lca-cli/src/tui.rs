@@ -229,8 +229,17 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     // with. (The registry stays mutable until the two completion-dependent
     // handles are in.)
     let missing_provider = registry.provider(&provider_name).is_none();
+    // The adapter's settings cell is how the host-persisted settings reach
+    // `list-models` (ADR-0035). The login flow writes what it persists into
+    // this same cell, so `list-models` sees the discovered model list from
+    // the one place `complete` already reads it.
+    let settings_cell: Arc<std::sync::Mutex<Vec<(String, String)>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
     let provider: Arc<dyn lca_provider::Provider> = match registry.provider(&provider_name) {
-        Some(handle) => Arc::new(lca_core::ExtensionProvider::new(handle.clone())),
+        Some(handle) => Arc::new(lca_core::ExtensionProvider::new_with_settings(
+            handle.clone(),
+            settings_cell.clone(),
+        )),
         None => Arc::new(lca_provider::NoProvider::new(provider_name.clone())),
     };
     if missing_provider {
@@ -405,6 +414,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     // owner-only credential writer extensions use, persist the opaque
     // settings, light the session up, and offer the ad hoc grant.
     let login_apply: Arc<dyn Fn(crate::login::Step) -> lca_tui::LoginNext + Send + Sync> = {
+        let settings_cell = settings_cell.clone();
         let registry = registry.clone();
         let data = data.clone();
         let cwd = cwd.to_path_buf();
@@ -478,6 +488,13 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                         "could not store {key} for {target}: {err}"
                     ));
                 }
+            }
+            // `list-models` reads the same pairs `complete` gets in its
+            // `extras` (ADR-0035): one source, no second store.
+            {
+                let mut cell = settings_cell.lock().unwrap_or_else(|p| p.into_inner());
+                cell.clear();
+                cell.extend(settings.iter().cloned());
             }
             // Light the session up now that the provider can answer.
             if target == provider_name

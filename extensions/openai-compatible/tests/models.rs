@@ -54,32 +54,46 @@ fn sandbox(name: &str) -> Arc<lca_tools::Capabilities> {
     Arc::new(engine)
 }
 
-// CHARACTERIZATION - the shape ADR-0035 changes. `provider_models` takes
-// no settings today, so the discovered list can only come from the
-// extension's own store; `complete` by contrast receives the host-persisted
-// settings on every call in its request `extras`. That asymmetry is what
-// D2 fixes: `list-models` gains the same settings flow.
+// The shape ADR-0035 settled. `list-models` takes the same settings flow
+// `complete` does, so the discovered model list - which `login-submit`
+// hands the host to persist - is visible to both, from one source, with no
+// second store. This is the characterization test from before the change,
+// moved onto the new shape rather than deleted.
 #[test]
-fn list_models_takes_no_settings_so_the_store_is_its_only_source() {
-    let cap = sandbox("characterize");
+fn list_models_reads_the_passed_settings_not_a_store_of_its_own() {
+    let cap = sandbox("settings");
     cap.credentials_set("api_key", "sk-x").expect("key");
     // What `login-submit` handed the host to persist (ADR-0033).
     cap.credentials_set("models", "store-a,store-b")
         .expect("models");
 
     let handle = openai_compatible::OpenAiCompat::new(cap.clone());
+    // With no settings passed, the extension cannot know better than the
+    // fallback it can reach.
+    let fallback: Vec<String> = handle
+        .provider_models(&[])
+        .expect("models")
+        .into_iter()
+        .map(|model| model.id)
+        .collect();
+    assert!(fallback.iter().any(|id| id == "store-a"), "{fallback:?}");
+
+    // The passed settings are the source of truth and override anything the
+    // extension might have stored: this is the symmetry with `complete`.
+    let passed = [("models".to_string(), "passed-x,passed-y".to_string())];
     let offered: Vec<String> = handle
-        .provider_models()
+        .provider_models(&passed)
         .expect("models")
         .into_iter()
         .map(|model| model.id)
         .collect();
     assert!(
-        offered.iter().any(|id| id == "store-a"),
-        "PRE-CHANGE SHAPE: the only way to see a discovered list is the \
-         extension's own store, because `list-models` receives nothing. \
-         Once ADR-0035 lands, this becomes the passed settings and this \
-         test moves with it - do not delete it. Offered: {offered:?}"
+        offered.iter().any(|id| id == "passed-x") && offered.iter().any(|id| id == "passed-y"),
+        "the passed list is what is offered: {offered:?}"
     );
-    let _ = std::fs::remove_dir_all(lca_testkit::scratch_path("lca-models-characterize"));
+    assert!(
+        !offered.iter().any(|id| id == "store-a"),
+        "the passed settings override the store rather than merging with it: {offered:?}"
+    );
+    let _ = std::fs::remove_dir_all(lca_testkit::scratch_path("lca-models-settings"));
 }

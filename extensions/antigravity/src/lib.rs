@@ -1131,7 +1131,10 @@ mod native {
             Ok(lca_protocol::CommandEffect::None)
         }
 
-        fn provider_models(&self) -> Result<Vec<ModelInfo>, DispatchError> {
+        fn provider_models(
+            &self,
+            _settings: &[(String, String)],
+        ) -> Result<Vec<ModelInfo>, DispatchError> {
             let cap = self.cap.clone();
             Ok(list_models(cap.as_ref()))
         }
@@ -1487,7 +1490,7 @@ mod wasm_mode {
     }
 
     impl ModelsGuest for AntigravityWasm {
-        fn list_models() -> Vec<WasmModel> {
+        fn list_models(_settings: Vec<ExtraPair>) -> Vec<WasmModel> {
             crate::list_models(&GuestCap)
                 .into_iter()
                 .map(|model| WasmModel {

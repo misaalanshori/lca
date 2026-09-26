@@ -53,6 +53,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0032 | Embedded extensions serve their resources from the binary | Accepted | Cycle 4 planning |
 | 0033 | The provider world's login surface | Accepted | Cycle 4 |
 | 0034 | Skills handling is a host-side merge | Accepted | Cycle 6 |
+| 0035 | `list-models` takes the settings `complete` does | Accepted | Cycle 6 |
 | 0029 | Typed image content for provider messages | Accepted | Post-release review (cycle 2) |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.

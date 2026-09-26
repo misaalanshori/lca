@@ -159,7 +159,10 @@ fn undeclared_world_defaults_report_missing_world() {
     let handle = Minimal;
     let missing = |err: DispatchError, world: &str| matches!(err, DispatchError::MissingWorld { world: w, .. } if w == world);
 
-    assert!(missing(handle.provider_models().unwrap_err(), "provider"));
+    assert!(missing(
+        handle.provider_models(&[]).unwrap_err(),
+        "provider"
+    ));
 
     let sink = NullSink;
     let request = lca_protocol::CompletionRequest {

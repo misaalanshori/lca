@@ -503,7 +503,27 @@ pub fn outcome_to_result(call_id: &str, outcome: ModeOutcome) -> ToolResult {
 // ---------------------------------------------------------------------------
 
 /// The model list both modes return (FR-PROV-2).
-pub fn provider_models() -> Vec<lca_protocol::ModelInfo> {
+/// The models the probe reports. A `models` setting (what `login-submit`
+/// hands the host to persist, ADR-0033) is the discovered list and wins -
+/// the same rule in both delivery modes (ADR-0035).
+pub fn provider_models(settings: &[(String, String)]) -> Vec<lca_protocol::ModelInfo> {
+    if let Some((_, list)) = settings.iter().find(|(key, _)| key == "models") {
+        return list
+            .split(',')
+            .filter(|id| !id.is_empty())
+            .map(|id| lca_protocol::ModelInfo {
+                id: id.to_string(),
+                name: id.to_string(),
+                context_window: 4096,
+                max_tokens: 0,
+            })
+            .collect();
+    }
+    provider_models_default()
+}
+
+/// The probe's fixed list, when no `models` setting was passed.
+pub fn provider_models_default() -> Vec<lca_protocol::ModelInfo> {
     vec![
         lca_protocol::ModelInfo {
             id: "conformance-a".to_string(),
@@ -1106,8 +1126,9 @@ mod native {
 
         fn provider_models(
             &self,
+            settings: &[(String, String)],
         ) -> Result<Vec<lca_protocol::ModelInfo>, lca_protocol::DispatchError> {
-            Ok(crate::provider_models())
+            Ok(crate::provider_models(settings))
         }
 
         fn stream_completion<'a>(
@@ -1778,8 +1799,12 @@ mod provider_world {
     pub struct ProviderComponent;
 
     impl ModelsGuest for ProviderComponent {
-        fn list_models() -> Vec<WasmModel> {
-            crate::provider_models()
+        fn list_models(settings: Vec<ExtraPair>) -> Vec<WasmModel> {
+            let pairs: Vec<(String, String)> = settings
+                .into_iter()
+                .map(|pair| (pair.key, pair.value))
+                .collect();
+            crate::provider_models(&pairs)
                 .into_iter()
                 .map(|model| WasmModel {
                     id: model.id,

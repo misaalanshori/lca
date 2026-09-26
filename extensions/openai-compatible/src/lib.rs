@@ -957,7 +957,10 @@ mod native {
             Ok(lca_protocol::CommandEffect::None)
         }
 
-        fn provider_models(&self) -> Result<Vec<ModelInfo>, DispatchError> {
+        fn provider_models(
+            &self,
+            settings: &[(String, String)],
+        ) -> Result<Vec<ModelInfo>, DispatchError> {
             // D2: the list `login-submit` discovered (or the preset's
             // curated short list) is what `/model` offers. The configured
             // model leads, then the rest of the stored list.
@@ -967,12 +970,21 @@ mod native {
                 context_window: self.settings.context_window,
                 max_tokens: 0,
             }];
-            let stored = self
-                .cap
-                .credentials_get("models")
-                .ok()
-                .flatten()
-                .unwrap_or_default();
+            // ADR-0035: the passed settings are the source of truth -
+            // the same pairs `complete` gets in its `extras`. The
+            // credential read is the fallback for a caller that has not
+            // been told the settings yet.
+            let stored = settings
+                .iter()
+                .find(|(key, _)| key == "models")
+                .map(|(_, value)| value.clone())
+                .unwrap_or_else(|| {
+                    self.cap
+                        .credentials_get("models")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
+                });
             for id in stored.split(',').filter(|id| !id.is_empty()) {
                 if models.iter().any(|model| model.id == id) {
                     continue;
@@ -1411,15 +1423,36 @@ mod wasm_mode {
     }
 
     impl ModelsGuest for OpenAiCompatWasm {
-        fn list_models() -> Vec<WasmModel> {
+        fn list_models(pairs: Vec<ExtraPair>) -> Vec<WasmModel> {
             let settings = Settings::default();
-            vec![WasmModel {
+            // ADR-0035: the passed settings carry the discovered list.
+            let stored = pairs
+                .iter()
+                .find(|pair| pair.key == "models")
+                .map(|pair| pair.value.clone())
+                .unwrap_or_default();
+            let mut out: Vec<WasmModel> = stored
+                .split(',')
+                .filter(|id| !id.is_empty())
+                .map(|id| WasmModel {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    context_window: settings.context_window,
+                    max_tokens: 0,
+                    extras: Vec::new(),
+                })
+                .collect();
+            if !out.is_empty() {
+                return out;
+            }
+            out.push(WasmModel {
                 id: settings.model.clone(),
                 name: settings.model,
                 context_window: Settings::default().context_window,
                 max_tokens: 0,
                 extras: Vec::new(),
-            }]
+            });
+            out
         }
     }
 

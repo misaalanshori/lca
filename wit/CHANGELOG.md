@@ -1,4 +1,13 @@
-# `lca:ext` ABI changelog
+# Changelog
+
+## 0.2.0 (in-place development line, 2026-09-26)
+
+- **Breaking (in-place):** `provider-models.list-models` now takes
+  `settings: list<extra-pair>`, the same opaque `setting: value` pairs
+  `provider-completion` carries in its request `extras` (ADR-0035). A
+  provider can now see its own persisted configuration when asked for
+  models, instead of only the environment. A component built against the
+  previous 0.2 shape fails to link and is refused at load.
 
 Written for extension authors. Each entry names the version, the date, and
 every change grouped as added, deprecated, removed, or fixed, with a

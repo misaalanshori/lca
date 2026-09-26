@@ -12,12 +12,36 @@ use lca_provider::{BoxFuture, EventSender, Provider, ProviderError};
 /// Wraps one provider-world handle as the core's `Provider`.
 pub struct ExtensionProvider {
     handle: Arc<dyn ExtensionDispatch>,
+    /// The opaque `setting: value` pairs the host persisted from
+    /// `login-submit` (ADR-0033), passed to `list-models` on the same
+    /// terms `complete` gets them in its request `extras` (ADR-0035).
+    settings: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
 }
 
 impl ExtensionProvider {
     /// Adapt a handle that implements the `provider` world.
     pub fn new(handle: Arc<dyn ExtensionDispatch>) -> ExtensionProvider {
-        ExtensionProvider { handle }
+        ExtensionProvider {
+            handle,
+            settings: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Adapt a handle against a settings cell the host also holds, so what
+    /// the login flow persists reaches `list-models` (ADR-0035).
+    pub fn new_with_settings(
+        handle: Arc<dyn ExtensionDispatch>,
+        settings: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    ) -> ExtensionProvider {
+        ExtensionProvider { handle, settings }
+    }
+
+    /// The cell this adapter hands `list-models`. The host writes the
+    /// opaque settings it persisted from `login-submit` here (ADR-0033)
+    /// and they reach the call on the same terms `complete` gets them in
+    /// its request `extras` (ADR-0035).
+    pub fn settings_cell(&self) -> std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>> {
+        self.settings.clone()
     }
 }
 
@@ -79,7 +103,9 @@ impl Provider for ExtensionProvider {
     fn list_models(&self) -> Vec<ModelInfo> {
         // A handle that cannot enumerate answers with an error; the
         // picker falls back to the configured model (FR-PROV-2).
-        self.handle.provider_models().unwrap_or_default()
+        self.handle
+            .provider_models(&self.settings.lock().unwrap_or_else(|p| p.into_inner()))
+            .unwrap_or_default()
     }
 
     fn stream(

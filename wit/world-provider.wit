@@ -30,7 +30,11 @@ interface provider-models {
     extras: list<extra-pair>,
   }
 
-  list-models: func() -> list<model-info>;
+  /// The opaque `setting: value` pairs the host persisted from
+  /// `login-submit` (ADR-0033) - the same flow `complete` receives in its
+  /// request `extras`. Symmetric on purpose (ADR-0035): the discovered
+  /// model list lives in host-persisted settings, with no second store.
+  list-models: func(settings: list<extra-pair>) -> list<model-info>;
 }
 
 interface provider-completion {

@@ -51,7 +51,10 @@ impl ExtensionDispatch for FakeProvider {
         Ok(CommandEffect::None)
     }
 
-    fn provider_models(&self) -> Result<Vec<ModelInfo>, DispatchError> {
+    fn provider_models(
+        &self,
+        _settings: &[(String, String)],
+    ) -> Result<Vec<ModelInfo>, DispatchError> {
         Ok(Vec::new())
     }
 

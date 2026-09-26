@@ -182,10 +182,29 @@ async fn model_listing_is_identical_across_modes() {
     assert_eq!(wasm.delivery(), DeliveryMode::Wasm);
     assert_eq!(native.delivery(), DeliveryMode::Native);
 
-    let wasm_models = wasm.provider_models().expect("wasm models");
-    let native_models = native.provider_models().expect("native models");
+    let wasm_models = wasm.provider_models(&[]).expect("wasm models");
+    let native_models = native.provider_models(&[]).expect("native models");
     assert_eq!(wasm_models, native_models);
-    assert_eq!(wasm_models, conformance::provider_models());
+    assert_eq!(wasm_models, conformance::provider_models_default());
+
+    // ADR-0035: the settings `login-submit` hands back are the source of
+    // truth in BOTH modes - the discovered list shows up in each, and the
+    // two agree.
+    let discovered = [("models".to_string(), "found-a,found-b".to_string())];
+    let wasm_discovered = wasm
+        .provider_models(&discovered)
+        .expect("wasm discovered")
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+    let native_discovered = native
+        .provider_models(&discovered)
+        .expect("native discovered")
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+    assert_eq!(wasm_discovered, native_discovered, "the two modes agree");
+    assert_eq!(wasm_discovered, vec!["found-a", "found-b"]);
     assert_eq!(wasm_models.len(), 2);
     assert_eq!(wasm_models[0].id, "conformance-a");
     assert_eq!(wasm_models[1].context_window, 8192);

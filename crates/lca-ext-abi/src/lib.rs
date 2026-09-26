@@ -163,7 +163,10 @@ pub mod dispatch {
         /// registration time. The default answers `MissingWorld`, so a
         /// handle without the provider world is rejected rather than
         /// silently empty.
-        fn provider_models(&self) -> Result<Vec<ModelInfo>, DispatchError> {
+        fn provider_models(
+            &self,
+            _settings: &[(String, String)],
+        ) -> Result<Vec<ModelInfo>, DispatchError> {
             Err(DispatchError::MissingWorld {
                 extension: self.name().to_string(),
                 world: "provider",
