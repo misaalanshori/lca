@@ -66,3 +66,6 @@ mod fuzz_targets_match_the_api;
 // cycle-5 driving: a disabled provider must take its presets with it.
 #[path = "20-disabled-provider-drops-its-presets.rs"]
 mod disabled_provider_drops_its_presets;
+// cycle-5 release defect: a WIT change broke the wasm components silently.
+#[path = "21-wasm-generate-blocks-map-every-host-import.rs"]
+mod wasm_generate_blocks_map_every_host_import;

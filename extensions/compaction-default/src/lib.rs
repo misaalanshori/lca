@@ -340,6 +340,10 @@ mod wasm_mode {
             "lca:host/log@0.2.0": generate,
             "lca:host/completion@0.2.0": generate,
             "lca:host/types@0.2.0": generate,
+            // ADR-0030's bags: every world imports them, so every
+            // `generate!` has to map them (see `extensions/conformance`).
+            "lca:host/resources@0.2.0": generate,
+            "lca:host/state@0.2.0": generate,
         },
     });
 

@@ -260,6 +260,31 @@ jobs:
         shell: bash
         run: bash scripts/fuzz-check.sh
 
+  # Verifies: docs/testing-plan.md section 13. The extension crates are
+  # ordinary workspace members, so every other gate builds them *natively*
+  # and says nothing about their wasm target. Their `wit_bindgen::generate!`
+  # blocks are target-shaped: when a world grows an import, every `with:`
+  # block has to map it, and the one that doesn't only fails at
+  # `--target wasm32-wasip2` - which nothing built until the publish job's
+  # component step, after the binaries were already attached. Cycle 5's
+  # release hit exactly that.
+  wasm-check:
+    name: extension components build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain and the component target
+        run: |
+          rustup set profile minimal
+          rustup target add wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Every extension component compiles
+        shell: bash
+        run: bash scripts/wasm-check.sh
+
   # NFR-7: measure binary size and cold start, fail on a threshold breach.
   size-and-startup:
     name: size and startup gate

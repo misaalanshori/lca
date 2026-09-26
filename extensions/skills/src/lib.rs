@@ -352,6 +352,9 @@ mod wasm_mode {
         with: {
             "lca:host/log@0.2.0": generate,
             "lca:host/fs@0.2.0": generate,
+            // ADR-0030's bags: every world imports them.
+            "lca:host/resources@0.2.0": generate,
+            "lca:host/state@0.2.0": generate,
         },
     });
 
