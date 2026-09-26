@@ -1030,7 +1030,7 @@ mod tests {
 
     #[test]
     fn resolve_target_normalizes_parent_traversal() {
-        let root = std::env::temp_dir().join(format!("lca-resolve-{}", std::process::id()));
+        let root = lca_testkit::scratch_path("lca-resolve");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("ws")).expect("mkdir");
         let resolved = resolve_target(&root.join("ws"), Path::new("../outside.txt"));

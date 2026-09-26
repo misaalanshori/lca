@@ -23,10 +23,7 @@ fn user(id: &str, content: &str) -> Record {
 
 #[test]
 fn the_display_view_keeps_a_truncation_warning() {
-    let root = std::env::temp_dir().join(format!(
-        "lca-regression-view-truncated-{}",
-        std::process::id()
-    ));
+    let root = lca_testkit::scratch_path("regression-view-truncated");
     let _ = std::fs::remove_dir_all(&root);
     let project = root.join("project");
     std::fs::create_dir_all(&project).expect("mkdir");

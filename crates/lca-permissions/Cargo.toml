@@ -16,6 +16,7 @@ ipnet.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+lca-testkit = { path = "../lca-testkit" }
 proptest.workspace = true
 
 [lints]

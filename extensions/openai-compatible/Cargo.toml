@@ -33,6 +33,7 @@ hyper-rustls.workspace = true
 wit-bindgen = "0.41"
 
 [dev-dependencies]
+lca-testkit = { path = "../../crates/lca-testkit" }
 toml.workspace = true
 
 [lints]

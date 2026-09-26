@@ -24,7 +24,7 @@ impl PermissionPrompt for Always {
 /// attaches those in production; here the test stands in for the user's
 /// consent, FR-PERM-16's shape).
 fn sandbox(name: &str, adhoc_loopback: bool) -> Arc<lca_tools::Capabilities> {
-    let root = std::env::temp_dir().join(format!("lca-openai-{name}-{}", std::process::id()));
+    let root = lca_testkit::scratch_path(&format!("lca-openai-{name}"));
     let _ = std::fs::remove_dir_all(&root);
     for dir in ["project", "private", "config", "data", "tmp"] {
         std::fs::create_dir_all(root.join(dir)).expect("mkdir");

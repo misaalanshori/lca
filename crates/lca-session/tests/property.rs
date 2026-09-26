@@ -7,10 +7,7 @@ use lca_session::SessionStore;
 use proptest::prelude::*;
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lca-session-prop-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    dir
+    lca_testkit::scratch_path(name)
 }
 
 fn arb_text() -> impl Strategy<Value = String> {

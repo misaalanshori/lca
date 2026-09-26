@@ -14,10 +14,7 @@ fn write(path: &Path, content: &str) {
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lca-config-test-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    dir
+    lca_testkit::scratch_path(name)
 }
 
 // Verifies: FR-CFG-1 (built-in defaults are the lowest layer)

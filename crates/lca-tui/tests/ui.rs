@@ -289,7 +289,7 @@ fn keys_follow_the_documented_conventions() {
 // Tab completes file paths from the workspace (SRDD input editor).
 #[test]
 fn tab_completes_file_paths() {
-    let root = std::env::temp_dir().join(format!("lca-tui-complete-{}", std::process::id()));
+    let root = lca_testkit::scratch_path("lca-tui-complete");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("src")).expect("mkdir");
     std::fs::write(root.join("Cargo.toml"), "").expect("write");

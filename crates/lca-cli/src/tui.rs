@@ -909,7 +909,7 @@ mod tests {
     // provider reports no pricing - that reads as "free", not "unknown").
     #[test]
     fn stats_omit_the_cost_when_no_price_is_reported() {
-        let root = std::env::temp_dir().join(format!("lca-stats-{}", std::process::id()));
+        let root = lca_testkit::scratch_path("lca-stats");
         let _ = std::fs::remove_dir_all(&root);
         let project = root.join("project");
         std::fs::create_dir_all(&project).expect("mkdir");
@@ -925,7 +925,7 @@ mod tests {
     // in the provider's own namespace, owner-only on Unix (B2).
     #[test]
     fn store_provider_secret_writes_the_namespace_credential() {
-        let root = std::env::temp_dir().join(format!("lca-login-{}", std::process::id()));
+        let root = lca_testkit::scratch_path("lca-login");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("mkdir");
         crate::store_provider_secret(&root, &root, "openai-compatible", "api_key", "sk-x")
@@ -962,7 +962,7 @@ mod tests {
     // capability environment picks it up (ADR-0022).
     #[test]
     fn the_ad_hoc_grant_is_persisted_for_the_project() {
-        let root = std::env::temp_dir().join(format!("lca-adhoc-{}", std::process::id()));
+        let root = lca_testkit::scratch_path("lca-adhoc");
         let _ = std::fs::remove_dir_all(&root);
         let project = root.join("project");
         std::fs::create_dir_all(&project).expect("mkdir");
@@ -984,7 +984,7 @@ mod tests {
     // is the path an env-var key takes, which never runs the login prompt.
     #[test]
     fn a_non_default_endpoint_is_ungranted_until_the_grant_is_stored() {
-        let root = std::env::temp_dir().join(format!("lca-ungranted-{}", std::process::id()));
+        let root = lca_testkit::scratch_path("lca-ungranted");
         let _ = std::fs::remove_dir_all(&root);
         let project = root.join("project");
         std::fs::create_dir_all(&project).expect("mkdir");
@@ -1017,7 +1017,7 @@ mod tests {
     #[cfg(feature = "bundled-openai-compat")]
     #[test]
     fn the_engine_honors_a_grant_attached_for_the_workspace() {
-        let root = std::env::temp_dir().join(format!("lca-engine-project-{}", std::process::id()));
+        let root = lca_testkit::scratch_path("lca-engine-project");
         let _ = std::fs::remove_dir_all(&root);
         let project = root.join("project");
         std::fs::create_dir_all(&project).expect("mkdir");
@@ -1054,7 +1054,7 @@ mod tests {
     // opened its own handle and its save dropped the engine's pattern.
     #[test]
     fn one_grant_store_holds_the_login_grant_and_an_engine_pattern() {
-        let root = std::env::temp_dir().join(format!("lca-shared-{}", std::process::id()));
+        let root = lca_testkit::scratch_path("lca-shared");
         let _ = std::fs::remove_dir_all(&root);
         let project = root.join("project");
         std::fs::create_dir_all(&project).expect("mkdir");
@@ -1089,7 +1089,7 @@ mod tests {
     // it). Automates the manual tmux check B1 carried.
     #[test]
     fn an_ad_hoc_grant_survives_a_restart_and_stays_project_scoped() {
-        let root = std::env::temp_dir().join(format!("lca-adhoc-persist-{}", std::process::id()));
+        let root = lca_testkit::scratch_path("lca-adhoc-persist");
         let _ = std::fs::remove_dir_all(&root);
         let project_a = root.join("a");
         let project_b = root.join("b");

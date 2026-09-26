@@ -35,7 +35,7 @@ impl PermissionPrompt for Recording {
 
 #[test]
 fn an_extension_process_call_asks_the_shared_prompt() {
-    let root = std::env::temp_dir().join(format!("lca-regression-prompt-{}", std::process::id()));
+    let root = lca_testkit::scratch_path("regression-prompt");
     let _ = std::fs::remove_dir_all(&root);
     let workspace = root.join("workspace");
     for dir in [

@@ -24,6 +24,7 @@ thiserror.workspace = true
 lca-provider = { path = "../lca-provider" }
 conformance = { path = "../../extensions/conformance" }
 lca-ext-native = { path = "../lca-ext-native" }
+lca-testkit = { path = "../lca-testkit" }
 tokio.workspace = true
 
 [lints]

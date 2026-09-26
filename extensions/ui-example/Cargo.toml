@@ -25,6 +25,7 @@ wit-bindgen = "0.41"
 [dev-dependencies]
 # The reference test draws through the same sanitizer the TUI uses.
 lca-tui = { path = "../../crates/lca-tui" }
+lca-testkit = { path = "../../crates/lca-testkit" }
 toml.workspace = true
 
 [lints]

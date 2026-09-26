@@ -22,7 +22,7 @@ fn opencode_go_completes_one_turn() {
 
     // A sandboxed user state, so the smoke never touches real sessions
     // or grants (the testkit's isolation rule, applied in-process).
-    let root = std::env::temp_dir().join(format!("lca-real-{}", std::process::id()));
+    let root = lca_testkit::scratch_path("lca-real");
     let _ = std::fs::remove_dir_all(&root);
     let data = root.join("data");
     let config = root.join("config");

@@ -10,7 +10,7 @@ struct Sandbox {
 
 impl Sandbox {
     fn new(name: &str) -> Sandbox {
-        let root = std::env::temp_dir().join(format!("lca-scope-{name}-{}", std::process::id()));
+        let root = lca_testkit::scratch_path(&format!("lca-scope-{name}"));
         let _ = std::fs::remove_dir_all(&root);
         for dir in ["workspace", "private", "config", "data", "tmp"] {
             std::fs::create_dir_all(root.join(dir)).expect("mkdir");
@@ -157,7 +157,7 @@ fn the_state_directory_is_refused_under_every_scope() {
 // used separate private/state roots and never saw `private` be unusable.
 #[test]
 fn private_resolves_under_the_state_dir_and_home_config_still_cannot_reach_it() {
-    let root = std::env::temp_dir().join(format!("lca-scope-prod-{}", std::process::id()));
+    let root = lca_testkit::scratch_path("lca-scope-prod");
     let _ = std::fs::remove_dir_all(&root);
     let home_config = root.join("app-support");
     let data = home_config.join("lca");

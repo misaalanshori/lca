@@ -27,8 +27,7 @@ impl PermissionPrompt for Always {
 }
 
 fn load() -> (lca_ext_host::WasmExtension, ExtHost) {
-    let root = std::env::temp_dir().join(format!("lca-nfr-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = lca_testkit::scratch_path("nfr");
     for dir in ["project", "private", "config", "data", "tmp"] {
         std::fs::create_dir_all(root.join(dir)).expect("mkdir");
     }

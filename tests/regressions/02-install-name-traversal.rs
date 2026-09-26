@@ -13,8 +13,7 @@ description = "Counts words."
 
 #[test]
 fn install_refuses_a_manifest_name_that_escapes_the_tree() {
-    let root =
-        std::env::temp_dir().join(format!("lca-regression-traversal-{}", std::process::id()));
+    let root = lca_testkit::scratch_path("regression-traversal");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("mkdir");
     let tree = lca_registry::InstallTree::new(root.clone());

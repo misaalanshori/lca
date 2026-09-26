@@ -25,8 +25,7 @@ const CONFORMANCE_WASM: &[u8] =
 const CONFORMANCE_MANIFEST: &str = include_str!("../../../extensions/conformance/extension.toml");
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("lca-hooks-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = lca_testkit::scratch_path(name);
     for part in ["project", "workspace", "private", "config", "data", "tmp"] {
         std::fs::create_dir_all(dir.join(part)).expect("mkdir");
     }

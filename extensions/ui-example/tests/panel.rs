@@ -22,8 +22,7 @@ impl PermissionPrompt for Always {
 }
 
 fn sandbox(name: &str) -> Arc<lca_tools::Capabilities> {
-    let root = std::env::temp_dir().join(format!("lca-ui-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = lca_testkit::scratch_path(&format!("ui-{name}"));
     for dir in ["project", "private", "config", "data", "tmp"] {
         std::fs::create_dir_all(root.join(dir)).expect("mkdir");
     }

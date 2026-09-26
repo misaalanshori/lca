@@ -22,7 +22,7 @@ fn user_record(id: &str, content: &str) -> Record {
 
 #[test]
 fn a_known_record_type_with_bad_fields_reports_truncation() {
-    let root = std::env::temp_dir().join(format!("lca-regression-corrupt-{}", std::process::id()));
+    let root = lca_testkit::scratch_path("regression-corrupt");
     let _ = std::fs::remove_dir_all(&root);
     let project = root.join("project");
     std::fs::create_dir_all(&project).expect("mkdir");

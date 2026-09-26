@@ -116,7 +116,7 @@ fn mock_server() -> Mock {
 /// mock (the gateway/mirror override), with the ad hoc loopback grant
 /// the login modal would have attached (FR-PERM-16).
 fn sandbox(name: &str, mock: &Mock) -> Arc<lca_tools::Capabilities> {
-    let root = std::env::temp_dir().join(format!("lca-ag-{name}-{}", std::process::id()));
+    let root = lca_testkit::scratch_path(&format!("lca-ag-{name}"));
     let _ = std::fs::remove_dir_all(&root);
     for dir in ["project", "private", "config", "data", "tmp"] {
         std::fs::create_dir_all(root.join(dir)).expect("mkdir");

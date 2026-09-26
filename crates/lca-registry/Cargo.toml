@@ -29,5 +29,8 @@ hyper-rustls.workspace = true
 tokio.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+[dev-dependencies]
+lca-testkit = { path = "../lca-testkit" }
+
 [lints]
 workspace = true

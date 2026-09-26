@@ -6,10 +6,7 @@ use lca_protocol::{FORMAT_VERSION, MessageRole, Record};
 use lca_session::SessionStore;
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lca-core-attach-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    dir
+    lca_testkit::scratch_path(name)
 }
 
 const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4];

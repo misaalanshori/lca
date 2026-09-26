@@ -1994,7 +1994,7 @@ mod windows_acl_tests {
     // the file with a protected, non-inheriting DACL.
     #[test]
     fn set_owner_only_protects_the_file() {
-        let dir = std::env::temp_dir().join(format!("lca-acl-{}", std::process::id()));
+        let dir = lca_testkit::scratch_path("lca-acl");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");
         let file = dir.join("cred.json");

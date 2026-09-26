@@ -20,7 +20,7 @@ fn installs_from_the_published_oci_reference_and_https_archive() {
         eprintln!("skipping: LCA_REAL_REGISTRY is not set (NFR-23)");
         return;
     }
-    let root = std::env::temp_dir().join(format!("lca-real-registry-{}", std::process::id()));
+    let root = lca_testkit::scratch_path("lca-real-registry");
     let _ = std::fs::remove_dir_all(&root);
     let home = root.join("home");
     let data = root.join("data");

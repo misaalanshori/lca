@@ -7,10 +7,7 @@ use std::path::PathBuf;
 use lca_permissions::{Action, Decision, GrantStore, PermissionPrompt, ProposalDiff, Proposals};
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("lca-perm-test-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    dir
+    lca_testkit::scratch_path(name)
 }
 
 fn store_path(root: &std::path::Path) -> PathBuf {
@@ -382,7 +379,7 @@ fn action_display_shows_the_exact_command_or_path() {
 // and a project that never decided stays at the default.
 #[test]
 fn extension_enablement_persists_per_project() {
-    let dir = std::env::temp_dir().join(format!("lca-grants-en-{}", std::process::id()));
+    let dir = lca_testkit::scratch_path("lca-grants-en");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("mkdir");
     let project = dir.join("project");
@@ -416,7 +413,7 @@ fn extension_enablement_persists_per_project() {
 // read, and one project's grant never leaks to another.
 #[test]
 fn adhoc_net_grants_persist_per_project() {
-    let dir = std::env::temp_dir().join(format!("lca-grants-net-{}", std::process::id()));
+    let dir = lca_testkit::scratch_path("lca-grants-net");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("mkdir");
     let project = dir.join("project");

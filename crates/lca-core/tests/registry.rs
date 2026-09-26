@@ -296,7 +296,7 @@ fn both_delivery_modes_share_one_table() {
 // (FR-EXT-6 with the Phase 2 fixture, not just a test double).
 #[test]
 fn the_native_conformance_handle_registers_through_the_table() {
-    let store_root = std::env::temp_dir().join(format!("lca-reg-conf-{}", std::process::id()));
+    let store_root = lca_testkit::scratch_path("lca-reg-conf");
     let _ = std::fs::remove_dir_all(&store_root);
     std::fs::create_dir_all(store_root.join("workspace")).expect("mkdir");
     let roots = lca_permissions::ScopeRoots {

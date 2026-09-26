@@ -96,6 +96,7 @@ dependencies = [
  "lca-ext-abi",
  "lca-permissions",
  "lca-protocol",
+ "lca-testkit",
  "lca-tools",
  "serde_json",
  "sha2",
@@ -1339,6 +1340,7 @@ dependencies = [
 name = "lca-config"
 version = "0.1.3"
 dependencies = [
+ "lca-testkit",
  "thiserror",
  "toml",
 ]
@@ -1385,6 +1387,7 @@ dependencies = [
  "lca-permissions",
  "lca-protocol",
  "lca-provider",
+ "lca-testkit",
  "lca-tools",
  "serde_json",
  "thiserror",
@@ -1409,6 +1412,7 @@ version = "0.1.3"
 dependencies = [
  "ipnet",
  "lca-protocol",
+ "lca-testkit",
  "proptest",
  "serde",
  "serde_json",
@@ -1443,6 +1447,7 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "lca-testkit",
  "serde",
  "serde_json",
  "sha2",
@@ -1490,6 +1495,7 @@ version = "0.1.3"
 dependencies = [
  "lca-ext-abi",
  "lca-protocol",
+ "lca-testkit",
  "proptest",
  "serde",
  "serde_json",
@@ -1516,6 +1522,7 @@ dependencies = [
  "hyper-util",
  "lca-permissions",
  "lca-protocol",
+ "lca-testkit",
  "libc",
  "regex",
  "serde_json",
@@ -1535,6 +1542,7 @@ dependencies = [
  "lca-config",
  "lca-permissions",
  "lca-protocol",
+ "lca-testkit",
  "lca-tools",
  "ratatui",
 ]
@@ -1737,6 +1745,7 @@ dependencies = [
  "lca-ext-abi",
  "lca-permissions",
  "lca-protocol",
+ "lca-testkit",
  "lca-tools",
  "serde_json",
  "tokio",
@@ -2687,6 +2696,7 @@ dependencies = [
  "lca-ext-abi",
  "lca-permissions",
  "lca-protocol",
+ "lca-testkit",
  "lca-tools",
  "lca-tui",
  "toml",

@@ -8,8 +8,7 @@ use lca_sdk::{Session, TurnEvent};
 use lca_testkit::FakeProvider;
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lca-sdk-test-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = lca_testkit::scratch_path(name);
     std::fs::create_dir_all(project_of(&dir)).expect("mkdir");
     dir
 }

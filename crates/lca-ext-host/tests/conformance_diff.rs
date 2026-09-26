@@ -39,7 +39,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str) -> Fixture {
-        let root = std::env::temp_dir().join(format!("lca-diff-{name}-{}", std::process::id()));
+        let root = lca_testkit::scratch_path(&format!("lca-diff-{name}"));
         let _ = std::fs::remove_dir_all(&root);
         for dir in ["project", "private", "config", "data", "tmp"] {
             std::fs::create_dir_all(root.join(dir)).expect("mkdir");

@@ -136,7 +136,7 @@ struct Sandbox {
 }
 
 fn sandbox(name: &str) -> Sandbox {
-    let root = std::env::temp_dir().join(format!("lca-cli-e2e-{name}-{}", std::process::id()));
+    let root = lca_testkit::scratch_path(&format!("lca-cli-e2e-{name}"));
     let _ = std::fs::remove_dir_all(&root);
     let home = root.join("home");
     let data = root.join("data");

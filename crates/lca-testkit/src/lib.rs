@@ -39,6 +39,75 @@ pub fn fake_usage(input: u64, output: u64, cache_read: u64, cache_write: u64) ->
     }
 }
 
+/// A scratch directory that removes itself on drop, so a test leaves no
+/// `/tmp` litter (the cycle-2 pile-up this exists to stop).
+///
+/// ```no_run
+/// let root = lca_testkit::ScratchDir::new("my-test");
+/// let project = root.join("project");
+/// std::fs::create_dir_all(&project).unwrap();
+/// ```
+pub struct ScratchDir(std::path::PathBuf);
+
+impl ScratchDir {
+    /// Create (clearing any stale copy) `<temp>/lca-test-<name>-<pid>`.
+    pub fn new(name: &str) -> ScratchDir {
+        let dir = std::env::temp_dir().join(format!("lca-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        ScratchDir(dir)
+    }
+
+    /// The directory path.
+    pub fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    /// A child path under the scratch directory.
+    pub fn join(&self, path: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+        self.0.join(path)
+    }
+}
+
+impl std::ops::Deref for ScratchDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for ScratchDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+thread_local! {
+    // Guards for scratch dirs created through `scratch_path`, so a test that
+    // keeps getting a plain path still cleans up: the thread-local drops at
+    // the end of the test thread (nextest's one-process-per-test, or the
+    // process end for libtest), removing every dir it created.
+    static SCRATCH: std::cell::RefCell<Vec<ScratchDir>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Create a scratch directory and return its path, registering it for removal
+/// when the test thread ends. Callers that can hold a guard should use
+/// [`ScratchDir`] directly; this keeps a plain-path helper from leaving
+/// litter.
+pub fn scratch_path(name: &str) -> std::path::PathBuf {
+    let dir = ScratchDir::new(name);
+    let path = dir.path().to_path_buf();
+    SCRATCH.with(|cell| cell.borrow_mut().push(dir));
+    path
+}
+
 /// One step of a scripted turn: an event, or a pause before the next step.
 #[derive(Debug, Clone)]
 pub enum Step {

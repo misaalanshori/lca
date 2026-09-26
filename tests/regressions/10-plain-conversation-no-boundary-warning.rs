@@ -45,10 +45,7 @@ impl PermissionPrompt for Prompt {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "lca-regression-plain-boundary-{name}-{}",
-        std::process::id()
-    ));
+    let dir = lca_testkit::scratch_path(&format!("regression-plain-boundary-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("mkdir");
     dir

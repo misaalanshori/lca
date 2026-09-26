@@ -9,10 +9,7 @@ use lca_protocol::{FORMAT_VERSION, Record};
 use lca_session::{ExportOptions, ReadOutcome, SessionStore, ViewMode};
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lca-session-test-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    dir
+    lca_testkit::scratch_path(name)
 }
 
 fn store(name: &str) -> SessionStore {

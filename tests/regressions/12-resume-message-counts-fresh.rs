@@ -20,10 +20,7 @@ fn user(id: &str, content: &str) -> Record {
 
 #[test]
 fn a_grown_session_lists_its_current_message_count() {
-    let root = std::env::temp_dir().join(format!(
-        "lca-regression-resume-count-{}",
-        std::process::id()
-    ));
+    let root = lca_testkit::scratch_path("regression-resume-count");
     let _ = std::fs::remove_dir_all(&root);
     let project = root.join("project");
     std::fs::create_dir_all(&project).expect("mkdir");

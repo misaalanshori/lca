@@ -36,10 +36,7 @@ struct Sandbox {
 
 impl Sandbox {
     fn new(name: &str) -> Sandbox {
-        let root = std::env::temp_dir().join(format!(
-            "lca-regression-https-scheme-{name}-{}",
-            std::process::id()
-        ));
+        let root = lca_testkit::scratch_path(&format!("regression-https-scheme-{name}"));
         let _ = std::fs::remove_dir_all(&root);
         for dir in ["workspace", "private", "config", "tmp", "data"] {
             std::fs::create_dir_all(root.join(dir)).expect("mkdir");

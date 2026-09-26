@@ -633,7 +633,7 @@ redirect_path = "/callback"
     // store's own method was tested; the command that reaches it was not.
     #[test]
     fn disabling_then_enabling_writes_the_per_project_flag() {
-        let root = std::env::temp_dir().join(format!("lca-ext-enable-{}", std::process::id()));
+        let root = lca_testkit::scratch_path("lca-ext-enable");
         let _ = std::fs::remove_dir_all(&root);
         let project = root.join("project");
         std::fs::create_dir_all(&project).expect("mkdir");

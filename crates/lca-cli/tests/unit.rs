@@ -122,7 +122,7 @@ fn exit_codes_follow_the_documented_table() {
 // FR-CFG-6: headless mode resolves update.check to off by default.
 #[test]
 fn headless_defaults_the_update_check_off() {
-    let grants_dir = std::env::temp_dir().join(format!("lca-cli-unit-{}", std::process::id()));
+    let grants_dir = lca_testkit::scratch_path("lca-cli-unit");
     let _ = std::fs::remove_dir_all(&grants_dir);
     std::fs::create_dir_all(&grants_dir).expect("mkdir");
     let grants = lca_permissions::GrantStore::open(&grants_dir.join("grants.json")).expect("open");

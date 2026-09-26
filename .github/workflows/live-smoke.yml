@@ -1,0 +1,40 @@
+name: live-smoke
+
+# The real-provider smoke is the only test that exercises an extension's
+# HTTPS path against a real endpoint. It found the two released defects the
+# mock-only suite could not see (`enforce_http` rejecting every `https` `net`
+# request, and the false cache-boundary event), so it runs on a schedule and
+# on demand rather than on every push.
+#
+# The owner adds the `OPENCODE_API_KEY` repository secret (Settings -> Secrets
+# and variables -> Actions). Without it the test skips cleanly (NFR-23), so a
+# fork or a repo without the secret still passes - the run just reports a
+# skip. The key is never printed, committed, or echoed.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily at 06:17 UTC, off the top of the hour to avoid the busiest slot.
+    - cron: '17 6 * * *'
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: live-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: |
+          rustup set profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - name: Live provider smoke (skips without the secret)
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: cargo test -p lca-cli --test real_provider -- --nocapture

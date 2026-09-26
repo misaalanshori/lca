@@ -45,7 +45,7 @@ fn component() -> Vec<u8> {
 }
 
 fn tree(name: &str) -> lca_registry::InstallTree {
-    let root = std::env::temp_dir().join(format!("lca-registry-{name}-{}", std::process::id()));
+    let root = lca_testkit::scratch_path(&format!("lca-registry-{name}"));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("mkdir");
     lca_registry::InstallTree::new(root)
@@ -74,7 +74,7 @@ fn the_grant_hash_is_canonical_and_value_sensitive() {
 // directory escapes the tree.
 #[test]
 fn install_refuses_a_manifest_name_that_escapes_the_tree() {
-    let root = std::env::temp_dir().join(format!("lca-registry-traversal-{}", std::process::id()));
+    let root = lca_testkit::scratch_path("lca-registry-traversal");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("mkdir");
     let tree = lca_registry::InstallTree::new(root.clone());
@@ -253,7 +253,7 @@ fn an_update_prompts_only_when_grants_widen() {
 // applies the same downstream consent flow (identical Resolved shape).
 #[test]
 fn a_local_path_resolves_to_the_same_shape() {
-    let dir = std::env::temp_dir().join(format!("lca-registry-local-{}", std::process::id()));
+    let dir = lca_testkit::scratch_path("lca-registry-local");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("mkdir");
     std::fs::write(dir.join("extension.toml"), MANIFEST).expect("manifest");
@@ -340,8 +340,7 @@ async fn an_interrupted_download_leaves_the_installed_version_working() {
     });
 
     // Install v1 from a complete copy.
-    let root =
-        std::env::temp_dir().join(format!("lca-registry-interrupted-{}", std::process::id()));
+    let root = lca_testkit::scratch_path("lca-registry-interrupted");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("mkdir");
     let tree = lca_registry::InstallTree::new(root);

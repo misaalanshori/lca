@@ -50,11 +50,7 @@ fn newer_release_detection() {
 
 #[test]
 fn the_stamp_survives_a_round_trip() {
-    let unique = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("lca-update-stamp-{unique}"));
+    let dir = lca_testkit::scratch_path("lca-update-stamp");
     std::fs::create_dir_all(&dir).expect("temp dir");
 
     assert!(update::read_last(&dir).is_none(), "no stamp yet");

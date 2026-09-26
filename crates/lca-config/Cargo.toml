@@ -12,6 +12,7 @@ toml.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+lca-testkit = { path = "../lca-testkit" }
 
 [lints]
 workspace = true

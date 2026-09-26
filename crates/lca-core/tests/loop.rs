@@ -15,10 +15,7 @@ use lca_testkit::{FakeProvider, Provider, fake_usage};
 use lca_tools::{CancelFlag, NativeOps, ToolExecutor};
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("lca-core-test-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    dir
+    lca_testkit::scratch_path(name)
 }
 
 #[derive(Default)]

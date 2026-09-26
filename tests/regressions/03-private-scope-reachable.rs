@@ -10,7 +10,7 @@ use lca_permissions::{FsMode, ScopeGrant, ScopeRoots, ScopeViolationKind};
 
 #[test]
 fn private_resolves_under_the_state_dir_and_home_config_still_cannot_reach_it() {
-    let root = std::env::temp_dir().join(format!("lca-regression-private-{}", std::process::id()));
+    let root = lca_testkit::scratch_path("regression-private");
     let _ = std::fs::remove_dir_all(&root);
     let home_config = root.join("app-support");
     let data = home_config.join("lca");
