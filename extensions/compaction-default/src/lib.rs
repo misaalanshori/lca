@@ -80,6 +80,13 @@ pub fn record_text(kind: &str, body: &str) -> String {
                 .and_then(|c| c.as_str())
                 .unwrap_or_default()
         ),
+        // A re-compaction's range covers the previous compaction record;
+        // its summary must carry forward, or every earlier fact is lost.
+        "compaction" => value
+            .get("summary")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default()
+            .to_string(),
         other => format!("[{other}]"),
     }
 }
@@ -122,10 +129,28 @@ pub fn mechanical_summary(excerpts: &[Excerpt]) -> String {
                 .collect::<String>()
         )
     });
+    // Carry forward anything an earlier summary already distilled: a
+    // re-compaction's range covers the previous compaction record.
+    let earlier: Vec<String> = excerpts
+        .iter()
+        .filter(|(kind, _)| kind == "compaction")
+        .map(|(_, body)| {
+            record_text("compaction", body)
+                .chars()
+                .take(600)
+                .collect::<String>()
+        })
+        .collect();
+    let earlier_line = if earlier.is_empty() {
+        String::new()
+    } else {
+        format!("\nEarlier summary: {}", earlier.join(" | "))
+    };
     format!(
-        "Conversation so far ({} messages). Requests: {}{}",
+        "Conversation so far ({} messages). Requests: {}{}{}",
         excerpts.len(),
         user_lines.join(" | "),
+        earlier_line,
         last.map(|text| format!("\nLast: {text}"))
             .unwrap_or_default()
     )

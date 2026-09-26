@@ -1456,6 +1456,7 @@ dependencies = [
 name = "lca-regressions"
 version = "0.0.0"
 dependencies = [
+ "compaction-default",
  "lca-core",
  "lca-permissions",
  "lca-protocol",

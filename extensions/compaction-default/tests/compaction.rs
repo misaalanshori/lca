@@ -52,6 +52,32 @@ fn renders_each_record_kind() {
     );
 }
 
+// A re-compaction's candidate range includes the previous compaction record.
+// Rendering it as a placeholder dropped every fact the earlier summary held,
+// so a codeword vanished the second time compaction fired.
+#[test]
+fn a_prior_summary_is_carried_into_the_next_one() {
+    let body = r#"{"v":1,"t":"compaction","summary":"The codeword is quartz-77."}"#;
+    assert_eq!(
+        record_text("compaction", body),
+        "The codeword is quartz-77."
+    );
+}
+
+// The no-model fallback must not drop a prior summary either.
+#[test]
+fn the_mechanical_fallback_carries_a_prior_summary() {
+    let excerpts = vec![
+        (
+            "compaction".to_string(),
+            r#"{"summary":"codeword quartz-77"}"#.to_string(),
+        ),
+        ("user".to_string(), r#"{"content":"next"}"#.to_string()),
+    ];
+    let summary = mechanical_summary(&excerpts);
+    assert!(summary.contains("quartz-77"), "{summary}");
+}
+
 // Verifies: ADR-0015's mechanical path works with no capability at all:
 // user requests and the last exchange survive.
 #[test]

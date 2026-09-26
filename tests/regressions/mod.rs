@@ -42,3 +42,6 @@ mod tui_turn_rendering;
 // released 0.1.x defect: `lca resume` listed stale message counts.
 #[path = "12-resume-message-counts-fresh.rs"]
 mod resume_message_counts_fresh;
+// released 0.1.x defect: re-compaction dropped the previous summary.
+#[path = "13-compaction-keeps-prior-summary.rs"]
+mod compaction_keeps_prior_summary;
