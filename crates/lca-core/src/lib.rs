@@ -775,13 +775,13 @@ impl<'a> Agent<'a> {
                     .expect("sent-stable lock")
                     .clone();
                 if let Some(previous) = previous {
-                    let diverged = (0..stable_prefix).find(|&index| {
-                        previous
-                            .get(index)
-                            .map(|there| *there != current[index])
-                            .unwrap_or(true)
-                    });
-                    if let Some(index) = diverged {
+                    // A previously-sent message whose content changed is a
+                    // real divergence: narrow to end before it and record it
+                    // (FR-CACHE-6's event is for rewritten content).
+                    let previously_sent = previous.len();
+                    let changed = (0..stable_prefix.min(previously_sent))
+                        .find(|&index| previous[index] != current[index]);
+                    if let Some(index) = changed {
                         let before = stable_prefix;
                         stable_prefix = index;
                         let detail = format!(
@@ -803,6 +803,12 @@ impl<'a> Agent<'a> {
                                 detail,
                             },
                         );
+                    } else if stable_prefix > previously_sent {
+                        // Messages appended since the last request. The
+                        // provider cached only that request, so the cacheable
+                        // prefix ends there; this is normal growth, not a
+                        // divergence, and narrows without an event.
+                        stable_prefix = previously_sent;
                     }
                 }
                 // Store the FULL list actually sent (the divergence

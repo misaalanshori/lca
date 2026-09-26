@@ -1456,12 +1456,15 @@ dependencies = [
 name = "lca-regressions"
 version = "0.0.0"
 dependencies = [
+ "lca-core",
  "lca-permissions",
  "lca-protocol",
  "lca-registry",
  "lca-session",
+ "lca-testkit",
  "lca-tools",
  "lca-tui",
+ "tokio",
 ]
 
 [[package]]

@@ -909,3 +909,20 @@ its source chain (hyper's Display stops at "client error (Connect)"), which is
 how the cause was found. Regression:
 `tests/regressions/09-https-net-scheme-rejected.rs`. The real-provider smoke
 passes against `deepseek-v4-flash`.
+
+### Post-cycle fix — a plain conversation no longer warns about the cache boundary
+
+Found in the same live session as the HTTPS fix: a normal multi-turn
+conversation showed `cache-boundary-narrowed: stable region diverged at
+message N` on every turn. The boundary correctly ends at the previous request
+(the provider cached only that), but the divergence check treated a message
+that simply was not in the previous, shorter request as changed
+(`previous.get(index).unwrap_or(true)`), so appending the previous turn's
+assistant message looked like a rewrite. The narrowing was right; the event
+was not — FR-CACHE-6's event is for content that was sent and then changed.
+The check now compares only indices the previous request actually had, and
+narrows past the previous request length silently. Tests:
+`a_plain_conversation_never_reports_a_boundary_divergence`
+(`crates/lca-core/tests/loop.rs`) and the released-defect guard
+`tests/regressions/10-plain-conversation-no-boundary-warning.rs`; the
+rewritten-content case still narrows once and settles.

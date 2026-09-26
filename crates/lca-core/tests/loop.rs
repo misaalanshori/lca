@@ -1426,6 +1426,53 @@ async fn stable_region_divergence_narrows_the_boundary_once_and_settles() {
     );
 }
 
+// Verifies: FR-CACHE-6 - a plain conversation (no transform, no compaction)
+// never reports a boundary divergence. The boundary legitimately ends at the
+// previous request, because the provider cached only that; messages appended
+// since then are growth, not a divergence, and must not raise the
+// `cache-boundary-narrowed` event on every turn.
+#[tokio::test]
+async fn a_plain_conversation_never_reports_a_boundary_divergence() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("one").usage(fake_usage(100, 10, 0, 0)))
+        .turn(|t| t.text("two").usage(fake_usage(120, 10, 100, 0)))
+        .turn(|t| t.text("three").usage(fake_usage(140, 10, 120, 0)))
+        .build();
+    let mut h = harness(
+        "plain-boundary",
+        provider,
+        phase_config(ExtensionRegistry::new(), 100_000, 0.99),
+    );
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: Vec::new(),
+        asked: Vec::new(),
+    };
+    for input in ["first", "second", "third"] {
+        let outcome = turn(&mut h, input, &mut sink, &mut prompt).await;
+        assert_eq!(
+            outcome.status,
+            lca_core::TurnStatus::Ok,
+            "turn {input}: {:?}",
+            outcome.error
+        );
+    }
+    assert_eq!(
+        count_extension_events(&h, "cache-boundary-narrowed"),
+        0,
+        "a plain conversation must not report a divergence"
+    );
+    let last = h.provider.last_request().expect("a request");
+    assert!(
+        last.stable_prefix > 0,
+        "the boundary grows with the conversation"
+    );
+    assert!(
+        last.stable_prefix < last.messages.len(),
+        "and never claims the current message"
+    );
+}
+
 fn count_extension_events(h: &Harness, event: &str) -> usize {
     h.store
         .read_with(&h.session, ViewMode::Display)

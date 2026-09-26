@@ -33,3 +33,6 @@ mod cancel_reaches_blocked_oauth_wait;
 // released 0.1.1-0.1.3 defect: HTTPS `net` requests were rejected as non-http.
 #[path = "09-https-net-scheme-rejected.rs"]
 mod https_net_scheme_rejected;
+// released 0.1.x defect: a plain conversation logged a boundary divergence.
+#[path = "10-plain-conversation-no-boundary-warning.rs"]
+mod plain_conversation_no_boundary_warning;
