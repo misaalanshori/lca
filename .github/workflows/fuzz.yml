@@ -5,7 +5,7 @@ name: fuzz
 # (a crash becomes a checked-in corpus entry and a regression test).
 # The targets themselves: the manifest parser, the session-log decode
 # path, the plain-HTTPS archive reader, and Wasmtime's component decode
-# - the four boundaries testing-plan section12 names.
+# - the four boundaries testing-plan section 13 names.
 
 on:
   schedule:
@@ -36,7 +36,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      # Verifies: the testing plan's fuzz schedule (section12): every
+      # Verifies: the testing plan's fuzz schedule (section 13): every
       # named target gets a sustained run; libFuzzer exits non-zero on
       # any crash, and the corpus under fuzz/corpus keeps what it found.
       - name: Run every fuzz target

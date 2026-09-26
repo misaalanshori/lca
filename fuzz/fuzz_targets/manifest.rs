@@ -1,4 +1,4 @@
-//! The manifest parser (testing plan section12: fuzz the manifest
+//! The manifest parser (testing plan section 13: fuzz the manifest
 //! parser). Every input is either rejected cleanly or parsed into a
 //! Manifest the loader would accept - no panics either way.
 #![no_main]

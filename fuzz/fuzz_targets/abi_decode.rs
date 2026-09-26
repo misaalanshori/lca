@@ -1,4 +1,4 @@
-//! The ABI decode path (testing plan section12): arbitrary bytes
+//! The ABI decode path (testing plan section 13): arbitrary bytes
 //! through Wasmtime's component decoder and linker - the gate every
 //! downloaded artifact must survive anyway (FR-DIST-3's other half).
 #![no_main]

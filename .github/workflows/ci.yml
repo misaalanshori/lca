@@ -240,6 +240,26 @@ jobs:
           path: nfr-gates-output.log
           if-no-files-found: ignore
 
+  # Verifies: docs/testing-plan.md section 13. The fuzz crate is its own
+  # workspace, so no other gate builds it - without this a parser change
+  # leaves a fuzz target uncompilable and the nightly `fuzz` job dies at
+  # build, after the other targets have burned their full 600s. This only
+  # checks the targets build (seconds), it never fuzzes.
+  fuzz-check:
+    name: fuzz targets build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup set profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target\nfuzz -> fuzz/target"
+      - name: Every fuzz target compiles
+        shell: bash
+        run: bash scripts/fuzz-check.sh
+
   # NFR-7: measure binary size and cold start, fail on a threshold breach.
   size-and-startup:
     name: size and startup gate

@@ -60,3 +60,6 @@ mod compaction_summary_framed;
 // latent release-pipeline defect: a bare release build produced no `lca`.
 #[path = "18-release-builds-the-cli.rs"]
 mod release_builds_the_cli;
+// latent nightly-fuzz defect: the fuzz workspace drifted out of sight.
+#[path = "19-fuzz-targets-match-the-api.rs"]
+mod fuzz_targets_match_the_api;

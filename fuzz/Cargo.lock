@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "lca-ext-abi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lca-protocol",
  "wasmtime",
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "lca-ext-host"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "lca-ext-abi",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "lca-permissions"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ipnet",
  "lca-protocol",
@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "lca-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -999,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "lca-registry"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "http-body-util",
  "hyper",
@@ -1016,19 +1016,22 @@ dependencies = [
 
 [[package]]
 name = "lca-tools"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "http-body-util",
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "lca-ext-abi",
  "lca-permissions",
  "lca-protocol",
  "libc",
  "regex",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
+ "tower-service",
  "windows-sys 0.61.2",
 ]
 
