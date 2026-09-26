@@ -1004,6 +1004,23 @@ fn next_char_boundary(text: &str, index: usize) -> usize {
     next
 }
 
+/// One-line descriptions for the interface's own commands. Extension
+/// commands arrive as names only (the registry carries no text), so they
+/// list bare.
+fn command_help(command: &str) -> &'static str {
+    match command {
+        "/help" => "list commands and keys",
+        "/exit" => "leave the interface",
+        "/login" => "sign in to a provider",
+        "/logout" => "clear the provider's stored key",
+        "/usage" => "show the provider's usage, when it has one",
+        "/model" => "list or switch the session's model",
+        "/compact" => "summarize the session to free context",
+        "/attach" => "attach an image to the next message",
+        _ => "",
+    }
+}
+
 /// The `/help` text: the commands the interface offers, then the keys.
 fn help_notice(commands: &[String]) -> String {
     let mut sorted: Vec<&String> = commands.iter().collect();
@@ -1013,6 +1030,11 @@ fn help_notice(commands: &[String]) -> String {
     for command in sorted {
         out.push_str("  ");
         out.push_str(command);
+        let help = command_help(command);
+        if !help.is_empty() {
+            out.push_str(" - ");
+            out.push_str(help);
+        }
         out.push('\n');
     }
     out.push_str("Enter sends, Shift+Enter adds a line, Tab completes, Ctrl+C cancels");

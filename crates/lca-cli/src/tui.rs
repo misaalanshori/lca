@@ -721,10 +721,22 @@ pub(crate) fn session_stats(store: &SessionStore, session: &Session) -> String {
         }
     }
     let waste = lca_session::compute_cache_waste(&read.records, 1024);
+    // OpenAI-shaped endpoints report no pricing, so cost is 0; printing
+    // `$0.0000` would read as "this was free" rather than "unknown".
+    let cost_part = if cost > 0.0 {
+        format!(", cost ${cost:.4}")
+    } else {
+        String::new()
+    };
+    let waste_cost = if waste.missed_cost > 0.0 {
+        format!(" / ${:.4}", waste.missed_cost)
+    } else {
+        String::new()
+    };
     format!(
         "{messages} messages, in {input} tokens (cache read {cache_read}, cache write {cache_write}), \
-         out {output} tokens, cost ${cost:.4}; cache waste {} tokens / ${1:.4} across {2} misses",
-        waste.missed_tokens, waste.missed_cost, waste.miss_count
+         out {output} tokens{cost_part}; cache waste {} tokens{waste_cost} across {} misses",
+        waste.missed_tokens, waste.miss_count
     )
 }
 
@@ -846,6 +858,22 @@ mod tests {
                 "/{slot} is a built-in the interface claims"
             );
         }
+    }
+
+    // Verifies: FR-UI-2 (the stats line does not print `$0.0000` when the
+    // provider reports no pricing - that reads as "free", not "unknown").
+    #[test]
+    fn stats_omit_the_cost_when_no_price_is_reported() {
+        let root = std::env::temp_dir().join(format!("lca-stats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let store = SessionStore::new(root.join("data"));
+        let session = store.create_session(&project, "test").expect("session");
+        let text = session_stats(&store, &session);
+        assert!(!text.contains('$'), "no dead cost at zero:\n{text}");
+        assert!(text.contains("0 messages"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // The `/login` secret is stored through the same writer extensions use,

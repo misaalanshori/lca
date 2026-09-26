@@ -718,6 +718,20 @@ fn help_lists_the_commands_without_an_extension() {
     assert!(notice.contains("Enter sends"), "shows the keys: {notice}");
 }
 
+// The `/help` list says what each command does, not just its name.
+#[test]
+fn help_describes_the_builtin_commands() {
+    let mut state = UiState::new(options());
+    state.buffer = "/help".to_string();
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    let notice = state.notice.as_deref().unwrap_or_default();
+    assert!(notice.contains("/model"), "{notice}");
+    assert!(
+        notice.contains("switch the session's model"),
+        "description shown:\n{notice}"
+    );
+}
+
 // With no model active the interface says so rather than letting the turn
 // fail deep inside the provider with a transport error.
 #[test]
