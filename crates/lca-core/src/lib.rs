@@ -333,6 +333,13 @@ pub fn assemble(records: &[Record], system_prompt: &str) -> Assembled {
     assemble_with(records, system_prompt, &|_| None)
 }
 
+/// Self-describing framing around a compaction summary, matching pi
+/// (`packages/coding-agent/src/core/messages.ts`). The wire role stays
+/// `user` (no ABI change); the framing is what tells the model this is its
+/// own compacted memory rather than a note from the user.
+const COMPACTION_SUMMARY_PREFIX: &str = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
+const COMPACTION_SUMMARY_SUFFIX: &str = "\n</summary>";
+
 /// Build the outbound message list from a session's resolved (display-view)
 /// records: compaction applied, forks followed, transforms not yet run.
 ///
@@ -442,8 +449,12 @@ pub fn assemble_with(
                 // The summary stands in for the range it replaced
                 // (session-log-format: the reader substitutes it), and
                 // everything through it becomes the stable prefix
-                // (FR-CACHE-5, ADR-0017).
-                messages.push(ChatMessage::text(MessageRole::User, summary.clone()));
+                // (FR-CACHE-5, ADR-0017). The framing makes the model read
+                // it as its own memory, not as a user note.
+                messages.push(ChatMessage::text(
+                    MessageRole::User,
+                    format!("{COMPACTION_SUMMARY_PREFIX}{summary}{COMPACTION_SUMMARY_SUFFIX}"),
+                ));
                 stable_prefix = messages.len();
             }
         }
@@ -1354,6 +1365,13 @@ impl<'a> Agent<'a> {
                         attempt += 1;
                         continue;
                     }
+                    // FR-CORE-7: the user sees that retries were tried and
+                    // gave up, not just the raw transport error.
+                    let message = if retryable && attempt > 0 {
+                        format!("{message} (retries exhausted after {attempt})")
+                    } else {
+                        message
+                    };
                     return Err(CallFail::Provider {
                         message,
                         class,

@@ -152,8 +152,9 @@ pub mod exit {
 /// so there is no model, and the install command is the way out.
 pub(crate) fn no_model_message(provider: &str) -> String {
     format!(
-        "No model is available (provider `{provider}` is not enabled). \
-         Install one with `lca ext install <reference>`."
+        "No model is available: no enabled provider answers `{provider}`. \
+         Check the name (`lca ext list`), or install a provider with \
+         `lca ext install <reference>`."
     )
 }
 

@@ -1621,7 +1621,7 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     let mut cancel_flag: Option<lca_tools::CancelFlag> = None;
     let mut next_input: Option<String> = None;
 
-    let result = loop {
+    let result = 'main: loop {
         if let Some(handle) = &active_turn
             && handle.is_finished()
         {
@@ -1692,32 +1692,44 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             break Err(anyhow::anyhow!("render failed: {err}"));
         }
 
+        // Handle every event already queued before drawing once: a paste
+        // delivered as raw key events (a terminal without bracketed paste)
+        // would otherwise redraw once per character.
         match event_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-            Ok(Event::Key(key)) if key.kind == crossterm::event::KeyEventKind::Press => {
-                match handle_key(&mut state, key) {
-                    Action::Continue => {}
-                    Action::Submit => {
-                        let submitted = state.history.last().cloned().unwrap_or_default();
-                        next_input = Some(submitted);
-                    }
-                    Action::CancelTurn => {
-                        if let Some(cancel) = &cancel_flag {
-                            cancel.cancel();
+            Ok(first) => {
+                let mut pending = Some(first);
+                while let Some(event) = pending.take().or_else(|| event_rx.try_recv().ok()) {
+                    let action = match event {
+                        Event::Key(key) if key.kind == crossterm::event::KeyEventKind::Press => {
+                            handle_key(&mut state, key)
                         }
+                        Event::Resize(width, height) => {
+                            state.resize(width, height);
+                            Action::Continue
+                        }
+                        // A bracketed paste arrives as one event, not one
+                        // key per character.
+                        Event::Paste(text) => {
+                            state.insert_at_cursor(&text);
+                            Action::Continue
+                        }
+                        _ => Action::Continue,
+                    };
+                    match action {
+                        Action::Continue => {}
+                        Action::Submit => {
+                            let submitted = state.history.last().cloned().unwrap_or_default();
+                            next_input = Some(submitted);
+                        }
+                        Action::CancelTurn => {
+                            if let Some(cancel) = &cancel_flag {
+                                cancel.cancel();
+                            }
+                        }
+                        Action::Exit => break 'main Ok(()),
                     }
-                    Action::Exit => break Ok(()),
                 }
             }
-            Ok(Event::Resize(width, height)) => {
-                state.resize(width, height);
-            }
-            // A bracketed paste arrives as one event, not one key per
-            // character: without this a large paste queued thousands of
-            // key events and a redraw each, freezing the interface.
-            Ok(Event::Paste(text)) => {
-                state.insert_at_cursor(&text);
-            }
-            Ok(_) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
         }

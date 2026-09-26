@@ -51,3 +51,12 @@ mod display_view_keeps_truncation;
 // released 0.1.x defect: a non-SSE body read as a silent empty success.
 #[path = "15-malformed-sse-not-silent.rs"]
 mod malformed_sse_not_silent;
+// released 0.2.0 defect: a forked session listed as 0 messages.
+#[path = "16-fork-listing-resolved-count.rs"]
+mod fork_listing_resolved_count;
+// released 0.2.0 defect: a compaction summary read as an untrusted user note.
+#[path = "17-compaction-summary-framed.rs"]
+mod compaction_summary_framed;
+// latent release-pipeline defect: a bare release build produced no `lca`.
+#[path = "18-release-builds-the-cli.rs"]
+mod release_builds_the_cli;

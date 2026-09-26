@@ -1064,7 +1064,7 @@ async fn crossing_the_threshold_compacts_once_and_the_summary_survives_a_restart
         .messages
         .iter()
         .position(|message| message.content.iter().any(
-            |block| matches!(block, lca_protocol::ContentBlock::Text { text } if text == "compacted 2 records"),
+            |block| matches!(block, lca_protocol::ContentBlock::Text { text } if text.contains("compacted 2 records")),
         ))
         .expect("the summary is a message the model sees");
     assert_eq!(

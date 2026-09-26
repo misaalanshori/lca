@@ -388,6 +388,40 @@ fn fork_creates_a_child_pointing_at_the_parent_record() {
     );
 }
 
+// Verifies: FR-SESS-3 (a fork's listing counts its resolved, inherited
+// history, not just its own two framing records)
+#[test]
+fn a_forked_sessions_listing_counts_the_resolved_history() {
+    let store = store("fork-listing");
+    let project = scratch("fork-listing-project");
+    let parent = store.create_session(&project, "parent").expect("create");
+    store
+        .append(&parent, user_record("r1", "one"))
+        .expect("append");
+    store
+        .append(&parent, user_record("r2", "two"))
+        .expect("append");
+    let child = store.fork(&parent, "r1").expect("fork");
+
+    let listed = store.list_sessions(&project).expect("list");
+    let row = |id: &str| {
+        listed
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("session {id} listed"))
+    };
+    assert_eq!(
+        row(parent.id()).message_count,
+        2,
+        "the parent counts its two messages"
+    );
+    assert_eq!(
+        row(child.id()).message_count,
+        1,
+        "the fork counts the inherited history (r1), not its own empty tail"
+    );
+}
+
 // The resolved view hides records inside a compacted range and shows the
 // summary instead; nothing outside the range disappears.
 #[test]

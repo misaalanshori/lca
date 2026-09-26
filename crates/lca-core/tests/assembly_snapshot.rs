@@ -192,7 +192,7 @@ fn after_compaction_a_new_turn_stays_outside_the_stable_prefix() {
     let summary = assembled
         .messages
         .iter()
-        .position(|message| text(message) == "the summary")
+        .position(|message| text(message).contains("the summary"))
         .expect("the summary is on the wire");
     let new_turn = assembled
         .messages
@@ -207,5 +207,73 @@ fn after_compaction_a_new_turn_stays_outside_the_stable_prefix() {
     assert!(
         new_turn >= assembled.stable_prefix,
         "the new turn is in the dynamic suffix, not the cached prefix"
+    );
+}
+
+// Verifies: FR-CTX-1 (a compaction summary is framed as the agent's own
+// compacted memory, not as a bare user message - cycle-3 kink 2). The wire
+// role stays `user`; the framing is what stops the model treating its own
+// memory as hearsay.
+#[test]
+fn a_compaction_summary_is_framed_as_the_agents_own_memory() {
+    fn text(message: &lca_protocol::ChatMessage) -> String {
+        message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                lca_protocol::ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+    let records = vec![
+        Record::User {
+            v: 1,
+            ts: 1,
+            id: "u1".into(),
+            content: "old".into(),
+            attachments: vec![],
+        },
+        Record::Compaction {
+            v: 1,
+            ts: 2,
+            id: "c1".into(),
+            replaced_from: "u1".into(),
+            replaced_to: "u1".into(),
+            summary: "the codeword is BANANA".into(),
+            strategy: "compaction-default".into(),
+            usage: None,
+        },
+    ];
+    let assembled = assemble(&records, "sys");
+    let summary = assembled
+        .messages
+        .iter()
+        .find(|message| text(message).contains("BANANA"))
+        .expect("the summary is on the wire");
+    let body = text(summary);
+    assert!(
+        body.starts_with(
+            "The conversation history before this point was compacted into the following summary:"
+        ),
+        "framed as compacted history, not a user note: {body}"
+    );
+    assert!(
+        body.contains("<summary>") && body.contains("</summary>"),
+        "self-describing tags: {body}"
+    );
+    assert!(body.contains("BANANA"), "the fact survives: {body}");
+    assert_eq!(
+        assembled.messages[0].role,
+        lca_protocol::MessageRole::System,
+        "the system prompt stays first across the boundary"
+    );
+    assert!(
+        assembled
+            .messages
+            .iter()
+            .any(|message| text(message) == "sys"),
+        "and intact"
     );
 }

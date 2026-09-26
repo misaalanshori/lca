@@ -241,6 +241,13 @@ jobs:
               cp "target/$target/release/lca" "dist/lca-$target"
             fi
           done
+          # Cycle-3 §8: assert the binary exists before packaging. A bare
+          # `cargo build --release` once built the root regression package
+          # and produced no `lca`, and the failure surfaced only at `cp`.
+          for artifact in dist/lca-*; do
+            test -s "$artifact" || { echo "missing or empty binary: $artifact"; exit 1; }
+          done
+          ls -l dist
 
       - name: Upload this leg's artifacts
         uses: actions/upload-artifact@v4

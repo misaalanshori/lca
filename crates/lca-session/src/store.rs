@@ -474,7 +474,13 @@ impl SessionStore {
                     continue;
                 };
                 let outcome = self.read(&handle).unwrap_or_default();
-                let message_count = outcome
+                // A fork's own log holds only its framing records; its
+                // history lives in the ancestor chain, so count the resolved
+                // view (FR-SESS-3), the same one `lca resume` shows.
+                let resolved = self
+                    .read_with(&handle, ViewMode::Display)
+                    .unwrap_or_default();
+                let message_count = resolved
                     .records
                     .iter()
                     .filter(|r| {
