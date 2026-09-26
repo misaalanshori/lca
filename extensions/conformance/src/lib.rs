@@ -31,6 +31,10 @@ pub trait Cap {
     fn fs_stat(&self, scope: &str, path: &str) -> Result<(bool, u64), CapabilityError>;
     /// List a directory inside a granted scope.
     fn fs_list(&self, scope: &str, path: &str) -> Result<Vec<String>, CapabilityError>;
+    /// List the extension's own resource entries under a prefix.
+    fn resource_list(&self, prefix: &str) -> Result<Vec<(String, u64)>, CapabilityError>;
+    /// Read one of the extension's own resources.
+    fn resource_read(&self, path: &str) -> Result<Vec<u8>, CapabilityError>;
     /// Spawn a program in a granted scope.
     fn process_spawn(
         &self,
@@ -197,6 +201,37 @@ pub fn run_shared(cap: &dyn Cap, mode: &str, args: &serde_json::Value) -> ModeOu
                 Ok(names) => ModeOutcome {
                     ok: true,
                     text: format!("list: {}", names.join(",")),
+                },
+                Err(err) => fail(err),
+            }
+        }
+        "resource-list" => {
+            let prefix = args.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
+            match cap.resource_list(prefix) {
+                Ok(entries) => ModeOutcome {
+                    ok: true,
+                    text: format!(
+                        "resources: {}",
+                        entries
+                            .iter()
+                            .map(|(path, size)| format!("{path}:{size}"))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                },
+                Err(err) => fail(err),
+            }
+        }
+        "resource-read" => {
+            let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
+                return fail(CapabilityError::Invalid(
+                    "resource-read needs path".to_string(),
+                ));
+            };
+            match cap.resource_read(path) {
+                Ok(bytes) => ModeOutcome {
+                    ok: true,
+                    text: format!("resource: {}", String::from_utf8_lossy(&bytes)),
                 },
                 Err(err) => fail(err),
             }
@@ -735,6 +770,12 @@ mod native {
         fn fs_list(&self, scope: &str, path: &str) -> Result<Vec<String>, CapabilityError> {
             self.0.fs_list(scope, path)
         }
+        fn resource_list(&self, prefix: &str) -> Result<Vec<(String, u64)>, CapabilityError> {
+            self.0.resource_list(prefix)
+        }
+        fn resource_read(&self, path: &str) -> Result<Vec<u8>, CapabilityError> {
+            self.0.resource_read(path)
+        }
         fn process_spawn(
             &self,
             program: &str,
@@ -1100,11 +1141,12 @@ mod tool_world {
             "lca:host/fs@0.2.0": generate,
             "lca:host/process@0.2.0": generate,
             "lca:host/pty@0.2.0": generate,
+            "lca:host/resources@0.2.0": generate,
         },
     });
 
     use lca::ext::types::ToolCall;
-    use lca::host::{fs, process, pty};
+    use lca::host::{fs, process, pty, resources};
 
     use crate::{Cap, ModeOutcome, mode_and_args, run_shared, schema_json};
     use exports::lca::ext::execute::Guest as ExecuteTrait;
@@ -1145,6 +1187,15 @@ mod tool_world {
         }
     }
 
+    fn map_resources(err: resources::Error) -> crate::CapabilityError {
+        use crate::CapabilityError as E;
+        match err {
+            resources::Error::Permission(d) => E::Permission(d),
+            resources::Error::NotFound(d) => E::NotFound(d),
+            resources::Error::Invalid(d) => E::Invalid(d),
+        }
+    }
+
     /// The guest's capability view: host imports behind every call.
     struct GuestCap;
 
@@ -1166,6 +1217,22 @@ mod tool_world {
         }
         fn fs_list(&self, scope: &str, path: &str) -> Result<Vec<String>, crate::CapabilityError> {
             fs::list_entries(scope, path).map_err(map_fs)
+        }
+        fn resource_list(
+            &self,
+            prefix: &str,
+        ) -> Result<Vec<(String, u64)>, crate::CapabilityError> {
+            resources::list_resources(prefix)
+                .map(|entries| {
+                    entries
+                        .into_iter()
+                        .map(|entry| (entry.path, entry.size))
+                        .collect()
+                })
+                .map_err(map_resources)
+        }
+        fn resource_read(&self, path: &str) -> Result<Vec<u8>, crate::CapabilityError> {
+            resources::read(path).map_err(map_resources)
         }
         fn process_spawn(
             &self,
@@ -1410,6 +1477,7 @@ mod provider_world {
             "lca:host/net@0.2.0": generate,
             "lca:host/oauth@0.2.0": generate,
             "lca:host/credentials@0.2.0": generate,
+            "lca:host/resources@0.2.0": generate,
         },
     });
 
@@ -1620,6 +1688,7 @@ mod compaction_world {
             "lca:host/log@0.2.0": generate,
             "lca:host/completion@0.2.0": generate,
             "lca:host/types@0.2.0": generate,
+            "lca:host/resources@0.2.0": generate,
         },
     });
 
@@ -1676,6 +1745,7 @@ mod transform_world {
         with: {
             "lca:host/log@0.2.0": generate,
             "lca:host/fs@0.2.0": generate,
+            "lca:host/resources@0.2.0": generate,
         },
     });
 
@@ -1787,6 +1857,7 @@ mod ui_world {
         with: {
             "lca:host/log@0.2.0": generate,
             "lca:host/ui@0.2.0": generate,
+            "lca:host/resources@0.2.0": generate,
         },
     });
 

@@ -104,7 +104,30 @@ pub struct Resolved {
     pub digest: String,
     /// The reference the digest was resolved from.
     pub source: String,
+    /// The package's `resources/` bag (ADR-0030): `(relative path, bytes)`.
+    /// Empty when the package ships none.
+    pub resources: Vec<(String, Vec<u8>)>,
 }
+
+/// The parts of an extension package: the manifest, the component, and
+/// the optional `resources/` bag (ADR-0030, ADR-0010's allowlist).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Archive {
+    /// The manifest text (`extension.toml`).
+    pub manifest: String,
+    /// The component bytes.
+    pub component: Vec<u8>,
+    /// The `resources/` bag: `(relative path, bytes)`.
+    pub resources: Vec<(String, Vec<u8>)>,
+}
+
+/// Per-file size cap for one resource. Kept in step with
+/// `lca_tools::RESOURCE_FILE_MAX_BYTES` (the read-side cap); the installer
+/// is the authority for the package budget (ADR-0030).
+pub const RESOURCE_FILE_MAX_BYTES: u64 = 1024 * 1024;
+/// Per-package size cap for the whole `resources/` bag (ADR-0030's
+/// suggested 32 MB). A DoS guard, shown as a manifest-declared budget.
+pub const RESOURCE_PACKAGE_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 impl Resolved {
     /// Content-digest a component (FR-DIST-3's value).
@@ -196,8 +219,11 @@ pub fn consent_lines(manifest: &str) -> Result<Vec<String>, Error> {
     let parsed: toml::Value = manifest
         .parse()
         .map_err(|err| Error::Invalid(format!("manifest does not parse: {err}")))?;
+    // ADR-0030: the package's `resources/` bag, shown as kind counts. A
+    // data-only extension has no capabilities but still shows its bag.
+    let resource_line = resource_consent(&parsed);
     let Some(table) = parsed.get("capabilities").and_then(|c| c.as_table()) else {
-        return Ok(Vec::new());
+        return Ok(resource_line.into_iter().collect());
     };
     let mut lines = Vec::new();
     let reason = |table: &toml::Value, key: &str| {
@@ -277,7 +303,27 @@ pub fn consent_lines(manifest: &str) -> Result<Vec<String>, Error> {
             }
         }
     }
+    if let Some(line) = resource_line {
+        lines.push(line);
+    }
     Ok(lines)
+}
+
+/// The consent line for a manifest's declared resource kinds, when any.
+fn resource_consent(parsed: &toml::Value) -> Option<String> {
+    let kinds: Vec<String> = parsed
+        .get("resources")
+        .and_then(|v| v.as_array())?
+        .iter()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect();
+    if kinds.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Ship data files ({}). These are read by the extension, not code it runs.",
+        kinds.join(", ")
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +361,11 @@ impl InstallTree {
     /// The tree under a root directory.
     pub fn new(root: impl Into<PathBuf>) -> InstallTree {
         InstallTree { root: root.into() }
+    }
+
+    /// The tree's root directory.
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     /// Where the lockfile lives.
@@ -372,6 +423,28 @@ impl InstallTree {
                 .unwrap_or_default()
                 .to_string(),
         };
+        // ADR-0030: the package's `resources/` bag. Declared-vs-shipped
+        // strictness like `worlds`: every resource's top-level kind must be
+        // in the manifest's `resources`, checked before anything is written
+        // so a refused install leaves no partial tree.
+        let declared: Vec<String> = value
+            .get("resources")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (rel, _) in &resolved.resources {
+            let kind = rel.split('/').next().unwrap_or_default();
+            if !declared.iter().any(|declared| declared == kind) {
+                return Err(Error::Invalid(format!(
+                    "resource `{rel}` has kind `{kind}`, which the manifest does not declare (add it to `resources = [...]`)"
+                )));
+            }
+        }
         let dir = self.root.join(&name);
         std::fs::create_dir_all(&dir)?;
         std::fs::write(self.manifest_path(&name), &manifest)?;
@@ -379,6 +452,17 @@ impl InstallTree {
             self.component_path(&name, &resolved.digest),
             &resolved.component,
         )?;
+        // A reinstall replaces the bag wholesale, so a file the new
+        // version dropped does not linger from the previous one.
+        let resources_dir = dir.join("resources");
+        let _ = std::fs::remove_dir_all(&resources_dir);
+        for (rel, bytes) in &resolved.resources {
+            let target = resources_dir.join(rel);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&target, bytes)?;
+        }
         let mut lock = Lockfile::load(&self.lockfile_path())?;
         lock.extensions.insert(name, entry.clone());
         lock.save(&self.lockfile_path())?;
@@ -442,8 +526,18 @@ impl InstallTree {
 // Archives (ADR-0010's zip: extension.toml + the component, nothing else)
 // ---------------------------------------------------------------------------
 
-/// Pack the two files ADR-0010 names into a zip (authors and tests).
+/// Pack the files ADR-0010 names into a zip (authors and tests).
 pub fn pack_archive(manifest: &str, component: &[u8]) -> Result<Vec<u8>, Error> {
+    pack_archive_with_resources(manifest, component, &[])
+}
+
+/// Pack a manifest, a component, and an optional `resources/` bag
+/// (ADR-0030) into the archive `read_archive` accepts.
+pub fn pack_archive_with_resources(
+    manifest: &str,
+    component: &[u8],
+    resources: &[(String, Vec<u8>)],
+) -> Result<Vec<u8>, Error> {
     let mut cursor = std::io::Cursor::new(Vec::new());
     {
         let mut writer = zip::ZipWriter::new(&mut cursor);
@@ -458,6 +552,17 @@ pub fn pack_archive(manifest: &str, component: &[u8]) -> Result<Vec<u8>, Error> 
             .start_file("component.wasm", stored)
             .map_err(|err| Error::Invalid(err.to_string()))?;
         std::io::Write::write_all(&mut writer, component)?;
+        for (rel, bytes) in resources {
+            if !valid_archive_path(rel) {
+                return Err(Error::Invalid(format!(
+                    "resource path `{rel}` is not a safe relative path"
+                )));
+            }
+            writer
+                .start_file(format!("resources/{rel}"), deflated)
+                .map_err(|err| Error::Invalid(err.to_string()))?;
+            std::io::Write::write_all(&mut writer, bytes)?;
+        }
         writer
             .finish()
             .map_err(|err| Error::Invalid(err.to_string()))?;
@@ -467,7 +572,7 @@ pub fn pack_archive(manifest: &str, component: &[u8]) -> Result<Vec<u8>, Error> 
 
 /// Unpack an archive to the pair everything downstream expects
 /// (ADR-0010: exactly these two files, verified digest downstream).
-pub fn read_archive(bytes: &[u8]) -> Result<(String, Vec<u8>), Error> {
+pub fn read_archive(bytes: &[u8]) -> Result<Archive, Error> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
         .map_err(|err| Error::Invalid(format!("not a zip archive: {err}")))?;
     // Names first (owned), so the per-file borrow of the archive ends
@@ -482,6 +587,8 @@ pub fn read_archive(bytes: &[u8]) -> Result<(String, Vec<u8>), Error> {
         .collect();
     let mut manifest = None;
     let mut component = None;
+    let mut resources: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut bag_bytes = 0u64;
     for name in names {
         let mut file = archive
             .by_name(&name)
@@ -495,7 +602,7 @@ pub fn read_archive(bytes: &[u8]) -> Result<(String, Vec<u8>), Error> {
             let mut text = String::new();
             file.read_to_string(&mut text)?;
             manifest = Some(text);
-        } else if name.ends_with(".wasm") {
+        } else if name.ends_with(".wasm") && !name.contains('/') {
             if component.is_some() {
                 return Err(Error::Invalid(
                     "the archive carries more than one component".to_string(),
@@ -504,19 +611,68 @@ pub fn read_archive(bytes: &[u8]) -> Result<(String, Vec<u8>), Error> {
             let mut buffer = Vec::new();
             file.read_to_end(&mut buffer)?;
             component = Some(buffer);
+        } else if let Some(rel) = name.strip_prefix("resources/") {
+            // ADR-0030: the bag is the extension's own data, but a
+            // hostile archive is a hostile archive. Reject traversal,
+            // absolute paths, backslashes, and duplicates here, before
+            // anything is written.
+            if !valid_archive_path(rel) {
+                return Err(Error::Invalid(format!(
+                    "resource path `{name}` leaves the package"
+                )));
+            }
+            if file.is_dir() {
+                continue;
+            }
+            let mut buffer = Vec::new();
+            file.read_to_end(&mut buffer)?;
+            if buffer.len() as u64 > RESOURCE_FILE_MAX_BYTES {
+                return Err(Error::Invalid(format!(
+                    "resource `{name}` is {} bytes, over the {} byte per-file cap",
+                    buffer.len(),
+                    RESOURCE_FILE_MAX_BYTES
+                )));
+            }
+            bag_bytes += buffer.len() as u64;
+            if bag_bytes > RESOURCE_PACKAGE_MAX_BYTES {
+                return Err(Error::Invalid(format!(
+                    "the resource bag exceeds the {RESOURCE_PACKAGE_MAX_BYTES} byte package cap"
+                )));
+            }
+            if resources.iter().any(|(path, _)| path == rel) {
+                return Err(Error::Invalid(format!("duplicate resource `{name}`")));
+            }
+            resources.push((rel.to_string(), buffer));
         } else {
-            // ADR-0010: extension.toml and the component, nothing else.
+            // ADR-0010 + ADR-0030: extension.toml, the component, and
+            // `resources/**`, nothing else.
             return Err(Error::Invalid(format!(
-                "unexpected archive entry `{name}` (ADR-0010 allows only extension.toml and the component)"
+                "unexpected archive entry `{name}` (the archive allows extension.toml, the component, and resources/**)"
             )));
         }
     }
     match (manifest, component) {
-        (Some(manifest), Some(component)) => Ok((manifest, component)),
+        (Some(manifest), Some(component)) => Ok(Archive {
+            manifest,
+            component,
+            resources,
+        }),
         _ => Err(Error::Invalid(
             "the archive must carry extension.toml and the component".to_string(),
         )),
     }
+}
+
+/// Whether an archive entry's path is a safe relative resource path:
+/// no absolute root, no `..`, no backslash, no NUL, not empty.
+fn valid_archive_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains('\0')
+        && !path.contains('\\')
+        && !path.starts_with('/')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 // ---------------------------------------------------------------------------
@@ -877,12 +1033,66 @@ pub fn resolve_local(component: &Path, manifest_path: Option<&Path>) -> Result<R
     };
     let manifest = std::fs::read_to_string(&manifest_path)?;
     let component_bytes = std::fs::read(component)?;
+    let resources = match component.parent() {
+        Some(dir) => read_resource_dir(&dir.join("resources"))?,
+        None => Vec::new(),
+    };
     Ok(Resolved {
         digest: Resolved::digest_of(&component_bytes),
         source: component.display().to_string(),
         manifest,
         component: component_bytes,
+        resources,
     })
+}
+
+/// Read a package's `resources/` directory into `(relative path, bytes)`.
+/// A missing directory is an empty bag, not an error.
+fn read_resource_dir(dir: &Path) -> Result<Vec<(String, Vec<u8>)>, Error> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    let mut bag_bytes = 0u64;
+    while let Some(current) = stack.pop() {
+        for entry in std::fs::read_dir(&current)? {
+            let entry = entry?;
+            let path = entry.path();
+            let meta = entry.metadata()?;
+            if meta.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !meta.is_file() {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(dir)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            if !valid_archive_path(&rel) {
+                return Err(Error::Invalid(format!(
+                    "resource path `{rel}` is not a safe relative path"
+                )));
+            }
+            if meta.len() > RESOURCE_FILE_MAX_BYTES {
+                return Err(Error::Invalid(format!(
+                    "resource `{rel}` is {} bytes, over the {RESOURCE_FILE_MAX_BYTES} byte per-file cap",
+                    meta.len()
+                )));
+            }
+            bag_bytes += meta.len();
+            if bag_bytes > RESOURCE_PACKAGE_MAX_BYTES {
+                return Err(Error::Invalid(format!(
+                    "the resource bag exceeds the {RESOURCE_PACKAGE_MAX_BYTES} byte package cap"
+                )));
+            }
+            files.push((rel, std::fs::read(&path)?));
+        }
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(files)
 }
 
 /// FR-DIST-9: fetch the zip, unpack the two files; the digest is
@@ -892,12 +1102,13 @@ pub fn resolve_local(component: &Path, manifest_path: Option<&Path>) -> Result<R
 pub async fn resolve_archive(url: &str) -> Result<Resolved, Error> {
     let client = http_client()?;
     let (bytes, _) = fetch_bytes(&client, url, "application/zip, application/octet-stream").await?;
-    let (manifest, component) = read_archive(&bytes)?;
+    let archive = read_archive(&bytes)?;
     Ok(Resolved {
-        digest: Resolved::digest_of(&component),
+        digest: Resolved::digest_of(&archive.component),
         source: url.to_string(),
-        manifest,
-        component,
+        manifest: archive.manifest,
+        component: archive.component,
+        resources: archive.resources,
     })
 }
 
@@ -1041,5 +1252,11 @@ pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
         source: reference.to_string(),
         manifest: extension_toml,
         component,
+        // ponytail: OCI resources need a third layer and a publish-script
+        // change; the first-party resource consumer (openai-compatible)
+        // embeds its bag natively (ADR-0032), and the HTTPS archive and
+        // local-path installs carry resources. Add the layer when a
+        // third-party OCI package needs one.
+        resources: Vec::new(),
     })
 }

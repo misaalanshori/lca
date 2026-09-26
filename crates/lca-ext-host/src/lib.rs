@@ -36,7 +36,7 @@ use lca_protocol::{
     CapabilityError, CommandEffect, CompletionRequest, DispatchError, EventSink, HookAction,
     IdentityOutcome, ModelInfo, PostToolObservation, ToolCall, ToolResultStatus, ToolSpec, Usage,
 };
-use lca_tools::{Capabilities, CapabilityGrants, Denial};
+use lca_tools::{Capabilities, CapabilityGrants, Denial, ResourceSource};
 use wasmtime::component::{HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
@@ -82,8 +82,12 @@ pub struct Manifest {
     pub version: String,
     /// The ABI line, `major.minor`.
     pub abi: String,
-    /// Worlds the component implements.
+    /// Worlds the component implements. Empty for a data-only extension
+    /// (`worlds = []`, resources only; ADR-0030).
     pub worlds: Vec<String>,
+    /// Declared `resources/` kinds (ADR-0030): the installer refuses an
+    /// undeclared kind; the host serves the bag by convention.
+    pub resources: Vec<String>,
     /// Declared `fs` scopes with their modes (FR-PERM-1).
     pub fs: Vec<ScopeGrant>,
     /// The `process` capability was declared (FR-PERM-1).
@@ -161,8 +165,23 @@ impl Manifest {
                     .filter_map(|item| item.as_str().map(str::to_string))
                     .collect::<Vec<_>>()
             })
-            .filter(|worlds| !worlds.is_empty())
-            .ok_or_else(|| LoadError::InvalidManifest("`worlds` must list at least one".into()))?;
+            .unwrap_or_default();
+        let resources = value
+            .get("resources")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if worlds.is_empty() && resources.is_empty() {
+            return Err(LoadError::InvalidManifest(
+                "`worlds` must list at least one world, or `resources` must list at least one kind (a data-only extension)"
+                    .into(),
+            ));
+        }
 
         let mut fs = Vec::new();
         let mut process = false;
@@ -352,6 +371,7 @@ impl Manifest {
             version,
             abi,
             worlds,
+            resources,
             fs,
             process,
             pty,
@@ -508,6 +528,48 @@ impl lca_ext_abi::host::tool::lca::host::log::Host for HostState {
     }
     fn error(&mut self, message: String) {
         self.record_log(message);
+    }
+}
+
+impl lca_ext_abi::host::tool::lca::host::resources::Host for HostState {
+    fn list_resources(
+        &mut self,
+        prefix: String,
+    ) -> Result<
+        Vec<lca_ext_abi::host::tool::lca::host::resources::ResourceEntry>,
+        lca_ext_abi::host::tool::lca::host::resources::Error,
+    > {
+        self.cap
+            .resource_list(&prefix)
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|(path, size)| {
+                        lca_ext_abi::host::tool::lca::host::resources::ResourceEntry { path, size }
+                    })
+                    .collect()
+            })
+            .map_err(resources_error)
+    }
+
+    fn read(
+        &mut self,
+        path: String,
+    ) -> Result<Vec<u8>, lca_ext_abi::host::tool::lca::host::resources::Error> {
+        self.cap.resource_read(&path).map_err(resources_error)
+    }
+}
+
+fn resources_error(err: CapabilityError) -> lca_ext_abi::host::tool::lca::host::resources::Error {
+    use lca_ext_abi::host::tool::lca::host::resources::Error as E;
+    match err {
+        CapabilityError::Permission(detail) | CapabilityError::NotGranted(detail) => {
+            E::Permission(detail)
+        }
+        CapabilityError::NotFound(detail) => E::NotFound(detail),
+        CapabilityError::Io(detail)
+        | CapabilityError::Invalid(detail)
+        | CapabilityError::Timeout(detail) => E::Invalid(detail),
     }
 }
 
@@ -1017,7 +1079,7 @@ impl ExtHost {
             });
         }
 
-        let cap = Arc::new(Capabilities::new(
+        let mut cap = Capabilities::new(
             manifest.name.clone(),
             CapabilityGrants {
                 fs: manifest.fs.clone(),
@@ -1037,7 +1099,23 @@ impl ExtHost {
             self.env.grant_store.clone(),
             self.env.project.clone(),
             self.env.proposals.clone(),
-        ));
+        );
+        // ADR-0030/0032: the extension's own `resources/` bag, served from
+        // the installed package directory. `None` when the package ships
+        // none, so an extension without a bag lists empty rather than
+        // erroring on a missing root. The seam is the same one a compiled-in
+        // extension's embedded table uses.
+        let resource_dir = self
+            .env
+            .roots
+            .state_dir
+            .join("extensions")
+            .join(&manifest.name)
+            .join("resources");
+        if resource_dir.is_dir() {
+            cap.set_resources(ResourceSource::Dir(resource_dir));
+        }
+        let cap = Arc::new(cap);
 
         // Resource limits come from the manifest, clamped to the
         // host's maxima (flows.md); a manifest without `limits` gets

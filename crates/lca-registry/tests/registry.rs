@@ -85,6 +85,7 @@ fn install_refuses_a_manifest_name_that_escapes_the_tree() {
         source: "https://example.invalid/evil.zip".to_string(),
         manifest: MANIFEST.replace("word-count", "../../escape"),
         component,
+        resources: Vec::new(),
     };
     let err = tree
         .install(resolved)
@@ -113,6 +114,7 @@ fn install_records_by_digest_and_roundtrips() {
         component: component(),
         digest: digest.clone(),
         source: "ghcr.io/example/word-count:abi-0.1".to_string(),
+        resources: Vec::new(),
     };
     let entry = tree.install(resolved).expect("install");
     assert_eq!(entry.digest, digest);
@@ -145,9 +147,9 @@ fn install_records_by_digest_and_roundtrips() {
 #[test]
 fn the_archive_roundtrips_the_two_files() {
     let packed = lca_registry::pack_archive(MANIFEST, &component()).expect("pack");
-    let (manifest, component_bytes) = lca_registry::read_archive(&packed).expect("read");
-    assert_eq!(manifest, MANIFEST);
-    assert_eq!(component_bytes, component());
+    let archive = lca_registry::read_archive(&packed).expect("read");
+    assert_eq!(archive.manifest, MANIFEST);
+    assert_eq!(archive.component, component());
 
     let names: Vec<String> = {
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&packed)).expect("open");
@@ -350,6 +352,7 @@ async fn an_interrupted_download_leaves_the_installed_version_working() {
         source: "https://example.invalid/word-count.zip".to_string(),
         manifest: MANIFEST.to_string(),
         component: component(),
+        resources: Vec::new(),
     })
     .expect("install v1");
 
@@ -591,4 +594,101 @@ workspace = "read"
         files_line(&read_write),
         "Files: workspace (read and write). It can read and write those files."
     );
+}
+
+const MANIFEST_WITH_RESOURCES: &str = r#"name = "word-count"
+version = "1.0.0"
+abi = "0.2"
+worlds = ["tool"]
+description = "Counts words."
+resources = ["presets", "skills"]
+
+[capabilities.process]
+reason = "Runs wc for you."
+"#;
+
+// Verifies: FR-DIST-1 / ADR-0030 (the archive carries `resources/**`).
+#[test]
+fn the_archive_carries_resources_and_roundtrips_them() {
+    let resources = vec![
+        ("presets/p.toml".to_string(), b"id = \"x\"".to_vec()),
+        ("skills/s.md".to_string(), b"hi".to_vec()),
+    ];
+    let packed = lca_registry::pack_archive_with_resources(
+        MANIFEST_WITH_RESOURCES,
+        &component(),
+        &resources,
+    )
+    .expect("pack");
+    let archive = lca_registry::read_archive(&packed).expect("read");
+    assert_eq!(archive.resources, resources);
+}
+
+// Verifies: ADR-0030 (an undeclared kind is refused, and the install
+// writes the declared bag where the host serves it).
+#[test]
+fn install_writes_declared_resources_and_refuses_an_undeclared_kind() {
+    let install_tree = tree("resources-install");
+    let resources = vec![("presets/p.toml".to_string(), b"id = \"x\"".to_vec())];
+    install_tree
+        .install(lca_registry::Resolved {
+            digest: lca_registry::Resolved::digest_of(&component()),
+            source: "https://example.invalid/word-count.zip".to_string(),
+            manifest: MANIFEST_WITH_RESOURCES.to_string(),
+            component: component(),
+            resources: resources.clone(),
+        })
+        .expect("install");
+    assert_eq!(
+        std::fs::read(
+            install_tree
+                .root()
+                .join("word-count/resources/presets/p.toml")
+        )
+        .expect("read"),
+        b"id = \"x\""
+    );
+
+    let tree2 = tree("resources-undeclared");
+    let err = tree2
+        .install(lca_registry::Resolved {
+            digest: lca_registry::Resolved::digest_of(&component()),
+            source: "https://example.invalid/word-count.zip".to_string(),
+            manifest: MANIFEST_WITH_RESOURCES.to_string(),
+            component: component(),
+            resources: vec![("wads/doom.wad".to_string(), b"x".to_vec())],
+        })
+        .expect_err("undeclared kind refused");
+    assert!(err.to_string().contains("does not declare"), "{err}");
+    assert!(
+        !tree2.root().join("word-count").exists(),
+        "a refused install writes nothing"
+    );
+}
+
+// Verifies: ADR-0030 (a resource path cannot escape the bag, at pack
+// time or read time).
+#[test]
+fn the_archive_refuses_a_traversal_resource_path() {
+    let packed = lca_registry::pack_archive_with_resources(
+        MANIFEST_WITH_RESOURCES,
+        &component(),
+        &[("../escape".to_string(), b"x".to_vec())],
+    );
+    assert!(packed.is_err(), "the packer refuses a traversal path");
+
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        let options = zip::write::SimpleFileOptions::default();
+        writer.start_file("extension.toml", options).unwrap();
+        std::io::Write::write_all(&mut writer, MANIFEST_WITH_RESOURCES.as_bytes()).unwrap();
+        writer.start_file("component.wasm", options).unwrap();
+        std::io::Write::write_all(&mut writer, &component()).unwrap();
+        writer.start_file("resources/../escape", options).unwrap();
+        std::io::Write::write_all(&mut writer, b"x").unwrap();
+        writer.finish().unwrap();
+    }
+    let err = lca_registry::read_archive(&cursor.into_inner()).expect_err("traversal refused");
+    assert!(err.to_string().contains("leaves the package"), "{err}");
 }

@@ -6,6 +6,7 @@ package lca:ext@0.2.0;
 /// touches storage.
 world compaction {
   import lca:host/log@0.2.0;
+  import lca:host/resources@0.2.0;
   /// The default strategy summarizes with the model it asks for through
   /// the `completion` capability; a mechanical strategy needs no such
   /// grant and imports only the log.

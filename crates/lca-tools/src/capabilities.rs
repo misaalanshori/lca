@@ -204,6 +204,29 @@ struct HandleTable {
 /// The default is the platform launcher (`xdg-open`/`open`/`cmd start`).
 pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
+/// Where an extension's read-only `resources/` bag lives (ADR-0030,
+/// ADR-0032). The engine seam is identical for both delivery modes: an
+/// installed package reads its files, a compiled-in extension serves an
+/// `include_bytes!` table, and a caller with no bag uses `None`.
+#[derive(Debug, Clone, Default)]
+pub enum ResourceSource {
+    /// The extension has no resource bag.
+    #[default]
+    None,
+    /// An installed package's `resources/` directory.
+    Dir(PathBuf),
+    /// A compiled-in extension's embedded table: `(relative path, bytes)`.
+    Embedded(&'static [(&'static str, &'static [u8])]),
+}
+
+/// Per-file size cap for one resource (ADR-0030's suggested 1 MB).
+pub const RESOURCE_FILE_MAX_BYTES: u64 = 1024 * 1024;
+/// Per-call read cap: a hostile package cannot pull the host into memory
+/// games. A single read is one file, so it equals the file cap.
+pub const RESOURCE_READ_MAX_BYTES: u64 = RESOURCE_FILE_MAX_BYTES;
+/// Per-package size cap (ADR-0030's suggested 32 MB), enforced at install.
+pub const RESOURCE_PACKAGE_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
 /// The engine: one per loaded extension.
 pub struct Capabilities {
     name: String,
@@ -242,6 +265,8 @@ pub struct Capabilities {
     pins: Arc<Mutex<HashMap<String, Vec<SocketAddr>>>>,
     flows: Arc<Mutex<HashMap<u32, OAuthFlow>>>,
     next_flow: std::sync::atomic::AtomicU32,
+    /// The extension's read-only resource bag (ADR-0030, ADR-0032).
+    resources: ResourceSource,
 }
 
 impl Capabilities {
@@ -301,6 +326,7 @@ impl Capabilities {
             pins,
             flows: Arc::new(Mutex::new(HashMap::new())),
             next_flow: std::sync::atomic::AtomicU32::new(1),
+            resources: ResourceSource::None,
         }
     }
 
@@ -1684,6 +1710,158 @@ connection: close
         }
         self.write_credentials(&path, &data)
     }
+
+    // ------------------------------------------------------------------
+    // resources (ADR-0030)
+    // ------------------------------------------------------------------
+
+    /// Set the extension's resource bag source (ADR-0032: the same seam
+    /// serves an installed directory and a compiled-in table).
+    pub fn set_resources(&mut self, source: ResourceSource) {
+        self.resources = source;
+    }
+
+    /// The extension's resource bag source.
+    pub fn resources(&self) -> &ResourceSource {
+        &self.resources
+    }
+
+    /// List resource entries under `prefix`, relative to the extension's
+    /// own resource root. Sorted for determinism (the conformance diff
+    /// compares both delivery modes entry for entry).
+    pub fn resource_list(&self, prefix: &str) -> Result<Vec<(String, u64)>, CapabilityError> {
+        let prefix = resource_relative(prefix)?;
+        match &self.resources {
+            ResourceSource::None => Ok(Vec::new()),
+            ResourceSource::Embedded(table) => {
+                let mut entries: Vec<(String, u64)> = table
+                    .iter()
+                    .filter(|(path, _)| resource_under(path, &prefix))
+                    .map(|(path, bytes)| ((*path).to_string(), bytes.len() as u64))
+                    .collect();
+                entries.sort();
+                Ok(entries)
+            }
+            ResourceSource::Dir(root) => {
+                let base = self.resource_dir(root, &prefix)?;
+                let mut entries = Vec::new();
+                collect_resources(root, &base, &mut entries)?;
+                entries.sort();
+                Ok(entries)
+            }
+        }
+    }
+
+    /// Read one resource's bytes. A path outside the extension's own tree
+    /// is a recorded permission error, never a cross-extension read
+    /// (ADR-0030: identity-derived, never guest input).
+    pub fn resource_read(&self, path: &str) -> Result<Vec<u8>, CapabilityError> {
+        let rel = resource_relative(path).inspect_err(|err| {
+            self.record("resources", path, &err.to_string());
+        })?;
+        match &self.resources {
+            ResourceSource::None => Err(CapabilityError::NotFound(format!("no resource `{rel}`"))),
+            ResourceSource::Embedded(table) => table
+                .iter()
+                .find(|(entry, _)| *entry == rel)
+                .map(|(_, bytes)| bytes.to_vec())
+                .ok_or_else(|| CapabilityError::NotFound(format!("no resource `{rel}`"))),
+            ResourceSource::Dir(root) => {
+                let file = self.resource_dir(root, &rel)?;
+                let meta = std::fs::metadata(&file)
+                    .map_err(|_| CapabilityError::NotFound(format!("no resource `{rel}`")))?;
+                if !meta.is_file() {
+                    return Err(CapabilityError::NotFound(format!("no resource `{rel}`")));
+                }
+                if meta.len() > RESOURCE_READ_MAX_BYTES {
+                    return Err(CapabilityError::Invalid(format!(
+                        "resource `{rel}` is {} bytes, over the {} byte read cap",
+                        meta.len(),
+                        RESOURCE_READ_MAX_BYTES
+                    )));
+                }
+                Ok(std::fs::read(file)?)
+            }
+        }
+    }
+
+    /// Resolve a relative resource path inside the bag root, refusing any
+    /// escape through `..` or a symlink (the fs scope resolver's rule).
+    fn resource_dir(&self, root: &Path, rel: &str) -> Result<PathBuf, CapabilityError> {
+        let candidate = if rel.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(rel)
+        };
+        let canonical_root = std::fs::canonicalize(root)
+            .map_err(|_| CapabilityError::NotFound("no resources".into()))?;
+        let canonical = std::fs::canonicalize(&candidate)
+            .map_err(|_| CapabilityError::NotFound(format!("no resource `{rel}`")))?;
+        if !canonical.starts_with(&canonical_root) {
+            let err = CapabilityError::Permission(format!(
+                "resource `{rel}` leaves the extension's resource tree"
+            ));
+            self.record("resources", rel, &err.to_string());
+            return Err(err);
+        }
+        Ok(canonical)
+    }
+}
+
+/// Validate a resource path: relative, no `..`, no NUL, no absolute.
+fn resource_relative(path: &str) -> Result<String, CapabilityError> {
+    if path.contains('\0') {
+        return Err(CapabilityError::Invalid(
+            "resource path contains NUL".into(),
+        ));
+    }
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        return Err(CapabilityError::Permission(format!(
+            "resource path `{path}` is absolute"
+        )));
+    }
+    let mut parts = Vec::new();
+    for component in candidate.components() {
+        match component {
+            std::path::Component::Normal(part) => parts.push(part.to_string_lossy().into_owned()),
+            std::path::Component::CurDir => {}
+            _ => {
+                return Err(CapabilityError::Permission(format!(
+                    "resource path `{path}` leaves the extension's resource tree"
+                )));
+            }
+        }
+    }
+    Ok(parts.join("/"))
+}
+
+/// Whether a relative `path` is under a relative `prefix`.
+fn resource_under(path: &str, prefix: &str) -> bool {
+    prefix.is_empty() || path == prefix || path.starts_with(&format!("{prefix}/"))
+}
+
+/// Collect a directory tree's files as `(relative path, size)`.
+fn collect_resources(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, u64)>,
+) -> Result<(), CapabilityError> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            collect_resources(root, &path, out)?;
+        } else if meta.is_file() {
+            let rel = path
+                .strip_prefix(root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            out.push((rel, meta.len()));
+        }
+    }
+    Ok(())
 }
 
 /// Resolve a host:port to addresses with the blocking resolver (capability

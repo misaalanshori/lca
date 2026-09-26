@@ -159,3 +159,30 @@ interface credentials {
   set: func(key: string, value: string) -> result<_, error>;
   delete: func(key: string) -> result<_, error>;
 }
+
+/// The `resources` bag (ADR-0030): the extension's own read-only package
+/// data. Always available, like `log` - this is a package-scoped read, not
+/// an `fs` grant, and it works whether or not the extension holds `fs`.
+/// The path resolves inside the calling extension's own `resources/` tree
+/// only: no traversal, no absolute path, no NUL, no cross-extension reach.
+/// Both delivery modes serve it from the same seam (ADR-0032).
+interface resources {
+  variant error {
+    /// The path left the extension's resource tree, or is absolute/NUL.
+    permission(string),
+    not-found(string),
+    /// Malformed input, or the read exceeds the per-call size cap.
+    invalid(string),
+  }
+
+  record resource-entry {
+    path: string,
+    size: u64,
+  }
+
+  /// List entries under `prefix` (empty lists everything), relative to the
+  /// extension's resource root.
+  list-resources: func(prefix: string) -> result<list<resource-entry>, error>;
+  /// Read one resource's full bytes.
+  read: func(path: string) -> result<list<u8>, error>;
+}

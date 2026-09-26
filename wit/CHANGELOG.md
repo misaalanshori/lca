@@ -25,6 +25,13 @@ with no interface change between them.
 
 ### Added
 
+- The `resources` host import (`lca:host/resources`): `list-resources` and
+  `read`, the extension's own read-only `resources/` data bag (ADR-0030).
+  Always available (like `log`), package-scoped, own tree only, per-call size
+  capped; the same seam serves both delivery modes (ADR-0032). Imported by
+  the `tool`, `provider`, `compaction`, `context-transform`, and `ui` worlds.
+  Additive: a new host import interface, so an extension built against the
+  previous WIT keeps loading; a rebuilt component declares `abi = "0.2"`.
 - The `content-block` variant in the `types` interface.
 
 ##1.0.0 — 2026-09-23

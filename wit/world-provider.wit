@@ -7,6 +7,7 @@ package lca:ext@0.2.0;
 /// socket of its own.
 world provider {
   import lca:host/log@0.2.0;
+  import lca:host/resources@0.2.0;
   import lca:host/net@0.2.0;
   import lca:host/oauth@0.2.0;
   import lca:host/credentials@0.2.0;

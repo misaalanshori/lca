@@ -26,6 +26,7 @@ fn install_refuses_a_manifest_name_that_escapes_the_tree() {
         source: "https://example.invalid/evil.zip".to_string(),
         manifest: MANIFEST.replace("word-count", "../../escape"),
         component,
+        resources: Vec::new(),
     };
     let err = tree
         .install(resolved)

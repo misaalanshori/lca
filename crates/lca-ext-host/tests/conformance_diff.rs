@@ -45,6 +45,14 @@ impl Fixture {
             std::fs::create_dir_all(root.join(dir)).expect("mkdir");
         }
         std::fs::write(root.join("project/notes.txt"), "diff content").expect("file");
+        // ADR-0030/0032: the conformance package's own resource bag, at the
+        // install layout the host derives (`<state_dir>/extensions/<name>/resources`).
+        // The native twin is pointed at the same directory, so the diff is
+        // over identical bytes.
+        let resources = root.join("data/extensions/conformance/resources");
+        std::fs::create_dir_all(resources.join("skills")).expect("mkdir resources");
+        std::fs::write(resources.join("greeting.txt"), "hello resources").expect("resource");
+        std::fs::write(resources.join("skills/note.txt"), "skill note").expect("resource");
         let roots = ScopeRoots {
             workspace: root.join("project"),
             private: root.join("private"),
@@ -73,7 +81,7 @@ impl Fixture {
     }
 
     fn capabilities(&self) -> Arc<lca_tools::Capabilities> {
-        Arc::new(lca_tools::Capabilities::new(
+        let mut cap = lca_tools::Capabilities::new(
             "conformance",
             lca_tools::CapabilityGrants {
                 fs: vec![
@@ -90,7 +98,11 @@ impl Fixture {
             self.store.clone(),
             self.root.join("project"),
             None,
-        ))
+        );
+        cap.set_resources(lca_tools::ResourceSource::Dir(
+            self.root.join("data/extensions/conformance/resources"),
+        ));
+        Arc::new(cap)
     }
 
     fn both_modes(
@@ -188,6 +200,14 @@ async fn native_and_wasm_modes_produce_identical_results() {
         r#"{"mode":"fs-read","scope":"workspace","path":"../../etc/passwd"}"#.to_string(),
         r#"{"mode":"fs-read","scope":"private","path":"x"}"#.to_string(),
         r#"{"mode":"fs-list","scope":"workspace","path":"."}"#.to_string(),
+        r#"{"mode":"resource-list"}"#.to_string(),
+        r#"{"mode":"resource-read","path":"greeting.txt"}"#.to_string(),
+        r#"{"mode":"resource-read","path":"skills/note.txt"}"#.to_string(),
+        // Hostile cases: traversal and absolute paths must be refused in
+        // both modes with the same recorded reason (ADR-0030).
+        r#"{"mode":"resource-read","path":"../../etc/passwd"}"#.to_string(),
+        r#"{"mode":"resource-read","path":"/etc/passwd"}"#.to_string(),
+        r#"{"mode":"resource-read","path":"missing.txt"}"#.to_string(),
         r#"{"mode":"fs-write","scope":"workspace","path":"written.txt","content":"hello"}"#
             .to_string(),
         spawn_args("echo", "diff-marker"),
