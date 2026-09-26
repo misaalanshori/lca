@@ -139,17 +139,21 @@ pub fn load_installed(
         env,
     );
     for (name, entry) in entries {
-        let outcome = (|| {
-            let manifest = tree.manifest(&name)?;
-            let bytes = tree.component(&name, &entry.digest)?;
-            Ok::<_, lca_registry::Error>(
-                host.load(&bytes, &manifest)
-                    .map_err(|err| lca_registry::Error::Invalid(err.to_string())),
-            )
-        })();
-        match outcome {
-            Ok(Ok(handle)) => registry.register(std::sync::Arc::new(handle)),
-            Ok(Err(err)) => eprintln!("warning: skipping `{name}`: {err}"),
+        // A data-only package (ADR-0030) carries no component: the host
+        // reads its `resources/` directly (skills), so there is nothing to
+        // register. A missing component file is that case, not an error.
+        let manifest = match tree.manifest(&name) {
+            Ok(manifest) => manifest,
+            Err(err) => {
+                eprintln!("warning: skipping `{name}`: {err}");
+                continue;
+            }
+        };
+        let Ok(bytes) = tree.component(&name, &entry.digest) else {
+            continue;
+        };
+        match host.load(&bytes, &manifest) {
+            Ok(handle) => registry.register(std::sync::Arc::new(handle)),
             Err(err) => eprintln!("warning: skipping `{name}`: {err}"),
         }
     }

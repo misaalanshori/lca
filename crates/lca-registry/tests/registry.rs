@@ -692,3 +692,67 @@ fn the_archive_refuses_a_traversal_resource_path() {
     let err = lca_registry::read_archive(&cursor.into_inner()).expect_err("traversal refused");
     assert!(err.to_string().contains("leaves the package"), "{err}");
 }
+
+// Verifies: ADR-0030 (a data-only package: `worlds = []`, resources only).
+#[test]
+fn a_data_only_package_installs_and_removes() {
+    const DATA_MANIFEST: &str = r#"name = "skill-pack"
+version = "1.0.0"
+abi = "0.2"
+worlds = []
+description = "A skill pack."
+resources = ["skills"]
+"#;
+    let resources = vec![(
+        "skills/commits/SKILL.md".to_string(),
+        b"name: commits\n---\nbody".to_vec(),
+    )];
+    let packed =
+        lca_registry::pack_archive_with_resources(DATA_MANIFEST, &[], &resources).expect("pack");
+    let archive = lca_registry::read_archive(&packed).expect("read");
+    assert!(
+        archive.component.is_empty(),
+        "no component in a data-only pack"
+    );
+
+    let tree = tree("data-only");
+    tree.install(lca_registry::Resolved {
+        digest: lca_registry::Resolved::digest_of(&[]),
+        source: "https://example.invalid/skill-pack.zip".to_string(),
+        manifest: DATA_MANIFEST.to_string(),
+        component: Vec::new(),
+        resources: resources.clone(),
+    })
+    .expect("install");
+    assert!(
+        tree.root()
+            .join("skill-pack/resources/skills/commits/SKILL.md")
+            .is_file()
+    );
+    assert!(tree.remove("skill-pack").expect("remove"));
+    assert!(!tree.root().join("skill-pack").exists());
+}
+
+// Verifies: FR-DIST-5 / ADR-0030 (a directory installs as a data-only
+// package: manifest plus `resources/`, no component).
+#[test]
+fn a_local_directory_resolves_as_a_data_only_package() {
+    let root = lca_testkit::scratch_path("lca-registry-data-local");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("resources/skills/pack")).expect("mkdir");
+    std::fs::write(
+        root.join("extension.toml"),
+        "name = \"skill-pack\"\nversion = \"1.0.0\"\nabi = \"0.2\"\nworlds = []\nresources = [\"skills\"]\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        root.join("resources/skills/pack/SKILL.md"),
+        "name: pack\n---\nbody",
+    )
+    .expect("skill");
+
+    let resolved = resolve_local(&root, None).expect("resolve");
+    assert!(resolved.component.is_empty());
+    assert_eq!(resolved.resources.len(), 1);
+    assert_eq!(resolved.resources[0].0, "skills/pack/SKILL.md");
+}

@@ -448,10 +448,12 @@ impl InstallTree {
         let dir = self.root.join(&name);
         std::fs::create_dir_all(&dir)?;
         std::fs::write(self.manifest_path(&name), &manifest)?;
-        std::fs::write(
-            self.component_path(&name, &resolved.digest),
-            &resolved.component,
-        )?;
+        if !resolved.component.is_empty() {
+            std::fs::write(
+                self.component_path(&name, &resolved.digest),
+                &resolved.component,
+            )?;
+        }
         // A reinstall replaces the bag wholesale, so a file the new
         // version dropped does not linger from the previous one.
         let resources_dir = dir.join("resources");
@@ -657,10 +659,32 @@ pub fn read_archive(bytes: &[u8]) -> Result<Archive, Error> {
             component,
             resources,
         }),
+        // A data-only package (ADR-0030) declares `resources` and carries
+        // no component; the archive is valid with the bag alone.
+        (Some(manifest), None) if manifest_declares_resources(&manifest) => Ok(Archive {
+            manifest,
+            component: Vec::new(),
+            resources,
+        }),
         _ => Err(Error::Invalid(
             "the archive must carry extension.toml and the component".to_string(),
         )),
     }
+}
+
+/// Whether a manifest declares a non-empty `resources` bag (the data-only
+/// extension marker, ADR-0030).
+fn manifest_declares_resources(manifest: &str) -> bool {
+    manifest
+        .parse::<toml::Value>()
+        .ok()
+        .and_then(|value| {
+            value
+                .get("resources")
+                .and_then(|resources| resources.as_array())
+                .map(|kinds| !kinds.is_empty())
+        })
+        .unwrap_or(false)
 }
 
 /// Whether an archive entry's path is a safe relative resource path:
@@ -1024,6 +1048,22 @@ pub async fn resolve(source: &str, local_manifest: Option<&Path>) -> Result<Reso
 /// FR-DIST-5: read both files from a local path (the manifest defaults
 /// to `extension.toml` beside the component).
 pub fn resolve_local(component: &Path, manifest_path: Option<&Path>) -> Result<Resolved, Error> {
+    // A directory is a data-only package (ADR-0030): no component, just a
+    // manifest and a `resources/` bag.
+    if component.is_dir() {
+        let manifest_path = manifest_path
+            .map(|path| path.to_path_buf())
+            .unwrap_or_else(|| component.join("extension.toml"));
+        let manifest = std::fs::read_to_string(&manifest_path)?;
+        let resources = read_resource_dir(&component.join("resources"))?;
+        return Ok(Resolved {
+            digest: Resolved::digest_of(&[]),
+            source: component.display().to_string(),
+            manifest,
+            component: Vec::new(),
+            resources,
+        });
+    }
     let manifest_path = match manifest_path {
         Some(path) => path.to_path_buf(),
         None => component
