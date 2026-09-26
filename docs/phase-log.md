@@ -1045,6 +1045,15 @@ cross-references that moved to `lcastale/` fixed in the living documents
 only; the Windows quarantine ledger re-checked (compiles, never retried on
 a console, clock from 2026-09-25).
 
-Suite: 455 tests. Commits: `baa2c14` (P0), `46c920a` (P1), `fac84dd` (P3),
+**P5 — the release.** `0.3.0` needed two attempts. The first publish
+failed *after* attaching the binaries: cycle 4's `resources`/`state`
+imports were mapped in only some extensions' `wit_bindgen::generate!`
+blocks, and the gap shows only at `--target wasm32-wasip2`, which nothing
+built - the same hole the fuzz workspace had in P0. Fixed (`b949f8d`),
+gated (`scripts/wasm-check.sh` + the `extension components build` CI job),
+pinned (regression 21). The tag moved to the fix so the shipped artifacts
+and the tagged tree agree.
+
+Suite: 456 tests. Commits: `baa2c14` (P0), `46c920a` (P1), `fac84dd` (P3),
 and this one. See `cycle5-report.md` (out of tree) for the full account,
 the deviations, and the re-freeze readiness note.
