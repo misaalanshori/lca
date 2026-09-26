@@ -1292,11 +1292,16 @@ pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
         source: reference.to_string(),
         manifest: extension_toml,
         component,
-        // ponytail: OCI resources need a third layer and a publish-script
-        // change; the first-party resource consumer (openai-compatible)
-        // embeds its bag natively (ADR-0032), and the HTTPS archive and
-        // local-path installs carry resources. Add the layer when a
-        // third-party OCI package needs one.
+        // ponytail: OCI carries no `resources` layer, so an OCI install
+        // resolves an empty bag. This is deliberate, not silent: the
+        // first-party resource consumer (openai-compatible) serves the same
+        // bag from the compiled-in table (ADR-0032), and the HTTPS archive
+        // and local-path installs carry resources fully. A *third-party*
+        // OCI package that declares a bag gets none - the ceiling. Refusing
+        // here instead was tried and reverted: every published artifact
+        // declares `resources`, so a hard error broke the shipped install
+        // path. Add the third layer (and the publish-script change) when a
+        // third-party OCI package needs a bag.
         resources: Vec::new(),
     })
 }

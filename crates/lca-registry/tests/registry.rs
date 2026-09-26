@@ -372,8 +372,15 @@ async fn an_interrupted_download_leaves_the_installed_version_working() {
 /// A local anonymous OCI registry: config blob carries the manifest,
 /// layer0 the component, digests honored (our publishing convention).
 async fn mock_oci(broken_digests: bool) -> (String, tokio::task::JoinHandle<()>) {
+    mock_oci_serving(MANIFEST, broken_digests).await
+}
+
+async fn mock_oci_serving(
+    manifest: &str,
+    broken_digests: bool,
+) -> (String, tokio::task::JoinHandle<()>) {
     use sha2::{Digest, Sha256};
-    let manifest_toml = MANIFEST.as_bytes().to_vec();
+    let manifest_toml = manifest.as_bytes().to_vec();
     let component_bytes = component();
     let config_digest = format!("sha256:{:x}", Sha256::digest(&manifest_toml));
     let layer_digest = format!("sha256:{:x}", Sha256::digest(&component_bytes));

@@ -331,3 +331,44 @@ An extension whose call gets cancelled mid-write through the `fs` capability can
 
 The three branches run concurrently, not in sequence: a cancelled turn does not wait for the provider stream to notice cancellation before also killing a shell command that was running alongside it.
 
+
+## The login flow
+
+`/login` with no argument opens a list picker (ADR-0033). The host asks
+every *enabled* provider extension for its `login-options` and renders what
+comes back - display name and host, nothing else - plus two host-owned
+rows: the user's named custom endpoints from `<config>/provider-presets.toml`
+(D1's override layer) and, always last, "Custom endpoint…". The list is
+longer than the box for a provider with many presets, so it scrolls and
+shows `[n/total]`; the universal entry stays reachable at the end.
+
+Choosing a row runs that option's own field list. A preset declares its
+fields (`api-key` for a bearer endpoint, nothing at all for a local
+`auth = "none"` one, which signs in on selection). "Custom endpoint…"
+collects base URL, key, and model. One prompt at a time, and the masking is
+per-field: a **key is asterisks and never renders**; a base URL or a model
+id renders as typed, because typing those blind is worse than any leak of a
+value that is not secret.
+
+Submit goes to the extension's `login-submit`, which stores the key in its
+own credentials namespace and returns opaque `setting: value` pairs. The
+host persists those without interpreting them, then offers the ad hoc `net`
+grant naming the exact host when it falls outside the extension's manifest
+vocabulary (FR-PERM-16). The extension may query `GET /models` during
+submit; when the endpoint answers, `/model` offers its live list, and when
+it cannot (a wrong key, or - on a first login - no `net` grant yet) the
+preset's curated short list is the fallback (D2).
+
+`/login <provider>` scopes the picker to one extension. `/login <option-id>`
+skips the picker entirely and is the same journey, drivable from a script.
+
+## `/attach` and its notice
+
+`/attach <path>` stages an image for the **next** message and reports
+"attached <path> - it goes with your next message" as a transient notice:
+it clears on the next redraw. The staging itself is durable - the bytes are
+in the session's attachment store immediately, and `lca session gc <id>`
+only reclaims a hash no resolved record references - so a notice that has
+scrolled away is not evidence the attachment was lost. The message that
+carries it shows the `[image attachment <hash8>, <media>, <n> bytes]` stub,
+which is the confirmation that it travelled.
