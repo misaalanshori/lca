@@ -75,6 +75,50 @@ fn streams_partial_text_into_the_active_area() {
     );
 }
 
+// A reasoning model's inner monologue must not be glued to its answer:
+// they are different things and the reader cannot tell where one ends and
+// the other begins (the live pane showed `...about it.The answer is 42.`).
+#[test]
+fn reasoning_is_separated_from_the_answer() {
+    let mut state = UiState::new(options());
+    state.on_turn_event(TurnEvent::ReasoningDelta("Let me think about it.".into()));
+    state.on_turn_event(TurnEvent::TextDelta("The answer is 42.".into()));
+    let mut term = terminal(80, 24);
+    render(&mut term, &state).expect("render");
+    let text = buffer_text(&mut term);
+    assert!(
+        text.contains("The answer is 42."),
+        "answer visible:\n{text}"
+    );
+    assert!(
+        !text.contains("about it.The answer"),
+        "reasoning glued to the answer:\n{text}"
+    );
+}
+
+// A finished tool call names the tool and its argument. The provider's call
+// id is not something the user ever saw or can act on (the live pane showed
+// `> call call_54a800706e3547d4b1d72c28 -> ok`).
+#[test]
+fn tool_lines_name_the_tool_not_the_call_id() {
+    let mut state = UiState::new(options());
+    state.on_turn_event(TurnEvent::ToolStarted(lca_protocol::ToolCall {
+        call_id: "call-abc123".into(),
+        name: "read".into(),
+        arguments: "{\"path\":\"stats.py\"}".into(),
+    }));
+    state.on_turn_event(TurnEvent::ToolFinished(lca_protocol::ToolResult::ok(
+        "call-abc123",
+        "file body",
+    )));
+    let mut term = terminal(80, 24);
+    render(&mut term, &state).expect("render");
+    let text = buffer_text(&mut term);
+    assert!(text.contains("read"), "tool name shown:\n{text}");
+    assert!(text.contains("stats.py"), "argument shown:\n{text}");
+    assert!(!text.contains("abc123"), "opaque call id hidden:\n{text}");
+}
+
 // The conversation scrollback keeps earlier messages visible (the region
 // list from the SRDD's user interface section).
 #[test]

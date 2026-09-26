@@ -36,3 +36,6 @@ mod https_net_scheme_rejected;
 // released 0.1.x defect: a plain conversation logged a boundary divergence.
 #[path = "10-plain-conversation-no-boundary-warning.rs"]
 mod plain_conversation_no_boundary_warning;
+// released 0.1.x defect: reasoning glued to the answer, tool lines unnamed.
+#[path = "11-tui-turn-rendering.rs"]
+mod tui_turn_rendering;

@@ -322,6 +322,12 @@ pub struct UiState {
     pub scrollback: Vec<String>,
     /// The streaming area.
     pub active: String,
+    /// Live reasoning text for the current response, kept apart from the
+    /// answer so the two never read as one run-on line.
+    pub reasoning: String,
+    /// The tool call that just started, so its result can name the tool
+    /// instead of the provider's opaque call id.
+    pub last_tool: Option<lca_protocol::ToolCall>,
     /// A transient notice (command results, unknown commands).
     pub notice: Option<String>,
     /// A running tool line, when one is executing.
@@ -370,6 +376,8 @@ impl UiState {
             history: Vec::new(),
             history_index: None,
             active: String::new(),
+            reasoning: String::new(),
+            last_tool: None,
             notice: None,
             tool_line: None,
             turn_running: false,
@@ -473,20 +481,46 @@ impl UiState {
         });
     }
 
+    /// Move any pending reasoning into the transcript, marked and set off
+    /// from the answer that follows it.
+    fn flush_reasoning(&mut self) {
+        let text = std::mem::take(&mut self.reasoning);
+        if text.trim().is_empty() {
+            return;
+        }
+        if !self.active.is_empty() && !self.active.ends_with('\n') {
+            self.active.push('\n');
+        }
+        self.active.push_str("\u{2234} ");
+        self.active.push_str(text.trim_end());
+        self.active.push('\n');
+    }
+
     /// Consume a turn event from the worker.
     pub fn on_turn_event(&mut self, event: TurnEvent) {
         match event {
-            TurnEvent::TextDelta(delta) | TurnEvent::ReasoningDelta(delta) => {
+            TurnEvent::TextDelta(delta) => {
+                self.flush_reasoning();
                 self.active.push_str(&delta);
+            }
+            TurnEvent::ReasoningDelta(delta) => {
+                self.reasoning.push_str(&delta);
             }
             TurnEvent::ToolStarted(call) => {
                 self.tool_line = Some(format!("running {}({})...", call.name, call.arguments));
+                self.last_tool = Some(call);
             }
             TurnEvent::ToolFinished(result) => {
+                self.flush_reasoning();
                 self.tool_line = None;
+                let call = self.last_tool.take();
+                let label = match &call {
+                    Some(call) => format!("{}({})", call.name, call.arguments),
+                    None => short_call(&result.call_id),
+                };
                 self.active.push_str(&format!(
                     "\n> {} -> {}\n",
-                    short_call(&result.call_id),
+                    label,
                     match result.status {
                         lca_protocol::ToolResultStatus::Ok => "ok",
                         lca_protocol::ToolResultStatus::Error => "error",
@@ -528,6 +562,7 @@ impl UiState {
                 status,
                 stop_reason,
             } => {
+                self.flush_reasoning();
                 if !self.active.trim().is_empty() {
                     let text = std::mem::take(&mut self.active);
                     self.scrollback.push(text);
