@@ -65,6 +65,10 @@ pub struct Settings {
     /// The model's context window when the endpoint publishes none; the
     /// FR-SESS-4 threshold needs it, `0` means unknown (never compacts).
     pub context_window: u32,
+    /// Whether to send OpenAI's `prompt_cache_key` cache-affinity pin
+    /// (V1, ADR-0031). Default on; a strict proxy that rejects unknown
+    /// body fields can turn it off with `OPENAI_PROMPT_CACHE_KEY=0`.
+    pub prompt_cache_key: bool,
 }
 
 impl Default for Settings {
@@ -87,8 +91,17 @@ impl Default for Settings {
                 .ok()
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(0),
+            prompt_cache_key: !matches!(
+                std::env::var("OPENAI_PROMPT_CACHE_KEY").as_deref(),
+                Ok("0") | Ok("false") | Ok("off")
+            ),
         }
     }
+}
+
+/// OpenAI's `prompt_cache_key` is capped at 64 characters (V1, ADR-0031).
+fn clamp_cache_key(key: &str) -> String {
+    key.chars().take(64).collect()
 }
 
 /// Whether an HTTP status is worth retrying (FR-CORE-6).
@@ -468,6 +481,15 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
         let tools = tools_wire(&request.tools);
         if !tools.is_empty() {
             body["tools"] = serde_json::Value::Array(tools);
+        }
+        // V1 (ADR-0031): OpenAI's cache-affinity pin, the general "keep our
+        // cache" field for OpenAI-shaped endpoints. Clamped to 64 chars;
+        // off only when a preset/opt-out says so. Added before the body is
+        // serialized.
+        if let Some(session) = request.extras.get("session-id")
+            && settings.prompt_cache_key
+        {
+            body["prompt_cache_key"] = serde_json::Value::String(clamp_cache_key(session));
         }
         let body_bytes = serde_json::to_vec(&body).map_err(|err| StreamFailure {
             message: format!("cannot build request: {err}"),

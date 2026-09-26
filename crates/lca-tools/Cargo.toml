@@ -10,6 +10,8 @@ repository.workspace = true
 [dependencies]
 lca-protocol = { path = "../lca-protocol" }
 lca-permissions = { path = "../lca-permissions" }
+# The ABI line for the host User-Agent (V2, ADR-0031); tiny, no wasmtime.
+lca-ext-abi = { path = "../lca-ext-abi" }
 tokio.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

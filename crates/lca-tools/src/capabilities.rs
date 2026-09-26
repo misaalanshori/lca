@@ -1162,7 +1162,11 @@ impl Capabilities {
         let http_method = hyper::Method::from_bytes(method.as_bytes())
             .map_err(|err| CapabilityError::Invalid(format!("bad method {method}: {err}")))?;
         let mut builder = hyper::Request::builder().method(http_method).uri(url);
+        let mut has_user_agent = false;
         for (key, value) in headers {
+            if key.eq_ignore_ascii_case("user-agent") {
+                has_user_agent = true;
+            }
             let name = hyper::header::HeaderName::from_bytes(key.as_bytes())
                 .map_err(|err| CapabilityError::Invalid(format!("bad header name {key}: {err}")))?;
             let value =
@@ -1170,6 +1174,12 @@ impl Capabilities {
                     CapabilityError::Invalid(format!("bad header value for {key}: {err}"))
                 })?;
             builder = builder.header(name, value);
+        }
+        // V2 (ADR-0031): one generic User-Agent at the net gate when the
+        // caller sets none. Traffic hygiene, not provider semantics, so it
+        // lives here rather than in each extension.
+        if !has_user_agent {
+            builder = builder.header(hyper::header::USER_AGENT, default_user_agent());
         }
         let request = builder
             .body(Full::new(hyper::body::Bytes::copy_from_slice(
@@ -1966,6 +1976,20 @@ fn collect_resources(
         }
     }
     Ok(())
+}
+
+/// The host's generic User-Agent (V2, ADR-0031): `lca/<version> (<os>;
+/// <arch>; abi-<line>)`. Set at the net gate when the caller sets none, so
+/// every extension is covered in one place and an endpoint can identify and
+/// rate-limit the agent correctly.
+pub fn default_user_agent() -> String {
+    format!(
+        "lca/{} ({}; {}; abi-{})",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        lca_ext_abi::ABI_VERSION,
+    )
 }
 
 /// Resolve a host:port to addresses with the blocking resolver (capability

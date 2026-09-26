@@ -61,6 +61,7 @@ fn settings_for(base_url: &str, key: Option<&str>) -> openai_compatible::Setting
         api_key: key.map(str::to_string),
         model: "test-model".to_string(),
         context_window: 0,
+        prompt_cache_key: true,
     }
 }
 
@@ -306,4 +307,90 @@ fn interrupt_flags_the_capability_engine() {
     assert!(!cap.is_cancelled());
     ext.interrupt();
     assert!(cap.is_cancelled(), "the engine is flagged for the net wait");
+}
+
+/// A loopback server that captures the request body and answers with a
+/// minimal SSE stream (for the V1 cache-pin test).
+fn body_capture_server() -> (String, std::sync::mpsc::Receiver<String>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        if let Some(mut stream) = listener.incoming().flatten().next() {
+            // Read until the full body arrives (headers and body can be
+            // separate packets).
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let n = stream.read(&mut chunk).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..pos]).to_string();
+                    let len: usize = head
+                        .lines()
+                        .find(|line| line.to_ascii_lowercase().starts_with("content-length:"))
+                        .and_then(|line| line.split_once(':'))
+                        .and_then(|(_, value)| value.trim().parse().ok())
+                        .unwrap_or(0);
+                    if buf.len() >= pos + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let request = String::from_utf8_lossy(&buf).to_string();
+            let body = request.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+            let _ = tx.send(body);
+            let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                sse.len(),
+                sse
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    (format!("http://{addr}"), rx)
+}
+
+// Verifies: V1 / ADR-0031 (the request body carries the clamped session
+// cache pin, and the preset opt-out drops it).
+#[test]
+fn the_body_carries_a_clamped_prompt_cache_key() {
+    let cap = sandbox("cache-key", true);
+    let (base, rx) = body_capture_server();
+    let settings = settings_for(&base, Some("sk-test"));
+    let mut req = request("test-model");
+    req.extras.insert("session-id".to_string(), "s".repeat(80));
+    openai_compatible::run_provider_stream(cap.as_ref(), &settings, &req, &mut |_| true)
+        .expect("stream completes");
+    let body = rx.recv().expect("body captured");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("json body");
+    let key = json
+        .get("prompt_cache_key")
+        .and_then(|value| value.as_str());
+    assert!(key.is_some(), "cache key present in body: {body}");
+    let key = key.expect("key");
+    assert_eq!(key.len(), 64, "clamped to 64 chars");
+    assert_eq!(key, "s".repeat(64));
+
+    // The preset opt-out drops it.
+    let cap = sandbox("cache-key-off", true);
+    let (base, rx) = body_capture_server();
+    let mut settings = settings_for(&base, Some("sk-test"));
+    settings.prompt_cache_key = false;
+    let mut req = request("test-model");
+    req.extras
+        .insert("session-id".to_string(), "abc".to_string());
+    openai_compatible::run_provider_stream(cap.as_ref(), &settings, &req, &mut |_| true)
+        .expect("stream completes");
+    let body = rx.recv().expect("body captured");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("json body");
+    assert!(
+        json.get("prompt_cache_key").is_none(),
+        "the opt-out drops the pin"
+    );
 }

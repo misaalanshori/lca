@@ -563,3 +563,64 @@ fn denial_journal_escapes_hostile_parameters() {
         "{value}"
     );
 }
+
+/// A loopback server that echoes the request's `User-Agent` value as its
+/// body (for the V2 default-UA test).
+fn ua_echo_server() -> (String, std::thread::JoinHandle<String>) {
+    let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let handle = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).expect("read");
+        let request = String::from_utf8_lossy(&buf[..n]).to_string();
+        let ua = request
+            .lines()
+            .find(|line| line.to_ascii_lowercase().starts_with("user-agent:"))
+            .and_then(|line| line.split_once(':'))
+            .map(|(_, value)| value.trim().to_string())
+            .unwrap_or_default();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            ua.len(),
+            ua
+        );
+        let _ = stream.write_all(response.as_bytes());
+        ua
+    });
+    (format!("http://{addr}"), handle)
+}
+
+// Verifies: V2 / ADR-0031 (the host sets one generic User-Agent when the
+// caller sets none, and a caller's own wins).
+#[test]
+fn the_net_gate_sets_a_default_user_agent_and_preserves_a_caller_one() {
+    let sandbox = Sandbox::new("ua");
+
+    let (base, server) = ua_echo_server();
+    let caps = sandbox.caps(local_grants(&["127.0.0.1"]));
+    let handle = caps
+        .net_request("GET", &format!("{base}/x"), &[], None)
+        .expect("request");
+    let body = drain_body(&caps, handle);
+    caps.net_close_response(handle).expect("close");
+    let _ = server.join().expect("server");
+    assert!(body.starts_with("lca/"), "host default UA: {body}");
+    assert!(body.contains("abi-0.2"), "names the ABI line: {body}");
+
+    let (base, server) = ua_echo_server();
+    let caps = sandbox.caps(local_grants(&["127.0.0.1"]));
+    let handle = caps
+        .net_request(
+            "GET",
+            &format!("{base}/x"),
+            &[("user-agent", "mine/1")],
+            None,
+        )
+        .expect("request");
+    let body = drain_body(&caps, handle);
+    caps.net_close_response(handle).expect("close");
+    let _ = server.join().expect("server");
+    assert_eq!(body, "mine/1", "a caller-set UA is preserved");
+}
