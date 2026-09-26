@@ -45,6 +45,16 @@ pub enum ExtCmd {
         /// The extension to inspect.
         name: String,
     },
+    /// Enable an extension for the current project (FR-PROV-9).
+    Enable {
+        /// The extension to enable.
+        name: String,
+    },
+    /// Disable an extension for the current project (FR-PROV-9).
+    Disable {
+        /// The extension to disable.
+        name: String,
+    },
     /// List installed extensions.
     List,
 }
@@ -223,8 +233,45 @@ pub async fn run(cmd: ExtCmd) -> i32 {
             }
         },
         ExtCmd::Info { name } => info(&tree, &name),
+        ExtCmd::Enable { name } => set_enabled(&name, true),
+        ExtCmd::Disable { name } => set_enabled(&name, false),
         ExtCmd::List => list(&tree),
     }
+}
+
+/// Enable or disable an extension for the current project (FR-PROV-9,
+/// SRDD's per-project enable/disable). The grant store is the same one
+/// the loader reads through `extension_enabled`.
+fn set_enabled(name: &str, enabled: bool) -> i32 {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(err) => {
+            eprintln!("error: cannot read the working directory: {err}");
+            return crate::exit::INTERNAL;
+        }
+    };
+    set_enabled_in(&crate::data_dir(), &cwd, name, enabled)
+}
+
+/// The testable core of [`set_enabled`]: the data dir and project are
+/// injected so a test never touches the real store or the process cwd.
+fn set_enabled_in(data: &std::path::Path, cwd: &std::path::Path, name: &str, enabled: bool) -> i32 {
+    let mut store = match lca_permissions::GrantStore::open(&data.join("grants.json")) {
+        Ok(store) => store,
+        Err(err) => {
+            eprintln!("error: cannot open the grant store: {err}");
+            return crate::exit::INTERNAL;
+        }
+    };
+    if let Err(err) = store.set_extension_enabled(cwd, name, enabled) {
+        eprintln!("error: {err}");
+        return crate::exit::INTERNAL;
+    }
+    println!(
+        "{} {name} for this project",
+        if enabled { "enabled" } else { "disabled" }
+    );
+    crate::exit::OK
 }
 
 /// Validate, show consent, then write (FR-DIST-4's delete never needs
@@ -580,5 +627,28 @@ redirect_path = "/callback"
             err.contains("outside this host's supported window"),
             "{err}"
         );
+    }
+
+    // Verifies: FR-PROV-9 (per-project enable/disable through the CLI). The
+    // store's own method was tested; the command that reaches it was not.
+    #[test]
+    fn disabling_then_enabling_writes_the_per_project_flag() {
+        let root = std::env::temp_dir().join(format!("lca-ext-enable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        assert_eq!(
+            super::set_enabled_in(&root, &project, "skills", false),
+            crate::exit::OK
+        );
+        let store = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open");
+        assert_eq!(store.extension_enabled(&project, "skills"), Some(false));
+        assert_eq!(
+            super::set_enabled_in(&root, &project, "skills", true),
+            crate::exit::OK
+        );
+        let store = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open");
+        assert_eq!(store.extension_enabled(&project, "skills"), Some(true));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
