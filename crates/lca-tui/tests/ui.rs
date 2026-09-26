@@ -718,6 +718,24 @@ fn help_lists_the_commands_without_an_extension() {
     assert!(notice.contains("Enter sends"), "shows the keys: {notice}");
 }
 
+// A paste arrives as one event and inserts at once; the composer submits it
+// like typed text (without bracketed paste a large paste queued one key event
+// per character and redrew for each, freezing the interface).
+#[test]
+fn a_paste_inserts_at_once_and_submits() {
+    let mut state = UiState::new(options());
+    state.insert_at_cursor("line one\nline two");
+    assert_eq!(state.buffer, "line one\nline two");
+    assert_eq!(
+        handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter)),
+        Action::Submit
+    );
+    assert_eq!(
+        state.history.last().map(String::as_str),
+        Some("line one\nline two")
+    );
+}
+
 // The `/help` list says what each command does, not just its name.
 #[test]
 fn help_describes_the_builtin_commands() {

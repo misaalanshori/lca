@@ -1560,6 +1560,7 @@ impl Drop for TerminalRestore {
             std::io::stdout(),
             crossterm::terminal::LeaveAlternateScreen,
             crossterm::event::DisableMouseCapture,
+            crossterm::event::DisableBracketedPaste,
             crossterm::cursor::Show,
         );
     }
@@ -1597,7 +1598,8 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
-        crossterm::event::EnableMouseCapture
+        crossterm::event::EnableMouseCapture,
+        crossterm::event::EnableBracketedPaste
     )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -1708,6 +1710,12 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             }
             Ok(Event::Resize(width, height)) => {
                 state.resize(width, height);
+            }
+            // A bracketed paste arrives as one event, not one key per
+            // character: without this a large paste queued thousands of
+            // key events and a redraw each, freezing the interface.
+            Ok(Event::Paste(text)) => {
+                state.insert_at_cursor(&text);
             }
             Ok(_) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}

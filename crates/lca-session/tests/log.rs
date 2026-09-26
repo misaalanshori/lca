@@ -317,6 +317,37 @@ fn listing_reflects_messages_appended_after_creation() {
     );
 }
 
+// Verifies: FR-SESS-6 (the display view keeps the reader's truncation
+// warning). It hardcoded `truncated: false` and empty warnings, so a corrupt
+// session resumed with no warning at all.
+#[test]
+fn the_display_view_reports_a_truncated_log() {
+    let store = store("view-truncated");
+    let project = scratch("view-truncated-project");
+    let session = store.create_session(&project, "test").expect("create");
+    store
+        .append(&session, user_record("r1", "before"))
+        .expect("append");
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(session.log_path())
+            .expect("open");
+        file.write_all(b"{\"v\":1,\"t\":\"user\",\"ts\":3,\"id\":\"r2\"}\n")
+            .expect("write");
+    }
+    store
+        .append(&session, user_record("r3", "after"))
+        .expect("append");
+    let outcome = store.read_with(&session, ViewMode::Display).expect("read");
+    assert!(
+        outcome.truncated,
+        "the display view keeps the truncation flag"
+    );
+    assert!(!outcome.warnings.is_empty(), "and the warning text");
+}
+
 // Verifies: FR-SESS-3 (fork creates a new session sharing history up to a
 // message; the parent's log is not copied)
 #[test]

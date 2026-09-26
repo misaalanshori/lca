@@ -106,6 +106,16 @@ fn model_effect_on(
 
 /// Enter the interactive interface for `cwd`, optionally resuming `resume`.
 pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
+    // The interface needs a terminal for raw mode and key events; without
+    // one crossterm fails with an opaque `os error 6`. Say what to do
+    // instead (the headless path is the scripted one).
+    use std::io::IsTerminal as _;
+    if !std::io::stdin().is_terminal() {
+        eprintln!(
+            "the interactive interface needs a terminal; use `lca -p \"...\"` for headless mode"
+        );
+        return Ok(crate::exit::USAGE);
+    }
     let data = crate::data_dir();
     let store = Arc::new(SessionStore::new(data.clone()));
     let grants = Arc::new(Mutex::new(
@@ -137,11 +147,27 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
 
     let provider_name = config.provider().to_string();
 
-    let records = store
+    let read = store
         .read_with(&session, ViewMode::Display)
-        .map_err(|err| anyhow::anyhow!("cannot read the session: {err}"))?
-        .records;
-    let mut initial_lines: Vec<String> = records.iter().filter_map(display_line).collect();
+        .map_err(|err| anyhow::anyhow!("cannot read the session: {err}"))?;
+    let mut initial_lines: Vec<String> = read.records.iter().filter_map(display_line).collect();
+    // A session that loaded with a truncation or a skipped line must say so:
+    // a short or empty transcript with no explanation reads as data loss.
+    if read.truncated {
+        initial_lines.insert(
+            0,
+            "warning: the session log was truncated; only the records that loaded are shown"
+                .to_string(),
+        );
+    } else if read.skipped_unknown > 0 {
+        initial_lines.insert(
+            0,
+            format!(
+                "warning: {} record(s) were skipped (unknown type or version)",
+                read.skipped_unknown
+            ),
+        );
+    }
     // The configured endpoint can be outside the provider's manifest hosts;
     // without its ad hoc grant every turn fails with a permission denial. Say
     // so up front and name the one command that fixes it (FR-PERM-16). This is

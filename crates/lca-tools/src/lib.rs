@@ -649,7 +649,35 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .map(str::to_string);
         let path_arg = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        let root = resolve_target(&self.cwd, Path::new(path_arg));
+        let target = resolve_target(&self.cwd, Path::new(path_arg));
+        // A file path greps that one file; walking it as a directory failed
+        // with "Not a directory".
+        let (root, entries) = if target.is_file() {
+            let parent = target
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.workspace.clone());
+            let name = target
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let len = target.metadata().map(|meta| meta.len()).unwrap_or(0);
+            (
+                parent,
+                vec![Entry {
+                    rel_path: name,
+                    is_dir: false,
+                    len,
+                }],
+            )
+        } else {
+            match self.ops.walk(&target) {
+                Ok(entries) => (target, entries),
+                Err(err) => {
+                    return ToolResult::error(call.call_id.clone(), format!("walk failed: {err}"));
+                }
+            }
+        };
 
         let effective = if literal {
             regex::escape(pattern)
@@ -670,12 +698,6 @@ impl ToolExecutor {
             }
         };
 
-        let entries = match self.ops.walk(&root) {
-            Ok(entries) => entries,
-            Err(err) => {
-                return ToolResult::error(call.call_id.clone(), format!("walk failed: {err}"));
-            }
-        };
         let prefix = root.strip_prefix(&self.workspace).unwrap_or(&root);
         let mut matches: Vec<String> = Vec::new();
         let mut truncated = false;

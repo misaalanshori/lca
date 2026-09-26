@@ -45,3 +45,6 @@ mod resume_message_counts_fresh;
 // released 0.1.x defect: re-compaction dropped the previous summary.
 #[path = "13-compaction-keeps-prior-summary.rs"]
 mod compaction_keeps_prior_summary;
+// released 0.1.x defect: the display view dropped truncation warnings.
+#[path = "14-display-view-keeps-truncation.rs"]
+mod display_view_keeps_truncation;

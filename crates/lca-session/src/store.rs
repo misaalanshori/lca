@@ -617,11 +617,6 @@ impl SessionStore {
             .next()
             .expect("session-start is always the first record"))
     }
-
-    /// Raw records of this session only (no fork chain).
-    pub(crate) fn raw(&self, session: &Session) -> Result<Vec<lca_protocol::Record>> {
-        Ok(self.read(session)?.records)
-    }
 }
 
 // The record variant is large by nature (it mirrors the log schema);

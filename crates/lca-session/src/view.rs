@@ -26,24 +26,23 @@ pub enum ViewMode {
 impl SessionStore {
     /// Read a session's resolved view (FR-SESS-7 export and the interface).
     pub fn read_with(&self, session: &Session, mode: ViewMode) -> Result<ReadOutcome> {
-        let mut chained = self.chain(session)?;
-        match mode {
-            ViewMode::Audit => {}
-            ViewMode::Display => chained = suppress_compacted(chained),
+        let mut outcome = self.chain(session)?;
+        if matches!(mode, ViewMode::Display) {
+            outcome.records = suppress_compacted(outcome.records);
         }
-        Ok(ReadOutcome {
-            records: chained,
-            truncated: false,
-            skipped_unknown: 0,
-            warnings: Vec::new(),
-        })
+        Ok(outcome)
     }
 
     /// All raw records of this session and its ancestors, forks followed:
     /// the ancestors stop at the fork point, and the child's own
     /// `session-start` is dropped once a parent contributed history.
-    fn chain(&self, session: &Session) -> Result<Vec<Record>> {
-        let mut chain = Vec::new();
+    fn chain(&self, session: &Session) -> Result<ReadOutcome> {
+        let mut outcome = ReadOutcome {
+            records: Vec::new(),
+            truncated: false,
+            skipped_unknown: 0,
+            warnings: Vec::new(),
+        };
         let mut current = Some(session.clone());
         let mut visited = BTreeSet::new();
         while let Some(handle) = current {
@@ -53,38 +52,47 @@ impl SessionStore {
                 });
             }
             let meta = self.meta(&handle)?;
-            let own = self.raw(&handle)?;
+            let own = self.read(&handle)?;
+            outcome.truncated |= own.truncated;
+            outcome.skipped_unknown += own.skipped_unknown;
+            outcome.warnings.extend(own.warnings);
             let cut_at = match &meta.parent_session {
                 Some(parent_id) => {
                     let parent = self.session_handle(parent_id, &handle)?;
                     let parent_chain = self.chain(&parent)?;
+                    outcome.truncated |= parent_chain.truncated;
+                    outcome.skipped_unknown += parent_chain.skipped_unknown;
+                    outcome.warnings.extend(parent_chain.warnings);
                     let parent_record = meta.parent_record.as_deref().unwrap_or_default();
                     let cut = parent_chain
+                        .records
                         .iter()
                         .position(|r| r.id() == Some(parent_record))
                         .ok_or_else(|| crate::Error::ForkPointMissing {
                             session: handle.id().to_string(),
                             record: parent_record.to_string(),
                         })?;
-                    chain.splice(0..0, parent_chain[..=cut].iter().cloned());
+                    outcome
+                        .records
+                        .splice(0..0, parent_chain.records[..=cut].iter().cloned());
                     true
                 }
                 None => false,
             };
-            let mut tail = own;
+            let mut tail = own.records;
             if cut_at {
                 // Keep exactly one session-start: the root's.
                 if matches!(tail.first(), Some(Record::SessionStart { .. })) {
                     tail.remove(0);
                 }
             }
-            chain.extend(tail);
+            outcome.records.extend(tail);
             current = match meta.parent_session {
                 Some(_) => break, // ancestors already spliced in above
                 None => None,
             };
         }
-        Ok(chain)
+        Ok(outcome)
     }
 
     /// Reconstruct the parent handle for a fork (parent id plus the child's

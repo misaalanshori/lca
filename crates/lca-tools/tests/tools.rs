@@ -405,6 +405,35 @@ async fn list_glob_and_grep_search_the_workspace() {
     );
 }
 
+// A file path greps that file. Walking it as a directory failed with
+// "Not a directory", which a model that naturally passes a file hits.
+#[tokio::test]
+async fn grep_accepts_a_file_path() {
+    let ws = scratch("grep-file");
+    std::fs::create_dir_all(ws.join("src")).expect("mkdir");
+    std::fs::write(ws.join("src/main.rs"), "fn main() {}\nfn other() {}\n").expect("write");
+    let mut exec = executor(&ws);
+    let result = run(
+        &mut exec,
+        &call(
+            "grep",
+            serde_json::json!({"pattern": "fn main", "path": "src/main.rs"}),
+        ),
+    )
+    .await;
+    assert_eq!(result.status, ToolResultStatus::Ok, "{}", result.content);
+    assert!(
+        result.content.contains("src/main.rs:1:"),
+        "{}",
+        result.content
+    );
+    assert!(
+        !result.content.contains("Not a directory"),
+        "{}",
+        result.content
+    );
+}
+
 // Verifies: FR-TOOL-3 (shell always asks; reads and writes outside the
 // workspace ask; in-workspace calls do not)
 #[test]
