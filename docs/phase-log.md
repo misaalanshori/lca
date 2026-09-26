@@ -1006,3 +1006,45 @@ Suite grew from 407 to 429 tests. Commits: `1973e76` (P0), `3804c23` (P1),
 `a2724f6` (P2), `3013519` (P3), `756e46b` (P4), `c5f1123` (P6), `a3b0680`
 (P5 ABI). See `cycle4-report.md` (out of tree) for the full account and the
 deviations.
+
+## Cycle 5 — finish it (no new features)
+
+Started 2026-09-26. The rule of the cycle, from cycle 3's own
+recommendation: stop adding features, make each thing feel finished.
+
+**P0 — the nightly fuzz.** The fuzz crate is its own workspace, so no gate
+built it; cycle 4's `Archive` change left a target uncompilable and the
+nightly died at build after the others had run their full budget. A second
+one was found by auditing: `manifest.rs` asserted `!worlds.is_empty()`,
+which the data-only package shape makes false. All four build;
+`scripts/fuzz-check.sh` and the `fuzz targets build` CI job gate them;
+regression 19 pins the two contracts the targets asserted wrongly.
+
+**P1 — the picker UI.** `/login` is a real list picker over every enabled
+provider's `login-options`, with the host's universal "Custom endpoint..."
+last. Per-field masking (a key is asterisks, a URL or model id is not).
+`/login <provider>` scopes, `/login <option-id>` scripts. The override file
+merges named custom endpoints. `GET /models` discovery with the curated
+fallback. **Two defects found by driving:** the bundled native extension
+never had its `resources` source set (the presets were dead weight), and a
+20-row picker truncated its last rows so the universal entry was
+unreachable.
+
+**P2 — the drives.** Five tmux journeys in `dogfood-journal.md`: the login
+journey end to end with a real key and a real first turn, discovery and
+its fallback on a live endpoint, Custom endpoint's three fields, disable
+drops the presets, and the picker under load.
+
+**P3 — the small kinks.** OCI resources: owner-accepted deferral, ceiling
+named at the site (fail-loud was tried and reverted - it broke the
+published artifacts). `/attach`'s notice documented. Skills rescan not
+cached.
+
+**P4 — housekeeping.** Both plan documents synced to cycles 4 and 5;
+cross-references that moved to `lcastale/` fixed in the living documents
+only; the Windows quarantine ledger re-checked (compiles, never retried on
+a console, clock from 2026-09-25).
+
+Suite: 455 tests. Commits: `baa2c14` (P0), `46c920a` (P1), `fac84dd` (P3),
+and this one. See `cycle5-report.md` (out of tree) for the full account,
+the deviations, and the re-freeze readiness note.
