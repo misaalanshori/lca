@@ -7,6 +7,7 @@ package lca:ext@0.2.0;
 world ui {
   import lca:host/log@0.2.0;
   import lca:host/resources@0.2.0;
+  import lca:host/state@0.2.0;
   import lca:host/ui@0.2.0;
   export render;
   export interaction;

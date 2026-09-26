@@ -227,6 +227,11 @@ pub const RESOURCE_READ_MAX_BYTES: u64 = RESOURCE_FILE_MAX_BYTES;
 /// Per-package size cap (ADR-0030's suggested 32 MB), enforced at install.
 pub const RESOURCE_PACKAGE_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
+/// Per-value cap for one `state` entry (ADR-0030's "few MB").
+pub const STATE_VALUE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+/// Per-namespace cap for the whole `state` bag.
+pub const STATE_TOTAL_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
 /// The engine: one per loaded extension.
 pub struct Capabilities {
     name: String,
@@ -1783,6 +1788,105 @@ connection: close
                 Ok(std::fs::read(file)?)
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // state (ADR-0030)
+    // ------------------------------------------------------------------
+
+    /// This extension's state namespace directory
+    /// (`<state_dir>/state/<name>`; identity-derived, never guest input).
+    pub fn state_dir(&self) -> PathBuf {
+        self.roots.state_dir.join("state").join(&self.name)
+    }
+
+    /// Read one key from this extension's own state namespace. Absence is
+    /// `None`, mirroring `credentials_get`.
+    pub fn state_read(&self, key: &str) -> Result<Option<Vec<u8>>, CapabilityError> {
+        let path = self.state_path(key)?;
+        match std::fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(CapabilityError::Io(err.to_string())),
+        }
+    }
+
+    /// Write one key into this extension's own state namespace, bounded by
+    /// the per-value and per-namespace caps.
+    pub fn state_write(&self, key: &str, value: &[u8]) -> Result<(), CapabilityError> {
+        if value.len() as u64 > STATE_VALUE_MAX_BYTES {
+            return Err(CapabilityError::Invalid(format!(
+                "state value `{key}` is {} bytes, over the {STATE_VALUE_MAX_BYTES} byte cap",
+                value.len()
+            )));
+        }
+        let path = self.state_path(key)?;
+        let mut total = 0u64;
+        if let Some(dir) = path.parent().filter(|dir| dir.is_dir()) {
+            for entry in std::fs::read_dir(dir)? {
+                let entry = entry?;
+                if entry.file_name().to_string_lossy() != key {
+                    total += entry.metadata()?.len();
+                }
+            }
+        }
+        if total + value.len() as u64 > STATE_TOTAL_MAX_BYTES {
+            return Err(CapabilityError::Invalid(format!(
+                "the state namespace would exceed the {STATE_TOTAL_MAX_BYTES} byte cap"
+            )));
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, value)?;
+        Ok(())
+    }
+
+    /// Delete one key from this extension's own state namespace.
+    pub fn state_delete(&self, key: &str) -> Result<(), CapabilityError> {
+        let path = self.state_path(key)?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(CapabilityError::Io(err.to_string())),
+        }
+    }
+
+    /// Every key in this extension's state namespace, sorted.
+    pub fn state_list(&self) -> Result<Vec<(String, u64)>, CapabilityError> {
+        let dir = self.state_dir();
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let meta = entry.metadata()?;
+            if meta.is_file() {
+                entries.push((entry.file_name().to_string_lossy().into_owned(), meta.len()));
+            }
+        }
+        entries.sort();
+        Ok(entries)
+    }
+
+    /// Resolve a state key to a file inside the extension's own namespace.
+    /// Keys are a safe filename charset: a guest key can never carry a path
+    /// (ADR-0030: identity namespace, never guest input).
+    fn state_path(&self, key: &str) -> Result<PathBuf, CapabilityError> {
+        let safe = !key.is_empty()
+            && key.len() <= 200
+            && key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        if !safe {
+            let err = CapabilityError::Invalid(format!(
+                "state key `{key}` must be 1-200 chars of letters, digits, `-`, `_`, or `.`"
+            ));
+            self.record("state", key, &err.to_string());
+            return Err(err);
+        }
+        Ok(self.state_dir().join(key))
     }
 
     /// Resolve a relative resource path inside the bag root, refusing any

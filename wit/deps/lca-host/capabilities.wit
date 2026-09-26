@@ -186,3 +186,30 @@ interface resources {
   /// Read one resource's full bytes.
   read: func(path: string) -> result<list<u8>, error>;
 }
+
+/// The `state` bag (ADR-0030): mutable, non-secret, extension-internal
+/// data - caches, last-used values, counters. Always available (like
+/// `log`), keyed by extension identity, size-capped, wiped on uninstall.
+/// Not secret-grade: secrets go in `credentials`. Never exported into a
+/// session. The namespace is identity-derived, never guest input, so a
+/// cross-extension read has no address to take.
+interface state {
+  variant error {
+    /// The key is not a safe identifier, or the value exceeds the cap.
+    invalid(string),
+    permission(string),
+    io(string),
+  }
+
+  record state-entry {
+    key: string,
+    size: u64,
+  }
+
+  /// Absence reads as `none`, like `credentials.get`, so a check needs no
+  /// denial/absence distinction.
+  read: func(key: string) -> option<list<u8>>;
+  write: func(key: string, value: list<u8>) -> result<_, error>;
+  delete: func(key: string) -> result<_, error>;
+  list-keys: func() -> result<list<state-entry>, error>;
+}

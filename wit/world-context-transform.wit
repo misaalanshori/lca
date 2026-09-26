@@ -5,6 +5,7 @@ package lca:ext@0.2.0;
 world context-transform {
   import lca:host/log@0.2.0;
   import lca:host/resources@0.2.0;
+  import lca:host/state@0.2.0;
   /// Skills handling reads the workspace's skills directory through the
   /// declared `fs` scope; a transform that needs no files imports only
   /// the log.

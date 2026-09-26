@@ -8,6 +8,7 @@ package lca:ext@0.2.0;
 world provider {
   import lca:host/log@0.2.0;
   import lca:host/resources@0.2.0;
+  import lca:host/state@0.2.0;
   import lca:host/net@0.2.0;
   import lca:host/oauth@0.2.0;
   import lca:host/credentials@0.2.0;

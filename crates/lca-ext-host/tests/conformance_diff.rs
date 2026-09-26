@@ -208,6 +208,16 @@ async fn native_and_wasm_modes_produce_identical_results() {
         r#"{"mode":"resource-read","path":"../../etc/passwd"}"#.to_string(),
         r#"{"mode":"resource-read","path":"/etc/passwd"}"#.to_string(),
         r#"{"mode":"resource-read","path":"missing.txt"}"#.to_string(),
+        // The `state` bag (ADR-0030): ordered so both modes see the same
+        // bag (the two engines share the namespace directory).
+        r#"{"mode":"state-list"}"#.to_string(),
+        r#"{"mode":"state-write","key":"counter","value":"1"}"#.to_string(),
+        r#"{"mode":"state-read","key":"counter"}"#.to_string(),
+        r#"{"mode":"state-list"}"#.to_string(),
+        r#"{"mode":"state-delete","key":"counter"}"#.to_string(),
+        r#"{"mode":"state-read","key":"counter"}"#.to_string(),
+        // A key that tries to carry a path is refused and recorded.
+        r#"{"mode":"state-write","key":"../escape","value":"x"}"#.to_string(),
         r#"{"mode":"fs-write","scope":"workspace","path":"written.txt","content":"hello"}"#
             .to_string(),
         spawn_args("echo", "diff-marker"),

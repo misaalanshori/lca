@@ -55,8 +55,24 @@ pub enum ExtCmd {
         /// The extension to disable.
         name: String,
     },
+    /// Manage an extension's `state` bag (ADR-0030).
+    State {
+        /// The state operation.
+        #[command(subcommand)]
+        cmd: StateCmd,
+    },
     /// List installed extensions.
     List,
+}
+
+/// `lca ext state ...` subcommands.
+#[derive(clap::Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum StateCmd {
+    /// Delete an extension's state bag.
+    Clear {
+        /// The extension whose state to clear.
+        name: String,
+    },
 }
 
 /// The install tree under the user data directory.
@@ -218,25 +234,72 @@ pub async fn run(cmd: ExtCmd) -> i32 {
             }
         },
         ExtCmd::Update { name, all, yes } => update(&tree, name, all, yes).await,
-        ExtCmd::Remove { name } => match tree.remove(&name) {
-            Ok(true) => {
-                println!("removed {name}");
-                crate::exit::OK
+        ExtCmd::Remove { name } => {
+            // ADR-0030: state is wiped on uninstall (it is the extension's
+            // own scratch, not something a reinstall should inherit).
+            let removed = tree.remove(&name);
+            match removed {
+                Ok(true) => {
+                    let _ = std::fs::remove_dir_all(crate::data_dir().join("state").join(&name));
+                    println!("removed {name}");
+                    crate::exit::OK
+                }
+                Ok(false) => {
+                    eprintln!("error: `{name}` is not installed");
+                    crate::exit::USAGE
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    crate::exit::INTERNAL
+                }
             }
-            Ok(false) => {
-                eprintln!("error: `{name}` is not installed");
-                crate::exit::USAGE
-            }
-            Err(err) => {
-                eprintln!("error: {err}");
-                crate::exit::INTERNAL
-            }
-        },
+        }
         ExtCmd::Info { name } => info(&tree, &name),
         ExtCmd::Enable { name } => set_enabled(&name, true),
         ExtCmd::Disable { name } => set_enabled(&name, false),
+        ExtCmd::State { cmd } => match cmd {
+            StateCmd::Clear { name } => clear_state(&name),
+        },
         ExtCmd::List => list(&tree),
     }
+}
+
+/// Delete one extension's `state` bag (ADR-0030).
+fn clear_state(name: &str) -> i32 {
+    clear_state_in(&crate::data_dir(), name)
+}
+
+/// The testable core of [`clear_state`]: the data dir is injected.
+fn clear_state_in(data: &std::path::Path, name: &str) -> i32 {
+    let dir = data.join("state").join(name);
+    if !dir.exists() {
+        println!("{name}: no state to clear");
+        return crate::exit::OK;
+    }
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => {
+            println!("cleared {name} state");
+            crate::exit::OK
+        }
+        Err(err) => {
+            eprintln!("error: cannot clear state: {err}");
+            crate::exit::INTERNAL
+        }
+    }
+}
+
+/// The total bytes in one extension's `state` bag (0 when absent).
+fn state_bytes(data: &std::path::Path, name: &str) -> u64 {
+    let dir = data.join("state").join(name);
+    std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| entry.metadata().ok())
+                .map(|meta| meta.len())
+                .sum()
+        })
+        .unwrap_or(0)
 }
 
 /// Enable or disable an extension for the current project (FR-PROV-9,
@@ -487,6 +550,11 @@ fn info(tree: &InstallTree, name: &str) -> i32 {
             // FR-EXT-9: the count that notices an extension trying
             // things it never declared.
             println!("denials:  {}", tree.denial_count(name));
+            // ADR-0030: the state bag is visible (and clearable).
+            let state_bytes = state_bytes(&crate::data_dir(), name);
+            if state_bytes > 0 {
+                println!("state:    {state_bytes} bytes (`lca ext state clear {name}`)");
+            }
             crate::exit::OK
         }
         Ok(None) => {
@@ -560,6 +628,7 @@ fn list(tree: &InstallTree) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::parse_manifest_strict;
+    use super::{clear_state_in, state_bytes};
 
     const VALID: &str = r#"name = "word-count"
 version = "1.0.0"
@@ -650,5 +719,25 @@ redirect_path = "/callback"
         let store = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open");
         assert_eq!(store.extension_enabled(&project, "skills"), Some(true));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: ADR-0030 (state is cleared per namespace and only that one).
+    #[test]
+    fn clearing_state_removes_only_that_namespace() {
+        let root = lca_testkit::scratch_path("ext-state-clear");
+        std::fs::create_dir_all(root.join("state/alpha")).expect("mkdir");
+        std::fs::write(root.join("state/alpha/counter"), b"1").expect("write");
+        std::fs::create_dir_all(root.join("state/beta")).expect("mkdir");
+        std::fs::write(root.join("state/beta/counter"), b"2").expect("write");
+
+        assert_eq!(clear_state_in(&root, "alpha"), crate::exit::OK);
+        assert!(!root.join("state/alpha").exists());
+        assert!(
+            root.join("state/beta/counter").exists(),
+            "another extension's namespace is untouched"
+        );
+        // Clearing an absent bag is not an error.
+        assert_eq!(clear_state_in(&root, "alpha"), crate::exit::OK);
+        assert_eq!(state_bytes(&root, "beta"), 1);
     }
 }

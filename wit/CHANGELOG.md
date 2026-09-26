@@ -32,6 +32,11 @@ with no interface change between them.
   the `tool`, `provider`, `compaction`, `context-transform`, and `ui` worlds.
   Additive: a new host import interface, so an extension built against the
   previous WIT keeps loading; a rebuilt component declares `abi = "0.2"`.
+- The `state` host import (`lca:host/state`): `read`, `write`, `delete`, and
+  `list-keys`, the extension's own mutable, non-secret data bag (ADR-0030).
+  Always available, identity-namespaced, size-capped, wiped on uninstall;
+  not secret-grade (secrets go in `credentials`). Imported by the same five
+  worlds. Additive, same as `resources`.
 - The `content-block` variant in the `types` interface.
 
 ##1.0.0 — 2026-09-23

@@ -573,6 +573,62 @@ fn resources_error(err: CapabilityError) -> lca_ext_abi::host::tool::lca::host::
     }
 }
 
+impl lca_ext_abi::host::tool::lca::host::state::Host for HostState {
+    fn read(&mut self, key: String) -> Option<Vec<u8>> {
+        self.cap.state_read(&key).unwrap_or(None)
+    }
+
+    fn write(
+        &mut self,
+        key: String,
+        value: Vec<u8>,
+    ) -> Result<(), lca_ext_abi::host::tool::lca::host::state::Error> {
+        self.cap.state_write(&key, &value).map_err(state_error)
+    }
+
+    fn delete(
+        &mut self,
+        key: String,
+    ) -> Result<(), lca_ext_abi::host::tool::lca::host::state::Error> {
+        self.cap.state_delete(&key).map_err(state_error)
+    }
+
+    fn list_keys(
+        &mut self,
+    ) -> Result<
+        Vec<lca_ext_abi::host::tool::lca::host::state::StateEntry>,
+        lca_ext_abi::host::tool::lca::host::state::Error,
+    > {
+        self.cap
+            .state_list()
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(
+                        |(key, size)| lca_ext_abi::host::tool::lca::host::state::StateEntry {
+                            key,
+                            size,
+                        },
+                    )
+                    .collect()
+            })
+            .map_err(state_error)
+    }
+}
+
+fn state_error(err: CapabilityError) -> lca_ext_abi::host::tool::lca::host::state::Error {
+    use lca_ext_abi::host::tool::lca::host::state::Error as E;
+    match err {
+        CapabilityError::Invalid(detail) => E::Invalid(detail),
+        CapabilityError::Permission(detail) | CapabilityError::NotGranted(detail) => {
+            E::Permission(detail)
+        }
+        CapabilityError::NotFound(detail)
+        | CapabilityError::Io(detail)
+        | CapabilityError::Timeout(detail) => E::Io(detail),
+    }
+}
+
 impl lca_ext_abi::host::tool::lca::ext::types::Host for HostState {}
 
 impl HostState {

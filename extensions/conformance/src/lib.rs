@@ -35,6 +35,14 @@ pub trait Cap {
     fn resource_list(&self, prefix: &str) -> Result<Vec<(String, u64)>, CapabilityError>;
     /// Read one of the extension's own resources.
     fn resource_read(&self, path: &str) -> Result<Vec<u8>, CapabilityError>;
+    /// Read one key from the extension's own state bag (absence is `None`).
+    fn state_read(&self, key: &str) -> Result<Option<Vec<u8>>, CapabilityError>;
+    /// Write one key into the extension's own state bag.
+    fn state_write(&self, key: &str, value: &[u8]) -> Result<(), CapabilityError>;
+    /// Delete one key from the extension's own state bag.
+    fn state_delete(&self, key: &str) -> Result<(), CapabilityError>;
+    /// List the extension's own state bag.
+    fn state_list(&self) -> Result<Vec<(String, u64)>, CapabilityError>;
     /// Spawn a program in a granted scope.
     fn process_spawn(
         &self,
@@ -236,6 +244,67 @@ pub fn run_shared(cap: &dyn Cap, mode: &str, args: &serde_json::Value) -> ModeOu
                 Err(err) => fail(err),
             }
         }
+        "state-write" => {
+            let (Some(key), Some(value)) = (
+                args.get("key").and_then(|v| v.as_str()),
+                args.get("value").and_then(|v| v.as_str()),
+            ) else {
+                return fail(CapabilityError::Invalid(
+                    "state-write needs key and value".to_string(),
+                ));
+            };
+            match cap.state_write(key, value.as_bytes()) {
+                Ok(()) => ModeOutcome {
+                    ok: true,
+                    text: format!("state wrote {key}"),
+                },
+                Err(err) => fail(err),
+            }
+        }
+        "state-read" => {
+            let Some(key) = args.get("key").and_then(|v| v.as_str()) else {
+                return fail(CapabilityError::Invalid("state-read needs key".to_string()));
+            };
+            match cap.state_read(key) {
+                Ok(Some(bytes)) => ModeOutcome {
+                    ok: true,
+                    text: format!("state: {}", String::from_utf8_lossy(&bytes)),
+                },
+                Ok(None) => ModeOutcome {
+                    ok: true,
+                    text: "state: <none>".to_string(),
+                },
+                Err(err) => fail(err),
+            }
+        }
+        "state-delete" => {
+            let Some(key) = args.get("key").and_then(|v| v.as_str()) else {
+                return fail(CapabilityError::Invalid(
+                    "state-delete needs key".to_string(),
+                ));
+            };
+            match cap.state_delete(key) {
+                Ok(()) => ModeOutcome {
+                    ok: true,
+                    text: format!("state deleted {key}"),
+                },
+                Err(err) => fail(err),
+            }
+        }
+        "state-list" => match cap.state_list() {
+            Ok(entries) => ModeOutcome {
+                ok: true,
+                text: format!(
+                    "state: {}",
+                    entries
+                        .iter()
+                        .map(|(key, size)| format!("{key}:{size}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ),
+            },
+            Err(err) => fail(err),
+        },
         "spawn" => {
             let (Some(program), Some(cwd)) = (
                 args.get("program").and_then(|v| v.as_str()),
@@ -776,6 +845,18 @@ mod native {
         fn resource_read(&self, path: &str) -> Result<Vec<u8>, CapabilityError> {
             self.0.resource_read(path)
         }
+        fn state_read(&self, key: &str) -> Result<Option<Vec<u8>>, CapabilityError> {
+            self.0.state_read(key)
+        }
+        fn state_write(&self, key: &str, value: &[u8]) -> Result<(), CapabilityError> {
+            self.0.state_write(key, value)
+        }
+        fn state_delete(&self, key: &str) -> Result<(), CapabilityError> {
+            self.0.state_delete(key)
+        }
+        fn state_list(&self) -> Result<Vec<(String, u64)>, CapabilityError> {
+            self.0.state_list()
+        }
         fn process_spawn(
             &self,
             program: &str,
@@ -1142,11 +1223,12 @@ mod tool_world {
             "lca:host/process@0.2.0": generate,
             "lca:host/pty@0.2.0": generate,
             "lca:host/resources@0.2.0": generate,
+            "lca:host/state@0.2.0": generate,
         },
     });
 
     use lca::ext::types::ToolCall;
-    use lca::host::{fs, process, pty, resources};
+    use lca::host::{fs, process, pty, resources, state};
 
     use crate::{Cap, ModeOutcome, mode_and_args, run_shared, schema_json};
     use exports::lca::ext::execute::Guest as ExecuteTrait;
@@ -1196,6 +1278,15 @@ mod tool_world {
         }
     }
 
+    fn map_state(err: state::Error) -> crate::CapabilityError {
+        use crate::CapabilityError as E;
+        match err {
+            state::Error::Permission(d) => E::Permission(d),
+            state::Error::Invalid(d) => E::Invalid(d),
+            state::Error::Io(d) => E::Io(d),
+        }
+    }
+
     /// The guest's capability view: host imports behind every call.
     struct GuestCap;
 
@@ -1233,6 +1324,25 @@ mod tool_world {
         }
         fn resource_read(&self, path: &str) -> Result<Vec<u8>, crate::CapabilityError> {
             resources::read(path).map_err(map_resources)
+        }
+        fn state_read(&self, key: &str) -> Result<Option<Vec<u8>>, crate::CapabilityError> {
+            Ok(state::read(key))
+        }
+        fn state_write(&self, key: &str, value: &[u8]) -> Result<(), crate::CapabilityError> {
+            state::write(key, value).map_err(map_state)
+        }
+        fn state_delete(&self, key: &str) -> Result<(), crate::CapabilityError> {
+            state::delete(key).map_err(map_state)
+        }
+        fn state_list(&self) -> Result<Vec<(String, u64)>, crate::CapabilityError> {
+            state::list_keys()
+                .map(|entries| {
+                    entries
+                        .into_iter()
+                        .map(|entry| (entry.key, entry.size))
+                        .collect()
+                })
+                .map_err(map_state)
         }
         fn process_spawn(
             &self,
@@ -1478,6 +1588,7 @@ mod provider_world {
             "lca:host/oauth@0.2.0": generate,
             "lca:host/credentials@0.2.0": generate,
             "lca:host/resources@0.2.0": generate,
+            "lca:host/state@0.2.0": generate,
         },
     });
 
@@ -1689,6 +1800,7 @@ mod compaction_world {
             "lca:host/completion@0.2.0": generate,
             "lca:host/types@0.2.0": generate,
             "lca:host/resources@0.2.0": generate,
+            "lca:host/state@0.2.0": generate,
         },
     });
 
@@ -1746,6 +1858,7 @@ mod transform_world {
             "lca:host/log@0.2.0": generate,
             "lca:host/fs@0.2.0": generate,
             "lca:host/resources@0.2.0": generate,
+            "lca:host/state@0.2.0": generate,
         },
     });
 
@@ -1858,6 +1971,7 @@ mod ui_world {
             "lca:host/log@0.2.0": generate,
             "lca:host/ui@0.2.0": generate,
             "lca:host/resources@0.2.0": generate,
+            "lca:host/state@0.2.0": generate,
         },
     });
 

@@ -4,6 +4,7 @@ package lca:ext@0.2.0;
 world tool {
   import lca:host/log@0.2.0;
   import lca:host/resources@0.2.0;
+  import lca:host/state@0.2.0;
   // Capability interfaces for tool-world components. The host provides
   // every interface in a denied state and raises it to the granted state
   // from the manifest, so an undeclared capability call returns a
