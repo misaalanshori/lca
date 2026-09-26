@@ -229,6 +229,9 @@ pub struct SseDecoder {
     buffer: String,
     open_calls: Vec<(usize, String, String)>, // (index, call_id, name)
     finished: bool,
+    /// Whether any well-formed frame (or `[DONE]`) was seen: a body with
+    /// none is not an empty answer, it is not an SSE stream.
+    saw_data: bool,
 }
 
 impl SseDecoder {
@@ -256,6 +259,14 @@ impl SseDecoder {
                 emit(StreamEvent::ToolCallEnd { call_id });
             }
         }
+        if !self.saw_data {
+            // A 200 with a body that never spoke SSE is not an empty
+            // answer; surface it instead of reading as a silent success.
+            emit(StreamEvent::Error {
+                message: "the provider's response was not a server-sent event stream".to_string(),
+                retryable: false,
+            });
+        }
     }
 
     fn handle_event(&mut self, raw: &str, emit: &mut dyn FnMut(StreamEvent)) {
@@ -269,6 +280,7 @@ impl SseDecoder {
                 continue;
             }
             if payload == "[DONE]" {
+                self.saw_data = true;
                 for (_, call_id, _) in std::mem::take(&mut self.open_calls) {
                     emit(StreamEvent::ToolCallEnd { call_id });
                 }
@@ -278,6 +290,7 @@ impl SseDecoder {
             let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
                 continue; // a malformed frame drops; the stream continues
             };
+            self.saw_data = true;
             self.handle_value(&value, emit);
         }
     }
@@ -1170,6 +1183,33 @@ mod tests {
         assert_eq!(
             text_only[0]["content"], "hi",
             "no image keeps the string form"
+        );
+    }
+
+    #[test]
+    fn a_body_with_no_sse_frames_reports_an_error() {
+        let mut events = Vec::new();
+        parse_sse(b"this is not SSE at all\n", &mut |event| events.push(event));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Error { .. })),
+            "a non-SSE body must surface, not read as an empty success: {events:?}"
+        );
+    }
+
+    #[test]
+    fn a_valid_stream_with_no_content_is_not_an_error() {
+        let mut events = Vec::new();
+        parse_sse(
+            b"data: {\"choices\":[{\"delta\":{}}]}\n\ndata: [DONE]\n\n",
+            &mut |event| events.push(event),
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Error { .. })),
+            "an empty but well-formed stream is a valid empty answer: {events:?}"
         );
     }
 }

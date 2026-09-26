@@ -48,3 +48,6 @@ mod compaction_keeps_prior_summary;
 // released 0.1.x defect: the display view dropped truncation warnings.
 #[path = "14-display-view-keeps-truncation.rs"]
 mod display_view_keeps_truncation;
+// released 0.1.x defect: a non-SSE body read as a silent empty success.
+#[path = "15-malformed-sse-not-silent.rs"]
+mod malformed_sse_not_silent;
