@@ -22,6 +22,8 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Core.** In the narrow sense from ADR-0013, code with exactly one implementation and no extension point at all: the agent loop's shape, the session log's framing, the permission enforcement path. Not a loose synonym for "the main codebase" or "the important part"; a build-time backend, such as the read and write tools, is not core in this sense even though it ships unconditionally, because it has more than one implementation selected at build time.
 
+**Data-only extension.** A package with `worlds = []` and no component: a manifest and a `resources` bag, nothing else. Installs and removes through the same pipeline as any other package, and the loader skips registering it because there is nothing to register. A skill pack is the common case. See ADR-0030 and ADR-0032.
+
 **Delivery mode.** Whether a given extension instance runs native-linked, compiled directly into the binary with no sandbox, or as a WASM component under the capability-enforced host. A single extension's source can support both; delivery mode is a build-time or install-time choice, not a property of the source itself. See ADR-0002 and ADR-0013.
 
 **Dynamic suffix.** The portion of a resolved message list after the stable prefix: the turns since the most recent compaction. See `stable prefix` below.
@@ -42,19 +44,27 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Lockfile.** The extension lockfile `lca-registry` owns, recording each installed extension's resolved digest, source reference, and approved-capability hash. Not `Cargo.lock`, which also exists in this project and means the ordinary Rust-ecosystem thing; where both could be meant, "extension lockfile" and "Cargo lockfile" are used explicitly.
 
+**Login surface.** The `provider-login` export (ADR-0033): `login-options` returns the picker choices the host renders, and `login-submit` consumes the user's answers, stores the secret in the extension's own credentials namespace, and returns opaque `setting: value` pairs the host persists. The host is UI, courier, and consent only - it never interprets a preset's shape. Not the same as `login`, which is the extension's own self-contained authentication flow (an OAuth dance).
+
 **Manifest.** The TOML file, `extension.toml`, declaring an extension's identity, ABI target, implemented worlds, and requested capabilities. The install-time consent surface; see `schemas/extension-manifest.schema.json`.
 
 **OCI artifact.** A component and its manifest, published to any registry implementing the OCI Distribution Specification, resolved by reference and pinned by digest. One of the source kinds `lca-registry` understands; see ADR-0010 for the others.
 
 **Preopen.** A WASI term: a directory handle an extension receives already opened and scoped by the host, so the extension resolves paths relative to a handle it was given rather than an absolute path it constructed itself. The mechanism underneath every `fs` capability grant.
 
+**Preset.** A named endpoint entry an extension ships in its own `resources/provider-presets.toml`: id, display name, base URL, auth kind, curated model list. Extension data, not host data - disabling the extension takes its presets with it. The host's `login-options` query maps presets to picker rows and nothing more. A user's own presets live at `<config>/provider-presets.toml`. See ADR-0031.
+
 **Provider.** An extension implementing the `provider` world: model listing, streaming completions, authentication, and the `login`, `logout`, and `usage` exports from ADR-0012. Not a synonym for "vendor" or "API"; a single vendor's API is what a provider extension talks to, not what the term itself names.
+
+**Resources (bag).** An extension's own read-only package data, served by `lca:host/resources` from `resources/` and visible only to the extension that owns it - never the filesystem, never another extension. Not "system resources" (memory, handles) and not the everyday plural of "resource" in a URL sense; where ambiguity is possible, "the resources bag" is used. The host also reads some kinds for its own features, notably `resources/skills/<name>/SKILL.md`. See ADR-0030.
 
 **Scope.** In the `fs` capability specifically, one of the named vocabulary entries, `workspace`, `private`, `home-config`, or `temp`, that a manifest grants read or write access to. See `workspace` below for a term collision worth knowing about.
 
 **Session.** One durable, append-only conversation record on disk, with its own log, its own metadata, and its own identity, forkable and resumable. See `docs/session-log-format.md`.
 
 **Stable prefix.** The leading portion of a resolved message list, up to and including the most recent compaction, that a provider's prompt cache can reuse across turns unchanged. The host computes this boundary and passes it to the active provider extension on every completion call. See ADR-0017.
+
+**State (bag).** An extension's own mutable, non-secret data, served by `lca:host/state` from `<state_dir>/state/<name>/`: caches, last-used values, counters. Keyed by the extension's own identity so a cross-namespace read has no address; size-capped; wiped on uninstall. Not secret-grade - secrets go in `credentials`. Not session state and not the `stable prefix`/`dynamic suffix` sense of "state" used elsewhere. See ADR-0030.
 
 **Turn.** One round of the agent loop: a user or system input, a model's response, any tool calls that response triggers and their results, repeated until the model stops without requesting a tool. Not the same as a single model API call; a turn with three sequential tool calls involves four calls to the provider.
 

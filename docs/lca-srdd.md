@@ -62,6 +62,8 @@ This keeps startup fast and keeps deployment to one file. The trade is that a WA
 
 Not everything that varies in this design varies the same way, and conflating the three is where confusion creeps in. Fixed core has one implementation and no extension point at all: the agent loop's shape, the session log's record framing, the permission enforcement path. A build-time backend has more than one implementation, chosen when the binary or web bundle is produced, with no manifest and no consent screen, because the project itself supplies every option. The read, write, and shell tools are the clearest case: no capability gates them, because they are what defines the model's access to the workspace rather than something requesting it, but their implementation differs behind a Rust trait, a native backend for desktop and a host-delegated backend for the web target that defers to whatever the embedding JavaScript application supplies, per FR-WEB-3. A runtime extension is installed by the user, potentially from a party the project does not control, gated by the capability model, and shown a consent screen naming exactly what it can reach. Providers, skills handling, compaction, and context transforms all live here, whether or not a particular one ships enabled by default; shipping enabled by default is a packaging decision, not a different category. See ADR-0013 for the full reasoning and a table classifying every major feature in the system this way.
 
+*Annotation (2026-09-26, ADR-0034):* skills handling is the one member of that list that no longer lives here. The merge and injection of skill text moved to the host (`crates/lca-core/src/skills.rs`), because a context-transform extension cannot read another extension's `resources` bag and the three sources have to be precedence-ordered together (ADR-0030's "who reads what" table). `extensions/skills` remains in the tree as a working `context-transform` example and is not registered by default. Providers, compaction, and context transforms are unchanged.
+
 ### Crate decomposition
 
 The repository is one Cargo workspace. Each crate has one job and depends downward only. A crate never depends on `lca-cli`, and only `lca-cli` depends on everything.
@@ -196,7 +198,7 @@ Host imports are grouped by capability and match the capability names above: `lc
 
 ### Extension manifest
 
-Every extension ships a manifest next to the component. The format is TOML. It declares identity, the ABI version it targets, the worlds it implements, and the capabilities it needs with their parameters.
+Every extension ships a manifest next to the component. The format is TOML. It declares identity, the ABI version it targets, the worlds it implements, and the capabilities it needs with their parameters. It also declares the `resources` kinds its bag carries (`resources = ["skills", ...]`), which is what the installer checks the bag against and reports at consent (ADR-0030). A data-only package declares `worlds = []` and carries no component at all - only a manifest and a `resources` bag (ADR-0030/0032).
 
 ```toml
 name = "example-provider"
@@ -637,7 +639,7 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── codex/                  second OAuth provider; WASM by default
 │   ├── lmstudio/                local provider; net-local by default
 │   ├── ollama/                  local provider; net-local by default
-│   ├── skills/                 skills handling; native-linked by default
+│   ├── skills/                 a `context-transform` example; not registered by default (skills merge is host-side, ADR-0034)
 │   └── compaction-default/     the default compaction extension; native-linked by default
 ├── web/
 │   ├── orchestrator/           JS glue for the browser build
@@ -668,6 +670,8 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 ```
 
 Extensions in `extensions/` build two ways. The workspace builds them as normal crates for the native-linked path. The `xtask` build target compiles them to `wasm32-wasip2` components for the sandboxed path. Both come from the same source. `lca-cli` gates each one behind its own Cargo feature; `bundled-openai-compat`, `bundled-skills`, and `bundled-compaction-default` are on by default, the rest are off by default and installed like any third-party extension. See ADR-0013.
+
+*Annotation (2026-09-26, ADR-0034):* `bundled-skills` still exists as a Cargo feature and still compiles the crate, but nothing registers the handle it builds — the skills merge is host-side now. The feature is kept so the example stays buildable; it is not a switch that changes what runs.
 
 ## Coding standards
 
@@ -779,6 +783,8 @@ Exit test: two provider extensions work, one with an API key and one with an OAu
 Four to six weeks. Two new worlds and the capability one of them needs, proven with two independent first-party consumers rather than one.
 
 Write the `compaction` and `context-transform` worlds. Implement the `completion` capability in the host, routing a granted extension's request to whichever provider is currently active, with its own conformance cases and threat model scenario built alongside it rather than after. Wire the cache-waste module's baseline reset to the `compaction` record and the boundary-narrowing behavior to a `context-transform` extension touching the stable region, completing the ADR-0017 mechanism that Phase 3 built the provider-facing half of. Build the default compaction extension under `extensions/compaction-default/`, using `completion` for real summarization, and wire it into the session log exactly as `docs/session-log-format.md` specifies. Build skills handling under `extensions/skills/` as a `context-transform` consumer, proving the world serves a real, non-hypothetical case beyond compaction. Both ship native-linked by default.
+
+*Annotation (2026-09-26, ADR-0034):* what shipped here proved the `context-transform` world exactly as intended, and the skills merge then moved host-side for the reason above. The world's proof stands; the skills code no longer lives in that crate.
 
 Exit test: usage crossing the configured threshold triggers the default compaction extension, its summary persists across a restart without being recomputed, the cache-waste baseline resets exactly on that turn and reports zero waste on every turn after, skills handling injects matched instructions through the transform chain on an ordinary turn without affecting the cache boundary, and a transform extension that returns a rejection ends the turn with the reason surfaced rather than calling the provider.
 

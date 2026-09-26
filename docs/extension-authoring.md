@@ -165,6 +165,8 @@ The installer refuses a kind the manifest does not declare and shows the counts 
 
 For mutable, non-secret data, use `lca:host/state` - `read`/`write`/`delete`/`list-keys`, keyed by your own identity, size-capped, wiped on uninstall. Secrets go in `credentials`, never `state`.
 
+A state key is 1-200 characters of ASCII letters, digits, `.`, `_`, or `-`, because the host stores one file per key under your own namespace and a path separator would be a path surface. A key outside that set is refused with an `invalid` error naming the rule, not silently sanitized. The value is opaque bytes: up to 4 MB per key, 16 MB per namespace.
+
 ```rust
 let bytes = lca::host::resources::read("provider-presets.toml")?;
 let preset_text = String::from_utf8_lossy(&bytes);

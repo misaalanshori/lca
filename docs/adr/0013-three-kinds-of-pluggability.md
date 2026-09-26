@@ -20,6 +20,8 @@ A build-time backend is code with more than one implementation, selected when th
 
 A runtime extension is code installed by the user, potentially from a party the project does not control, gated by the capability model, shown a consent screen naming exactly what it can reach, and running either sandboxed as a WASM component or native-linked and labeled unsandboxed. Providers, skills-handling, compaction, context transforms, and anything a user installs from a registry all live here, regardless of whether a particular one ships enabled by default. Shipping enabled by default is a packaging decision; it does not move something out of this category.
 
+*Annotation (2026-09-26, ADR-0034):* skills-handling no longer lives here; the rest of the sentence stands.
+
 The test for which category something belongs in is not "could this be swapped" but "who supplies the thing it is swapped for, and does that party need to be treated as untrusted." Fixed core has one supplier: the project itself, and there is only one implementation. A build-time backend has more than one implementation, all supplied by the project, chosen once at build time. A runtime extension's implementation is supplied by whoever the user chooses to install, which is why it needs the consent and capability machinery the other two categories do not.
 
 ## Alternatives considered
@@ -41,6 +43,8 @@ Every new feature proposal should be placed into one of the three categories exp
 | Skills-handling | Runtime extension, native-linked by default |
 | Compaction | Runtime extension, native-linked by default |
 | Context transforms | Runtime extension; skills-handling is one and ships bundled, no others by default |
+
+*Annotation (2026-09-26, ADR-0034):* this row's "skills-handling" half moved categories. The skills merge and injection are host-side now (`crates/lca-core/src/skills.rs`); `extensions/skills` remains a `context-transform` example that is not registered. See ADR-0034 for why, and ADR-0030's "who reads what" table for the constraint that forced it.
 | OpenAI-compatible provider | Runtime extension, native-linked by default |
 | Antigravity, Codex providers | Runtime extension, WASM only by default |
 | MCP-bridging, external tool wrapping | Runtime extension |

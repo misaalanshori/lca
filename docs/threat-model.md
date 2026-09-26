@@ -60,6 +60,27 @@ The host import table is the enumerable surface. Every function in it is an entr
 | `lca:host/completion` request | Extension with `completion` | Consuming model output as input to extension logic; a channel for the extension to react to content it could not otherwise see |
 | `lca:host/ui` render | Extension with `ui` | Spoofing a prompt, hiding output |
 | `lca:host/log` | Every extension | Noise, minor information disclosure in diagnostics |
+| `lca:host/resources` read | Every extension (always granted) | Reading its own package data; the risk is not the read but what the bytes *are* - see the skill-text and preset scenarios below |
+| `lca:host/state` write | Every extension (always granted) | Filling the disk; planting data a later call trusts |
+| A package's `resources/` bag at install | Whoever published the package | Shipping hostile content that the host or the model will read |
+
+### The three new surfaces (ADR-0030/0031/0032)
+
+The bags and the preset data introduced three risks the table above cannot
+express as an import, because the danger is in the content rather than in
+the call. Each row names the mitigation **as built**, and what pins it.
+
+| Risk | As built | Pinned by |
+|---|---|---|
+| **Skill text as prompt injection, with a distribution channel.** A package ships `resources/skills/<name>/SKILL.md` containing instructions aimed at the model rather than the reader, and now it is in every prompt. | The install consent names the `resources` kinds and their counts, so a package cannot quietly carry a bag; a manifest that declares no `resources` kinds is refused an undeclared one. Every injected skill is attributed (`[skill <name> from <project>\|user\|<extension>]`), so injected instructions are visibly not the user's own words. Any extension can be disabled per project, which removes its skill pack with it. | `crates/lca-core/src/skills.rs` (attribution + precedence); `crates/lca-registry/src/lib.rs` (`install` refuses an undeclared kind, `resource_consent` names the counts); `crates/lca-core/tests/skills.rs` |
+| **Preset phishing.** A preset points `base_url` at an attacker's host, the picker shows a familiar name, and the user's key goes there. | The picker shows the **host**, not just the name. The key prompt is masked and never reaches the scrollback or the log. The key goes to the extension's own credentials namespace, never into configuration and never into a session record (FR-CFG-5). A base URL whose host is outside the manifest's `net` vocabulary gets the B1 ad hoc grant prompt naming that exact host, and it is login-only so a turn cannot manufacture one (FR-PERM-16). | `crates/lca-tui/src/lib.rs` (the picker's hint column, the masked prompt); `crates/lca-cli/src/login.rs` (`field_prompt`: only `api-key` is masked); `crates/lca-cli/src/tui.rs` (`ungranted_host` + the grant prompt); `crates/lca-cli/tests/e2e.rs` (`the_logins_secret_prompt_masks_input_in_a_real_terminal`, `the_picker_moves_to_a_local_preset_that_needs_no_key`) |
+| **Resource bloat and install DoS.** A package declares a huge bag and the installer or a later read pulls the host into memory games. | Per-file cap 1 MB, per-call read cap 1 MB, per-package cap 32 MB, enforced at pack, at install, and at read. `state` is capped the same way (4 MB per key, 16 MB per namespace) and wiped on uninstall. | `lca-registry::RESOURCE_FILE_MAX_BYTES` / `RESOURCE_PACKAGE_MAX_BYTES`; `lca-tools::RESOURCE_READ_MAX_BYTES`, `STATE_VALUE_MAX_BYTES`, `STATE_TOTAL_MAX_BYTES`; `crates/lca-tools/tests/resources.rs` (`a_read_over_the_size_cap_is_refused`), `crates/lca-tools/tests/state.rs` (`a_state_value_over_the_cap_is_refused`), `crates/lca-registry/tests/registry.rs` |
+
+The bags themselves are not a trust boundary in the usual sense: the path
+resolves inside the calling extension's own tree only, with no traversal,
+absolute path, NUL, or symlink escape (FR-PERM-6/7), so a hostile package
+cannot read a sibling's bag even when it tries. That is why the three rows
+above are about content, not reach.
 
 Outside the import table: the manifest parser, the session log reader, the OCI client, the HTTPS archive resolver, and the canonical ABI decode path all read input an attacker can influence. These are the fuzz targets.
 

@@ -29,6 +29,20 @@ Environment variables use the `LCA_` prefix with the key uppercased and dots rep
 | `ui.color` | `auto` or `never` | `auto` | `never` forces plain text on terminals without color support (FR-UI-5). |
 | `permissions.proposals` | table | empty | Project file only. Proposals with no force; see ADR-0006. |
 
+## Environment
+
+Environment variables are read by the provider extension that speaks the
+shape, not by the host, and they take precedence over what the login flow
+persisted. The bundled `openai-compatible` provider reads:
+
+| Variable | Meaning |
+|---|---|
+| `OPENAI_BASE_URL` | The endpoint's base URL. A non-default host needs the ad hoc `net` grant (FR-PERM-16). |
+| `OPENAI_API_KEY` | The API key. `OPENCODE_API_KEY` is accepted as a synonym. |
+| `OPENAI_MODEL` | The model id. `LCA_MODEL` is accepted as a synonym. |
+| `OPENAI_CONTEXT_WINDOW` | The context window, in tokens, when the endpoint does not report one. |
+| `OPENAI_PROMPT_CACHE_KEY` | Set to `0` to stop sending `prompt_cache_key`. **Default: on.** The key is the clamped session id, which is OpenAI's native cache-affinity parameter; some strict proxies reject unknown body fields, which is what the opt-out is for. |
+
 ## What does not live here
 
 **Credentials.** Tokens and keys go in the credential store, never in configuration and never in the session log (FR-CFG-5).
@@ -36,5 +50,7 @@ Environment variables use the `LCA_` prefix with the key uppercased and dots rep
 **Extension enablement, project trust, and ad hoc grants.** These live in the user grant store, keyed by the canonical project path, not in any file inside the project directory (FR-PERM-8, FR-PERM-19).
 
 **Provider endpoints and keys.** Each provider's base URL and login are set through that provider's own setup or login flow, so the ad hoc `net` grant for a user-chosen host attaches at the moment the host is named (FR-PERM-16).
+
+**Named custom endpoints.** The user's own presets live at `<config>/provider-presets.toml`, outside every project directory: a plain TOML list of `[[preset]]` entries (`id`, `name`, `base_url`, `auth = "bearer"|"none"`, `models`), merged into the `/login` picker alongside the extension's own presets (D1's override layer). It is user data in the config directory, not project configuration, so it never travels with a repository.
 
 **Telemetry.** There is none in 1.0 (FR-CFG-3).
