@@ -257,6 +257,28 @@ pub(crate) fn ad_hoc_host_from_authority(rest: &str) -> Option<String> {
     (!host.is_empty() && host != "api.openai.com").then_some(host)
 }
 
+/// The endpoint host that still needs an ad hoc `net` grant for this project
+/// (FR-PERM-16). `None` when none is needed: no non-default endpoint is
+/// configured, or the host is already granted. A poisoned store reads as
+/// granted so a broken lock never nags.
+pub(crate) fn ungranted_host(
+    store: &std::sync::Mutex<GrantStore>,
+    cwd: &Path,
+    host: Option<String>,
+) -> Option<String> {
+    let host = host?;
+    let covered = store
+        .lock()
+        .map(|store| {
+            store
+                .net_patterns(cwd)
+                .iter()
+                .any(|pattern| pattern == &host)
+        })
+        .unwrap_or(true);
+    (!covered).then_some(host)
+}
+
 /// Persist an ad hoc `net` grant the user approved at login (FR-PERM-16).
 /// It writes through the shared grant-store handle so the running session's
 /// capability engines and the turn loop see it and cannot clobber it.
@@ -327,7 +349,13 @@ pub(crate) fn extension_capabilities(
         roots,
         Arc::new(Mutex::new(prompt)),
         store,
-        data,
+        // The grant project is the workspace, not the data dir: shell
+        // "allow always" patterns and mid-session ad hoc `net` grants
+        // (FR-PERM-16, FR-PERM-18) are keyed by project, and the consent
+        // flows write them for `cwd`. Keying the engine by the data dir
+        // made those grants project-agnostic and hid every ad hoc grant
+        // attached after startup.
+        cwd.to_path_buf(),
         None,
     ))
 }

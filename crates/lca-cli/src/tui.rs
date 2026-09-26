@@ -141,7 +141,21 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         .read_with(&session, ViewMode::Display)
         .map_err(|err| anyhow::anyhow!("cannot read the session: {err}"))?
         .records;
-    let initial_lines: Vec<String> = records.iter().filter_map(display_line).collect();
+    let mut initial_lines: Vec<String> = records.iter().filter_map(display_line).collect();
+    // The configured endpoint can be outside the provider's manifest hosts;
+    // without its ad hoc grant every turn fails with a permission denial. Say
+    // so up front and name the one command that fixes it (FR-PERM-16). This is
+    // the env-var path, which never runs `/login` on its own.
+    if crate::provider_ready(&provider_name, &data)
+        && let Some(host) = crate::ungranted_host(&grants, cwd, crate::openai_ad_hoc_host(&data))
+    {
+        initial_lines.insert(
+            0,
+            format!(
+                "note: the endpoint {host} is not granted for this project - run /login to approve it"
+            ),
+        );
+    }
 
     let tools = Arc::new(Mutex::new(ToolExecutor::new(
         Arc::new(NativeOps),
@@ -334,6 +348,8 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         let registry = registry.clone();
         let provider_name = provider_name.clone();
         let data = data.clone();
+        let grants = grants.clone();
+        let cwd = cwd.to_path_buf();
         Arc::new(move |argument: &str| -> lca_tui::LoginNext {
             let names = registry.provider_names();
             if names.is_empty() {
@@ -363,26 +379,27 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     label: "API key for openai-compatible (input hidden)".to_string(),
                 };
             }
+            // The key is already present, so the provider reports a message
+            // rather than asking for one. The ad hoc grant is still what makes
+            // the first turn possible, so offer it first: an env-var key with a
+            // non-default endpoint had no way to be approved (the provider's
+            // message branch used to skip the grant).
+            if target == "openai-compatible"
+                && let Some(host) =
+                    crate::ungranted_host(&grants, &cwd, crate::openai_ad_hoc_host(&data))
+            {
+                return lca_tui::LoginNext::Grant {
+                    provider: target.clone(),
+                    host: host.clone(),
+                    prompt: format!(
+                        "{target}'s endpoint is {host}, which its manifest does not cover; \
+                         add it as an ad hoc grant?"
+                    ),
+                };
+            }
             match registry.invoke_generic("login", &target, &provider_name) {
                 Some(CommandEffect::ShowWidget(text)) => lca_tui::LoginNext::Message(text),
-                Some(_) => {
-                    // Login succeeded: if the configured endpoint is outside
-                    // the manifest's fixed hosts, offer the ad hoc grant now,
-                    // at the moment the user names it (FR-PERM-16).
-                    if target == "openai-compatible"
-                        && let Some(host) = crate::openai_ad_hoc_host(&data)
-                    {
-                        return lca_tui::LoginNext::Grant {
-                            provider: target.clone(),
-                            host: host.clone(),
-                            prompt: format!(
-                                "{target}'s endpoint is {host}, which its manifest does not cover; \
-                                 add it as an ad hoc grant?"
-                            ),
-                        };
-                    }
-                    lca_tui::LoginNext::Message(format!("{target}: login finished"))
-                }
+                Some(_) => lca_tui::LoginNext::Message(format!("{target}: login finished")),
                 None => lca_tui::LoginNext::Message(format!("`{target}` cannot log in")),
             }
         })
@@ -390,6 +407,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     let login_complete: lca_tui::LoginComplete = {
         let data = data.clone();
         let cwd = cwd.to_path_buf();
+        let grants = grants.clone();
         let label_cell = label_cell.clone();
         let model_cell = model_cell.clone();
         let provider = provider.clone();
@@ -411,7 +429,8 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     // A non-default endpoint needs its ad hoc `net` grant,
                     // offered now that the user is signed in (FR-PERM-16).
                     if target == "openai-compatible"
-                        && let Some(host) = crate::openai_ad_hoc_host(&data)
+                        && let Some(host) =
+                            crate::ungranted_host(&grants, &cwd, crate::openai_ad_hoc_host(&data))
                     {
                         return lca_tui::LoginNext::Grant {
                             provider: target.to_string(),
@@ -929,6 +948,76 @@ mod tests {
         assert_eq!(
             reread.net_patterns(&project),
             vec!["llm.example.com".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: FR-PERM-16 (the check behind the startup notice and
+    // `/login`'s grant prompt). A non-default endpoint is ungranted until the
+    // ad hoc grant is stored; no non-default endpoint never needs one. This
+    // is the path an env-var key takes, which never runs the login prompt.
+    #[test]
+    fn a_non_default_endpoint_is_ungranted_until_the_grant_is_stored() {
+        let root = std::env::temp_dir().join(format!("lca-ungranted-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
+        ));
+        assert_eq!(
+            crate::ungranted_host(&store, &project, None),
+            None,
+            "the default endpoint needs no grant"
+        );
+        assert_eq!(
+            crate::ungranted_host(&store, &project, Some("opencode.ai".to_string())),
+            Some("opencode.ai".to_string()),
+            "a non-default endpoint needs a grant"
+        );
+        crate::store_ad_hoc_grant(&store, &project, "opencode.ai").expect("grant");
+        assert_eq!(
+            crate::ungranted_host(&store, &project, Some("opencode.ai".to_string())),
+            None,
+            "the stored grant satisfies the check"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: FR-PERM-18 (the engine's grant project is the workspace).
+    // The production wiring once passed the data dir, so a grant attached for
+    // the project after startup was invisible to the same engine - the ad hoc
+    // `net` grant `/login` stores never took effect until a restart.
+    #[cfg(feature = "bundled-openai-compat")]
+    #[test]
+    fn the_engine_honors_a_grant_attached_for_the_workspace() {
+        let root = std::env::temp_dir().join(format!("lca-engine-project-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
+        ));
+        let caps = crate::extension_capabilities(
+            &project,
+            "openai-compatible",
+            openai_compatible::manifest_grants(),
+            lca_permissions::SharedPrompt::default(),
+            store.clone(),
+        );
+        crate::store_ad_hoc_grant(&store, &project, "127.0.0.1").expect("grant");
+        // Reaching the socket layer (and failing to connect) proves the grant
+        // was honored; a permission refusal means it was not.
+        let err = caps
+            .net_request("GET", "http://127.0.0.1:9/", &[], None)
+            .expect_err("nothing listens on port 9");
+        assert!(
+            !matches!(
+                err,
+                lca_protocol::CapabilityError::Permission(_)
+                    | lca_protocol::CapabilityError::NotGranted(_)
+            ),
+            "the ad hoc grant was honored, not refused: {err:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
