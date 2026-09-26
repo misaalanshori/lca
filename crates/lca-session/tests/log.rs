@@ -294,6 +294,29 @@ fn index_is_rebuilt_when_missing() {
     assert_eq!(listed[0].message_count, 1);
 }
 
+// Verifies: FR-SESS-2 (the listing reflects current content, not a cache
+// snapshot from creation). `lca resume` showed `0 messages` for a session
+// that had grown, because the index cache is written at creation and only
+// rebuilt when another session is created.
+#[test]
+fn listing_reflects_messages_appended_after_creation() {
+    let store = store("list-fresh");
+    let project = scratch("list-fresh-project");
+    let session = store.create_session(&project, "grows").expect("create");
+    store
+        .append(&session, user_record("r1", "hi"))
+        .expect("append1");
+    store
+        .append(&session, user_record("r2", "there"))
+        .expect("append2");
+    let listed = store.list_sessions(&project).expect("list");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].message_count, 2,
+        "the count reflects records appended after creation"
+    );
+}
+
 // Verifies: FR-SESS-3 (fork creates a new session sharing history up to a
 // message; the parent's log is not copied)
 #[test]

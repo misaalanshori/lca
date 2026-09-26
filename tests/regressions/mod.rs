@@ -39,3 +39,6 @@ mod plain_conversation_no_boundary_warning;
 // released 0.1.x defect: reasoning glued to the answer, tool lines unnamed.
 #[path = "11-tui-turn-rendering.rs"]
 mod tui_turn_rendering;
+// released 0.1.x defect: `lca resume` listed stale message counts.
+#[path = "12-resume-message-counts-fresh.rs"]
+mod resume_message_counts_fresh;

@@ -558,6 +558,12 @@ impl TurnSink for HeadlessSink {
                 if self.json {
                     self.emit(serde_json::json!({ "type": "text", "content": text }));
                 } else {
+                    // A tool-using turn has several assistant messages (a
+                    // preamble before the tool, then the answer). Gluing
+                    // them ran the sentences together.
+                    if !self.plain.is_empty() {
+                        self.plain.push_str("\n\n");
+                    }
                     self.plain.push_str(&text);
                 }
             }
@@ -1145,5 +1151,21 @@ fn gc_command(cwd: &Path, id: &str) -> i32 {
             eprintln!("error: {err}");
             exit::SESSION
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lca_core::TurnSink;
+
+    // A tool-using turn emits one assistant message before the tool and one
+    // after; plain headless glued them into one run-on line.
+    #[test]
+    fn plain_headless_separates_multiple_assistant_messages() {
+        let mut sink = HeadlessSink::new(false, false);
+        sink.on_event(TurnEvent::AssistantText("I'll read the file.".into()));
+        sink.on_event(TurnEvent::AssistantText("The answer is 42.".into()));
+        assert_eq!(sink.plain, "I'll read the file.\n\nThe answer is 42.");
     }
 }

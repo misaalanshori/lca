@@ -444,13 +444,14 @@ impl SessionStore {
 
     /// List this project's sessions, newest first (FR-SESS-2). Rebuilds
     /// `index.json` when it is missing or unreadable.
+    /// List a project's sessions, newest first. Rebuilt from the session
+    /// directories on every call: the index cache is only refreshed on
+    /// create, rename, and gc, so trusting it showed a session's message
+    /// count frozen at creation (`lca resume` said `0 messages` for a
+    /// session that had grown). ponytail: O(sessions) directory scan; this
+    /// is a human-facing listing, so add an mtime-guarded cache only if a
+    /// huge project ever makes it slow.
     pub fn list_sessions(&self, project_dir: &Path) -> Result<Vec<SessionSummary>> {
-        if let Ok(text) = std::fs::read_to_string(self.index_path(project_dir))
-            && let Ok(index) = serde_json::from_str::<IndexFile>(&text)
-            && index.version == 1
-        {
-            return Ok(index.sessions);
-        }
         self.rebuild_index(project_dir)
     }
 
