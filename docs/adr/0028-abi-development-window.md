@@ -84,6 +84,41 @@ decision stands on its own merits. `docs/abi-versioning.md`, the requirements
 document's Phase 8 note, and the release policy carry the dated amendment;
 the Phase 8 exit test recorded its pass as written on the day it passed.
 
+## Annotation — 2026-09-27 (the versioning sync): the ABI line tracks the product minor
+
+Owner decision, 2026-09-27. This supersedes the 2026-09-25 annotation's
+"one line forever" shape and keeps everything else that annotation settled.
+Both annotations stand as written; where they disagree on how the line
+moves, this one governs.
+
+**The rule.** On the 0.x line, the ABI line tracks the product minor:
+`lca 0.x.y` ships `abi 0.x`. Every release train bumps both together — the
+WIT package, every manifest, and the fixtures move at release cadence,
+which is the mechanical bump the previous annotation avoided per change,
+not the churn it was written against. Within a line the interface still
+mutates **in place**: a breaking change does not bump the number. What is
+dropped is per-change churn; what is kept is one honest label per train.
+
+**What this buys.** The public story is one sentence — "0.x = unstable,
+1.0 = locked." A stale extension gets a legible failure (built against
+`abi 0.2`; this interface moved) instead of an invisible same-line
+mismatch, and the current-plus-previous support window regains meaning
+across trains. Same-line indistinguishability shrinks from "the whole
+window" to "inside one train" — see the named limitation in
+`docs/abi-versioning.md`.
+
+**The endgame is unchanged.** `lca 1.0.0` ships `abi 1.0` — the joint-ship
+rule stands; the freeze is a snapshot of the final 0.x line with zero
+interface change; after it, majors stay joint and "breaking = major" is
+true again as written.
+
+**Transition (the one mismatch, documented).** `v0.3.0` shipped labeled
+`abi 0.2` — the last release before this rule. The next release is `0.4.0`
+carrying `abi 0.4`; the `list-models` signature change (ADR-0035) rides in
+the 0.4 train. Published 0.2-line extension artifacts are stale against
+that change and are rebuilt with 0.4.0. `0.3.0 / abi 0.2` is the transition
+artifact, not a pattern.
+
 ## Annotation — 2026-09-25 (cycle 2): 0.2 is a single in-place development line
 
 The decision above stands; this narrows how its window is versioned. It does
