@@ -926,3 +926,34 @@ narrows past the previous request length silently. Tests:
 (`crates/lca-core/tests/loop.rs`) and the released-defect guard
 `tests/regressions/10-plain-conversation-no-boundary-warning.rs`; the
 rewritten-content case still narrows once and settles.
+
+## Cycle 3 — the dogfood cycle (2026-09-26)
+
+The goal was to turn LCA from "the tests pass" into "a developer can use it",
+by driving the real binary in tmux and fixing every friction found. It ran in
+five milestones (M1 daily driver, M2 a day in the life, M3 ugly states, M4
+features used, M5 polish) and shipped as **0.2.0**.
+
+**Defects found by driving, each with a guard:**
+
+| Defect | Fix | Regression |
+|---|---|---|
+| Extension `https` requests died before TLS (`enforce_http`) | `71b68eb` | `09` |
+| A plain conversation logged a false cache-boundary divergence | `126f501` | `10` |
+| Reasoning glued to the answer; tool lines named an opaque call id | `cc2d177` | `11` |
+| `lca resume` listed a creation-time message count | `229ff42` | `12` |
+| Re-compaction dropped the previous summary | `1d12959` | `13` |
+| The display view dropped the reader's truncation warning | `f0c73fc` | `14` |
+| A non-SSE provider body read as a silent empty success | `be8334d` | `15` |
+
+**Other fixes:** capability grants keyed by the project instead of the data
+directory (mid-session grants were invisible and shell patterns were global,
+`143fee2`); `net` waits poll cancellation (NFR-21, `ebdf54d`); `/help`
+descriptions and no dead `$0.0000` cost (`7fd9279`); a terminal-required
+message, `grep` on a file, bracketed paste (`f0c73fc`); `lca ext enable`/
+`disable` (`2b59ed7`); a scratch-dir guard in `lca-testkit` and the
+live-smoke workflow (`6638500`).
+
+**Process:** `dogfood-journal.md` (out of tree) records every session;
+`try-it-yourself.md` is the cold walkthrough, run against the released
+binary. The suite grew from 376 to 402 tests.
