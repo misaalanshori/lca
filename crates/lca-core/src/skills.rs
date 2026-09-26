@@ -30,6 +30,10 @@ pub struct SkillsRoots {
     /// The extension install tree; each package may carry
     /// `resources/skills/<name>/SKILL.md`.
     pub extensions: PathBuf,
+    /// Extension names disabled for this project (FR-PROV-9): a disabled
+    /// package contributes no skills, per the threat model's promise that
+    /// disabling removes its skill pack.
+    pub disabled: Vec<String>,
 }
 
 /// Where a skill came from, for attribution.
@@ -161,6 +165,9 @@ pub fn collect(roots: &SkillsRoots) -> Vec<Skill> {
             .unwrap_or_default();
         names.sort();
         for name in names {
+            if roots.disabled.iter().any(|disabled| disabled == &name) {
+                continue;
+            }
             let dir = roots
                 .extensions
                 .join(&name)

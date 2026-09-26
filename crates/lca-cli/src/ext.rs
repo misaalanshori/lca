@@ -722,6 +722,48 @@ redirect_path = "/callback"
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    // Cycle-7 driving defect: a data-only package's digest was over an
+    // empty component, so v2 of a skill pack compared equal to v1 and
+    // `ext update` answered "up to date" forever. The bag is the payload.
+    //
+    // Verifies: ADR-0030, FR-DIST-7.
+    #[tokio::test]
+    async fn a_data_only_update_applies_a_resource_change() {
+        let root = lca_testkit::scratch_path("ext-data-only-update");
+        let _ = std::fs::remove_dir_all(&root);
+        let pkg = root.join("pack");
+        std::fs::create_dir_all(pkg.join("resources/skills/demo")).expect("mkdir");
+        std::fs::write(
+            pkg.join("extension.toml"),
+            "name = \"demo-pack\"\nversion = \"1.0.0\"\nabi = \"0.2\"\nworlds = []\nresources = [\"skills\"]\n",
+        )
+        .expect("manifest");
+        let skill = pkg.join("resources/skills/demo/SKILL.md");
+        std::fs::write(&skill, "name: demo\nmatch: demo\n---\nv1\n").expect("skill v1");
+
+        let tree = lca_registry::InstallTree::new(root.join("extensions"));
+        let first = tree
+            .install(lca_registry::resolve_local(&pkg, None).expect("resolve v1"))
+            .expect("install v1");
+
+        // v2 changes only the skill body.
+        std::fs::write(&skill, "name: demo\nmatch: demo\n---\nv2\n").expect("skill v2");
+        let second = lca_registry::resolve_local(&pkg, None).expect("resolve v2");
+        assert_ne!(
+            second.digest, first.digest,
+            "the resources bag is part of a data-only package's identity"
+        );
+
+        let code = super::update(&tree, Some("demo-pack".to_string()), false, true).await;
+        assert_eq!(code, crate::exit::OK);
+        let installed = std::fs::read_to_string(
+            root.join("extensions/demo-pack/resources/skills/demo/SKILL.md"),
+        )
+        .expect("read installed skill");
+        assert!(installed.contains("v2"), "the update applied: {installed}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     // Verifies: ADR-0030 (state is cleared per namespace and only that one).
     #[test]
     fn clearing_state_removes_only_that_namespace() {

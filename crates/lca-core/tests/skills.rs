@@ -24,8 +24,35 @@ fn roots(name: &str) -> (std::path::PathBuf, SkillsRoots) {
             project,
             user,
             extensions,
+            disabled: Vec::new(),
         },
     )
+}
+
+// Cycle-7 driving defect: `ext disable <pack>` did not stop a data-only
+// package's skill from injecting, because the host-side merge read the
+// install tree and never consulted per-project enablement. The threat model
+// promises "disable removes its skill pack".
+//
+// Verifies: ADR-0030, FR-PROV-9 (the threat-model resources row).
+#[test]
+fn a_disabled_extension_contributes_no_skills() {
+    let (_root, mut roots) = roots("disabled");
+    write_skill(
+        &roots.extensions.join("pack/resources/skills"),
+        "packaged",
+        "name: packaged",
+        "extension only",
+    );
+    assert!(
+        skills::collect(&roots).iter().any(|s| s.name == "packaged"),
+        "enabled by default: its skill is collected"
+    );
+    roots.disabled = vec!["pack".to_string()];
+    assert!(
+        !skills::collect(&roots).iter().any(|s| s.name == "packaged"),
+        "a disabled package takes its skill pack with it"
+    );
 }
 
 #[test]

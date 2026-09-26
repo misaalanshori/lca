@@ -355,6 +355,24 @@ impl GrantStore {
         self.save()
     }
 
+    /// The extension names this project has explicitly disabled (FR-PROV-9).
+    /// Used by the host-side skills merge so a disabled package's skill pack
+    /// falls out with it, the same way its registered handle does.
+    pub fn disabled_extensions(&self, project_dir: &Path) -> Vec<String> {
+        self.data
+            .projects
+            .get(&canonical_key(project_dir))
+            .map(|entry| {
+                entry
+                    .extensions
+                    .iter()
+                    .filter(|(_, enabled)| !**enabled)
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The ad hoc `net` patterns approved for this project, in the
     /// order the store lists them (FR-PERM-16's persistence; ADR-0022).
     /// A pattern that no longer parses is skipped rather than failing

@@ -72,3 +72,9 @@ mod wasm_generate_blocks_map_every_host_import;
 // cycle-6: the zero-provider state is valid, not fatal (FR-PROV-9).
 #[path = "22-zero-provider-is-a-valid-state.rs"]
 mod zero_provider_is_a_valid_state;
+// cycle-7 driving: a data-only package's digest must cover its bag.
+#[path = "23-data-only-package-digest.rs"]
+mod data_only_package_digest;
+// cycle-7 driving: a disabled package takes its skill pack with it.
+#[path = "24-disable-stops-skill-injection.rs"]
+mod disable_stops_skill_injection;

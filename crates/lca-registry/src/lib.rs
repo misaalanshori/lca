@@ -134,6 +134,29 @@ impl Resolved {
     pub fn digest_of(component: &[u8]) -> String {
         format!("sha256:{:x}", Sha256::digest(component))
     }
+
+    /// Content-digest a package whose payload is its manifest and
+    /// `resources/` bag rather than a component (a data-only package,
+    /// ADR-0030). Deterministic: the manifest bytes, then each resource's
+    /// path and bytes in sorted order, length-prefixed so a path cannot be
+    /// confused with the bytes that follow it. Without this the digest was
+    /// the empty-component digest for every data-only package, so
+    /// `ext update` could never see a new version.
+    pub fn digest_of_package(manifest: &str, resources: &[(String, Vec<u8>)]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(b"lca-package\0");
+        hasher.update((manifest.len() as u64).to_le_bytes());
+        hasher.update(manifest.as_bytes());
+        let mut entries: Vec<&(String, Vec<u8>)> = resources.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (path, bytes) in entries {
+            hasher.update((path.len() as u64).to_le_bytes());
+            hasher.update(path.as_bytes());
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        }
+        format!("sha256:{:x}", hasher.finalize())
+    }
 }
 
 /// Everything that can go wrong resolving or installing.
@@ -1056,8 +1079,9 @@ pub fn resolve_local(component: &Path, manifest_path: Option<&Path>) -> Result<R
             .unwrap_or_else(|| component.join("extension.toml"));
         let manifest = std::fs::read_to_string(&manifest_path)?;
         let resources = read_resource_dir(&component.join("resources"))?;
+        let digest = Resolved::digest_of_package(&manifest, &resources);
         return Ok(Resolved {
-            digest: Resolved::digest_of(&[]),
+            digest,
             source: component.display().to_string(),
             manifest,
             component: Vec::new(),
@@ -1143,8 +1167,13 @@ pub async fn resolve_archive(url: &str) -> Result<Resolved, Error> {
     let client = http_client()?;
     let (bytes, _) = fetch_bytes(&client, url, "application/zip, application/octet-stream").await?;
     let archive = read_archive(&bytes)?;
+    let digest = if archive.component.is_empty() {
+        Resolved::digest_of_package(&archive.manifest, &archive.resources)
+    } else {
+        Resolved::digest_of(&archive.component)
+    };
     Ok(Resolved {
-        digest: Resolved::digest_of(&archive.component),
+        digest,
         source: url.to_string(),
         manifest: archive.manifest,
         component: archive.component,
