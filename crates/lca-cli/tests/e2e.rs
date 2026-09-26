@@ -1682,3 +1682,112 @@ fn the_logins_secret_prompt_masks_input_in_a_windows_console() {
         "the secret never appears on the ConPTY screen: {screen:?}"
     );
 }
+
+// Verifies: FR-PROV-6's report on the headless path: a script needs a
+// loud failure with a nonzero exit, so headless is *not* made recoverable
+// along with the interactive surface. "No model" here is the zero-provider
+// state - no enabled provider answers the configured name - which is the
+// one the fix is about.
+#[test]
+fn headless_without_an_enabled_provider_still_fails_loud_with_exit_two() {
+    let sandbox = sandbox("headless-no-model");
+    let out = sandbox.run(None, &["ext", "disable", "openai-compatible"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = sandbox.run(None, &["-p", "hello"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a script is told, not left hanging: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("No model is available"), "{stderr}");
+    assert!(
+        stderr.contains("lca ext enable"),
+        "the report names the way back: {stderr}"
+    );
+}
+
+// Verifies: FR-PROV-9 - disabling the only provider must not lock the
+// interface out of existence. The design states zero providers is a valid
+// state, and the interface is the surface for settings, so it has to be
+// able to open into that state and leave it through `/login`.
+#[cfg(unix)]
+#[test]
+fn the_interface_opens_in_the_zero_provider_state_and_recovers_through_login() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("tui-zero-provider");
+    // Disable the only provider, from the project the session will run in.
+    let out = sandbox.run(None, &["ext", "disable", "openai-compatible"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let session = Tmux::new("zeroprov");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    // The first frame names the state and the way out.
+    session.wait_for("No model is available", std::time::Duration::from_secs(20));
+    let pane = session.capture();
+    assert!(
+        pane.contains("/login"),
+        "the first frame says how to recover: {pane}"
+    );
+
+    // `/login` opens its picker: zero providers means no presets, but the
+    // host's universal entry is always there and is the way back.
+    session.send(&["/login", "Enter"]);
+    session.wait_for("Custom endpoint", std::time::Duration::from_secs(15));
+    let pane = session.capture();
+    assert!(
+        pane.contains("Custom endpoint"),
+        "the picker still offers a way to configure one: {pane}"
+    );
+
+    // Walk to it and complete the three fields: the state has to be
+    // *leavable*, not merely reportable.
+    for _ in 0..24 {
+        session.send(&["Down"]);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        if session
+            .capture()
+            .contains("Custom endpoint\u{2026}   base URL")
+            || session.capture().contains("base URL + key + model")
+        {
+            break;
+        }
+    }
+    session.send(&["Enter"]);
+    session.wait_for("Base URL", std::time::Duration::from_secs(15));
+    session.send(&["https://example.test/v1", "Enter"]);
+    session.wait_for("input hidden", std::time::Duration::from_secs(15));
+    session.send(&["sk-x", "Enter"]);
+    session.wait_for("Model id", std::time::Duration::from_secs(15));
+    session.send(&["m1", "Enter"]);
+    // A host outside the manifest's vocabulary gets the ad hoc `net` grant
+    // prompt (FR-PERM-16), and answering it is the last step of the flow.
+    session.wait_for("ad hoc grant", std::time::Duration::from_secs(15));
+    session.send(&["y"]);
+    // The confirmation is a transient notice by design, so assert the
+    // durable state it left behind rather than a flash of text.
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    // And the project's enablement actually moved.
+    let grants: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(sandbox.state_dir().join("grants.json")).expect("grants"),
+    )
+    .expect("grants json");
+    assert_eq!(
+        grants["projects"][sandbox.project().to_string_lossy().to_string()]["extensions"]["openai-compatible"],
+        serde_json::json!(true),
+        "the provider is enabled again"
+    );
+}

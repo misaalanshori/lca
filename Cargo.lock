@@ -1467,6 +1467,7 @@ dependencies = [
  "lca-ext-host",
  "lca-permissions",
  "lca-protocol",
+ "lca-provider",
  "lca-registry",
  "lca-session",
  "lca-testkit",

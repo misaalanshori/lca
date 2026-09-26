@@ -25,6 +25,7 @@ compaction-default = { path = "extensions/compaction-default" }
 lca-core = { path = "crates/lca-core" }
 lca-ext-host = { path = "crates/lca-ext-host" }
 lca-permissions = { path = "crates/lca-permissions" }
+lca-provider = { path = "crates/lca-provider" }
 lca-protocol = { path = "crates/lca-protocol" }
 lca-registry = { path = "crates/lca-registry" }
 lca-session = { path = "crates/lca-session" }

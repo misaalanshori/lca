@@ -69,3 +69,6 @@ mod disabled_provider_drops_its_presets;
 // cycle-5 release defect: a WIT change broke the wasm components silently.
 #[path = "21-wasm-generate-blocks-map-every-host-import.rs"]
 mod wasm_generate_blocks_map_every_host_import;
+// cycle-6: the zero-provider state is valid, not fatal (FR-PROV-9).
+#[path = "22-zero-provider-is-a-valid-state.rs"]
+mod zero_provider_is_a_valid_state;

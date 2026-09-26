@@ -26,6 +26,53 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 /// rendering (streaming is host-driven polling, ADR-0004).
 pub type EventSender = tokio::sync::mpsc::Sender<StreamEvent>;
 
+/// The zero-provider state (FR-PROV-9): a valid state the interface opens
+/// into, reports "no model" for, and recovers from interactively. It is
+/// the fallback when no enabled provider answers the configured name, so
+/// the interactive surface is never lockable from the inside - a user who
+/// disables the only provider still has a UI to bring one back with.
+///
+/// Every call fails with a typed, non-retryable error naming the fix. A
+/// turn can never silently succeed against nothing.
+pub struct NoProvider {
+    name: String,
+}
+
+impl NoProvider {
+    /// A stand-in for the configured provider `name`.
+    pub fn new(name: impl Into<String>) -> Self {
+        NoProvider { name: name.into() }
+    }
+}
+
+impl Provider for NoProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn list_models(&self) -> Vec<ModelInfo> {
+        Vec::new()
+    }
+
+    fn stream(
+        &self,
+        _request: CompletionRequest,
+        _tx: EventSender,
+    ) -> BoxFuture<Result<(), ProviderError>> {
+        let name = self.name.clone();
+        Box::pin(async move {
+            Err(ProviderError {
+                message: format!(
+                    "No model is available: no enabled provider answers `{name}`. \
+                     Use /login to sign in to one, or `lca ext enable <name>`."
+                ),
+                class: "no-model",
+                retryable: false,
+            })
+        })
+    }
+}
+
 /// How a provider call failed. `retryable` decides whether the core retries
 /// (FR-CORE-6) and feeds the headless `error` envelope's class.
 #[derive(Debug, Clone, thiserror::Error)]

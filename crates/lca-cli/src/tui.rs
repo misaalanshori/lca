@@ -222,16 +222,24 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     crate::apply_enablement(&mut registry, |name| {
         grants.lock().expect("grants").extension_enabled(cwd, name) == Some(false)
     });
-    // FR-PROV-6 before anything reaches the interface: the configured
-    // provider must resolve to an enabled handle. (The registry stays
-    // mutable until the two completion-dependent handles are in.)
+    // FR-PROV-6: the configured provider resolves to an enabled handle, or
+    // the session opens in the zero-provider state (FR-PROV-9). The
+    // interactive surface must never be lockable from the inside, so a user
+    // who disables the only provider still has a `/login` to bring one back
+    // with. (The registry stays mutable until the two completion-dependent
+    // handles are in.)
+    let missing_provider = registry.provider(&provider_name).is_none();
     let provider: Arc<dyn lca_provider::Provider> = match registry.provider(&provider_name) {
         Some(handle) => Arc::new(lca_core::ExtensionProvider::new(handle.clone())),
-        None => {
-            eprintln!("{}", crate::no_model_message(&provider_name));
-            return Ok(crate::exit::USAGE);
-        }
+        None => Arc::new(lca_provider::NoProvider::new(provider_name.clone())),
     };
+    if missing_provider {
+        // The first frame says what is wrong and how to leave this state;
+        // the report is the same one the headless path prints.
+        initial_lines.push(String::new());
+        initial_lines.push(crate::no_model_message(&provider_name));
+        initial_lines.push("Use /login to sign in to a provider.".to_string());
+    }
     // No configured model and no credential for this provider: stay in the
     // honest "no model" state rather than auto-selecting a model that will
     // fail on the first turn. `/model` or `/login` moves the session on.
@@ -420,6 +428,18 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             } else {
                 target
             };
+            // Choosing a login option for a provider that was disabled is
+            // an explicit request to use it: re-enable it for this project,
+            // or the settings land on something that will not run.
+            let re_enabled = {
+                let mut store = grants.lock().unwrap_or_else(|p| p.into_inner());
+                if store.extension_enabled(&cwd, &target) == Some(false) {
+                    let _ = store.set_extension_enabled(&cwd, &target, true);
+                    true
+                } else {
+                    false
+                }
+            };
             // The host's universal entry has no extension behind it: the
             // values themselves are the settings. A preset delegates to its
             // extension, which stores the key and returns its own settings.
@@ -484,8 +504,13 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     ),
                 };
             }
+            let suffix = if re_enabled {
+                format!("; re-enabled `{target}` for this project")
+            } else {
+                String::new()
+            };
             lca_tui::LoginNext::Message(format!(
-                "signed in {target}; the settings are stored under its namespace"
+                "signed in {target}; the settings are stored under its namespace{suffix}"
             ))
         })
     };
@@ -496,10 +521,12 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         let provider_name = provider_name.clone();
         let registry = registry.clone();
         Arc::new(move |argument: &str| -> lca_tui::LoginNext {
+            // Zero *enabled* providers is a valid state (FR-PROV-9, D1),
+            // and `/login` is how the interface leaves it: the picker still
+            // opens, with the host's universal entry attributed to the
+            // configured provider. Refusing here would lock the interface
+            // out of its own settings surface.
             let names = registry.provider_names();
-            if names.is_empty() {
-                return lca_tui::LoginNext::Message(crate::no_model_message(&provider_name));
-            }
             // `/login <provider>` scopes the picker to that provider. A
             // bare `/login`, or an argument naming an option id, needs the
             // full list (an id may belong to any enabled provider).
