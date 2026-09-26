@@ -1327,6 +1327,7 @@ dependencies = [
  "lca-tools",
  "lca-tui",
  "openai-compatible",
+ "serde",
  "serde_json",
  "sha2",
  "skills",

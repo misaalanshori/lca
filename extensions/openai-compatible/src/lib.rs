@@ -709,6 +709,22 @@ fn string_list(value: Option<&toml::Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The extension's own `resources/` bag, compiled in (ADR-0032): the same
+/// bytes an installed package serves from its directory, so both delivery
+/// modes answer the picker query identically.
+pub const RESOURCES: &[(&str, &[u8])] = &[(
+    "provider-presets.toml",
+    include_bytes!("../resources/provider-presets.toml"),
+)];
+
+/// The native handle's resource source. The host sets this on the
+/// capability engine so `resource_read` resolves against the compiled-in
+/// bag instead of finding nothing.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn resources() -> lca_tools::ResourceSource {
+    lca_tools::ResourceSource::Embedded(RESOURCES)
+}
+
 /// Load the extension's presets from its own `resources/` bag.
 pub fn load_presets(cap: &dyn ProviderCap) -> Vec<Preset> {
     match cap.resource_read("provider-presets.toml") {
@@ -757,6 +773,59 @@ fn host_of(base_url: &str) -> String {
         .to_string()
 }
 
+/// D2: ask the endpoint for its model list. `None` on any failure - a wrong
+/// key, a down endpoint, or a host with no `net` grant yet (the ad hoc grant
+/// is offered *after* submit, so a first login often cannot reach the
+/// network here) - and the caller falls back to the preset's curated short
+/// list.
+fn discover_models(
+    cap: &dyn ProviderCap,
+    base_url: &str,
+    key: Option<&str>,
+) -> Option<Vec<String>> {
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let mut headers = vec![("accept", "application/json")];
+    let auth = key.map(|key| format!("Bearer {key}"));
+    if let Some(auth) = &auth {
+        headers.push(("authorization", auth.as_str()));
+    }
+    let handle = cap.net_request("GET", &url, &headers, None).ok()?;
+    let status = cap.net_response_status(handle).ok();
+    let mut body = Vec::new();
+    // One megabyte and one hundred chunks: discovery is a convenience, and
+    // a response that never ends must not pin the login flow.
+    for _ in 0..100 {
+        match cap.net_read_body(handle, 64 * 1024) {
+            Ok(Some(chunk)) => {
+                body.extend_from_slice(&chunk);
+                if body.len() > 1024 * 1024 {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    let _ = cap.net_close_response(handle);
+    if !matches!(status, Some(200..=299)) {
+        return None;
+    }
+    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
+    let mut ids: Vec<String> = json
+        .get("data")?
+        .as_array()?
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(str::to_string)
+        })
+        .collect();
+    ids.sort();
+    ids.dedup();
+    (!ids.is_empty()).then_some(ids)
+}
+
 /// Consume one login answer (ADR-0033): store the secret in the extension's
 /// own credentials namespace, return opaque settings for the host.
 pub fn login_submit(
@@ -776,7 +845,18 @@ pub fn login_submit(
         cap.credentials_set("api_key", key)
             .map_err(|err| format!("cannot store the key: {err}"))?;
     }
-    let mut settings = vec![("base_url".to_string(), base_url)];
+    let mut settings = vec![("base_url".to_string(), base_url.clone())];
+    // D2: the endpoint's own model list when it answers, the preset's
+    // curated short list otherwise. The host persists whatever comes back
+    // and never interprets it.
+    let models = discover_models(cap, &base_url, answer.value("api-key")).unwrap_or_else(|| {
+        preset
+            .map(|preset| preset.models.clone())
+            .unwrap_or_default()
+    });
+    if !models.is_empty() {
+        settings.push(("models".to_string(), models.join(",")));
+    }
     if let Some(model) = answer.value("model") {
         settings.push(("model".to_string(), model.to_string()));
     }
@@ -878,12 +958,33 @@ mod native {
         }
 
         fn provider_models(&self) -> Result<Vec<ModelInfo>, DispatchError> {
-            Ok(vec![ModelInfo {
+            // D2: the list `login-submit` discovered (or the preset's
+            // curated short list) is what `/model` offers. The configured
+            // model leads, then the rest of the stored list.
+            let mut models = vec![ModelInfo {
                 id: self.settings.model.clone(),
                 name: self.settings.model.clone(),
                 context_window: self.settings.context_window,
                 max_tokens: 0,
-            }])
+            }];
+            let stored = self
+                .cap
+                .credentials_get("models")
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            for id in stored.split(',').filter(|id| !id.is_empty()) {
+                if models.iter().any(|model| model.id == id) {
+                    continue;
+                }
+                models.push(ModelInfo {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    context_window: self.settings.context_window,
+                    max_tokens: 0,
+                });
+            }
+            Ok(models)
         }
 
         fn stream_completion<'a>(

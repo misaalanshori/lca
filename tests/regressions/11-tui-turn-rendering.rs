@@ -29,6 +29,7 @@ fn state() -> UiState {
         update_notice: None,
         login: None,
         complete_login: None,
+        pick_login: None,
         confirm_login_grant: None,
     })
 }

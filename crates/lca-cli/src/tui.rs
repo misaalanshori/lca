@@ -272,6 +272,8 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             compaction_default::manifest_grants(),
             shared_prompt.clone(),
             grants.clone(),
+            // No `resources/` bag: a compaction strategy carries code.
+            lca_tools::ResourceSource::None,
         );
         cap.set_completion(backend.clone());
         registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
@@ -357,53 +359,121 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         format!("{provider_name}/{model_id}")
     }));
 
-    // The host login seam (`/login`): the CLI decides per provider whether to
-    // ask for a secret, then stores it through the same atomic, owner-only
-    // credential writer extensions use. Antigravity's OAuth path needs no
-    // prompt; the key-based provider asks only when nothing is configured.
-    let login_seam: lca_tui::LoginRequest = {
+    // The host login flow (`/login`, ADR-0033 / `api-key-login-plan.md` D1):
+    // the CLI renders whatever the extension's `login-options` hands it,
+    // ferries the typed values through the prompt, persists the opaque
+    // settings `login-submit` returns, and runs the ad hoc `net` grant
+    // (FR-PERM-16). It never reads a provider's preset shape itself.
+    let flow: Arc<std::sync::Mutex<crate::login::LoginFlow>> =
+        Arc::new(std::sync::Mutex::new(crate::login::LoginFlow::new()));
+    // Every picker choice: each enabled provider extension's own options,
+    // plus the user's named custom endpoints (D1's override layer). The
+    // host's universal "Custom endpoint..." entry is appended by the flow.
+    let gather = {
         let registry = registry.clone();
-        let provider_name = provider_name.clone();
-        let data = data.clone();
-        let grants = grants.clone();
-        let cwd = cwd.to_path_buf();
-        Arc::new(move |argument: &str| -> lca_tui::LoginNext {
-            let names = registry.provider_names();
-            if names.is_empty() {
-                return lca_tui::LoginNext::Message(crate::no_model_message(&provider_name));
+        let overrides = std::fs::read_to_string(crate::config_dir().join("provider-presets.toml"))
+            .unwrap_or_default();
+        move |scope: &[String]| {
+            let mut out: Vec<(String, lca_protocol::LoginOption)> = Vec::new();
+            for name in scope {
+                let Some(handle) = registry.provider(name).cloned() else {
+                    continue;
+                };
+                let name = name.clone();
+                let result = lca_core::drive_blocking(async move { handle.login_options().await });
+                match result {
+                    Ok(options) => out.extend(options.into_iter().map(|o| (name.clone(), o))),
+                    Err(err) => tracing::warn!("{name} login options: {err}"),
+                }
             }
-            let target = if !argument.is_empty() {
-                if names.iter().any(|name| name == argument) {
-                    argument.to_string()
-                } else {
+            out.extend(crate::login::override_presets(
+                &overrides,
+                "openai-compatible",
+            ));
+            out
+        }
+    };
+    // Submit the finished login: store the secret through the same atomic,
+    // owner-only credential writer extensions use, persist the opaque
+    // settings, light the session up, and offer the ad hoc grant.
+    let login_apply: Arc<dyn Fn(crate::login::Step) -> lca_tui::LoginNext + Send + Sync> = {
+        let registry = registry.clone();
+        let data = data.clone();
+        let cwd = cwd.to_path_buf();
+        let grants = grants.clone();
+        let provider_name = provider_name.clone();
+        let provider = provider.clone();
+        let label_cell = label_cell.clone();
+        let model_cell = model_cell.clone();
+        Arc::new(move |step: crate::login::Step| -> lca_tui::LoginNext {
+            use crate::login::Step;
+            let (target, choice, values) = match step {
+                Step::Next(next) => return next,
+                Step::Submit {
+                    provider,
+                    choice,
+                    values,
+                } => (provider, choice, values),
+            };
+            let target = if target.is_empty() {
+                provider_name.clone()
+            } else {
+                target
+            };
+            // The host's universal entry has no extension behind it: the
+            // values themselves are the settings. A preset delegates to its
+            // extension, which stores the key and returns its own settings.
+            let settings = if choice == lca_tui::CUSTOM_OPTION {
+                values
+                    .iter()
+                    .filter(|(field, _)| *field != "api-key")
+                    .map(|(field, value)| (field.replace('-', "_"), value.clone()))
+                    .collect::<Vec<_>>()
+            } else {
+                let Some(handle) = registry.provider(&target).cloned() else {
+                    return lca_tui::LoginNext::Message(format!("`{target}` cannot log in"));
+                };
+                let answer = lca_protocol::LoginAnswer {
+                    choice: choice.clone(),
+                    values: values.clone(),
+                };
+                match lca_core::drive_blocking(async move { handle.login_submit(answer).await }) {
+                    Ok(settings) => settings,
+                    Err(err) => {
+                        return lca_tui::LoginNext::Message(format!("could not sign in: {err}"));
+                    }
+                }
+            };
+            if let Some(secret) = values.get("api-key")
+                && let Err(err) =
+                    crate::store_provider_secret(&data, &cwd, &target, "api_key", secret)
+            {
+                return lca_tui::LoginNext::Message(format!(
+                    "could not store the key for {target}: {err}"
+                ));
+            }
+            for (key, value) in &settings {
+                if let Err(err) = crate::store_provider_secret(&data, &cwd, &target, key, value) {
                     return lca_tui::LoginNext::Message(format!(
-                        "no provider named `{argument}`; installed: {}",
-                        names.join(", ")
+                        "could not store {key} for {target}: {err}"
                     ));
                 }
-            } else if names.len() == 1 {
-                names[0].clone()
-            } else {
-                return lca_tui::LoginNext::Message(format!(
-                    "{} installed: {}. Choose: /login <name>",
-                    names.len(),
-                    names.join(", ")
-                ));
-            };
-            if target == "openai-compatible" && !crate::provider_ready(&target, &data) {
-                return lca_tui::LoginNext::Secret {
-                    provider: target,
-                    label: "API key for openai-compatible (input hidden)".to_string(),
-                };
             }
-            // The key is already present, so the provider reports a message
-            // rather than asking for one. The ad hoc grant is still what makes
-            // the first turn possible, so offer it first: an env-var key with a
-            // non-default endpoint had no way to be approved (the provider's
-            // message branch used to skip the grant).
-            if target == "openai-compatible"
-                && let Some(host) =
-                    crate::ungranted_host(&grants, &cwd, crate::openai_ad_hoc_host(&data))
+            // Light the session up now that the provider can answer.
+            if target == provider_name
+                && let Some(model) = provider.list_models().first()
+            {
+                *model_cell.lock().unwrap_or_else(|p| p.into_inner()) = ModelChoice {
+                    id: model.id.clone(),
+                    window: model.context_window,
+                };
+                *label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
+                    format!("{target}/{}", model.id);
+            }
+            // A non-default endpoint needs its ad hoc `net` grant, offered
+            // now that the user is signed in (FR-PERM-16).
+            if let Some(host) =
+                crate::ungranted_host(&grants, &cwd, crate::openai_ad_hoc_host(&data))
             {
                 return lca_tui::LoginNext::Grant {
                     provider: target.clone(),
@@ -414,58 +484,79 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     ),
                 };
             }
-            match registry.invoke_generic("login", &target, &provider_name) {
-                Some(CommandEffect::ShowWidget(text)) => lca_tui::LoginNext::Message(text),
-                Some(_) => lca_tui::LoginNext::Message(format!("{target}: login finished")),
-                None => lca_tui::LoginNext::Message(format!("`{target}` cannot log in")),
+            lca_tui::LoginNext::Message(format!(
+                "signed in {target}; the settings are stored under its namespace"
+            ))
+        })
+    };
+    let login_seam: lca_tui::LoginRequest = {
+        let flow = flow.clone();
+        let gather = gather.clone();
+        let apply = login_apply.clone();
+        let provider_name = provider_name.clone();
+        let registry = registry.clone();
+        Arc::new(move |argument: &str| -> lca_tui::LoginNext {
+            let names = registry.provider_names();
+            if names.is_empty() {
+                return lca_tui::LoginNext::Message(crate::no_model_message(&provider_name));
             }
+            // `/login <provider>` scopes the picker to that provider. A
+            // bare `/login`, or an argument naming an option id, needs the
+            // full list (an id may belong to any enabled provider).
+            let scope: Vec<String> = if names.iter().any(|name| name == argument) {
+                vec![argument.to_string()]
+            } else {
+                names.clone()
+            };
+            let options = gather(&scope);
+            // `/login <option>` skips the picker: the same journey, drivable
+            // from a script.
+            if !argument.is_empty()
+                && let Some((owner, _)) = options
+                    .iter()
+                    .find(|(_, option)| option.id == argument)
+                    .map(|(owner, option)| (owner.clone(), option.clone()))
+            {
+                let mut flow = flow.lock().unwrap_or_else(|p| p.into_inner());
+                let _ = flow.offer(options, &provider_name);
+                return match flow.pick(&owner, argument) {
+                    crate::login::Step::Next(next) => next,
+                    step => apply(step),
+                };
+            }
+            if !argument.is_empty()
+                && !names.iter().any(|name| name == argument)
+                && !options.iter().any(|(_, option)| option.id == argument)
+            {
+                return lca_tui::LoginNext::Message(format!(
+                    "no provider or login option named `{argument}`; installed: {}",
+                    names.join(", ")
+                ));
+            }
+            let mut flow = flow.lock().unwrap_or_else(|p| p.into_inner());
+            flow.offer(options, &provider_name)
+        })
+    };
+    let pick_seam: lca_tui::LoginPick = {
+        let flow = flow.clone();
+        let apply = login_apply.clone();
+        Arc::new(move |provider: &str, choice: &str| -> lca_tui::LoginNext {
+            let step = flow
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .pick(provider, choice);
+            apply(step)
         })
     };
     let login_complete: lca_tui::LoginComplete = {
-        let data = data.clone();
-        let cwd = cwd.to_path_buf();
-        let grants = grants.clone();
-        let label_cell = label_cell.clone();
-        let model_cell = model_cell.clone();
-        let provider = provider.clone();
-        let provider_name = provider_name.clone();
-        Arc::new(move |target: &str, secret: &str| -> lca_tui::LoginNext {
-            match crate::store_provider_secret(&data, &cwd, target, "api_key", secret) {
-                Ok(()) => {
-                    // Light the session up now that the provider can answer.
-                    if target == provider_name
-                        && let Some(model) = provider.list_models().first()
-                    {
-                        *model_cell.lock().unwrap_or_else(|p| p.into_inner()) = ModelChoice {
-                            id: model.id.clone(),
-                            window: model.context_window,
-                        };
-                        *label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
-                            format!("{target}/{}", model.id);
-                    }
-                    // A non-default endpoint needs its ad hoc `net` grant,
-                    // offered now that the user is signed in (FR-PERM-16).
-                    if target == "openai-compatible"
-                        && let Some(host) =
-                            crate::ungranted_host(&grants, &cwd, crate::openai_ad_hoc_host(&data))
-                    {
-                        return lca_tui::LoginNext::Grant {
-                            provider: target.to_string(),
-                            host: host.clone(),
-                            prompt: format!(
-                                "{target}'s endpoint is {host}, which its manifest does not cover; \
-                                 add it as an ad hoc grant?"
-                            ),
-                        };
-                    }
-                    lca_tui::LoginNext::Message(format!(
-                        "signed in {target}; the key is stored under its namespace"
-                    ))
-                }
-                Err(err) => lca_tui::LoginNext::Message(format!(
-                    "could not store the key for {target}: {err}"
-                )),
-            }
+        let flow = flow.clone();
+        let apply = login_apply.clone();
+        Arc::new(move |provider: &str, value: &str| -> lca_tui::LoginNext {
+            let step = flow
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(provider, value);
+            apply(step)
         })
     };
     let login_confirm: lca_tui::LoginConfirm = {
@@ -561,6 +652,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         ui_events,
         update_notice: Some(update_notice),
         login: Some(login_seam),
+        pick_login: Some(pick_seam),
         complete_login: Some(login_complete),
         confirm_login_grant: Some(login_confirm),
         slash_commands: {
@@ -1021,6 +1113,7 @@ mod tests {
             openai_compatible::manifest_grants(),
             lca_permissions::SharedPrompt::default(),
             store.clone(),
+            openai_compatible::resources(),
         );
         crate::store_ad_hoc_grant(&store, &project, "127.0.0.1").expect("grant");
         // Reaching the socket layer (and failing to connect) proves the grant

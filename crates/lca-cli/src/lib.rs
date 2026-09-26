@@ -122,6 +122,10 @@ pub enum SessionCmd {
     },
 }
 
+/// The `/login` picker flow (ADR-0033, `api-key-login-plan.md` D1): the
+/// state machine, with no I/O of its own.
+pub mod login;
+
 /// Interactive mode, wired to `lca-tui`.
 pub mod tui;
 
@@ -150,10 +154,15 @@ pub mod exit {
 /// FR-PROV-6's report, shared by both front ends and by the mid-session
 /// identity commands: no enabled provider answers the configured name,
 /// so there is no model, and the install command is the way out.
+///
+/// The message names the escape route explicitly: disabling the only
+/// provider leaves `lca` unable to start at all, so "install one" is not
+/// the only answer - re-enabling is the common one.
 pub(crate) fn no_model_message(provider: &str) -> String {
     format!(
         "No model is available: no enabled provider answers `{provider}`. \
-         Check the name (`lca ext list`), or install a provider with \
+         Check the name (`lca ext list`), re-enable one that is disabled \
+         (`lca ext enable <name>`), or install a provider with \
          `lca ext install <reference>`."
     )
 }
@@ -333,6 +342,7 @@ pub(crate) fn extension_capabilities(
     grants: lca_tools::CapabilityGrants,
     prompt: lca_permissions::SharedPrompt,
     store: std::sync::Arc<std::sync::Mutex<GrantStore>>,
+    resources: lca_tools::ResourceSource,
 ) -> std::sync::Arc<lca_tools::Capabilities> {
     use std::sync::{Arc, Mutex};
 
@@ -344,7 +354,7 @@ pub(crate) fn extension_capabilities(
         temp: session_temp(),
         state_dir: data.clone(),
     };
-    Arc::new(lca_tools::Capabilities::new(
+    let mut engine = lca_tools::Capabilities::new(
         name,
         grants,
         roots,
@@ -358,7 +368,13 @@ pub(crate) fn extension_capabilities(
         // attached after startup.
         cwd.to_path_buf(),
         None,
-    ))
+    );
+    // The extension's own `resources/` bag (ADR-0032): the compiled-in
+    // table for a bundled extension, an installed package's directory for
+    // a downloaded one. Without this `resource_read` finds nothing and the
+    // picker has no presets to show.
+    engine.set_resources(resources);
+    Arc::new(engine)
 }
 
 #[cfg(feature = "bundled-openai-compat")]
@@ -378,7 +394,14 @@ pub(crate) fn openai_capabilities(
                 .collect()
         })
         .unwrap_or_default();
-    extension_capabilities(cwd, "openai-compatible", grants, prompt, store)
+    extension_capabilities(
+        cwd,
+        "openai-compatible",
+        grants,
+        prompt,
+        store,
+        openai_compatible::resources(),
+    )
 }
 
 /// The host-side skill sources (FR-CTX-2, ADR-0030): the workspace's
@@ -793,6 +816,8 @@ pub async fn headless(
             compaction_default::manifest_grants(),
             shared_prompt.clone(),
             grants.clone(),
+            // No `resources/` bag: a compaction strategy carries code.
+            lca_tools::ResourceSource::None,
         );
         cap.set_completion(backend.clone());
         registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
@@ -1160,6 +1185,22 @@ fn gc_command(cwd: &Path, id: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
+
+    // Verifies: FR-PROV-6 - the report names every way back, including
+    // re-enabling. Disabling the only provider leaves `lca` unable to start
+    // until one is enabled again, so "install a provider" alone is advice
+    // that cannot be followed from inside the stuck state.
+    #[test]
+    fn the_no_model_report_names_the_way_back() {
+        let report = no_model_message("openai-compatible");
+        assert!(report.contains("No model is available"), "{report}");
+        assert!(
+            report.contains("lca ext enable"),
+            "re-enabling is the common escape: {report}"
+        );
+        assert!(report.contains("lca ext install"), "{report}");
+    }
+
     use super::*;
     use lca_core::TurnSink;
 

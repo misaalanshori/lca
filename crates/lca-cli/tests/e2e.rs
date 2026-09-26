@@ -1215,11 +1215,11 @@ fn the_logins_secret_prompt_masks_input_in_a_real_terminal() {
     }
     let sandbox = sandbox("tui-login-mask");
     let session = Tmux::new("mask");
-    // No key: `/login` asks for the secret.
+    // No key: `/login <preset>` skips the picker and asks for the secret.
     session.spawn(&sandbox, None, false, &[], &[]);
     session.wait_for("no model", std::time::Duration::from_secs(20));
 
-    session.send(&["/login", "Enter"]);
+    session.send(&["/login openrouter", "Enter"]);
     session.wait_for("input hidden", std::time::Duration::from_secs(15));
     let secret = "sk-super-secret-value";
     session.send(&[secret]);
@@ -1231,6 +1231,113 @@ fn the_logins_secret_prompt_masks_input_in_a_real_terminal() {
         "the secret never appears in the frame:\n{pane}"
     );
     assert!(pane.contains("input hidden"), "still the masked prompt");
+}
+
+// Verifies: ADR-0033 / `api-key-login-plan.md` D1 - `/login` with no
+// argument is a list picker: the extension's presets, and always the host's
+// universal "Custom endpoint..." entry. The list is longer than the box, so
+// it scrolls - and the universal entry, which sits last, has to stay
+// reachable.
+#[cfg(unix)]
+#[test]
+fn the_login_picker_lists_the_presets_and_scrolls_to_the_custom_entry() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("tui-login-picker");
+    let session = Tmux::new("picker");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+
+    session.send(&["/login", "Enter"]);
+    session.wait_for("Sign in with", std::time::Duration::from_secs(15));
+    let pane = session.capture();
+    assert!(pane.contains("OpenRouter"), "a preset is listed:\n{pane}");
+    assert!(pane.contains("OpenAI"), "and another:\n{pane}");
+    assert!(pane.contains("> "), "the cursor marks a row:\n{pane}");
+    assert!(
+        !pane.contains("Custom endpoint"),
+        "the universal entry is last, below the fold at the top:\n{pane}"
+    );
+
+    // Walking to the end reaches it.
+    let mut reached = false;
+    for _ in 0..24 {
+        session.send(&["Down"]);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        if session.capture().contains("Custom endpoint") {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "the host's universal entry is reachable");
+}
+
+// Verifies: ADR-0033 - choosing a preset reaches that preset's own field
+// prompt, and the picker closes behind it.
+#[cfg(unix)]
+#[test]
+fn a_preset_choice_reaches_its_own_field_prompt() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("tui-login-choose");
+    let session = Tmux::new("choose");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+
+    session.send(&["/login", "Enter"]);
+    session.wait_for("Sign in with", std::time::Duration::from_secs(15));
+    // The first row is a bearer preset, so it asks for its key next.
+    session.send(&["Enter"]);
+    session.wait_for("input hidden", std::time::Duration::from_secs(15));
+    let pane = session.capture();
+    assert!(
+        !pane.contains("Sign in with"),
+        "the picker closed when the row was chosen:\n{pane}"
+    );
+    assert!(pane.contains("API key"), "its own field prompt:\n{pane}");
+}
+
+// Verifies: D3 - a local `auth = "none"` preset has no key step, so
+// choosing one never opens a secret prompt.
+#[cfg(unix)]
+#[test]
+fn the_picker_moves_to_a_local_preset_that_needs_no_key() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("tui-login-local");
+    let session = Tmux::new("local");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+
+    session.send(&["/login", "Enter"]);
+    session.wait_for("Sign in with", std::time::Duration::from_secs(15));
+    // The list is longer than the box, so it scrolls; walk down until the
+    // hint names a local host rather than counting rows.
+    let mut reached = false;
+    for _ in 0..24 {
+        session.send(&["Down"]);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        if session.capture().contains("localhost") {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "the walk reached a local preset");
+    // A local preset has no key step: Enter signs in without one.
+    session.send(&["Enter"]);
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    let pane = session.capture();
+    assert!(!pane.contains("Sign in with"), "the picker closed:\n{pane}");
+    assert!(
+        !pane.contains("input hidden"),
+        "no key was asked for:\n{pane}"
+    );
 }
 
 // Verifies: ADR-0029 - the interface's `/attach` stages an image and the next

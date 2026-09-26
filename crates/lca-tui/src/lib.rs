@@ -60,18 +60,47 @@ pub struct TurnStatusLine {
 /// How the input editor invokes a registered slash command.
 pub type CommandInvoker = Arc<dyn Fn(&str, &str) -> CommandEffect + Send + Sync>;
 
+/// One entry in the `/login` list picker. Display-ready: the host renders
+/// it and never learns what the id means (ADR-0033 - provider-shaped data
+/// stays in the extension).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PickerOption {
+    /// The provider this choice belongs to; the picker mixes several.
+    pub provider: String,
+    /// The id handed back to `login-submit`. The host keeps the universal
+    /// "custom" entry's id in [`CUSTOM_OPTION`].
+    pub id: String,
+    /// Display line, e.g. "OpenRouter".
+    pub label: String,
+    /// Right-hand hint, e.g. "openrouter.ai".
+    pub hint: String,
+}
+
+/// The host-owned picker entry: base URL + key + model, no preset.
+pub const CUSTOM_OPTION: &str = "__custom__";
+
 /// What `/login <provider>` should do next, decided by the CLI.
+#[derive(Debug)]
 pub enum LoginNext {
     /// The CLI already handled it (OAuth, already signed in, refusal); show
     /// this text.
     Message(String),
-    /// Ask the user for a secret through a masked modal; the answer goes to
-    /// the [`LoginComplete`] seam.
+    /// Ask the user for one line through a modal; the answer goes to the
+    /// [`LoginComplete`] seam. Masked for a secret, plain for a base URL or
+    /// a model id.
     Secret {
-        /// The provider the secret belongs to.
+        /// The provider the value belongs to.
         provider: String,
         /// The prompt to show, e.g. "API key for openai-compatible".
         label: String,
+        /// Render as asterisks (a secret) or as typed (a URL, a model id).
+        masked: bool,
+    },
+    /// Offer the list picker (ADR-0033); the choice goes to the
+    /// [`LoginPick`] seam.
+    Picker {
+        /// The choices to show, in order.
+        options: Vec<PickerOption>,
     },
     /// Offer an ad hoc `net` grant for the endpoint host the login flow
     /// just named (FR-PERM-16); the answer goes to the [`LoginConfirm`]
@@ -86,28 +115,45 @@ pub enum LoginNext {
     },
 }
 
-/// The host's login seam: `/login` calls this to choose between a message
-/// and a masked secret prompt. The CLI owns provider knowledge; the
-/// interface owns the modal (`docs/deferred_workplan.md` B2).
+/// The host's login seam: `/login` calls this to choose between a message,
+/// a list picker, and a masked secret prompt. The CLI owns provider
+/// knowledge; the interface owns the modal (`docs/deferred_workplan.md` B2).
 pub type LoginRequest = Arc<dyn Fn(&str) -> LoginNext + Send + Sync>;
 
-/// Store a secret the user typed for `provider`; returns what to do next
-/// (a message, or an ad hoc-grant offer). The secret is never echoed into
-/// scrollback or history.
+/// The user picked a picker entry; returns the next step (usually the
+/// first field to collect). The CLI remembers the choice for
+/// [`LoginComplete`].
+pub type LoginPick = Arc<dyn Fn(&str, &str) -> LoginNext + Send + Sync>;
+
+/// Hand the CLI one typed line (a secret, a base URL, a model id) for the
+/// login flow it is running; returns what to do next - including another
+/// [`LoginNext::Secret`], which is how a multi-field login collects its
+/// remaining fields. A secret is never echoed into scrollback or history.
 pub type LoginComplete = Arc<dyn Fn(&str, &str) -> LoginNext + Send + Sync>;
 
 /// Persist an ad hoc `net` grant the user approved at login; returns the
 /// message to show.
 pub type LoginConfirm = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
 
-/// A masked single-line secret prompt (the `/login` flow).
+/// A single-line prompt (the `/login` flow).
 pub struct SecretPrompt {
-    /// The provider the secret belongs to.
+    /// The provider the value belongs to.
     pub provider: String,
     /// What the user is being asked for.
     pub label: String,
-    /// The characters typed so far - rendered masked, never logged.
+    /// The characters typed so far - rendered masked when [`Self::masked`],
+    /// never logged.
     pub input: String,
+    /// Asterisks instead of the typed characters.
+    pub masked: bool,
+}
+
+/// The open list picker (the `/login` flow).
+pub struct PickerPrompt {
+    /// The choices, in order.
+    pub options: Vec<PickerOption>,
+    /// Which row the cursor is on.
+    pub selected: usize,
 }
 
 /// A yes/no confirm for an ad hoc `net` grant the login flow offers.
@@ -292,6 +338,8 @@ pub struct UiOptions {
     pub login: Option<LoginRequest>,
     /// Stores a secret the user typed for `/login`.
     pub complete_login: Option<LoginComplete>,
+    /// The user chose a `/login` picker entry.
+    pub pick_login: Option<LoginPick>,
     /// Persists an ad hoc `net` grant the user approved at login.
     pub confirm_login_grant: Option<LoginConfirm>,
 }
@@ -344,6 +392,8 @@ pub struct UiState {
     pub permission: Option<PermissionModal>,
     /// The open masked secret prompt, if any (`/login`).
     pub secret: Option<SecretPrompt>,
+    /// The open list picker, if any (`/login`).
+    pub picker: Option<PickerPrompt>,
     /// The open ad hoc-grant confirm, if any (`/login`).
     pub grant: Option<GrantPrompt>,
     /// Ctrl+C seen once on an idle prompt.
@@ -386,6 +436,7 @@ impl UiState {
             mode: InputMode::Normal,
             permission: None,
             secret: None,
+            picker: None,
             grant: None,
             ctrl_c_armed: false,
             panel_open: false,
@@ -653,38 +704,92 @@ fn key_input(key: crossterm::event::KeyEvent) -> lca_protocol::UiInput {
     }
 }
 
+/// Apply the CLI's next login step: one modal at a time, and a
+/// [`LoginNext::Secret`] mid-flow is the next field of a multi-field
+/// login, not a refusal.
+fn apply_login_next(state: &mut UiState, next: LoginNext) {
+    match next {
+        LoginNext::Message(text) => state.notice = Some(sanitize_block(&text)),
+        LoginNext::Secret {
+            provider,
+            label,
+            masked,
+        } => {
+            state.secret = Some(SecretPrompt {
+                provider,
+                label,
+                input: String::new(),
+                masked,
+            });
+        }
+        LoginNext::Picker { options } => {
+            if options.is_empty() {
+                state.notice = Some("nothing to sign in to".to_string());
+            } else {
+                state.picker = Some(PickerPrompt {
+                    options,
+                    selected: 0,
+                });
+            }
+        }
+        LoginNext::Grant {
+            provider,
+            host,
+            prompt,
+        } => {
+            state.grant = Some(GrantPrompt {
+                provider,
+                host,
+                prompt,
+            });
+        }
+    }
+}
+
 /// Handle one key press against the state (NFR-27: keyboard only).
 pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Action {
     use crossterm::event::{KeyCode, KeyModifiers};
 
-    // The masked secret prompt (`/login`) owns the keyboard while open. The
-    // typed characters live only here - never in the buffer, history, or
+    // The list picker (`/login`) owns the keyboard while open.
+    if let Some(mut prompt) = state.picker.take() {
+        use crossterm::event::KeyCode as PK;
+        match key.code {
+            PK::Esc => state.notice = Some("login cancelled".to_string()),
+            PK::Up | PK::Char('k') => {
+                prompt.selected = prompt.selected.saturating_sub(1);
+                state.picker = Some(prompt);
+            }
+            PK::Down | PK::Char('j') => {
+                prompt.selected = (prompt.selected + 1).min(prompt.options.len().saturating_sub(1));
+                state.picker = Some(prompt);
+            }
+            PK::Enter => {
+                if let Some(option) = prompt.options.get(prompt.selected).cloned()
+                    && let Some(pick) = &state.options.pick_login
+                {
+                    let next = pick(&option.provider, &option.id);
+                    apply_login_next(state, next);
+                }
+            }
+            _ => state.picker = Some(prompt),
+        }
+        return Action::Continue;
+    }
+
+    // The single-line login prompt (`/login`) owns the keyboard while open.
+    // The typed characters live only here - never in the buffer, history, or
     // session log - and are moved out on submit.
     if let Some(mut prompt) = state.secret.take() {
         use crossterm::event::KeyCode as SK;
         match key.code {
             SK::Esc => state.notice = Some("login cancelled".to_string()),
             SK::Enter => {
-                let secret = std::mem::take(&mut prompt.input);
-                if secret.is_empty() {
+                let typed = std::mem::take(&mut prompt.input);
+                if typed.is_empty() {
                     state.notice = Some("nothing was entered".to_string());
                 } else if let Some(complete) = &state.options.complete_login {
-                    match complete(&prompt.provider, &secret) {
-                        LoginNext::Message(text) => state.notice = Some(sanitize_block(&text)),
-                        LoginNext::Grant {
-                            provider,
-                            host,
-                            prompt,
-                        } => {
-                            state.grant = Some(GrantPrompt {
-                                provider,
-                                host,
-                                prompt,
-                            });
-                        }
-                        // A login step never asks for a second secret.
-                        LoginNext::Secret { .. } => {}
-                    }
+                    let next = complete(&prompt.provider, &typed);
+                    apply_login_next(state, next);
                 }
             }
             SK::Backspace => {
@@ -838,29 +943,8 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
                 if name == "login"
                     && let Some(login) = &state.options.login
                 {
-                    match login(&argument) {
-                        LoginNext::Message(text) => {
-                            state.notice = Some(sanitize_block(&text));
-                        }
-                        LoginNext::Secret { provider, label } => {
-                            state.secret = Some(SecretPrompt {
-                                provider,
-                                label,
-                                input: String::new(),
-                            });
-                        }
-                        LoginNext::Grant {
-                            provider,
-                            host,
-                            prompt,
-                        } => {
-                            state.grant = Some(GrantPrompt {
-                                provider,
-                                host,
-                                prompt,
-                            });
-                        }
-                    }
+                    let next = login(&argument);
+                    apply_login_next(state, next);
                     return Action::Continue;
                 }
                 let full = format!("/{name}");
@@ -1399,7 +1483,44 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
     );
     frame.set_cursor_position(cursor_position(input_row, state));
 
-    if let Some(grant) = &state.grant {
+    if let Some(picker) = &state.picker {
+        // One line per choice, the cursor row marked with `>`. More
+        // choices than rows scrolls: the window keeps the cursor in view,
+        // so the last entry is never unreachable (the host's universal one
+        // sits at the end).
+        let area = centered(frame.area(), 76, 20);
+        // Borders (2) + the blank line and the footer.
+        let rows = (area.height as usize).saturating_sub(5).max(1);
+        let total = picker.options.len();
+        let start = (picker.selected + 1)
+            .saturating_sub(rows)
+            .min(total.saturating_sub(rows));
+        let end = (start + rows).min(total);
+        let mut body = String::from("Sign in with:\n\n");
+        for (index, option) in picker.options.iter().enumerate().take(end).skip(start) {
+            let cursor = if index == picker.selected { '>' } else { ' ' };
+            let hint = if option.hint.is_empty() {
+                String::new()
+            } else {
+                format!("   {}", option.hint)
+            };
+            body.push_str(&format!(" {} {}{}\n", cursor, option.label, hint));
+        }
+        if start > 0 || end < total {
+            body.push_str(&format!("   [{}/{}]\n", picker.selected + 1, total));
+        }
+        body.push_str("\nUp/Down moves; Enter chooses; Esc cancels.");
+        frame.render_widget(Clear, area);
+        let dialog = Paragraph::new(body)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(theme(plain, Color::Cyan))
+                    .title("login"),
+            )
+            .wrap(Wrap { trim: false });
+        frame.render_widget(dialog, area);
+    } else if let Some(grant) = &state.grant {
         let area = centered(frame.area(), 74, 8);
         frame.render_widget(Clear, area);
         let body = format!(
@@ -1416,15 +1537,23 @@ fn draw_frame(frame: &mut Frame, state: &UiState) {
             .wrap(Wrap { trim: false });
         frame.render_widget(dialog, area);
     } else if let Some(secret) = &state.secret {
-        // Masked: one asterisk per character, never the characters.
-        let masked = "*".repeat(secret.input.chars().count());
-        let shown = if masked.is_empty() {
-            "(type the secret)"
+        // A secret is asterisks and never the characters (FR-UI-4); a URL
+        // or a model id is shown as typed, since typing those blind is
+        // worse than any leak of a value that is not secret.
+        let shown = if secret.masked {
+            let masked = "*".repeat(secret.input.chars().count());
+            if masked.is_empty() {
+                "(type the secret)".to_string()
+            } else {
+                masked
+            }
+        } else if secret.input.is_empty() {
+            "(type a value)".to_string()
         } else {
-            masked.as_str()
+            secret.input.clone()
         };
         let body = format!(
-            "{}\n\n  {}\n\nEnter stores it (hidden); Esc cancels.",
+            "{}\n\n  {}\n\nEnter stores it; Esc cancels.",
             secret.label, shown
         );
         let area = centered(frame.area(), 70, 7);

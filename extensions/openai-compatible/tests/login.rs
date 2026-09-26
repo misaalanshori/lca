@@ -15,26 +15,48 @@ const PRESETS: &[u8] = include_bytes!("../resources/provider-presets.toml");
 struct FakeCap {
     resources: BTreeMap<String, Vec<u8>>,
     creds: Mutex<BTreeMap<String, String>>,
+    /// What `GET /models` answers: `None` is "nothing listens".
+    models_body: Option<(u16, Vec<u8>)>,
+    /// The URLs the cap was asked for, so a test can assert discovery ran.
+    seen: Mutex<Vec<String>>,
+    /// Whether the body has already been handed out (a response reads once).
+    sent: Mutex<bool>,
 }
 
 impl ProviderCap for FakeCap {
     fn net_request(
         &self,
         _method: &str,
-        _url: &str,
+        url: &str,
         _headers: &[(&str, &str)],
         _body: Option<&[u8]>,
     ) -> Result<u32, CapabilityError> {
-        Err(CapabilityError::Io("no net in this test".into()))
+        self.seen.lock().expect("seen").push(url.to_string());
+        if self.models_body.is_some() {
+            Ok(1)
+        } else {
+            Err(CapabilityError::Io("nothing listens in this test".into()))
+        }
     }
     fn net_response_status(&self, _handle: u32) -> Result<u16, CapabilityError> {
-        Err(CapabilityError::Io("no net in this test".into()))
+        self.models_body
+            .as_ref()
+            .map(|(status, _)| *status)
+            .ok_or_else(|| CapabilityError::Io("nothing listens in this test".into()))
     }
     fn net_read_body(&self, _handle: u32, _max: usize) -> Result<Option<Vec<u8>>, CapabilityError> {
-        Err(CapabilityError::Io("no net in this test".into()))
+        // One chunk then end, like the real reader.
+        if *self.sent.lock().expect("sent") {
+            return Ok(None);
+        }
+        *self.sent.lock().expect("sent") = true;
+        self.models_body
+            .as_ref()
+            .map(|(_, body)| Some(body.clone()))
+            .ok_or_else(|| CapabilityError::Io("nothing listens in this test".into()))
     }
     fn net_close_response(&self, _handle: u32) -> Result<(), CapabilityError> {
-        Err(CapabilityError::Io("no net in this test".into()))
+        Ok(())
     }
     fn credentials_get(&self, key: &str) -> Option<String> {
         self.creds.lock().expect("creds").get(key).cloned()
@@ -129,4 +151,82 @@ fn parse_presets_tolerates_junk() {
     assert!(parse_presets("not toml [[[").is_empty());
     assert!(parse_presets("").is_empty());
     assert!(parse_presets("[[preset]]\nname = \"missing id\"").is_empty());
+}
+
+#[cfg(test)]
+mod discovery {
+    use super::*;
+
+    fn cap_with(body: Option<(u16, Vec<u8>)>) -> FakeCap {
+        let mut cap = FakeCap::default();
+        cap.resources
+            .insert("provider-presets.toml".to_string(), PRESETS.to_vec());
+        cap.models_body = body;
+        cap
+    }
+
+    fn answer() -> LoginAnswer {
+        LoginAnswer {
+            choice: "openrouter".to_string(),
+            values: [("api-key".to_string(), "sk-x".to_string())]
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    fn setting<'a>(settings: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        settings
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    // D2: the endpoint's own list wins when it answers.
+    #[test]
+    fn login_submit_discovers_the_endpoints_models_when_it_answers() {
+        let body = br#"{"data":[{"id":"zeta"},{"id":"alpha"},{"id":"alpha"}]}"#.to_vec();
+        let cap = cap_with(Some((200, body)));
+        let settings = login_submit(&cap, &answer()).expect("submit");
+        assert_eq!(
+            setting(&settings, "models"),
+            Some("alpha,zeta"),
+            "sorted and deduplicated"
+        );
+        assert!(
+            cap.seen.lock().expect("seen")[0].ends_with("/models"),
+            "discovery hit the endpoint"
+        );
+    }
+
+    // D2's fallback: an unreachable endpoint means the curated short list,
+    // not an empty picker and not an error.
+    #[test]
+    fn login_submit_falls_back_to_the_curated_list_when_the_endpoint_is_unreachable() {
+        let cap = cap_with(None);
+        let settings = login_submit(&cap, &answer()).expect("submit");
+        let models = setting(&settings, "models").expect("a list either way");
+        assert!(
+            models.contains("openai/gpt-4o"),
+            "the preset's curated ids: {models}"
+        );
+    }
+
+    // A live but wrong answer (401, or a body that is not the expected
+    // shape) is a fall-back, never a panic and never a bogus list.
+    #[test]
+    fn login_submit_treats_an_unexpected_answer_as_no_discovery() {
+        for body in [
+            (401u16, br#"{"error":{"message":"bad key"}}"#.to_vec()),
+            (200, br#"{"not":"a model list"}"#.to_vec()),
+            (200, br#"{"data":[]}"#.to_vec()),
+        ] {
+            let cap = cap_with(Some(body));
+            let settings = login_submit(&cap, &answer()).expect("submit");
+            assert_eq!(
+                setting(&settings, "models"),
+                Some("openai/gpt-4o,anthropic/claude-3.5-sonnet,google/gemini-2.0-flash"),
+                "the curated list is the fallback"
+            );
+        }
+    }
 }

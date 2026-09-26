@@ -29,6 +29,7 @@ fn options() -> UiOptions {
         update_notice: None,
         login: None,
         complete_login: None,
+        pick_login: None,
         confirm_login_grant: None,
         slash_commands: vec![
             "/login".into(),
@@ -829,6 +830,7 @@ fn login_collects_a_secret_in_a_masked_prompt_and_never_logs_it() {
         lca_tui::LoginNext::Secret {
             provider: "openai-compatible".to_string(),
             label: "API key".to_string(),
+            masked: true,
         }
     }));
     let sink = captured.clone();
@@ -898,6 +900,7 @@ fn escaping_the_secret_prompt_cancels_without_storing() {
     options.login = Some(Arc::new(|_argument: &str| lca_tui::LoginNext::Secret {
         provider: "openai-compatible".to_string(),
         label: "API key".to_string(),
+        masked: true,
     }));
     let sink = captured.clone();
     options.complete_login = Some(Arc::new(move |_provider: &str, secret: &str| {
@@ -997,6 +1000,7 @@ fn a_grant_needed_after_the_secret_opens_the_grant_prompt() {
     options.login = Some(Arc::new(|_argument: &str| lca_tui::LoginNext::Secret {
         provider: "openai-compatible".to_string(),
         label: "API key".to_string(),
+        masked: true,
     }));
     options.complete_login = Some(Arc::new(|_provider: &str, _secret: &str| {
         lca_tui::LoginNext::Grant {
@@ -1024,4 +1028,228 @@ fn a_grant_needed_after_the_secret_opens_the_grant_prompt() {
         state.grant.is_some(),
         "the ad hoc grant follows the stored secret"
     );
+}
+
+// ADR-0033: the picker shows every option, and marks the row the cursor is
+// on. The host renders what it is given and never interprets the id.
+#[test]
+fn the_login_picker_lists_the_options_and_marks_the_cursor() {
+    use std::sync::Arc;
+    let mut options = options();
+    options.login = Some(Arc::new(|_argument: &str| lca_tui::LoginNext::Picker {
+        options: vec![
+            lca_tui::PickerOption {
+                provider: "openai-compatible".to_string(),
+                id: "openrouter".to_string(),
+                label: "OpenRouter".to_string(),
+                hint: "openrouter.ai".to_string(),
+            },
+            lca_tui::PickerOption {
+                provider: "openai-compatible".to_string(),
+                id: lca_tui::CUSTOM_OPTION.to_string(),
+                label: "Custom endpoint\u{2026}".to_string(),
+                hint: "base URL + key + model".to_string(),
+            },
+        ],
+    }));
+    let mut state = UiState::new(options);
+    state.buffer = "/login".to_string();
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    assert!(state.picker.is_some(), "the picker opened");
+    let mut term = terminal(80, 24);
+    render(&mut term, &state).expect("render");
+    let text = buffer_text(&mut term);
+    assert!(text.contains("OpenRouter"), "lists the preset: {text}");
+    assert!(text.contains("openrouter.ai"), "shows its host: {text}");
+    assert!(
+        text.contains("Custom endpoint"),
+        "always offers the universal entry"
+    );
+    assert!(text.contains("> OpenRouter"), "marks the first row: {text}");
+}
+
+// Up/Down moves the cursor; Enter submits the chosen id to the host's
+// picker seam (ADR-0033's `login-submit` routing).
+#[test]
+fn the_picker_moves_the_cursor_and_submits_the_chosen_option() {
+    use std::sync::{Arc, Mutex};
+    let picked: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+    let sink = picked.clone();
+    let mut options = options();
+    options.pick_login = Some(Arc::new(move |provider: &str, choice: &str| {
+        *sink.lock().unwrap() = Some((provider.to_string(), choice.to_string()));
+        lca_tui::LoginNext::Message(format!("chosen {choice}"))
+    }));
+    let mut state = UiState::new(options);
+    state.picker = Some(lca_tui::PickerPrompt {
+        options: vec![
+            lca_tui::PickerOption {
+                provider: "openai-compatible".to_string(),
+                id: "openrouter".to_string(),
+                label: "OpenRouter".to_string(),
+                hint: String::new(),
+            },
+            lca_tui::PickerOption {
+                provider: "openai-compatible".to_string(),
+                id: "ollama".to_string(),
+                label: "Ollama (local)".to_string(),
+                hint: "localhost".to_string(),
+            },
+        ],
+        selected: 0,
+    });
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Down));
+    assert_eq!(state.picker.as_ref().map(|p| p.selected), Some(1));
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    assert!(state.picker.is_none(), "the picker closed");
+    assert_eq!(
+        picked.lock().unwrap().as_ref(),
+        Some(&("openai-compatible".to_string(), "ollama".to_string()))
+    );
+}
+
+// A login flow that needs several values collects them one prompt at a
+// time: a `Secret` back from the seam is the next field, not a refusal.
+#[test]
+fn a_second_field_from_the_login_flow_reopens_the_prompt() {
+    use std::sync::{Arc, Mutex};
+    let collected: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = collected.clone();
+    let mut options = options();
+    options.login = Some(Arc::new(|_argument: &str| lca_tui::LoginNext::Secret {
+        provider: "openai-compatible".to_string(),
+        label: "Base URL".to_string(),
+        masked: false,
+    }));
+    options.complete_login = Some(Arc::new(move |_provider: &str, value: &str| {
+        sink.lock().unwrap().push(value.to_string());
+        if sink.lock().unwrap().len() == 1 {
+            lca_tui::LoginNext::Secret {
+                provider: "openai-compatible".to_string(),
+                label: "API key".to_string(),
+                masked: true,
+            }
+        } else {
+            lca_tui::LoginNext::Message("done".to_string())
+        }
+    }));
+    let mut state = UiState::new(options);
+    state.buffer = "/login".to_string();
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    assert!(state.secret.is_some());
+    for c in "https://x.test/v1".chars() {
+        handle_key(
+            &mut state,
+            crossterm::event::KeyEvent::from(KeyCode::Char(c)),
+        );
+    }
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    assert!(
+        state.secret.is_some(),
+        "the second field's prompt reopened after the first was stored"
+    );
+    assert_eq!(
+        collected.lock().unwrap().as_slice(),
+        ["https://x.test/v1".to_string()],
+        "the first value reached the seam"
+    );
+}
+
+// A visible prompt (a base URL, a model id) shows what was typed; only a
+// secret is masked. Typing a URL blind is worse than any leak of a value
+// that is not secret.
+#[test]
+fn a_visible_prompt_shows_what_was_typed_but_a_secret_does_not() {
+    use std::sync::Arc;
+    let mut opts = options();
+    opts.login = Some(Arc::new(|_argument: &str| lca_tui::LoginNext::Secret {
+        provider: "openai-compatible".to_string(),
+        label: "Base URL".to_string(),
+        masked: false,
+    }));
+    let mut state = UiState::new(opts);
+    state.buffer = "/login".to_string();
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    for c in "https://x.test/v1".chars() {
+        handle_key(
+            &mut state,
+            crossterm::event::KeyEvent::from(KeyCode::Char(c)),
+        );
+    }
+    let mut term = terminal(80, 12);
+    render(&mut term, &state).expect("render");
+    let text = buffer_text(&mut term);
+    assert!(
+        text.contains("https://x.test/v1"),
+        "a visible prompt echoes the value: {text}"
+    );
+
+    let mut opts = options();
+    opts.login = Some(Arc::new(|_argument: &str| lca_tui::LoginNext::Secret {
+        provider: "openai-compatible".to_string(),
+        label: "API key".to_string(),
+        masked: true,
+    }));
+    let mut state = UiState::new(opts);
+    state.buffer = "/login".to_string();
+    handle_key(&mut state, crossterm::event::KeyEvent::from(KeyCode::Enter));
+    for c in "sk-secret".chars() {
+        handle_key(
+            &mut state,
+            crossterm::event::KeyEvent::from(KeyCode::Char(c)),
+        );
+    }
+    let mut term = terminal(80, 12);
+    render(&mut term, &state).expect("render");
+    let text = buffer_text(&mut term);
+    assert!(
+        !text.contains("sk-secret"),
+        "a secret never renders: {text}"
+    );
+    assert!(text.contains("*"), "it renders masked instead: {text}");
+}
+
+// More choices than rows must scroll, or the last entry is unreachable -
+// and the host's universal "Custom endpoint..." entry sits at the end.
+#[test]
+fn a_long_picker_keeps_the_last_choice_visible() {
+    let rows = |count: usize| -> Vec<lca_tui::PickerOption> {
+        (0..count)
+            .map(|index| lca_tui::PickerOption {
+                provider: "openai-compatible".to_string(),
+                id: format!("p{index}"),
+                label: format!("Preset {index}"),
+                hint: String::new(),
+            })
+            .collect()
+    };
+
+    let mut state = UiState::new(options());
+    state.picker = Some(lca_tui::PickerPrompt {
+        options: rows(30),
+        selected: 29,
+    });
+    let mut term = terminal(80, 24);
+    render(&mut term, &state).expect("render");
+    let text = buffer_text(&mut term);
+    assert!(
+        text.contains("Preset 29"),
+        "the last row stays in view: {text}"
+    );
+    assert!(
+        text.contains("[30/30]"),
+        "the scroll position is shown: {text}"
+    );
+
+    // Unscrolled, the top of the list is what shows.
+    let mut state = UiState::new(options());
+    state.picker = Some(lca_tui::PickerPrompt {
+        options: rows(30),
+        selected: 0,
+    });
+    let mut term = terminal(80, 24);
+    render(&mut term, &state).expect("render");
+    let text = buffer_text(&mut term);
+    assert!(text.contains("Preset 0"), "the top row is shown: {text}");
+    assert!(text.contains("Preset 1"), "and the next: {text}");
 }

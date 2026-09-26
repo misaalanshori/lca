@@ -63,3 +63,6 @@ mod release_builds_the_cli;
 // latent nightly-fuzz defect: the fuzz workspace drifted out of sight.
 #[path = "19-fuzz-targets-match-the-api.rs"]
 mod fuzz_targets_match_the_api;
+// cycle-5 driving: a disabled provider must take its presets with it.
+#[path = "20-disabled-provider-drops-its-presets.rs"]
+mod disabled_provider_drops_its_presets;
