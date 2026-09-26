@@ -96,6 +96,13 @@ pub trait ProviderCap: Send + Sync {
     fn credentials_set(&self, key: &str, value: &str) -> Result<(), crate::CapabilityError>;
     /// Delete one credential.
     fn credentials_delete(&self, key: &str) -> Result<(), crate::CapabilityError>;
+    /// Read one of the extension's own resources (ADR-0030). Default:
+    /// absent, so a provider with no resource bag compiles unchanged.
+    fn resource_read(&self, path: &str) -> Result<Vec<u8>, crate::CapabilityError> {
+        Err(crate::CapabilityError::NotFound(format!(
+            "no resource `{path}`"
+        )))
+    }
 }
 
 /// The loopback authorization flow, the other half of the `provider`

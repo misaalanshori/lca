@@ -79,8 +79,8 @@ pub mod dispatch {
     use crate::{DeliveryMode, World};
     use lca_protocol::{
         ChatMessage, CommandEffect, CommandSpec, CompletionRequest, DispatchError, EventSink,
-        HookAction, IdentityOutcome, ModelInfo, PostToolObservation, Record, ToolCall, ToolResult,
-        ToolSpec, Usage,
+        HookAction, IdentityOutcome, LoginAnswer, LoginOption, ModelInfo, PostToolObservation,
+        Record, ToolCall, ToolResult, ToolSpec, Usage,
     };
 
     /// Boxed future bound for dispatch calls, tied to the handle's life.
@@ -209,6 +209,24 @@ pub mod dispatch {
         ) -> DispatchFuture<'static, Result<Result<Usage, IdentityOutcome>, DispatchError>>
         {
             Box::pin(std::future::ready(Ok(Err(IdentityOutcome::NotSupported))))
+        }
+
+        /// The provider's login options (ADR-0033). Default: none, so the
+        /// host's picker shows only its own "Custom endpoint…".
+        fn login_options(
+            &self,
+        ) -> DispatchFuture<'static, Result<Vec<LoginOption>, DispatchError>> {
+            Box::pin(std::future::ready(Ok(Vec::new())))
+        }
+
+        /// Consume the user's answers (ADR-0033): store the secret in the
+        /// extension's own credentials namespace, return opaque settings
+        /// for the host to persist. Default: nothing to do.
+        fn login_submit(
+            &self,
+            _answer: LoginAnswer,
+        ) -> DispatchFuture<'static, Result<Vec<(String, String)>, DispatchError>> {
+            Box::pin(std::future::ready(Ok(Vec::new())))
         }
 
         /// The regions this handle registered under `capabilities.ui`

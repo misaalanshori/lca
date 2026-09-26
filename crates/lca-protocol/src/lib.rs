@@ -8,6 +8,7 @@
 
 pub mod capability;
 pub mod dispatch;
+pub mod login;
 pub mod message;
 pub mod provider;
 pub mod record;
@@ -19,6 +20,7 @@ pub mod usage;
 
 pub use capability::CapabilityError;
 pub use dispatch::{CommandEffect, CommandSpec, DispatchError, HookAction, PostToolObservation};
+pub use login::{LoginAnswer, LoginOption};
 pub use message::{ChatMessage, ContentBlock, MessageRole, base64_encode, sniff_image_media_type};
 pub use provider::{
     CompletionRequest, EventSink, IdentityOutcome, ModelInfo, OauthCap, ProviderCap,

@@ -590,3 +590,34 @@ async fn ui_regions_and_effects_agree_across_modes() {
         "only the modal region answers"
     );
 }
+
+// Verifies: ADR-0033 (the provider login surface agrees across delivery
+// modes: options round-trip and a submit returns the same opaque settings).
+#[tokio::test]
+async fn the_login_surface_agrees_across_modes() {
+    let fixture = Fixture::new("login");
+    let (wasm, native, _engine) = fixture.both_modes();
+
+    let wasm_options = wasm.login_options().await.expect("wasm options");
+    let native_options = native.login_options().await.expect("native options");
+    assert_eq!(wasm_options, native_options, "identical login options");
+    assert_eq!(wasm_options.len(), 2, "the probe reports two options");
+    assert_eq!(wasm_options[0].kind, "api-key");
+
+    let answer = lca_protocol::LoginAnswer {
+        choice: "conformance".to_string(),
+        values: [("api-key".to_string(), "secret".to_string())]
+            .into_iter()
+            .collect(),
+    };
+    let wasm_settings = wasm
+        .login_submit(answer.clone())
+        .await
+        .expect("wasm submit");
+    let native_settings = native.login_submit(answer).await.expect("native submit");
+    assert_eq!(wasm_settings, native_settings, "identical settings");
+    assert!(
+        wasm_settings.iter().any(|(key, _)| key == "base_url"),
+        "the settings the host persists came back"
+    );
+}

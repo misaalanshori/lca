@@ -1,0 +1,159 @@
+# Provider presets (ADR-0031): the extension's own data, loaded through
+# `lca:host/resources`. The host never parses this; the extension answers
+# the host's picker query from it. Shape stolen from pi's provider
+# registry; `auth = "none"` is a local endpoint with no key step.
+
+[[preset]]
+id = "openai"
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+env = ["OPENAI_API_KEY"]
+auth = "bearer"
+models = ["gpt-4o", "gpt-4o-mini", "o3-mini"]
+
+[[preset]]
+id = "openrouter"
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env = ["OPENROUTER_API_KEY"]
+auth = "bearer"
+models = ["openai/gpt-4o", "anthropic/claude-3.5-sonnet", "google/gemini-2.0-flash"]
+
+[[preset]]
+id = "deepseek"
+name = "DeepSeek"
+base_url = "https://api.deepseek.com/v1"
+env = ["DEEPSEEK_API_KEY"]
+auth = "bearer"
+models = ["deepseek-chat", "deepseek-reasoner"]
+
+[[preset]]
+id = "groq"
+name = "Groq"
+base_url = "https://api.groq.com/openai/v1"
+env = ["GROQ_API_KEY"]
+auth = "bearer"
+models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+
+[[preset]]
+id = "cerebras"
+name = "Cerebras"
+base_url = "https://api.cerebras.ai/v1"
+env = ["CEREBRAS_API_KEY"]
+auth = "bearer"
+models = ["llama-3.3-70b", "llama3.1-8b"]
+
+[[preset]]
+id = "fireworks"
+name = "Fireworks"
+base_url = "https://api.fireworks.ai/inference/v1"
+env = ["FIREWORKS_API_KEY"]
+auth = "bearer"
+models = ["accounts/fireworks/models/llama-v3p3-70b-instruct"]
+
+[[preset]]
+id = "together"
+name = "Together"
+base_url = "https://api.together.xyz/v1"
+env = ["TOGETHER_API_KEY"]
+auth = "bearer"
+models = ["meta-llama/Llama-3.3-70B-Instruct-Turbo"]
+
+[[preset]]
+id = "xai"
+name = "xAI"
+base_url = "https://api.x.ai/v1"
+env = ["XAI_API_KEY"]
+auth = "bearer"
+models = ["grok-2-latest", "grok-3"]
+
+[[preset]]
+id = "mistral"
+name = "Mistral"
+base_url = "https://api.mistral.ai/v1"
+env = ["MISTRAL_API_KEY"]
+auth = "bearer"
+models = ["mistral-large-latest", "codestral-latest"]
+
+[[preset]]
+id = "moonshot"
+name = "Moonshot"
+base_url = "https://api.moonshot.ai/v1"
+env = ["MOONSHOT_API_KEY"]
+auth = "bearer"
+models = ["kimi-k2-0711-preview", "moonshot-v1-128k"]
+
+[[preset]]
+id = "minimax"
+name = "MiniMax"
+base_url = "https://api.minimax.io/v1"
+env = ["MINIMAX_API_KEY"]
+auth = "bearer"
+models = ["MiniMax-M2", "abab6.5s-chat"]
+
+[[preset]]
+id = "nvidia"
+name = "NVIDIA"
+base_url = "https://integrate.api.nvidia.com/v1"
+env = ["NVIDIA_API_KEY"]
+auth = "bearer"
+models = ["meta/llama-3.3-70b-instruct"]
+
+[[preset]]
+id = "baseten"
+name = "Baseten"
+base_url = "https://inference.baseten.co/v1"
+env = ["BASETEN_API_KEY"]
+auth = "bearer"
+models = ["moonshotai/Kimi-K2-Instruct"]
+
+[[preset]]
+id = "huggingface"
+name = "Hugging Face"
+base_url = "https://router.huggingface.co/v1"
+env = ["HF_TOKEN"]
+auth = "bearer"
+models = ["meta-llama/Llama-3.3-70B-Instruct"]
+
+[[preset]]
+id = "github-models"
+name = "GitHub Models"
+base_url = "https://models.inference.ai.azure.com"
+env = ["GITHUB_TOKEN"]
+auth = "bearer"
+models = ["gpt-4o", "Phi-3.5-MoE-instruct"]
+
+[[preset]]
+id = "opencode-go"
+name = "OpenCode Go"
+base_url = "https://opencode.ai/zen/go/v1"
+env = ["OPENCODE_API_KEY", "OPENAI_API_KEY"]
+auth = "bearer"
+models = ["deepseek-v4-flash", "deepseek-v4.1-flash", "mimo-v2.6-flash"]
+
+[[preset]]
+id = "perplexity"
+name = "Perplexity"
+base_url = "https://api.perplexity.ai"
+env = ["PERPLEXITY_API_KEY"]
+auth = "bearer"
+models = ["sonar-pro", "sonar"]
+
+# Local endpoints: no key step, model discovery over `GET /models` or the
+# curated list. The "provider you can try in thirty seconds" path (D3).
+
+[[preset]]
+id = "ollama"
+name = "Ollama (local)"
+base_url = "http://localhost:11434/v1"
+env = []
+auth = "none"
+models = ["qwen2.5-coder:7b", "llama3.2"]
+
+[[preset]]
+id = "lmstudio"
+name = "LM Studio (local)"
+base_url = "http://localhost:1234/v1"
+env = []
+auth = "none"
+models = ["local-model"]

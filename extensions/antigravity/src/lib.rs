@@ -1267,6 +1267,8 @@ mod wasm_mode {
             "lca:host/net@0.2.0": generate,
             "lca:host/oauth@0.2.0": generate,
             "lca:host/credentials@0.2.0": generate,
+            "lca:host/resources@0.2.0": generate,
+            "lca:host/state@0.2.0": generate,
         },
     });
 
@@ -1275,6 +1277,10 @@ mod wasm_mode {
     };
     use exports::lca::ext::provider_identity::{
         Guest as IdentityGuest, IdentityOutcome as WasmOutcome, TokenUsage,
+    };
+    use exports::lca::ext::provider_login::{
+        Guest as LoginGuest, LoginAnswer as WasmLoginAnswer, LoginOption as WasmLoginOption,
+        LoginResult as WasmLoginResult,
     };
     use exports::lca::ext::provider_models::{Guest as ModelsGuest, ModelInfo as WasmModel};
     use lca::ext::types::{ExtraPair, Usage as WasmUsage};
@@ -1608,6 +1614,18 @@ mod wasm_mode {
                 }),
                 Err(err) => Err(WasmOutcome::Failed(err.0)),
             }
+        }
+    }
+
+    impl LoginGuest for AntigravityWasm {
+        fn login_options() -> Vec<WasmLoginOption> {
+            // Antigravity's login is its own OAuth flow (`identity_login`),
+            // so it offers no picker presets (ADR-0033).
+            Vec::new()
+        }
+
+        fn login_submit(_answer: WasmLoginAnswer) -> WasmLoginResult {
+            WasmLoginResult::Ok
         }
     }
 

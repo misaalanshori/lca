@@ -3,6 +3,7 @@ version = "1.0.0"
 abi = "0.2"
 worlds = ["provider"]
 description = "Any OpenAI-compatible chat completions endpoint. Configurable base URL and key."
+resources = ["provider-presets"]
 
 [capabilities.net]
 hosts = ["api.openai.com"]

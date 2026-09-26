@@ -16,6 +16,12 @@ with no interface change between them.
 
 ### Changed (breaking)
 
+- The `provider` world gains the `provider-login` export: `login-options`
+  and `login-submit`, the host-rendered picker over the extension's own
+  presets (ADR-0033). A provider component must export it; the two
+  first-party providers and the conformance extension are rebuilt in the
+  same change. **Migration:** implement `login-options`/`login-submit`,
+  returning `login-result::ok` with no options if the provider has none.
 - `types.message.content` is now `list<content-block>` instead of a joined
   `string`, and the new `content-block` variant carries `text(string)` or
   `image(tuple<string, list<u8>>)`. A provider can carry a typed image

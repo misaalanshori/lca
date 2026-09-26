@@ -2081,6 +2081,10 @@ impl lca_protocol::ProviderCap for Capabilities {
     fn credentials_delete(&self, key: &str) -> Result<(), CapabilityError> {
         Capabilities::credentials_delete(self, key)
     }
+
+    fn resource_read(&self, path: &str) -> Result<Vec<u8>, CapabilityError> {
+        Capabilities::resource_read(self, path)
+    }
 }
 
 impl lca_protocol::OauthCap for Capabilities {

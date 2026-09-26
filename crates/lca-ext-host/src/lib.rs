@@ -491,6 +491,9 @@ pub enum CallError {
     /// The guest's arguments failed the host's shape check.
     #[error("invalid arguments: {0}")]
     InvalidArguments(String),
+    /// A provider login submission failed (ADR-0033).
+    #[error("login failed: {0}")]
+    LoginFailed(String),
 }
 
 type HostLinker = Linker<HostState>;
@@ -696,6 +699,7 @@ fn pty_error(err: CapabilityError) -> PtyError {
 
 use lca_ext_abi::host::provider::exports::lca::ext::provider_completion as wit_completion;
 use lca_ext_abi::host::provider::exports::lca::ext::provider_identity as wit_identity;
+use lca_ext_abi::host::provider::exports::lca::ext::provider_login as wit_login;
 use lca_ext_abi::host::provider::lca::host as provider_host;
 
 fn net_error(err: CapabilityError) -> provider_host::net::Error {
@@ -1851,6 +1855,70 @@ fn from_wit_identity_usage(usage: wit_identity::TokenUsage) -> Usage {
     })
 }
 
+/// The provider's login options (ADR-0033) from the component's export.
+fn login_options_work(inner: &Inner) -> Result<Vec<lca_protocol::LoginOption>, CallError> {
+    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let options = instance
+        .lca_ext_provider_login()
+        .call_login_options(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    Ok(options.into_iter().map(from_wit_login_option).collect())
+}
+
+fn from_wit_login_option(option: wit_login::LoginOption) -> lca_protocol::LoginOption {
+    lca_protocol::LoginOption {
+        id: option.id,
+        name: option.name,
+        kind: option.kind,
+        host: option.host,
+        fields: option.fields,
+        extras: option
+            .extras
+            .into_iter()
+            .map(|pair| (pair.key, pair.value))
+            .collect(),
+    }
+}
+
+/// Consume the user's answers (ADR-0033).
+fn login_submit_work(
+    inner: &Inner,
+    answer: lca_protocol::LoginAnswer,
+) -> Result<Vec<(String, String)>, CallError> {
+    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
+    let mut store = inner.build_store()?;
+    let instance = pre
+        .instantiate(&mut store)
+        .map_err(|err| inner.classify(err))?;
+    let wit_answer = wit_login::LoginAnswer {
+        choice: answer.choice.clone(),
+        values: answer
+            .values
+            .iter()
+            .map(|(key, value)| wit_login::ExtraPair {
+                key: key.clone(),
+                value: value.clone(),
+            })
+            .collect(),
+    };
+    let result = instance
+        .lca_ext_provider_login()
+        .call_login_submit(&mut store, &wit_answer)
+        .map_err(|err| inner.classify(err))?;
+    match result {
+        wit_login::LoginResult::Ok => Ok(Vec::new()),
+        wit_login::LoginResult::Settings(pairs) => Ok(pairs
+            .into_iter()
+            .map(|pair| (pair.key, pair.value))
+            .collect()),
+        wit_login::LoginResult::Failed(reason) => Err(CallError::LoginFailed(reason)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Compaction and context-transform work
 // ---------------------------------------------------------------------------
@@ -2490,6 +2558,40 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
                 });
             }
             pool_call(inner, identity_usage_work)
+                .await
+                .map_err(|err| to_dispatch(err, &extension))
+        })
+    }
+
+    fn login_options(
+        &self,
+    ) -> lca_ext_abi::DispatchFuture<'static, Result<Vec<lca_protocol::LoginOption>, DispatchError>>
+    {
+        let inner = self.inner.clone();
+        let extension = inner.name.clone();
+        Box::pin(async move {
+            // A provider without the login surface has no options; the host
+            // still shows its own "Custom endpoint…" entry.
+            if !inner.worlds.contains(&"provider".to_string()) {
+                return Ok(Vec::new());
+            }
+            pool_call(inner, login_options_work)
+                .await
+                .map_err(|err| to_dispatch(err, &extension))
+        })
+    }
+
+    fn login_submit(
+        &self,
+        answer: lca_protocol::LoginAnswer,
+    ) -> lca_ext_abi::DispatchFuture<'static, Result<Vec<(String, String)>, DispatchError>> {
+        let inner = self.inner.clone();
+        let extension = inner.name.clone();
+        Box::pin(async move {
+            if !inner.worlds.contains(&"provider".to_string()) {
+                return Ok(Vec::new());
+            }
+            pool_call(inner, move |inner| login_submit_work(inner, answer))
                 .await
                 .map_err(|err| to_dispatch(err, &extension))
         })

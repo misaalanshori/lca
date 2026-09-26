@@ -15,6 +15,7 @@ world provider {
   export provider-models;
   export provider-completion;
   export provider-identity;
+  export provider-login;
 }
 
 interface provider-models {
@@ -102,4 +103,51 @@ interface provider-identity {
   /// The standard usage shape the generic `/usage` prints; `usage` maps
   /// `not-supported` from the outcome variant.
   usage: func() -> result<token-usage, identity-outcome>;
+}
+
+/// The login surface (ADR-0031): the host renders the picker (the `ui`
+/// world has no input functions), the extension supplies the options and
+/// consumes the answers. Presets are the extension's data, loaded from
+/// its own `resources/` bag via `lca:host/resources`; the host never
+/// parses provider-shaped data.
+interface provider-login {
+  use types.{extra-pair};
+
+  /// One login choice the host renders.
+  record login-option {
+    /// Stable id the host passes back in `login-submit`.
+    id: string,
+    /// Display name (e.g. `OpenRouter`).
+    name: string,
+    /// `api-key`, `oauth`, or `custom`.
+    kind: string,
+    /// The endpoint host, shown in the `net` consent when known.
+    host: string,
+    /// Field ids to prompt for: `api-key`, `base-url`, `model`.
+    fields: list<string>,
+    /// Free-form extras (e.g. a curated model list).
+    extras: list<extra-pair>,
+  }
+
+  /// The user's answers to one option.
+  record login-answer {
+    /// The chosen option id.
+    choice: string,
+    /// Field id -> value (`api-key` is the secret; the host masks it).
+    values: list<extra-pair>,
+  }
+
+  variant login-result {
+    ok,
+    /// The host persists these opaque `setting: value` pairs (it owns the
+    /// config file format, not their meaning).
+    settings(list<extra-pair>),
+    failed(string),
+  }
+
+  /// The extension's login options, loaded from its own resources.
+  login-options: func() -> list<login-option>;
+  /// Consume the user's answers: store the secret in the extension's own
+  /// credentials namespace, return opaque settings for the host to persist.
+  login-submit: func(answer: login-answer) -> login-result;
 }

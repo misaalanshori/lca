@@ -812,6 +812,47 @@ pub fn scripted_usage_report() -> lca_protocol::Usage {
     }
 }
 
+/// The login options the conformance probe reports (ADR-0033): a fixed
+/// pair so both delivery modes are compared on identical data.
+pub fn scripted_login_options() -> Vec<lca_protocol::LoginOption> {
+    vec![
+        lca_protocol::LoginOption {
+            id: "conformance".to_string(),
+            name: "Conformance".to_string(),
+            kind: "api-key".to_string(),
+            host: "conformance.example.com".to_string(),
+            fields: vec!["api-key".to_string()],
+            extras: Default::default(),
+        },
+        lca_protocol::LoginOption {
+            id: "local".to_string(),
+            name: "Local".to_string(),
+            kind: "api-key".to_string(),
+            host: "localhost".to_string(),
+            fields: vec!["api-key".to_string()],
+            extras: Default::default(),
+        },
+    ]
+}
+
+/// Consume one answer the way a real provider would: return the opaque
+/// settings the host persists (ADR-0033).
+pub fn scripted_login_submit(
+    answer: &lca_protocol::LoginAnswer,
+) -> Result<Vec<(String, String)>, String> {
+    if answer.choice.is_empty() {
+        return Err("no choice given".to_string());
+    }
+    let key = answer.value("api-key").unwrap_or_default();
+    Ok(vec![
+        (
+            "base_url".to_string(),
+            format!("https://{}/v1", answer.choice),
+        ),
+        ("key_len".to_string(), key.len().to_string()),
+    ])
+}
+
 // ---------------------------------------------------------------------------
 // Native delivery mode (compiled into the host, unsandboxed, labeled so)
 // ---------------------------------------------------------------------------
@@ -1113,6 +1154,27 @@ mod native {
             >,
         > {
             Box::pin(std::future::ready(Ok(Ok(crate::scripted_usage_report()))))
+        }
+
+        fn login_options(
+            &self,
+        ) -> lca_ext_abi::DispatchFuture<
+            'static,
+            Result<Vec<lca_protocol::LoginOption>, lca_protocol::DispatchError>,
+        > {
+            Box::pin(std::future::ready(Ok(crate::scripted_login_options())))
+        }
+
+        fn login_submit(
+            &self,
+            answer: lca_protocol::LoginAnswer,
+        ) -> lca_ext_abi::DispatchFuture<
+            'static,
+            Result<Vec<(String, String)>, lca_protocol::DispatchError>,
+        > {
+            Box::pin(std::future::ready(
+                crate::scripted_login_submit(&answer).map_err(lca_protocol::DispatchError::Failed),
+            ))
         }
 
         fn interrupt(&self) {
@@ -1601,6 +1663,10 @@ mod provider_world {
     use exports::lca::ext::provider_identity::{
         Guest as IdentityGuest, IdentityOutcome as WasmOutcome, TokenUsage,
     };
+    use exports::lca::ext::provider_login::{
+        Guest as LoginGuest, LoginAnswer as WasmLoginAnswer, LoginOption as WasmLoginOption,
+        LoginResult as WasmLoginResult,
+    };
     use exports::lca::ext::provider_models::{Guest as ModelsGuest, ModelInfo as WasmModel};
     use lca::ext::types::{ExtraPair, Usage as WasmUsage};
     use lca::host::{credentials, oauth};
@@ -1778,6 +1844,47 @@ mod provider_world {
                 cost: usage.cost,
                 extras: usage.extras,
             })
+        }
+    }
+
+    impl LoginGuest for ProviderComponent {
+        fn login_options() -> Vec<WasmLoginOption> {
+            crate::scripted_login_options()
+                .into_iter()
+                .map(|option| WasmLoginOption {
+                    id: option.id,
+                    name: option.name,
+                    kind: option.kind,
+                    host: option.host,
+                    fields: option.fields,
+                    extras: option
+                        .extras
+                        .into_iter()
+                        .map(|(key, value)| ExtraPair { key, value })
+                        .collect(),
+                })
+                .collect()
+        }
+
+        fn login_submit(answer: WasmLoginAnswer) -> WasmLoginResult {
+            let answer = lca_protocol::LoginAnswer {
+                choice: answer.choice,
+                values: answer
+                    .values
+                    .into_iter()
+                    .map(|pair| (pair.key, pair.value))
+                    .collect(),
+            };
+            match crate::scripted_login_submit(&answer) {
+                Ok(settings) if settings.is_empty() => WasmLoginResult::Ok,
+                Ok(settings) => WasmLoginResult::Settings(
+                    settings
+                        .into_iter()
+                        .map(|(key, value)| ExtraPair { key, value })
+                        .collect(),
+                ),
+                Err(reason) => WasmLoginResult::Failed(reason),
+            }
         }
     }
 

@@ -647,6 +647,143 @@ pub fn run_logout(cap: &dyn ProviderCap) -> IdentityOutcome {
 }
 
 // ---------------------------------------------------------------------------
+// Login presets (ADR-0031/0033): the extension's own data
+// ---------------------------------------------------------------------------
+
+/// One parsed provider preset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Preset {
+    /// Stable id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Base URL including the version prefix.
+    pub base_url: String,
+    /// Environment variables that can supply the key.
+    pub env: Vec<String>,
+    /// `bearer` or `none`.
+    pub auth: String,
+    /// A curated model list (a fallback for `GET /models`).
+    pub models: Vec<String>,
+}
+
+/// Parse the preset resource.
+pub fn parse_presets(text: &str) -> Vec<Preset> {
+    let Ok(value) = text.parse::<toml::Value>() else {
+        return Vec::new();
+    };
+    value
+        .get("preset")
+        .and_then(|presets| presets.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some(Preset {
+                        id: item.get("id")?.as_str()?.to_string(),
+                        name: item.get("name")?.as_str()?.to_string(),
+                        base_url: item.get("base_url")?.as_str()?.to_string(),
+                        env: string_list(item.get("env")),
+                        auth: item
+                            .get("auth")
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("bearer")
+                            .to_string(),
+                        models: string_list(item.get("models")),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn string_list(value: Option<&toml::Value>) -> Vec<String> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Load the extension's presets from its own `resources/` bag.
+pub fn load_presets(cap: &dyn ProviderCap) -> Vec<Preset> {
+    match cap.resource_read("provider-presets.toml") {
+        Ok(bytes) => parse_presets(&String::from_utf8_lossy(&bytes)),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The host's picker options (ADR-0033), one per preset.
+pub fn login_options(cap: &dyn ProviderCap) -> Vec<lca_protocol::LoginOption> {
+    load_presets(cap)
+        .into_iter()
+        .map(|preset| {
+            let mut extras = std::collections::BTreeMap::new();
+            extras.insert("base_url".to_string(), preset.base_url.clone());
+            extras.insert("auth".to_string(), preset.auth.clone());
+            if !preset.models.is_empty() {
+                extras.insert("models".to_string(), preset.models.join(","));
+            }
+            lca_protocol::LoginOption {
+                id: preset.id,
+                name: preset.name,
+                kind: "api-key".to_string(),
+                host: host_of(&preset.base_url),
+                fields: if preset.auth == "none" {
+                    Vec::new()
+                } else {
+                    vec!["api-key".to_string()]
+                },
+                extras,
+            }
+        })
+        .collect()
+}
+
+/// The host portion of a base URL (for the ad hoc `net` consent).
+fn host_of(base_url: &str) -> String {
+    let without_scheme = base_url.split("://").nth(1).unwrap_or(base_url);
+    without_scheme
+        .split('/')
+        .next()
+        .unwrap_or(without_scheme)
+        .split(':')
+        .next()
+        .unwrap_or(without_scheme)
+        .to_string()
+}
+
+/// Consume one login answer (ADR-0033): store the secret in the extension's
+/// own credentials namespace, return opaque settings for the host.
+pub fn login_submit(
+    cap: &dyn ProviderCap,
+    answer: &lca_protocol::LoginAnswer,
+) -> Result<Vec<(String, String)>, String> {
+    let presets = load_presets(cap);
+    let preset = presets.iter().find(|preset| preset.id == answer.choice);
+    let base_url = answer
+        .value("base-url")
+        .map(str::to_string)
+        .or_else(|| preset.map(|preset| preset.base_url.clone()))
+        .ok_or_else(|| format!("unknown preset `{}`", answer.choice))?;
+    if let Some(key) = answer.value("api-key")
+        && !key.is_empty()
+    {
+        cap.credentials_set("api_key", key)
+            .map_err(|err| format!("cannot store the key: {err}"))?;
+    }
+    let mut settings = vec![("base_url".to_string(), base_url)];
+    if let Some(model) = answer.value("model") {
+        settings.push(("model".to_string(), model.to_string()));
+    }
+    Ok(settings)
+}
+
+// ---------------------------------------------------------------------------
 // Native delivery mode: the dispatch handle the registry holds
 // ---------------------------------------------------------------------------
 
@@ -810,6 +947,35 @@ mod native {
             Box::pin(std::future::ready(Ok(Err(IdentityOutcome::NotSupported))))
         }
 
+        fn login_options(
+            &self,
+        ) -> DispatchFuture<'static, Result<Vec<lca_protocol::LoginOption>, DispatchError>>
+        {
+            let cap = self.cap.clone();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || login_options(cap.as_ref()))
+                    .await
+                    .map_err(|_| {
+                        DispatchError::Failed("openai-compatible: login options panicked".into())
+                    })
+            })
+        }
+
+        fn login_submit(
+            &self,
+            answer: lca_protocol::LoginAnswer,
+        ) -> DispatchFuture<'static, Result<Vec<(String, String)>, DispatchError>> {
+            let cap = self.cap.clone();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || login_submit(cap.as_ref(), &answer))
+                    .await
+                    .map_err(|_| {
+                        DispatchError::Failed("openai-compatible: login submit panicked".into())
+                    })?
+                    .map_err(DispatchError::Failed)
+            })
+        }
+
         fn on_pre_turn(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
             Box::pin(std::future::ready(Ok(())))
         }
@@ -870,6 +1036,8 @@ mod wasm_mode {
             "lca:host/net@0.2.0": generate,
             "lca:host/oauth@0.2.0": generate,
             "lca:host/credentials@0.2.0": generate,
+            "lca:host/resources@0.2.0": generate,
+            "lca:host/state@0.2.0": generate,
         },
     });
 
@@ -879,11 +1047,24 @@ mod wasm_mode {
     use exports::lca::ext::provider_identity::{
         Guest as IdentityGuest, IdentityOutcome as WasmOutcome, TokenUsage,
     };
+    use exports::lca::ext::provider_login::{
+        Guest as LoginGuest, LoginAnswer as WasmLoginAnswer, LoginOption as WasmLoginOption,
+        LoginResult as WasmLoginResult,
+    };
     use exports::lca::ext::provider_models::{Guest as ModelsGuest, ModelInfo as WasmModel};
     use lca::ext::types::{ExtraPair, Usage as WasmUsage};
-    use lca::host::{credentials, net};
+    use lca::host::{credentials, net, resources};
 
-    use crate::{Settings, run_login, run_logout};
+    use crate::{Settings, login_options, login_submit, run_login, run_logout};
+
+    fn map_resources(err: resources::Error) -> lca_protocol::CapabilityError {
+        use lca_protocol::CapabilityError as E;
+        match err {
+            resources::Error::Permission(d) => E::Permission(d),
+            resources::Error::NotFound(d) => E::NotFound(d),
+            resources::Error::Invalid(d) => E::Invalid(d),
+        }
+    }
 
     fn map_net(err: net::Error) -> lca_protocol::CapabilityError {
         use lca_protocol::CapabilityError as E;
@@ -964,6 +1145,10 @@ mod wasm_mode {
                 credentials::Error::Io(d) => lca_protocol::CapabilityError::Io(d),
                 credentials::Error::Invalid(d) => lca_protocol::CapabilityError::Invalid(d),
             })
+        }
+
+        fn resource_read(&self, path: &str) -> Result<Vec<u8>, lca_protocol::CapabilityError> {
+            resources::read(path).map_err(map_resources)
         }
     }
 
@@ -1164,6 +1349,46 @@ mod wasm_mode {
 
         fn usage() -> Result<TokenUsage, WasmOutcome> {
             Err(WasmOutcome::NotSupported)
+        }
+    }
+
+    impl LoginGuest for OpenAiCompatWasm {
+        fn login_options() -> Vec<WasmLoginOption> {
+            login_options(&GuestCap)
+                .into_iter()
+                .map(|option| WasmLoginOption {
+                    id: option.id,
+                    name: option.name,
+                    kind: option.kind,
+                    host: option.host,
+                    fields: option.fields,
+                    extras: option
+                        .extras
+                        .into_iter()
+                        .map(|(key, value)| ExtraPair { key, value })
+                        .collect(),
+                })
+                .collect()
+        }
+
+        fn login_submit(answer: WasmLoginAnswer) -> WasmLoginResult {
+            let answer = lca_protocol::LoginAnswer {
+                choice: answer.choice,
+                values: answer
+                    .values
+                    .into_iter()
+                    .map(|pair| (pair.key, pair.value))
+                    .collect(),
+            };
+            match login_submit(&GuestCap, &answer) {
+                Ok(settings) => WasmLoginResult::Settings(
+                    settings
+                        .into_iter()
+                        .map(|(key, value)| ExtraPair { key, value })
+                        .collect(),
+                ),
+                Err(reason) => WasmLoginResult::Failed(reason),
+            }
         }
     }
 

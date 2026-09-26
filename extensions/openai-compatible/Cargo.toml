@@ -14,6 +14,8 @@ crate-type = ["rlib", "cdylib"]
 [dependencies]
 lca-protocol = { path = "../../crates/lca-protocol" }
 serde_json.workspace = true
+# Parsing the extension's own `resources/provider-presets.toml` (ADR-0031).
+toml.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The dispatch contract (native handle) and the shared capability engine
