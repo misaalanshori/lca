@@ -1057,3 +1057,35 @@ and the tagged tree agree.
 Suite: 456 tests. Commits: `baa2c14` (P0), `46c920a` (P1), `fac84dd` (P3),
 and this one. See `cycle5-report.md` (out of tree) for the full account,
 the deviations, and the re-freeze readiness note.
+
+## Cycle 6 — the final revisions (consistency + quality)
+
+Started 2026-09-26. Executes the final-alignment review's three-bucket
+checklist. **P1-P3 landed; P4-P6 did not run** (the run ran out of context
+budget). Every phase that started finished gates-green with a commit.
+
+**P1 — the docs pass (R1-R7).** The design-level contradiction (R1: the
+SRDD and ADR-0013 still called skills handling a runtime extension)
+annotated at all six spots and recorded as **ADR-0034**; the threat model
+gained the three rows the resources plan promised, each naming the
+mitigation as built and what pins it; configuration gained the
+`OPENAI_PROMPT_CACHE_KEY` opt-out and the `provider-presets.toml` override
+file; providers/README gained the 19-preset table; extension-authoring
+stated the `state` key grammar; the glossary gained five entries;
+testing-plan noted the live-smoke workflow and the SRDD's manifest section
+noted `resources` kinds and `worlds = []`.
+
+**P2 — zero-provider start (owner: option A).** `lca_provider::NoProvider`;
+the interface opens into the state and recovers through `/login`, which
+now also re-enables a provider the user picks. Headless keeps its loud
+exit 2. Regression 22 + a full e2e recovery journey.
+
+**P3 — `list-models` takes the settings `complete` does (owner: option B,
+ADR-0035).** The characterization test was written and committed first;
+then the WIT signature, the dispatch trait, the host adapter's settings
+cell, the extension implementations, and conformance parity, all in one
+change with the changelog line. No fallback route was needed.
+
+Suite 456 -> 461. Commits: `6cba8cb` (P1), `02dcefc` (P2), `2c2dd3e` +
+`878abca` (P3). See `cycle6-report.md` (out of tree) for the full account
+and the handoff of P4-P6.
