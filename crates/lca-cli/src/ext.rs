@@ -584,9 +584,6 @@ fn builtin_names() -> Vec<&'static str> {
     if cfg!(feature = "bundled-compaction-default") {
         names.push("compaction-default");
     }
-    if cfg!(feature = "bundled-skills") {
-        names.push("skills");
-    }
     names
 }
 

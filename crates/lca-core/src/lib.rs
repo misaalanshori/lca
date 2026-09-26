@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod registry;
+pub mod skills;
 
 pub mod ext_provider;
 pub use ext_provider::ExtensionProvider;
@@ -15,6 +16,7 @@ pub use registry::{BUILTIN_COMMANDS, BUILTIN_TOOLS, CollisionReport, ExtensionRe
 // The turn types live in the protocol layer so the interface and the
 // embedding SDK can render them without depending on this crate.
 pub use lca_protocol::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
+pub use skills::{Skill, SkillSource, SkillsRoots};
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -63,6 +65,9 @@ pub struct AgentConfig {
     /// The full message list sent on the previous provider call, for
     /// FR-CACHE-6's divergence check (`None` before the first call).
     pub sent_stable: Arc<Mutex<Option<Vec<String>>>>,
+    /// Host-side skill sources (FR-CTX-2, ADR-0030). Empty paths collect
+    /// nothing.
+    pub skills_roots: SkillsRoots,
 }
 
 impl std::fmt::Debug for AgentConfig {
@@ -101,6 +106,7 @@ impl Default for AgentConfig {
             model_context_window: 0,
             completion_backend: None,
             sent_stable: Arc::new(Mutex::new(None)),
+            skills_roots: SkillsRoots::default(),
         }
     }
 }
@@ -761,6 +767,14 @@ impl<'a> Agent<'a> {
                         error: Some(reason),
                     };
                 }
+            };
+            // FR-CTX-2 / ADR-0030: the host's own three-source skills
+            // merge (project > user > extension resources), appended after
+            // the extension transforms as a system message, so the stable
+            // cache prefix is untouched by construction.
+            let messages = {
+                let skills = crate::skills::collect(&self.config.skills_roots);
+                crate::skills::transform(messages, &skills)
             };
             let mut stable_prefix = stable_cap.min(messages.len());
             // FR-CACHE-6: content inside that boundary which differs

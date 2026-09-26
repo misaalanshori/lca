@@ -381,6 +381,16 @@ pub(crate) fn openai_capabilities(
     extension_capabilities(cwd, "openai-compatible", grants, prompt, store)
 }
 
+/// The host-side skill sources (FR-CTX-2, ADR-0030): the workspace's
+/// `.lca/skills`, the user skills dir, and the extension install tree.
+pub(crate) fn skills_roots(cwd: &Path) -> lca_core::SkillsRoots {
+    lca_core::SkillsRoots {
+        project: cwd.to_path_buf(),
+        user: config_dir().join("skills"),
+        extensions: data_dir().join("extensions"),
+    }
+}
+
 /// The user data directory for sessions, grants, and state.
 pub fn data_dir() -> PathBuf {
     lca_session::default_data_dir()
@@ -790,14 +800,6 @@ pub async fn headless(
     };
     #[cfg(not(feature = "bundled-compaction-default"))]
     let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = None;
-    #[cfg(feature = "bundled-skills")]
-    registry.register(Arc::new(skills::Skills::new(extension_capabilities(
-        cwd,
-        "skills",
-        skills::manifest_grants(),
-        shared_prompt.clone(),
-        grants.clone(),
-    ))));
     apply_enablement(&mut registry, |name| {
         grants
             .lock()
@@ -819,6 +821,7 @@ pub async fn headless(
             .map(|model| model.context_window)
             .unwrap_or(0),
         completion_backend,
+        skills_roots: skills_roots(cwd),
         ..AgentConfig::default()
     };
     let proposals = if grants.lock().expect("grant store").is_trusted(cwd) {

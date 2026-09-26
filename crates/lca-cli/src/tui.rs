@@ -282,16 +282,6 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = provider_backend
         .clone()
         .map(|backend| backend as Arc<dyn lca_tools::CompletionBackend>);
-    #[cfg(feature = "bundled-skills")]
-    registry.register(Arc::new(skills::Skills::new(
-        crate::extension_capabilities(
-            cwd,
-            "skills",
-            skills::manifest_grants(),
-            shared_prompt.clone(),
-            grants.clone(),
-        ),
-    )));
     crate::apply_enablement(&mut registry, |name| {
         grants.lock().expect("grants").extension_enabled(cwd, name) == Some(false)
     });
@@ -311,6 +301,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             .map(|model| model.context_window)
             .unwrap_or(0),
         completion_backend,
+        skills_roots: crate::skills_roots(cwd),
         ..AgentConfig::default()
     };
 
