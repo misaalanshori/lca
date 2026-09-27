@@ -11,3 +11,4 @@ pub mod keys;
 pub mod stdin_buffer;
 pub(crate) mod sys;
 pub mod terminal;
+pub mod text;
