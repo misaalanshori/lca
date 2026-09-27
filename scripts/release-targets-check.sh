@@ -30,10 +30,10 @@ cd "$(dirname "$0")/.."
 
 # Named constants, so a failure is legible.
 readonly CHECK_TIMEOUT_SECONDS="${RELEASE_TARGETS_TIMEOUT:-900}"
+readonly ZIG_TARGET_x86_64_unknown_linux_musl="x86_64-linux-musl"
 readonly ZIG_TARGET_aarch64_unknown_linux_musl="aarch64-linux-musl"
 
 host_os="$(uname -s)"
-host_arch="$(uname -m)"
 
 case "$host_os" in
     Linux)
@@ -123,24 +123,24 @@ check_one() {
 
     case "$target" in
         *-unknown-linux-musl)
-            if [ "$host_os" = Linux ] && [ "$host_arch" = x86_64 ] && [ "$target" = "x86_64-unknown-linux-musl" ]; then
-                cmd=(cargo check -q --target "$target" -p lca-cli)
-            else
-                local zig_target cc_wrapper zig
-                case "$target" in
-                    aarch64-unknown-linux-musl) zig_target="$ZIG_TARGET_aarch64_unknown_linux_musl" ;;
-                    *) echo "release-targets-check: no zig target mapping for $target" >&2; return 1 ;;
-                esac
-                cc_wrapper="$work/zigcc-$target"
-                if ! zig="$(zig_wrapper_for "$zig_target" "$cc_wrapper")"; then
-                    return 1
-                fi
-                env_prefix=(
-                    "CC_${target//-/_}=$cc_wrapper"
-                    "AR_${target//-/_}=$zig ar"
-                )
-                cmd=(cargo check -q --target "$target" -p lca-cli)
+            # Both musl targets compile their C dependencies with `zig cc`:
+            # a bare `cargo check` only works where a musl toolchain happens
+            # to be installed, which the hosted runner does not have.
+            local zig_target cc_wrapper zig
+            case "$target" in
+                x86_64-unknown-linux-musl) zig_target="$ZIG_TARGET_x86_64_unknown_linux_musl" ;;
+                aarch64-unknown-linux-musl) zig_target="$ZIG_TARGET_aarch64_unknown_linux_musl" ;;
+                *) echo "release-targets-check: no zig target mapping for $target" >&2; return 1 ;;
+            esac
+            cc_wrapper="$work/zigcc-$target"
+            if ! zig="$(zig_wrapper_for "$zig_target" "$cc_wrapper")"; then
+                return 1
             fi
+            env_prefix=(
+                "CC_${target//-/_}=$cc_wrapper"
+                "AR_${target//-/_}=$zig ar"
+            )
+            cmd=(cargo check -q --target "$target" -p lca-cli)
             ;;
         *-pc-windows-msvc)
             if [ "$host_os" = Linux ]; then
