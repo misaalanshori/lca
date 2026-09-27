@@ -52,6 +52,7 @@ fn the_gate_names_every_release_target_and_is_wired_into_ci() {
 }
 
 #[test]
+#[cfg(unix)]
 fn the_gate_fails_loudly_instead_of_passing_an_unbuildable_target() {
     let script = root().join("scripts/release-targets-check.sh");
     // An unknown triple is not a release target; the gate must exit non-zero
@@ -70,8 +71,11 @@ fn the_gate_fails_loudly_instead_of_passing_an_unbuildable_target() {
 }
 
 /// A guard on the file itself: a script that is not executable in a shell
-/// context is a script that silently never runs.
+/// context is a script that silently never runs. Unix-only: the check runs
+/// the script through `bash`, and the gate's own CI legs are Linux/macOS
+/// (the Windows targets are checked from the Linux leg).
 #[test]
+#[cfg(unix)]
 fn the_gate_script_is_syntactically_valid() {
     let script = root().join("scripts/release-targets-check.sh");
     let output = Command::new("bash")

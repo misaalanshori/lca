@@ -155,8 +155,12 @@ check_one() {
     esac
 
     echo "release-targets-check: $target"
+    local -a wrap=()
+    if command -v timeout >/dev/null 2>&1; then
+        wrap=(timeout "$CHECK_TIMEOUT_SECONDS")
+    fi
     if env "${env_prefix[@]+"${env_prefix[@]}"}" \
-        timeout "$CHECK_TIMEOUT_SECONDS" "${cmd[@]}" >"$log" 2>&1; then
+        "${wrap[@]+"${wrap[@]}"}" "${cmd[@]}" >"$log" 2>&1; then
         echo "  ok: $target"
         return 0
     fi
