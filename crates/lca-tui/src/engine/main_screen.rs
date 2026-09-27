@@ -98,6 +98,15 @@ impl MainScreenRenderer {
         let mut out = String::new();
         out.push_str("\x1b[?2026h"); // synchronized output
 
+        // The visible viewport shows the last `height` document lines; the
+        // screen row of document row `i` is `i - viewport_top`.
+        let viewport_top = lines.len().saturating_sub(height as usize);
+        let end_screen_row = lines
+            .len()
+            .saturating_sub(1)
+            .min(height.saturating_sub(1) as usize);
+        let screen_row = |doc_row: usize| -> i64 { doc_row as i64 - viewport_top as i64 };
+
         if resize {
             if !self.first_render {
                 // Clear screen + scrollback so the reflowed content replaces
@@ -111,14 +120,14 @@ impl MainScreenRenderer {
                 out.push_str(line);
             }
             out.push_str(SEGMENT_RESET);
-            self.cursor_row = lines.len().saturating_sub(1);
+            self.cursor_row = end_screen_row;
             self.width = width;
             self.height = height;
             self.first_render = false;
         } else if let Some(range) = changed_range(&self.previous, &lines) {
             // Full-render fallback when the change is above the viewport.
-            let viewport_top = self.previous.len().saturating_sub(height as usize);
-            if range.first < viewport_top {
+            let old_viewport_top = self.previous.len().saturating_sub(height as usize);
+            if range.first < old_viewport_top {
                 out.push_str("\x1b[2J\x1b[H\x1b[3J");
                 for (i, line) in lines.iter().enumerate() {
                     if i > 0 {
@@ -127,55 +136,76 @@ impl MainScreenRenderer {
                     out.push_str(line);
                 }
                 out.push_str(SEGMENT_RESET);
-                self.cursor_row = lines.len().saturating_sub(1);
+                self.cursor_row = end_screen_row;
             } else {
-                // Move the cursor up to `range.first`.
-                if self.cursor_row > range.first {
-                    let up = self.cursor_row - range.first;
-                    out.push_str(&format!("\x1b[{up}A"));
-                    self.cursor_row = range.first;
+                // Move to the screen row of `range.first` (either direction;
+                // the cursor may be parked at a CURSOR_MARKER row).
+                let target = screen_row(range.first)
+                    .max(0)
+                    .min(height.saturating_sub(1) as i64) as usize;
+                if self.cursor_row != target {
+                    if self.cursor_row > target {
+                        out.push_str(&format!("\x1b[{}A", self.cursor_row - target));
+                    } else {
+                        out.push_str(&format!("\x1b[{}B", target - self.cursor_row));
+                    }
+                    self.cursor_row = target;
                 }
                 if range.append {
                     // Genuine scrollback growth: append with newlines.
                     for line in lines.iter().take(range.last).skip(range.first) {
                         out.push_str("\r\n\x1b[2K");
                         out.push_str(line);
-                        self.cursor_row += 1;
+                        self.cursor_row =
+                            (self.cursor_row + 1).min(height.saturating_sub(1) as usize);
                     }
                 } else {
                     for (offset, line) in
-                        lines.iter().enumerate().take(range.last).skip(range.first)
+                        lines.iter().enumerate().take(lines.len()).skip(range.first)
                     {
                         if offset > range.first {
                             out.push_str("\r\n");
-                            self.cursor_row += 1;
+                            self.cursor_row =
+                                (self.cursor_row + 1).min(height.saturating_sub(1) as usize);
                         }
                         out.push_str("\r\x1b[2K");
                         out.push_str(line);
                     }
-                }
-                // Clear trailing lines that no longer exist.
-                if self.previous.len() > lines.len() {
-                    for _ in lines.len()..self.previous.len() {
-                        out.push_str("\r\n\x1b[2K");
+                    // Clear trailing lines that no longer exist.
+                    if self.previous.len() > lines.len() {
+                        let extra = self.previous.len() - lines.len();
+                        for _ in 0..extra {
+                            out.push_str("\r\n\x1b[2K");
+                            self.cursor_row =
+                                (self.cursor_row + 1).min(height.saturating_sub(1) as usize);
+                        }
+                        out.push_str(&format!("\x1b[{extra}A"));
+                        self.cursor_row = self.cursor_row.saturating_sub(extra);
                     }
-                    let extra = self.previous.len() - lines.len();
-                    out.push_str(&format!("\x1b[{extra}A"));
+                    // Return to the end of the document.
+                    if self.cursor_row != end_screen_row {
+                        if self.cursor_row > end_screen_row {
+                            out.push_str(&format!("\x1b[{}A", self.cursor_row - end_screen_row));
+                        } else {
+                            out.push_str(&format!("\x1b[{}B", end_screen_row - self.cursor_row));
+                        }
+                        self.cursor_row = end_screen_row;
+                    }
                 }
                 out.push_str(SEGMENT_RESET);
-                self.cursor_row = lines.len().saturating_sub(1);
             }
         }
 
-        // Position the hardware cursor.
+        // Position the hardware cursor at the CURSOR_MARKER's screen row.
         if let Some((row, col)) = cursor {
-            if row as usize != self.cursor_row {
-                if self.cursor_row > row as usize {
-                    out.push_str(&format!("\x1b[{}A", self.cursor_row - row as usize));
+            let target = screen_row(row as usize).max(0) as usize;
+            if target != self.cursor_row {
+                if self.cursor_row > target {
+                    out.push_str(&format!("\x1b[{}A", self.cursor_row - target));
                 } else {
-                    out.push_str(&format!("\x1b[{}B", row as usize - self.cursor_row));
+                    out.push_str(&format!("\x1b[{}B", target - self.cursor_row));
                 }
-                self.cursor_row = row as usize;
+                self.cursor_row = target;
             }
             out.push_str(&format!("\x1b[{}G", col + 1));
             out.push_str("\x1b[?25h");

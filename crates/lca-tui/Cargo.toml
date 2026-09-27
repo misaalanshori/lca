@@ -1,6 +1,6 @@
 [package]
 name = "lca-tui"
-description = "Terminal engine and widget library: the pi TUI port (crate boundary per ADR-0036)."
+description = "Terminal engine and widget library: the pi TUI port (ADR-0036)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,38 +8,20 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
-lca-protocol = { path = "../lca-protocol" }
-lca-permissions = { path = "../lca-permissions" }
-lca-tools = { path = "../lca-tools" }
-lca-config = { path = "../lca-config" }
-# Legacy ratatui renderer: retired in Group II when lca-ui takes over.
-ratatui.workspace = true
-crossterm.workspace = true
-# ADR-0036: the TUI port's own dependencies.
+# ADR-0036: the port's own dependencies (unicode tables + OS backend).
 unicode-width.workspace = true
 unicode-segmentation.workspace = true
-anyhow.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-# Dependency justification (ADR-0036): termios raw mode, TIOCGWINSZ, read(2)
-# and isatty for the engine's terminal backend. Already a direct dependency of
-# lca-tools for the pty capability; zero transitive dependencies.
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-# Dependency justification (ADR-0036): console mode
-# (ENABLE_VIRTUAL_TERMINAL_INPUT), screen-buffer info, and ReadFile on the
-# stdin handle for the Windows terminal backend. Already a direct dependency
-# of lca-tools at this version.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Console",
     "Win32_Storage_FileSystem",
     "Win32_System_Threading",
 ] }
-
-[dev-dependencies]
-lca-testkit = { path = "../lca-testkit" }
 
 [lints]
 workspace = true

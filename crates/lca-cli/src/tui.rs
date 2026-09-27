@@ -10,7 +10,7 @@ use lca_protocol::CommandEffect;
 use lca_protocol::Record;
 use lca_session::{Session, SessionStore, ViewMode};
 use lca_tools::{NativeOps, ToolExecutor};
-use lca_tui::{PromptRequest, TurnRunner, UiOptions};
+use lca_ui::{PromptRequest, TurnRunner, UiOptions};
 
 use crate::lock;
 
@@ -346,7 +346,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     })
                     .collect()
             },
-        ) as lca_tui::RegionRenderer)
+        ) as lca_ui::RegionRenderer)
     };
     let ui_events = {
         let registry = registry.clone();
@@ -364,7 +364,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                             .map(|effect| (handle.name().to_string(), effect))
                     })
             },
-        ) as lca_tui::RegionInteractor)
+        ) as lca_ui::RegionInteractor)
     };
 
     // The session's live model: /model rewrites the cell, the runner
@@ -416,7 +416,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     // Submit the finished login: store the secret through the same atomic,
     // owner-only credential writer extensions use, persist the opaque
     // settings, light the session up, and offer the ad hoc grant.
-    let login_apply: Arc<dyn Fn(crate::login::Step) -> lca_tui::LoginNext + Send + Sync> = {
+    let login_apply: Arc<dyn Fn(crate::login::Step) -> lca_ui::LoginNext + Send + Sync> = {
         let settings_cell = settings_cell.clone();
         let registry = registry.clone();
         let data = data.clone();
@@ -426,7 +426,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         let provider = provider.clone();
         let label_cell = label_cell.clone();
         let model_cell = model_cell.clone();
-        Arc::new(move |step: crate::login::Step| -> lca_tui::LoginNext {
+        Arc::new(move |step: crate::login::Step| -> lca_ui::LoginNext {
             use crate::login::Step;
             let (target, choice, values) = match step {
                 Step::Next(next) => return next,
@@ -456,7 +456,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             // The host's universal entry has no extension behind it: the
             // values themselves are the settings. A preset delegates to its
             // extension, which stores the key and returns its own settings.
-            let settings = if choice == lca_tui::CUSTOM_OPTION {
+            let settings = if choice == lca_ui::CUSTOM_OPTION {
                 values
                     .iter()
                     .filter(|(field, _)| *field != "api-key")
@@ -464,7 +464,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     .collect::<Vec<_>>()
             } else {
                 let Some(handle) = registry.provider(&target).cloned() else {
-                    return lca_tui::LoginNext::Message(format!("`{target}` cannot log in"));
+                    return lca_ui::LoginNext::Message(format!("`{target}` cannot log in"));
                 };
                 let answer = lca_protocol::LoginAnswer {
                     choice: choice.clone(),
@@ -473,7 +473,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 match lca_core::drive_blocking(async move { handle.login_submit(answer).await }) {
                     Ok(settings) => settings,
                     Err(err) => {
-                        return lca_tui::LoginNext::Message(format!("could not sign in: {err}"));
+                        return lca_ui::LoginNext::Message(format!("could not sign in: {err}"));
                     }
                 }
             };
@@ -481,13 +481,13 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 && let Err(err) =
                     crate::store_provider_secret(&data, &cwd, &target, "api_key", secret)
             {
-                return lca_tui::LoginNext::Message(format!(
+                return lca_ui::LoginNext::Message(format!(
                     "could not store the key for {target}: {err}"
                 ));
             }
             for (key, value) in &settings {
                 if let Err(err) = crate::store_provider_secret(&data, &cwd, &target, key, value) {
-                    return lca_tui::LoginNext::Message(format!(
+                    return lca_ui::LoginNext::Message(format!(
                         "could not store {key} for {target}: {err}"
                     ));
                 }
@@ -515,7 +515,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             if let Some(host) =
                 crate::ungranted_host(&grants, &cwd, crate::openai_ad_hoc_host(&data))
             {
-                return lca_tui::LoginNext::Grant {
+                return lca_ui::LoginNext::Grant {
                     provider: target.clone(),
                     host: host.clone(),
                     prompt: format!(
@@ -529,18 +529,18 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             } else {
                 String::new()
             };
-            lca_tui::LoginNext::Message(format!(
+            lca_ui::LoginNext::Message(format!(
                 "signed in {target}; the settings are stored under its namespace{suffix}"
             ))
         })
     };
-    let login_seam: lca_tui::LoginRequest = {
+    let login_seam: lca_ui::LoginRequest = {
         let flow = flow.clone();
         let gather = gather.clone();
         let apply = login_apply.clone();
         let provider_name = provider_name.clone();
         let registry = registry.clone();
-        Arc::new(move |argument: &str| -> lca_tui::LoginNext {
+        Arc::new(move |argument: &str| -> lca_ui::LoginNext {
             // Zero *enabled* providers is a valid state (FR-PROV-9, D1),
             // and `/login` is how the interface leaves it: the picker still
             // opens, with the host's universal entry attributed to the
@@ -575,7 +575,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 && !names.iter().any(|name| name == argument)
                 && !options.iter().any(|(_, option)| option.id == argument)
             {
-                return lca_tui::LoginNext::Message(format!(
+                return lca_ui::LoginNext::Message(format!(
                     "no provider or login option named `{argument}`; installed: {}",
                     names.join(", ")
                 ));
@@ -584,10 +584,10 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             flow.offer(options, &provider_name)
         })
     };
-    let pick_seam: lca_tui::LoginPick = {
+    let pick_seam: lca_ui::LoginPick = {
         let flow = flow.clone();
         let apply = login_apply.clone();
-        Arc::new(move |provider: &str, choice: &str| -> lca_tui::LoginNext {
+        Arc::new(move |provider: &str, choice: &str| -> lca_ui::LoginNext {
             let step = flow
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -595,10 +595,10 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             apply(step)
         })
     };
-    let login_complete: lca_tui::LoginComplete = {
+    let login_complete: lca_ui::LoginComplete = {
         let flow = flow.clone();
         let apply = login_apply.clone();
-        Arc::new(move |provider: &str, value: &str| -> lca_tui::LoginNext {
+        Arc::new(move |provider: &str, value: &str| -> lca_ui::LoginNext {
             let step = flow
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -606,7 +606,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             apply(step)
         })
     };
-    let login_confirm: lca_tui::LoginConfirm = {
+    let login_confirm: lca_ui::LoginConfirm = {
         let grants = grants.clone();
         let cwd = cwd.to_path_buf();
         Arc::new(move |provider: &str, host: &str| -> String {
@@ -719,7 +719,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 registry
                     .command_names()
                     .into_iter()
-                    .map(|name| format!("/{}", lca_tui::sanitize_text(&name))),
+                    .map(|name| format!("/{}", lca_ui::sanitize_text(&name))),
             );
             names
         },
@@ -816,7 +816,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
 
     // `session-close`: the interface is done; let hooks flush state.
     let close_registry = registry.clone();
-    let result = lca_tui::run(options, runner);
+    let result = lca_ui::run(options, runner);
     lca_core::drive_blocking(async move {
         close_registry.on_session_close().await;
     });

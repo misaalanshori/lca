@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 
 use lca_protocol::LoginOption;
-use lca_tui::{CUSTOM_OPTION, LoginNext, PickerOption};
+use lca_ui::{CUSTOM_OPTION, LoginNext, PickerOption};
 
 /// The host-owned universal entry's fields, in prompt order (D1: base URL +
 /// key + model). A preset declares its own; this one never does.

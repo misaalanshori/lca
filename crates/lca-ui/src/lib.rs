@@ -6,14 +6,22 @@
 //! on any of them. The theme, transcript, footer, chat composition, and the
 //! interactive loop live here.
 
-pub mod app;
 pub mod chat;
 pub mod footer;
+pub mod render;
+pub mod run;
+pub mod state;
 pub mod theme;
 pub mod transcript;
 
-pub use app::{App, AppOptions, PromptRequest, TurnChannels, TurnRunner, run};
 pub use chat::Chat;
 pub use footer::Footer;
+pub use render::render_state;
+pub use run::run;
+pub use state::{
+    Action, CUSTOM_OPTION, CommandInvoker, LoginComplete, LoginConfirm, LoginNext, LoginPick,
+    LoginRequest, PickerOption, PromptRequest, RegionInteractor, RegionRenderer, TurnChannels,
+    TurnRunner, UiOptions, UiState, handle_key, sanitize_block, sanitize_text, widget_lines,
+};
 pub use theme::Theme;
 pub use transcript::{Entry, ToolStatus, Transcript};

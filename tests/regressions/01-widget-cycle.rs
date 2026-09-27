@@ -17,7 +17,7 @@ fn a_cyclic_widget_arena_renders_once_and_terminates() {
         Widget::Column(vec![0, 1, 1]),
     ];
     assert_eq!(
-        lca_tui::widget_lines(&nodes),
+        lca_ui::widget_lines(&nodes),
         vec!["[box]".to_string()],
         "each node renders once"
     );
@@ -27,5 +27,5 @@ fn a_cyclic_widget_arena_renders_once_and_terminates() {
         title: Some("self".to_string()),
         child: 0,
     }];
-    assert_eq!(lca_tui::widget_lines(&selfish), vec!["[self]".to_string()]);
+    assert_eq!(lca_ui::widget_lines(&selfish), vec!["[self]".to_string()]);
 }

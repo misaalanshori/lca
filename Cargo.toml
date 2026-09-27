@@ -32,6 +32,7 @@ lca-session = { path = "crates/lca-session" }
 lca-testkit = { path = "crates/lca-testkit" }
 lca-tools = { path = "crates/lca-tools" }
 lca-tui = { path = "crates/lca-tui" }
+lca-ui = { path = "crates/lca-ui" }
 openai-compatible = { path = "extensions/openai-compatible" }
 tokio.workspace = true
 

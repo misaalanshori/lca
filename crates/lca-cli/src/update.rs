@@ -116,7 +116,7 @@ pub fn spawn(enabled: bool, notify: Option<Arc<OnceLock<String>>>) {
         // The tag arrives from the network: it goes through the
         // display choke point (FR-UI-2) and stays short, because the
         // status line has one row to spend.
-        let tag = lca_tui::sanitize_text(&tag);
+        let tag = lca_ui::sanitize_text(&tag);
         let tag: String = tag.chars().take(48).collect();
         let notice = format!("update available: lca {tag}");
         match notify {

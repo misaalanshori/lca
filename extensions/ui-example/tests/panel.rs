@@ -51,7 +51,7 @@ fn panel_lines(handle: &dyn ExtensionDispatch) -> String {
         .render("panel")
         .expect("render")
         .expect("the panel has content");
-    lca_tui::widget_lines(&tree.nodes).join("\n")
+    lca_ui::widget_lines(&tree.nodes).join("\n")
 }
 
 // Verifies: all four regions are registered and answer, and the panel

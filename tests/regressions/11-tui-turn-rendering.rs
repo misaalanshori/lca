@@ -4,8 +4,8 @@
 //! argument. Both are visible on every reasoning-model turn.
 //!
 //! The same rendering is also guarded at the buffer level by
-//! `crates/lca-tui/tests/ui.rs::reasoning_is_separated_from_the_answer` and
-//! `::tool_lines_name_the_tool_not_the_call_id`; this file keeps the
+//! `crates/lca-ui/src/transcript.rs` and the new-engine tests and
+//! `crates/lca-ui/src/run.rs`; this file keeps the
 //! released-defect guard in the named regression set.
 //!
 //! Verifies: FR-UI-2.
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use lca_protocol::{ToolCall, ToolResult, TurnEvent};
-use lca_tui::{UiOptions, UiState};
+use lca_ui::{UiOptions, UiState};
 
 fn state() -> UiState {
     UiState::new(UiOptions {
