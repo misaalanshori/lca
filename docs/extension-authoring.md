@@ -27,7 +27,7 @@ cargo install wkg
 Get the ABI package. It holds the WIT definitions for every world.
 
 ```
-wkg get lca:ext@0.1.0 --format wit --output wit/
+wkg get lca:ext@0.4.0 --format wit --output wit/
 ```
 
 ## A first extension: a tool
@@ -104,7 +104,7 @@ Write the manifest as `extension.toml` next to `Cargo.toml`.
 ```toml
 name = "word-count"
 version = "0.1.0"
-abi = "0.2"
+abi = "0.4"
 worlds = ["tool"]
 description = "Counts words in a workspace file."
 license = "MIT"

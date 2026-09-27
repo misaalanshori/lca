@@ -723,7 +723,7 @@ fn session_start_records_the_contract_abi_version() {
     match store.raw_start(&session).expect("start") {
         lca_protocol::Record::SessionStart { abi_version, .. } => {
             assert_eq!(abi_version, lca_ext_abi::ABI_VERSION);
-            assert_eq!(abi_version, "0.2");
+            assert_eq!(abi_version, "0.4");
         }
         other => panic!("not a session-start: {other:?}"),
     }

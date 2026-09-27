@@ -350,11 +350,11 @@ mod wasm_mode {
         world: "context-transform",
         export_macro_name: "export_transform",
         with: {
-            "lca:host/log@0.2.0": generate,
-            "lca:host/fs@0.2.0": generate,
+            "lca:host/log@0.4.0": generate,
+            "lca:host/fs@0.4.0": generate,
             // ADR-0030's bags: every world imports them.
-            "lca:host/resources@0.2.0": generate,
-            "lca:host/state@0.2.0": generate,
+            "lca:host/resources@0.4.0": generate,
+            "lca:host/state@0.4.0": generate,
         },
     });
 

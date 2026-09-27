@@ -1145,12 +1145,12 @@ mod wasm_mode {
         world: "provider",
         export_macro_name: "export_provider",
         with: {
-            "lca:host/log@0.2.0": generate,
-            "lca:host/net@0.2.0": generate,
-            "lca:host/oauth@0.2.0": generate,
-            "lca:host/credentials@0.2.0": generate,
-            "lca:host/resources@0.2.0": generate,
-            "lca:host/state@0.2.0": generate,
+            "lca:host/log@0.4.0": generate,
+            "lca:host/net@0.4.0": generate,
+            "lca:host/oauth@0.4.0": generate,
+            "lca:host/credentials@0.4.0": generate,
+            "lca:host/resources@0.4.0": generate,
+            "lca:host/state@0.4.0": generate,
         },
     });
 

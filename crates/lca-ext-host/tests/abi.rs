@@ -60,6 +60,40 @@ fn the_window_accepts_the_current_and_previous_minor_only() {
     );
 }
 
+// Verifies: the versioning sync rule (ADR-0028's second annotation) makes a
+// stale extension fail *legibly* at the manifest check, not at a link error:
+// a line older than current-minus-one is refused, and the refusal names the
+// accepted lines.
+#[test]
+fn a_stale_line_is_refused_legibly_at_the_manifest_check() {
+    let (major, minor) = ABI_VERSION
+        .split_once('.')
+        .expect("ABI_VERSION is major.minor");
+    let minor: u64 = minor.parse().expect("minor is a number");
+    if minor < 2 {
+        return;
+    }
+    let stale = format!("{major}.{}", minor - 2);
+    let manifest = manifest_with_abi(&stale);
+    assert!(
+        !manifest.abi_in_window(),
+        "{stale} is two lines back and must be refused"
+    );
+
+    // The refusal is the loader's typed window error, and its message names
+    // the accepted range rather than leaving the user to guess.
+    let err = lca_ext_host::LoadError::AbiUnsupported {
+        declared: stale.clone(),
+        window: SUPPORTED_ABI_WINDOW,
+    };
+    let text = err.to_string();
+    assert!(text.contains(&stale), "names the declared line: {text}");
+    assert!(
+        text.contains("0.3") && text.contains("0.4"),
+        "names the accepted lines: {text}"
+    );
+}
+
 // Verifies: NFR-20's discipline (a change that removes or alters an
 // export increments the major) rests on the changelog being written
 // for the live line in the same change as the WIT edit

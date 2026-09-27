@@ -203,7 +203,7 @@ Every extension ships a manifest next to the component. The format is TOML. It d
 ```toml
 name = "example-provider"
 version = "0.3.1"
-abi = "0.2"
+abi = "0.4"
 worlds = ["provider", "command"]
 description = "Model provider for Example Cloud."
 
@@ -224,7 +224,7 @@ A local provider's manifest looks different in a telling way: no `credentials`, 
 ```toml
 name = "lmstudio"
 version = "1.0.0"
-abi = "0.2"
+abi = "0.4"
 worlds = ["provider", "command"]
 description = "Connects to a local LM Studio server."
 

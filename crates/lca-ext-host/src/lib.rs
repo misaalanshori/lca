@@ -70,7 +70,7 @@ pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<
 
 /// The ABI lines this host loads: the current minor and the one before it
 /// (NFR-19).
-pub const SUPPORTED_ABI_WINDOW: &str = "0.1..=0.2, plus the 1.0 freeze line";
+pub const SUPPORTED_ABI_WINDOW: &str = "0.3..=0.4, plus the 1.0 freeze line";
 
 /// Resource limits applied to every call, resolved from the manifest and
 /// clamped to host maximums (`docs/flows.md`).

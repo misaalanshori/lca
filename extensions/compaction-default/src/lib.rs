@@ -337,13 +337,13 @@ mod wasm_mode {
         world: "compaction",
         export_macro_name: "export_compaction",
         with: {
-            "lca:host/log@0.2.0": generate,
-            "lca:host/completion@0.2.0": generate,
-            "lca:host/types@0.2.0": generate,
+            "lca:host/log@0.4.0": generate,
+            "lca:host/completion@0.4.0": generate,
+            "lca:host/types@0.4.0": generate,
             // ADR-0030's bags: every world imports them, so every
             // `generate!` has to map them (see `extensions/conformance`).
-            "lca:host/resources@0.2.0": generate,
-            "lca:host/state@0.2.0": generate,
+            "lca:host/resources@0.4.0": generate,
+            "lca:host/state@0.4.0": generate,
         },
     });
 

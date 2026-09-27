@@ -68,7 +68,7 @@ fn assembly_appends_an_image_block_for_a_user_attachment() {
             v: FORMAT_VERSION,
             ts: 1,
             agent_version: "0.1.3".to_string(),
-            abi_version: "0.2".to_string(),
+            abi_version: "0.4".to_string(),
             working_dir: "/tmp".to_string(),
         },
         Record::User {

@@ -1301,12 +1301,12 @@ mod tool_world {
         world: "tool",
         export_macro_name: "export_tool",
         with: {
-            "lca:host/log@0.2.0": generate,
-            "lca:host/fs@0.2.0": generate,
-            "lca:host/process@0.2.0": generate,
-            "lca:host/pty@0.2.0": generate,
-            "lca:host/resources@0.2.0": generate,
-            "lca:host/state@0.2.0": generate,
+            "lca:host/log@0.4.0": generate,
+            "lca:host/fs@0.4.0": generate,
+            "lca:host/process@0.4.0": generate,
+            "lca:host/pty@0.4.0": generate,
+            "lca:host/resources@0.4.0": generate,
+            "lca:host/state@0.4.0": generate,
         },
     });
 
@@ -1666,12 +1666,12 @@ mod provider_world {
         world: "provider",
         export_macro_name: "export_provider",
         with: {
-            "lca:host/log@0.2.0": generate,
-            "lca:host/net@0.2.0": generate,
-            "lca:host/oauth@0.2.0": generate,
-            "lca:host/credentials@0.2.0": generate,
-            "lca:host/resources@0.2.0": generate,
-            "lca:host/state@0.2.0": generate,
+            "lca:host/log@0.4.0": generate,
+            "lca:host/net@0.4.0": generate,
+            "lca:host/oauth@0.4.0": generate,
+            "lca:host/credentials@0.4.0": generate,
+            "lca:host/resources@0.4.0": generate,
+            "lca:host/state@0.4.0": generate,
         },
     });
 
@@ -1928,11 +1928,11 @@ mod compaction_world {
         world: "compaction",
         export_macro_name: "export_compaction",
         with: {
-            "lca:host/log@0.2.0": generate,
-            "lca:host/completion@0.2.0": generate,
-            "lca:host/types@0.2.0": generate,
-            "lca:host/resources@0.2.0": generate,
-            "lca:host/state@0.2.0": generate,
+            "lca:host/log@0.4.0": generate,
+            "lca:host/completion@0.4.0": generate,
+            "lca:host/types@0.4.0": generate,
+            "lca:host/resources@0.4.0": generate,
+            "lca:host/state@0.4.0": generate,
         },
     });
 
@@ -1987,10 +1987,10 @@ mod transform_world {
         world: "context-transform",
         export_macro_name: "export_transform",
         with: {
-            "lca:host/log@0.2.0": generate,
-            "lca:host/fs@0.2.0": generate,
-            "lca:host/resources@0.2.0": generate,
-            "lca:host/state@0.2.0": generate,
+            "lca:host/log@0.4.0": generate,
+            "lca:host/fs@0.4.0": generate,
+            "lca:host/resources@0.4.0": generate,
+            "lca:host/state@0.4.0": generate,
         },
     });
 
@@ -2100,10 +2100,10 @@ mod ui_world {
         world: "ui",
         export_macro_name: "export_ui",
         with: {
-            "lca:host/log@0.2.0": generate,
-            "lca:host/ui@0.2.0": generate,
-            "lca:host/resources@0.2.0": generate,
-            "lca:host/state@0.2.0": generate,
+            "lca:host/log@0.4.0": generate,
+            "lca:host/ui@0.4.0": generate,
+            "lca:host/resources@0.4.0": generate,
+            "lca:host/state@0.4.0": generate,
         },
     });
 

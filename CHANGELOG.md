@@ -4,6 +4,44 @@ Notable changes to LCA. Versions follow semantic versioning for the product;
 the `lca:ext` ABI version is independent and is printed by `lca --version`.
 Dates are UTC.
 
+## [0.4.0] - 2026-09-27
+
+The backlog release: the last four undriven journeys, a build gate for every
+release target, and the code-quality cleanup. It carries **`abi 0.4`** - the
+ABI label now tracks the product minor (ADR-0028's second annotation), and
+`0.3.0 / abi 0.2` is the documented transition artifact.
+
+### Added
+
+- **A release-target build gate.** `scripts/release-targets-check.sh`, run
+  by a new CI job, checks all six release targets compile on every push -
+  the last surface (after the fuzz workspace and the wasm components) that
+  nothing built until release time.
+
+### Changed
+
+- **The ABI label moves to 0.4.** The WIT packages, the first-party
+  manifests, and `lca-ext-abi`'s `ABI_VERSION` all read 0.4. A component
+  still declaring `abi = "0.2"` is refused at the manifest check with a
+  message naming the accepted `0.3..=0.4` window, not at a link error.
+- **The two god-files are modular.** `lca-ext-host/src/lib.rs` (was 2,706
+  lines) and `lca-tools/src/capabilities.rs` (was 2,329) are split by
+  concern; no file exceeds ~1,200 lines.
+- **One mutex-lock helper per crate.** The 56 scattered `lock().expect()`
+  sites call a single `lock<T: ?Sized>(&Mutex<T>)`; panic semantics are
+  unchanged.
+- **Typed errors at the remaining stringly seams:** `lca-provider`'s schema
+  validator, `lca-cli`'s manifest and secret paths, and the `completion`
+  capability's backend.
+
+### Fixed
+
+- **A data-only extension could never be updated.** Its version identity
+  was the digest of an empty component, so a new skill pack compared equal
+  to the old one and `ext update` answered "up to date" forever.
+- **`ext disable` did not stop a skill pack.** The host-side skills merge
+  read the install tree without consulting per-project enablement.
+
 ## [0.3.0] - 2026-09-26
 
 The finish-it release: no new surface. Every feature the last two cycles

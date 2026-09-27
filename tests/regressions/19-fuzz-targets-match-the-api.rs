@@ -14,7 +14,7 @@
 
 const DATA_ONLY: &str = r#"name = "skill-pack"
 version = "1.0.0"
-abi = "0.2"
+abi = "0.4"
 worlds = []
 resources = ["skills"]
 "#;
@@ -35,7 +35,7 @@ fn a_manifest_with_no_worlds_and_no_resources_is_still_just_a_parse() {
     // The fuzz target asserts "worlds or resources" *after* a successful
     // parse; an empty manifest must parse without panicking, and the
     // caller decides. What must never happen is a panic either way.
-    let _ = lca_ext_host::Manifest::parse("name = \"x\"\nversion = \"1\"\nabi = \"0.2\"\n");
+    let _ = lca_ext_host::Manifest::parse("name = \"x\"\nversion = \"1\"\nabi = \"0.4\"\n");
 }
 
 #[test]

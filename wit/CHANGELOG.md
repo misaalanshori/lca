@@ -1,6 +1,19 @@
 # Changelog
 
-## 0.2.0 (in-place development line, 2026-09-26)
+## 0.4.0 (release train, 2026-09-27)
+
+The ABI label now tracks the product minor (ADR-0028's second annotation):
+`lca 0.4.y` ships `abi 0.4`. No interface bytes changed between the 0.2 line
+and this label; this train carries the in-place 0.2 changes below under the
+0.4 label. The train's breaking item is `provider-models.list-models`'s new
+`settings` parameter (ADR-0035).
+
+**Migration:** rebuild against `@0.4.0`, declare `abi = "0.4"`, implement the
+`settings` parameter, and push both registry tags. A component still
+declaring `abi = "0.2"` is refused at the manifest check with a message
+naming the accepted `0.3..=0.4` window - a legible refusal, not a link error.
+
+## 0.2.0 (in-place development line, 2026-09-26 — superseded by the 0.4.0 relabel)
 
 - **Breaking (in-place):** `provider-models.list-models` now takes
   `settings: list<extra-pair>`, the same opaque `setting: value` pairs
@@ -13,7 +26,7 @@ Written for extension authors. Each entry names the version, the date, and
 every change grouped as added, deprecated, removed, or fixed, with a
 migration note for anything breaking (docs/abi-versioning.md).
 
-##0.2 development — open (started 2026-09-25)
+## 0.2 development — closed (2026-09-25 to 2026-09-27)
 
 The ADR-0028 development window's single **in-place** line. Breaking changes
 land here without a minor bump (ADR-0028's annotation): the package stays

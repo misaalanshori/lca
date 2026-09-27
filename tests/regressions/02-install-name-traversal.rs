@@ -6,7 +6,7 @@
 
 const MANIFEST: &str = r#"name = "word-count"
 version = "1.0.0"
-abi = "0.1"
+abi = "0.4"
 worlds = ["tool"]
 description = "Counts words."
 "#;

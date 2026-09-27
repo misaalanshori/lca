@@ -10,9 +10,9 @@ use std::process::{Command, Stdio};
 
 /// The published artifacts (the release workflow's naming, ADR-0010's
 /// two source kinds).
-const OCI_REF: &str = "ghcr.io/misaalanshori/lca/openai-compatible:abi-0.1";
+const OCI_REF: &str = "ghcr.io/misaalanshori/lca/openai-compatible:abi-0.4";
 const ARCHIVE_URL: &str =
-    "https://github.com/misaalanshori/lca/releases/download/phase5-0.1.0/skills-abi-0.1.zip";
+    "https://github.com/misaalanshori/lca/releases/download/v0.4.0/skills-abi-0.4.zip";
 
 #[test]
 fn installs_from_the_published_oci_reference_and_https_archive() {

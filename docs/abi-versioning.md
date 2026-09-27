@@ -22,7 +22,7 @@ A minor version change adds surface. Existing extensions keep working. New exten
 
 A patch version change fixes documentation, comments, or tooling. The interface bytes do not change.
 
-The manifest declares a line as `major.minor`. An extension declaring `abi = "0.2"` targets any 0.2.x. During the ADR-0028 development window the host also loads the previous line (0.1) and the 1.0 freeze line, so an extension installed against the released host keeps loading across the window's first change. **Amended 2026-09-27 (ADR-0028's second annotation):** on the 0.x line the label now tracks the product minor — `lca 0.x.y` ships `abi 0.x` — so lines advance at release cadence and the manifest names the train the extension was built for.
+The manifest declares a line as `major.minor`. An extension declaring `abi = "0.4"` targets any 0.4.x. During the ADR-0028 development window the host also loads the previous line (0.3) and the 1.0 freeze line, so an extension installed against the released host keeps loading across the window's first change. **Amended 2026-09-27 (ADR-0028's second annotation):** on the 0.x line the label now tracks the product minor — `lca 0.x.y` ships `abi 0.x` — so lines advance at release cadence and the manifest names the train the extension was built for.
 
 During 0.x, the minor position is normally the breaking position. **Amended 2026-09-25 (ADR-0028):** the ABI sits in a *development window*, and the window's line, 0.2, is a single **in-place** line — breaking changes land inside it without a minor bump. The WIT package stays `@0.2.0`, every manifest stays `abi = "0.2"`, and the ABI changelog carries a running "0.2 development" section. The line moves (to 0.3) only if a checkpoint or an external extension needs the signal, never per change. The discipline is unchanged: a breaking change still updates the conformance extension in the same change, and a real interface decision still gets an ADR. The ABI freezes for good at 1.0, which is a snapshot-and-relabel of the final 0.2 — no interface bytes differ between them (ADR-0028's annotation). **Amended 2026-09-27 (ADR-0028's second annotation):** the line now tracks the product minor — every release train (`0.4.0`, `0.5.0`, …) bumps the ABI label with it — while everything this amendment keeps still holds: **in-place mutation inside a line** (a breaking change does not bump the number), the per-change discipline, and the freeze at 1.0. The superseded point is only the one-line-forever shape. Transition: `v0.3.0` shipped `abi 0.2` (the last mismatch); the next release is `0.4.0` carrying `abi 0.4`.
 
@@ -85,7 +85,7 @@ The changelog is updated in the same pull request as the WIT change. A separate 
 
 ## Making a change
 
-A change to the ABI needs, in one pull request: the WIT edit, the regenerated bindings, a changelog entry, an update to the conformance extension covering the new or changed surface, an update to the manifest schema if the manifest is affected, and a version bump following the table above. **During the ADR-0028 window there is no version bump per change:** 0.2 is a single in-place line, and the changelog's running "0.2 development" section is the record. The rest of the list still applies to every change.
+A change to the ABI needs, in one pull request: the WIT edit, the regenerated bindings, a changelog entry, an update to the conformance extension covering the new or changed surface, an update to the manifest schema if the manifest is affected, and a version bump following the table above. **During the ADR-0028 window there is no version bump per change:** the live train is a single in-place line, and the changelog's running development section is the record. The rest of the list still applies to every change.
 
 An ABI change also needs an ADR when it changes a design decision rather than filling in an agreed shape. Adding a capability is an ADR. Adding a field to a capability that an ADR already described is not.
 
@@ -123,8 +123,8 @@ The known punch list going into Phase 8, each already decided and awaiting imple
 
 **This is the active regime during the ADR-0028 development window.**
 
-Before 1.0, minor versions break. The support window still applies, so 0.2 loads 0.1 extensions, but an author should expect to rebuild each cycle.
+Before 1.0, minor versions break. The support window still applies, so 0.4 loads 0.3 extensions, but an author should expect to rebuild each cycle.
 
-During the ADR-0028 window, 0.2 is a single **in-place** line: breaking changes land inside it without a minor bump, and the changelog's running "0.2 development" section is the record of what changed. An author should expect to rebuild after a same-line change, but the host cannot tell an early 0.2 build from a late one (the named limitation above). The registry tag for this line is `abi-0.2`; a rebuild is a new push under the same tag until the line moves.
+During the ADR-0028 window, the live train (`0.4` at this release) is a single **in-place** line: breaking changes land inside it without a minor bump, and the changelog's running development section is the record of what changed. An author should expect to rebuild after a same-line change, but the host cannot tell an early train build from a late one (the named limitation above). The registry tag for this line is `abi-0.4`; a rebuild is a new push under the same tag until the line moves.
 
 Authors publishing during 0.x should track the changelog and push a rebuilt artifact within one cycle of each minor release. The ABI line tag in the registry makes this mechanical: a rebuild is a new push under a new `abi-0.N` tag.

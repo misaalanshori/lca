@@ -7,7 +7,7 @@ use lca_registry::{grant_hash, resolve, resolve_archive, resolve_local, resolve_
 
 const MANIFEST: &str = r#"name = "word-count"
 version = "1.0.0"
-abi = "0.1"
+abi = "0.4"
 worlds = ["tool"]
 description = "Counts words."
 
@@ -15,7 +15,7 @@ description = "Counts words."
 reason = "Runs wc for you."
 "#;
 
-const MANIFEST_REORDERED: &str = r#"abi = "0.1"
+const MANIFEST_REORDERED: &str = r#"abi = "0.4"
 description = "Counts words."
 name = "word-count"
 version = "1.0.0"
@@ -27,7 +27,7 @@ reason = "Runs wc for you."
 
 const MANIFEST_WIDENED: &str = r#"name = "word-count"
 version = "1.1.0"
-abi = "0.1"
+abi = "0.4"
 worlds = ["tool"]
 description = "Counts words."
 
@@ -113,14 +113,14 @@ fn install_records_by_digest_and_roundtrips() {
         manifest: MANIFEST.to_string(),
         component: component(),
         digest: digest.clone(),
-        source: "ghcr.io/example/word-count:abi-0.1".to_string(),
+        source: "ghcr.io/example/word-count:abi-0.4".to_string(),
         resources: Vec::new(),
     };
     let entry = tree.install(resolved).expect("install");
     assert_eq!(entry.digest, digest);
-    assert_eq!(entry.source, "ghcr.io/example/word-count:abi-0.1");
+    assert_eq!(entry.source, "ghcr.io/example/word-count:abi-0.4");
     assert_eq!(entry.version, "1.0.0");
-    assert_eq!(entry.abi, "0.1");
+    assert_eq!(entry.abi, "0.4");
     assert_eq!(entry.grant_hash, grant_hash(MANIFEST).expect("hash"));
 
     // The component is on disk under its digest (load-by-digest has a
@@ -179,7 +179,7 @@ fn consent_lines_are_the_catalog_sentences() {
 
     let provider = r#"name = "p"
 version = "1.0.0"
-abi = "0.1"
+abi = "0.4"
 worlds = ["provider"]
 description = "x"
 
@@ -209,7 +209,7 @@ namespace = "p"
 
     let completer = r#"name = "c"
 version = "1.0.0"
-abi = "0.1"
+abi = "0.4"
 worlds = ["compaction"]
 description = "x"
 
@@ -297,7 +297,7 @@ async fn an_archive_url_resolves_through_the_shared_path() {
             let _ = stream.write_all(&packed).await;
         }
     });
-    let url = format!("http://{addr}/word-count-abi-0.1.zip");
+    let url = format!("http://{addr}/word-count-abi-0.4.zip");
     let resolved = resolve_archive(&url).await.expect("resolve");
     assert_eq!(resolved.manifest, MANIFEST);
     assert_eq!(resolved.component, component());
@@ -357,7 +357,7 @@ async fn an_interrupted_download_leaves_the_installed_version_working() {
     .expect("install v1");
 
     // The interrupted update fails without touching the tree.
-    let url = format!("http://{addr}/word-count-abi-0.1.zip");
+    let url = format!("http://{addr}/word-count-abi-0.4.zip");
     let err = resolve_archive(&url)
         .await
         .expect_err("the interrupted download fails");
@@ -462,7 +462,7 @@ async fn mock_oci_serving(
 #[tokio::test]
 async fn oci_resolution_verifies_both_digests() {
     let (reference, server) = mock_oci(false).await;
-    let resolved = resolve_oci(&format!("{reference}:abi-0.1"))
+    let resolved = resolve_oci(&format!("{reference}:abi-0.4"))
         .await
         .expect("resolve");
     assert_eq!(resolved.manifest, MANIFEST);
@@ -471,7 +471,7 @@ async fn oci_resolution_verifies_both_digests() {
         resolved.digest,
         lca_registry::Resolved::digest_of(&component())
     );
-    assert_eq!(resolved.source, format!("{reference}:abi-0.1"));
+    assert_eq!(resolved.source, format!("{reference}:abi-0.4"));
 
     // The default tag when the reference carries none (moving-tag
     // installs spell theirs out; bare names resolve to `latest`).
@@ -483,7 +483,7 @@ async fn oci_resolution_verifies_both_digests() {
     // serves: refused at resolve time, so FR-DIST-4's delete never has
     // to happen - nothing was written.
     let (reference, server) = mock_oci(true).await;
-    let err = resolve_oci(&format!("{reference}:abi-0.1"))
+    let err = resolve_oci(&format!("{reference}:abi-0.4"))
         .await
         .expect_err("digest lie");
     assert!(
@@ -578,7 +578,7 @@ fn the_archive_refuses_extra_entries() {
 fn the_fs_consent_sentence_matches_the_granted_mode() {
     let read_only = r#"name = "r"
 version = "1.0.0"
-abi = "0.2"
+abi = "0.4"
 worlds = ["context-transform"]
 description = "x"
 
@@ -605,7 +605,7 @@ workspace = "read"
 
 const MANIFEST_WITH_RESOURCES: &str = r#"name = "word-count"
 version = "1.0.0"
-abi = "0.2"
+abi = "0.4"
 worlds = ["tool"]
 description = "Counts words."
 resources = ["presets", "skills"]
@@ -705,7 +705,7 @@ fn the_archive_refuses_a_traversal_resource_path() {
 fn a_data_only_package_installs_and_removes() {
     const DATA_MANIFEST: &str = r#"name = "skill-pack"
 version = "1.0.0"
-abi = "0.2"
+abi = "0.4"
 worlds = []
 description = "A skill pack."
 resources = ["skills"]
@@ -749,7 +749,7 @@ fn a_local_directory_resolves_as_a_data_only_package() {
     std::fs::create_dir_all(root.join("resources/skills/pack")).expect("mkdir");
     std::fs::write(
         root.join("extension.toml"),
-        "name = \"skill-pack\"\nversion = \"1.0.0\"\nabi = \"0.2\"\nworlds = []\nresources = [\"skills\"]\n",
+        "name = \"skill-pack\"\nversion = \"1.0.0\"\nabi = \"0.4\"\nworlds = []\nresources = [\"skills\"]\n",
     )
     .expect("manifest");
     std::fs::write(

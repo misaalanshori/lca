@@ -10,10 +10,12 @@
 /// The ABI version this build implements (`major.minor`, per the manifest's
 /// `abi` field and the support window in docs/abi-versioning.md).
 ///
-/// `0.2` is the first line of the ADR-0028 development window: the typed
-/// image content is a breaking change, and 0.x makes the minor the breaking
-/// position (docs/abi-versioning.md § Pre-1.0 reality).
-pub const ABI_VERSION: &str = "0.2";
+/// `0.4` is the line the ADR-0028 development window's next release train
+/// carries: the ABI label tracks the product minor, so `lca 0.4.y` ships
+/// `abi 0.4` (docs/abi-versioning.md, ADR-0028's second annotation). The
+/// in-place 0.2 changes (typed image content, `provider-login`, the
+/// `list-models` settings parameter) are the train's breaking items.
+pub const ABI_VERSION: &str = "0.4";
 
 /// The WIT package name that crosses every manifest and registry tag.
 pub const PACKAGE: &str = "lca:ext";

@@ -327,14 +327,11 @@ impl Manifest {
             return declared_minor == current_minor
                 || (current_minor > 0 && declared_minor == current_minor - 1);
         }
-        // The freeze line's amnesty: the 1.0 release shipped with the ABI
-        // frozen, and every extension installed against it declares `1.0`.
-        // When ADR-0028 reopened the interface on the 0.x line, that line
-        // would otherwise stop loading the moment the window's first change
-        // (0.2) landed, breaking every installed extension with no rebuild
-        // cycle. It keeps loading for the window, exactly as the pre-freeze
-        // 0.1 line kept loading on a 1.0 host.
-        (declared_major, declared_minor) == (1, 0) && (current_major, current_minor) == (0, 2)
+        // The 1.0 freeze line's amnesty: an extension installed against the
+        // 1.0-freeze host declares `1.0`, and it keeps loading while the
+        // 0.x development window is open, exactly as the pre-freeze 0.1
+        // line kept loading on a 1.0 host.
+        (declared_major, declared_minor) == (1, 0) && current_major == 0
     }
 }
 

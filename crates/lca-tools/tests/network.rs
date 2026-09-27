@@ -607,7 +607,7 @@ fn the_net_gate_sets_a_default_user_agent_and_preserves_a_caller_one() {
     caps.net_close_response(handle).expect("close");
     let _ = server.join().expect("server");
     assert!(body.starts_with("lca/"), "host default UA: {body}");
-    assert!(body.contains("abi-0.2"), "names the ABI line: {body}");
+    assert!(body.contains("abi-0.4"), "names the ABI line: {body}");
 
     let (base, server) = ua_echo_server();
     let caps = sandbox.caps(local_grants(&["127.0.0.1"]));
