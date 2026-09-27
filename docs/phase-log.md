@@ -1089,3 +1089,32 @@ change with the changelog line. No fallback route was needed.
 Suite 456 -> 461. Commits: `6cba8cb` (P1), `02dcefc` (P2), `2c2dd3e` +
 `878abca` (P3). See `cycle6-report.md` (out of tree) for the full account
 and the handoff of P4-P6.
+
+## Cycle 7 — the TUI renovation (2026-09-27–28)
+
+The interface moved off ratatui onto the project's own TUI, ported from pi's
+`packages/tui` after a file-by-file reverse engineering. Two crates now carry
+the interface: `lca-tui`, the terminal engine and widget library (terminal
+and protocol handling, input parsing, the alt-screen and main-screen
+renderers with the renderer-owned selection subsystem, editor, markdown,
+autocomplete, primitives), and `lca-ui`, the agent interface on top
+(transcript, chrome, selectors, theme, modals). ADR-0036 records the two
+Unicode dependencies; ADR-0037 records the architecture; ratatui is retired
+from the workspace.
+
+Nine owner issues from hands-on Windows driving were closed in the same
+cycle: embedded Antigravity OAuth client credentials, purged dev model ids
+with no implicit default, an identity block in the system prompt, streaming
+painted incrementally (the host's `net_read_body` was buffering the body),
+user prompts in history, markdown in the transcript, command and argument
+completion, and the working directory in the status area. Selection and
+verified OSC 52 copy ship with the alt-screen renderer.
+
+Planned next (brief `LCA-PROMPT-TUI-2`, out-of-tree): finish the switch to
+the pi interaction model (one editor, one key vocabulary, the completion
+menu), steering per ADR-0038, streaming-tolerant markdown, the interaction
+and visibility packs (shell mode, external editor, paste markers, transcript
+search, prompt jump, countdowns, stats, theme preview), and `/tree` with
+fork-from-message. The migration runs under a breaking license: phases may
+break the tree mid-move; commits and phase boundaries land green, and tmux
+driving is the proof.

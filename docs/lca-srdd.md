@@ -6,7 +6,7 @@ The project name in this document is LCA. The binary is `lca` and the crates use
 
 ## Companion documents
 
-This document sets the requirements and the architecture. Eighteen decisions that support it are written up separately as architecture decision records under `docs/adr/`, numbered 0001 through 0018, covering runtime selection, crate decomposition, the widget tree, the provider stream shape, filesystem scopes, the permission store split, the decision against an out-of-process runner, extension composition, the extension update path, distribution beyond OCI, local network access, provider identity operations, the three kinds of pluggability, the async execution model, compaction and context transform, the pty capability, prompt cache preservation and measurement, and web-embedded extension hosting. Where this document and an ADR could drift, the ADR is the more current statement of the reasoning; this document is the more current statement of the requirement itself.
+This document sets the requirements and the architecture. Thirty-seven decisions that support it are written up separately as architecture decision records under `docs/adr/`, numbered 0001 through 0038 (0020 is unused), covering runtime selection, crate decomposition, the widget tree, the provider stream shape, filesystem scopes, the permission store split, the decision against an out-of-process runner, extension composition, the extension update path, distribution beyond OCI, local network access, provider identity operations, the three kinds of pluggability, the async execution model, compaction and context transform, the pty capability, prompt cache preservation and measurement, web-embedded extension hosting, and — the most recent pair — the two-crate TUI architecture (ADR-0037) and steering (ADR-0038). Where this document and an ADR could drift, the ADR is the more current statement of the reasoning; this document is the more current statement of the requirement itself.
 
 Thirteen further documents fill in detail this one only summarizes: the capability catalog at `docs/capabilities.md`, the extension authoring guide at `docs/extension-authoring.md`, the ABI versioning policy at `docs/abi-versioning.md`, the session log format at `docs/session-log-format.md`, the runtime flows as diagrams at `docs/flows.md`, the threat model at `docs/threat-model.md`, the release and versioning policy at `docs/release-policy.md`, the software testing plan at `docs/testing-plan.md`, per-platform implementation notes at `docs/platform-notes.md`, the configuration key reference at `docs/configuration.md`, the headless and scripting contract at `docs/headless.md`, a glossary of project-specific terminology at `docs/glossary.md`, and the provenance of what this design takes from Pi and fx at `docs/inspiration.md`. First-party provider extensions are documented individually under `docs/providers/`. The extension manifest schema is at `schemas/extension-manifest.schema.json` and is the normative validation source; the manifest examples in this document are illustrative.
 
@@ -90,7 +90,7 @@ First-party extensions, including the default OpenAI-compatible provider and ski
 
 `lca-registry` is the OCI client. It resolves references, fetches manifests and blobs over HTTPS, verifies digests, and owns the extension lockfile that records each installed extension's resolved digest, source reference, and approved capability hash. It also resolves the plain-HTTPS-archive source kind described in ADR-0010, sharing the same lockfile and digest-verification path as the OCI resolver.
 
-`lca-tui` is the terminal renderer, the widget model, the input editor, and the event loop.
+`lca-tui` is the terminal engine and the widget library: terminal I/O and protocol negotiation, input parsing and keybindings, the two screen renderers with the selection subsystem, and the editor, markdown, autocomplete, and primitive widgets. It knows nothing about the agent. `lca-ui` is the agent interface built on it: the transcript, the chrome, the selectors, the theme, and the modal surfaces, and it is the only place that knows both the engine and the agent's domain types. The boundary is enforced mechanically, and the rendering and input model is described in ADR-0037.
 
 `lca-core` holds the agent loop, the dispatch table, and the compaction and context-transform dispatch. It sits above the domain and platform crates, and only `lca-sdk` and `lca-cli` depend on it.
 
@@ -174,6 +174,8 @@ The TUI does not let extensions write escape sequences. An extension returns a w
 
 This costs flexibility. It buys two things. Extensions cannot inject escape sequences to spoof output or hide text. The renderer can change without breaking extensions.
 
+Rendering itself is the project's own engine (ADR-0037). Every component renders to line strings at a width, and a renderer diffs those against the screen: the default alt-screen renderer, which owns text selection and verified copy, or the main-screen renderer, which appends the transcript to the terminal's own scrollback and can be switched at runtime. Input is parsed from the terminal's raw byte stream into one key vocabulary that flows end-to-end to the editor and the keybindings. `docs/platform-notes.md` carries the terminal-protocol quirks that this parsing exists to absorb.
+
 ## Interfaces
 
 ### Extension ABI
@@ -252,11 +254,11 @@ For JavaScript hosts, the build produces an ES module through jco transpilation.
 
 ### User interface
 
-The interactive screen has four regions. The scrollback shows the conversation. The active area shows the streaming response and running tool calls. The status line shows the model, the context use, the session cost, and any extension-provided segments. The input editor sits at the bottom with multi-line support, history, file path completion, and slash command completion. Built-in slash commands are `/login`, `/logout`, `/usage`, `/model`, `/compact`, and `/stats`; an extension's own commands are namespaced under its extension name, and the provider identity commands also appear there automatically.
+The interactive screen has three parts. The transcript shows the conversation: user messages in a distinct band, markdown assistant text with aligned tables and framed code blocks and links, tool calls as status-coded cards, and images inline or as named placeholders. The status area shows the working directory and its git branch, the model and thinking level, the context use and the session cost, any extension-provided segments, and the queued-message count. The input editor sits at the bottom with multi-line editing, history, a kill ring and undo, paste markers for large pastes, and tab completion over slash commands, command arguments, and file paths with a menu. Built-in slash commands include `/login`, `/logout`, `/usage`, `/model`, `/thinking`, `/theme`, `/compact`, `/stats`, `/tree`, and `/session`; an extension's own commands are namespaced under its extension name, and the provider identity commands also appear there automatically.
 
-Keyboard control follows terminal conventions. Enter submits. Shift+Enter inserts a newline. Ctrl+C cancels the running turn and does not exit. A second Ctrl+C on an idle prompt exits. Escape closes a modal or clears the input.
+Keyboard control follows terminal conventions, with the steering model on top. Enter submits; while a turn runs, a submission queues as a steer, which joins the turn at the next model-call boundary, or as a follow-up, which runs when the turn ends (ADR-0038). Shift+Enter inserts a newline. Ctrl+C cancels the running turn and does not exit; a second Ctrl+C on an idle prompt exits. Escape closes a modal or clears the input. `!command` runs a shell command inline and `!!` runs one excluded from the model's context. The prompt can be edited in `$EDITOR`, the transcript searched, and the user's own messages jumped between. The user can browse session branches and fork from any message.
 
-The permission prompt is a modal. It names the action, shows the exact command or path, and offers allow once, allow always for this pattern, and deny.
+The permission prompt is a modal. It names the action, shows the exact command or path, and offers allow once, allow always for this pattern, and deny. Any automatic-approval countdown is visible and interruptible and never fires silently.
 
 ## Functional requirements
 
@@ -283,6 +285,10 @@ FR-CORE-8. The agent SHALL record the token count and the cost of each turn, inc
 FR-CORE-9. IF a turn exceeds the configured maximum tool-call iteration count, THEN the agent SHALL end the turn with an iteration-limit error and return control to the user.
 
 FR-CORE-10. The pre-tool hook SHALL run before the permission check, and a hook denial SHALL end the call without a user prompt.
+
+FR-CORE-11. WHILE a turn is running, a submitted message SHALL queue as a steer or a follow-up: a steer joins the turn's input at the next model-call boundary, a follow-up is submitted when the turn ends, and queued messages keep submission order. See ADR-0038.
+
+FR-CORE-12. WHEN a turn is aborted, queued messages SHALL return to the input editor in order, and when compaction completes, the queue SHALL flush into the turn.
 
 ### Session management
 
@@ -442,6 +448,36 @@ FR-UI-5. WHERE the terminal does not support color, the agent SHALL render with 
 
 FR-UI-6. An extension SHALL NOT open a modal during a running turn unless the user invoked it.
 
+FR-UI-7. The transcript SHALL render markdown: headings, lists, tables with aligned columns, framed code blocks, and links.
+
+FR-UI-8. WHILE a response is streaming, the markdown renderer SHALL tolerate partial content: an incomplete fence renders as plain text, an incomplete table waits for its separator row, and no half frame is ever drawn.
+
+FR-UI-9. Tab completion SHALL cover slash commands, command arguments, and file paths, and SHALL show the candidates in a menu.
+
+FR-UI-10. A multi-line paste into the input editor SHALL be one atomic segment that does not reflow into surrounding text or split across history entries.
+
+FR-UI-11. User messages SHALL be visually distinct from assistant messages, and the user SHALL be able to jump between their own messages.
+
+FR-UI-12. WHEN the user searches the transcript, the agent SHALL highlight matches and navigate between them.
+
+FR-UI-13. An image content block SHALL render in the transcript with its media type and dimensions or a named placeholder, and SHALL NOT be silently dropped.
+
+FR-UI-14. A `!` command SHALL run a shell command inline and show its output in the transcript; a `!!` command SHALL run one excluded from the model's context.
+
+FR-UI-15. The user SHALL be able to edit the prompt in an external editor and return the result to the input.
+
+FR-UI-16. The user SHALL be able to browse session branches and fork from any message in the interface (the interface form of FR-SESS-3).
+
+FR-UI-17. Theme selection SHALL preview live and restore the previous theme on cancel, and the agent SHALL detect whether the terminal renders dark or light.
+
+FR-UI-18. WHEN the agent offers an automatic decision, such as an approval timeout or a retry, the countdown SHALL be visible and interruptible.
+
+FR-UI-19. The stats view SHALL show tokens and cost per model, including cache-read and cache-write accounting.
+
+FR-UI-20. The status area SHALL show the working directory and its git branch, the active model, and the queued-message count.
+
+FR-UI-21. The user SHALL be able to switch between the fullscreen renderer and the scrollback renderer at runtime.
+
 ### Distribution and installation
 
 FR-DIST-1. The agent SHALL fetch extensions over the OCI distribution protocol with a client built into the binary.
@@ -582,7 +618,7 @@ The dependency list stays short on purpose. Each entry below states what it does
 | tokio | Async runtime | None. This is a structural commitment. |
 | hyper with rustls | HTTPS transport | reqwest as a thicker alternative |
 | tower-service | The `Service` trait the hyper-util `HttpConnector` accepts as a custom DNS resolver; used to pin the `net` rebinding check's resolved address (ADR-0025) | Hand-written resolver behind a different connector, or accept the TOCTOU race ADR-0025 closes |
-| ratatui with crossterm | Terminal rendering and input | A renderer written in the project, over crossterm alone |
+| crossterm | Terminal input for the non-interactive consent prompt only | The interactive TUI is the project's own engine and terminal layer (ADR-0037); ratatui was retired in the TUI renovation |
 | serde and serde_json | Serialization | None |
 | clap | Argument parsing | Hand-written parser |
 | tracing | Structured logging and diagnostics | log with env_logger |
@@ -628,7 +664,8 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── lca-ext-native/         in-binary extension registry, default-feature wiring
 │   ├── lca-registry/           OCI and HTTPS-archive resolvers, lockfile
 │   ├── lca-config/             configuration merge
-│   ├── lca-tui/                renderer, widgets, input editor
+│   ├── lca-tui/                terminal engine and widget library
+│   ├── lca-ui/                 agent interface: transcript, chrome, selectors
 │   ├── lca-sdk/                embedding API
 │   └── lca-testkit/            fake provider and harness
 ├── extensions/

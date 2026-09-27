@@ -55,6 +55,8 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0034 | Skills handling is a host-side merge | Accepted | Cycle 6 |
 | 0035 | `list-models` takes the settings `complete` does | Accepted | Cycle 6 |
 | 0036 | Dependencies for the pi TUI port (`lca-tui`) | Accepted | TUI port |
+| 0037 | The TUI is ours: two crates and the line-string engine | Accepted | TUI renovation |
+| 0038 | Steering: prompts submitted while a turn runs | Accepted | TUI renovation |
 | 0029 | Typed image content for provider messages | Accepted | Post-release review (cycle 2) |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
