@@ -78,3 +78,6 @@ mod data_only_package_digest;
 // cycle-7 driving: a disabled package takes its skill pack with it.
 #[path = "24-disable-stops-skill-injection.rs"]
 mod disable_stops_skill_injection;
+// cycle-7 P2: the six release targets have their own build gate.
+#[path = "25-release-targets-gate.rs"]
+mod release_targets_gate;

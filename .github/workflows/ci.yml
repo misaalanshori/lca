@@ -285,6 +285,51 @@ jobs:
         shell: bash
         run: bash scripts/wasm-check.sh
 
+  # Verifies: docs/release-policy.md (the artifact matrix), NFR-8, NFR-9,
+  # NFR-10; docs/testing-plan.md section 13. The six release targets were
+  # the last surface nothing built until release time - the same class as
+  # the fuzz workspace and the extension components, each of which surfaced
+  # at a publish. This checks every release target compiles on every push,
+  # with the toolchain the publish workflow uses (zig + cargo-xwin on
+  # Linux, natively on the macOS leg).
+  release-targets-check:
+    name: release targets build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux+windows
+            targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+          - os: macos-14
+            name: darwin
+            targets: x86_64-apple-darwin aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup set profile minimal
+      - name: LLVM19 for the MSVC build scripts
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSfL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 19
+          sudo apt-get install -y -q clang-19
+          echo "/usr/lib/llvm-19/bin" >> "$GITHUB_PATH"
+      - uses: taiki-e/install-action@v2
+        if: runner.os == 'Linux'
+        with:
+          tool: cargo-xwin@0.23.1
+      - uses: mlugg/setup-zig@v2
+        if: runner.os == 'Linux'
+        with:
+          version: "0.16.0"
+      - name: Check every assigned release target
+        shell: bash
+        run: bash scripts/release-targets-check.sh ${{ matrix.targets }}
+
   # NFR-7: measure binary size and cold start, fail on a threshold breach.
   size-and-startup:
     name: size and startup gate
