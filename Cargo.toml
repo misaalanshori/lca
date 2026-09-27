@@ -52,7 +52,9 @@ repository = "https://github.com/misaalanshori/lca"
 # thiserror - library error types; anyhow - binary only.
 # tokio - async runtime (structural commitment, ADR-0014).
 # hyper + rustls - HTTPS transport (reqwest is the documented heavier alternative).
-# ratatui + crossterm - terminal rendering and input.
+# crossterm - the state machine's key-event type and the non-TUI install
+# consent prompt. The pi-port engine parses raw input itself; ratatui is
+# gone (the TUI port replaced it).
 # clap - argument parsing.
 # tracing - structured logging.
 # sha2 - digest verification.
@@ -74,7 +76,6 @@ hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", 
 tower-service = "0.3"
 http-body-util = "0.1"
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "ring", "webpki-roots", "logging", "tls12"] }
-ratatui = "0.29"
 crossterm = "0.28"
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
