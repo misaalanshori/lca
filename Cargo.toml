@@ -82,6 +82,13 @@ sha2 = "0.10"
 # zip - the ADR-0010 HTTPS archive format; DEFLATE gets a maintained
 # implementation instead of a hand-written one (SRDD dependency rule).
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# unicode-width / unicode-segmentation - East Asian width classes and
+# grapheme-cluster iteration for the pi TUI port's text measurement and
+# cursor motion (ADR-0036). Both are already in Cargo.lock transitively;
+# promoted to direct dependencies rather than hand-maintaining the
+# Unicode tables.
+unicode-width = "0.2"
+unicode-segmentation = "1.13"
 ipnet = "2"
 toml = "0.8"
 wasmtime = { version = "49.0.0", default-features = false, features = [

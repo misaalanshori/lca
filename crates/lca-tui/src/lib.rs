@@ -6,7 +6,10 @@
 //! terminal; their widgets join in Phase 6 through the declarative
 //! vocabulary (ADR-0003).
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+
+pub mod engine;
+pub mod widgets;
 
 use std::path::PathBuf;
 use std::sync::Arc;
