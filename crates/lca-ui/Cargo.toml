@@ -20,6 +20,7 @@ anyhow.workspace = true
 
 [dev-dependencies]
 lca-testkit = { path = "../lca-testkit" }
+lca-tui = { path = "../lca-tui" }
 
 [lints]
 workspace = true
