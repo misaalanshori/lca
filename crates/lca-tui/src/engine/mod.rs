@@ -6,8 +6,10 @@
 //! need agent data are wrapped by `lca-ui`.
 
 pub mod colors;
+pub mod core;
 pub mod keybindings;
 pub mod keys;
+pub mod layout;
 pub mod stdin_buffer;
 pub(crate) mod sys;
 pub mod terminal;
