@@ -10,6 +10,7 @@
 //! NFR-10.
 
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Command;
 
 /// The six targets the release policy packages, exactly.

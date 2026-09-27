@@ -100,14 +100,19 @@ EOF
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# ring forces plain gcc-mode clang for Windows AArch64 while cargo-xwin
-# supplies MSVC-style flags; the committed shim translates between them. It
-# is installed under a name other than `clang` on purpose: cargo-xwin caches
-# `clang-cl` as a symlink to whatever `clang` it finds on PATH, so a shim
-# called `clang` poisons that cache and the next run collides with it.
-win_shim="$work/lca-clang-shim"
+# ring forces plain gcc-mode clang for Windows builds while cargo-xwin
+# supplies MSVC-style flags; the committed shim translates between them.
+# This mirrors the publish workflow exactly: the shim is installed as
+# `clang` in a stable directory first on PATH and the two MSVC targets name
+# it as their compiler. Stable on purpose - cargo-xwin caches `clang-cl` as
+# a symlink to the `clang` it finds, so a temp path would dangle on the
+# next run.
+win_shim_dir="$PWD/target/release-targets-shim"
 if [ "$host_os" = Linux ]; then
-    install -m755 ci/clang-shim "$win_shim"
+    mkdir -p "$win_shim_dir"
+    install -m755 ci/clang-shim "$win_shim_dir/clang"
+    PATH="$win_shim_dir:$PATH"
+    export PATH
 fi
 
 check_one() {
@@ -139,11 +144,10 @@ check_one() {
             ;;
         *-pc-windows-msvc)
             if [ "$host_os" = Linux ]; then
-                # Only the aarch64 build needs the gcc-mode shim; x86_64 uses
-                # cargo-xwin's clang-cl directly (proven by the publish job).
-                if [ "$target" = "aarch64-pc-windows-msvc" ]; then
-                    env_prefix=("CC_${target//-/_}=$win_shim")
-                fi
+                # The publish workflow's arrangement: both MSVC targets use
+                # the shim, which is `clang` on PATH (its `real` exec picks
+                # the platform clang).
+                env_prefix=("CC_${target//-/_}=clang")
                 cmd=(cargo xwin check -q --target "$target" -p lca-cli)
             else
                 cmd=(cargo check -q --target "$target" -p lca-cli)
