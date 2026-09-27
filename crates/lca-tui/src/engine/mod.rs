@@ -5,11 +5,14 @@
 //! `lca-core`, `lca-protocol`, `lca-session`, or session types. Widgets that
 //! need agent data are wrapped by `lca-ui`.
 
+pub mod alt_screen;
 pub mod colors;
 pub mod core;
 pub mod keybindings;
 pub mod keys;
 pub mod layout;
+pub mod main_screen;
+pub mod selection;
 pub mod stdin_buffer;
 pub(crate) mod sys;
 pub mod terminal;
