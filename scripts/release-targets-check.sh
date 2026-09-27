@@ -100,15 +100,14 @@ EOF
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# ring forces plain gcc-mode clang for Windows builds while cargo-xwin
-# supplies MSVC-style flags; the committed shim translates between them.
-# Same arrangement as the publish workflow: the shim sits ahead of the
-# real clang and the two MSVC targets name it as their compiler.
+# ring forces plain gcc-mode clang for Windows AArch64 while cargo-xwin
+# supplies MSVC-style flags; the committed shim translates between them. It
+# is installed under a name other than `clang` on purpose: cargo-xwin caches
+# `clang-cl` as a symlink to whatever `clang` it finds on PATH, so a shim
+# called `clang` poisons that cache and the next run collides with it.
+win_shim="$work/lca-clang-shim"
 if [ "$host_os" = Linux ]; then
-    mkdir -p "$work/bin"
-    install -m755 ci/clang-shim "$work/bin/clang"
-    PATH="$work/bin:$PATH"
-    export PATH
+    install -m755 ci/clang-shim "$win_shim"
 fi
 
 check_one() {
@@ -140,7 +139,11 @@ check_one() {
             ;;
         *-pc-windows-msvc)
             if [ "$host_os" = Linux ]; then
-                env_prefix=("CC_${target//-/_}=clang")
+                # Only the aarch64 build needs the gcc-mode shim; x86_64 uses
+                # cargo-xwin's clang-cl directly (proven by the publish job).
+                if [ "$target" = "aarch64-pc-windows-msvc" ]; then
+                    env_prefix=("CC_${target//-/_}=$win_shim")
+                fi
                 cmd=(cargo xwin check -q --target "$target" -p lca-cli)
             else
                 cmd=(cargo check -q --target "$target" -p lca-cli)
