@@ -411,8 +411,13 @@ pub(crate) enum ManifestError {
     #[error("{0}")]
     Load(#[from] lca_ext_host::LoadError),
     /// The declared ABI line is outside this host's window (FR-EXT-8).
-    #[error("manifest targets ABI {0}, outside this host's supported window")]
-    Abi(String),
+    #[error("manifest targets ABI {declared}, outside this host's supported window ({window})")]
+    Abi {
+        /// The declared `major.minor`.
+        declared: String,
+        /// The accepted window, named so the message says what to build for.
+        window: &'static str,
+    },
 }
 
 fn parse_manifest_strict(
@@ -420,7 +425,10 @@ fn parse_manifest_strict(
 ) -> Result<(String, String, String, String), ManifestError> {
     let parsed = lca_ext_host::Manifest::parse(manifest)?;
     if !parsed.abi_in_window() {
-        return Err(ManifestError::Abi(parsed.abi.clone()));
+        return Err(ManifestError::Abi {
+            declared: parsed.abi.clone(),
+            window: lca_ext_host::SUPPORTED_ABI_WINDOW,
+        });
     }
     // `description` is display-only and not part of the loader's contract.
     let description = manifest
@@ -708,6 +716,10 @@ redirect_path = "/callback"
             err.to_string()
                 .contains("outside this host's supported window"),
             "{err}"
+        );
+        assert!(
+            err.to_string().contains("0.3") && err.to_string().contains("0.4"),
+            "the refusal names the accepted lines: {err}"
         );
     }
 
