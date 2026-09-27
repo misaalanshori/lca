@@ -7,7 +7,7 @@ use std::sync::mpsc::Receiver;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use lca_protocol::{StopReason, TurnOutcome, TurnStatus, Usage};
-use lca_tui::engine::main_screen::MainScreenRenderer;
+use lca_tui::engine::alt_screen::AltScreenRenderer;
 use lca_tui::engine::terminal::{ProcessTerminal, Terminal};
 
 use crate::render::render_state;
@@ -67,7 +67,8 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             let _ = resize_tx.send(());
         }),
     );
-    let mut renderer = MainScreenRenderer::new();
+    let mut renderer = AltScreenRenderer::new();
+    renderer.enter(&mut terminal);
 
     let mut active_turn: Option<std::thread::JoinHandle<TurnOutcome>> = None;
     let mut turn_rx: Option<Receiver<lca_protocol::TurnEvent>> = None;
@@ -116,6 +117,14 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                 events: event_tx,
                 prompt: prompt_tx,
             };
+            // Issue #5: the user's own prompt must appear in the transcript,
+            // distinct from the answer. The state machine never recorded it.
+            let prompt_text = text.clone();
+            state.scrollback.push(format!(
+                "{}\x1b[1;36m{}\x1b[0m",
+                "› ",
+                prompt_text.replace('\n', "\n› ")
+            ));
             state.turn_running = true;
             state.turn_status = Some(TurnStatusLine {
                 text: "running...".into(),
@@ -148,14 +157,34 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         if dirty {
             let width = terminal.columns();
             let height = terminal.rows();
-            let lines = render_state(&state, width, height);
-            renderer.render(&mut terminal, lines, width, height);
+            let document = render_state(&state, width, height);
+            // The viewport is the tail of the document, minus the scroll
+            // offset (wheel / selection auto-scroll).
+            let total = document.len();
+            let end = total.saturating_sub(renderer.scroll as usize);
+            let start = end.saturating_sub(height as usize);
+            let viewport: Vec<String> = document[start..end].to_vec();
+            renderer.render_lines(&mut terminal, viewport, width, height);
             dirty = false;
         }
 
         // Input.
         match input_rx.recv_timeout(std::time::Duration::from_millis(50)) {
             Ok(data) => {
+                // Mouse (selection, wheel) is the renderer's.
+                if data.starts_with("\x1b[<") {
+                    renderer.handle_input(&data);
+                    // Copy on release (issue #2): a completed selection is
+                    // written to the clipboard via OSC 52.
+                    if data.ends_with('m') && renderer.copy_on_select {
+                        let text = renderer.selected_text();
+                        if !text.is_empty() {
+                            renderer.copy_osc52(&mut terminal, &text);
+                        }
+                    }
+                    dirty = true;
+                    continue;
+                }
                 // Bracketed paste: insert verbatim.
                 if let Some(rest) = data.strip_prefix("\x1b[200~")
                     && let Some(content) = rest.strip_suffix("\x1b[201~")
@@ -198,7 +227,7 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     if let Some(handle) = active_turn {
         let _ = handle.join();
     }
-    renderer.finish(&mut terminal);
+    renderer.leave(&mut terminal, false);
     terminal.drain_input(1000, 50);
     terminal.stop();
     result.map(|()| 0)

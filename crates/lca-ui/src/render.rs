@@ -64,7 +64,22 @@ pub fn render_state(state: &UiState, width: u16, height: u16) -> Vec<String> {
     let w = width as usize;
 
     // --- Transcript -------------------------------------------------------
-    let mut lines: Vec<String> = state.scrollback.clone();
+    // `scrollback` stores one entry per completed turn (the old renderer
+    // joined them). A user-prompt entry is already styled (`› `); every
+    // other entry is assistant/tool text and renders as markdown (#6).
+    let mut lines: Vec<String> = Vec::new();
+    for entry in &state.scrollback {
+        if entry.starts_with('›') {
+            lines.extend(entry.split('\n').map(|line| line.to_string()));
+        } else {
+            lines.extend(render_markdown(
+                entry,
+                w,
+                &theme.markdown(),
+                &MarkdownOptions::default(),
+            ));
+        }
+    }
     if let Some(notice) = &state.notice {
         lines.push((theme.warn)(&format!("• {notice}")));
     }
@@ -121,6 +136,17 @@ pub fn render_state(state: &UiState, width: u16, height: u16) -> Vec<String> {
     lines.extend(wrap_text_with_ansi(&input, w));
 
     // Status line.
+    // Location footer (issue #9): the cwd, `~`-shortened, with the git
+    // branch, above the stats/model line.
+    let workspace = state.options.workspace.to_string_lossy().to_string();
+    let home = std::env::var("HOME").ok();
+    let cwd = crate::footer::shorten_home(&workspace, home.as_deref());
+    let mut location = (theme.accent)(&cwd);
+    if let Some(branch) = crate::footer::git_branch(&workspace) {
+        location.push_str(&(theme.dim)(&format!(" ({branch})")));
+    }
+    lines.push(truncate_to_width(&location, w, "…", false));
+
     let model_label = state
         .options
         .model_label
@@ -313,6 +339,7 @@ mod tests {
             plain: false,
             invoke_command: Arc::new(|_, _| lca_protocol::CommandEffect::None),
             slash_commands: Vec::new(),
+            models: Vec::new(),
             workspace: PathBuf::new(),
             render_regions: None,
             ui_events: None,

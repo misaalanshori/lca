@@ -618,9 +618,15 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     };
     let pending_attachments: Arc<std::sync::Mutex<Vec<lca_core::StagedAttachment>>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
+    let model_ids: Vec<String> = provider
+        .list_models()
+        .iter()
+        .map(|m| m.id.clone())
+        .collect();
     let options = UiOptions {
         model_label: label_cell.clone(),
         initial_lines,
+        models: model_ids,
         plain: config.ui_color() == lca_config::ColorMode::Never,
         invoke_command: {
             let registry = registry.clone();

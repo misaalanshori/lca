@@ -156,7 +156,21 @@ impl AltScreenRenderer {
         height: u16,
     ) -> Option<(u16, u16)> {
         let frame = render_frame(root, width, height);
-        let mut lines = frame.lines;
+        self.render_lines(term, frame.lines, width, height)
+    }
+
+    /// Render already-composed lines with the selection highlight and the
+    /// full-screen diff. Used by the agent interface, which composes its
+    /// own viewport (transcript + dock) rather than a `LayoutNode`.
+    pub fn render_lines(
+        &mut self,
+        term: &mut dyn Terminal,
+        lines: Vec<String>,
+        width: u16,
+        height: u16,
+    ) -> Option<(u16, u16)> {
+        let mut lines = lines;
+        lines.resize(height as usize, String::new());
         // Apply the selection highlight.
         self.selection.highlight(&mut lines);
         let (lines, cursor) = extract_cursor_position(&lines);

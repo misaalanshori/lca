@@ -312,6 +312,8 @@ pub struct UiOptions {
     pub invoke_command: CommandInvoker,
     /// Slash commands offered by completion.
     pub slash_commands: Vec<String>,
+    /// Model ids offered by `/model <Tab>` argument completion.
+    pub models: Vec<String>,
     /// Workspace root for path completion.
     pub workspace: PathBuf,
     /// Extension trees per region (`None`: no ui-capable extension is
@@ -1140,6 +1142,35 @@ fn complete(state: &mut UiState) {
                 }
                 state.notice = Some(format!("completions: {}", matches.join("  ")));
             }
+        }
+        return;
+    }
+
+    // Argument completion: `/model <id>` and `/login <provider>`.
+    if let Some(rest) = state.buffer.strip_prefix('/')
+        && let Some((name, argument)) = rest.split_once(char::is_whitespace)
+    {
+        let candidates: Vec<String> = match name {
+            "model" => state.options.models.clone(),
+            "login" => state
+                .options
+                .slash_commands
+                .iter()
+                .filter_map(|c| c.strip_prefix('/'))
+                .filter_map(|c| c.strip_suffix(".login"))
+                .map(str::to_string)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let matches: Vec<String> = candidates
+            .into_iter()
+            .filter(|c| c.starts_with(argument))
+            .collect();
+        if matches.len() == 1 {
+            state.buffer = format!("/{name} {}", matches[0]);
+            state.cursor = None;
+        } else if matches.len() > 1 {
+            state.notice = Some(format!("completions: {}", matches.join("  ")));
         }
         return;
     }

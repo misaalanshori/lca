@@ -23,6 +23,7 @@ fn state() -> UiState {
         plain: false,
         invoke_command: Arc::new(|_, _| lca_protocol::CommandEffect::None),
         slash_commands: Vec::new(),
+        models: Vec::new(),
         workspace: PathBuf::new(),
         render_regions: None,
         ui_events: None,
