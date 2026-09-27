@@ -390,6 +390,13 @@ impl Capabilities {
             };
             if let Ok(data) = frame.into_data() {
                 collected.extend_from_slice(&data);
+                // Return as soon as a data frame arrives so a streaming
+                // body (SSE) is delivered incrementally rather than
+                // buffered until `max` bytes or EOF (FR-CORE-4's
+                // first-token latency).
+                if !collected.is_empty() {
+                    break;
+                }
             }
             // Non-data frames (trailers) carry no body bytes.
         }

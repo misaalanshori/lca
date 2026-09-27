@@ -81,3 +81,7 @@ mod disable_stops_skill_injection;
 // cycle-7 P2: the six release targets have their own build gate.
 #[path = "25-release-targets-gate.rs"]
 mod release_targets_gate;
+// tui-port driving: `net_read_body` buffered a streaming body until EOF, so
+// an SSE provider stream painted only at the end (owner issue #4).
+#[path = "26-net-read-body-streams.rs"]
+mod net_read_body_streams;
