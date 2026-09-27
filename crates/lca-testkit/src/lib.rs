@@ -12,6 +12,14 @@
 
 #![deny(unsafe_code)]
 
+/// Lock a mutex, panicking on poisoning with one shared message.
+///
+/// The panic semantics are unchanged from the per-site `expect` this
+/// replaces: a poisoned lock is a bug, and the release profile aborts.
+pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().expect("mutex poisoned")
+}
+
 pub mod fixture;
 
 use std::collections::VecDeque;
@@ -262,7 +270,7 @@ impl FakeProvider {
 
     /// The last request the core handed this provider (FR-CACHE-5 checks).
     pub fn last_request(&self) -> Option<CompletionRequest> {
-        self.last_request.lock().expect("request lock").clone()
+        lock(&self.last_request).clone()
     }
 
     /// How many completion calls happened, including exhausted ones.
@@ -315,18 +323,13 @@ impl Provider for FakeProvider {
     ) -> lca_provider::BoxFuture<Result<(), ProviderError>> {
         self.call_count
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        *self.last_request.lock().expect("request lock") = Some(request);
-        let events = self
-            .turns
-            .lock()
-            .expect("turn lock")
-            .pop_front()
-            .unwrap_or_else(|| {
-                vec![Step::Event(StreamEvent::Error {
-                    message: "no more scripted responses queued".to_string(),
-                    retryable: false,
-                })]
-            });
+        *lock(&self.last_request) = Some(request);
+        let events = lock(&self.turns).pop_front().unwrap_or_else(|| {
+            vec![Step::Event(StreamEvent::Error {
+                message: "no more scripted responses queued".to_string(),
+                retryable: false,
+            })]
+        });
         Box::pin(async move {
             for step in events {
                 match step {

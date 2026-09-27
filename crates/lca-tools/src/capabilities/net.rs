@@ -258,7 +258,7 @@ impl Capabilities {
         // The head arrives before the body does: nothing is buffered
         // here, the reader pulls frames as the server sends them
         // (capability catalog: streaming body reader).
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         let id = table.next;
         table.next += 1;
         table.entries.insert(
@@ -274,7 +274,7 @@ impl Capabilities {
 
     /// The response's HTTP status.
     pub fn net_response_status(&self, handle: u32) -> Result<u16, CapabilityError> {
-        let table = self.handles.lock().expect("handle lock");
+        let table = lock(&self.handles);
         match table.entries.get(&handle) {
             Some(HandleEntry::Response { status, .. }) => Ok(*status),
             Some(_) => Err(CapabilityError::Invalid(format!(
@@ -291,7 +291,7 @@ impl Capabilities {
         &self,
         handle: u32,
     ) -> Result<Vec<(String, String)>, CapabilityError> {
-        let table = self.handles.lock().expect("handle lock");
+        let table = lock(&self.handles);
         match table.entries.get(&handle) {
             Some(HandleEntry::Response { headers, .. }) => Ok(headers.clone()),
             Some(_) => Err(CapabilityError::Invalid(format!(
@@ -315,7 +315,7 @@ impl Capabilities {
         use http_body_util::BodyExt as _;
         let max = max.max(1);
         let mut body = {
-            let mut table = self.handles.lock().expect("handle lock");
+            let mut table = lock(&self.handles);
             match table.entries.get_mut(&handle) {
                 Some(HandleEntry::Response { body, .. }) => {
                     match std::mem::replace(body, ResponseBody::Busy) {
@@ -405,7 +405,7 @@ impl Capabilities {
             Some(message) => ResponseBody::Failed(message),
         };
         {
-            let mut table = self.handles.lock().expect("handle lock");
+            let mut table = lock(&self.handles);
             if let Some(HandleEntry::Response { body, .. }) = table.entries.get_mut(&handle) {
                 *body = final_state;
             }
@@ -421,7 +421,7 @@ impl Capabilities {
 
     /// Release the response.
     pub fn net_close_response(&self, handle: u32) -> Result<(), CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         match table.entries.remove(&handle) {
             Some(HandleEntry::Response { .. }) => Ok(()),
             Some(_) => Err(CapabilityError::Invalid(format!(
@@ -547,14 +547,8 @@ connection: close
         let id = self
             .next_flow
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.flows
-            .lock()
-            .expect("flow lock")
-            .insert(id, OAuthFlow { rx: Some(rx), stop });
-        self.oauth_begun
-            .lock()
-            .expect("oauth lock")
-            .push(redirect_url.clone());
+        lock(&self.flows).insert(id, OAuthFlow { rx: Some(rx), stop });
+        lock(&self.oauth_begun).push(redirect_url.clone());
         Ok((redirect_url, id))
     }
 
@@ -566,11 +560,8 @@ connection: close
                 "refusing to open {url}: only the loopback flow or https"
             )));
         }
-        self.oauth_opened
-            .lock()
-            .expect("oauth lock")
-            .push(url.to_string());
-        if let Some(opener) = self.browser_opener.lock().expect("opener lock").clone() {
+        lock(&self.oauth_opened).push(url.to_string());
+        if let Some(opener) = lock(&self.browser_opener).clone() {
             return opener(url).map_err(CapabilityError::Io);
         }
         #[cfg(target_os = "linux")]
@@ -610,7 +601,7 @@ connection: close
             .map(|settings| settings.timeout_seconds)
             .unwrap_or(300);
         let receiver = {
-            let mut flows = self.flows.lock().expect("flow lock");
+            let mut flows = lock(&self.flows);
             flows
                 .get_mut(&handle)
                 .and_then(|flow| flow.rx.take())
@@ -649,7 +640,7 @@ connection: close
 
     /// Abandon a flow and stop its listener.
     pub fn oauth_end(&self, handle: u32) -> Result<(), CapabilityError> {
-        let flows = self.flows.lock().expect("flow lock");
+        let flows = lock(&self.flows);
         match flows.get(&handle) {
             Some(flow) => {
                 flow.stop.store(true, std::sync::atomic::Ordering::SeqCst);

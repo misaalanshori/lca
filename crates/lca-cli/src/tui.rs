@@ -12,6 +12,8 @@ use lca_session::{Session, SessionStore, ViewMode};
 use lca_tools::{NativeOps, ToolExecutor};
 use lca_tui::{PromptRequest, TurnRunner, UiOptions};
 
+use crate::lock;
+
 /// The built-in slash slots the interface itself claims; the spec's
 /// sixth built-in, `/stats`, arrives from the native hooks extension
 /// that holds the stats source (ADR-0013).
@@ -122,8 +124,8 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         GrantStore::open(&data.join("grants.json"))
             .map_err(|err| anyhow::anyhow!("cannot open the grant store: {err}"))?,
     ));
-    let trusted = grants.lock().expect("grant store").is_trusted(cwd);
-    let config = crate::load_config(cwd, &grants.lock().expect("grant store"), false)?;
+    let trusted = lock(&grants).is_trusted(cwd);
+    let config = crate::load_config(cwd, &lock(&grants), false)?;
     // Today's update check, if enabled and due: stamped, then spawned
     // - the startup path never waits on it (FR-CFG-6), and the status
     // line picks the finding up from the shared cell once it lands.
@@ -220,7 +222,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         crate::openai_capabilities(cwd, shared_prompt.clone(), grants.clone()),
     )));
     crate::apply_enablement(&mut registry, |name| {
-        grants.lock().expect("grants").extension_enabled(cwd, name) == Some(false)
+        lock(&grants).extension_enabled(cwd, name) == Some(false)
     });
     // FR-PROV-6: the configured provider resolves to an enabled handle, or
     // the session opens in the zero-provider state (FR-PROV-9). The
@@ -302,7 +304,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         .clone()
         .map(|backend| backend as Arc<dyn lca_tools::CompletionBackend>);
     crate::apply_enablement(&mut registry, |name| {
-        grants.lock().expect("grants").extension_enabled(cwd, name) == Some(false)
+        lock(&grants).extension_enabled(cwd, name) == Some(false)
     });
     let registry = Arc::new(registry);
 
@@ -768,7 +770,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     };
                 }
             };
-            let mut tools = tools.lock().expect("tools lock");
+            let mut tools = lock(&tools);
             // Drain anything `/attach` staged: append each stub to the
             // message text and pass the hashes as the user record's
             // attachments.

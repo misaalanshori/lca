@@ -37,6 +37,14 @@ mod store;
 #[allow(unsafe_code)]
 mod windows_acl;
 
+/// Lock a mutex, panicking on poisoning with one shared message.
+///
+/// The panic semantics are unchanged from the per-site `expect` this
+/// replaces: a poisoned lock is a bug, and the release profile aborts.
+pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().expect("mutex poisoned")
+}
+
 /// One recorded attempt: identity, what was tried, and why it failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Denial {
@@ -400,13 +408,13 @@ impl Capabilities {
 
     /// Every recorded refusal (FR-EXT-9's data).
     pub fn denials(&self) -> Vec<Denial> {
-        self.denials.lock().expect("denial lock").clone()
+        lock(&self.denials).clone()
     }
 
     /// Attach the backend behind the `completion` capability (the host
     /// routes to the active provider; ADR-0008's star topology).
     pub fn set_completion(&self, backend: Arc<dyn CompletionBackend>) {
-        *self.completion.lock().expect("completion lock") = Some(backend);
+        *lock(&self.completion) = Some(backend);
     }
 
     /// Ask the host for one response (capability catalog `completion`).
@@ -426,7 +434,7 @@ impl Capabilities {
             ));
         }
         let backend = {
-            let slot = self.completion.lock().expect("completion lock");
+            let slot = lock(&self.completion);
             slot.clone()
         };
         let Some(backend) = backend else {
@@ -457,11 +465,7 @@ impl Capabilities {
     /// request; the set is tiny, cache it if a hot loop ever notices.
     pub(super) fn live_adhoc_net(&self) -> Vec<lca_permissions::NetPattern> {
         let mut patterns = self.grants.adhoc_net.clone();
-        let stored = self
-            .store
-            .lock()
-            .expect("grant lock")
-            .net_patterns(&self.project);
+        let stored = lock(&self.store).net_patterns(&self.project);
         for pattern in stored {
             if let Ok(parsed) = lca_permissions::parse_net_pattern(&pattern)
                 && !patterns.contains(&parsed)
@@ -494,18 +498,18 @@ impl Capabilities {
     /// Every URL this extension asked the host to open, in order: how
     /// a test (or an audit) sees the authorization URL a login built.
     pub fn oauth_opened(&self) -> Vec<String> {
-        self.oauth_opened.lock().expect("oauth lock").clone()
+        lock(&self.oauth_opened).clone()
     }
 
     /// Redirect URLs `oauth_begin` bound, oldest first.
     pub fn oauth_begun(&self) -> Vec<String> {
-        self.oauth_begun.lock().expect("oauth lock").clone()
+        lock(&self.oauth_begun).clone()
     }
 
     /// Replace the browser launcher `oauth_open` uses (tests record the
     /// URL instead of opening one); `None` restores the platform default.
     pub fn set_browser_opener(&self, opener: Option<BrowserOpener>) {
-        *self.browser_opener.lock().expect("opener lock") = opener;
+        *lock(&self.browser_opener) = opener;
     }
 
     /// Signal that this extension's in-flight work is cancelled. Blocking
@@ -529,11 +533,11 @@ impl Capabilities {
 
     /// How many attempts were refused (FR-EXT-9).
     pub fn denial_count(&self) -> usize {
-        self.denials.lock().expect("denial lock").len()
+        lock(&self.denials).len()
     }
 
     pub(super) fn record(&self, capability: &str, parameter: &str, reason: &str) {
-        self.denials.lock().expect("denial lock").push(Denial {
+        lock(&self.denials).push(Denial {
             capability: capability.to_string(),
             parameter: parameter.to_string(),
             reason: reason.to_string(),
@@ -694,8 +698,8 @@ impl Capabilities {
             cwd: dir.clone(),
         };
         let decision = {
-            let mut store = self.store.lock().expect("grant store lock");
-            let mut prompt = self.prompt.lock().expect("prompt lock");
+            let mut store = lock(&self.store);
+            let mut prompt = lock(&self.prompt);
             authorize(
                 &mut store,
                 &self.project,
@@ -726,7 +730,7 @@ impl Capabilities {
             self.record("process", &display, &err.to_string());
             err
         })?;
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         let id = table.next;
         table.next += 1;
         table.entries.insert(
@@ -747,7 +751,7 @@ impl Capabilities {
         handle: u32,
         max: usize,
     ) -> Result<Option<Vec<u8>>, CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         let entry = table
             .entries
             .get_mut(&handle)
@@ -768,7 +772,7 @@ impl Capabilities {
         handle: u32,
         max: usize,
     ) -> Result<Option<Vec<u8>>, CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         let entry = table
             .entries
             .get_mut(&handle)
@@ -785,7 +789,7 @@ impl Capabilities {
 
     /// Write to the child's stdin.
     pub fn process_write_stdin(&self, handle: u32, bytes: &[u8]) -> Result<u64, CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         let entry = table
             .entries
             .get_mut(&handle)
@@ -801,7 +805,7 @@ impl Capabilities {
 
     /// Wait for the child; returns its exit code.
     pub fn process_wait(&self, handle: u32) -> Result<i32, CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         let entry = table
             .entries
             .get_mut(&handle)
@@ -816,7 +820,7 @@ impl Capabilities {
 
     /// Kill the child's whole tree and release the handle.
     pub fn process_kill(&self, handle: u32) -> Result<(), CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         match table.entries.remove(&handle) {
             Some(HandleEntry::Process { mut child, .. }) => {
                 child.kill_tree();
@@ -865,8 +869,8 @@ impl Capabilities {
             cwd: dir.clone(),
         };
         let decision = {
-            let mut store = self.store.lock().expect("grant store lock");
-            let mut prompt = self.prompt.lock().expect("prompt lock");
+            let mut store = lock(&self.store);
+            let mut prompt = lock(&self.prompt);
             authorize(
                 &mut store,
                 &self.project,
@@ -894,7 +898,7 @@ impl Capabilities {
                 self.record("pty", &display, &err.to_string());
                 err
             })?;
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         let id = table.next;
         table.next += 1;
         table.entries.insert(id, HandleEntry::Pty(child));
@@ -903,7 +907,7 @@ impl Capabilities {
 
     /// Read up to `max` terminal bytes; `None` when the session ended.
     pub fn pty_read(&self, handle: u32, max: usize) -> Result<Option<Vec<u8>>, CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         let entry = table
             .entries
             .get_mut(&handle)
@@ -918,7 +922,7 @@ impl Capabilities {
 
     /// Forward keystrokes to the program.
     pub fn pty_write(&self, handle: u32, bytes: &[u8]) -> Result<u64, CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         let entry = table
             .entries
             .get_mut(&handle)
@@ -933,7 +937,7 @@ impl Capabilities {
 
     /// Resize the terminal.
     pub fn pty_resize(&self, handle: u32, rows: u16, cols: u16) -> Result<(), CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         let entry = table
             .entries
             .get_mut(&handle)
@@ -948,7 +952,7 @@ impl Capabilities {
 
     /// Wait for the program; returns its exit code.
     pub fn pty_wait(&self, handle: u32) -> Result<i32, CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         let entry = table
             .entries
             .get_mut(&handle)
@@ -963,7 +967,7 @@ impl Capabilities {
 
     /// End the session and release the handle.
     pub fn pty_kill(&self, handle: u32) -> Result<(), CapabilityError> {
-        let mut table = self.handles.lock().expect("handle lock");
+        let mut table = lock(&self.handles);
         match table.entries.remove(&handle) {
             Some(HandleEntry::Pty(mut pty)) => {
                 pty.kill();

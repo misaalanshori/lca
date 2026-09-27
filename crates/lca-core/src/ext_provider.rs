@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use super::lock;
 use lca_ext_abi::ExtensionDispatch;
 use lca_protocol::{CompletionRequest, EventSink, ModelInfo, StreamEvent};
 use lca_provider::{BoxFuture, EventSender, Provider, ProviderError};
@@ -294,7 +295,7 @@ impl lca_tools::CompletionBackend for ProviderBackend {
         if let Some(message) = failure {
             return Err(message);
         }
-        let mut slot = self.usage.lock().expect("backend usage");
+        let mut slot = lock(&self.usage);
         let total = slot.get_or_insert_with(lca_protocol::Usage::default);
         total.input += usage.input;
         total.output += usage.output;
@@ -309,6 +310,6 @@ impl lca_tools::CompletionBackend for ProviderBackend {
     }
 
     fn take_usage(&self) -> Option<lca_protocol::Usage> {
-        self.usage.lock().expect("backend usage").take()
+        lock(&self.usage).take()
     }
 }

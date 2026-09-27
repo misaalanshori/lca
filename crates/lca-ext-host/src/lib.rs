@@ -60,6 +60,14 @@ use tool_hooks::{
 use transform::{compact_work, transform_work};
 use ui::{event_work, render_work};
 
+/// Lock a mutex, panicking on poisoning with one shared message.
+///
+/// The panic semantics are unchanged from the per-site `expect` this
+/// replaces: a poisoned lock is a bug, and the release profile aborts.
+pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().expect("mutex poisoned")
+}
+
 /// The ABI lines this host loads: the current minor and the one before it
 /// (NFR-19).
 pub const SUPPORTED_ABI_WINDOW: &str = "0.1..=0.2, plus the 1.0 freeze line";
@@ -512,7 +520,7 @@ impl WasmExtension {
     /// Everything this extension logged through the always-granted import,
     /// already truncated at the configured limit (FR-EXT-10).
     pub fn captured_logs(&self) -> Vec<String> {
-        self.inner.logs.lock().expect("log lock").clone()
+        lock(&self.inner.logs).clone()
     }
 
     /// Every capability attempt this extension was refused (FR-EXT-9's

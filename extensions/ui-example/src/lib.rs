@@ -27,6 +27,14 @@
 /// [`manifest_grants`]; a test keeps them in step).
 pub const MANIFEST: &str = include_str!("../extension.toml");
 
+/// Lock a mutex, panicking on poisoning with one shared message.
+///
+/// The panic semantics are unchanged from the per-site `expect` this
+/// replaces: a poisoned lock is a bug, and the release profile aborts.
+pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().expect("mutex poisoned")
+}
+
 /// The grants the manifest declares: the four regions plus the demo's
 /// process and terminal (capability catalog's sentences are what the
 /// consent screen shows; this is the parsed grant set).
@@ -177,10 +185,7 @@ mod native {
 
         /// The live panel session, when one has started.
         pub fn panel_session(&self) -> Option<u32> {
-            self.session
-                .lock()
-                .expect("session")
-                .map(|session| session.handle)
+            lock(&self.session).map(|session| session.handle)
         }
     }
 
@@ -237,7 +242,7 @@ mod native {
             // the user opening the panel IS the invocation (FR-UI-6's
             // shape - nothing starts on its own).
             if region == "panel" {
-                let mut session = self.session.lock().expect("session");
+                let mut session = lock(&self.session);
                 if session.is_none() {
                     let args: Vec<String> = Vec::new();
                     let spawned = self
@@ -248,7 +253,7 @@ mod native {
                     }
                 }
             }
-            let session = self.session.lock().expect("session");
+            let session = lock(&self.session);
             // The live read: whatever the program has produced since
             // the last frame, as data (the host draws it; nothing here
             // touches a terminal).
@@ -279,10 +284,8 @@ mod native {
                 }
             }
             drop(session);
-            Ok(
-                render_region(region, self.session.lock().expect("session").as_ref())
-                    .map(|nodes| WidgetTree { nodes }),
-            )
+            Ok(render_region(region, lock(&self.session).as_ref())
+                .map(|nodes| WidgetTree { nodes }))
         }
 
         fn on_ui_event(&self, region: &str, input: &UiInput) -> Result<UiEffect, DispatchError> {
@@ -290,7 +293,7 @@ mod native {
             // live session: typing into the panel types into the program.
             if region == "panel"
                 && let UiInput::Key { key } = input
-                && let Some(session) = *self.session.lock().expect("session")
+                && let Some(session) = *lock(&self.session)
             {
                 let _ = self.cap.pty_write(session.handle, key.as_bytes());
                 return Ok(UiEffect::None);

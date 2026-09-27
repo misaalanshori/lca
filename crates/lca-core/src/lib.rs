@@ -31,6 +31,14 @@ use lca_provider::{CompletionRequest, ProtocolError, Provider, ToolCallAccumulat
 use lca_session::{Session, SessionStore, ViewMode};
 use lca_tools::{CancelFlag, ToolExecutor};
 
+/// Lock a mutex, panicking on poisoning with one shared message.
+///
+/// The panic semantics are unchanged from the per-site `expect` this
+/// replaces: a poisoned lock is a bug, and the release profile aborts.
+pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().expect("mutex poisoned")
+}
+
 /// Static configuration for the loop, built from merged configuration.
 #[derive(Clone)]
 pub struct AgentConfig {
@@ -793,12 +801,7 @@ impl<'a> Agent<'a> {
                         }
                     })
                     .collect();
-                let previous = self
-                    .config
-                    .sent_stable
-                    .lock()
-                    .expect("sent-stable lock")
-                    .clone();
+                let previous = lock(&self.config.sent_stable).clone();
                 if let Some(previous) = previous {
                     // A previously-sent message whose content changed is a
                     // real divergence: narrow to end before it and record it
@@ -838,7 +841,7 @@ impl<'a> Agent<'a> {
                 }
                 // Store the FULL list actually sent (the divergence
                 // basis is content, not the previous claim).
-                *self.config.sent_stable.lock().expect("sent-stable lock") =
+                *lock(&self.config.sent_stable) =
                     Some(messages.iter().map(stable_fingerprint).collect());
                 let _ = current;
             }

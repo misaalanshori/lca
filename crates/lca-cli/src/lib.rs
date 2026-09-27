@@ -15,6 +15,14 @@ use lca_permissions::{GrantStore, PermissionPrompt, ProposalDiff};
 use lca_session::{ExportOptions, SessionStore};
 use lca_tools::{CancelFlag, NativeOps, ToolExecutor};
 
+/// Lock a mutex, panicking on poisoning with one shared message.
+///
+/// The panic semantics are unchanged from the per-site `expect` this
+/// replaces: a poisoned lock is a bug, and the release profile aborts.
+pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().expect("mutex poisoned")
+}
+
 /// [`version_text`], leaked to the `'static` lifetime clap's derive wants.
 pub fn version_static() -> &'static str {
     Box::leak(version_text().into_boxed_str())
@@ -714,7 +722,7 @@ pub async fn headless(
             return exit::INTERNAL;
         }
     };
-    let config = match load_config(cwd, &grants.lock().expect("grant store"), true) {
+    let config = match load_config(cwd, &lock(&grants), true) {
         Ok(config) => config,
         Err(err) => {
             eprintln!("error: {err}");
@@ -856,7 +864,7 @@ pub async fn headless(
         skills_roots: skills_roots(cwd),
         ..AgentConfig::default()
     };
-    let proposals = if grants.lock().expect("grant store").is_trusted(cwd) {
+    let proposals = if lock(&grants).is_trusted(cwd) {
         Some(config.permissions_proposals().clone())
     } else {
         None

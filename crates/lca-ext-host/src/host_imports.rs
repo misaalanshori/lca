@@ -123,7 +123,7 @@ impl lca_ext_abi::host::tool::lca::ext::types::Host for HostState {}
 impl HostState {
     fn record_log(&mut self, message: String) {
         let truncated = truncate_bytes(&message, self.log_limit);
-        self.logs.lock().expect("log lock").push(truncated);
+        lock(&self.logs).push(truncated);
     }
 }
 
