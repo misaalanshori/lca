@@ -1,0 +1,24 @@
+[package]
+name = "lca-ui"
+description = "The agent interface on the terminal engine (pi's interactive mode, ported)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+lca-tui = { path = "../lca-tui" }
+lca-protocol = { path = "../lca-protocol" }
+lca-session = { path = "../lca-session" }
+lca-core = { path = "../lca-core" }
+lca-config = { path = "../lca-config" }
+lca-permissions = { path = "../lca-permissions" }
+lca-tools = { path = "../lca-tools" }
+anyhow.workspace = true
+
+[dev-dependencies]
+lca-testkit = { path = "../lca-testkit" }
+
+[lints]
+workspace = true

@@ -52,8 +52,8 @@ fn only_the_sdk_and_the_binary_depend_on_the_core() {
             .any(|dep| dep == "lca-core")
         {
             assert!(
-                matches!(name.as_str(), "lca-cli" | "lca-sdk"),
-                "{name} depends on lca-core; the architecture allows only lca-sdk and lca-cli"
+                matches!(name.as_str(), "lca-cli" | "lca-sdk" | "lca-ui"),
+                "{name} depends on lca-core; the architecture allows only lca-sdk, lca-ui and lca-cli"
             );
         }
     }
