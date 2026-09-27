@@ -396,6 +396,10 @@ pub struct UiState {
     pub modal_open: bool,
     /// Terminal size, tracked across resizes (FR-UI-3).
     pub size: (u16, u16),
+    /// The kill ring (readline Ctrl+U/W/K then Ctrl+Y).
+    pub kill_ring: Vec<String>,
+    /// Undo stack: `(buffer, cursor)` before each edit.
+    pub undo: Vec<(String, Option<usize>)>,
 }
 
 impl UiState {
@@ -433,6 +437,72 @@ impl UiState {
             panel_open: false,
             modal_open: false,
             size: (80, 24),
+            kill_ring: Vec::new(),
+            undo: Vec::new(),
+        }
+    }
+
+    /// Snapshot the buffer before an edit (readline undo, Ctrl+-).
+    fn snapshot(&mut self) {
+        self.undo.push((self.buffer.clone(), self.cursor));
+        if self.undo.len() > 200 {
+            self.undo.remove(0);
+        }
+    }
+
+    /// Undo the last edit (Ctrl+-).
+    fn undo(&mut self) {
+        if let Some((buffer, cursor)) = self.undo.pop() {
+            self.buffer = buffer;
+            self.cursor = cursor;
+        }
+    }
+
+    /// Delete the word before the cursor into the kill ring (Ctrl+W).
+    fn delete_word_backward(&mut self) {
+        self.snapshot();
+        let at = self.cursor_index();
+        let before = &self.buffer[..at];
+        // Skip trailing whitespace, then the word itself.
+        let word_end = before.trim_end().len();
+        let start = before[..word_end]
+            .rfind(char::is_whitespace)
+            .map_or(0, |index| index + 1);
+        let killed = self.buffer[start..at].to_string();
+        self.buffer.replace_range(start..at, "");
+        self.set_cursor(start);
+        self.kill_ring.push(killed);
+    }
+
+    /// Delete from the line start to the cursor (Ctrl+U).
+    fn delete_to_line_start(&mut self) {
+        self.snapshot();
+        let at = self.cursor_index();
+        let start = self.buffer[..at].rfind('\n').map_or(0, |index| index + 1);
+        let killed = self.buffer[start..at].to_string();
+        self.buffer.replace_range(start..at, "");
+        self.set_cursor(start);
+        self.kill_ring.push(killed);
+    }
+
+    /// Delete from the cursor to the line end (Ctrl+K).
+    fn delete_to_line_end(&mut self) {
+        self.snapshot();
+        let at = self.cursor_index();
+        let end = self.buffer[at..]
+            .find('\n')
+            .map_or(self.buffer.len(), |index| at + index);
+        let killed = self.buffer[at..end].to_string();
+        self.buffer.replace_range(at..end, "");
+        self.set_cursor(at);
+        self.kill_ring.push(killed);
+    }
+
+    /// Yank the most recent kill (Ctrl+Y).
+    fn yank(&mut self) {
+        if let Some(killed) = self.kill_ring.last().cloned() {
+            self.snapshot();
+            self.insert_at_cursor(&killed);
         }
     }
 
@@ -460,12 +530,14 @@ impl UiState {
 
     /// Insert `text` at the cursor and leave the cursor after it.
     pub fn insert_at_cursor(&mut self, text: &str) {
+        self.snapshot();
         let at = self.cursor_index();
         self.buffer.insert_str(at, text);
         self.set_cursor(at + text.len());
     }
 
     fn backspace(&mut self) {
+        self.snapshot();
         let at = self.cursor_index();
         if at == 0 {
             return;
@@ -476,6 +548,7 @@ impl UiState {
     }
 
     fn delete_at_cursor(&mut self) {
+        self.snapshot();
         let at = self.cursor_index();
         if at >= self.buffer.len() {
             return;
@@ -1052,6 +1125,46 @@ pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Actio
             state.move_end();
             Action::Continue
         }
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.move_home();
+            Action::Continue
+        }
+        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.move_end();
+            Action::Continue
+        }
+        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.move_left();
+            Action::Continue
+        }
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.move_right();
+            Action::Continue
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.delete_at_cursor();
+            Action::Continue
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.delete_to_line_start();
+            Action::Continue
+        }
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.delete_to_line_end();
+            Action::Continue
+        }
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.delete_word_backward();
+            Action::Continue
+        }
+        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.yank();
+            Action::Continue
+        }
+        KeyCode::Char('-') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.undo();
+            Action::Continue
+        }
         KeyCode::Char(c) => {
             state.insert_at_cursor(&c.to_string());
             state.ctrl_c_armed = false;
@@ -1276,3 +1389,92 @@ pub type TurnRunner = Box<
         + Send
         + Sync,
 >;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::sync::{Arc, Mutex};
+
+    fn state() -> UiState {
+        UiState::new(UiOptions {
+            model_label: Arc::new(Mutex::new("p/m".into())),
+            initial_lines: Vec::new(),
+            plain: true,
+            invoke_command: Arc::new(|_, _| CommandEffect::None),
+            slash_commands: Vec::new(),
+            models: Vec::new(),
+            workspace: std::path::PathBuf::from("."),
+            render_regions: None,
+            ui_events: None,
+            update_notice: None,
+            login: None,
+            complete_login: None,
+            pick_login: None,
+            confirm_login_grant: None,
+        })
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    fn type_str(s: &mut UiState, text: &str) {
+        for c in text.chars() {
+            handle_key(s, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    }
+
+    #[test]
+    fn ctrl_u_deletes_to_line_start() {
+        let mut s = state();
+        type_str(&mut s, "hello world");
+        handle_key(&mut s, ctrl('u'));
+        assert_eq!(s.buffer, "");
+    }
+
+    #[test]
+    fn ctrl_w_deletes_a_word_and_ctrl_y_yanks_it_back() {
+        let mut s = state();
+        type_str(&mut s, "hello world");
+        handle_key(&mut s, ctrl('w'));
+        assert_eq!(s.buffer, "hello ");
+        handle_key(&mut s, ctrl('y'));
+        assert_eq!(s.buffer, "hello world");
+    }
+
+    #[test]
+    fn ctrl_k_deletes_to_line_end() {
+        let mut s = state();
+        type_str(&mut s, "hello world");
+        handle_key(&mut s, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        handle_key(&mut s, ctrl('k'));
+        assert_eq!(s.buffer, "");
+    }
+
+    #[test]
+    fn ctrl_minus_undoes_the_last_edit() {
+        let mut s = state();
+        s.insert_at_cursor("hello");
+        handle_key(&mut s, ctrl('-'));
+        assert_eq!(s.buffer, "");
+    }
+
+    #[test]
+    fn ctrl_a_and_e_move_to_the_line_ends() {
+        let mut s = state();
+        type_str(&mut s, "abc");
+        handle_key(&mut s, ctrl('a'));
+        handle_key(
+            &mut s,
+            KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
+        );
+        assert_eq!(s.buffer, "Xabc");
+        handle_key(&mut s, ctrl('e'));
+        handle_key(
+            &mut s,
+            KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::NONE),
+        );
+        assert_eq!(s.buffer, "XabcY");
+    }
+}
