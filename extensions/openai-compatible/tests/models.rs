@@ -97,3 +97,21 @@ fn list_models_reads_the_passed_settings_not_a_store_of_its_own() {
     );
     let _ = std::fs::remove_dir_all(lca_testkit::scratch_path("lca-models-settings"));
 }
+
+/// Issue #3: shipped model data must be product data, never the development
+/// harness's model whitelist. This is the snapshot that would have caught the
+/// dev-ids leak into the `/model` picker.
+#[test]
+fn shipped_presets_contain_no_development_policy_ids() {
+    let presets = include_str!("../resources/provider-presets.toml");
+    for forbidden in [
+        "deepseek-v4-flash",
+        "deepseek-v4.1-flash",
+        "mimo-v2.6-flash",
+    ] {
+        assert!(
+            !presets.contains(forbidden),
+            "development model id `{forbidden}` shipped in provider-presets.toml"
+        );
+    }
+}

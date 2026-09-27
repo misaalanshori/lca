@@ -243,7 +243,10 @@ impl Sandbox {
         if let Some(mock) = mock {
             command
                 .env("OPENAI_BASE_URL", mock.url())
-                .env("OPENAI_API_KEY", "test-key");
+                .env("OPENAI_API_KEY", "test-key")
+                // Issue #3: there is no implicit default model, so the
+                // harness picks one explicitly (a test may still remove it).
+                .env("OPENAI_MODEL", "test-model");
         }
         for (key, value) in extra {
             command.env(key, value);
@@ -756,7 +759,10 @@ impl Sandbox {
         if let Some(mock) = mock {
             command
                 .env("OPENAI_BASE_URL", mock.url())
-                .env("OPENAI_API_KEY", "test-key");
+                .env("OPENAI_API_KEY", "test-key")
+                // Issue #3: there is no implicit default model, so the
+                // harness picks one explicitly (a test may still remove it).
+                .env("OPENAI_MODEL", "test-model");
         }
         let mut child = command.spawn().expect("spawn lca");
         {
@@ -1027,6 +1033,13 @@ impl Tmux {
         let endpoint = mock
             .map(|mock| format!(" OPENAI_BASE_URL={}", mock.url()))
             .unwrap_or_default();
+        // Issue #3: no implicit default model, so a mock-backed session picks
+        // one explicitly. `extra_env` (appended last) can still override it.
+        let model = if mock.is_some() {
+            " OPENAI_MODEL=test-model"
+        } else {
+            ""
+        };
         let extra: String = extra_env
             .iter()
             .map(|(key, value)| format!(" {key}={value}"))
@@ -1035,7 +1048,7 @@ impl Tmux {
         let command = format!(
             "cd {project} && HOME={home} USERPROFILE={home} XDG_DATA_HOME={data} \
              APPDATA={data} LOCALAPPDATA={data} XDG_CONFIG_HOME={config} \
-             LCA_UPDATE_CHECK=false{endpoint}{key}{extra} {bin}{arguments}",
+             LCA_UPDATE_CHECK=false{endpoint}{key}{model}{extra} {bin}{arguments}",
             project = sandbox.project().display(),
             home = sandbox.home.display(),
             data = sandbox.data.display(),
@@ -1179,7 +1192,7 @@ fn the_tui_renders_a_turn_in_a_real_terminal() {
 
     // 1. Startup renders the frame with the configured model.
     session.wait_for(
-        "openai-compatible/gpt-4o-mini",
+        "openai-compatible/test-model",
         std::time::Duration::from_secs(20),
     );
 
@@ -1363,7 +1376,7 @@ fn attach_in_the_tui_stages_an_image_for_the_next_message() {
     let session = Tmux::new("attach");
     session.spawn(&sandbox, Some(&mock), true, &[], &[]);
     session.wait_for(
-        "openai-compatible/gpt-4o-mini",
+        "openai-compatible/test-model",
         std::time::Duration::from_secs(20),
     );
 

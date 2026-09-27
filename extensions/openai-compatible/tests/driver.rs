@@ -78,8 +78,12 @@ fn the_driver_yields_an_event_before_the_body_ends() {
         Some(b"data: [DONE]\n\n".to_vec()),
         None,
     ]);
-    let mut driver = StreamDriver::open(&cap, &Settings::default(), &CompletionRequest::default())
-        .expect("open");
+    let settings = Settings {
+        model: "test-model".into(),
+        ..Settings::default()
+    };
+    let mut driver =
+        StreamDriver::open(&cap, &settings, &CompletionRequest::default()).expect("open");
 
     let first = driver.next_event().expect("an event").expect("ok");
     assert_eq!(
@@ -111,8 +115,12 @@ fn the_driver_yields_an_event_before_the_body_ends() {
 fn a_mid_stream_read_error_becomes_a_typed_failure() {
     let mut cap = cap(vec![Some(text_event("Hello"))]);
     cap.fail_after = Some(1);
-    let mut driver = StreamDriver::open(&cap, &Settings::default(), &CompletionRequest::default())
-        .expect("open");
+    let settings = Settings {
+        model: "test-model".into(),
+        ..Settings::default()
+    };
+    let mut driver =
+        StreamDriver::open(&cap, &settings, &CompletionRequest::default()).expect("open");
     let _ = driver.next_event().expect("first event").expect("ok");
     let failure = driver
         .next_event()

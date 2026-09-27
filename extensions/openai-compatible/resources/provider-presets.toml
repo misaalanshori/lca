@@ -129,7 +129,10 @@ name = "OpenCode Go"
 base_url = "https://opencode.ai/zen/go/v1"
 env = ["OPENCODE_API_KEY", "OPENAI_API_KEY"]
 auth = "bearer"
-models = ["deepseek-v4-flash", "deepseek-v4.1-flash", "mimo-v2.6-flash"]
+# No curated list: the endpoint's `GET /models` is the source of truth
+# (issue #3). An empty list means "discover", and the picker shows why when
+# discovery cannot be reached rather than shipping dev-harness ids.
+models = []
 
 [[preset]]
 id = "perplexity"

@@ -322,6 +322,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             .map(|model| model.context_window)
             .unwrap_or(0),
         completion_backend,
+        system_prompt: lca_core::identity_prompt(&model_id, std::env::consts::OS),
         skills_roots: crate::skills_roots(cwd),
         ..AgentConfig::default()
     };

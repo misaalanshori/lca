@@ -161,19 +161,25 @@ fn sandbox(name: &str, mock: &Mock) -> Arc<lca_tools::Capabilities> {
     cap
 }
 
-// Verifies: the client pair is configuration the user supplies (the
-// names pi uses for its own override), never source - a login with
-// nothing configured says exactly that before any flow starts.
+// Verifies: issue #1 - a login with no stored/env client pair uses the
+// embedded default Antigravity client and drives the flow (owner override
+// of the earlier "configuration only" policy).
 #[test]
-fn login_without_a_client_pair_says_what_to_set() {
+fn login_without_a_stored_client_pair_uses_the_embedded_default() {
     let mock = mock_server();
     let cap = sandbox("no-client", &mock);
     lca_protocol::ProviderCap::credentials_delete(cap.as_ref(), "client_id").expect("clear");
     lca_protocol::ProviderCap::credentials_delete(cap.as_ref(), "client_secret").expect("clear");
-    let err = antigravity::run_login(cap.as_ref(), cap.as_ref()).expect_err("no client, no flow");
-    assert!(err.0.contains("ANTIGRAVITY_CLIENT_ID"), "{}", err.0);
-    assert!(cap.oauth_opened().is_empty(), "no flow was started");
-    assert!(cap.denials().is_empty());
+    let outcome = drive_login(&cap).expect("the embedded default drives the flow");
+    assert_eq!(outcome, IdentityOutcome::Ok);
+    let opened = cap.oauth_opened();
+    assert!(!opened.is_empty(), "a flow was started");
+    assert!(
+        opened
+            .iter()
+            .any(|u| u.contains("apps.googleusercontent.com")),
+        "the embedded client id is in the auth URL: {opened:?}"
+    );
 }
 
 /// Run the full login on a thread, watch the engine for the

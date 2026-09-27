@@ -874,6 +874,7 @@ pub async fn headless(
             .map(|model| model.context_window)
             .unwrap_or(0),
         completion_backend,
+        system_prompt: lca_core::identity_prompt(&model_id, std::env::consts::OS),
         skills_roots: skills_roots(cwd),
         ..AgentConfig::default()
     };

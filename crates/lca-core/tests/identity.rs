@@ -387,3 +387,27 @@ fn the_adapter_streams_the_script_into_the_core_channel() {
         ));
     });
 }
+
+// ---------------------------------------------------------------------------
+// Owner issue #8: the agent knows what model it is running as.
+// ---------------------------------------------------------------------------
+
+/// Verifies: issue #8 — `identity_prompt` names the product, the role, the
+/// real model id, and the platform, so "what model are you" has an answer.
+#[test]
+fn identity_prompt_names_the_real_model() {
+    let prompt = lca_core::identity_prompt("deepseek-v4-flash", "windows");
+    assert!(prompt.contains("LCA"));
+    assert!(prompt.contains("coding agent"));
+    assert!(prompt.contains("deepseek-v4-flash"));
+    assert!(prompt.contains("windows"));
+}
+
+/// Verifies: issue #8 — no model selected still yields a legible identity
+/// and never claims a specific model.
+#[test]
+fn identity_prompt_handles_no_model_selected() {
+    let prompt = lca_core::identity_prompt("", "linux");
+    assert!(prompt.contains("unselected"));
+    assert!(!prompt.contains("gpt-"));
+}

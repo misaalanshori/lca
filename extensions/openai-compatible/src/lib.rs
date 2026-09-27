@@ -86,7 +86,7 @@ impl Default for Settings {
                 .filter(|key| !key.is_empty()),
             model: std::env::var("OPENAI_MODEL")
                 .or_else(|_| std::env::var("LCA_MODEL"))
-                .unwrap_or_else(|_| "gpt-4o-mini".to_string()),
+                .unwrap_or_default(),
             context_window: std::env::var("OPENAI_CONTEXT_WINDOW")
                 .ok()
                 .and_then(|value| value.parse().ok())
@@ -472,8 +472,22 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
     ) -> Result<StreamDriver<'a, C>, StreamFailure> {
         let base = effective_base_url(cap, settings);
         let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+        let model = if request.model.is_empty() {
+            settings.model.clone()
+        } else {
+            request.model.clone()
+        };
+        // Issue #3: no implicit default model. A call with nothing selected is
+        // a legible error pointing at /model, never a silent "gpt-4o-mini".
+        if model.is_empty() {
+            return Err(StreamFailure {
+                message: "this endpoint has no model selected; run /model to pick one".to_string(),
+                class: "invalid",
+                retryable: false,
+            });
+        }
         let mut body = serde_json::json!({
-            "model": if request.model.is_empty() { settings.model.clone() } else { request.model.clone() },
+            "model": model,
             "messages": to_wire(&request.messages),
             "stream": true,
             "stream_options": { "include_usage": true },
@@ -528,8 +542,25 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
                 .and_then(|m| m.as_str())
                 .unwrap_or("unknown error")
                 .to_string();
+            // Issue #3: a model the endpoint does not offer reads as a legible
+            // "pick another with /model", not a bare HTTP 400.
+            let lower = message.to_lowercase();
+            let model_problem = (status == 400 || status == 404)
+                && lower.contains("model")
+                && (lower.contains("unavailable")
+                    || lower.contains("not found")
+                    || lower.contains("does not exist")
+                    || lower.contains("invalid")
+                    || lower.contains("no such"));
+            let message = if model_problem {
+                format!(
+                    "this model isn't available on this endpoint; run /model to pick another ({message})"
+                )
+            } else {
+                format!("provider returned HTTP {status}: {message}")
+            };
             return Err(StreamFailure {
-                message: format!("provider returned HTTP {status}: {message}"),
+                message,
                 class: class_for_status(status),
                 retryable: classify_status(status),
             });

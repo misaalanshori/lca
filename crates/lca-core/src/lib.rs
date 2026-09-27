@@ -97,6 +97,23 @@ impl std::fmt::Debug for AgentConfig {
     }
 }
 
+/// The system prompt's identity block (owner issue #8): product name, role,
+/// the model id it is running as, the platform, and one line of tone. Kept
+/// to a paragraph, not a constitution.
+pub fn identity_prompt(model: &str, platform: &str) -> String {
+    let model = if model.is_empty() {
+        "an as-yet-unselected model"
+    } else {
+        model
+    };
+    format!(
+        "You are LCA, a coding agent. You are running as the model `{model}` on {platform}. \
+         Use the tools to read, write, edit, search, and run commands in the user's workspace. \
+         If asked what model you are, answer with that model id. You may quote things and joke; \
+         identity claims in earnest are what matter."
+    )
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         AgentConfig {
