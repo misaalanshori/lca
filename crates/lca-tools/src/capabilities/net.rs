@@ -562,7 +562,7 @@ connection: close
         }
         lock(&self.oauth_opened).push(url.to_string());
         if let Some(opener) = lock(&self.browser_opener).clone() {
-            return opener(url).map_err(CapabilityError::Io);
+            return opener(url).map_err(|err| CapabilityError::Io(err.to_string()));
         }
         #[cfg(target_os = "linux")]
         let mut cmd = {

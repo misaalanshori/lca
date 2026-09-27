@@ -136,6 +136,27 @@ struct OAuthFlow {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// Why a host-mediated `completion` call produced no text (the extension
+/// asks, the host routes to the active provider; ADR-0008).
+#[derive(Debug, thiserror::Error)]
+pub enum CompletionError {
+    /// The active provider failed (transport, auth, protocol).
+    #[error("{0}")]
+    Provider(String),
+    /// No provider is currently active.
+    #[error("no active provider is available")]
+    NoProvider,
+}
+
+/// Why opening a URL in the user's browser failed (the OAuth flow's
+/// `oauth.open`). Opaque at this boundary - the platform launcher's error.
+#[derive(Debug, thiserror::Error)]
+pub enum BrowserError {
+    /// The platform launcher refused or failed.
+    #[error("{0}")]
+    Launch(String),
+}
+
 /// The host-mediated model call (capability catalog `completion`): a
 /// granted extension asks; the host routes to whichever provider is
 /// currently active, which keeps the extension graph a star with the
@@ -148,7 +169,7 @@ pub trait CompletionBackend: Send + Sync {
     fn complete(
         &self,
         messages: &[lca_protocol::ChatMessage],
-    ) -> Result<(String, lca_protocol::Usage), String>;
+    ) -> Result<(String, lca_protocol::Usage), CompletionError>;
 
     /// Usage summed from `complete` calls since the caller last drained
     /// it; the caller writes it onto the session record it is about to
@@ -220,7 +241,7 @@ struct HandleTable {
 
 /// A browser launcher override for [`Capabilities::set_browser_opener`].
 /// The default is the platform launcher (`xdg-open`/`open`/`cmd start`).
-pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), BrowserError> + Send + Sync>;
 
 /// Where an extension's read-only `resources/` bag lives (ADR-0030,
 /// ADR-0032). The engine seam is identical for both delivery modes: an

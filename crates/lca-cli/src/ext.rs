@@ -403,13 +403,24 @@ fn install(resolved: Resolved, tree: InstallTree, yes: bool) -> i32 {
 /// here loads later, and - critically - a manifest whose `name` is not a
 /// legal identifier is refused before `InstallTree::install` ever joins it
 /// onto the filesystem.
-fn parse_manifest_strict(manifest: &str) -> Result<(String, String, String, String), String> {
-    let parsed = lca_ext_host::Manifest::parse(manifest).map_err(|err| err.to_string())?;
+/// Why a manifest failed the install-time validation pass (the loader's
+/// parser is the authority; this wraps it and the host window check).
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ManifestError {
+    /// The loader's own parse/validation failure.
+    #[error("{0}")]
+    Load(#[from] lca_ext_host::LoadError),
+    /// The declared ABI line is outside this host's window (FR-EXT-8).
+    #[error("manifest targets ABI {0}, outside this host's supported window")]
+    Abi(String),
+}
+
+fn parse_manifest_strict(
+    manifest: &str,
+) -> Result<(String, String, String, String), ManifestError> {
+    let parsed = lca_ext_host::Manifest::parse(manifest)?;
     if !parsed.abi_in_window() {
-        return Err(format!(
-            "manifest targets ABI {}, outside this host's supported window",
-            parsed.abi
-        ));
+        return Err(ManifestError::Abi(parsed.abi.clone()));
     }
     // `description` is display-only and not part of the loader's contract.
     let description = manifest
@@ -660,7 +671,7 @@ workspace = "read"
         let err = parse_manifest_strict(&VALID.replace("word-count", "../../escape"))
             .expect_err("traversal refused");
         assert!(
-            err.contains("name"),
+            err.to_string().contains("name"),
             "the refusal names the identifier: {err}"
         );
     }
@@ -694,7 +705,8 @@ redirect_path = "/callback"
         let err = parse_manifest_strict(&VALID.replace("abi = \"0.2\"", "abi = \"9.9\""))
             .expect_err("out-of-window ABI refused");
         assert!(
-            err.contains("outside this host's supported window"),
+            err.to_string()
+                .contains("outside this host's supported window"),
             "{err}"
         );
     }

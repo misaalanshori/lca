@@ -252,14 +252,42 @@ pub fn validate_arguments(call: &ToolCall) -> Result<serde_json::Value, serde_js
     serde_json::from_str(&call.arguments)
 }
 
+/// Why a tool call's arguments failed schema validation (extension
+/// authoring guide; the host validates before it calls `execute`).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SchemaError {
+    /// The argument string is not valid JSON.
+    #[error("not valid JSON: {0}")]
+    Json(String),
+    /// A value's JSON type does not match the schema's `type`.
+    #[error("{path} must be {expected}")]
+    Type {
+        /// The dotted path (or array index) that failed.
+        path: String,
+        /// The schema's expected JSON type.
+        expected: String,
+    },
+    /// A schema-required key is absent.
+    #[error("{path}.{key} is required")]
+    Required {
+        /// The object's dotted path.
+        path: String,
+        /// The missing key.
+        key: String,
+    },
+}
+
 /// Validate a tool call's arguments against its JSON-schema `parameters`
 /// before the host calls `execute` (extension authoring guide). Covers the
 /// subset the project's tools declare - `object`/`array`/`string`/`integer`/
 /// `number`/`boolean` types, `required`, and `items` - and names the offending
 /// field. Unknown type keywords are ignored rather than rejected.
-pub fn validate_against_schema(schema: &serde_json::Value, arguments: &str) -> Result<(), String> {
+pub fn validate_against_schema(
+    schema: &serde_json::Value,
+    arguments: &str,
+) -> Result<(), SchemaError> {
     let value: serde_json::Value =
-        serde_json::from_str(arguments).map_err(|err| format!("not valid JSON: {err}"))?;
+        serde_json::from_str(arguments).map_err(|err| SchemaError::Json(err.to_string()))?;
     validate_value(schema, &value, "$")
 }
 
@@ -267,7 +295,7 @@ fn validate_value(
     schema: &serde_json::Value,
     value: &serde_json::Value,
     path: &str,
-) -> Result<(), String> {
+) -> Result<(), SchemaError> {
     let Some(expected) = schema.get("type").and_then(serde_json::Value::as_str) else {
         return Ok(());
     };
@@ -282,14 +310,20 @@ fn validate_value(
         _ => true,
     };
     if !matches {
-        return Err(format!("{path} must be {expected}"));
+        return Err(SchemaError::Type {
+            path: path.to_string(),
+            expected: expected.to_string(),
+        });
     }
     match (expected, value) {
         ("object", serde_json::Value::Object(map)) => {
             if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
                 for key in required.iter().filter_map(serde_json::Value::as_str) {
                     if !map.contains_key(key) {
-                        return Err(format!("{path}.{key} is required"));
+                        return Err(SchemaError::Required {
+                            path: path.to_string(),
+                            key: key.to_string(),
+                        });
                     }
                 }
             }

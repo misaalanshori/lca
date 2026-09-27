@@ -204,6 +204,21 @@ pub(crate) fn provider_ready(name: &str, data: &Path) -> bool {
     })
 }
 
+/// Why a secret write or an ad hoc grant write failed, typed for the
+/// login flow rather than collapsed to a string at the seam.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SecretError {
+    /// The credential store refused the write.
+    #[error("credentials: {0}")]
+    Credentials(String),
+    /// The grant store's lock is poisoned (a bug elsewhere; fail closed).
+    #[error("the grant store is locked")]
+    GrantStoreLocked,
+    /// The grant store refused the write.
+    #[error("grant store: {0}")]
+    GrantStore(String),
+}
+
 /// Store one secret in a provider's credential namespace (the `/login`
 /// flow): the same atomic, owner-only writer extensions use. The namespace
 /// is the provider identity, never guest input (FR-PERM-6).
@@ -213,7 +228,7 @@ pub(crate) fn store_provider_secret(
     provider: &str,
     key: &str,
     value: &str,
-) -> Result<(), String> {
+) -> Result<(), SecretError> {
     let roots = lca_permissions::ScopeRoots {
         workspace: cwd.to_path_buf(),
         private: data.join("private"),
@@ -237,7 +252,7 @@ pub(crate) fn store_provider_secret(
     );
     capabilities
         .credentials_set(key, value)
-        .map_err(|err| err.to_string())
+        .map_err(|err| SecretError::Credentials(err.to_string()))
 }
 
 /// The endpoint host an openai-compatible login would need an ad hoc `net`
@@ -304,13 +319,11 @@ pub(crate) fn store_ad_hoc_grant(
     store: &std::sync::Arc<std::sync::Mutex<GrantStore>>,
     cwd: &Path,
     host: &str,
-) -> Result<(), String> {
-    let mut store = store
-        .lock()
-        .map_err(|_| "the grant store lock is poisoned".to_string())?;
+) -> Result<(), SecretError> {
+    let mut store = store.lock().map_err(|_| SecretError::GrantStoreLocked)?;
     store
         .approve_net_pattern(cwd, host)
-        .map_err(|err| err.to_string())
+        .map_err(|err| SecretError::GrantStore(err.to_string()))
 }
 
 /// FR-PROV-9's disable knob (FR-PERM-19's storage): every handle the

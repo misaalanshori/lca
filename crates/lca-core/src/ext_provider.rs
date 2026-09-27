@@ -210,7 +210,7 @@ impl lca_tools::CompletionBackend for ProviderBackend {
     fn complete(
         &self,
         messages: &[lca_protocol::ChatMessage],
-    ) -> Result<(String, lca_protocol::Usage), String> {
+    ) -> Result<(String, lca_protocol::Usage), lca_tools::CompletionError> {
         let mut extras = std::collections::BTreeMap::new();
         extras.insert("session-id".to_string(), self.session_id.clone());
         let model = self
@@ -288,12 +288,14 @@ impl lca_tools::CompletionBackend for ProviderBackend {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .map_err(|err| format!("runtime: {err}"))?;
+                    .map_err(|err| {
+                        lca_tools::CompletionError::Provider(format!("runtime: {err}"))
+                    })?;
                 runtime.block_on(run)
             }
         };
         if let Some(message) = failure {
-            return Err(message);
+            return Err(lca_tools::CompletionError::Provider(message));
         }
         let mut slot = lock(&self.usage);
         let total = slot.get_or_insert_with(lca_protocol::Usage::default);

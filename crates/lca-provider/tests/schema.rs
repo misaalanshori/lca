@@ -33,17 +33,20 @@ fn required_and_typed_fields_are_enforced() {
     assert!(
         validate_against_schema(&schema, r#"{"path":1}"#)
             .unwrap_err()
+            .to_string()
             .contains("$.path must be string")
     );
     assert!(
         validate_against_schema(&schema, "{}")
             .unwrap_err()
+            .to_string()
             .contains("$.path is required")
     );
     assert!(validate_against_schema(&schema, r#"{"path":"a","offset":1.5}"#).is_err());
     assert!(
         validate_against_schema(&schema, r#"{"path":"a","edits":[{"oldText":"x"}]}"#)
             .unwrap_err()
+            .to_string()
             .contains("$.edits[0].newText is required")
     );
     assert!(validate_against_schema(&schema, "not json").is_err());
