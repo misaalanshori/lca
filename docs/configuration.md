@@ -28,6 +28,7 @@ Environment variables use the `LCA_` prefix with the key uppercased and dots rep
 | `update.check` | boolean | `true` interactive, `false` headless | Daily background version check (FR-CFG-6). |
 | `ui.color` | `auto` or `never` | `auto` | `never` forces plain text on terminals without color support (FR-UI-5). |
 | `ui.fullscreen` | boolean | `true` | The `/fullscreen` toggle's persisted choice (FR-UI-21). Written to `<config dir>/ui.json` when toggled, not to the config file, so the runtime toggle never rewrites user config. |
+| `thinking` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` | unset | The session's reasoning level, pi's vocabulary. Unset means the provider chooses; `/thinking` sets it live. It rides the request extras as `reasoning-effort`, which a provider honors where meaningful. |
 | `permissions.proposals` | table | empty | Project file only. Proposals with no force; see ADR-0006. |
 
 ## Environment
@@ -43,6 +44,7 @@ persisted. The bundled `openai-compatible` provider reads:
 | `OPENAI_MODEL` | The model id. `LCA_MODEL` is accepted as a synonym. |
 | `OPENAI_CONTEXT_WINDOW` | The context window, in tokens, when the endpoint does not report one. |
 | `OPENAI_PROMPT_CACHE_KEY` | Set to `0` to stop sending `prompt_cache_key`. **Default: on.** The key is the clamped session id, which is OpenAI's native cache-affinity parameter; some strict proxies reject unknown body fields, which is what the opt-out is for. |
+| `OPENAI_SUPPORTS_REASONING` | Set to `0` to stop sending `reasoning_effort` when the session's `thinking` level is set. **Default: on.** Same reason as the cache-key opt-out: a strict proxy that rejects unknown body fields. |
 
 ## What does not live here
 

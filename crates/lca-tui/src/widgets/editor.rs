@@ -522,6 +522,16 @@ impl Editor {
         }
         if kb.matches(data, "tui.input.tab") {
             self.refresh_suggestions(true);
+            // pi applies silently when force+Tab yields exactly one item
+            // (`editor.md` §8), so a single candidate needs one Tab, not two.
+            if self
+                .suggestions
+                .as_ref()
+                .is_some_and(|s| s.items.len() == 1)
+            {
+                self.accept_suggestion();
+                self.clear_suggestions();
+            }
             return EditorEvent::Changed;
         }
         if kb.matches(data, "tui.editor.deleteCharBackward") {
@@ -1006,5 +1016,31 @@ mod tests {
         e.handle_key(" ");
         e.handle_key("b");
         assert_eq!(e.text(), "a b");
+    }
+
+    struct SingleCandidate;
+    impl AutocompleteProvider for SingleCandidate {
+        fn get_suggestions(&self, _prefix: &str, _force: bool) -> Option<Suggestions> {
+            Some(Suggestions {
+                items: vec![crate::widgets::autocomplete::AutocompleteItem {
+                    value: "README.md".into(),
+                    label: "README.md".into(),
+                    description: None,
+                }],
+                prefix: "REA".into(),
+            })
+        }
+    }
+
+    // Verifies: FR-UI-9 (pi's editor.md §8 - force+Tab with one candidate
+    // applies it silently, so one Tab suffices).
+    #[test]
+    fn tab_applies_a_single_candidate_silently() {
+        let mut e = Editor::new();
+        e.set_autocomplete(Arc::new(SingleCandidate));
+        e.insert_str("read REA");
+        e.handle_key("\t");
+        assert_eq!(e.text(), "read README.md");
+        assert!(e.suggestions().is_none());
     }
 }
