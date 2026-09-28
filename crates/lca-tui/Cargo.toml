@@ -25,3 +25,8 @@ windows-sys = { version = "0.61", features = [
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# R18: the pi width golden vectors are JSON; parse them with the workspace's
+# serde_json (already a dependency of lca-tools/lca-protocol).
+serde_json.workspace = true

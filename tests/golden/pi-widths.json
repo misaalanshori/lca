@@ -1,0 +1,82 @@
+[
+  {
+    "text": "",
+    "width": 0
+  },
+  {
+    "text": "hello",
+    "width": 5
+  },
+  {
+    "text": "hello world",
+    "width": 11
+  },
+  {
+    "text": "你好世界",
+    "width": 8
+  },
+  {
+    "text": "mixed ascii 你好 done",
+    "width": 21
+  },
+  {
+    "text": "🎉🚀",
+    "width": 4
+  },
+  {
+    "text": "👨‍👩‍👧‍👦",
+    "width": 2
+  },
+  {
+    "text": "🇺🇸🇯🇵",
+    "width": 4
+  },
+  {
+    "text": "🇺",
+    "width": 2
+  },
+  {
+    "text": "🇺🇸",
+    "width": 2
+  },
+  {
+    "text": "é",
+    "width": 1
+  },
+  {
+    "text": "áb̂c̃",
+    "width": 3
+  },
+  {
+    "text": "กำ",
+    "width": 2
+  },
+  {
+    "text": "ກຳ",
+    "width": 2
+  },
+  {
+    "text": "a\tb",
+    "width": 5
+  },
+  {
+    "text": "\t",
+    "width": 3
+  },
+  {
+    "text": "\u001b[31mred\u001b[0m",
+    "width": 3
+  },
+  {
+    "text": "\u001b[1;32mbold green\u001b[0m plain",
+    "width": 16
+  },
+  {
+    "text": "\u001b]8;;https://pi.dev\u0007pi\u001b]8;;\u0007",
+    "width": 2
+  },
+  {
+    "text": "\u001b[2Kcleared",
+    "width": 7
+  }
+]

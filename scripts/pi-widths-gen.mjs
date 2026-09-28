@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+// Generate `tests/golden/pi-widths.json` from pi's own width function (R18).
+//
+// pi's `packages/tui/src/utils.ts` exports `visibleWidth`, the ANSI-aware
+// visual-column measure LCA's `lca-tui::text::visible_width` ports. This
+// script feeds the `utils.md` case taxonomy through pi's function and
+// writes the answer; `crates/lca-tui/tests/pi_widths.rs` diffs LCA's
+// answer against the file and fails on drift.
+//
+// It imports pi's TypeScript through Node's type stripping, so the run
+// needs `get-east-asian-width` resolvable from the imported file. The
+// checked-in JSON is the artifact that matters; regenerate with:
+//
+//   cp ~/gits/pi/packages/tui/src/utils.ts /tmp/pi-width/utils.ts
+//   (cd /tmp/pi-width && npm install get-east-asian-width)
+//   PI_TUI_UTILS=/tmp/pi-width/utils.ts node scripts/pi-widths-gen.mjs
+//
+// Never run this against the owner's pi tree in a way that writes to it.
+
+import { writeFileSync } from "node:fs";
+
+const utilsPath =
+  process.env.PI_TUI_UTILS ??
+  `${process.env.HOME}/gits/pi/packages/tui/src/utils.ts`;
+const { visibleWidth } = await import(utilsPath);
+
+const cases = [
+  "",
+  "hello",
+  "hello world",
+  // Wide characters.
+  "你好世界",
+  "mixed ascii 你好 done",
+  // Emoji, including a run and an RGI sequence.
+  "🎉🚀",
+  "👨‍👩‍👧‍👦",
+  "🇺🇸🇯🇵",
+  // Regional indicators mid-pair (streaming split).
+  "\u{1F1FA}",
+  "\u{1F1FA}\u{1F1F8}",
+  // Combining marks.
+  "e\u0301",
+  "a\u0301b\u0302c\u0303",
+  // Thai / Lao AM vowels.
+  "กำ",
+  "ກຳ",
+  // Tabs (pi expands to three spaces).
+  "a\tb",
+  "\t",
+  // ANSI styling runs (stripped for width).
+  "\x1b[31mred\x1b[0m",
+  "\x1b[1;32mbold green\x1b[0m plain",
+  // OSC 8 hyperlink (the text is the visible part).
+  "\x1b]8;;https://pi.dev\x07pi\x1b]8;;\x07",
+  // A CSI cursor move (stripped; width counts only the text).
+  "\x1b[2Kcleared",
+];
+
+const out = cases.map((text) => ({ text, width: visibleWidth(text) }));
+const target = new URL("../tests/golden/pi-widths.json", import.meta.url);
+writeFileSync(target, JSON.stringify(out, null, 2) + "\n");
+console.log(`pi-widths: wrote ${out.length} vectors to tests/golden/pi-widths.json`);

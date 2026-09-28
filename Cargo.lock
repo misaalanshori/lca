@@ -1442,6 +1442,7 @@ name = "lca-tui"
 version = "0.4.0"
 dependencies = [
  "libc",
+ "serde_json",
  "unicode-segmentation",
  "unicode-width",
  "windows-sys 0.61.2",
