@@ -8,6 +8,7 @@
 
 pub mod chat;
 mod chat_commands;
+mod chat_keys;
 mod chat_overlays;
 mod chat_pickers;
 mod chat_shell;
