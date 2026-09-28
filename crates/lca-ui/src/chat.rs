@@ -275,6 +275,12 @@ impl Chat {
                 };
                 self.transcript
                     .finish_tool(status, Some(result.content.clone()));
+                // R5: a tool that read an image shows it through the ladder.
+                for image in &result.images {
+                    let info =
+                        lca_tui::widgets::image::ImageInfo::new(&image.media_type, &image.bytes);
+                    self.transcript.push_image(info, image.bytes.clone());
+                }
             }
             TurnEvent::ToolOutputChunk { chunk, .. } => {
                 self.transcript.append_tool_output(&chunk);
@@ -1321,8 +1327,8 @@ impl Chat {
                     bytes,
                     note,
                 } => {
-                    self.transcript
-                        .push_image(lca_tui::widgets::image::ImageInfo::new(media_type, &bytes));
+                    let info = lca_tui::widgets::image::ImageInfo::new(&media_type, &bytes);
+                    self.transcript.push_image(info, bytes);
                     self.world.notice = Some(crate::state::sanitize_block(&note));
                 }
                 CommandEffect::InsertText(text) => {

@@ -44,6 +44,15 @@ pub enum ToolResultStatus {
     Timeout,
 }
 
+/// An image a tool returned (R5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageContent {
+    /// IANA media type, e.g. `image/png`.
+    pub media_type: String,
+    /// The raw bytes.
+    pub bytes: Vec<u8>,
+}
+
 /// The result of one tool call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResult {
@@ -57,6 +66,10 @@ pub struct ToolResult {
     /// (FR-TOOL-7).
     #[serde(default)]
     pub truncated: bool,
+    /// Images the tool returned (R5): a tool that read an image file, for
+    /// example. Empty for text-only results.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageContent>,
     /// Reserved map for non-structural extensions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: BTreeMap<String, String>,
@@ -70,6 +83,7 @@ impl ToolResult {
             status: ToolResultStatus::Ok,
             content: content.into(),
             truncated: false,
+            images: Vec::new(),
             extras: BTreeMap::new(),
         }
     }
@@ -81,6 +95,7 @@ impl ToolResult {
             status: ToolResultStatus::Error,
             content: content.into(),
             truncated: false,
+            images: Vec::new(),
             extras: BTreeMap::new(),
         }
     }
@@ -92,6 +107,7 @@ impl ToolResult {
             status: ToolResultStatus::Denied,
             content: reason.into(),
             truncated: false,
+            images: Vec::new(),
             extras: BTreeMap::new(),
         }
     }
@@ -103,6 +119,7 @@ impl ToolResult {
             status: ToolResultStatus::Timeout,
             content: content.into(),
             truncated: false,
+            images: Vec::new(),
             extras: BTreeMap::new(),
         }
     }

@@ -202,6 +202,7 @@ impl ToolExecutor {
             status,
             content,
             truncated,
+            images: Vec::new(),
             extras: Default::default(),
         };
         if let Some(hash) = attachment {
@@ -390,6 +391,19 @@ impl ToolExecutor {
             }
         };
         self.tracker.record(&target, &bytes);
+        // R5: an image file comes back as image content, not lossy UTF-8; the
+        // interface renders it through the terminal's graphics ladder.
+        if let Some(media_type) = lca_protocol::sniff_image_media_type(&bytes) {
+            let mut result = ToolResult::ok(
+                call.call_id.clone(),
+                format!("[image {media_type}, {} bytes]", bytes.len()),
+            );
+            result.images.push(lca_protocol::ImageContent {
+                media_type: media_type.to_string(),
+                bytes,
+            });
+            return result;
+        }
         let text = String::from_utf8_lossy(&bytes);
         let mut lines: Vec<&str> = text.split('\n').collect();
         if text.ends_with('\n') {

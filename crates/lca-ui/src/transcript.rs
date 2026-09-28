@@ -8,7 +8,7 @@
 //! streams, and the renderer repaints only what changed.
 
 use lca_tui::engine::text::{truncate_to_width, visible_width, wrap_text_with_ansi};
-use lca_tui::widgets::image::{ImageInfo, render_image_placeholder};
+use lca_tui::widgets::image::{ImageInfo, render_image};
 use lca_tui::widgets::markdown::{MarkdownOptions, render_markdown};
 
 use crate::theme::Theme;
@@ -71,8 +71,14 @@ pub enum Entry {
     Error(String),
     /// A pre-rendered line from a resumed session (displayed verbatim).
     Raw(String),
-    /// An image the terminal shows as a placeholder (FR-UI-13).
-    Image(ImageInfo),
+    /// An image the terminal renders through the graphics ladder, or as a
+    /// placeholder when it has no graphics support (FR-UI-13, R5).
+    Image {
+        /// What is known about the image.
+        info: ImageInfo,
+        /// The raw bytes, for the graphics protocols.
+        bytes: std::sync::Arc<Vec<u8>>,
+    },
 }
 
 /// The transcript: an ordered list of entries.
@@ -232,9 +238,12 @@ impl Transcript {
         }
     }
 
-    /// Append an image placeholder (FR-UI-13).
-    pub fn push_image(&mut self, info: ImageInfo) {
-        self.entries.push(Entry::Image(info));
+    /// Append an image (FR-UI-13, R5): rendered through the graphics ladder.
+    pub fn push_image(&mut self, info: ImageInfo, bytes: Vec<u8>) {
+        self.entries.push(Entry::Image {
+            info,
+            bytes: std::sync::Arc::new(bytes),
+        });
     }
 
     /// Append streamed tool output to the most recent running tool card.
@@ -347,8 +356,13 @@ fn render_entry(
         Entry::Raw(text) => {
             out.extend(wrap_text_with_ansi(text, width as usize));
         }
-        Entry::Image(info) => {
-            out.extend(render_image_placeholder(info, width as usize));
+        Entry::Image { info, bytes } => {
+            out.extend(render_image(
+                info,
+                bytes,
+                lca_tui::widgets::image::detect_image_protocol(),
+                width as usize,
+            ));
         }
     }
 }
@@ -632,13 +646,16 @@ mod tests {
     #[test]
     fn image_entries_render_a_placeholder() {
         let mut t = Transcript::new();
-        t.push_image(ImageInfo {
-            media_type: "image/png".into(),
-            bytes: 1024,
-            width: Some(10),
-            height: Some(20),
-            alt: Some("a chart".into()),
-        });
+        t.push_image(
+            ImageInfo {
+                media_type: "image/png".into(),
+                bytes: 1024,
+                width: Some(10),
+                height: Some(20),
+                alt: Some("a chart".into()),
+            },
+            Vec::new(),
+        );
         let out = strip(&t.render(60, &plain()));
         assert!(
             out.iter()

@@ -1,11 +1,11 @@
-//! Image placeholders for the transcript.
+//! Image rendering for the transcript: the kitty/iterm2 graphics ladder
+//! with a legible placeholder fallback (R5).
 //!
-//! The live event stream carries no image bytes (a provider's vision output
-//! is a content block on the final message, not a stream delta), so the
-//! transcript shows a legible placeholder: media type, dimensions when the
-//! header is readable, byte size, and alt text. A terminal-graphics
-//! capability ladder (kitty/iterm2 passthrough) is the `ponytail:` upgrade
-//! when the agent gains an image-producing path.
+//! The terminal capabilities are detected from the environment (pi's
+//! `terminal-image.ts` ladder): tmux and screen never get graphics, kitty
+//! and its forks get the kitty protocol, iTerm2 gets its own, and
+//! everything else gets the placeholder. `/attach` is the path that has
+//! bytes today; the ladder renders wherever they exist.
 
 /// What is known about one image without decoding it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +173,124 @@ pub fn render_image_placeholder(info: &ImageInfo, width: usize) -> Vec<String> {
     lines
 }
 
+/// The terminal graphics protocol an image can use (pi's detection ladder,
+/// `terminal-image.md` §1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageProtocol {
+    /// The kitty graphics protocol (kitty, ghostty, wezterm, Warp).
+    Kitty,
+    /// The iTerm2 inline-image protocol.
+    Iterm2,
+    /// No graphics: the placeholder.
+    None,
+}
+
+/// Detect the terminal's graphics protocol from the environment. tmux and
+/// screen are always `None`: pi's ladder calls images "unreliable under
+/// tmux", and a wrong guess is invisible data loss.
+pub fn detect_image_protocol() -> ImageProtocol {
+    let term = std::env::var("TERM").unwrap_or_default();
+    if std::env::var_os("TMUX").is_some()
+        || std::env::var_os("STY").is_some()
+        || term.starts_with("tmux")
+        || term.starts_with("screen")
+    {
+        return ImageProtocol::None;
+    }
+    if std::env::var_os("KITTY_WINDOW_ID").is_some()
+        || std::env::var_os("GHOSTTY_RESOURCES_DIR").is_some()
+        || std::env::var_os("WEZTERM_PANE").is_some()
+    {
+        return ImageProtocol::Kitty;
+    }
+    if std::env::var_os("ITERM_SESSION_ID").is_some() {
+        return ImageProtocol::Iterm2;
+    }
+    ImageProtocol::None
+}
+
+/// The cell size an image occupies at `max_width` columns, preserving its
+/// aspect ratio (pi's `calculateImageCellSize`, default 9×18 cells).
+fn image_cell_size(info: &ImageInfo, max_width: usize) -> (u32, u32) {
+    let max_cols = max_width.max(1) as f64;
+    let px_w = info.width.unwrap_or(0) as f64;
+    let px_h = info.height.unwrap_or(0) as f64;
+    if px_w <= 0.0 || px_h <= 0.0 {
+        return (max_cols.min(60.0) as u32, 1);
+    }
+    let (cell_w, cell_h) = (9.0_f64, 18.0_f64);
+    let natural_cols = (px_w / cell_w).ceil().max(1.0);
+    let cols = natural_cols.min(max_cols).max(1.0);
+    let rows = ((px_h / cell_h) * (cols / natural_cols)).ceil().max(1.0);
+    (cols as u32, rows as u32)
+}
+
+/// Encode an image with the kitty graphics protocol (4096-char chunks).
+pub fn encode_kitty(bytes: &[u8], columns: u32, rows: u32, image_id: u32) -> String {
+    let encoded = base64_encode(bytes);
+    let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(4096).collect();
+    let mut out = String::new();
+    for (index, chunk) in chunks.iter().enumerate() {
+        let more = usize::from(index + 1 < chunks.len());
+        let text = std::str::from_utf8(chunk).unwrap_or("");
+        out.push_str(&format!(
+            "\x1b_Ga=T,f=100,q=2,C=1,c={columns},r={rows},i={image_id},m={more};{text}\x1b\\"
+        ));
+    }
+    out
+}
+
+/// Encode an image with the iTerm2 inline-image protocol.
+pub fn encode_iterm2(bytes: &[u8], columns: u32, rows: u32) -> String {
+    let encoded = base64_encode(bytes);
+    let name = base64_encode(b"image");
+    format!(
+        "\x1b]1337;File=inline=1;size={};width={columns};height={rows};name={name};preserveAspectRatio=0:{encoded}\x07",
+        bytes.len()
+    )
+}
+
+/// Render an image through the protocol ladder (R5): kitty → iterm2 → the
+/// placeholder.
+pub fn render_image(
+    info: &ImageInfo,
+    bytes: &[u8],
+    protocol: ImageProtocol,
+    max_width: usize,
+) -> Vec<String> {
+    let (cols, rows) = image_cell_size(info, max_width);
+    match protocol {
+        ImageProtocol::Kitty => vec![encode_kitty(bytes, cols, rows, 1)],
+        ImageProtocol::Iterm2 => vec![encode_iterm2(bytes, cols, rows)],
+        ImageProtocol::None => render_image_placeholder(info, max_width),
+    }
+}
+
+/// A self-contained base64 encoder (no new dependency).
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = chunk.get(1).copied().map(u32::from).unwrap_or(0);
+        let b2 = chunk.get(2).copied().map(u32::from).unwrap_or(0);
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +348,35 @@ mod tests {
         assert!(out[0].contains("image/tiff"));
         assert!(out[0].contains("unknown size"));
         assert!(out.len() > 1, "a second line explains the placeholder");
+    }
+
+    // Verifies: R5 - the kitty encoder emits a complete chunk with its id.
+    #[test]
+    fn the_kitty_encoder_carries_the_id_and_closes() {
+        let out = encode_kitty(&[0u8; 8], 4, 2, 7);
+        assert!(out.starts_with("\x1b_Ga=T,f=100,q=2,C=1,c=4,r=2,i=7,m=0;"));
+        assert!(out.ends_with("\x1b\\"));
+    }
+
+    // Verifies: R5 - the iTerm2 encoder sizes the inline file.
+    #[test]
+    fn the_iterm2_encoder_sizes_and_inlines() {
+        let out = encode_iterm2(&[1, 2, 3], 5, 3);
+        assert!(out.starts_with("\x1b]1337;File=inline=1;size=3;width=5;height=3;"));
+        assert!(out.ends_with('\x07'));
+    }
+
+    // Verifies: R5 - the ladder falls back to the placeholder on no graphics.
+    #[test]
+    fn the_ladder_falls_back_to_the_placeholder() {
+        let info = ImageInfo {
+            media_type: "image/png".into(),
+            bytes: 3,
+            width: Some(10),
+            height: Some(10),
+            alt: None,
+        };
+        let lines = render_image(&info, &[1, 2, 3], ImageProtocol::None, 40);
+        assert!(lines[0].contains("image/png"));
     }
 }

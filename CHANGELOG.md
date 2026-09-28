@@ -12,13 +12,27 @@ Dates are UTC.
 - **The interaction pack.** `!`/`!!` shell mode, an external prompt editor (Ctrl+X Ctrl+E), a runtime `/fullscreen` toggle, `/hotkeys`, Alt+Up/Down prompt jump, and Ctrl+R transcript search (FR-UI-10/11/12/14/15/21).
 - **The visibility pack.** A `/theme` picker with live preview and restore-on-cancel plus `COLORFGBG` dark/light detection, a visible keyboard-interruptible permission auto-approve countdown, and a `/session` stats view (FR-UI-17/18/19).
 - **`/tree` and `/fork`.** Browse session branches and fork a new one at any user message (FR-UI-16).
+- **Cycle 3: the thinking level (R1).** A `thinking` config key with pi's level vocabulary, carried on every request as `reasoning-effort`; a `/thinking` picker with cost/latency descriptions and the level in the footer (FR-UI-20).
+- **Cycle 3: `/resume` (R2).** A searchable session list with pi's grammar (`re:<pattern>`, `"quoted phrase"`, AND terms).
+- **Cycle 3: in-place session switching (R3).** `/tree` and `/resume` switch the live session and rebuild the transcript from its log.
+- **Cycle 3: async `!`/`!!` (R4).** Shell commands stream on a worker thread; Escape cancels the process tree.
+- **Cycle 3: selectors (R9).** A searchable `/model` picker and a `/settings` view over the real `lca-config` keys.
+- **Cycle 3: real images (R5).** An image renders through the terminal's kitty/iterm2 graphics ladder, with a legible placeholder on terminals without graphics; reading an image file returns image content through the tool result (FR-UI-13).
+- **Cycle 3: verified clipboard and edge auto-scroll (R6).** Copy-on-release prefers a native clipboard command and reports honestly when only OSC 52 ran; a selection drag on a viewport edge auto-scrolls.
+- **Cycle 3: OSC 11 dark/light detection (R10).** The interface queries the terminal's background color and color-scheme preference at startup.
 - **Streaming-tolerant markdown.** Tables wait for an intact separator row, partial pipes render as text, unpaired inline markers stay literal, and the code-block border caps at the content width (FR-UI-7/8).
-- **Image placeholders.** A `ContentBlock::Image` renders its media type, dimensions, size, and alt text rather than nothing (FR-UI-13).
 
 ### Changed
 
 - **The interface runs on the ported pi widget stack.** `lca-ui`'s `Chat` owns the engine's `Editor`, transcript, footer, and theme; the completion menu is live (commands, arguments, file paths); modals composite over the viewport. `crossterm` and the interim key-event bridge are gone from `lca-ui`.
 - **`lca-tui` files are split under the 1,200-line ceiling** (`engine/text/{ansi,osc8}.rs`, `engine/keys/{legacy,kitty}.rs`); the keybindings global singleton is deleted and byte-slice indexing can no longer panic.
+- **Cycle 3: the transcript collapses by default.** Tool cards are one line with per-tool arguments (Ctrl+O expands); thinking runs hide behind one dim line (Ctrl+T expands) (R8).
+- **Cycle 3: the editor gained sticky-column motion and jump mode** (Ctrl+]/Ctrl+Alt+]) (R7).
+- **Cycle 3: dead code out.** The unused `RenderScheduler` is deleted; `SteerQueue` carries an in-code justification; `lca-tui`/`lca-ui` warn on non-test `unwrap`/`expect`/`panic` (R12/R13/R17).
+
+### Fixed
+
+- **Cycle 3: cancelling the permission auto-approve countdown** kept the modal but dropped its responder, so a later Allow/Deny was a no-op (R11).
 
 ## [0.4.0] - 2026-09-27
 

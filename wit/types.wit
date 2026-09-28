@@ -24,6 +24,11 @@ interface types {
   }
 
   /// The outcome of one tool call.
+  ///
+  /// Images are host-side only (R5): a built-in tool (a `read` of an image
+  /// file) can return image content through the Rust `ToolResult`, but an
+  /// extension's `tool-result` here stays text. A future window could carry
+  /// image blocks.
   record tool-result {
     /// Call this answers.
     call-id: string,

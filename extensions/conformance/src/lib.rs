@@ -494,6 +494,7 @@ pub fn outcome_to_result(call_id: &str, outcome: ModeOutcome) -> ToolResult {
         },
         content: outcome.text,
         truncated: false,
+        images: Vec::new(),
         extras: Default::default(),
     }
 }

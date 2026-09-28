@@ -70,6 +70,7 @@ pub(super) fn execute_work(
         },
         content: guest_result.content.unwrap_or_default(),
         truncated: guest_result.truncated,
+        images: Vec::new(),
         extras: Default::default(),
     })
 }

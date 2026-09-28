@@ -57,6 +57,26 @@ fn ships_exactly_the_documented_builtin_tools() {
     }
 }
 
+// Verifies: R5 - reading an image returns image content, not lossy text.
+#[tokio::test]
+async fn reading_an_image_returns_image_content() {
+    let dir = scratch("read-image");
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pixel.png");
+    // A minimal PNG header is enough for the sniffer.
+    std::fs::write(&png, b"\x89PNG\r\n\x1a\nrest").unwrap();
+    let mut exec = executor(&dir);
+    let result = run(
+        &mut exec,
+        &call("read", serde_json::json!({"path": "pixel.png"})),
+    )
+    .await;
+    assert_eq!(result.status, ToolResultStatus::Ok);
+    assert_eq!(result.images.len(), 1);
+    assert_eq!(result.images[0].media_type, "image/png");
+    assert!(result.content.contains("image/png"));
+}
+
 // Verifies: FR-TOOL-1 (read returns content with line numbers and offsets)
 #[tokio::test]
 async fn read_shows_line_numbers_and_honours_offset() {
