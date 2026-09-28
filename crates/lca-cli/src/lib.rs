@@ -1242,4 +1242,201 @@ mod tests {
         sink.on_event(TurnEvent::AssistantText("The answer is 42.".into()));
         assert_eq!(sink.plain, "I'll read the file.\n\nThe answer is 42.");
     }
+
+    // The `/login` secret is stored through the same writer extensions use,
+    // in the provider's own namespace, owner-only on Unix (B2).
+    #[test]
+    fn store_provider_secret_writes_the_namespace_credential() {
+        let root = lca_testkit::scratch_path("lca-login");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        store_provider_secret(&root, &root, "openai-compatible", "api_key", "sk-x")
+            .expect("store the secret");
+        let path = root.join("credentials").join("openai-compatible.json");
+        let text = std::fs::read_to_string(&path).expect("read the credential file");
+        assert!(text.contains("sk-x"), "{text}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "owner-only credential file");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // The ad hoc host is the base URL's host, unless it is the manifest's
+    // fixed default (FR-PERM-16: only a non-default endpoint needs the grant).
+    #[test]
+    fn the_ad_hoc_host_is_the_non_default_endpoint_host() {
+        assert_eq!(
+            ad_hoc_host_from_authority("llm.example.com:8443/v1"),
+            Some("llm.example.com".to_string())
+        );
+        assert_eq!(
+            ad_hoc_host_from_authority("user@internal.local/v1"),
+            Some("internal.local".to_string())
+        );
+        assert_eq!(ad_hoc_host_from_authority("api.openai.com/v1"), None);
+        assert_eq!(ad_hoc_host_from_authority(""), None);
+    }
+
+    // The approved grant is persisted for this project, so the next run's
+    // capability environment picks it up (ADR-0022).
+    #[test]
+    fn the_ad_hoc_grant_is_persisted_for_the_project() {
+        let root = lca_testkit::scratch_path("lca-adhoc");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
+        ));
+        store_ad_hoc_grant(&store, &project, "llm.example.com").expect("store");
+        let reread = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open");
+        assert_eq!(
+            reread.net_patterns(&project),
+            vec!["llm.example.com".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: FR-PERM-16 (the check behind the startup notice and
+    // `/login`'s grant prompt). A non-default endpoint is ungranted until the
+    // ad hoc grant is stored; no non-default endpoint never needs one. This
+    // is the path an env-var key takes, which never runs the login prompt.
+    #[test]
+    fn a_non_default_endpoint_is_ungranted_until_the_grant_is_stored() {
+        let root = lca_testkit::scratch_path("lca-ungranted");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
+        ));
+        assert_eq!(
+            ungranted_host(&store, &project, None),
+            None,
+            "the default endpoint needs no grant"
+        );
+        assert_eq!(
+            ungranted_host(&store, &project, Some("opencode.ai".to_string())),
+            Some("opencode.ai".to_string()),
+            "a non-default endpoint needs a grant"
+        );
+        store_ad_hoc_grant(&store, &project, "opencode.ai").expect("grant");
+        assert_eq!(
+            ungranted_host(&store, &project, Some("opencode.ai".to_string())),
+            None,
+            "the stored grant satisfies the check"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: FR-PERM-18 (the engine's grant project is the workspace).
+    // The production wiring once passed the data dir, so a grant attached for
+    // the project after startup was invisible to the same engine - the ad hoc
+    // `net` grant `/login` stores never took effect until a restart.
+    #[cfg(feature = "bundled-openai-compat")]
+    #[test]
+    fn the_engine_honors_a_grant_attached_for_the_workspace() {
+        let root = lca_testkit::scratch_path("lca-engine-project");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
+        ));
+        let caps = extension_capabilities(
+            &project,
+            "openai-compatible",
+            openai_compatible::manifest_grants(),
+            lca_permissions::SharedPrompt::default(),
+            store.clone(),
+            openai_compatible::resources(),
+        );
+        store_ad_hoc_grant(&store, &project, "127.0.0.1").expect("grant");
+        // Reaching the socket layer (and failing to connect) proves the grant
+        // was honored; a permission refusal means it was not.
+        let err = caps
+            .net_request("GET", "http://127.0.0.1:9/", &[], None)
+            .expect_err("nothing listens on port 9");
+        assert!(
+            !matches!(
+                err,
+                lca_protocol::CapabilityError::Permission(_)
+                    | lca_protocol::CapabilityError::NotGranted(_)
+            ),
+            "the ad hoc grant was honored, not refused: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: FR-PERM-16 (the ad hoc net grant and an engine-persisted
+    // `always` pattern share one store, so neither save clobbers the other
+    // - deferred plan E1). Before the single-owner wiring, the login seam
+    // opened its own handle and its save dropped the engine's pattern.
+    #[test]
+    fn one_grant_store_holds_the_login_grant_and_an_engine_pattern() {
+        let root = lca_testkit::scratch_path("lca-shared");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let store = std::sync::Arc::new(std::sync::Mutex::new(
+            lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
+        ));
+        // The login flow writes the ad hoc net grant ...
+        store_ad_hoc_grant(&store, &project, "llm.example.com").expect("net grant");
+        // ... then the engine (or the turn loop) persists an `always`.
+        store
+            .lock()
+            .expect("store")
+            .approve_pattern(&project, "cargo test")
+            .expect("pattern");
+        let reread = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open");
+        assert_eq!(
+            reread.net_patterns(&project),
+            vec!["llm.example.com".to_string()]
+        );
+        assert!(reread.is_allowed(
+            &project,
+            &lca_permissions::Action::Shell {
+                command: "cargo test".to_string(),
+                cwd: project.clone(),
+            }
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: FR-PERM-16 (an approved ad hoc net grant is persisted and
+    // project-scoped: it survives a restart, and another project never sees
+    // it). Automates the manual tmux check B1 carried.
+    #[test]
+    fn an_ad_hoc_grant_survives_a_restart_and_stays_project_scoped() {
+        let root = lca_testkit::scratch_path("lca-adhoc-persist");
+        let _ = std::fs::remove_dir_all(&root);
+        let project_a = root.join("a");
+        let project_b = root.join("b");
+        std::fs::create_dir_all(&project_a).expect("mkdir");
+        std::fs::create_dir_all(&project_b).expect("mkdir");
+        let path = root.join("grants.json");
+        // The login flow's handle is dropped here: the store on disk is all
+        // that survives a restart.
+        {
+            let store = std::sync::Arc::new(std::sync::Mutex::new(
+                lca_permissions::GrantStore::open(&path).expect("open"),
+            ));
+            store_ad_hoc_grant(&store, &project_a, "llm.example.com").expect("grant");
+        }
+
+        let reloaded = lca_permissions::GrantStore::open(&path).expect("reopen");
+        assert_eq!(
+            reloaded.net_patterns(&project_a),
+            vec!["llm.example.com".to_string()]
+        );
+        assert!(
+            reloaded.net_patterns(&project_b).is_empty(),
+            "the grant never leaks to another project"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
