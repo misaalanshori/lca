@@ -1586,6 +1586,9 @@ mod command_world {
                 lca_protocol::CommandEffect::InsertText(text) => Effect::InsertText(text),
                 lca_protocol::CommandEffect::SubmitPrompt(text) => Effect::SubmitPrompt(text),
                 lca_protocol::CommandEffect::ShowWidget(text) => Effect::ShowWidget(text),
+                // Host-only (the built-in `/attach`); an extension never
+                // produces it, so the note is the faithful WIT fallback.
+                lca_protocol::CommandEffect::AttachImage { note, .. } => Effect::ShowWidget(note),
                 lca_protocol::CommandEffect::None => Effect::None,
             }
         }

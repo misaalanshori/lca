@@ -752,6 +752,15 @@ impl Chat {
                 CommandEffect::ShowWidget(text) => {
                     self.world.notice = Some(crate::state::sanitize_block(&text))
                 }
+                CommandEffect::AttachImage {
+                    media_type,
+                    bytes,
+                    note,
+                } => {
+                    self.transcript
+                        .push_image(lca_tui::widgets::image::ImageInfo::new(media_type, &bytes));
+                    self.world.notice = Some(crate::state::sanitize_block(&note));
+                }
                 CommandEffect::InsertText(text) => {
                     self.editor.insert_str(&crate::state::sanitize_block(&text))
                 }

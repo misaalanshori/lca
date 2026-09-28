@@ -645,7 +645,8 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 // (ADR-0029). The bytes land in the session's attachment
                 // store; the stub text rides with the next user message.
                 "attach" => {
-                    match lca_core::stage_image(&session, std::path::Path::new(argument.trim())) {
+                    let path = std::path::Path::new(argument.trim());
+                    match lca_core::stage_image(&session, path) {
                         Ok(staged) => {
                             let note = format!(
                                 "attached {} - it goes with your next message",
@@ -655,7 +656,19 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner())
                                 .push(staged);
-                            CommandEffect::ShowWidget(note)
+                            // Show the image placeholder at once (FR-UI-13);
+                            // fall back to the note when the bytes are gone.
+                            match std::fs::read(path).ok().and_then(|bytes| {
+                                lca_protocol::sniff_image_media_type(&bytes)
+                                    .map(|media_type| (media_type.to_string(), bytes))
+                            }) {
+                                Some((media_type, bytes)) => CommandEffect::AttachImage {
+                                    media_type,
+                                    bytes,
+                                    note,
+                                },
+                                None => CommandEffect::ShowWidget(note),
+                            }
                         }
                         Err(err) => CommandEffect::ShowWidget(format!("attach failed: {err}")),
                     }
@@ -848,7 +861,7 @@ fn display_line(record: &Record) -> Option<String> {
                     }
                     lca_protocol::ContentBlock::Reasoning { .. } => None,
                     lca_protocol::ContentBlock::Image { media_type, bytes } => {
-                        Some(format!("[image {media_type}, {} bytes]", bytes.len()))
+                        Some(lca_ui::image_label(media_type, bytes))
                     }
                 })
                 .collect::<Vec<String>>()

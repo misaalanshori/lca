@@ -31,6 +31,16 @@ pub enum CommandEffect {
     /// Show text in the notice area (the `show-widget` case, rendered by
     /// the host until the `ui` world lands in Phase 6).
     ShowWidget(String),
+    /// Show an image in the transcript as a placeholder and set a notice
+    /// (FR-UI-13). Used by `/attach` so the staged image is visible at once.
+    AttachImage {
+        /// The media type.
+        media_type: String,
+        /// The image bytes (for dimensions and size).
+        bytes: Vec<u8>,
+        /// The notice to show alongside it.
+        note: String,
+    },
     /// Do nothing.
     None,
 }

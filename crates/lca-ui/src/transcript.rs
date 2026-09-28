@@ -8,6 +8,7 @@
 //! streams, and the renderer repaints only what changed.
 
 use lca_tui::engine::text::{truncate_to_width, visible_width, wrap_text_with_ansi};
+use lca_tui::widgets::image::{ImageInfo, render_image_placeholder};
 use lca_tui::widgets::markdown::{MarkdownOptions, render_markdown};
 
 use crate::theme::Theme;
@@ -70,6 +71,8 @@ pub enum Entry {
     Error(String),
     /// A pre-rendered line from a resumed session (displayed verbatim).
     Raw(String),
+    /// An image the terminal shows as a placeholder (FR-UI-13).
+    Image(ImageInfo),
 }
 
 /// The transcript: an ordered list of entries.
@@ -179,6 +182,11 @@ impl Transcript {
         self.entries.push(Entry::Raw(text.into()));
     }
 
+    /// Append an image placeholder (FR-UI-13).
+    pub fn push_image(&mut self, info: ImageInfo) {
+        self.entries.push(Entry::Image(info));
+    }
+
     /// Append streamed tool output to the most recent running tool card.
     pub fn append_tool_output(&mut self, chunk: &str) {
         for entry in self.entries.iter_mut().rev() {
@@ -232,6 +240,9 @@ impl Transcript {
                 Entry::Raw(text) => {
                     out.extend(wrap_text_with_ansi(text, width as usize));
                 }
+                Entry::Image(info) => {
+                    out.extend(render_image_placeholder(info, width as usize));
+                }
             }
         }
         out
@@ -241,6 +252,16 @@ impl Transcript {
     pub fn height(&self, width: u16, theme: &Theme) -> usize {
         self.render(width, theme).len()
     }
+}
+
+/// A one-line image label (media type, dimensions, size) for resume lines.
+pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
+    let info = ImageInfo::new(media_type, bytes);
+    let dimensions = match (info.width, info.height) {
+        (Some(w), Some(h)) => format!("{w}×{h}"),
+        _ => "unknown size".to_string(),
+    };
+    format!("[image {media_type}, {dimensions}, {} bytes]", bytes.len())
 }
 
 fn render_user(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
@@ -399,5 +420,25 @@ mod tests {
         t.finish_assistant();
         let done = strip(&t.render(40, &plain()));
         assert!(!done.iter().any(|l| l.contains("▍")));
+    }
+
+    // Verifies: FR-UI-13 - an image renders with its media type and
+    // dimensions, never silently dropped.
+    #[test]
+    fn image_entries_render_a_placeholder() {
+        let mut t = Transcript::new();
+        t.push_image(ImageInfo {
+            media_type: "image/png".into(),
+            bytes: 1024,
+            width: Some(10),
+            height: Some(20),
+            alt: Some("a chart".into()),
+        });
+        let out = strip(&t.render(60, &plain()));
+        assert!(
+            out.iter()
+                .any(|l| l.contains("image/png") && l.contains("10×20") && l.contains("a chart")),
+            "{out:?}"
+        );
     }
 }

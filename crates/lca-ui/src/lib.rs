@@ -24,4 +24,4 @@ pub use state::{
     TurnRunner, UiOptions, UiState, sanitize_block, sanitize_text, widget_lines,
 };
 pub use theme::Theme;
-pub use transcript::{Entry, ToolStatus, Transcript};
+pub use transcript::{Entry, ToolStatus, Transcript, image_label};
