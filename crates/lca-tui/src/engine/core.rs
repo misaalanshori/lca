@@ -28,22 +28,6 @@ pub const CURSOR_MARKER: &str = "\x1b_pi:c\x07";
 /// Style reset plus OSC 8 hyperlink close, applied to every rendered line.
 pub const SEGMENT_RESET: &str = "\x1b[0m\x1b]8;;\x07";
 
-/// A renderable component. `render` returns one string per logical line.
-pub trait Component: Send {
-    /// Render at `width` visible columns.
-    fn render(&mut self, width: u16) -> Vec<String>;
-    /// Handle a raw key sequence when focused. Returns true if consumed.
-    fn handle_input(&mut self, _data: &str) -> bool {
-        false
-    }
-    /// Drop cached render state (theme change, resize).
-    fn invalidate(&mut self) {}
-}
-
-// =============================================================================
-// Overlays
-// =============================================================================
-
 /// A size that is absolute or a percentage of the available space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SizeValue {
