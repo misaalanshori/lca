@@ -123,6 +123,44 @@ fn age_label(now_ms: u64, then_ms: u64) -> String {
     }
 }
 
+/// Write text to the system clipboard through a native command, returning
+/// `true` only when the command succeeded (R6). A `false` lets the
+/// interface fall back to OSC 52 and report it unverified.
+fn native_clipboard(text: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    let candidates: &[(&str, &[&str])] = &[("pbcopy", &[])];
+    #[cfg(target_os = "windows")]
+    let candidates: &[(&str, &[&str])] = &[("clip", &[])];
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let candidates: &[(&str, &[&str])] = &[
+        ("wl-copy", &[]),
+        ("xclip", &["-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--input"]),
+    ];
+    for (program, args) in candidates {
+        let Ok(mut child) = std::process::Command::new(program)
+            .args(*args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        else {
+            continue;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write as _;
+            if stdin.write_all(text.as_bytes()).is_err() {
+                let _ = child.kill();
+                continue;
+            }
+        }
+        if child.wait().map(|status| status.success()).unwrap_or(false) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Read a child pipe into the shell sink until it closes (R4). Control
 /// characters are sanitized so the card can never paint the terminal.
 fn read_into<R: std::io::Read>(
@@ -958,6 +996,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     Some(lines)
                 })
             }),
+            copy_to_clipboard: Some(Arc::new(|text: &str| native_clipboard(text))),
             fork_at: Some({
                 let store = store.clone();
                 let session_cell = current_session.clone();

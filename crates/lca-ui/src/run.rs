@@ -94,6 +94,13 @@ impl Screen {
             r.scroll = scroll;
         }
     }
+
+    fn tick_auto_scroll(&mut self) -> bool {
+        match self {
+            Screen::Alt(r) => r.tick_auto_scroll(),
+            Screen::Main(_) => false,
+        }
+    }
 }
 
 fn switch_screen(screen: &mut Screen, fullscreen: bool, term: &mut dyn Terminal) {
@@ -255,6 +262,12 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             dirty = true;
         }
 
+        // Edge auto-scroll while a selection drag sits on a viewport edge
+        // (R6).
+        if screen.tick_auto_scroll() {
+            dirty = true;
+        }
+
         // The screen mode can change at runtime (FR-UI-21).
         if screen.is_fullscreen() != chat.screen_mode {
             switch_screen(&mut screen, chat.screen_mode, &mut terminal);
@@ -278,12 +291,27 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                 // Mouse (selection, wheel) is the renderer's.
                 if data.starts_with("\x1b[<") {
                     screen.handle_mouse(&data);
-                    // Copy on release (issue #2): a completed selection is
-                    // written to the clipboard via OSC 52.
+                    // Copy on release (issue #2): prefer a verified native
+                    // clipboard (R6); OSC 52 is the honest fallback, and the
+                    // notice says which one ran.
                     if data.ends_with('m') && screen.copy_on_select() {
                         let text = screen.selected_text();
                         if !text.is_empty() {
-                            screen.copy_osc52(&mut terminal, &text);
+                            let verified = chat
+                                .world
+                                .options
+                                .hooks
+                                .copy_to_clipboard
+                                .as_ref()
+                                .is_some_and(|write| write(&text));
+                            if !verified {
+                                screen.copy_osc52(&mut terminal, &text);
+                            }
+                            chat.world.notice = Some(if verified {
+                                "copied to the clipboard".to_string()
+                            } else {
+                                "copied via OSC 52 (unverified)".to_string()
+                            });
                         }
                     }
                     dirty = true;

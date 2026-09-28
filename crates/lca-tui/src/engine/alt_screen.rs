@@ -94,6 +94,9 @@ pub struct AltScreenRenderer {
     pub copy_on_select: bool,
     last_click: Option<(std::time::Instant, u16, u16)>,
     click_count: u8,
+    /// While dragging, the edge the pointer sits on: `-1` top, `1` bottom
+    /// (R6's edge auto-scroll). `None` when not at an edge.
+    drag_edge: Option<i8>,
 }
 
 impl Default for AltScreenRenderer {
@@ -115,6 +118,7 @@ impl AltScreenRenderer {
             copy_on_select: true,
             last_click: None,
             click_count: 0,
+            drag_edge: None,
         }
     }
 
@@ -231,6 +235,15 @@ impl AltScreenRenderer {
         }
         if motion {
             if self.selection.dragging {
+                // Edge auto-scroll (R6): a drag at the top/bottom row arms a
+                // scroll that `tick_auto_scroll` advances on the loop's tick.
+                self.drag_edge = if row == 0 {
+                    Some(-1)
+                } else if row + 1 >= self.height {
+                    Some(1)
+                } else {
+                    None
+                };
                 let line = self.previous.get(row as usize).cloned().unwrap_or_default();
                 self.selection.update(point, &line);
                 return true;
@@ -256,8 +269,35 @@ impl AltScreenRenderer {
             true
         } else {
             self.selection.end();
+            self.drag_edge = None;
             true
         }
+    }
+
+    /// Advance an edge drag by one line (R6): scroll and extend the
+    /// selection to the edge. Returns whether it scrolled. The loop calls
+    /// this every tick while a drag sits on an edge.
+    pub fn tick_auto_scroll(&mut self) -> bool {
+        let Some(edge) = self.drag_edge else {
+            return false;
+        };
+        if edge < 0 {
+            if self.scroll == 0 {
+                return false;
+            }
+            self.scroll -= 1;
+        } else {
+            self.scroll = self.scroll.saturating_add(1);
+        }
+        let row = if edge < 0 {
+            0
+        } else {
+            self.height.saturating_sub(1)
+        };
+        let line = self.previous.get(row as usize).cloned().unwrap_or_default();
+        let col = line.chars().count().saturating_sub(1) as u16;
+        self.selection.update(SelectionPoint { row, col }, &line);
+        true
     }
 
     /// The selected text, if any.
@@ -381,5 +421,37 @@ mod tests {
         assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
         assert_eq!(base64_encode(b"a"), "YQ==");
         assert_eq!(base64_encode(b""), "");
+    }
+
+    // Verifies: R6 - a drag on a viewport edge auto-scrolls and extends.
+    #[test]
+    fn a_drag_at_the_bottom_edge_auto_scrolls() {
+        let mut r = AltScreenRenderer::new();
+        r.previous = (0..10).map(|i| format!("line {i}")).collect();
+        r.width = 20;
+        r.height = 10;
+        r.selection.start(
+            SelectionPoint { row: 5, col: 0 },
+            Granularity::Char,
+            1,
+            "line 5",
+        );
+        // Motion at the bottom row (y=10, 1-based) arms the scroll.
+        r.handle_mouse(SgrMouse {
+            bits: 32, // motion
+            x: 1,
+            y: 10,
+            press: true,
+        });
+        assert!(r.tick_auto_scroll());
+        assert_eq!(r.scroll, 1);
+        // A release clears the edge.
+        r.handle_mouse(SgrMouse {
+            bits: 0,
+            x: 1,
+            y: 10,
+            press: false,
+        });
+        assert!(!r.tick_auto_scroll());
     }
 }

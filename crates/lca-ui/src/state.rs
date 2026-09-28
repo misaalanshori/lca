@@ -286,6 +286,11 @@ pub enum ShellEvent {
 /// Cancels a running `!`/`!!` command (Escape, R4).
 pub type ShellHandle = Arc<dyn Fn() + Send + Sync>;
 
+/// Writes text to the system clipboard, returning `true` only when the
+/// write was verified (R6). `None` falls back to OSC 52, which reports
+/// unverified.
+pub type ClipboardWriter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 /// Starts a `!`/`!!` shell command, streaming output through the sender and
 /// returning a cancel handle (R4). The `bool` is `true` for `!!`.
 pub type ShellRunner =
@@ -329,6 +334,8 @@ pub struct UiHooks {
     /// Switch the live session in place, returning the new transcript lines
     /// (R3).
     pub switch_session: Option<SwitchSession>,
+    /// Write a selection to the system clipboard, verified (R6).
+    pub copy_to_clipboard: Option<ClipboardWriter>,
 }
 
 /// Static inputs for the interface.
