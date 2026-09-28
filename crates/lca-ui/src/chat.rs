@@ -59,6 +59,18 @@ pub struct Chat {
     pub current_steer: Option<lca_protocol::SteerQueue>,
     /// A submitted prompt awaiting the loop's handoff.
     pub submitted: Option<String>,
+    /// Whether the fullscreen (alt-screen) renderer is active (FR-UI-21).
+    pub screen_mode: bool,
+    /// Ctrl+X seen, waiting for the chord's second key (external editor).
+    pending_ctrl_x: bool,
+    /// A pending prompt-jump target (a document line index).
+    jump_target: Option<usize>,
+    /// The open transcript search query (FR-UI-12), when any.
+    pub search: Option<String>,
+    /// Document lines matching the search query.
+    search_matches: Vec<usize>,
+    /// The current match.
+    search_index: usize,
 }
 
 impl Chat {
@@ -81,6 +93,7 @@ impl Chat {
             cwd: world.options.workspace.to_string_lossy().to_string(),
             ..Default::default()
         };
+        let screen_mode = world.options.fullscreen;
         Chat {
             transcript,
             editor,
@@ -93,6 +106,12 @@ impl Chat {
             pending: Vec::new(),
             current_steer: None,
             submitted: None,
+            screen_mode,
+            pending_ctrl_x: false,
+            jump_target: None,
+            search: None,
+            search_matches: Vec::new(),
+            search_index: 0,
         }
     }
 
@@ -221,7 +240,18 @@ impl Chat {
         out.push((self.theme.dim)(&"─".repeat(width as usize)));
 
         if let Some(notice) = &self.world.notice {
-            out.push((self.theme.warn)(&format!("• {notice}")));
+            // A notice can be multi-line (`/help`, `/hotkeys`, a command's
+            // block output); render each line rather than embedding a
+            // newline in one line string (which corrupts the screen).
+            for (i, line) in notice.split('\n').enumerate() {
+                let prefix = if i == 0 { "• " } else { "  " };
+                for wrapped in lca_tui::engine::text::wrap_text_with_ansi(
+                    &format!("{prefix}{line}"),
+                    width as usize,
+                ) {
+                    out.push((self.theme.warn)(&wrapped));
+                }
+            }
         }
 
         // The pending-messages band (ADR-0038).
@@ -418,6 +448,15 @@ impl Chat {
             }
             side_panel(viewport, width, &panel);
         }
+
+        // Highlight the search matches (FR-UI-12).
+        if let Some(query) = &self.search
+            && !query.is_empty()
+        {
+            for line in viewport.iter_mut() {
+                *line = highlight_matches(line, query);
+            }
+        }
     }
 
     /// Handle one raw input sequence. Returns what the loop should do.
@@ -426,8 +465,32 @@ impl Chat {
             return action;
         }
 
+        let key = keys::parse_key(data);
+        // The transcript search owns the keyboard while open (FR-UI-12).
+        if self.search.is_some() {
+            return self.handle_search_key(data, key.as_deref());
+        }
+        if key.as_deref() == Some("ctrl+r") {
+            self.search = Some(String::new());
+            self.search_matches.clear();
+            self.search_index = 0;
+            self.world.notice = Some("search: ".to_string());
+            return Action::Continue;
+        }
+        // Ctrl+X Ctrl+E opens the external editor (FR-UI-15).
+        if self.pending_ctrl_x {
+            self.pending_ctrl_x = false;
+            if key.as_deref() == Some("ctrl+e") {
+                return Action::ExternalEditor;
+            }
+        }
+        if key.as_deref() == Some("ctrl+x") {
+            self.pending_ctrl_x = true;
+            return Action::Continue;
+        }
+
         // Ctrl+P toggles the side panel (a host binding, not an extension's).
-        if keys::parse_key(data).as_deref() == Some("ctrl+p") {
+        if key.as_deref() == Some("ctrl+p") {
             self.world.panel_open = !self.world.panel_open;
             return Action::Continue;
         }
@@ -439,8 +502,88 @@ impl Chat {
         }
     }
 
+    /// Handle a key while the transcript search is open (FR-UI-12).
+    fn handle_search_key(&mut self, data: &str, key: Option<&str>) -> Action {
+        let mut query = self.search.take().unwrap_or_default();
+        match key {
+            Some("escape") => {
+                self.search = None;
+                self.search_matches.clear();
+                self.world.notice = None;
+                return Action::Continue;
+            }
+            Some("enter") => {
+                self.search_next();
+                self.search = Some(query);
+                return Action::Continue;
+            }
+            Some("backspace") => {
+                query.pop();
+            }
+            _ => {
+                if let Some(text) = printable(data) {
+                    query.push_str(&text);
+                }
+            }
+        }
+        self.search = Some(query.clone());
+        self.refresh_search();
+        self.world.notice = Some(format!(
+            "search: {query}{}",
+            if self.search_matches.is_empty() {
+                "  (no matches)".to_string()
+            } else {
+                format!(
+                    "  [{}/{}]",
+                    self.search_index + 1,
+                    self.search_matches.len()
+                )
+            }
+        ));
+        Action::Continue
+    }
+
+    /// Recompute the search matches against the current document.
+    fn refresh_search(&mut self) {
+        let query = self.search.clone().unwrap_or_default();
+        self.search_matches.clear();
+        self.search_index = 0;
+        if query.is_empty() {
+            return;
+        }
+        let width = self.world.size.0.max(1);
+        let lower = query.to_lowercase();
+        for (index, line) in self.render(width).iter().enumerate() {
+            if strip_ansi(line).to_lowercase().contains(&lower) {
+                self.search_matches.push(index);
+            }
+        }
+        if let Some(&first) = self.search_matches.first() {
+            self.jump_target = Some(first);
+        }
+    }
+
+    /// Move to the next search match (FR-UI-12).
+    fn search_next(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        self.search_index = (self.search_index + 1) % self.search_matches.len();
+        self.jump_target = Some(self.search_matches[self.search_index]);
+    }
+
     /// Keys the editor does not claim (the escape ladder, cancel, exit).
     fn global_key(&mut self, data: &str) -> Action {
+        // Prompt jump (FR-UI-11): the authoritative matcher, since the
+        // arrow-modifier dialects are not all round-tripped by `parse_key`.
+        if keys::matches_key(data, "alt+up") || keys::matches_key(data, "ctrl+up") {
+            self.jump_prompt(-1);
+            return Action::Continue;
+        }
+        if keys::matches_key(data, "alt+down") || keys::matches_key(data, "ctrl+down") {
+            self.jump_prompt(1);
+            return Action::Continue;
+        }
         match keys::parse_key(data).as_deref() {
             Some("ctrl+c") => {
                 if self.turn_running {
@@ -658,6 +801,10 @@ impl Chat {
         if trimmed.is_empty() {
             return Action::Continue;
         }
+        // `!cmd` / `!!cmd` shell mode (FR-UI-14).
+        if trimmed.starts_with('!') {
+            return self.run_shell_mode(trimmed);
+        }
         if trimmed.starts_with('/') {
             return self.dispatch_command(trimmed);
         }
@@ -708,6 +855,30 @@ impl Chat {
         Some(next.text)
     }
 
+    /// Run a `!`/`!!` shell command and show it as a bash card (FR-UI-14).
+    fn run_shell_mode(&mut self, line: &str) -> Action {
+        let excluded = line.starts_with("!!");
+        let command = line.trim_start_matches('!').trim();
+        if command.is_empty() {
+            return Action::Continue;
+        }
+        let Some(run_shell) = self.world.options.hooks.run_shell.clone() else {
+            self.world.notice = Some("shell mode is not available in this host".to_string());
+            return Action::Continue;
+        };
+        // The command card is visible either way; the host records the
+        // command for the model's context only when it is not `!!`.
+        self.transcript.start_tool("bash", command.to_string());
+        let output = run_shell(command, excluded);
+        self.transcript.finish_tool(ToolStatus::Ok, Some(output));
+        self.world.notice = Some(if excluded {
+            format!("ran `{command}` (excluded from context)")
+        } else {
+            format!("ran `{command}`")
+        });
+        Action::Continue
+    }
+
     /// Dispatch a slash command line.
     fn dispatch_command(&mut self, line: &str) -> Action {
         let command_line = line.strip_prefix('/').unwrap_or(line);
@@ -718,6 +889,25 @@ impl Chat {
         match name.as_str() {
             "help" => {
                 self.world.notice = Some(help_notice(&self.world.options.slash_commands));
+                return Action::Continue;
+            }
+            "hotkeys" => {
+                self.world.notice = Some(hotkeys_notice());
+                return Action::Continue;
+            }
+            "fullscreen" => {
+                self.screen_mode = !self.screen_mode;
+                if let Some(persist) = &self.world.options.hooks.persist_screen_mode {
+                    persist(self.screen_mode);
+                }
+                self.world.notice = Some(format!(
+                    "screen mode: {}",
+                    if self.screen_mode {
+                        "fullscreen"
+                    } else {
+                        "scrollback"
+                    }
+                ));
                 return Action::Continue;
             }
             "quit" | "exit" => return Action::Exit,
@@ -771,6 +961,29 @@ impl Chat {
         Action::Continue
     }
 
+    /// Move the prompt-jump target to the previous/next user message
+    /// (FR-UI-11). The scroll is applied by the loop on the next frame.
+    fn jump_prompt(&mut self, delta: i32) {
+        let width = self.world.size.0.max(1);
+        let offsets = self.transcript.user_offsets(width, &self.theme);
+        if offsets.is_empty() {
+            return;
+        }
+        let current = self.jump_target.unwrap_or(0);
+        let index = offsets.iter().position(|&o| o >= current).unwrap_or(0) as i32;
+        let next = (index + delta).clamp(0, offsets.len() as i32 - 1) as usize;
+        self.jump_target = Some(offsets[next]);
+    }
+
+    /// The scroll value that centers a pending jump target, if any
+    /// (FR-UI-11). Cleared once taken.
+    pub fn take_jump_scroll(&mut self, width: u16, height: u16) -> Option<u16> {
+        let target = self.jump_target.take()?;
+        let total = self.render(width).len();
+        let scroll = total.saturating_sub(target + height as usize / 2);
+        Some(scroll.min(u16::MAX as usize) as u16)
+    }
+
     /// Restore the queued messages to the editor, in order (FR-CORE-12).
     pub fn restore_pending(&mut self) {
         if self.pending.is_empty() {
@@ -792,6 +1005,40 @@ impl Chat {
         }
         self.editor.insert_str(&text);
     }
+}
+
+/// The visible text of a line with ANSI stripped (for search matching).
+fn strip_ansi(line: &str) -> String {
+    lca_tui::engine::text::strip_terminal_sequences(line)
+}
+
+/// Wrap case-insensitive occurrences of `query` in inverse video
+/// (char-boundary-safe; skips a line when case folding changes its length).
+fn highlight_matches(line: &str, query: &str) -> String {
+    let line_chars: Vec<char> = line.chars().collect();
+    let query_chars: Vec<char> = query.to_lowercase().chars().collect();
+    if query_chars.is_empty() {
+        return line.to_string();
+    }
+    let lower: Vec<char> = line.to_lowercase().chars().collect();
+    if lower.len() != line_chars.len() {
+        return line.to_string();
+    }
+    let mut out = String::new();
+    let mut i = 0;
+    while i + query_chars.len() <= line_chars.len() {
+        if lower[i..i + query_chars.len()] == query_chars[..] {
+            out.push_str("\x1b[7m");
+            out.extend(&line_chars[i..i + query_chars.len()]);
+            out.push_str("\x1b[27m");
+            i += query_chars.len();
+        } else {
+            out.push(line_chars[i]);
+            i += 1;
+        }
+    }
+    out.extend(&line_chars[i..]);
+    out
 }
 
 /// Decode the printable text a key inserts, if any.
@@ -867,6 +1114,8 @@ fn provider_for(options: &UiOptions) -> CombinedAutocompleteProvider {
 fn command_help(command: &str) -> &'static str {
     match command {
         "/help" => "list commands and keys",
+        "/hotkeys" => "list every key binding",
+        "/fullscreen" => "toggle fullscreen and scrollback renderers",
         "/exit" => "leave the interface",
         "/login" => "sign in to a provider",
         "/logout" => "clear the provider's stored key",
@@ -876,6 +1125,20 @@ fn command_help(command: &str) -> &'static str {
         "/attach" => "attach an image to the next message",
         _ => "",
     }
+}
+
+/// The `/hotkeys` text: the binding registry prints itself.
+fn hotkeys_notice() -> String {
+    let kb = KeybindingsManager::new();
+    let mut lines = vec!["keys:".to_string()];
+    for (action, keys) in kb.resolved_bindings() {
+        if keys.is_empty() {
+            continue;
+        }
+        let description = kb.description(&action).unwrap_or("");
+        lines.push(format!("  {} - {description}", keys.join(", ")));
+    }
+    lines.join("\n")
 }
 
 /// The `/help` text: the commands the interface offers, then the keys.
@@ -921,6 +1184,8 @@ mod tests {
             complete_login: None,
             pick_login: None,
             confirm_login_grant: None,
+            hooks: crate::state::UiHooks::default(),
+            fullscreen: true,
         }
     }
 
@@ -1088,6 +1353,124 @@ mod tests {
         assert_eq!(chat.take_next_pending().as_deref(), Some("first"));
         assert_eq!(chat.take_next_pending().as_deref(), Some("second"));
         assert!(chat.take_next_pending().is_none());
+    }
+
+    // Verifies: FR-UI-14 - `!cmd` runs and shows a bash card; `!!` is
+    // excluded from context.
+    #[test]
+    fn shell_mode_shows_a_bash_card() {
+        let mut options = options();
+        options.hooks.run_shell = Some(Arc::new(|cmd: &str, excluded: bool| {
+            format!("ran {cmd} excluded={excluded}")
+        }));
+        let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+        for c in "!!echo hi".chars() {
+            chat.handle_key(&c.to_string());
+        }
+        assert_eq!(chat.handle_key("\r"), Action::Continue);
+        let text = strip(&chat.render(80)).join("\n");
+        assert!(text.contains("bash"), "{text}");
+        assert!(text.contains("echo hi"), "{text}");
+        assert!(text.contains("excluded=true"), "{text}");
+    }
+
+    // Verifies: FR-UI-15 - Ctrl+X Ctrl+E asks the loop for the external editor.
+    #[test]
+    fn ctrl_x_ctrl_e_opens_the_external_editor() {
+        let mut chat = chat();
+        assert_eq!(chat.handle_key("\x18"), Action::Continue); // Ctrl+X
+        assert_eq!(chat.handle_key("\x05"), Action::ExternalEditor); // Ctrl+E
+    }
+
+    // Verifies: FR-UI-21 - `/fullscreen` toggles the screen mode and persists.
+    #[test]
+    fn fullscreen_toggles_and_persists() {
+        let persisted = Arc::new(std::sync::Mutex::new(None));
+        let sink = persisted.clone();
+        let mut options = options();
+        options.fullscreen = true;
+        options.hooks.persist_screen_mode = Some(Arc::new(move |fullscreen| {
+            *sink.lock().unwrap() = Some(fullscreen);
+        }));
+        let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+        assert!(chat.screen_mode);
+        for c in "/fullscreen".chars() {
+            chat.handle_key(&c.to_string());
+        }
+        chat.handle_key("\r");
+        assert!(!chat.screen_mode);
+        assert_eq!(*persisted.lock().unwrap(), Some(false));
+    }
+
+    // Verifies: FR-UI-11 - Alt+Up/Down hop between the user's own messages.
+    #[test]
+    fn alt_up_and_down_jump_between_prompts() {
+        let mut chat = chat();
+        chat.world.resize(80, 24);
+        chat.transcript.push_user("first question");
+        chat.transcript.append_text("an answer");
+        chat.transcript.finish_assistant();
+        chat.transcript.push_user("second question");
+        assert!(chat.transcript.user_offsets(80, &chat.theme).len() >= 2);
+        assert_eq!(chat.handle_key("\x1b[1;3A"), Action::Continue); // Alt+Up
+        assert!(chat.jump_target.is_some());
+        assert!(chat.take_jump_scroll(80, 24).is_some());
+        assert_eq!(chat.handle_key("\x1b[1;3B"), Action::Continue); // Alt+Down
+        assert!(chat.jump_target.is_some());
+    }
+
+    // Verifies: FR-UI-12 - Ctrl+R searches the transcript, highlights
+    // matches, and navigates between them.
+    #[test]
+    fn ctrl_r_searches_the_transcript() {
+        let mut chat = chat();
+        chat.world.resize(80, 24);
+        chat.transcript.push_user("alpha question");
+        chat.transcript.append_text("an answer");
+        chat.transcript.finish_assistant();
+        chat.transcript.push_user("beta question");
+        chat.handle_key("\x12"); // Ctrl+R
+        assert!(chat.search.is_some());
+        for c in "question".chars() {
+            chat.handle_key(&c.to_string());
+        }
+        assert_eq!(chat.search.as_deref(), Some("question"));
+        assert!(chat.search_matches.len() >= 2, "two prompts match");
+        assert!(chat.jump_target.is_some());
+        chat.handle_key("\r"); // next match
+        assert!(chat.search_index >= 1);
+        let viewport = chat.viewport(80, 24, 0);
+        assert!(
+            viewport.iter().any(|l| l.contains("\x1b[7m")),
+            "matches are highlighted"
+        );
+        chat.handle_key("\x1b"); // escape closes
+        assert!(chat.search.is_none());
+    }
+
+    // Verifies: FR-UI-20 - the status area shows the cwd, the active model,
+    // and the queued-message count.
+    #[test]
+    fn status_area_shows_cwd_model_and_queue() {
+        let mut chat = chat();
+        chat.begin_turn(lca_protocol::steer_queue());
+        chat.queue_submit("queued".into(), lca_protocol::SubmitMode::FollowUp);
+        let text = strip(&chat.render(120)).join("\n");
+        assert!(text.contains("p/m"), "model shown:\n{text}");
+        assert!(text.contains("1 queued"), "queue count shown:\n{text}");
+    }
+
+    // Verifies: FR-UI-21 - `/hotkeys` prints the binding registry.
+    #[test]
+    fn hotkeys_lists_bindings() {
+        let mut chat = chat();
+        for c in "/hotkeys".chars() {
+            chat.handle_key(&c.to_string());
+        }
+        chat.handle_key("\r");
+        let notice = chat.world.notice.as_deref().unwrap_or_default();
+        assert!(notice.contains("keys:"), "{notice}");
+        assert!(notice.contains("enter"), "{notice}");
     }
 
     // Verifies: FR-CORE-12 - edit-all-queued returns the queue to the editor

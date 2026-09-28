@@ -85,3 +85,7 @@ mod release_targets_gate;
 // an SSE provider stream painted only at the end (owner issue #4).
 #[path = "26-net-read-body-streams.rs"]
 mod net_read_body_streams;
+// tui-port2 P6: a multi-line notice wrote embedded newlines to the
+// terminal and corrupted the screen.
+#[path = "27-multiline-notice-render.rs"]
+mod multiline_notice_render;

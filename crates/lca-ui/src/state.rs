@@ -268,6 +268,29 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
     out
 }
 
+/// Runs a `!`/`!!` shell command; the `bool` is `true` for `!!`.
+pub type ShellRunner = Arc<dyn Fn(&str, bool) -> String + Send + Sync>;
+/// Opens the external editor on the prompt text.
+pub type ExternalEditor = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+/// Persists a runtime screen-mode change.
+pub type ScreenModePersist = Arc<dyn Fn(bool) + Send + Sync>;
+
+/// Optional host hooks the interface calls (P6): an external editor, the
+/// `!`/`!!` shell path, and screen-mode persistence. Default: all absent,
+/// so a host that wires none still gets the in-app behavior.
+#[derive(Default)]
+pub struct UiHooks {
+    /// Run a shell command for `!`/`!!` mode; the `bool` is `true` for
+    /// `!!` (excluded from the model's context). Returns the combined
+    /// output to show in the transcript.
+    pub run_shell: Option<ShellRunner>,
+    /// Open `$EDITOR`/`$VISUAL` on the prompt text; `None` aborts. The
+    /// terminal is restored around the call.
+    pub external_editor: Option<ExternalEditor>,
+    /// Persist a runtime screen-mode change (fullscreen = `true`).
+    pub persist_screen_mode: Option<ScreenModePersist>,
+}
+
 /// Static inputs for the interface.
 pub struct UiOptions {
     /// `provider/model` for the status line - a cell, because the
@@ -305,6 +328,10 @@ pub struct UiOptions {
     pub pick_login: Option<LoginPick>,
     /// Persists an ad hoc `net` grant the user approved at login.
     pub confirm_login_grant: Option<LoginConfirm>,
+    /// Host hooks (P6).
+    pub hooks: UiHooks,
+    /// Whether the session starts in the fullscreen (alt-screen) renderer.
+    pub fullscreen: bool,
 }
 
 /// The permission modal: what is being asked, and how to answer.
@@ -397,6 +424,8 @@ pub enum Action {
     Submit,
     /// Cancel the running turn (FR-CORE-5).
     CancelTurn,
+    /// Open the external editor on the prompt text (FR-UI-15).
+    ExternalEditor,
     /// Exit the interface.
     Exit,
 }
@@ -507,6 +536,8 @@ mod tests {
             complete_login: None,
             pick_login: None,
             confirm_login_grant: None,
+            hooks: UiHooks::default(),
+            fullscreen: true,
         }
     }
 

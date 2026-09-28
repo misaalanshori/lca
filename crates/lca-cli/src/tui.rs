@@ -721,6 +721,72 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         pick_login: Some(pick_seam),
         complete_login: Some(login_complete),
         confirm_login_grant: Some(login_confirm),
+        hooks: lca_ui::UiHooks {
+            run_shell: Some({
+                let shell_store = store.clone();
+                let shell_session = session.clone();
+                Arc::new(move |command: &str, excluded: bool| {
+                    // `!` is context; `!!` is not (FR-UI-14).
+                    if !excluded {
+                        let _ = shell_store.append(
+                            &shell_session,
+                            Record::User {
+                                v: lca_protocol::FORMAT_VERSION,
+                                ts: lca_session::now_ms(),
+                                id: lca_session::new_record_id(),
+                                content: format!("!{command}"),
+                                attachments: Vec::new(),
+                                queue: None,
+                            },
+                        );
+                    }
+                    match std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(command)
+                        .output()
+                    {
+                        Ok(out) => {
+                            let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+                            text.push_str(&String::from_utf8_lossy(&out.stderr));
+                            if text.trim().is_empty() {
+                                text = format!("(no output; exit {:?})", out.status.code());
+                            }
+                            lca_ui::sanitize_block(&text)
+                        }
+                        Err(err) => format!("shell failed: {err}"),
+                    }
+                })
+            }),
+            external_editor: Some(Arc::new(|text: &str| {
+                let editor = std::env::var("VISUAL")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.is_empty()))?;
+                let path =
+                    std::env::temp_dir().join(format!("lca-prompt-{}.md", std::process::id()));
+                std::fs::write(&path, text).ok()?;
+                let status = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(format!("{editor} {}", path.display()))
+                    .status()
+                    .ok()?;
+                let edited = std::fs::read_to_string(&path).ok();
+                let _ = std::fs::remove_file(&path);
+                status.success().then_some(edited).flatten()
+            })),
+            persist_screen_mode: Some({
+                let path = crate::config_dir().join("ui.json");
+                Arc::new(move |fullscreen: bool| {
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(&path, format!("{{\"fullscreen\":{fullscreen}}}"));
+                })
+            }),
+        },
+        fullscreen: std::fs::read_to_string(crate::config_dir().join("ui.json"))
+            .map(|s| !s.contains("false"))
+            .unwrap_or(true),
         slash_commands: {
             let mut names: Vec<String> = BUILTIN_SLOTS
                 .iter()
@@ -732,6 +798,8 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             // them first.
             names.insert(0, "/help".to_string());
             names.insert(1, "/exit".to_string());
+            names.insert(2, "/hotkeys".to_string());
+            names.insert(3, "/fullscreen".to_string());
             // Extension command names reach completion (and the screen);
             // sanitized because an extension chose these strings.
             names.extend(

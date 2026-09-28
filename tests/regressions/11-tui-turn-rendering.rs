@@ -34,6 +34,8 @@ fn chat() -> Chat {
             complete_login: None,
             pick_login: None,
             confirm_login_grant: None,
+            hooks: lca_ui::UiHooks::default(),
+            fullscreen: true,
         },
         Arc::new(KeybindingsManager::new()),
     )

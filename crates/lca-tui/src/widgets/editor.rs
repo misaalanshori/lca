@@ -736,6 +736,7 @@ mod tests {
         assert_eq!(e.text(), "hello");
     }
 
+    // Verifies: FR-UI-10 - a multi-line paste is one atomic segment.
     #[test]
     fn large_paste_becomes_a_marker() {
         let mut e = Editor::new();

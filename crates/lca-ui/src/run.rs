@@ -1,7 +1,12 @@
 //! The interactive loop on the engine: raw input flows through the engine's
 //! parser into the chat's pi pipeline; the chat composes line strings and
-//! the alt-screen renderer diffs them. The interactive path never goes
-//! through a second input crate (ADR-0037).
+//! the active renderer diffs them. The interactive path never goes through
+//! a second input crate (ADR-0037).
+//!
+//! Two renderers coexist (FR-UI-21): the fullscreen (alt-screen) renderer
+//! owns selection and is the default, and the main-screen renderer leaves
+//! the terminal's own scrollback and selection in charge. `/fullscreen`
+//! swaps them at runtime.
 
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -9,10 +14,102 @@ use std::sync::mpsc::Receiver;
 use lca_protocol::{StopReason, TurnOutcome, TurnStatus, Usage};
 use lca_tui::engine::alt_screen::AltScreenRenderer;
 use lca_tui::engine::keybindings::KeybindingsManager;
-use lca_tui::engine::terminal::{ProcessTerminal, Terminal};
+use lca_tui::engine::main_screen::MainScreenRenderer;
+use lca_tui::engine::terminal::{InputHandler, ProcessTerminal, ResizeHandler, Terminal};
 
 use crate::chat::Chat;
 use crate::state::{Action, PermissionModal, PromptRequest, TurnChannels, TurnRunner, UiOptions};
+
+/// The active screen renderer.
+enum Screen {
+    /// Fullscreen with app-owned selection.
+    Alt(AltScreenRenderer),
+    /// The terminal's own scrollback and selection.
+    Main(MainScreenRenderer),
+}
+
+impl Screen {
+    fn is_fullscreen(&self) -> bool {
+        matches!(self, Screen::Alt(_))
+    }
+
+    fn enter(&mut self, term: &mut dyn Terminal) {
+        if let Screen::Alt(r) = self {
+            r.enter(term);
+        }
+    }
+
+    fn leave(&mut self, term: &mut dyn Terminal, preserve: bool) {
+        if let Screen::Alt(r) = self {
+            r.leave(term, preserve);
+        }
+    }
+
+    fn scroll(&self) -> u16 {
+        match self {
+            Screen::Alt(r) => r.scroll,
+            Screen::Main(_) => 0,
+        }
+    }
+
+    fn render(
+        &mut self,
+        term: &mut dyn Terminal,
+        lines: Vec<String>,
+        width: u16,
+        height: u16,
+    ) -> Option<(u16, u16)> {
+        match self {
+            Screen::Alt(r) => r.render_lines(term, lines, width, height),
+            Screen::Main(r) => r.render(term, lines, width, height),
+        }
+    }
+
+    fn handle_mouse(&mut self, data: &str) -> bool {
+        match self {
+            Screen::Alt(r) => r.handle_input(data),
+            Screen::Main(_) => false,
+        }
+    }
+
+    fn copy_on_select(&self) -> bool {
+        matches!(self, Screen::Alt(r) if r.copy_on_select)
+    }
+
+    fn selected_text(&self) -> String {
+        match self {
+            Screen::Alt(r) => r.selected_text(),
+            Screen::Main(_) => String::new(),
+        }
+    }
+
+    fn copy_osc52(&self, term: &mut dyn Terminal, text: &str) {
+        if let Screen::Alt(r) = self {
+            r.copy_osc52(term, text);
+        }
+    }
+
+    fn set_scroll(&mut self, scroll: u16) {
+        if let Screen::Alt(r) = self {
+            r.scroll = scroll;
+        }
+    }
+}
+
+fn switch_screen(screen: &mut Screen, fullscreen: bool, term: &mut dyn Terminal) {
+    match (screen.is_fullscreen(), fullscreen) {
+        (true, false) => {
+            screen.leave(term, true);
+            *screen = Screen::Main(MainScreenRenderer::new());
+        }
+        (false, true) => {
+            let mut alt = AltScreenRenderer::new();
+            alt.enter(term);
+            *screen = Screen::Alt(alt);
+        }
+        _ => {}
+    }
+}
 
 /// Run the interface until the user exits.
 pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
@@ -21,20 +118,28 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     let mut terminal = ProcessTerminal::new();
     let (input_tx, input_rx) = std::sync::mpsc::channel::<String>();
     let (resize_tx, resize_rx) = std::sync::mpsc::channel::<()>();
+    let itx = input_tx.clone();
+    let rtx = resize_tx.clone();
     terminal.start(
         Box::new(move |data| {
-            let _ = input_tx.send(data);
+            let _ = itx.send(data);
         }),
         Box::new(move || {
-            let _ = resize_tx.send(());
+            let _ = rtx.send(());
         }),
     );
-    let mut renderer = AltScreenRenderer::new();
-    renderer.enter(&mut terminal);
+    let mut screen = if chat.screen_mode {
+        let mut alt = AltScreenRenderer::new();
+        alt.enter(&mut terminal);
+        Screen::Alt(alt)
+    } else {
+        Screen::Main(MainScreenRenderer::new())
+    };
     terminal.set_title(&format!(
         "lca — {}",
         chat.world.options.workspace.to_string_lossy()
     ));
+    chat.world.resize(terminal.columns(), terminal.rows());
 
     let mut active_turn: Option<std::thread::JoinHandle<TurnOutcome>> = None;
     let mut turn_rx: Option<Receiver<lca_protocol::TurnEvent>> = None;
@@ -123,11 +228,20 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             dirty = true;
         }
 
+        // The screen mode can change at runtime (FR-UI-21).
+        if screen.is_fullscreen() != chat.screen_mode {
+            switch_screen(&mut screen, chat.screen_mode, &mut terminal);
+            dirty = true;
+        }
+
         if dirty {
             let width = terminal.columns();
             let height = terminal.rows();
-            let viewport = chat.viewport(width, height, renderer.scroll);
-            renderer.render_lines(&mut terminal, viewport, width, height);
+            if let Some(scroll) = chat.take_jump_scroll(width, height) {
+                screen.set_scroll(scroll);
+            }
+            let viewport = chat.viewport(width, height, screen.scroll());
+            screen.render(&mut terminal, viewport, width, height);
             dirty = false;
         }
 
@@ -136,13 +250,13 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             Ok(data) => {
                 // Mouse (selection, wheel) is the renderer's.
                 if data.starts_with("\x1b[<") {
-                    renderer.handle_input(&data);
+                    screen.handle_mouse(&data);
                     // Copy on release (issue #2): a completed selection is
                     // written to the clipboard via OSC 52.
-                    if data.ends_with('m') && renderer.copy_on_select {
-                        let text = renderer.selected_text();
+                    if data.ends_with('m') && screen.copy_on_select() {
+                        let text = screen.selected_text();
                         if !text.is_empty() {
-                            renderer.copy_osc52(&mut terminal, &text);
+                            screen.copy_osc52(&mut terminal, &text);
                         }
                     }
                     dirty = true;
@@ -155,6 +269,28 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                         aborted = true;
                         if let Some(cancel) = &cancel_flag {
                             cancel.cancel();
+                        }
+                    }
+                    Action::ExternalEditor => {
+                        if let Some(editor) = chat.world.options.hooks.external_editor.clone() {
+                            let text = chat.editor.text();
+                            screen.leave(&mut terminal, true);
+                            terminal.stop();
+                            let edited = editor(&text);
+                            let itx = input_tx.clone();
+                            let rtx = resize_tx.clone();
+                            terminal.start(
+                                Box::new(move |d| {
+                                    let _ = itx.send(d);
+                                }) as InputHandler,
+                                Box::new(move || {
+                                    let _ = rtx.send(());
+                                }) as ResizeHandler,
+                            );
+                            screen.enter(&mut terminal);
+                            if let Some(edited) = edited {
+                                chat.editor.set_text(&edited);
+                            }
                         }
                     }
                     Action::Exit => break 'main Ok(()),
@@ -178,7 +314,7 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     if let Some(handle) = active_turn {
         let _ = handle.join();
     }
-    renderer.leave(&mut terminal, false);
+    screen.leave(&mut terminal, false);
     terminal.drain_input(1000, 50);
     terminal.stop();
     result.map(|()| 0)

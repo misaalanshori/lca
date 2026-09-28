@@ -211,6 +211,9 @@ impl Terminal for ProcessTerminal {
         if sys::stdin_is_tty() {
             self.raw_state = sys::enable_raw_mode().ok();
         }
+        // A previous `stop` set the shutdown flag; clear it so a restart
+        // (the external editor) gets a live reader thread.
+        self.shared.shutdown.store(false, Ordering::SeqCst);
         let shared = self.shared.clone();
         self.raw_write("\x1b[?2004h");
         let escape_timeout = resolve_escape_timeout_ms();
@@ -569,6 +572,19 @@ impl Terminal for FakeTerminal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_clears_the_shutdown_flag() {
+        // The external editor stops and restarts the terminal; without a
+        // reset the new reader thread sees the old shutdown flag and dies.
+        let mut term = ProcessTerminal::new();
+        term.start(Box::new(|_| {}), Box::new(|| {}));
+        term.stop();
+        assert!(term.shared.shutdown.load(Ordering::SeqCst));
+        term.start(Box::new(|_| {}), Box::new(|| {}));
+        assert!(!term.shared.shutdown.load(Ordering::SeqCst));
+        term.stop();
+    }
 
     #[test]
     fn negotiation_replies_parse() {

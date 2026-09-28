@@ -210,42 +210,28 @@ impl Transcript {
             if i > 0 {
                 out.push(String::new()); // separate messages (#6)
             }
-            match entry {
-                Entry::User(text) => render_user(text, width, theme, &mut out),
-                Entry::Assistant {
-                    text,
-                    reasoning,
-                    streaming,
-                } => render_assistant(text, reasoning, *streaming, width, theme, &mut out),
-                Entry::Tool {
-                    name,
-                    args,
-                    status,
-                    result,
-                } => render_tool(
-                    name,
-                    args,
-                    *status,
-                    result.as_deref(),
-                    width,
-                    theme,
-                    &mut out,
-                ),
-                Entry::Notice(text) => {
-                    out.extend(wrap_text_with_ansi(&(theme.dim)(text), width as usize));
-                }
-                Entry::Error(text) => {
-                    out.extend(wrap_text_with_ansi(&(theme.error)(text), width as usize));
-                }
-                Entry::Raw(text) => {
-                    out.extend(wrap_text_with_ansi(text, width as usize));
-                }
-                Entry::Image(info) => {
-                    out.extend(render_image_placeholder(info, width as usize));
-                }
-            }
+            render_entry(entry, width, theme, &mut out);
         }
         out
+    }
+
+    /// The document line index where each user message starts, at `width`
+    /// (FR-UI-11's prompt jump).
+    pub fn user_offsets(&self, width: u16, theme: &Theme) -> Vec<usize> {
+        let mut offsets = Vec::new();
+        let mut line = 0usize;
+        for (i, entry) in self.entries.iter().enumerate() {
+            if i > 0 {
+                line += 1;
+            }
+            if matches!(entry, Entry::User(_)) {
+                offsets.push(line);
+            }
+            let mut tmp = Vec::new();
+            render_entry(entry, width, theme, &mut tmp);
+            line += tmp.len();
+        }
+        offsets
     }
 
     /// The height (line count) at a width.
@@ -262,6 +248,35 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
         _ => "unknown size".to_string(),
     };
     format!("[image {media_type}, {dimensions}, {} bytes]", bytes.len())
+}
+
+fn render_entry(entry: &Entry, width: u16, theme: &Theme, out: &mut Vec<String>) {
+    match entry {
+        Entry::User(text) => render_user(text, width, theme, out),
+        Entry::Assistant {
+            text,
+            reasoning,
+            streaming,
+        } => render_assistant(text, reasoning, *streaming, width, theme, out),
+        Entry::Tool {
+            name,
+            args,
+            status,
+            result,
+        } => render_tool(name, args, *status, result.as_deref(), width, theme, out),
+        Entry::Notice(text) => {
+            out.extend(wrap_text_with_ansi(&(theme.dim)(text), width as usize));
+        }
+        Entry::Error(text) => {
+            out.extend(wrap_text_with_ansi(&(theme.error)(text), width as usize));
+        }
+        Entry::Raw(text) => {
+            out.extend(wrap_text_with_ansi(text, width as usize));
+        }
+        Entry::Image(info) => {
+            out.extend(render_image_placeholder(info, width as usize));
+        }
+    }
 }
 
 fn render_user(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
