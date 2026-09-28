@@ -6,6 +6,15 @@ Dates are UTC.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-29
+
+The TUI renovation release. Cycles 2–4 rebuilt the interface on LCA's own
+terminal engine (pi's design, ported) and this tag closes the chapter: the
+post-review findings are fixed, the theme is the full pi vocabulary, the
+grant store is visible, and the code is under the house's structure rules.
+It carries **`abi 0.5`** — a **relabel** of the 0.4 line: no interface
+bytes changed, exactly as the 0.4 train carried 0.2's changes forward.
+
 ### Added
 
 - **Steering.** A prompt submitted while a turn runs queues instead of being dropped: `Steer` joins the turn's input at the next model-call boundary, `FollowUp` (Alt+Enter) auto-runs at turn end, the pending band and the footer show the queue, and an aborted turn returns it to the editor (ADR-0038, FR-CORE-11/12).
@@ -21,6 +30,13 @@ Dates are UTC.
 - **Cycle 3: verified clipboard and edge auto-scroll (R6).** Copy-on-release prefers a native clipboard command and reports honestly when only OSC 52 ran; a selection drag on a viewport edge auto-scrolls.
 - **Cycle 3: OSC 11 dark/light detection (R10).** The interface queries the terminal's background color and color-scheme preference at startup.
 - **Streaming-tolerant markdown.** Tables wait for an intact separator row, partial pipes render as text, unpaired inline markers stay literal, and the code-block border caps at the content width (FR-UI-7/8).
+- **Cycle 4: the full theme vocabulary (S5).** The ~50 pi theme roles replaced three hard-coded palettes behind the same accessors; `ui.theme` takes `auto`, a built-in (`dark`/`light`/`plain`), or a custom theme file at `<config>/lca/themes/<name>.toml` (`<name>.light.toml` / `<name>.dark.toml` for a scheme pair). A file overlays only the roles it names, resolves a `vars` table, and accepts `#rrggbb`, a bare 256-color index, or `""`; an invalid file keeps the last-good palette and says why, and `/theme` lists custom themes with the active one marked.
+- **Cycle 4: the grants view (S8).** `/grants` shows the project's grants in the store's own granularity: the install-consent group (extension enablement and the approved proposal set, whose revoke path is `lca ext disable <name>`) and the ad hoc group (shell/file patterns and `net` grants, revocable in place). `/settings` points at it.
+
+### Changed
+
+- **Cycle 4: the god files are gone (S1/S2/S3).** `lca-cli/src/tui.rs` (1,697 lines, a ~1,000-line `run`) is a composition root (`tui/` with `run` orchestration, options/commands, hooks, login, runner, display); `lca-core/src/lib.rs` (1,579) is `assemble`/`compact`/`turn`/`lib`. No file in the workspace is over 1,200 lines, the panic lints run workspace-wide, and every lock helper is poison-tolerant.
+- **Cycle 4: custom themes are TOML**, the project's one configuration format (ADR-0036 addendum).
 
 ### Changed
 
@@ -33,6 +49,11 @@ Dates are UTC.
 ### Fixed
 
 - **Cycle 3: cancelling the permission auto-approve countdown** kept the modal but dropped its responder, so a later Allow/Deny was a no-op (R11).
+- **Cycle 4: the overlay and code-block frames** drew a left-only border (no top-right or bottom-right corner); both are full frames now.
+- **Cycle 4: link URLs vanished under tmux** because OSC 8 was always emitted; the interface now follows the terminal's hyperlink capability and falls back to `text (url)`.
+- **Cycle 4: the context-use meter** never showed because its cells were never populated.
+- **Cycle 4: three silent truncation casts** (the scroll offset past `u16::MAX`, image rows at `u32`, and the wait timeout's `u64 as i32`) now saturate explicitly.
+- **Cycle 4: an empty-id model** from a provider that answered a model probe unparseably left the session with no model; it now falls back like an empty list does.
 
 ## [0.4.0] - 2026-09-27
 

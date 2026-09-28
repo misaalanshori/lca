@@ -15,7 +15,7 @@
 /// `abi 0.4` (docs/abi-versioning.md, ADR-0028's second annotation). The
 /// in-place 0.2 changes (typed image content, `provider-login`, the
 /// `list-models` settings parameter) are the train's breaking items.
-pub const ABI_VERSION: &str = "0.4";
+pub const ABI_VERSION: &str = "0.5";
 
 /// The WIT package name that crosses every manifest and registry tag.
 pub const PACKAGE: &str = "lca:ext";

@@ -360,8 +360,9 @@ fn wire(
         if configured.is_empty() {
             provider
                 .list_models()
-                .first()
-                .map(|model| model.id.clone())
+                .into_iter()
+                .map(|model| model.id)
+                .find(|id| !id.is_empty())
                 .unwrap_or_else(|| provider_name.to_string())
         } else {
             configured.to_string()

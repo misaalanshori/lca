@@ -1,15 +1,15 @@
-package lca:ext@0.4.0;
+package lca:ext@0.5.0;
 
 /// The `context-transform` world: reshape the resolved message list on
 /// every turn, touching nothing durable (ADR-0015, FR-CTX-2/3/4).
 world context-transform {
-  import lca:host/log@0.4.0;
-  import lca:host/resources@0.4.0;
-  import lca:host/state@0.4.0;
+  import lca:host/log@0.5.0;
+  import lca:host/resources@0.5.0;
+  import lca:host/state@0.5.0;
   /// Skills handling reads the workspace's skills directory through the
   /// declared `fs` scope; a transform that needs no files imports only
   /// the log.
-  import lca:host/fs@0.4.0;
+  import lca:host/fs@0.5.0;
   export transform;
 }
 

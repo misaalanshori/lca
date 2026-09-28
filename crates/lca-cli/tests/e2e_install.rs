@@ -128,7 +128,7 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
 
     // --- OCI install, consent shown and approved (FR-DIST-1).
     // `registry_addr` already renders host:port.
-    let reference = format!("{registry_addr}/library/openai-compatible:abi-0.4");
+    let reference = format!("{registry_addr}/library/openai-compatible:abi-0.5");
     let output = sandbox.run_with_stdin(Some(&model), &["ext", "install", &reference], "y\n");
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     let text = stdout(&output);
@@ -179,7 +179,7 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
     assert_eq!(component_dir.len(), 1, "one component, digest-named");
 
     // --- HTTPS archive install with its own consent (FR-DIST-9).
-    let url = format!("http://{archive_addr}/skills-abi-0.4.zip");
+    let url = format!("http://{archive_addr}/skills-abi-0.5.zip");
     let output = sandbox.run_with_stdin(Some(&model), &["ext", "install", &url], "yes\n");
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     let text = stdout(&output);
@@ -262,7 +262,7 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
     let archive2 = lca_registry::pack_archive(SKILLS_MANIFEST, SKILLS_COMPONENT).expect("pack");
     let runtime2 = rt();
     let archive_addr2 = runtime2.block_on(mock_archive(archive2));
-    let url2 = format!("http://{archive_addr2}/skills-abi-0.4.zip");
+    let url2 = format!("http://{archive_addr2}/skills-abi-0.5.zip");
     let output = sandbox.run_with_stdin(Some(&model), &["ext", "install", &url2], "");
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     assert!(stdout(&output).contains("aborted"), "{}", stdout(&output));

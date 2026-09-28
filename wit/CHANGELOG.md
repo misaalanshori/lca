@@ -8,7 +8,7 @@ and this label; this train carries the in-place 0.2 changes below under the
 0.4 label. The train's breaking item is `provider-models.list-models`'s new
 `settings` parameter (ADR-0035).
 
-**Migration:** rebuild against `@0.4.0`, declare `abi = "0.4"`, implement the
+**Migration (0.4.0):** rebuild against `@0.4.0`, declare `abi = "0.4"`, implement the
 `settings` parameter, and push both registry tags. A component still
 declaring `abi = "0.2"` is refused at the manifest check with a message
 naming the accepted `0.3..=0.4` window - a legible refusal, not a link error.
@@ -105,3 +105,17 @@ The initial surface, ahead of the Phase 8 freeze at 1.0.
   docs/abi-versioning.md): worlds `provider`, `ui`, `compaction`,
   `context-transform`; host imports `fs`, `net`, `net-local`, `oauth`,
   `credentials`, `process`, `pty`, `completion`, `ui`.
+
+## 0.5.0 (release train, 2026-09-29)
+
+The ABI label tracks the product minor (ADR-0028's second annotation):
+`lca 0.5.y` ships `abi 0.5`. **No interface bytes changed between the 0.4
+line and this label** — it is a relabel, carrying the same in-place 0.4
+interface forward under the 0.5 label, exactly as the 0.4 train carried
+0.2's changes forward.
+
+**Migration:** rebuild against `@0.5.0` and declare `abi = "0.5"`. A
+component still declaring `abi = "0.4"` keeps loading (the window accepts
+the previous line); one declaring `abi = "0.3"` is refused at the manifest
+check with a message naming the accepted `0.4..=0.5` window — a legible
+refusal, not a link error.

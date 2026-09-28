@@ -571,10 +571,14 @@ fn resolve_model_id(config: &Config, provider_is_ready: bool, provider: &dyn Pro
     if !configured.is_empty() {
         configured.to_string()
     } else if provider_is_ready {
+        // An empty id counts as no model: a provider that answered a model
+        // probe with something unparseable must not leave the session with
+        // a blank model label and a `complete` call the extension refuses.
         provider
             .list_models()
-            .first()
-            .map(|model| model.id.clone())
+            .into_iter()
+            .map(|model| model.id)
+            .find(|id| !id.is_empty())
             .unwrap_or_default()
     } else {
         String::new()

@@ -1,4 +1,4 @@
-package lca:host@0.4.0;
+package lca:host@0.5.0;
 
 /// The `fs` capability: named scopes, never paths in the manifest
 /// (ADR-0005). Every refusal is one of these cases so the host can record
