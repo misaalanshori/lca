@@ -124,11 +124,45 @@ impl ExtensionRegistry {
             return;
         }
 
-        let mut pending_tools: Vec<ToolSpec> = Vec::new();
-        let mut pending_commands: Vec<(String, PendingRoute)> = Vec::new();
         let native_claim = handle.delivery() == DeliveryMode::Native;
         let slots = handle.builtin_command_slots();
+        let pending_commands = self.plan_commands(&name, handle.as_ref(), native_claim, &slots);
+        let pending_tools = self.plan_tools(&name, handle.as_ref());
 
+        let entry_index = self.entries.len();
+        for spec in pending_tools {
+            self.tools.insert(spec.name.clone(), entry_index);
+            self.tool_schemas.insert(spec.name.clone(), spec);
+        }
+        for (full, pending) in pending_commands {
+            let route = match pending {
+                PendingRoute::World(leaf) => Route::World {
+                    entry: entry_index,
+                    leaf,
+                },
+                PendingRoute::Identity(op) => Route::Identity {
+                    entry: entry_index,
+                    op,
+                },
+            };
+            self.commands.insert(full, route);
+        }
+        self.entries.push(Registered {
+            handle,
+            enabled: true,
+        });
+    }
+
+    /// Plan one handle's command routes: reserved built-in slots, the
+    /// provider identity trio, and collisions (ADR-0019, FR-PROV-10).
+    fn plan_commands(
+        &mut self,
+        name: &str,
+        handle: &dyn ExtensionDispatch,
+        native_claim: bool,
+        slots: &[String],
+    ) -> Vec<(String, PendingRoute)> {
+        let mut pending: Vec<(String, PendingRoute)> = Vec::new();
         if handle.worlds().contains(&World::Command) {
             match handle.command_specs() {
                 Ok(specs) => {
@@ -153,12 +187,12 @@ impl ExtensionRegistry {
                             .map(|route| self.route_name(route).to_string());
                         match winner {
                             Some(winner) => self.collisions.push(CollisionReport {
-                                extension: name.clone(),
+                                extension: name.to_string(),
                                 name: full,
                                 kind: "command",
                                 winner,
                             }),
-                            None => pending_commands.push((full, PendingRoute::World(spec.name))),
+                            None => pending.push((full, PendingRoute::World(spec.name))),
                         }
                     }
                 }
@@ -166,7 +200,7 @@ impl ExtensionRegistry {
                     // A handle that cannot enumerate its commands keeps its
                     // other worlds; report through the collision log.
                     self.collisions.push(CollisionReport {
-                        extension: name.clone(),
+                        extension: name.to_string(),
                         name: "(command world)".to_string(),
                         kind: "command",
                         winner: format!("unavailable: {err}"),
@@ -191,16 +225,22 @@ impl ExtensionRegistry {
                     .map(|route| self.route_name(route).to_string());
                 match winner {
                     Some(winner) => self.collisions.push(CollisionReport {
-                        extension: name.clone(),
+                        extension: name.to_string(),
                         name: full,
                         kind: "command",
                         winner,
                     }),
-                    None => pending_commands.push((full, PendingRoute::Identity(op))),
+                    None => pending.push((full, PendingRoute::Identity(op))),
                 }
             }
         }
+        pending
+    }
 
+    /// Plan one handle's tool specs, refusing built-in shadowing and
+    /// earlier-registered names.
+    fn plan_tools(&mut self, name: &str, handle: &dyn ExtensionDispatch) -> Vec<ToolSpec> {
+        let mut pending: Vec<ToolSpec> = Vec::new();
         if handle.worlds().contains(&World::Tool) {
             match handle.tool_specs() {
                 Ok(specs) => {
@@ -214,22 +254,18 @@ impl ExtensionRegistry {
                         };
                         match winner {
                             Some(winner) => self.collisions.push(CollisionReport {
-                                extension: name.clone(),
+                                extension: name.to_string(),
                                 name: spec.name,
                                 kind: "tool",
                                 winner,
                             }),
-                            None => {
-                                // The entry index is not pushed yet: patch
-                                // after push via the pending name below.
-                                pending_tools.push(spec);
-                            }
+                            None => pending.push(spec),
                         }
                     }
                 }
                 Err(err) => {
                     self.collisions.push(CollisionReport {
-                        extension: name.clone(),
+                        extension: name.to_string(),
                         name: "(tool world)".to_string(),
                         kind: "tool",
                         winner: format!("unavailable: {err}"),
@@ -237,29 +273,7 @@ impl ExtensionRegistry {
                 }
             }
         }
-
-        let entry_index = self.entries.len();
-        for spec in pending_tools {
-            self.tools.insert(spec.name.clone(), entry_index);
-            self.tool_schemas.insert(spec.name.clone(), spec);
-        }
-        for (full, pending) in pending_commands {
-            let route = match pending {
-                PendingRoute::World(leaf) => Route::World {
-                    entry: entry_index,
-                    leaf,
-                },
-                PendingRoute::Identity(op) => Route::Identity {
-                    entry: entry_index,
-                    op,
-                },
-            };
-            self.commands.insert(full, route);
-        }
-        self.entries.push(Registered {
-            handle,
-            enabled: true,
-        });
+        pending
     }
 
     fn entry_name(&self, index: usize) -> &str {

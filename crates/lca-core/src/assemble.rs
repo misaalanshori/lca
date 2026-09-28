@@ -1,0 +1,283 @@
+//! Message assembly and attachment staging (S2): the outbound message list
+//! from a session's records (compaction applied, forks followed), the
+//! stable-prefix boundary's helpers, and the `/attach` staging path.
+//!
+//! Split out of `lib.rs`; the loop body calls [`assemble_with`] and the
+//! fingerprint helpers in order.
+
+use lca_protocol::{ChatMessage, ContentBlock, MessageRole, Record, Usage};
+use lca_session::Session;
+
+/// The resolved message list plus the stable-prefix boundary (FR-CACHE-5).
+#[derive(Debug, Clone)]
+pub struct Assembled {
+    /// Messages, oldest first, system prompt leading.
+    pub messages: Vec<ChatMessage>,
+    /// Count of leading messages inside the stable cache boundary.
+    pub stable_prefix: usize,
+    /// Whether a compaction record appeared (FR-CACHE-5's anchor).
+    pub compaction_seen: bool,
+}
+
+/// One resolved attachment: a media type and the bytes a provider carries.
+#[derive(Debug, Clone)]
+pub struct Attachment {
+    /// IANA media type (`image/png`, ...), from magic-byte sniffing.
+    pub media_type: String,
+    /// Raw bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// The result of staging one image file as a session attachment.
+#[derive(Debug, Clone)]
+pub struct StagedAttachment {
+    /// The content hash (`sha256`), the record's attachment reference.
+    pub hash: String,
+    /// The text stub a provider (or a model without vision) can read.
+    pub stub: String,
+}
+
+/// Read `path`, reject anything whose magic bytes are not a known image, and
+/// write it into the session's content-addressed attachment store
+/// (owner-only). Returns the hash and the model-visible stub text.
+///
+/// This is the `/attach`/`--attach` input path (ADR-0029). D8's rules hold:
+/// the file name is the digest (no traversal), the media type is sniffed and
+/// never taken from a user-controlled name, and the bytes are never
+/// executable. A non-image is refused rather than attached as opaque text.
+pub fn stage_image(session: &Session, path: &std::path::Path) -> Result<StagedAttachment, String> {
+    let bytes =
+        std::fs::read(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+    let Some(media_type) = lca_protocol::sniff_image_media_type(&bytes) else {
+        return Err(format!(
+            "{} is not a recognized image (png, jpeg, gif, or webp)",
+            path.display()
+        ));
+    };
+    let hash = lca_tools::sha256_hex(&bytes);
+    let dir = session.dir().join("attachments");
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+    let target = dir.join(&hash);
+    if !target.exists() {
+        write_attachment(&target, &bytes)?;
+    }
+    let stub = format!(
+        "[image attachment {}, {media_type}, {} bytes]",
+        &hash[..8],
+        bytes.len()
+    );
+    Ok(StagedAttachment { hash, stub })
+}
+
+/// Write one attachment file owner-only (0600 on Unix), never executable.
+fn write_attachment(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|err| format!("cannot create {}: {err}", path.display()))?;
+    file.write_all(bytes)
+        .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
+    Ok(())
+}
+
+/// Build the outbound message list from a session's resolved (display-view)
+/// records, with no attachment resolver: image attachments appear only as
+/// the text stub the attach path recorded in the message content.
+pub fn assemble(records: &[Record], system_prompt: &str) -> Assembled {
+    assemble_with(records, system_prompt, &|_| None)
+}
+
+/// Self-describing framing around a compaction summary, matching pi
+/// (`packages/coding-agent/src/core/messages.ts`). The wire role stays
+/// `user` (no ABI change); the framing is what tells the model this is its
+/// own compacted memory rather than a note from the user.
+const COMPACTION_SUMMARY_PREFIX: &str = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
+const COMPACTION_SUMMARY_SUFFIX: &str = "\n</summary>";
+
+/// Build the outbound message list from a session's resolved (display-view)
+/// records: compaction applied, forks followed, transforms not yet run.
+///
+/// `resolve` turns an attachment hash into the bytes a provider needs; a
+/// `user` record's image attachments become `ContentBlock::Image` blocks
+/// after their text (ADR-0029). A hash the resolver does not know is skipped
+/// rather than an error: the message's text stub already says it exists.
+pub fn assemble_with(
+    records: &[Record],
+    system_prompt: &str,
+    resolve: &dyn Fn(&str) -> Option<Attachment>,
+) -> Assembled {
+    let mut messages = vec![ChatMessage::text(MessageRole::System, system_prompt)];
+    let mut stable_prefix = 0usize;
+    let mut compaction_seen = false;
+    for record in records {
+        match record {
+            Record::SessionStart { .. }
+            | Record::SessionEnd { .. }
+            | Record::ForkPoint { .. }
+            | Record::Permission { .. }
+            | Record::ExtensionEvent { .. } => {}
+            Record::User {
+                content,
+                attachments,
+                queue,
+                ..
+            } => {
+                let mut message = ChatMessage::text(MessageRole::User, content.clone());
+                // ADR-0038: the submit-mode marker travels in `extras`, the
+                // reserved map extensions already receive in `transform`.
+                if let Some(marker) = queue {
+                    message.extras.insert("queue".to_string(), marker.clone());
+                }
+                for hash in attachments {
+                    if let Some(attachment) = resolve(hash) {
+                        message.content.push(ContentBlock::Image {
+                            media_type: attachment.media_type,
+                            bytes: attachment.bytes,
+                        });
+                    }
+                }
+                messages.push(message);
+            }
+            Record::Assistant {
+                content, reasoning, ..
+            } => {
+                let mut message = ChatMessage {
+                    role: MessageRole::Assistant,
+                    content: content.clone(),
+                    tool_calls: Vec::new(),
+                    tool_call_id: None,
+                    usage: None,
+                    extras: Default::default(),
+                };
+                if let Some(reasoning) = reasoning {
+                    message.content.insert(
+                        0,
+                        ContentBlock::Reasoning {
+                            reasoning: reasoning.clone(),
+                        },
+                    );
+                }
+                messages.push(message);
+            }
+            Record::ToolCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } => {
+                // Tool calls belong to the assistant message that requested
+                // them; the log keeps them as their own records.
+                if let Some(assistant) = messages
+                    .iter_mut()
+                    .rev()
+                    .find(|m| m.role == MessageRole::Assistant)
+                {
+                    assistant.content.push(ContentBlock::ToolCall {
+                        call_id: call_id.clone(),
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                    });
+                    assistant.tool_calls.push(lca_protocol::ToolCall {
+                        call_id: call_id.clone(),
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                    });
+                }
+            }
+            Record::ToolResult {
+                call_id,
+                content,
+                attachment,
+                truncated,
+                ..
+            } => {
+                let mut text = content
+                    .clone()
+                    .or_else(|| {
+                        attachment
+                            .clone()
+                            .map(|hash| format!("[attachment {hash}]"))
+                    })
+                    .unwrap_or_default();
+                if *truncated {
+                    text.push_str("\n[result truncated]");
+                }
+                messages.push(ChatMessage::tool_result(call_id.clone(), text));
+            }
+            Record::Compaction { summary, .. } => {
+                compaction_seen = true;
+                // The summary stands in for the range it replaced
+                // (session-log-format: the reader substitutes it), and
+                // everything through it becomes the stable prefix
+                // (FR-CACHE-5, ADR-0017). The framing makes the model read
+                // it as its own memory, not as a user note.
+                messages.push(ChatMessage::text(
+                    MessageRole::User,
+                    format!("{COMPACTION_SUMMARY_PREFIX}{summary}{COMPACTION_SUMMARY_SUFFIX}"),
+                ));
+                stable_prefix = messages.len();
+            }
+        }
+    }
+    Assembled {
+        messages,
+        stable_prefix,
+        compaction_seen,
+    }
+}
+
+/// One request's prompt token count, the number FR-CACHE-1 compares.
+pub(super) fn usage_prompt_tokens(usage: &Usage) -> u64 {
+    usage.input + usage.cache_read + usage.cache_write + usage.cache_write_1h
+}
+
+/// All text a message carries (the comparison key for finding this
+/// turn's own user message).
+pub(super) fn message_text(message: &ChatMessage) -> String {
+    message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            ContentBlock::Reasoning { reasoning } => Some(reasoning.as_str()),
+            ContentBlock::ToolCall { .. } => None,
+            // The image's stub text is already in the message content.
+            ContentBlock::Image { .. } => None,
+        })
+        .collect()
+}
+
+/// What one message looks like on the wire, for FR-CACHE-6's
+/// previous-versus-current comparison: role, text, and tool calls.
+pub(super) fn stable_fingerprint(message: &ChatMessage) -> String {
+    let text: String = message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.clone()),
+            ContentBlock::Reasoning { reasoning } => Some(reasoning.clone()),
+            // An image changes the wire bytes, so its content hash belongs in
+            // the fingerprint (a length-only key would miss a same-size swap).
+            ContentBlock::Image { media_type, bytes } => Some(format!(
+                "[image {media_type} {}]",
+                lca_tools::sha256_hex(bytes)
+            )),
+            ContentBlock::ToolCall { .. } => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let calls: Vec<String> = message
+        .tool_calls
+        .iter()
+        .map(|call| format!("{}:{}:{}", call.call_id, call.name, call.arguments))
+        .collect();
+    format!("{:?}|{}|{:?}", message.role, text, calls)
+}
