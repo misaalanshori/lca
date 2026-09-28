@@ -14,7 +14,6 @@ use std::sync::Arc;
 use lca_protocol::{CommandEffect, StopReason, TurnEvent, TurnStatus, Usage};
 use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::keys;
-use lca_tui::engine::text::truncate_to_width;
 use lca_tui::widgets::autocomplete::{
     ArgumentCompletions, AutocompleteItem, CombinedAutocompleteProvider, SlashCommand,
 };
@@ -60,7 +59,6 @@ pub struct Chat {
     pub current_steer: Option<lca_protocol::SteerQueue>,
     /// A submitted prompt awaiting the loop's handoff.
     pub submitted: Option<String>,
-    keybindings: Arc<KeybindingsManager>,
 }
 
 impl Chat {
@@ -95,13 +93,7 @@ impl Chat {
             pending: Vec::new(),
             current_steer: None,
             submitted: None,
-            keybindings,
         }
-    }
-
-    /// The keybindings in force.
-    pub fn keybindings(&self) -> &KeybindingsManager {
-        &self.keybindings
     }
 
     /// Consume a turn event into the transcript and the counters.
@@ -904,16 +896,6 @@ fn help_notice(commands: &[String]) -> String {
     }
     out.push_str("Enter sends, Shift+Enter adds a line, Tab completes, Ctrl+C cancels");
     out
-}
-
-/// The transcript's cursor row/col for the renderer's hardware cursor.
-pub fn cursor_of(lines: &[String]) -> Option<(u16, u16)> {
-    lca_tui::engine::core::extract_cursor_position(lines).1
-}
-
-/// Truncate helper used by the dock.
-pub fn truncate(line: &str, width: u16) -> String {
-    truncate_to_width(line, width as usize, "…", false)
 }
 
 #[cfg(test)]

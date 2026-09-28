@@ -16,6 +16,13 @@
 //! Attribution: `graphemeWidth` is "based on code from the string-width
 //! library" (MIT), as pi's own header states.
 
+mod ansi;
+mod osc8;
+use ansi::update_tracker_from_text;
+pub use ansi::{AnsiCodeTracker, get_active_background_ansi};
+use osc8::get_active_osc8_close;
+pub use osc8::{ActiveHyperlink, Osc8Terminator, parse_osc8_hyperlink};
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -65,6 +72,13 @@ pub fn extract_ansi_code(s: &str, pos: usize) -> Option<(String, usize)> {
         }
         _ => None,
     }
+}
+
+/// The character starting at byte `index`, or `None` when `index` is out
+/// of range or not a char boundary. The char-boundary-safe replacement for
+/// `text[index..].chars().next().unwrap()` in the scanners below.
+pub(crate) fn char_at(text: &str, index: usize) -> Option<char> {
+    text.get(index..).and_then(|rest| rest.chars().next())
 }
 
 fn is_printable_ascii(s: &str) -> bool {
@@ -199,7 +213,7 @@ fn strip_sequences(s: &str) -> String {
             i += len;
             continue;
         }
-        let ch = s[i..].chars().next().unwrap();
+        let Some(ch) = char_at(s, i) else { break };
         out.push(ch);
         i += ch.len_utf8();
     }
@@ -271,7 +285,9 @@ pub fn normalize_terminal_output(s: &str) -> String {
             i += len;
             continue;
         }
-        let ch = normalized[i..].chars().next().unwrap();
+        let Some(ch) = char_at(&normalized, i) else {
+            break;
+        };
         if ch == '\t' {
             result.push_str("   ");
         } else {
@@ -280,326 +296,6 @@ pub fn normalize_terminal_output(s: &str) -> String {
         i += ch.len_utf8();
     }
     result
-}
-
-// =============================================================================
-// OSC 8 hyperlinks
-// =============================================================================
-
-/// The terminator an OSC 8 link was opened with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Osc8Terminator {
-    /// BEL (`\x07`).
-    Bel,
-    /// String Terminator (`ESC \`).
-    St,
-}
-
-impl Osc8Terminator {
-    fn as_str(self) -> &'static str {
-        match self {
-            Osc8Terminator::Bel => "\x07",
-            Osc8Terminator::St => "\x1b\\",
-        }
-    }
-}
-
-/// An active OSC 8 hyperlink.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActiveHyperlink {
-    /// Link parameters (before the first `;`).
-    pub params: String,
-    /// The URL.
-    pub url: String,
-    /// The terminator it was opened with (preserved on reopen).
-    pub terminator: Osc8Terminator,
-}
-
-/// Parse an OSC 8 hyperlink sequence: `Some(Some(link))` open,
-/// `Some(None)` close, `None` not an OSC 8 sequence.
-pub fn parse_osc8_hyperlink(code: &str) -> Option<Option<ActiveHyperlink>> {
-    let rest = code.strip_prefix("\x1b]8;")?;
-    let (terminator, body) = if let Some(b) = rest.strip_suffix('\x07') {
-        (Osc8Terminator::Bel, b)
-    } else {
-        (Osc8Terminator::St, rest.strip_suffix("\x1b\\")?)
-    };
-    let (params, url) = body.split_once(';')?;
-    if url.is_empty() {
-        return Some(None);
-    }
-    Some(Some(ActiveHyperlink {
-        params: params.to_string(),
-        url: url.to_string(),
-        terminator,
-    }))
-}
-
-fn format_osc8_hyperlink(link: &ActiveHyperlink) -> String {
-    format!(
-        "\x1b]8;{};{}{}",
-        link.params,
-        link.url,
-        link.terminator.as_str()
-    )
-}
-
-fn format_osc8_close(terminator: Osc8Terminator) -> String {
-    format!("\x1b]8;;{}", terminator.as_str())
-}
-
-fn get_active_osc8_close(prefix: &str) -> String {
-    if !prefix.contains("\x1b]8;") {
-        return String::new();
-    }
-    let mut active: Option<ActiveHyperlink> = None;
-    let mut i = 0;
-    while i < prefix.len() {
-        if let Some((code, len)) = extract_ansi_code(prefix, i) {
-            if let Some(link) = parse_osc8_hyperlink(&code) {
-                active = link;
-            }
-            i += len;
-        } else {
-            i += prefix[i..].chars().next().unwrap().len_utf8();
-        }
-    }
-    active
-        .map(|l| format_osc8_close(l.terminator))
-        .unwrap_or_default()
-}
-
-// =============================================================================
-// AnsiCodeTracker (RE doc §5)
-// =============================================================================
-
-/// Tracks active SGR attributes and the active OSC 8 hyperlink so styling
-/// can be re-emitted across wrapped lines.
-#[derive(Debug, Clone, Default)]
-pub struct AnsiCodeTracker {
-    bold: bool,
-    dim: bool,
-    italic: bool,
-    underline: bool,
-    blink: bool,
-    inverse: bool,
-    hidden: bool,
-    strikethrough: bool,
-    fg_color: Option<String>,
-    bg_color: Option<String>,
-    active_hyperlink: Option<ActiveHyperlink>,
-}
-
-impl AnsiCodeTracker {
-    /// A fresh tracker.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Process one ANSI/OSC sequence.
-    pub fn process(&mut self, ansi_code: &str) {
-        if let Some(link) = parse_osc8_hyperlink(ansi_code) {
-            self.active_hyperlink = link;
-            return;
-        }
-        if !ansi_code.ends_with('m') {
-            return;
-        }
-        let Some(body) = ansi_code
-            .strip_prefix("\x1b[")
-            .and_then(|s| s.strip_suffix('m'))
-        else {
-            return;
-        };
-        if body.is_empty() || body == "0" {
-            self.reset();
-            return;
-        }
-        let parts: Vec<&str> = body.split(';').collect();
-        let mut i = 0;
-        while i < parts.len() {
-            let Ok(code) = parts[i].parse::<u32>() else {
-                i += 1;
-                continue;
-            };
-            if code == 38 || code == 48 {
-                if parts.get(i + 1) == Some(&"5") && parts.get(i + 2).is_some() {
-                    let color = format!("{};{};{}", parts[i], parts[i + 1], parts[i + 2]);
-                    if code == 38 {
-                        self.fg_color = Some(color);
-                    } else {
-                        self.bg_color = Some(color);
-                    }
-                    i += 3;
-                    continue;
-                }
-                if parts.get(i + 1) == Some(&"2") && parts.get(i + 4).is_some() {
-                    let color = format!(
-                        "{};{};{};{};{}",
-                        parts[i],
-                        parts[i + 1],
-                        parts[i + 2],
-                        parts[i + 3],
-                        parts[i + 4]
-                    );
-                    if code == 38 {
-                        self.fg_color = Some(color);
-                    } else {
-                        self.bg_color = Some(color);
-                    }
-                    i += 5;
-                    continue;
-                }
-            }
-            match code {
-                0 => self.reset(),
-                1 => self.bold = true,
-                2 => self.dim = true,
-                3 => self.italic = true,
-                4 => self.underline = true,
-                5 => self.blink = true,
-                7 => self.inverse = true,
-                8 => self.hidden = true,
-                9 => self.strikethrough = true,
-                21 => self.bold = false,
-                22 => {
-                    self.bold = false;
-                    self.dim = false;
-                }
-                23 => self.italic = false,
-                24 => self.underline = false,
-                25 => self.blink = false,
-                27 => self.inverse = false,
-                28 => self.hidden = false,
-                29 => self.strikethrough = false,
-                39 => self.fg_color = None,
-                49 => self.bg_color = None,
-                30..=37 | 90..=97 => self.fg_color = Some(code.to_string()),
-                40..=47 | 100..=107 => self.bg_color = Some(code.to_string()),
-                _ => {}
-            }
-            i += 1;
-        }
-    }
-
-    fn reset(&mut self) {
-        self.bold = false;
-        self.dim = false;
-        self.italic = false;
-        self.underline = false;
-        self.blink = false;
-        self.inverse = false;
-        self.hidden = false;
-        self.strikethrough = false;
-        self.fg_color = None;
-        self.bg_color = None;
-        // SGR reset deliberately does not clear the hyperlink.
-    }
-
-    /// Clear all state for reuse.
-    pub fn clear(&mut self) {
-        self.reset();
-        self.active_hyperlink = None;
-    }
-
-    /// Re-emit the complete active state (styles + hyperlink).
-    pub fn active_codes(&self) -> String {
-        let mut codes: Vec<String> = Vec::new();
-        if self.bold {
-            codes.push("1".into());
-        }
-        if self.dim {
-            codes.push("2".into());
-        }
-        if self.italic {
-            codes.push("3".into());
-        }
-        if self.underline {
-            codes.push("4".into());
-        }
-        if self.blink {
-            codes.push("5".into());
-        }
-        if self.inverse {
-            codes.push("7".into());
-        }
-        if self.hidden {
-            codes.push("8".into());
-        }
-        if self.strikethrough {
-            codes.push("9".into());
-        }
-        if let Some(fg) = &self.fg_color {
-            codes.push(fg.clone());
-        }
-        if let Some(bg) = &self.bg_color {
-            codes.push(bg.clone());
-        }
-        let mut result = if codes.is_empty() {
-            String::new()
-        } else {
-            format!("\x1b[{}m", codes.join(";"))
-        };
-        if let Some(link) = &self.active_hyperlink {
-            result.push_str(&format_osc8_hyperlink(link));
-        }
-        result
-    }
-
-    /// The active background code alone (scrollbar cell surgery).
-    pub fn active_background_code(&self) -> String {
-        self.bg_color
-            .as_ref()
-            .map(|bg| format!("\x1b[{bg}m"))
-            .unwrap_or_default()
-    }
-
-    /// Whether any state is active.
-    pub fn has_active_codes(&self) -> bool {
-        self.bold
-            || self.dim
-            || self.italic
-            || self.underline
-            || self.blink
-            || self.inverse
-            || self.hidden
-            || self.strikethrough
-            || self.fg_color.is_some()
-            || self.bg_color.is_some()
-            || self.active_hyperlink.is_some()
-    }
-
-    /// Reset only what bleeds at line end: underline off and the hyperlink
-    /// close (re-opened on the next line).
-    pub fn line_end_reset(&self) -> String {
-        let mut result = String::new();
-        if self.underline {
-            result.push_str("\x1b[24m");
-        }
-        if let Some(link) = &self.active_hyperlink {
-            result.push_str(&format_osc8_close(link.terminator));
-        }
-        result
-    }
-}
-
-fn update_tracker_from_text(text: &str, tracker: &mut AnsiCodeTracker) {
-    let mut i = 0;
-    while i < text.len() {
-        if let Some((code, len)) = extract_ansi_code(text, i) {
-            tracker.process(&code);
-            i += len;
-        } else {
-            i += text[i..].chars().next().unwrap().len_utf8();
-        }
-    }
-}
-
-/// Only the background color active at the end of an ANSI string.
-pub fn get_active_background_ansi(text: &str) -> String {
-    let mut tracker = AnsiCodeTracker::new();
-    update_tracker_from_text(text, &mut tracker);
-    tracker.active_background_code()
 }
 
 // =============================================================================
@@ -640,7 +336,8 @@ fn split_into_tokens_with_ansi(text: &str) -> Vec<String> {
         }
         let mut end = i;
         while end < text.len() && extract_ansi_code(text, end).is_none() {
-            end += text[end..].chars().next().unwrap().len_utf8();
+            let Some(ch) = char_at(text, end) else { break };
+            end += ch.len_utf8();
         }
         for segment in text[i..end].graphemes(true) {
             let is_space = segment == " ";
@@ -694,7 +391,8 @@ fn break_long_word(word: &str, width: usize, tracker: &mut AnsiCodeTracker) -> V
         } else {
             let mut end = i;
             while end < word.len() && extract_ansi_code(word, end).is_none() {
-                end += word[end..].chars().next().unwrap().len_utf8();
+                let Some(ch) = char_at(word, end) else { break };
+                end += ch.len_utf8();
             }
             for g in word[i..end].graphemes(true) {
                 segments.push(Seg::Grapheme(g.to_string()));
@@ -856,7 +554,7 @@ fn truncate_fragment_to_width(text: &str, max_width: usize) -> (String, usize) {
             i += len;
             continue;
         }
-        let ch = text[i..].chars().next().unwrap();
+        let Some(ch) = char_at(text, i) else { break };
         if ch == '\t' {
             if width + 3 > max_width {
                 break;
@@ -870,7 +568,8 @@ fn truncate_fragment_to_width(text: &str, max_width: usize) -> (String, usize) {
         }
         let mut end = i;
         while end < text.len() && extract_ansi_code(text, end).is_none() {
-            end += text[end..].chars().next().unwrap().len_utf8();
+            let Some(ch) = char_at(text, end) else { break };
+            end += ch.len_utf8();
         }
         for g in text[i..end].graphemes(true) {
             let w = grapheme_width(g);
@@ -1001,7 +700,7 @@ pub fn truncate_to_width(text: &str, max_width: usize, ellipsis: &str, pad: bool
                 i += len;
                 continue;
             }
-            let ch = text[i..].chars().next().unwrap();
+            let Some(ch) = char_at(text, i) else { break };
             if ch == '\t' {
                 if keep_contiguous && kept_width + 3 <= target {
                     result.push_str(&pending_ansi);
@@ -1022,7 +721,8 @@ pub fn truncate_to_width(text: &str, max_width: usize, ellipsis: &str, pad: bool
             }
             let mut end = i;
             while end < text.len() && extract_ansi_code(text, end).is_none() {
-                end += text[end..].chars().next().unwrap().len_utf8();
+                let Some(ch) = char_at(text, end) else { break };
+                end += ch.len_utf8();
             }
             for g in text[i..end].graphemes(true) {
                 let w = grapheme_width(g);
@@ -1104,7 +804,10 @@ pub fn slice_with_width(
         }
         let mut text_end = i;
         while text_end < line.len() && extract_ansi_code(line, text_end).is_none() {
-            text_end += line[text_end..].chars().next().unwrap().len_utf8();
+            let Some(ch) = char_at(line, text_end) else {
+                break;
+            };
+            text_end += ch.len_utf8();
         }
         for g in line[i..text_end].graphemes(true) {
             let w = grapheme_width(g);
@@ -1162,7 +865,10 @@ pub fn extract_segments(
         }
         let mut text_end = i;
         while text_end < line.len() && extract_ansi_code(line, text_end).is_none() {
-            text_end += line[text_end..].chars().next().unwrap().len_utf8();
+            let Some(ch) = char_at(line, text_end) else {
+                break;
+            };
+            text_end += ch.len_utf8();
         }
         for g in line[i..text_end].graphemes(true) {
             let w = grapheme_width(g);
@@ -1227,7 +933,10 @@ pub fn get_grapheme_cell_range(line: &str, column: usize) -> Option<(usize, usiz
         }
         let mut text_end = i;
         while text_end < line.len() && extract_ansi_code(line, text_end).is_none() {
-            text_end += line[text_end..].chars().next().unwrap().len_utf8();
+            let Some(ch) = char_at(line, text_end) else {
+                break;
+            };
+            text_end += ch.len_utf8();
         }
         for g in line[i..text_end].graphemes(true) {
             let w = grapheme_width(g);
@@ -1256,7 +965,10 @@ pub fn get_osc8_link_at_column(line: &str, column: usize) -> Option<String> {
         }
         let mut text_end = i;
         while text_end < line.len() && extract_ansi_code(line, text_end).is_none() {
-            text_end += line[text_end..].chars().next().unwrap().len_utf8();
+            let Some(ch) = char_at(line, text_end) else {
+                break;
+            };
+            text_end += ch.len_utf8();
         }
         for g in line[i..text_end].graphemes(true) {
             let w = if g == "\t" { 3 } else { grapheme_width(g) };

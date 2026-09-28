@@ -157,6 +157,9 @@ impl CombinedAutocompleteProvider {
         let mut items: Vec<(i32, usize, String, AutocompleteItem)> = Vec::new();
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
+            if is_ignored_dir(&name) {
+                continue;
+            }
             if !name.to_lowercase().starts_with(&base.to_lowercase()) {
                 continue;
             }
@@ -223,7 +226,8 @@ fn collect_files(
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name == ".git" {
+        // D10: skip the heavy build/vendor directories in the fuzzy walk.
+        if is_ignored_dir(&name) {
             continue;
         }
         let path = entry.path();
@@ -250,6 +254,11 @@ fn collect_files(
             collect_files(root, &path, query, depth + 1, out);
         }
     }
+}
+
+/// Directories the fuzzy file walk never descends into (D10).
+fn is_ignored_dir(name: &str) -> bool {
+    matches!(name, ".git" | "target" | "node_modules")
 }
 
 fn looks_like_path(text: &str) -> bool {
@@ -383,6 +392,30 @@ mod tests {
         assert!(fuzzy_match("model", "mdl"));
         assert!(fuzzy_match("model", ""));
         assert!(!fuzzy_match("model", "xyz"));
+    }
+
+    #[test]
+    fn fuzzy_files_skip_build_and_vendor_dirs() {
+        let tmp = std::env::temp_dir().join(format!("lca-ac-skip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("target/debug")).unwrap();
+        std::fs::create_dir_all(tmp.join("node_modules/pkg")).unwrap();
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::write(tmp.join("src/main.rs"), "x").unwrap();
+        let p = provider(&tmp);
+        let s = p.get_suggestions("@", false).unwrap();
+        let descs: Vec<String> = s
+            .items
+            .iter()
+            .filter_map(|i| i.description.clone())
+            .collect();
+        assert!(descs.iter().any(|d| d.contains("src/main.rs")), "{descs:?}");
+        assert!(!descs.iter().any(|d| d.starts_with("target/")), "{descs:?}");
+        assert!(
+            !descs.iter().any(|d| d.starts_with("node_modules/")),
+            "{descs:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

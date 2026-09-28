@@ -457,9 +457,6 @@ pub fn apply_login_next(state: &mut UiState, next: LoginNext) {
     }
 }
 
-// Re-exported for the turn worker wiring in the binary.
-pub use lca_protocol::TurnEvent as WorkerTurnEvent;
-
 /// Channels between the UI loop and the worker thread running a turn.
 pub struct TurnChannels {
     /// Turn events flow to the UI.
@@ -488,12 +485,6 @@ pub type TurnRunner = Box<
         + Send
         + Sync,
 >;
-
-/// Re-exported usage accumulator type.
-pub use lca_protocol::Usage as WorkerUsage;
-/// Re-exported so callers do not depend on `lca_protocol` directly for the
-/// turn vocabulary they already handle.
-pub use lca_protocol::{StopReason as TurnStopReason, TurnStatus as WorkerTurnStatus};
 
 #[cfg(test)]
 mod tests {

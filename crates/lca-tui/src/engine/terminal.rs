@@ -489,13 +489,16 @@ impl FakeTerminal {
 
     /// Take everything written so far.
     pub fn take_output(&self) -> String {
-        let mut out = self.output.lock().unwrap();
+        let mut out = self.output.lock().unwrap_or_else(|p| p.into_inner());
         std::mem::take(&mut *out)
     }
 
     /// Peek at everything written so far.
     pub fn output(&self) -> String {
-        self.output.lock().unwrap().clone()
+        self.output
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 }
 
@@ -510,7 +513,10 @@ impl Terminal for FakeTerminal {
     fn drain_input(&mut self, _max_ms: u64, _idle_ms: u64) {}
 
     fn write(&mut self, data: &str) {
-        self.output.lock().unwrap().push_str(data);
+        self.output
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push_str(data);
     }
 
     fn columns(&self) -> u16 {

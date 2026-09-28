@@ -201,7 +201,9 @@ fn extract_complete_sequences(buffer: &str) -> (Vec<String>, String) {
                 }
             }
         } else {
-            let ch = remaining.chars().next().unwrap();
+            let Some(ch) = remaining.chars().next() else {
+                break;
+            };
             sequences.push(ch.to_string());
             pos += ch.len_utf8();
         }

@@ -7,7 +7,6 @@
 //! can rebind or explicitly unbind (`[]`).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Mutex, OnceLock};
 
 use super::keys::matches_key;
 
@@ -327,27 +326,6 @@ impl KeybindingsManager {
             .iter()
             .find(|(name, _)| *name == action)
             .map(|(_, def)| def.description)
-    }
-}
-
-static GLOBAL: OnceLock<Mutex<KeybindingsManager>> = OnceLock::new();
-
-/// Install the process-wide keybindings, replacing any previous one.
-pub fn set_keybindings(manager: KeybindingsManager) {
-    match GLOBAL.get() {
-        Some(lock) => *lock.lock().unwrap() = manager,
-        None => {
-            let _ = GLOBAL.set(Mutex::new(manager));
-        }
-    }
-}
-
-/// Run a closure with the process-wide keybindings (defaults if unset).
-pub fn with_keybindings<R>(f: impl FnOnce(&KeybindingsManager) -> R) -> R {
-    static DEFAULT: OnceLock<KeybindingsManager> = OnceLock::new();
-    match GLOBAL.get() {
-        Some(lock) => f(&lock.lock().unwrap()),
-        None => f(DEFAULT.get_or_init(KeybindingsManager::new)),
     }
 }
 

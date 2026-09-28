@@ -271,7 +271,9 @@ pub fn highlight_range(line: &str, from: u16, to: u16) -> String {
             }
             i += len;
         } else {
-            let ch = selected[i..].chars().next().unwrap();
+            let Some(ch) = super::text::char_at(&selected, i) else {
+                break;
+            };
             armed.push(ch);
             i += ch.len_utf8();
         }

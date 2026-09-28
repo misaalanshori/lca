@@ -506,7 +506,9 @@ pub fn strip_osc133(line: &str) -> String {
             out.push_str(&code);
             continue;
         }
-        let ch = line[i..].chars().next().unwrap();
+        let Some(ch) = super::text::char_at(line, i) else {
+            break;
+        };
         out.push(ch);
         i += ch.len_utf8();
     }
