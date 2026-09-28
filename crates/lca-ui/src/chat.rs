@@ -955,20 +955,25 @@ impl Chat {
             deadline,
         } = self.world.permission.take()?;
         let _ = deadline;
-        let answer = |decision: Decision| {
-            if let Some(respond) = respond {
-                let _ = respond.send(decision);
-            }
+        let decision = match key {
+            Some("o") => Some(Decision::Once),
+            Some("a") => Some(Decision::Always),
+            Some("d" | "escape" | "enter") => Some(Decision::Denied),
+            _ => None,
         };
-        match key {
-            Some("o") => answer(Decision::Once),
-            Some("a") => answer(Decision::Always),
-            Some("d" | "escape" | "enter") => answer(Decision::Denied),
-            _ => {
-                // Any other key cancels the countdown but keeps the modal.
+        match decision {
+            Some(decision) => {
+                if let Some(respond) = respond {
+                    let _ = respond.send(decision);
+                }
+            }
+            None => {
+                // Any other key cancels the countdown but keeps the modal -
+                // and its responder, so a later answer still reaches the
+                // waiting worker (R11).
                 self.world.permission = Some(crate::state::PermissionModal {
                     action,
-                    respond: None,
+                    respond,
                     deadline: None,
                 });
             }

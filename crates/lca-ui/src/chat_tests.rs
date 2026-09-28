@@ -252,6 +252,35 @@ fn escape_cancels_a_running_shell_command() {
     );
 }
 
+// Verifies: R11 - modal focus: the modal owns keys while open, the editor
+// regains them on close, and a key that only cancels the countdown keeps the
+// responder alive.
+#[test]
+fn modal_focus_returns_to_the_editor_and_keeps_the_responder() {
+    let mut chat = chat();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    chat.world.permission = Some(crate::state::PermissionModal {
+        action: "rm -rf /tmp/x".into(),
+        respond: Some(tx),
+        deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(30)),
+    });
+    // A key that is neither a decision nor Escape only cancels the countdown.
+    for c in "xyz".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    assert!(chat.world.permission.is_some(), "the modal stays open");
+    assert_eq!(chat.editor.text(), "", "the modal owns the keys");
+    // Deny closes the modal and reaches the waiting worker.
+    chat.handle_key("d");
+    assert!(chat.world.permission.is_none());
+    assert_eq!(rx.try_recv().ok(), Some(lca_permissions::Decision::Denied));
+    // The editor receives keys again.
+    for c in "hi".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    assert_eq!(chat.editor.text(), "hi");
+}
+
 // Verifies: FR-UI-15 - Ctrl+X Ctrl+E asks the loop for the external editor.
 #[test]
 fn ctrl_x_ctrl_e_opens_the_external_editor() {

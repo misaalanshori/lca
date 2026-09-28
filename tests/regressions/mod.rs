@@ -92,3 +92,6 @@ mod multiline_notice_render;
 // audit: a steer left the assistant before it with a streaming marker.
 #[path = "28-steer-finalizes-assistant.rs"]
 mod steer_finalizes_assistant;
+// R11: cancelling the permission countdown dropped the responder.
+#[path = "29-permission-countdown-keeps-responder.rs"]
+mod permission_countdown_keeps_responder;
