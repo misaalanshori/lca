@@ -480,8 +480,10 @@ fn format_tool_args(name: &str, args: &str) -> String {
         return String::new();
     }
     let summary = match name {
-        "read" | "write" | "edit" | "ls" => json_string_field(args, "path"),
-        "bash" => json_string_field(args, "command"),
+        "read" | "write" | "edit" | "list" | "ls" | "glob" => {
+            json_string_field(args, "path").or_else(|| json_string_field(args, "file_path"))
+        }
+        "bash" | "shell" => json_string_field(args, "command"),
         "grep" => json_string_field(args, "pattern").map(|pattern| format!("/{pattern}/")),
         _ => None,
     };
@@ -549,19 +551,47 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
         status_text
     );
     out.push(truncate_to_width(&header, width as usize, "…", false));
-    // pi collapses a tool card to its one line and expands on demand
-    // (`app.tools.expand`, Ctrl+O). The hint names the key when there is
-    // more to see.
+    // pi shows a bounded preview of command output (`bash.ts`
+    // `BASH_PREVIEW_LINES` = 5, `ls.ts` 20, `grep.ts` 15) and a one-line
+    // card for the rest; Ctrl+O expands to the full result.
     if let Some(result) = result {
+        let inner = (width as usize).saturating_sub(2).max(1);
+        let preview = preview_lines(name);
+        let total = result.lines().count();
         if expanded {
-            for line in wrap_text_with_ansi(result, (width as usize).saturating_sub(2).max(1)) {
+            for line in wrap_text_with_ansi(result, inner) {
                 out.push(format!("  {}", (theme.dim)(&line)));
             }
-        } else if result.lines().count() > 1 {
+        } else if preview > 0 && total > 0 {
+            let shown: String = result.lines().take(preview).collect::<Vec<_>>().join("\n");
+            for line in wrap_text_with_ansi(&shown, inner) {
+                out.push(format!("  {}", (theme.dim)(&line)));
+            }
+            if total > preview {
+                out.push(format!(
+                    "  {}",
+                    (theme.dim)(&format!(
+                        "… ({} more lines, ctrl+o to expand)",
+                        total - preview
+                    ))
+                ));
+            }
+        } else if total > 1 {
             out.push(format!("  {}", (theme.dim)("… (ctrl+o to expand)")));
         }
     }
     let _ = visible_width("");
+}
+
+/// The collapsed preview line count for a tool, from pi's per-tool
+/// renderers: `bash` 5, `ls` 20, `grep` 15; the rest show one line.
+fn preview_lines(name: &str) -> usize {
+    match name {
+        "bash" | "shell" => 5,
+        "list" | "ls" => 20,
+        "grep" => 15,
+        _ => 0,
+    }
 }
 
 #[cfg(test)]
@@ -670,7 +700,35 @@ mod tests {
             format_tool_args("grep", r#"{"pattern":"foo","path":"."}"#),
             "/foo/"
         );
+        assert_eq!(format_tool_args("list", r#"{"path":"."}"#), ".");
         assert_eq!(format_tool_args("other", "raw"), "raw");
+    }
+
+    // Verifies: R8 - a command card shows a bounded preview when collapsed.
+    #[test]
+    fn a_shell_card_previews_its_output() {
+        let mut t = Transcript::new();
+        t.start_tool("shell", r#"{"command":"ls"}"#);
+        let output: String = (1..=8).map(|i| format!("line {i}\n")).collect();
+        t.finish_tool(ToolStatus::Ok, Some(output));
+        let out = strip(&t.render(60, &plain()));
+        assert_eq!(out[0], "> shell ls ok");
+        assert!(out.iter().any(|l| l.contains("line 1")), "{out:?}");
+        assert!(out.iter().any(|l| l.contains("line 5")), "{out:?}");
+        assert!(!out.iter().any(|l| l.contains("line 6")), "{out:?}");
+        assert!(out.iter().any(|l| l.contains("3 more lines")), "{out:?}");
+    }
+
+    // Verifies: R8 - a read card stays one line when collapsed.
+    #[test]
+    fn a_read_card_stays_one_line() {
+        let mut t = Transcript::new();
+        t.start_tool("read", r#"{"path":"a.rs"}"#);
+        t.finish_tool(ToolStatus::Ok, Some("1  fn main() {}\n2  more\n".into()));
+        let out = strip(&t.render(60, &plain()));
+        assert_eq!(out[0], "> read a.rs ok");
+        assert!(out.iter().any(|l| l.contains("ctrl+o to expand")));
+        assert!(!out.iter().any(|l| l.contains("fn main")), "{out:?}");
     }
 
     #[test]
