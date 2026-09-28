@@ -62,7 +62,7 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Preset.** A named endpoint entry an extension ships in its own `resources/provider-presets.toml`: id, display name, base URL, auth kind, curated model list. Extension data, not host data - disabling the extension takes its presets with it. The host's `login-options` query maps presets to picker rows and nothing more. A user's own presets live at `<config>/provider-presets.toml`. See ADR-0031.
 
-**Prompt jump.** Keyboard navigation between the user's own messages in the transcript, layered on the OSC 133 zones the renderer emits around each block. Not navigation of model output.
+**Prompt jump.** Keyboard navigation between the user's own messages in the transcript, using the transcript's own user-message offsets (the port does not emit OSC 133 zones; see `tui-port2-audit.md`). Not navigation of model output.
 
 **Provider.** An extension implementing the `provider` world: model listing, streaming completions, authentication, and the `login`, `logout`, and `usage` exports from ADR-0012. Not a synonym for "vendor" or "API"; a single vendor's API is what a provider extension talks to, not what the term itself names.
 
