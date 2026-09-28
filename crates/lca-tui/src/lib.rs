@@ -5,6 +5,9 @@
 //! interface lives in `lca-ui`.
 
 #![deny(unsafe_code)]
+// R17: production paths stay panic-free (test code may unwrap; clippy.toml
+// scopes the lints away from tests).
+#![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 pub mod engine;
 pub mod widgets;

@@ -481,47 +481,6 @@ pub fn width_violation(lines: &[String], width: u16) -> Option<(usize, usize)> {
     None
 }
 
-/// The minimum render interval (pi's `MIN_RENDER_INTERVAL_MS`).
-pub const MIN_RENDER_INTERVAL_MS: u64 = 16;
-
-/// Render scheduling state (throttle + immediate preemption).
-#[derive(Debug, Default)]
-pub struct RenderScheduler {
-    last_render: Option<std::time::Instant>,
-    pending: bool,
-}
-
-impl RenderScheduler {
-    /// A new scheduler.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Request a render; returns whether it may proceed now.
-    pub fn request(&mut self, force: bool) -> bool {
-        let now = std::time::Instant::now();
-        match self.last_render {
-            Some(last)
-                if !force
-                    && now.duration_since(last).as_millis() < MIN_RENDER_INTERVAL_MS as u128 =>
-            {
-                self.pending = true;
-                false
-            }
-            _ => {
-                self.last_render = Some(now);
-                self.pending = false;
-                true
-            }
-        }
-    }
-
-    /// Whether a throttled frame is pending.
-    pub fn is_pending(&self) -> bool {
-        self.pending
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -610,14 +569,5 @@ mod tests {
         let lines = vec!["ok".to_string(), "this is too long".to_string()];
         assert_eq!(width_violation(&lines, 5), Some((1, 16)));
         assert_eq!(width_violation(&lines, 80), None);
-    }
-
-    #[test]
-    fn scheduler_throttles_but_force_preempts() {
-        let mut s = RenderScheduler::new();
-        assert!(s.request(false));
-        assert!(!s.request(false));
-        assert!(s.is_pending());
-        assert!(s.request(true));
     }
 }

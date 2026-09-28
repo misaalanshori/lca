@@ -72,6 +72,12 @@ pub struct QueuedMessage {
 /// The shared queue the interface fills and the turn loop drains at each
 /// model-call boundary (ADR-0038). `FollowUp` entries stay in the
 /// interface's own list; only `Steer` entries are pushed here.
+///
+/// It lives in `lca-protocol`, not `lca-core`, because it is the interface
+/// *between* the two: `lca-ui` may not depend on `lca-core` (ADR-0036's
+/// boundary rule), and `lca-core` may not depend on `lca-ui`. The vocabulary
+/// crate is the one place both can name, so the queue's type is vocabulary,
+/// like `TurnEvent` and `SubmitMode` beside it.
 pub type SteerQueue = std::sync::Arc<std::sync::Mutex<Vec<QueuedMessage>>>;
 
 /// A new, empty steer queue.

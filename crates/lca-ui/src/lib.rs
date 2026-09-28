@@ -6,6 +6,10 @@
 //! on any of them. The theme, transcript, footer, chat composition, and the
 //! interactive loop live here.
 
+// R17: production paths stay panic-free (test code may unwrap; clippy.toml
+// scopes the lints away from tests).
+#![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 pub mod chat;
 mod chat_overlays;
 pub mod footer;
