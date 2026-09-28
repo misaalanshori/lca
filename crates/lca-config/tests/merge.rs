@@ -4,6 +4,7 @@
 //! built-ins. The project file only participates once the user trusts the
 //! project (FR-PERM-9).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::path::Path;
 
 use lca_config::{ColorMode, Config, MergeSource};

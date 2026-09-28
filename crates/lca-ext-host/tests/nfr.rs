@@ -5,6 +5,7 @@
 //! size-and-startup gate re-measures the release binary (NFR-7 discipline,
 //! docs/phase0-report.md).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

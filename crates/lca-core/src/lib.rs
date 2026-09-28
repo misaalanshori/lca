@@ -38,12 +38,13 @@ use lca_provider::Provider;
 use lca_session::{Session, SessionStore};
 use lca_tools::{CancelFlag, ToolExecutor};
 
-/// Lock a mutex, panicking on poisoning with one shared message.
+/// Lock a mutex, recovering a poisoned guard rather than panicking.
 ///
-/// The panic semantics are unchanged from the per-site `expect` this
-/// replaces: a poisoned lock is a bug, and the release profile aborts.
+/// A panic while another thread held the lock leaves it poisoned; refusing
+/// to recover would take the whole agent down with a lock that is still
+/// perfectly usable (S3: one poison-tolerant style everywhere).
 pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().expect("mutex poisoned")
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Static configuration for the loop, built from merged configuration.
@@ -175,6 +176,7 @@ impl TurnSink for NullSink {
 /// this thread waits for it.
 /// ponytail: one thread per invocation; commands are human-paced, so
 /// the cost is invisible, and a concurrent caller just joins.
+#[allow(clippy::expect_used)] // startup-fatal: a runtime that cannot start, or a command thread that panicked, ends the process.
 pub fn drive_blocking<T: Send + 'static>(
     future: impl std::future::Future<Output = T> + Send + 'static,
 ) -> T {

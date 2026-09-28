@@ -6,6 +6,7 @@
 //! extension displays a live interactive session inside a panel with no
 //! raw terminal access of its own (ADR-0003's data-only boundary).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::sync::{Arc, Mutex};
 
 use lca_ext_abi::ExtensionDispatch;

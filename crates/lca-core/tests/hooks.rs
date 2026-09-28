@@ -4,6 +4,7 @@
 //! (FR-EXT-3), and cancelling a turn interrupts a running extension call
 //! (FR-CONC-1).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

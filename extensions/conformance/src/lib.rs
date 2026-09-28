@@ -1014,6 +1014,7 @@ mod native {
         }
 
         /// The tool schema (identical to the guest's).
+        #[allow(clippy::expect_used)] // the fixture's own scripted schema string is JSON by construction.
         pub fn schema(&self) -> lca_protocol::ToolSpec {
             let (name, description, parameters) = schema_json();
             lca_protocol::ToolSpec {

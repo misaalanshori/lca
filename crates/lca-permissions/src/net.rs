@@ -154,6 +154,7 @@ impl LocalPattern {
 
 /// Parse a `net-local` manifest entry, refusing anything outside the
 /// canonical local ranges (FR-PERM-14).
+#[allow(clippy::expect_used)] // a /32 (v4) or /128 (v6) prefix is always valid; the constructor only rejects out-of-range prefixes.
 pub fn parse_local_pattern(value: &str) -> Result<LocalPattern, PatternError> {
     let invalid = |reason: &str| PatternError::Invalid {
         value: value.to_string(),

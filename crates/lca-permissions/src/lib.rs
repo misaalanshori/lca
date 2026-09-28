@@ -451,6 +451,7 @@ impl GrantStore {
     }
 
     /// Persist an extension's project-specific enablement change.
+    #[allow(clippy::expect_used)] // serializing a `serde_json::Value` into JSON is infallible.
     pub fn save(&mut self) -> Result<(), Error> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| Error::Io {

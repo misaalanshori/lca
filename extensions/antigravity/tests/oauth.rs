@@ -3,6 +3,7 @@
 //! the quota usage shape, and logout with its revoke - every call
 //! through the capability engine, no real network (testing plan §4).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

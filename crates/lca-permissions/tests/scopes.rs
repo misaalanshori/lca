@@ -2,6 +2,7 @@
 //! named vocabulary, mode enforcement, traversal and symlink refusal, and
 //! the state-directory exclusion that keeps credential isolation true.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use lca_permissions::{FsMode, ScopeGrant, ScopeRoots, ScopeViolationKind};
 
 struct Sandbox {

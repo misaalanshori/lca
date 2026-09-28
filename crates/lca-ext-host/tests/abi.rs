@@ -1,5 +1,6 @@
 //! The ABI policy's machine-checkable half (docs/abi-versioning.md).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use lca_ext_abi::ABI_VERSION;
 use lca_ext_host::{Manifest, SUPPORTED_ABI_WINDOW};
 

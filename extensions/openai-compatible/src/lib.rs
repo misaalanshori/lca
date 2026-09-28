@@ -40,6 +40,7 @@ pub const MANIFEST: &str = include_str!("../extension.toml");
 /// The grants the manifest declares: `net` for the default endpoint and
 /// the credential namespace (FR-PERM-6), everything else denied.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::expect_used)] // the extension's own literal manifest patterns are valid by construction.
 pub fn manifest_grants() -> lca_tools::CapabilityGrants {
     lca_tools::CapabilityGrants {
         net: vec![

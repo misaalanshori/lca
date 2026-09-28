@@ -121,9 +121,8 @@ impl Provider for ExtensionProvider {
             let answered = {
                 let dispatch = handle.stream_completion(request, &sink);
                 tokio::pin!(dispatch);
-                let mut done = None;
                 let mut core_gone = false;
-                while done.is_none() {
+                loop {
                     tokio::select! {
                         maybe = srx.recv() => {
                             if let Some(event) = maybe {
@@ -138,12 +137,11 @@ impl Provider for ExtensionProvider {
                                 }
                             }
                         }
-                        result = &mut dispatch => done = Some(result),
+                        // The dispatch answering ends the bridge; dropping it
+                        // here closes the sink so the drain below terminates.
+                        result = &mut dispatch => break result,
                     }
                 }
-                // The loop exits only when the dispatch answered; dropping
-                // it here closes the bridge so the drain below terminates.
-                done.expect("the loop waits for the dispatch future")
             };
             drop(sink);
             while let Some(event) = srx.recv().await {

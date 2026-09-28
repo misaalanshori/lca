@@ -4,6 +4,7 @@
 //!
 //! Verifies: FR-PERM-6, FR-PERM-7, NFR-25.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::sync::{Arc, Mutex};
 
 use lca_permissions::{Decision, GrantStore, PermissionPrompt, ProposalDiff, ScopeRoots};

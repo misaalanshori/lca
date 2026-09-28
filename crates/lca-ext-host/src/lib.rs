@@ -60,12 +60,13 @@ use tool_hooks::{
 use transform::{compact_work, transform_work};
 use ui::{event_work, render_work};
 
-/// Lock a mutex, panicking on poisoning with one shared message.
+/// Lock a mutex, recovering a poisoned guard rather than panicking.
 ///
-/// The panic semantics are unchanged from the per-site `expect` this
-/// replaces: a poisoned lock is a bug, and the release profile aborts.
+/// A panic while another thread held the lock leaves it poisoned; refusing
+/// to recover would take the whole agent down with a lock that is still
+/// perfectly usable (S3: one poison-tolerant style everywhere).
 pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().expect("mutex poisoned")
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// The ABI lines this host loads: the current minor and the one before it
@@ -156,6 +157,7 @@ pub struct ExtHost {
 
 impl ExtHost {
     /// Build the host with its resource limits and environment.
+    #[allow(clippy::expect_used)] // startup-fatal: a wasmtime engine that cannot build leaves nothing to run.
     pub fn new(limits: ExtensionLimits, env: Arc<HostEnvironment>) -> ExtHost {
         let mut config = wasmtime::Config::new();
         config.wasm_component_model(true);
@@ -183,6 +185,7 @@ impl ExtHost {
     /// ABI window), resolve its grants, then link and probe-instantiate
     /// so a broken component fails here, before the first input
     /// (FR-EXT-1, FR-EXT-2, FR-EXT-8, `docs/flows.md`).
+    #[allow(clippy::expect_used)] // `add_to_linker` only fails on a duplicate definition, which is a programming error.
     pub fn load(&mut self, wasm: &[u8], manifest_text: &str) -> Result<WasmExtension, LoadError> {
         let manifest = Manifest::parse(manifest_text)?;
         if !manifest.abi_in_window() {

@@ -1,6 +1,7 @@
 //! Agent loop tests: the core turn flow against the fake provider, with
 //! every FR it verifies named on the test.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

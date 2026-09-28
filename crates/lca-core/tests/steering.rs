@@ -5,6 +5,7 @@
 //! injection; the submit-mode marker travels on the session record and in
 //! the message `extras` extensions see.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

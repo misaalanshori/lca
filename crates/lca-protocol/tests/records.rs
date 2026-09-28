@@ -1,6 +1,7 @@
 //! Protocol type tests: the serialized shapes are what `docs/session-log-format.md`
 //! and `docs/headless.md` promise, so they are pinned here.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use lca_protocol::record::{PermissionDecision, ToolSource};
 use lca_protocol::{
     ChatMessage, ContentBlock, FORMAT_VERSION, MessageRole, Record, StreamEvent, ToolCall,

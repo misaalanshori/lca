@@ -9,6 +9,7 @@
 //! The mock runs on its own multi-thread runtime so the blocking
 //! `Command::output()` calls cannot starve it.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::PathBuf;

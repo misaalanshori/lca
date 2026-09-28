@@ -4,6 +4,7 @@
 //!
 //! Verifies: FR-CTX-2.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use lca_core::{SkillSource, SkillsRoots, skills};
 
 fn write_skill(dir: &std::path::Path, name: &str, header: &str, body: &str) {

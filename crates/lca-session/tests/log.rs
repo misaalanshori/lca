@@ -5,6 +5,7 @@
 //! fixture in `lca-testkit` covers environment isolation for tests that
 //! touch process state.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use lca_protocol::{FORMAT_VERSION, Record};
 use lca_session::{ExportOptions, ReadOutcome, SessionStore, ViewMode};
 

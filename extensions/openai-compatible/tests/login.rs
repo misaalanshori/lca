@@ -3,6 +3,7 @@
 //!
 //! Verifies: ADR-0031, ADR-0033.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 

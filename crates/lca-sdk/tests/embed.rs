@@ -1,6 +1,7 @@
 //! The Embedding SDK's contract (SRDD: "creates a session, subscribes
 //! to events, and sends input").
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::sync::Arc;
 
 use lca_protocol::{Record, Usage};

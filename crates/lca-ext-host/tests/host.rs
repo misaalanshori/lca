@@ -1,6 +1,7 @@
 //! Extension host tests: the FR-EXT behaviors the host itself owns, run
 //! against the committed conformance fixture (`tool` world slice).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::sync::{Arc, Mutex};
 
 use lca_ext_host::{CallError, ExtHost, ExtensionLimits, HostEnvironment, LoadError, Manifest};

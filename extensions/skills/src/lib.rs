@@ -30,6 +30,7 @@ pub const MANIFEST: &str = include_str!("../extension.toml");
 /// The grants the manifest declares: read access to the workspace,
 /// which is where `.lca/skills` lives - nothing else.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::expect_used)] // the extension's own literal manifest patterns are valid by construction.
 pub fn manifest_grants() -> lca_tools::CapabilityGrants {
     lca_tools::CapabilityGrants {
         fs: vec![

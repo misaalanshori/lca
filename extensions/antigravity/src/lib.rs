@@ -105,6 +105,7 @@ const DEFAULT_API_BASE: &str = "https://daily-cloudcode-pa.googleapis.com";
 /// The grants the manifest declares (net for Google's API surface, the
 /// loopback flow, this provider's own credential namespace).
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::expect_used)] // the extension's own literal manifest patterns are valid by construction.
 pub fn manifest_grants() -> lca_tools::CapabilityGrants {
     lca_tools::CapabilityGrants {
         net: vec![

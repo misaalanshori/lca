@@ -1,5 +1,6 @@
 //! Capture the build target triple for `lca --version`.
 
+#[allow(clippy::expect_used)] // cargo always sets TARGET for a build script.
 fn main() {
     // The build target triple for `lca --version` (release policy).
     let target = std::env::var("TARGET").expect("cargo sets TARGET for build scripts");

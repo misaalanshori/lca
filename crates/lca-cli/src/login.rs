@@ -153,8 +153,9 @@ impl LoginFlow {
             .pending
             .as_ref()
             .is_some_and(|pending| pending.fields.is_empty())
+            && let Some(done) = self.pending.take()
         {
-            let done = self.pending.take().expect("pending just set");
+            // Every field was pre-filled: the flow is already done.
             return Step::Submit {
                 provider: done.provider,
                 choice: done.choice,
@@ -176,7 +177,9 @@ impl LoginFlow {
         pending.fields.remove(0);
         pending.answers.insert(field, value.to_string());
         if pending.fields.is_empty() {
-            let done = self.pending.take().expect("pending just used");
+            let Some(done) = self.pending.take() else {
+                return Step::Next(LoginNext::Message("nothing to sign in to".to_string()));
+            };
             return Step::Submit {
                 provider: done.provider,
                 choice: done.choice,

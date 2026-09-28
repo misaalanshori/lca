@@ -3,6 +3,7 @@
 //! flow (FR-PROV-3/4), and credential namespace isolation with owner-only
 //! permissions (FR-PERM-6/7, NFR-14).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::net::TcpListener as StdTcpListener;
 use std::sync::{Arc, Mutex};
 

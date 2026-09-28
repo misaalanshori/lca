@@ -1,5 +1,6 @@
 //! Unit tests for the dispatch rules and exit-code mapping.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use clap::Parser;
 use lca_cli::{Cli, Route, exit, exit_code, route};
 

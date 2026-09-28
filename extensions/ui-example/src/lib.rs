@@ -27,18 +27,20 @@
 /// [`manifest_grants`]; a test keeps them in step).
 pub const MANIFEST: &str = include_str!("../extension.toml");
 
-/// Lock a mutex, panicking on poisoning with one shared message.
+/// Lock a mutex, recovering a poisoned guard rather than panicking.
 ///
-/// The panic semantics are unchanged from the per-site `expect` this
-/// replaces: a poisoned lock is a bug, and the release profile aborts.
+/// A panic while another thread held the lock leaves it poisoned; refusing
+/// to recover would take the whole agent down with a lock that is still
+/// perfectly usable (S3: one poison-tolerant style everywhere).
 pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().expect("mutex poisoned")
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// The grants the manifest declares: the four regions plus the demo's
 /// process and terminal (capability catalog's sentences are what the
 /// consent screen shows; this is the parsed grant set).
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::expect_used)] // the extension's own literal manifest patterns are valid by construction.
 pub fn manifest_grants() -> lca_tools::CapabilityGrants {
     lca_tools::CapabilityGrants {
         fs: vec![

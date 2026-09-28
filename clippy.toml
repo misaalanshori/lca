@@ -1,9 +1,11 @@
-# Clippy configuration (R17).
+# Clippy configuration (R17, S3).
 #
-# The `unwrap_used`/`expect_used`/`panic` restriction lints (enabled per
-# crate in `lca-tui` and `lca-ui`) keep production paths panic-free while
-# leaving test code free to unwrap. Tests are where an unwrap is a
-# deliberate assertion, so the lints are scoped away from them here.
+# The `unwrap_used`/`expect_used`/`panic` restriction lints are enabled
+# workspace-wide in the root `Cargo.toml`'s `[workspace.lints.clippy]`.
+# This block keeps unit-test code (`#[cfg(test)]` modules) free to unwrap:
+# a test's unwrap is a deliberate assertion. Integration-test files and the
+# test-support crate carry their own file/crate-level allow, since these
+# options do not reach a whole test crate.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true

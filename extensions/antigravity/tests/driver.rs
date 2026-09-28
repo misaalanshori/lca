@@ -2,6 +2,7 @@
 //! body chunks, not after the whole response (`docs/deferred_workplan.md`
 //! C1). Deterministic: a fake capability view scripts the chunks.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};

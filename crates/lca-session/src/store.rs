@@ -255,11 +255,7 @@ impl SessionStore {
             if !visited.insert(parent_id.clone()) {
                 return Err(crate::Error::ForkCycle { session: parent_id });
             }
-            let dir = current
-                .dir()
-                .parent()
-                .expect("session lives under a project dir")
-                .join(&parent_id);
+            let dir = project_dir_of(&current)?.join(&parent_id);
             if !dir.is_dir() {
                 break;
             }
@@ -290,14 +286,12 @@ impl SessionStore {
     /// directory can be referenced by any member's resolved records.
     pub fn fork_tree(&self, session: &Session) -> Result<Vec<Session>> {
         let ancestors = self.ancestors(session)?;
-        let root = ancestors
-            .last()
-            .expect("the session itself is in the chain");
-        let project_dir = root
-            .dir()
-            .parent()
-            .expect("session lives under a project dir")
-            .to_path_buf();
+        let Some(root) = ancestors.last() else {
+            return Err(crate::Error::Io(std::io::Error::other(
+                "the fork chain is empty",
+            )));
+        };
+        let project_dir = project_dir_of(root)?.to_path_buf();
         let summaries = self.rebuild_index_from_key(&project_dir)?;
         let mut tree = Vec::new();
         let mut seen = BTreeSet::new();
@@ -405,7 +399,7 @@ impl SessionStore {
         }
         let now = ids::now_ms();
         let id = ids::session_id(now);
-        let project_dir = parent.dir().parent().expect("project dir");
+        let project_dir = project_dir_of(parent)?;
         let dir = project_dir.join(&id);
         std::fs::create_dir_all(&dir)?;
 
@@ -616,12 +610,12 @@ impl SessionStore {
     /// The session's own `session-start` record, for tests that need the
     /// exact stored form.
     pub fn raw_start(&self, session: &Session) -> Result<lca_protocol::Record> {
-        Ok(self
-            .read(session)?
-            .records
-            .into_iter()
-            .next()
-            .expect("session-start is always the first record"))
+        let Some(record) = self.read(session)?.records.into_iter().next() else {
+            return Err(crate::Error::Io(std::io::Error::other(
+                "the session log has no records",
+            )));
+        };
+        Ok(record)
     }
 }
 
@@ -632,6 +626,19 @@ enum Line {
     Record(lca_protocol::Record),
     Skipped { reason: String },
     Corrupt { reason: String },
+}
+
+/// The project directory a session lives under. A session directory is
+/// always `<data>/sessions/<project>/<id>`, so its parent is the project
+/// key; a session whose directory has no parent is a broken handle, reported
+/// as an I/O error rather than a panic.
+pub(crate) fn project_dir_of(session: &Session) -> Result<&Path> {
+    session.dir().parent().ok_or_else(|| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "session directory {} has no project parent",
+            session.dir().display()
+        )))
+    })
 }
 
 fn parse_line(line: &[u8]) -> Line {

@@ -98,7 +98,7 @@ impl SessionStore {
     /// Reconstruct the parent handle for a fork (parent id plus the child's
     /// project key, since both live under the same project).
     fn session_handle(&self, parent_id: &str, like: &Session) -> Result<Session> {
-        let dir = like.dir().parent().expect("project dir").join(parent_id);
+        let dir = crate::store::project_dir_of(like)?.join(parent_id);
         if !dir.is_dir() {
             return Err(crate::Error::MissingParent {
                 session: parent_id.to_string(),

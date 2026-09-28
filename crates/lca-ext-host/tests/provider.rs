@@ -2,6 +2,7 @@
 //! scripted results, case-per-case event mapping, FR-PROV-7/8 shapes,
 //! and ADR-0012's three identity exports (NFR-25's Phase 3 half).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::sync::{Arc, Mutex};
 
 use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};

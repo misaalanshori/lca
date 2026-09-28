@@ -3,6 +3,7 @@
 //! resolvers against local mock servers (offline, deterministic -
 //! testing plan sections4-5).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use lca_registry::{grant_hash, resolve, resolve_archive, resolve_local, resolve_oci};
 
 const MANIFEST: &str = r#"name = "word-count"

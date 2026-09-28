@@ -215,9 +215,15 @@ async fn platform_exec(
     // platform notes): the pgid equals the child's pid.
     cmd.process_group(0);
     let mut child = cmd.spawn()?;
-    let pgid = child.id().expect("child has a pid");
-    let mut stdout = child.stdout.take().expect("piped");
-    let mut stderr = child.stderr.take().expect("piped");
+    let Some(pgid) = child.id() else {
+        return Err(std::io::Error::other("the spawned shell has no pid"));
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        return Err(std::io::Error::other("the shell's stdout was not piped"));
+    };
+    let Some(mut stderr) = child.stderr.take() else {
+        return Err(std::io::Error::other("the shell's stderr was not piped"));
+    };
 
     let mut collected: Vec<u8> = Vec::new();
     let mut outcome: Option<ExecOutcome> = None;

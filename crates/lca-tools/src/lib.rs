@@ -534,13 +534,12 @@ impl ToolExecutor {
                 );
             };
             let mut matches = original.match_indices(old);
-            let first = matches.next();
-            if first.is_none() {
+            let Some((start, text)) = matches.next() else {
                 return ToolResult::error(
                     call.call_id.clone(),
                     format!("edits[{index}].oldText not found in {path}"),
                 );
-            }
+            };
             if matches.next().is_some() {
                 return ToolResult::error(
                     call.call_id.clone(),
@@ -549,7 +548,6 @@ impl ToolExecutor {
                     ),
                 );
             }
-            let (start, text) = first.expect("one match");
             spans.push((start, start + text.len(), new.to_string()));
         }
         spans.sort_by_key(|(start, ..)| *start);

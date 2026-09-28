@@ -3,6 +3,7 @@
 //! providers, and the provider world reaches the core through one
 //! adapter regardless of delivery mode.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::sync::Arc;
 
 use lca_core::ExtensionRegistry;

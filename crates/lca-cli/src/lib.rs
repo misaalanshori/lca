@@ -15,12 +15,13 @@ use lca_permissions::{GrantStore, PermissionPrompt, ProposalDiff};
 use lca_session::{ExportOptions, SessionStore};
 use lca_tools::{CancelFlag, NativeOps, ToolExecutor};
 
-/// Lock a mutex, panicking on poisoning with one shared message.
+/// Lock a mutex, recovering a poisoned guard rather than panicking.
 ///
-/// The panic semantics are unchanged from the per-site `expect` this
-/// replaces: a poisoned lock is a bug, and the release profile aborts.
+/// A panic while another thread held the lock leaves it poisoned; refusing
+/// to recover would take the whole agent down with a lock that is still
+/// perfectly usable (S3: one poison-tolerant style everywhere).
 pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().expect("mutex poisoned")
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// [`version_text`], leaked to the `'static` lifetime clap's derive wants.
@@ -805,7 +806,7 @@ pub async fn headless(
     apply_enablement(&mut registry, |name| {
         grants
             .lock()
-            .expect("grant store")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .extension_enabled(cwd, name)
             == Some(false)
     });
@@ -856,7 +857,7 @@ pub async fn headless(
     apply_enablement(&mut registry, |name| {
         grants
             .lock()
-            .expect("grant store")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .extension_enabled(cwd, name)
             == Some(false)
     });

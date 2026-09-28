@@ -11,6 +11,7 @@
 //! Verifies: ADR-0033 (the settings `login-submit` hands back), and pins
 //! the shape ADR-0035 is about to change.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::sync::Arc;
 
 use lca_ext_abi::ExtensionDispatch;

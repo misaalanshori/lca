@@ -40,12 +40,13 @@ mod windows_acl;
 
 pub use errors::{BrowserError, CompletionError};
 
-/// Lock a mutex, panicking on poisoning with one shared message.
+/// Lock a mutex, recovering a poisoned guard rather than panicking.
 ///
-/// The panic semantics are unchanged from the per-site `expect` this
-/// replaces: a poisoned lock is a bug, and the release profile aborts.
+/// A panic while another thread held the lock leaves it poisoned; refusing
+/// to recover would take the whole agent down with a lock that is still
+/// perfectly usable (S3: one poison-tolerant style everywhere).
 pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().expect("mutex poisoned")
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// One recorded attempt: identity, what was tried, and why it failed.
@@ -367,6 +368,7 @@ impl Capabilities {
     /// call did).
     /// ponytail: callers already inside an async poll would panic on
     /// `block_on`; every current caller is inside a blocking region.
+    #[allow(clippy::expect_used)] // startup-fatal: a capability runtime that cannot start leaves no host calls runnable.
     pub(super) fn drive<F: std::future::Future>(future: F) -> F::Output {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => handle.block_on(future),
@@ -764,8 +766,17 @@ impl Capabilities {
                 "handle {handle} is not a process"
             )));
         };
-        let reader =
-            stdout.get_or_insert_with(|| child.stdout().expect("stdout was piped at spawn"));
+        let reader = match stdout.as_mut() {
+            Some(reader) => reader,
+            None => {
+                let Some(reader) = child.stdout() else {
+                    return Err(CapabilityError::Invalid(format!(
+                        "handle {handle} has no stdout"
+                    )));
+                };
+                stdout.insert(reader)
+            }
+        };
         Ok(crate::process::read_up_to(reader, max)?)
     }
 
@@ -785,8 +796,17 @@ impl Capabilities {
                 "handle {handle} is not a process"
             )));
         };
-        let reader =
-            stderr.get_or_insert_with(|| child.stderr().expect("stderr was piped at spawn"));
+        let reader = match stderr.as_mut() {
+            Some(reader) => reader,
+            None => {
+                let Some(reader) = child.stderr() else {
+                    return Err(CapabilityError::Invalid(format!(
+                        "handle {handle} has no stderr"
+                    )));
+                };
+                stderr.insert(reader)
+            }
+        };
         Ok(crate::process::read_up_to(reader, max)?)
     }
 
@@ -802,7 +822,17 @@ impl Capabilities {
                 "handle {handle} is not a process"
             )));
         };
-        let writer = stdin.get_or_insert_with(|| child.stdin().expect("stdin was piped at spawn"));
+        let writer = match stdin.as_mut() {
+            Some(writer) => writer,
+            None => {
+                let Some(writer) = child.stdin() else {
+                    return Err(CapabilityError::Invalid(format!(
+                        "handle {handle} has no stdin"
+                    )));
+                };
+                stdin.insert(writer)
+            }
+        };
         Ok(crate::process::write_all(writer, bytes)?)
     }
 

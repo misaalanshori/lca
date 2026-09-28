@@ -3,6 +3,7 @@
 //! the shared prompt (capability catalog, FR-PERM-1, FR-PERM-3,
 //! FR-PERM-12).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

@@ -3,6 +3,7 @@
 //! ADR-0012 identity trio (Phase 3 exit-test half: an API-key provider
 //! that never touches a socket or a credential file directly).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::sync::{Arc, Mutex};
 
 use lca_ext_abi::ExtensionDispatch;

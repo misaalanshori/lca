@@ -7,6 +7,7 @@
 //! same engine directly. Any divergence is a defect regardless of which
 //! side "wins" (docs/testing-plan.md section6).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::sync::{Arc, Mutex};
 
 use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};

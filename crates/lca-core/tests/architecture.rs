@@ -5,6 +5,7 @@
 //! bottom with no workspace dependencies"). Drift here is invisible to
 //! every behavior test, so the graph itself gets checked.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::path::{Path, PathBuf};
 
 fn workspace_crates() -> Vec<(String, PathBuf)> {

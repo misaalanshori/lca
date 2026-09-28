@@ -3,6 +3,7 @@
 //! Deterministic: a fake capability view scripts the chunks, so no network
 //! and no timing are involved.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};

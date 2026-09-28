@@ -110,6 +110,15 @@ proptest = "1"
 [workspace.lints.rust]
 missing_docs = "warn"
 
+# S3: production paths stay panic-free workspace-wide (clippy.toml scopes the
+# allowlist away from tests). A deliberate panic site carries
+# `#[allow(clippy::expect_used)]` (or the specific lint) with a one-line
+# justification; the allowlist is the audit trail.
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
 [profile.release]
 opt-level = 3
 lto = "fat"
