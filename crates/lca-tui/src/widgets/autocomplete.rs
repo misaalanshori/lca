@@ -91,27 +91,35 @@ impl AutocompleteProvider for CombinedAutocompleteProvider {
                     prefix: format!("/{rest}"),
                 });
             }
-            let (name, argument) = rest.split_once(' ')?;
-            let command = self.commands.iter().find(|c| c.name == name)?;
-            let items = command.argument_completions.as_ref()?.as_ref()(argument);
-            if items.is_empty() {
-                return None;
+            // A command with argument completions answers here; a command
+            // without them (or one whose argument has no matches) falls
+            // through to file completion for the last token, the way pi's
+            // provider chain does.
+            if let Some((name, argument)) = rest.split_once(' ')
+                && let Some(command) = self.commands.iter().find(|c| c.name == name)
+                && let Some(completions) = &command.argument_completions
+            {
+                let items = completions(argument);
+                if !items.is_empty() {
+                    return Some(Suggestions {
+                        items,
+                        prefix: argument.to_string(),
+                    });
+                }
             }
-            return Some(Suggestions {
-                items,
-                prefix: argument.to_string(),
-            });
         }
-        // Plain path completion (only for path-ish tokens, or when forced).
-        if force || looks_like_path(text) {
-            let (dir_part, base) = split_path(text);
+        // Plain path completion for the last whitespace-delimited token
+        // (pi completes the token at the cursor, not the whole line).
+        let token = text.rsplit(char::is_whitespace).next().unwrap_or(text);
+        if force || looks_like_path(token) {
+            let (dir_part, base) = split_path(token);
             let items = self.file_items(&dir_part, base);
             if items.is_empty() {
                 return None;
             }
             return Some(Suggestions {
                 items,
-                prefix: text.to_string(),
+                prefix: token.to_string(),
             });
         }
         None
@@ -124,7 +132,7 @@ impl CombinedAutocompleteProvider {
             .iter()
             .filter(|c| fuzzy_match(&c.name, query))
             .map(|c| AutocompleteItem {
-                value: format!("{} ", c.name),
+                value: format!("/{} ", c.name),
                 label: format!("/{}", c.name),
                 description: match (&c.argument_hint, &c.description) {
                     (Some(h), Some(d)) => Some(format!("{h} — {d}")),

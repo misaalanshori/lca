@@ -14,14 +14,13 @@ pub mod state;
 pub mod theme;
 pub mod transcript;
 
-pub use chat::Chat;
+pub use chat::{Chat, PendingMessage, SubmitMode};
 pub use footer::Footer;
-pub use render::render_state;
 pub use run::run;
 pub use state::{
     Action, CUSTOM_OPTION, CommandInvoker, LoginComplete, LoginConfirm, LoginNext, LoginPick,
     LoginRequest, PickerOption, PromptRequest, RegionInteractor, RegionRenderer, TurnChannels,
-    TurnRunner, UiOptions, UiState, handle_key, sanitize_block, sanitize_text, widget_lines,
+    TurnRunner, UiOptions, UiState, sanitize_block, sanitize_text, widget_lines,
 };
 pub use theme::Theme;
 pub use transcript::{Entry, ToolStatus, Transcript};

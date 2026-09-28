@@ -10,17 +10,12 @@ repository.workspace = true
 [dependencies]
 lca-tui = { path = "../lca-tui" }
 lca-protocol = { path = "../lca-protocol" }
-lca-session = { path = "../lca-session" }
-lca-core = { path = "../lca-core" }
-lca-config = { path = "../lca-config" }
 lca-permissions = { path = "../lca-permissions" }
 lca-tools = { path = "../lca-tools" }
-crossterm.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
 lca-testkit = { path = "../lca-testkit" }
-lca-tui = { path = "../lca-tui" }
 
 [lints]
 workspace = true

@@ -1,42 +1,17 @@
-//! The agent interface state machine, moved from the legacy `lca-tui`
-//! renderer. Owns the scrollback, the input editor, the permission modal,
-//! the login prompts, and the key handling. Rendering lives in
-//! `crate::render`; the engine is `lca-tui`.
+//! The ui-world adapter: the inputs the CLI hands the interface, the
+//! modal state (permission, the `/login` picker/secret/grant, an extension
+//! modal, the side panel), and the effect vocabulary the `ui` world speaks.
+//!
+//! Editing, the transcript, and key routing live in [`crate::chat`] on the
+//! engine's widgets (ADR-0037: one editor, one key vocabulary). This module
+//! is single-purpose: it holds no buffer and no rendering.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 
 use lca_protocol::CommandEffect;
-use lca_protocol::Usage;
-use lca_protocol::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
-
-/// Color policy (FR-UI-5): plain never paints a foreground color.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColorMode {
-    /// Terminal colors allowed.
-    Themed,
-    /// Plain text only.
-    Plain,
-}
-
-impl ColorMode {
-    /// Map the configuration value onto the render policy.
-    pub fn from_config(mode: lca_config::ColorMode) -> ColorMode {
-        match mode {
-            lca_config::ColorMode::Auto => ColorMode::Themed,
-            lca_config::ColorMode::Never => ColorMode::Plain,
-        }
-    }
-}
-
-/// Input editor mode; multiline is carried in the buffer itself
-/// (Shift+Enter), so mode is reserved for future modal input states.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputMode {
-    /// Normal editing.
-    Normal,
-}
+use lca_protocol::{TurnEvent, TurnOutcome};
 
 /// A one-line description of the running turn (NFR-28: state also has a
 /// text cue, never color alone).
@@ -258,7 +233,7 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|since| since.subsec_millis())
                     .unwrap_or(0);
-                let count = chars_count(frames);
+                let count = frames.chars().count();
                 if count > 0 {
                     let pick = (ticks / 80) as usize % count;
                     out.push(frames.chars().nth(pick).unwrap_or(' ').to_string());
@@ -284,9 +259,6 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
             }
             Widget::Vendor(kind) => out.push(format!("[vendor {kind}]")),
         }
-    }
-    fn chars_count(text: &str) -> usize {
-        text.chars().count()
     }
     let mut out = Vec::new();
     if !nodes.is_empty() {
@@ -343,42 +315,13 @@ pub struct PermissionModal {
     pub respond: Option<SyncSender<lca_permissions::Decision>>,
 }
 
-/// Everything the renderer draws.
+/// The ui-world state: the options, the open modals, and the small flags
+/// the interface tracks across keys. No buffer, no transcript, no editing.
 pub struct UiState {
     /// Static inputs.
     pub options: UiOptions,
-    /// The input buffer.
-    pub buffer: String,
-    /// Where the cursor sits, in bytes. `None` means the end of the buffer,
-    /// which is the default so text assigned directly still appends; a
-    /// movement key pins it to an explicit index.
-    pub cursor: Option<usize>,
-    /// Submitted lines, newest last (input editor history).
-    pub history: Vec<String>,
-    /// History browsing position.
-    pub history_index: Option<usize>,
-    /// Conversation scrollback, one entry per display line.
-    pub scrollback: Vec<String>,
-    /// The streaming area.
-    pub active: String,
-    /// Live reasoning text for the current response, kept apart from the
-    /// answer so the two never read as one run-on line.
-    pub reasoning: String,
-    /// The tool call that just started, so its result can name the tool
-    /// instead of the provider's opaque call id.
-    pub last_tool: Option<lca_protocol::ToolCall>,
     /// A transient notice (command results, unknown commands).
     pub notice: Option<String>,
-    /// A running tool line, when one is executing.
-    pub tool_line: Option<String>,
-    /// A turn is in flight.
-    pub turn_running: bool,
-    /// Status-line turn state.
-    pub turn_status: Option<TurnStatusLine>,
-    /// Accumulated usage for the session's visible totals (FR-CORE-8).
-    pub usage: Usage,
-    /// Editor mode.
-    pub mode: InputMode,
     /// The open permission modal, if any.
     pub permission: Option<PermissionModal>,
     /// The open masked secret prompt, if any (`/login`).
@@ -396,14 +339,10 @@ pub struct UiState {
     pub modal_open: bool,
     /// Terminal size, tracked across resizes (FR-UI-3).
     pub size: (u16, u16),
-    /// The kill ring (readline Ctrl+U/W/K then Ctrl+Y).
-    pub kill_ring: Vec<String>,
-    /// Undo stack: `(buffer, cursor)` before each edit.
-    pub undo: Vec<(String, Option<usize>)>,
 }
 
 impl UiState {
-    /// Build the initial state.
+    /// Build the initial ui-world state.
     pub fn new(options: UiOptions) -> UiState {
         let workspace = if options.workspace.as_os_str().is_empty() {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -412,23 +351,9 @@ impl UiState {
         };
         let mut options = options;
         options.workspace = workspace;
-        let initial_lines = options.initial_lines.clone();
         UiState {
             options,
-            scrollback: initial_lines,
-            buffer: String::new(),
-            cursor: None,
-            history: Vec::new(),
-            history_index: None,
-            active: String::new(),
-            reasoning: String::new(),
-            last_tool: None,
             notice: None,
-            tool_line: None,
-            turn_running: false,
-            turn_status: None,
-            usage: Usage::default(),
-            mode: InputMode::Normal,
             permission: None,
             secret: None,
             picker: None,
@@ -437,155 +362,12 @@ impl UiState {
             panel_open: false,
             modal_open: false,
             size: (80, 24),
-            kill_ring: Vec::new(),
-            undo: Vec::new(),
-        }
-    }
-
-    /// Snapshot the buffer before an edit (readline undo, Ctrl+-).
-    fn snapshot(&mut self) {
-        self.undo.push((self.buffer.clone(), self.cursor));
-        if self.undo.len() > 200 {
-            self.undo.remove(0);
-        }
-    }
-
-    /// Undo the last edit (Ctrl+-).
-    fn undo(&mut self) {
-        if let Some((buffer, cursor)) = self.undo.pop() {
-            self.buffer = buffer;
-            self.cursor = cursor;
-        }
-    }
-
-    /// Delete the word before the cursor into the kill ring (Ctrl+W).
-    fn delete_word_backward(&mut self) {
-        self.snapshot();
-        let at = self.cursor_index();
-        let before = &self.buffer[..at];
-        // Skip trailing whitespace, then the word itself.
-        let word_end = before.trim_end().len();
-        let start = before[..word_end]
-            .rfind(char::is_whitespace)
-            .map_or(0, |index| index + 1);
-        let killed = self.buffer[start..at].to_string();
-        self.buffer.replace_range(start..at, "");
-        self.set_cursor(start);
-        self.kill_ring.push(killed);
-    }
-
-    /// Delete from the line start to the cursor (Ctrl+U).
-    fn delete_to_line_start(&mut self) {
-        self.snapshot();
-        let at = self.cursor_index();
-        let start = self.buffer[..at].rfind('\n').map_or(0, |index| index + 1);
-        let killed = self.buffer[start..at].to_string();
-        self.buffer.replace_range(start..at, "");
-        self.set_cursor(start);
-        self.kill_ring.push(killed);
-    }
-
-    /// Delete from the cursor to the line end (Ctrl+K).
-    fn delete_to_line_end(&mut self) {
-        self.snapshot();
-        let at = self.cursor_index();
-        let end = self.buffer[at..]
-            .find('\n')
-            .map_or(self.buffer.len(), |index| at + index);
-        let killed = self.buffer[at..end].to_string();
-        self.buffer.replace_range(at..end, "");
-        self.set_cursor(at);
-        self.kill_ring.push(killed);
-    }
-
-    /// Yank the most recent kill (Ctrl+Y).
-    fn yank(&mut self) {
-        if let Some(killed) = self.kill_ring.last().cloned() {
-            self.snapshot();
-            self.insert_at_cursor(&killed);
         }
     }
 
     /// Record a terminal resize (FR-UI-3: nothing is lost).
     pub fn resize(&mut self, width: u16, height: u16) {
         self.size = (width, height);
-    }
-
-    /// The cursor's byte offset into `buffer`, clamped to a char boundary.
-    pub fn cursor_index(&self) -> usize {
-        let end = self.buffer.len();
-        let Some(mut index) = self.cursor else {
-            return end;
-        };
-        index = index.min(end);
-        while index > 0 && !self.buffer.is_char_boundary(index) {
-            index -= 1;
-        }
-        index
-    }
-
-    fn set_cursor(&mut self, index: usize) {
-        self.cursor = (index < self.buffer.len()).then_some(index);
-    }
-
-    /// Insert `text` at the cursor and leave the cursor after it.
-    pub fn insert_at_cursor(&mut self, text: &str) {
-        self.snapshot();
-        let at = self.cursor_index();
-        self.buffer.insert_str(at, text);
-        self.set_cursor(at + text.len());
-    }
-
-    fn backspace(&mut self) {
-        self.snapshot();
-        let at = self.cursor_index();
-        if at == 0 {
-            return;
-        }
-        let prev = prev_char_boundary(&self.buffer, at);
-        self.buffer.replace_range(prev..at, "");
-        self.set_cursor(prev);
-    }
-
-    fn delete_at_cursor(&mut self) {
-        self.snapshot();
-        let at = self.cursor_index();
-        if at >= self.buffer.len() {
-            return;
-        }
-        let next = next_char_boundary(&self.buffer, at);
-        self.buffer.replace_range(at..next, "");
-        self.set_cursor(at);
-    }
-
-    fn move_left(&mut self) {
-        let at = self.cursor_index();
-        if at > 0 {
-            self.set_cursor(prev_char_boundary(&self.buffer, at));
-        }
-    }
-
-    fn move_right(&mut self) {
-        let at = self.cursor_index();
-        if at >= self.buffer.len() {
-            self.cursor = None;
-        } else {
-            self.set_cursor(next_char_boundary(&self.buffer, at));
-        }
-    }
-
-    fn move_home(&mut self) {
-        let at = self.cursor_index();
-        let start = self.buffer[..at].rfind('\n').map_or(0, |index| index + 1);
-        self.set_cursor(start);
-    }
-
-    fn move_end(&mut self) {
-        let at = self.cursor_index();
-        let end = self.buffer[at..]
-            .find('\n')
-            .map_or(self.buffer.len(), |index| at + index);
-        self.set_cursor(end);
     }
 
     /// Open the permission modal (FR-UI-4).
@@ -596,113 +378,14 @@ impl UiState {
         });
     }
 
-    /// Move any pending reasoning into the transcript, marked and set off
-    /// from the answer that follows it.
-    fn flush_reasoning(&mut self) {
-        let text = std::mem::take(&mut self.reasoning);
-        if text.trim().is_empty() {
-            return;
-        }
-        if !self.active.is_empty() && !self.active.ends_with('\n') {
-            self.active.push('\n');
-        }
-        self.active.push_str("\u{2234} ");
-        self.active.push_str(text.trim_end());
-        self.active.push('\n');
+    /// Whether any modal owns the screen this frame.
+    pub fn modal_active(&self) -> bool {
+        self.picker.is_some()
+            || self.grant.is_some()
+            || self.secret.is_some()
+            || self.permission.is_some()
+            || self.modal_open
     }
-
-    /// Consume a turn event from the worker.
-    pub fn on_turn_event(&mut self, event: TurnEvent) {
-        match event {
-            TurnEvent::TextDelta(delta) => {
-                self.flush_reasoning();
-                self.active.push_str(&delta);
-            }
-            TurnEvent::ReasoningDelta(delta) => {
-                self.reasoning.push_str(&delta);
-            }
-            TurnEvent::ToolStarted(call) => {
-                self.tool_line = Some(format!("running {}({})...", call.name, call.arguments));
-                self.last_tool = Some(call);
-            }
-            TurnEvent::ToolFinished(result) => {
-                self.flush_reasoning();
-                self.tool_line = None;
-                let call = self.last_tool.take();
-                let label = match &call {
-                    Some(call) => format!("{}({})", call.name, call.arguments),
-                    None => short_call(&result.call_id),
-                };
-                self.active.push_str(&format!(
-                    "\n> {} -> {}\n",
-                    label,
-                    match result.status {
-                        lca_protocol::ToolResultStatus::Ok => "ok",
-                        lca_protocol::ToolResultStatus::Error => "error",
-                        lca_protocol::ToolResultStatus::Denied => "denied",
-                        lca_protocol::ToolResultStatus::Timeout => "timeout",
-                    }
-                ));
-            }
-            TurnEvent::ToolOutputChunk { chunk, .. } => {
-                self.active.push_str(&chunk);
-            }
-            TurnEvent::Usage(usage) => {
-                self.usage.input = self.usage.input.saturating_add(usage.input);
-                self.usage.output = self.usage.output.saturating_add(usage.output);
-                self.usage.cache_read = self.usage.cache_read.saturating_add(usage.cache_read);
-                self.usage.cache_write = self.usage.cache_write.saturating_add(usage.cache_write);
-                self.usage.cost += usage.cost;
-            }
-            TurnEvent::RetryScheduled {
-                attempt,
-                max,
-                error,
-                ..
-            } => {
-                self.notice = Some(format!("retry {attempt}/{max} after: {error}"));
-            }
-            TurnEvent::Error { message, .. } => {
-                self.active.push_str(&format!("\n! {message}\n"));
-            }
-            TurnEvent::AssistantText(_) => {}
-            TurnEvent::ExtensionEvent {
-                extension,
-                event,
-                detail,
-            } => {
-                self.notice = Some(format!("[{extension}] {event}: {detail}"));
-            }
-            TurnEvent::TurnEnded {
-                status,
-                stop_reason,
-            } => {
-                self.flush_reasoning();
-                if !self.active.trim().is_empty() {
-                    let text = std::mem::take(&mut self.active);
-                    self.scrollback.push(text);
-                }
-                self.tool_line = None;
-                self.turn_running = false;
-                self.turn_status = Some(TurnStatusLine {
-                    text: match (status, stop_reason) {
-                        (TurnStatus::Ok, StopReason::Stop) => "done".to_string(),
-                        (TurnStatus::Ok, StopReason::Cancelled) => "cancelled".to_string(),
-                        (TurnStatus::Error, StopReason::IterationLimit) => {
-                            "stopped: iteration limit".to_string()
-                        }
-                        (TurnStatus::Error, _) => "done with errors".to_string(),
-                        (TurnStatus::Ok, _) => "done".to_string(),
-                    },
-                });
-            }
-        }
-    }
-}
-
-fn short_call(call_id: &str) -> String {
-    let trimmed = call_id.trim_start_matches("call-");
-    format!("call {trimmed}")
 }
 
 /// What a key press asks the loop to do.
@@ -718,52 +401,16 @@ pub enum Action {
     Exit,
 }
 
-/// Apply one extension effect. `OpenModal` is dropped while a turn
-/// runs: an extension cannot interrupt work (FR-UI-6), and this is the
-/// single place effects are applied, all of them sourced from real
-/// user input.
-fn apply_ui_effect(state: &mut UiState, effect: lca_protocol::UiEffect) -> Option<Action> {
-    use lca_protocol::UiEffect;
-    match effect {
-        UiEffect::None => None,
-        UiEffect::CloseModal => {
-            state.modal_open = false;
-            None
-        }
-        UiEffect::OpenModal => {
-            if !state.turn_running {
-                state.modal_open = true;
-            }
-            None
-        }
-        UiEffect::ShowNotice(text) => {
-            state.notice = Some(sanitize_block(&text));
-            None
-        }
-        UiEffect::InsertText(text) => {
-            state.insert_at_cursor(&sanitize_block(&text));
-            None
-        }
-        UiEffect::SubmitPrompt(text) => {
-            state.buffer = text;
-            Some(Action::Submit)
-        }
-    }
-}
-
-/// Map a key to the interaction vocabulary the ui world speaks.
-fn key_input(key: crossterm::event::KeyEvent) -> lca_protocol::UiInput {
-    use crossterm::event::KeyCode;
-    match key.code {
-        KeyCode::Char(character) => lca_protocol::UiInput::Key {
-            key: character.to_string(),
-        },
-        KeyCode::Enter => lca_protocol::UiInput::Submit {
+/// Map a key identifier (`engine::keys::parse_key`'s vocabulary) to the
+/// `ui` world's interaction input.
+pub fn key_input(key: &str) -> lca_protocol::UiInput {
+    match key {
+        "enter" => lca_protocol::UiInput::Submit {
             text: String::new(),
         },
-        KeyCode::Esc => lca_protocol::UiInput::Cancel,
+        "escape" => lca_protocol::UiInput::Cancel,
         other => lca_protocol::UiInput::Key {
-            key: format!("{other:?}"),
+            key: other.to_string(),
         },
     }
 }
@@ -771,7 +418,7 @@ fn key_input(key: crossterm::event::KeyEvent) -> lca_protocol::UiInput {
 /// Apply the CLI's next login step: one modal at a time, and a
 /// [`LoginNext::Secret`] mid-flow is the next field of a multi-field
 /// login, not a refusal.
-fn apply_login_next(state: &mut UiState, next: LoginNext) {
+pub fn apply_login_next(state: &mut UiState, next: LoginNext) {
     match next {
         LoginNext::Message(text) => state.notice = Some(sanitize_block(&text)),
         LoginNext::Secret {
@@ -810,559 +457,8 @@ fn apply_login_next(state: &mut UiState, next: LoginNext) {
     }
 }
 
-/// Handle one key press against the state (NFR-27: keyboard only).
-pub fn handle_key(state: &mut UiState, key: crossterm::event::KeyEvent) -> Action {
-    use crossterm::event::{KeyCode, KeyModifiers};
-
-    // The list picker (`/login`) owns the keyboard while open.
-    if let Some(mut prompt) = state.picker.take() {
-        use crossterm::event::KeyCode as PK;
-        match key.code {
-            PK::Esc => state.notice = Some("login cancelled".to_string()),
-            PK::Up | PK::Char('k') => {
-                prompt.selected = prompt.selected.saturating_sub(1);
-                state.picker = Some(prompt);
-            }
-            PK::Down | PK::Char('j') => {
-                prompt.selected = (prompt.selected + 1).min(prompt.options.len().saturating_sub(1));
-                state.picker = Some(prompt);
-            }
-            PK::Enter => {
-                if let Some(option) = prompt.options.get(prompt.selected).cloned()
-                    && let Some(pick) = &state.options.pick_login
-                {
-                    let next = pick(&option.provider, &option.id);
-                    apply_login_next(state, next);
-                }
-            }
-            _ => state.picker = Some(prompt),
-        }
-        return Action::Continue;
-    }
-
-    // The single-line login prompt (`/login`) owns the keyboard while open.
-    // The typed characters live only here - never in the buffer, history, or
-    // session log - and are moved out on submit.
-    if let Some(mut prompt) = state.secret.take() {
-        use crossterm::event::KeyCode as SK;
-        match key.code {
-            SK::Esc => state.notice = Some("login cancelled".to_string()),
-            SK::Enter => {
-                let typed = std::mem::take(&mut prompt.input);
-                if typed.is_empty() {
-                    state.notice = Some("nothing was entered".to_string());
-                } else if let Some(complete) = &state.options.complete_login {
-                    let next = complete(&prompt.provider, &typed);
-                    apply_login_next(state, next);
-                }
-            }
-            SK::Backspace => {
-                prompt.input.pop();
-                state.secret = Some(prompt);
-            }
-            SK::Char(c) => {
-                prompt.input.push(c);
-                state.secret = Some(prompt);
-            }
-            _ => state.secret = Some(prompt),
-        }
-        return Action::Continue;
-    }
-
-    // The ad hoc-grant confirm (`/login`) owns the keyboard while open.
-    if let Some(prompt) = state.grant.take() {
-        use crossterm::event::KeyCode as GK;
-        match key.code {
-            GK::Char('y' | 'Y') | GK::Enter => {
-                let message = state
-                    .options
-                    .confirm_login_grant
-                    .as_ref()
-                    .map(|confirm| confirm(&prompt.provider, &prompt.host))
-                    .unwrap_or_else(|| "nothing was changed".to_string());
-                state.notice = Some(sanitize_block(&message));
-            }
-            GK::Char('n' | 'N') | GK::Esc => {
-                state.notice = Some(format!("kept {} without the ad hoc grant", prompt.host));
-            }
-            _ => state.grant = Some(prompt),
-        }
-        return Action::Continue;
-    }
-
-    // The modal swallows every key while open.
-    if let Some(modal) = state.permission.take() {
-        use lca_permissions::Decision;
-        let PermissionModal { action, respond } = modal;
-        let answer = |decision: Decision| {
-            if let Some(respond) = respond {
-                let _ = respond.send(decision);
-            }
-        };
-        return match key.code {
-            KeyCode::Char('o') => {
-                answer(Decision::Once);
-                Action::Continue
-            }
-            KeyCode::Char('a') => {
-                answer(Decision::Always);
-                Action::Continue
-            }
-            KeyCode::Char('d') | KeyCode::Esc | KeyCode::Enter => {
-                answer(Decision::Denied);
-                Action::Continue
-            }
-            _ => {
-                state.permission = Some(PermissionModal {
-                    action,
-                    respond: None,
-                });
-                Action::Continue
-            }
-        };
-    }
-
-    use crossterm::event::KeyCode as K;
-    // The extension modal runs first: Enter submits what is typed,
-    // Escape dismisses (host-level: a modal is user-dismissible), and
-    // everything else goes to the extension that opened it.
-    if state.modal_open {
-        if key.code == K::Esc {
-            state.modal_open = false;
-            return Action::Continue;
-        }
-        let input = match key.code {
-            K::Enter => {
-                let text = std::mem::take(&mut state.buffer);
-                lca_protocol::UiInput::Submit { text }
-            }
-            other => key_input(crossterm::event::KeyEvent::new(other, key.modifiers)),
-        };
-        if let Some(interactor) = &state.options.ui_events
-            && let Some((_, effect)) = interactor("modal", &input)
-            && let Some(action) = apply_ui_effect(state, effect)
-        {
-            return action;
-        }
-        return Action::Continue;
-    }
-
-    // Ctrl+P toggles the side panel (the host's binding, not routed to
-    // an extension).
-    if key.code == K::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        state.panel_open = !state.panel_open;
-        return Action::Continue;
-    }
-
-    // With the panel open and no control chord in flight, keys belong
-    // to whatever extension registered for the region: the live session
-    // in the reference panel eats them the way a terminal would. An
-    // extension that claims nothing closes the panel instead.
-    if state.panel_open && !key.modifiers.contains(KeyModifiers::CONTROL) {
-        let input = key_input(key);
-        if let Some(interactor) = &state.options.ui_events {
-            if let Some((_, effect)) = interactor("panel", &input) {
-                if let Some(action) = apply_ui_effect(state, effect) {
-                    return action;
-                }
-                return Action::Continue;
-            }
-            // Nothing claims the panel: close it and let the key edit
-            // normally.
-            state.panel_open = false;
-        }
-    }
-
-    match key.code {
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            state.insert_at_cursor("\n");
-            Action::Continue
-        }
-        KeyCode::Enter => {
-            if state.buffer.is_empty() {
-                return Action::Continue;
-            }
-            let submitted = state.buffer.clone();
-            if submitted.starts_with('/') {
-                let command_line = submitted.strip_prefix('/').unwrap_or(&submitted);
-                let mut parts = command_line.splitn(2, ' ');
-                let name = parts.next().unwrap_or("").to_string();
-                let argument = parts.next().unwrap_or("").to_string();
-                state.history.push(submitted);
-                state.history_index = None;
-                state.buffer.clear();
-                state.cursor = None;
-                // Host-level commands the interface answers itself, so they
-                // work with no extension installed.
-                match name.as_str() {
-                    "help" => {
-                        state.notice = Some(help_notice(&state.options.slash_commands));
-                        return Action::Continue;
-                    }
-                    "quit" | "exit" => return Action::Exit,
-                    _ => {}
-                }
-                // `/login` goes through the host seam when one is installed:
-                // the CLI decides between a message and a masked prompt.
-                if name == "login"
-                    && let Some(login) = &state.options.login
-                {
-                    let next = login(&argument);
-                    apply_login_next(state, next);
-                    return Action::Continue;
-                }
-                let full = format!("/{name}");
-                if state
-                    .options
-                    .slash_commands
-                    .iter()
-                    .any(|command| command == &full)
-                {
-                    match (state.options.invoke_command)(&name, &argument) {
-                        CommandEffect::ShowWidget(text) => {
-                            state.notice = Some(sanitize_block(&text))
-                        }
-                        CommandEffect::InsertText(text) => {
-                            state.insert_at_cursor(&sanitize_block(&text))
-                        }
-                        CommandEffect::SubmitPrompt(text) => {
-                            state.buffer = text;
-                            state.cursor = None;
-                            return Action::Submit;
-                        }
-                        CommandEffect::None => {}
-                    }
-                    return Action::Continue;
-                }
-                state.notice = Some(sanitize_text(&format!("unknown command /{name}")));
-                return Action::Continue;
-            }
-            // A turn needs a model; say so rather than letting it fail deep
-            // inside the provider with a transport error.
-            if state
-                .options
-                .model_label
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .trim()
-                .is_empty()
-            {
-                state.buffer.clear();
-                state.cursor = None;
-                state.notice = Some(
-                    "No model is active. Use /login to sign in, or /model to choose one."
-                        .to_string(),
-                );
-                return Action::Continue;
-            }
-            let submitted = std::mem::take(&mut state.buffer);
-            state.cursor = None;
-            state.history.push(submitted);
-            state.history_index = None;
-            Action::Submit
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if state.turn_running {
-                Action::CancelTurn
-            } else if state.ctrl_c_armed {
-                state.ctrl_c_armed = false;
-                Action::Exit
-            } else {
-                state.ctrl_c_armed = true;
-                Action::Continue
-            }
-        }
-        KeyCode::Up => {
-            if !state.history.is_empty() {
-                let index = match state.history_index {
-                    None => state.history.len() - 1,
-                    Some(0) => 0,
-                    Some(index) => index - 1,
-                };
-                state.history_index = Some(index);
-                state.buffer = state.history[index].clone();
-                state.cursor = None;
-            }
-            Action::Continue
-        }
-        KeyCode::Down => {
-            match state.history_index.take() {
-                Some(index) if index + 1 < state.history.len() => {
-                    state.history_index = Some(index + 1);
-                    state.buffer = state.history[index + 1].clone();
-                }
-                Some(_) => state.buffer.clear(),
-                None => {}
-            }
-            state.cursor = None;
-            Action::Continue
-        }
-        KeyCode::Tab => {
-            complete(state);
-            Action::Continue
-        }
-        KeyCode::Backspace => {
-            state.backspace();
-            Action::Continue
-        }
-        KeyCode::Delete => {
-            state.delete_at_cursor();
-            Action::Continue
-        }
-        KeyCode::Left => {
-            state.move_left();
-            Action::Continue
-        }
-        KeyCode::Right => {
-            state.move_right();
-            Action::Continue
-        }
-        KeyCode::Home => {
-            state.move_home();
-            Action::Continue
-        }
-        KeyCode::End => {
-            state.move_end();
-            Action::Continue
-        }
-        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.move_home();
-            Action::Continue
-        }
-        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.move_end();
-            Action::Continue
-        }
-        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.move_left();
-            Action::Continue
-        }
-        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.move_right();
-            Action::Continue
-        }
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.delete_at_cursor();
-            Action::Continue
-        }
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.delete_to_line_start();
-            Action::Continue
-        }
-        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.delete_to_line_end();
-            Action::Continue
-        }
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.delete_word_backward();
-            Action::Continue
-        }
-        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.yank();
-            Action::Continue
-        }
-        KeyCode::Char('-') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.undo();
-            Action::Continue
-        }
-        KeyCode::Char(c) => {
-            state.insert_at_cursor(&c.to_string());
-            state.ctrl_c_armed = false;
-            Action::Continue
-        }
-        _ => Action::Continue,
-    }
-}
-
-/// The byte offset of the previous character boundary before `index`.
-fn prev_char_boundary(text: &str, index: usize) -> usize {
-    let mut previous = index.saturating_sub(1);
-    while previous > 0 && !text.is_char_boundary(previous) {
-        previous -= 1;
-    }
-    previous
-}
-
-/// The byte offset of the next character boundary after `index`.
-fn next_char_boundary(text: &str, index: usize) -> usize {
-    let mut next = index + 1;
-    while next < text.len() && !text.is_char_boundary(next) {
-        next += 1;
-    }
-    next
-}
-
-/// One-line descriptions for the interface's own commands. Extension
-/// commands arrive as names only (the registry carries no text), so they
-/// list bare.
-fn command_help(command: &str) -> &'static str {
-    match command {
-        "/help" => "list commands and keys",
-        "/exit" => "leave the interface",
-        "/login" => "sign in to a provider",
-        "/logout" => "clear the provider's stored key",
-        "/usage" => "show the provider's usage, when it has one",
-        "/model" => "list or switch the session's model",
-        "/compact" => "summarize the session to free context",
-        "/attach" => "attach an image to the next message",
-        _ => "",
-    }
-}
-
-/// The `/help` text: the commands the interface offers, then the keys.
-fn help_notice(commands: &[String]) -> String {
-    let mut sorted: Vec<&String> = commands.iter().collect();
-    sorted.sort();
-    sorted.dedup();
-    let mut out = String::from("commands:\n");
-    for command in sorted {
-        out.push_str("  ");
-        out.push_str(command);
-        let help = command_help(command);
-        if !help.is_empty() {
-            out.push_str(" - ");
-            out.push_str(help);
-        }
-        out.push('\n');
-    }
-    out.push_str("Enter sends, Shift+Enter adds a line, Tab completes, Ctrl+C cancels");
-    out
-}
-
-fn complete(state: &mut UiState) {
-    if state.buffer.starts_with('/') && !state.buffer.contains(char::is_whitespace) {
-        let prefix = state.buffer.clone();
-        let mut matches: Vec<String> = state
-            .options
-            .slash_commands
-            .iter()
-            .filter(|command| command.starts_with(&prefix))
-            .cloned()
-            .collect();
-        matches.sort();
-        match matches.len() {
-            0 => {}
-            1 => {
-                state.buffer = matches[0].clone();
-                state.cursor = None;
-            }
-            _ => {
-                if let Some(common) = common_prefix(&matches)
-                    && common.len() > prefix.len()
-                {
-                    state.buffer = common;
-                    state.cursor = None;
-                }
-                state.notice = Some(format!("completions: {}", matches.join("  ")));
-            }
-        }
-        return;
-    }
-
-    // Argument completion: `/model <id>` and `/login <provider>`.
-    if let Some(rest) = state.buffer.strip_prefix('/')
-        && let Some((name, argument)) = rest.split_once(char::is_whitespace)
-    {
-        let candidates: Vec<String> = match name {
-            "model" => state.options.models.clone(),
-            "login" => state
-                .options
-                .slash_commands
-                .iter()
-                .filter_map(|c| c.strip_prefix('/'))
-                .filter_map(|c| c.strip_suffix(".login"))
-                .map(str::to_string)
-                .collect(),
-            _ => Vec::new(),
-        };
-        let matches: Vec<String> = candidates
-            .into_iter()
-            .filter(|c| c.starts_with(argument))
-            .collect();
-        if matches.len() == 1 {
-            state.buffer = format!("/{name} {}", matches[0]);
-            state.cursor = None;
-        } else if matches.len() > 1 {
-            state.notice = Some(format!("completions: {}", matches.join("  ")));
-        }
-        return;
-    }
-
-    // Path completion: the last whitespace-delimited token.
-    let (head, partial) = match state.buffer.rfind(char::is_whitespace) {
-        Some(index) => state.buffer.split_at(index + 1),
-        None => ("", state.buffer.as_str()),
-    };
-    if partial.is_empty() {
-        return;
-    }
-    let (dir_part, file_prefix) = match partial.rfind('/') {
-        Some(index) => (&partial[..=index], &partial[index + 1..]),
-        None => ("", partial),
-    };
-    let base = state
-        .options
-        .workspace
-        .join(dir_part.trim_end_matches('/').trim_start_matches("./"));
-    let base = if dir_part.is_empty() {
-        state.options.workspace.clone()
-    } else {
-        base
-    };
-    let Ok(entries) = std::fs::read_dir(&base) else {
-        return;
-    };
-    let mut matches: Vec<String> = entries
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            !name.starts_with('.') && name.starts_with(file_prefix)
-        })
-        .map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            format!(
-                "{dir_part}{name}{}",
-                if is_dir && dir_part.is_empty() {
-                    "/".to_string()
-                } else {
-                    String::new()
-                }
-            )
-        })
-        .collect();
-    matches.sort();
-    if matches.len() == 1 {
-        state.buffer = format!("{head}{}", matches[0]);
-        state.cursor = None;
-    } else if let Some(common) = common_prefix(&matches)
-        && common.len() > dir_part.len() + file_prefix.len()
-    {
-        state.buffer = format!("{head}{common}");
-        state.cursor = None;
-    } else if matches.len() > 1 {
-        state.notice = Some(format!("completions: {}", matches.join("  ")));
-    }
-}
-
-fn common_prefix(items: &[String]) -> Option<String> {
-    let first = items.first()?;
-    let mut prefix = first.as_str();
-    for item in items {
-        let mut end = 0;
-        for (a, b) in prefix.bytes().zip(item.bytes()) {
-            if a != b {
-                break;
-            }
-            end += 1;
-        }
-        prefix = &prefix[..end];
-        if prefix.is_empty() {
-            return None;
-        }
-    }
-    Some(prefix.to_string())
-}
+// Re-exported for the turn worker wiring in the binary.
+pub use lca_protocol::TurnEvent as WorkerTurnEvent;
 
 /// Channels between the UI loop and the worker thread running a turn.
 pub struct TurnChannels {
@@ -1390,21 +486,26 @@ pub type TurnRunner = Box<
         + Sync,
 >;
 
+/// Re-exported usage accumulator type.
+pub use lca_protocol::Usage as WorkerUsage;
+/// Re-exported so callers do not depend on `lca_protocol` directly for the
+/// turn vocabulary they already handle.
+pub use lca_protocol::{StopReason as TurnStopReason, TurnStatus as WorkerTurnStatus};
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use std::sync::{Arc, Mutex};
+    use lca_protocol::{StopReason, TurnStatus, Usage};
 
-    fn state() -> UiState {
-        UiState::new(UiOptions {
-            model_label: Arc::new(Mutex::new("p/m".into())),
+    fn options() -> UiOptions {
+        UiOptions {
+            model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
             initial_lines: Vec::new(),
             plain: true,
             invoke_command: Arc::new(|_, _| CommandEffect::None),
             slash_commands: Vec::new(),
             models: Vec::new(),
-            workspace: std::path::PathBuf::from("."),
+            workspace: PathBuf::from("."),
             render_regions: None,
             ui_events: None,
             update_notice: None,
@@ -1412,69 +513,68 @@ mod tests {
             complete_login: None,
             pick_login: None,
             confirm_login_grant: None,
-        })
-    }
-
-    fn ctrl(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
-    }
-
-    fn type_str(s: &mut UiState, text: &str) {
-        for c in text.chars() {
-            handle_key(s, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
     }
 
     #[test]
-    fn ctrl_u_deletes_to_line_start() {
-        let mut s = state();
-        type_str(&mut s, "hello world");
-        handle_key(&mut s, ctrl('u'));
-        assert_eq!(s.buffer, "");
+    fn sanitize_strips_control_characters() {
+        assert_eq!(sanitize_text("a\x1b[31mb"), "a\\x1b[31mb");
+        assert_eq!(sanitize_block("a\nb\tc"), "a\nb c");
     }
 
     #[test]
-    fn ctrl_w_deletes_a_word_and_ctrl_y_yanks_it_back() {
-        let mut s = state();
-        type_str(&mut s, "hello world");
-        handle_key(&mut s, ctrl('w'));
-        assert_eq!(s.buffer, "hello ");
-        handle_key(&mut s, ctrl('y'));
-        assert_eq!(s.buffer, "hello world");
+    fn widget_lines_renders_a_column_and_key_values() {
+        use lca_protocol::Widget;
+        let nodes = vec![
+            Widget::Column(vec![1, 2]),
+            Widget::Text {
+                content: "hello".into(),
+                role: "default".into(),
+            },
+            Widget::KeyValue(vec![("k".into(), "v".into())]),
+        ];
+        assert_eq!(widget_lines(&nodes), vec!["hello", "k: v"]);
     }
 
     #[test]
-    fn ctrl_k_deletes_to_line_end() {
-        let mut s = state();
-        type_str(&mut s, "hello world");
-        handle_key(&mut s, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-        handle_key(&mut s, ctrl('k'));
-        assert_eq!(s.buffer, "");
+    fn widget_lines_guards_against_a_self_referential_child() {
+        use lca_protocol::Widget;
+        let nodes = vec![Widget::Boxed {
+            title: None,
+            child: 0,
+        }];
+        assert!(widget_lines(&nodes).is_empty());
     }
 
     #[test]
-    fn ctrl_minus_undoes_the_last_edit() {
-        let mut s = state();
-        s.insert_at_cursor("hello");
-        handle_key(&mut s, ctrl('-'));
-        assert_eq!(s.buffer, "");
-    }
-
-    #[test]
-    fn ctrl_a_and_e_move_to_the_line_ends() {
-        let mut s = state();
-        type_str(&mut s, "abc");
-        handle_key(&mut s, ctrl('a'));
-        handle_key(
-            &mut s,
-            KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
+    fn login_next_secret_opens_the_secret_prompt() {
+        let mut state = UiState::new(options());
+        apply_login_next(
+            &mut state,
+            LoginNext::Secret {
+                provider: "p".into(),
+                label: "key".into(),
+                masked: true,
+            },
         );
-        assert_eq!(s.buffer, "Xabc");
-        handle_key(&mut s, ctrl('e'));
-        handle_key(
-            &mut s,
-            KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::NONE),
-        );
-        assert_eq!(s.buffer, "XabcY");
+        assert!(state.secret.is_some());
+        assert!(state.modal_active());
+    }
+
+    #[test]
+    fn key_input_maps_the_vocabulary() {
+        assert!(matches!(
+            key_input("enter"),
+            lca_protocol::UiInput::Submit { .. }
+        ));
+        assert!(matches!(key_input("escape"), lca_protocol::UiInput::Cancel));
+        assert!(matches!(key_input("up"), lca_protocol::UiInput::Key { .. }));
+    }
+
+    #[test]
+    fn usage_reexports_compile() {
+        let _ = Usage::default();
+        let _ = TurnStatus::Ok;
+        let _ = StopReason::Stop;
     }
 }

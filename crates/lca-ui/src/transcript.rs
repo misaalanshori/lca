@@ -68,6 +68,8 @@ pub enum Entry {
     Notice(String),
     /// An error.
     Error(String),
+    /// A pre-rendered line from a resumed session (displayed verbatim).
+    Raw(String),
 }
 
 /// The transcript: an ordered list of entries.
@@ -172,6 +174,27 @@ impl Transcript {
         self.entries.push(Entry::Error(text.into()));
     }
 
+    /// Append a pre-rendered resume line, displayed verbatim.
+    pub fn push_raw(&mut self, text: impl Into<String>) {
+        self.entries.push(Entry::Raw(text.into()));
+    }
+
+    /// Append streamed tool output to the most recent running tool card.
+    pub fn append_tool_output(&mut self, chunk: &str) {
+        for entry in self.entries.iter_mut().rev() {
+            if let Entry::Tool { result, .. } = entry {
+                result.get_or_insert_with(String::new).push_str(chunk);
+                return;
+            }
+        }
+        self.entries.push(Entry::Tool {
+            name: "tool".into(),
+            args: String::new(),
+            status: ToolStatus::Running,
+            result: Some(chunk.to_string()),
+        });
+    }
+
     /// Render every entry to styled lines at `width`.
     pub fn render(&self, width: u16, theme: &Theme) -> Vec<String> {
         let mut out = Vec::new();
@@ -205,6 +228,9 @@ impl Transcript {
                 }
                 Entry::Error(text) => {
                     out.extend(wrap_text_with_ansi(&(theme.error)(text), width as usize));
+                }
+                Entry::Raw(text) => {
+                    out.extend(wrap_text_with_ansi(text, width as usize));
                 }
             }
         }

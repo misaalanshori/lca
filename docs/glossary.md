@@ -8,6 +8,8 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Ad hoc grant.** A single specific path or host the user attaches to an extension's grant outside the manifest's fixed vocabulary, at install time or later, with consent text naming the exact path or host. A manifest can never request one; see `docs/capabilities.md` and FR-PERM-16.
 
+**Alt screen.** The fullscreen rendering mode where the interface owns the whole terminal and restores the previous screen on exit. The default; text selection in it belongs to the renderer, not the terminal. Its counterpart is `main screen` below. See ADR-0037.
+
 **Build-time backend.** In the sense of ADR-0013, code with more than one implementation, all supplied by the project and chosen when the binary or web bundle is built: no manifest, no consent screen. The read, write, and shell tools are the clearest case. Distinct from both fixed core and a runtime extension.
 
 **Capability.** A named, manifest-declared grant an extension holds: `net`, `net-local`, `fs`, `credentials`, `oauth`, `process`, `pty`, `ui`, or `completion`. The host links every capability interface a world carries in a denied state; an ungranted call returns a recorded permission error (FR-PERM-3), and an interface a world does not import at all is absent from the link. See `docs/capabilities.md`.
@@ -30,6 +32,8 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Extension.** A runtime-installed, capability-gated unit of behavior implementing one or more WIT worlds, in either delivery mode. Not every pluggable piece of the system is an extension in this sense; see `core` and the build-time-backend sense under `delivery mode`. See ADR-0013 for the full three-way distinction.
 
+**Follow-up.** A prompt submitted while a turn runs with the intent to run after that turn ends, in submission order with any other queued prompts. The counterpart of `steering` below; the two are the queued-prompt modes of ADR-0038.
+
 **Grant.** The result of resolving an extension's declared capabilities against what the user has approved; the actual, enforced permission set an instance runs with, as opposed to what its manifest merely asked for. A manifest can declare more than it's granted; the import table reflects the grant, not the declaration.
 
 **Guest.** The extension's own code, from the perspective of the WASM runtime hosting it. The counterpart term is `host` below. "Guest" and "extension" are near-synonyms in casual use; "guest" specifically emphasizes the WASM-runtime relationship, which matters when discussing something like the sibling-instantiation hosting model in ADR-0018, where there are two guests, the agent and an extension, sharing one host engine.
@@ -46,13 +50,19 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Login surface.** The `provider-login` export (ADR-0033): `login-options` returns the picker choices the host renders, and `login-submit` consumes the user's answers, stores the secret in the extension's own credentials namespace, and returns opaque `setting: value` pairs the host persists. The host is UI, courier, and consent only - it never interprets a preset's shape. Not the same as `login`, which is the extension's own self-contained authentication flow (an OAuth dance).
 
+**Main screen.** The scrollback rendering mode where the transcript is appended to the terminal's own buffer and remains after exit, so the terminal's native history and selection apply. Runtime-switchable against `alt screen`. See ADR-0037.
+
 **Manifest.** The TOML file, `extension.toml`, declaring an extension's identity, ABI target, implemented worlds, and requested capabilities. The install-time consent surface; see `schemas/extension-manifest.schema.json`.
 
 **OCI artifact.** A component and its manifest, published to any registry implementing the OCI Distribution Specification, resolved by reference and pinned by digest. One of the source kinds `lca-registry` understands; see ADR-0010 for the others.
 
+**Paste marker.** The atomic editor segment a large paste becomes: one unit that does not reflow into surrounding text or split across history entries. An editor behavior, not a clipboard feature; see FR-UI-10.
+
 **Preopen.** A WASI term: a directory handle an extension receives already opened and scoped by the host, so the extension resolves paths relative to a handle it was given rather than an absolute path it constructed itself. The mechanism underneath every `fs` capability grant.
 
 **Preset.** A named endpoint entry an extension ships in its own `resources/provider-presets.toml`: id, display name, base URL, auth kind, curated model list. Extension data, not host data - disabling the extension takes its presets with it. The host's `login-options` query maps presets to picker rows and nothing more. A user's own presets live at `<config>/provider-presets.toml`. See ADR-0031.
+
+**Prompt jump.** Keyboard navigation between the user's own messages in the transcript, layered on the OSC 133 zones the renderer emits around each block. Not navigation of model output.
 
 **Provider.** An extension implementing the `provider` world: model listing, streaming completions, authentication, and the `login`, `logout`, and `usage` exports from ADR-0012. Not a synonym for "vendor" or "API"; a single vendor's API is what a provider extension talks to, not what the term itself names.
 
@@ -65,6 +75,8 @@ Terms as used across this document set specifically. Several of these have a bro
 **Stable prefix.** The leading portion of a resolved message list, up to and including the most recent compaction, that a provider's prompt cache can reuse across turns unchanged. The host computes this boundary and passes it to the active provider extension on every completion call. See ADR-0017.
 
 **State (bag).** An extension's own mutable, non-secret data, served by `lca:host/state` from `<state_dir>/state/<name>/`: caches, last-used values, counters. Keyed by the extension's own identity so a cross-namespace read has no address; size-capped; wiped on uninstall. Not secret-grade - secrets go in `credentials`. Not session state and not the `stable prefix`/`dynamic suffix` sense of "state" used elsewhere. See ADR-0030.
+
+**Steering.** A prompt submitted while a turn runs that joins the turn's input at the next model-call boundary, after the current tool or model step completes. It never mutates a streaming response. The counterpart of `follow-up` above; see ADR-0038.
 
 **Turn.** One round of the agent loop: a user or system input, a model's response, any tool calls that response triggers and their results, repeated until the model stops without requesting a tool. Not the same as a single model API call; a turn with three sequential tool calls involves four calls to the provider.
 

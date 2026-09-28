@@ -435,8 +435,14 @@ impl Editor {
             return EditorEvent::Changed;
         }
 
-        // Autocomplete popup navigation takes priority when open.
+        // Autocomplete popup navigation takes priority when open (pi's
+        // editor.ts): Escape cancels, Tab applies and closes, Enter applies
+        // and - for a slash-command prefix - falls through to submit.
         if self.suggestions.is_some() {
+            if kb.matches(data, "tui.select.cancel") {
+                self.clear_suggestions();
+                return EditorEvent::Changed;
+            }
             if kb.matches(data, "tui.select.up") || kb.matches(data, "tui.editor.cursorUp") {
                 self.move_suggestion(-1);
                 return EditorEvent::Changed;
@@ -445,13 +451,25 @@ impl Editor {
                 self.move_suggestion(1);
                 return EditorEvent::Changed;
             }
-            if kb.matches(data, "tui.select.confirm") {
+            if kb.matches(data, "tui.input.tab") {
                 self.accept_suggestion();
-                return EditorEvent::Changed;
-            }
-            if kb.matches(data, "tui.select.cancel") {
                 self.clear_suggestions();
                 return EditorEvent::Changed;
+            }
+            if kb.matches(data, "tui.select.confirm") {
+                let slash = self
+                    .suggestions
+                    .as_ref()
+                    .is_some_and(|s| s.prefix.starts_with('/'));
+                let before = self.text();
+                self.accept_suggestion();
+                self.clear_suggestions();
+                // A slash command falls through to submit (pi's behavior),
+                // and so does an accept that changed nothing (the token was
+                // already complete): otherwise Enter would appear dead.
+                if !slash && self.text() != before {
+                    return EditorEvent::Changed;
+                }
             }
         }
 
@@ -534,12 +552,15 @@ impl Editor {
             self.insert_str(&text);
             return EditorEvent::Changed;
         }
-        if let Some(key) = crate::engine::keys::parse_key(data)
-            && key.chars().count() == 1
-            && !key.starts_with("ctrl+")
-        {
-            self.insert_str(&key);
-            return EditorEvent::Changed;
+        if let Some(key) = crate::engine::keys::parse_key(data) {
+            if key == "space" {
+                self.insert_str(" ");
+                return EditorEvent::Changed;
+            }
+            if key.chars().count() == 1 && !key.starts_with("ctrl+") {
+                self.insert_str(&key);
+                return EditorEvent::Changed;
+            }
         }
         EditorEvent::None
     }
@@ -761,9 +782,17 @@ mod tests {
         let mut e = Editor::new();
         e.set_autocomplete(provider);
         e.insert_str("/model ");
-        e.handle_key("\t");
         assert!(e.suggestions().is_some());
         e.accept_suggestion();
         assert_eq!(e.text(), "/model gpt-4o");
+    }
+
+    #[test]
+    fn space_is_inserted() {
+        let mut e = Editor::new();
+        e.handle_key("a");
+        e.handle_key(" ");
+        e.handle_key("b");
+        assert_eq!(e.text(), "a b");
     }
 }

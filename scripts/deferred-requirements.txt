@@ -21,3 +21,26 @@ FR-WEB-1
 FR-WEB-2
 FR-WEB-3
 NFR-11
+
+# Cycle 2 (the TUI renovation brief, 2026-09-28): the SRDD names these as
+# this cycle's requirements and acceptance bar. They are tracked here as
+# an in-cycle burn-down - each line is REMOVED in the phase that lands its
+# implementation and its `// Verifies:` test - so the traceability gate
+# stays meaningful for everything already shipped. The file returns to the
+# web-target list alone when cycle 2 completes.
+FR-CORE-11
+FR-CORE-12
+FR-UI-7
+FR-UI-8
+FR-UI-10
+FR-UI-11
+FR-UI-12
+FR-UI-13
+FR-UI-14
+FR-UI-15
+FR-UI-16
+FR-UI-17
+FR-UI-18
+FR-UI-19
+FR-UI-20
+FR-UI-21

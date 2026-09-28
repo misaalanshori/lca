@@ -19,7 +19,7 @@ trap 'rm -f "$requirements" "$markers" "$deferred_ids"' EXIT
 # the SRDD risk table's lever). Printed as deferred, never silently
 # dropped - NFR-30's "zero untagged" holds over the requirements in
 # force for this release.
-grep -E '^(NFR|FR)-' scripts/deferred-requirements.txt > "$deferred_ids" || true
+grep -E '^(NFR|FR)-' scripts/deferred-requirements.txt | sort -u > "$deferred_ids" || true
 
 # Every requirement id the SRDD defines, minus the explicitly deferred
 # ones (their ids are still gathered below so a stale-marker warning

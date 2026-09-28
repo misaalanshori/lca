@@ -6,13 +6,15 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use lca_protocol::{CommandEffect, Widget, WidgetTree};
-use lca_ui::render_state;
-use lca_ui::state::{PermissionModal, UiOptions, UiState, handle_key, widget_lines};
+use lca_tui::engine::core::CURSOR_MARKER;
+use lca_tui::engine::keybindings::KeybindingsManager;
+use lca_tui::engine::text::{strip_terminal_sequences, visible_width};
+use lca_ui::Chat;
+use lca_ui::state::{UiOptions, widget_lines};
 
-fn state(plain: bool) -> UiState {
-    UiState::new(UiOptions {
+fn options(plain: bool) -> UiOptions {
+    UiOptions {
         model_label: Arc::new(Mutex::new("p/m".into())),
         initial_lines: Vec::new(),
         plain,
@@ -27,15 +29,15 @@ fn state(plain: bool) -> UiState {
         complete_login: None,
         pick_login: None,
         confirm_login_grant: None,
-    })
+    }
 }
 
-fn visible_width(s: &str) -> usize {
-    lca_tui::engine::text::visible_width(s)
+fn chat(plain: bool) -> Chat {
+    Chat::new(options(plain), Arc::new(KeybindingsManager::new()))
 }
 
-fn strip(s: &str) -> String {
-    lca_tui::engine::text::strip_terminal_sequences(s)
+fn strip(lines: &[String]) -> Vec<String> {
+    lines.iter().map(|l| strip_terminal_sequences(l)).collect()
 }
 
 // Verifies: FR-UI-1 - an extension's declarative widget tree renders to
@@ -60,15 +62,15 @@ fn extension_widget_trees_render_through_the_host() {
     );
 }
 
-// Verifies: FR-UI-3 - a resize re-renders without losing scrollback.
+// Verifies: FR-UI-3 - a resize re-renders without losing the transcript.
 #[test]
-fn resize_keeps_the_scrollback() {
-    let mut s = state(true);
-    s.scrollback.push("an earlier turn".into());
-    let before = render_state(&s, 80, 24);
+fn resize_keeps_the_transcript() {
+    let mut chat = chat(true);
+    chat.transcript.push_user("an earlier turn");
+    let before = strip(&chat.render(80));
     assert!(before.iter().any(|l| l.contains("an earlier turn")));
-    s.resize(120, 40);
-    let after = render_state(&s, 120, 40);
+    chat.world.resize(120, 40);
+    let after = strip(&chat.render(120));
     assert!(
         after.iter().any(|l| l.contains("an earlier turn")),
         "the transcript survived the resize"
@@ -78,29 +80,27 @@ fn resize_keeps_the_scrollback() {
 // Verifies: FR-UI-4 - the approval prompt shows the exact command or path.
 #[test]
 fn permission_modal_shows_the_exact_command() {
-    let mut s = state(true);
-    s.permission = Some(PermissionModal {
-        action: "shell: rm -rf /tmp/x --force".into(),
-        respond: None,
-    });
-    let lines = render_state(&s, 100, 30);
+    let mut chat = chat(true);
+    chat.world
+        .show_permission("shell: rm -rf /tmp/x --force".into());
+    let viewport = strip(&chat.viewport(100, 30, 0));
     assert!(
-        lines.iter().any(|l| l.contains("rm -rf /tmp/x --force")),
+        viewport.iter().any(|l| l.contains("rm -rf /tmp/x --force")),
         "the exact command is shown:\n{}",
-        lines.join("\n")
+        viewport.join("\n")
     );
 }
 
 // Verifies: FR-UI-5 - a terminal without color renders plain text only.
 #[test]
 fn plain_mode_never_paints_color() {
-    let mut s = state(true);
-    s.scrollback.push("an answer".into());
-    s.notice = Some("a notice".into());
-    let lines = render_state(&s, 80, 24);
-    for line in &lines {
+    let mut chat = chat(true);
+    chat.transcript.push_user("a question");
+    chat.transcript.append_text("an answer");
+    chat.world.notice = Some("a notice".into());
+    for line in chat.render(80) {
         // The CURSOR_MARKER is the renderer's side channel, not color.
-        let cleaned = line.replace(lca_tui::engine::core::CURSOR_MARKER, "");
+        let cleaned = line.replace(CURSOR_MARKER, "");
         assert!(
             !cleaned.contains('\x1b'),
             "plain mode emitted an escape: {cleaned:?}"
@@ -111,12 +111,11 @@ fn plain_mode_never_paints_color() {
 // Verifies: NFR-26 - the interface works at 80 columns.
 #[test]
 fn renders_at_eighty_columns() {
-    let mut s = state(false);
-    s.scrollback
-        .push("a fairly long answer line that must wrap within the width".into());
-    let lines = render_state(&s, 80, 24);
-    for line in &lines {
-        assert!(visible_width(line) <= 80, "over 80 columns: {line:?}");
+    let mut chat = chat(false);
+    chat.transcript
+        .push_user("a fairly long answer line that must wrap within the width");
+    for line in chat.render(80) {
+        assert!(visible_width(&line) <= 80, "over 80 columns: {line:?}");
     }
 }
 
@@ -124,20 +123,14 @@ fn renders_at_eighty_columns() {
 // keyboard path alone drives editing and submission).
 #[test]
 fn keyboard_alone_edits_and_submits() {
-    let mut s = state(true);
+    let mut chat = chat(true);
     for c in "hello".chars() {
-        handle_key(&mut s, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        chat.handle_key(&c.to_string());
     }
-    handle_key(
-        &mut s,
-        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
-    );
-    handle_key(
-        &mut s,
-        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
-    );
-    assert_eq!(s.buffer, "hellp");
-    let action = handle_key(&mut s, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key("\x7f"); // backspace
+    chat.handle_key("p");
+    assert_eq!(chat.editor.text(), "hellp");
+    let action = chat.handle_key("\r");
     assert_eq!(action, lca_ui::Action::Submit);
 }
 
@@ -145,16 +138,15 @@ fn keyboard_alone_edits_and_submits() {
 // carries a text cue too.
 #[test]
 fn state_carries_a_text_cue_not_only_color() {
-    let mut s = state(false);
-    s.turn_running = true;
-    s.turn_status = Some(lca_ui::state::TurnStatusLine {
+    let mut chat = chat(false);
+    chat.turn_running = true;
+    chat.turn_status = Some(lca_ui::state::TurnStatusLine {
         text: "running...".into(),
     });
-    let lines = render_state(&s, 100, 24);
+    let lines = strip(&chat.render(100));
     let status = lines
         .iter()
         .find(|l| l.contains("running..."))
         .expect("cue");
-    // The cue is literal text, present with or without the color code.
-    assert!(strip(status).contains("running..."));
+    assert!(status.contains("running..."));
 }

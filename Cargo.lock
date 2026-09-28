@@ -1452,12 +1452,8 @@ name = "lca-ui"
 version = "0.4.0"
 dependencies = [
  "anyhow",
- "crossterm",
- "lca-config",
- "lca-core",
  "lca-permissions",
  "lca-protocol",
- "lca-session",
  "lca-testkit",
  "lca-tools",
  "lca-tui",
