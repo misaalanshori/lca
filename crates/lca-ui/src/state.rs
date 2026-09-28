@@ -356,6 +356,13 @@ pub struct UiOptions {
     /// provider's own default. A cell, because `/thinking` rewrites it and
     /// the footer shows it every frame.
     pub thinking: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// The configured theme setting (`ui.theme`, S5): a built-in name, a
+    /// custom theme's name, or `auto` for the detected terminal scheme.
+    pub theme: String,
+    /// Where custom theme files live (`<config>/themes`).
+    pub theme_dir: PathBuf,
+    /// The `/theme` picker's names (built-ins plus custom files).
+    pub themes: Vec<String>,
     /// Conversation lines already resolved for display (resume).
     pub initial_lines: Vec<String>,
     /// Plain-text rendering (FR-UI-5).
@@ -590,6 +597,9 @@ mod tests {
             model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
             context_window: Arc::new(std::sync::Mutex::new(0)),
             thinking: Arc::new(std::sync::Mutex::new(None)),
+            theme: "auto".to_string(),
+            theme_dir: std::path::PathBuf::new(),
+            themes: crate::theme::THEMES.iter().map(|s| s.to_string()).collect(),
             initial_lines: Vec::new(),
             plain: true,
             invoke_command: Arc::new(|_, _| CommandEffect::None),

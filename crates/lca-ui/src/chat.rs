@@ -74,6 +74,12 @@ pub struct Chat {
     search_index: usize,
     /// The active theme's name (FR-UI-17).
     pub theme_name: String,
+    /// The configured theme setting (`ui.theme`, S5).
+    theme_setting: String,
+    /// Where custom theme files live.
+    theme_dir: std::path::PathBuf,
+    /// The picker's theme names (built-ins plus custom files).
+    pub theme_names: Vec<String>,
     /// Whether the theme still follows the detected terminal scheme (R10);
     /// an explicit pick clears it.
     theme_auto: bool,
@@ -94,18 +100,30 @@ pub struct Chat {
 impl Chat {
     /// Build the chat: widgets, theme, and the autocomplete chain.
     pub fn new(options: UiOptions, keybindings: Arc<KeybindingsManager>) -> Chat {
-        let world = UiState::new(options);
-        let theme_name = if world.options.plain {
+        let mut world = UiState::new(options);
+        // S5: the configured theme resolves through the auto-pair grammar
+        // (a built-in, a custom file, or `auto` following the detected
+        // scheme); an invalid custom file keeps the last-good palette and
+        // lands in the notice.
+        let theme_setting = if world.options.plain {
             "plain".to_string()
-        } else if matches!(
-            crate::theme::detect_scheme(),
-            Some(lca_tui::engine::colors::ColorScheme::Light)
-        ) {
-            "light".to_string()
         } else {
-            "default".to_string()
+            world.options.theme.clone()
         };
-        let theme = Theme::named(&theme_name).unwrap_or_else(Theme::colored);
+        let theme_dir = world.options.theme_dir.clone();
+        let theme_names = if world.options.themes.is_empty() {
+            crate::theme::THEMES
+                .iter()
+                .map(|name| name.to_string())
+                .collect()
+        } else {
+            world.options.themes.clone()
+        };
+        let (theme, theme_notice) =
+            crate::theme::load(&theme_setting, crate::theme::detect_scheme(), &theme_dir);
+        let theme_name = theme.name.clone();
+        let theme_auto = !world.options.plain && matches!(theme_setting.as_str(), "" | "auto");
+        world.notice = theme_notice;
         let mut editor = Editor::new();
         editor.set_keybindings(keybindings.clone());
         editor.set_autocomplete(Arc::new(provider_for(&world.options)));
@@ -123,7 +141,6 @@ impl Chat {
             ..Default::default()
         };
         let screen_mode = world.options.fullscreen;
-        let theme_auto = !world.options.plain;
         Chat {
             transcript,
             editor,
@@ -143,6 +160,9 @@ impl Chat {
             search_matches: Vec::new(),
             search_index: 0,
             theme_name,
+            theme_setting,
+            theme_dir,
+            theme_names,
             theme_auto,
             theme_picker: None,
             thinking_picker: None,
@@ -443,8 +463,9 @@ impl Chat {
                     self.set_theme(&picker.original);
                 }
                 Some("enter") => {
-                    let name = crate::theme::THEMES[picker.selected].to_string();
-                    self.set_theme(&name);
+                    if let Some(name) = self.theme_names.get(picker.selected).cloned() {
+                        self.set_theme(&name);
+                    }
                 }
                 Some("up") | Some("k") => {
                     picker.selected = picker.selected.saturating_sub(1);
@@ -453,7 +474,7 @@ impl Chat {
                 }
                 Some("down") | Some("j") => {
                     picker.selected =
-                        (picker.selected + 1).min(crate::theme::THEMES.len().saturating_sub(1));
+                        (picker.selected + 1).min(self.theme_names.len().saturating_sub(1));
                     self.preview_theme(picker.selected);
                     self.theme_picker = Some(picker);
                 }
@@ -628,11 +649,14 @@ impl Chat {
         }
     }
 
-    /// Apply a theme by name and remember it.
+    /// Apply a theme by name and remember it (S5: built-in or custom file).
     fn set_theme(&mut self, name: &str) {
+        let (theme, notice) =
+            crate::theme::load(name, crate::theme::detect_scheme(), &self.theme_dir);
+        self.theme = theme;
         self.theme_name = name.to_string();
         self.theme_auto = false;
-        self.theme = Theme::named(name).unwrap_or_else(Theme::colored);
+        self.world.notice = notice;
     }
 
     /// Apply a terminal color-scheme detection (R10): only while the theme
@@ -641,18 +665,17 @@ impl Chat {
         if !self.theme_auto {
             return;
         }
-        let name = match scheme {
-            lca_tui::engine::colors::ColorScheme::Light => "light",
-            lca_tui::engine::colors::ColorScheme::Dark => "default",
-        };
-        self.theme_name = name.to_string();
-        self.theme = Theme::named(name).unwrap_or_else(Theme::colored);
+        let (theme, _) = crate::theme::load(&self.theme_setting, Some(scheme), &self.theme_dir);
+        self.theme_name = theme.name.clone();
+        self.theme = theme;
     }
 
     /// Preview a theme without committing it (FR-UI-17).
     fn preview_theme(&mut self, index: usize) {
-        if let Some(name) = crate::theme::THEMES.get(index) {
-            self.theme = Theme::named(name).unwrap_or_else(Theme::colored);
+        if let Some(name) = self.theme_names.get(index).cloned() {
+            let (theme, _) =
+                crate::theme::load(&name, crate::theme::detect_scheme(), &self.theme_dir);
+            self.theme = theme;
         }
     }
 

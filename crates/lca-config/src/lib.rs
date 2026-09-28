@@ -133,6 +133,7 @@ pub struct Config {
     extensions_log_limit_bytes: u64,
     update_check: Option<bool>,
     ui_color: ColorMode,
+    ui_theme: Option<String>,
     thinking: Option<String>,
     permissions_proposals: BTreeMap<String, String>,
     sources: BTreeMap<String, MergeSource>,
@@ -152,6 +153,7 @@ impl Default for Config {
             extensions_log_limit_bytes: 4096,
             update_check: None,
             ui_color: ColorMode::Auto,
+            ui_theme: None,
             thinking: None,
             permissions_proposals: BTreeMap::new(),
             sources: BTreeMap::new(),
@@ -186,6 +188,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "extensions.log_limit_bytes",
     "update.check",
     "ui.color",
+    "ui.theme",
     "thinking",
 ];
 
@@ -260,6 +263,7 @@ fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigEr
         "ui.color" => Ok(TypedValue::Color(
             raw.parse::<ColorMode>().map_err(invalid)?,
         )),
+        "ui.theme" => Ok(TypedValue::Text(raw.to_string())),
         "thinking" => {
             if THINKING_LEVELS.contains(&raw) {
                 Ok(TypedValue::Text(raw.to_string()))
@@ -312,6 +316,7 @@ impl Config {
             "extensions.log_limit_bytes",
             "update.check",
             "ui.color",
+            "ui.theme",
             "thinking",
         ] {
             config.sources.insert(key.to_string(), MergeSource::Default);
@@ -406,6 +411,12 @@ impl Config {
                     let color: ColorMode = text.parse().map_err(invalid)?;
                     this.apply(key.to_string(), TypedValue::Color(color), source)?;
                 }
+                "ui.theme" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
                 "thinking" => {
                     let text = value.as_str().ok_or_else(|| {
                         invalid(format!("expected a string, got {}", type_name(&value)))
@@ -457,6 +468,7 @@ impl Config {
             "extensions.log_limit_bytes",
             "update.check",
             "ui.color",
+            "ui.theme",
             "thinking",
         ] {
             if let Some(value) = table_value(table, key) {
@@ -497,6 +509,7 @@ impl Config {
             }
             ("update.check", TypedValue::Bool(v)) => self.update_check = Some(v),
             ("ui.color", TypedValue::Color(v)) => self.ui_color = v,
+            ("ui.theme", TypedValue::Text(v)) => self.ui_theme = Some(v),
             ("thinking", TypedValue::Text(v)) => self.thinking = Some(v),
             (other, _) => {
                 return Err(ConfigError::InvalidValue {
@@ -565,6 +578,12 @@ impl Config {
         self.ui_color
     }
 
+    /// The configured theme (S5): a built-in name, a custom theme's name, or
+    /// `auto` for the detected terminal scheme. `None` is `auto`.
+    pub fn ui_theme(&self) -> Option<&str> {
+        self.ui_theme.as_deref()
+    }
+
     /// The configured thinking level (`thinking`), or `None` for the
     /// provider's own default (pi's "unset").
     pub fn thinking(&self) -> Option<&str> {
@@ -630,6 +649,10 @@ impl Config {
                 self.thinking
                     .clone()
                     .unwrap_or_else(|| "<provider default>".to_string()),
+            ),
+            (
+                "ui.theme",
+                self.ui_theme.clone().unwrap_or_else(|| "auto".to_string()),
             ),
             (
                 "permissions.proposals",

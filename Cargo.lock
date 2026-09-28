@@ -1459,6 +1459,7 @@ dependencies = [
  "lca-tools",
  "lca-tui",
  "regex",
+ "toml",
 ]
 
 [[package]]

@@ -27,6 +27,7 @@ Environment variables use the `LCA_` prefix with the key uppercased and dots rep
 | `extensions.log_limit_bytes` | integer | `4096` | Extension log messages above this are truncated (FR-EXT-10). |
 | `update.check` | boolean | `true` interactive, `false` headless | Daily background version check (FR-CFG-6). |
 | `ui.color` | `auto` or `never` | `auto` | `never` forces plain text on terminals without color support (FR-UI-5). |
+| `ui.theme` | string | `auto` | The theme (S5): `auto` follows the detected terminal scheme; `dark`/`light`/`plain` are built in; any other name loads `<config dir>/themes/<name>.toml` (or `<name>.light.toml` / `<name>.dark.toml` for a scheme pair). A theme file names any of the ~50 roles; an invalid file keeps the previous palette and says why. |
 | `ui.fullscreen` | boolean | `true` | The `/fullscreen` toggle's persisted choice (FR-UI-21). Written to `<config dir>/ui.json` when toggled, not to the config file, so the runtime toggle never rewrites user config. |
 | `thinking` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` | unset | The session's reasoning level, pi's vocabulary. Unset means the provider chooses; `/thinking` sets it live. It rides the request extras as `reasoning-effort`, which a provider honors where meaningful. |
 | `permissions.proposals` | table | empty | Project file only. Proposals with no force; see ADR-0006. |

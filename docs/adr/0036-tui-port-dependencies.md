@@ -102,3 +102,15 @@ resolved in `Cargo.lock`, and `lca-ui` already depends on `lca-tools`).
 The alternative — routing every keystroke's search through a host
 callback — puts the grammar in the host instead of the interface that
 owns the picker, which is the wrong layer.
+
+## Addendum (cycle 4, S5): `toml` for custom theme files
+
+The theme work ports pi's ~50-role token vocabulary and lets a user file
+override individual roles (`theme.md` §1, `theme-json.ts`'s shape). pi
+reads JSON; LCA's configuration is TOML everywhere else, so a theme file
+is TOML too and joins the one configuration format the project already
+documents. `toml` is already a workspace dependency (`lca-config` parses
+every config file with it, `lca-registry` reads `extension.toml`), so the
+supply-chain footprint does not change and `Cargo.lock` already resolves
+it. The alternative — a hand-written parser — would be a second,
+divergent configuration grammar for a presentation-only concern.

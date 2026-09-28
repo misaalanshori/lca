@@ -73,9 +73,14 @@ impl Chat {
         }
         if let Some(picker) = &self.theme_picker {
             let mut body = vec!["Theme (live preview):".to_string(), String::new()];
-            for (index, name) in crate::theme::THEMES.iter().enumerate() {
+            for (index, name) in self.theme_names.iter().enumerate() {
                 let cur = if index == picker.selected { '>' } else { ' ' };
-                body.push(format!(" {cur} {name}"));
+                let current = if *name == self.theme_name {
+                    "  ✓"
+                } else {
+                    ""
+                };
+                body.push(format!(" {cur} {name}{current}"));
             }
             body.push(String::new());
             body.push("Up/Down previews; Enter applies; Esc restores.".to_string());

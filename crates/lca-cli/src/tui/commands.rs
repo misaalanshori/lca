@@ -23,6 +23,11 @@ impl Ui {
             model_label: self.label_cell.clone(),
             context_window: self.context_window_cell.clone(),
             thinking: self.thinking_cell.clone(),
+            theme: self.config.ui_theme().unwrap_or("auto").to_string(),
+            theme_dir: lca_ui::theme::themes_dir(&crate::config_dir().join("lca")),
+            themes: lca_ui::theme::theme_names(&lca_ui::theme::themes_dir(
+                &crate::config_dir().join("lca"),
+            )),
             initial_lines: self.initial_lines.clone(),
             models: self
                 .provider

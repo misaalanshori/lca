@@ -9,6 +9,9 @@ fn options() -> UiOptions {
         model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
         context_window: Arc::new(std::sync::Mutex::new(0)),
         thinking: Arc::new(std::sync::Mutex::new(None)),
+        theme: "auto".to_string(),
+        theme_dir: std::path::PathBuf::new(),
+        themes: crate::theme::THEMES.iter().map(|s| s.to_string()).collect(),
         initial_lines: Vec::new(),
         plain: true,
         invoke_command: Arc::new(|_, _| CommandEffect::None),
@@ -456,7 +459,7 @@ fn a_detected_scheme_sets_the_auto_theme() {
     chat.apply_detected_scheme(lca_tui::engine::colors::ColorScheme::Light);
     assert_eq!(chat.theme_name, "light");
     chat.apply_detected_scheme(lca_tui::engine::colors::ColorScheme::Dark);
-    assert_eq!(chat.theme_name, "default");
+    assert_eq!(chat.theme_name, "dark");
     // An explicit pick wins over later detection.
     chat.set_theme("plain");
     chat.apply_detected_scheme(lca_tui::engine::colors::ColorScheme::Light);

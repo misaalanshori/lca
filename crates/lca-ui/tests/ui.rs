@@ -18,6 +18,12 @@ fn options(plain: bool) -> UiOptions {
         model_label: Arc::new(Mutex::new("p/m".into())),
         context_window: Arc::new(std::sync::Mutex::new(0)),
         thinking: Arc::new(Mutex::new(None)),
+        theme: "auto".to_string(),
+        theme_dir: std::path::PathBuf::new(),
+        themes: lca_ui::theme::THEMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         initial_lines: Vec::new(),
         plain,
         invoke_command: Arc::new(|_, _| CommandEffect::None),

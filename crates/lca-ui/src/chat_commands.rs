@@ -48,7 +48,8 @@ impl Chat {
             }
             "theme" => {
                 self.theme_picker = Some(ThemePicker {
-                    selected: crate::theme::THEMES
+                    selected: self
+                        .theme_names
                         .iter()
                         .position(|name| *name == self.theme_name)
                         .unwrap_or(0),
