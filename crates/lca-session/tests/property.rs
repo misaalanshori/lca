@@ -29,6 +29,7 @@ fn arb_record(n: u32) -> impl Strategy<Value = Record> {
             id: arb_id(n),
             content,
             attachments: vec![],
+            queue: None,
         }),
         (arb_text(), arb_text()).prop_map(move |(text, reasoning)| Record::Assistant {
             v: FORMAT_VERSION,
@@ -113,6 +114,7 @@ proptest! {
                 id: format!("id-{n:04}"),
                 content: format!("content {n} with \"quotes\" and \\backslash\\"),
                 attachments: vec![],
+                queue: None,
             }).expect("append");
         }
         let full = std::fs::read(session.log_path()).expect("read log");
@@ -168,6 +170,7 @@ proptest! {
                 id: id.clone(),
                 content: format!("message {n}"),
                 attachments: vec![],
+                queue: None,
             }).expect("append");
         }
         let start = start.min(count - 1);

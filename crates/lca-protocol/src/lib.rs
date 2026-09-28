@@ -28,6 +28,9 @@ pub use provider::{
 pub use record::{FORMAT_VERSION, PermissionDecision, Record, ToolSource};
 pub use stream::StreamEvent;
 pub use tool::{ToolCall, ToolResult, ToolResultStatus, ToolSpec};
-pub use turn::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
+pub use turn::{
+    QueuedMessage, SteerQueue, StopReason, SubmitMode, TurnEvent, TurnOutcome, TurnStatus,
+    steer_queue,
+};
 pub use ui::{UiEffect, UiInput, Widget, WidgetTree};
 pub use usage::Usage;

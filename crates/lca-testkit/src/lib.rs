@@ -251,6 +251,7 @@ impl FakeBuilder {
             turns: Mutex::new(VecDeque::from(turns)),
             call_count: std::sync::atomic::AtomicUsize::new(0),
             last_request: Mutex::new(None),
+            requests: Mutex::new(Vec::new()),
         }
     }
 }
@@ -260,6 +261,7 @@ pub struct FakeProvider {
     turns: Mutex<VecDeque<Vec<Step>>>,
     call_count: std::sync::atomic::AtomicUsize,
     last_request: Mutex<Option<CompletionRequest>>,
+    requests: Mutex<Vec<CompletionRequest>>,
 }
 
 impl FakeProvider {
@@ -271,6 +273,11 @@ impl FakeProvider {
     /// The last request the core handed this provider (FR-CACHE-5 checks).
     pub fn last_request(&self) -> Option<CompletionRequest> {
         lock(&self.last_request).clone()
+    }
+
+    /// Every request, in call order (steering/cache-boundary checks).
+    pub fn requests(&self) -> Vec<CompletionRequest> {
+        lock(&self.requests).clone()
     }
 
     /// How many completion calls happened, including exhausted ones.
@@ -323,7 +330,8 @@ impl Provider for FakeProvider {
     ) -> lca_provider::BoxFuture<Result<(), ProviderError>> {
         self.call_count
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        *lock(&self.last_request) = Some(request);
+        *lock(&self.last_request) = Some(request.clone());
+        lock(&self.requests).push(request);
         let events = lock(&self.turns).pop_front().unwrap_or_else(|| {
             vec![Step::Event(StreamEvent::Error {
                 message: "no more scripted responses queued".to_string(),

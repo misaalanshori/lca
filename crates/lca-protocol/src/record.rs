@@ -44,6 +44,11 @@ pub enum Record {
         /// Attachment hashes, when present.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<String>,
+        /// The submit-mode marker when this message was queued while a
+        /// turn ran (`steer` / `follow-up`, ADR-0038). Its position in the
+        /// log is the injection point. Absent for an ordinary message.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queue: Option<String>,
     },
     /// One model message.
     Assistant {

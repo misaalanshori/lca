@@ -77,6 +77,7 @@ fn assembly_appends_an_image_block_for_a_user_attachment() {
             id: "u1".to_string(),
             content: "what is this?".to_string(),
             attachments: vec!["hash-a".to_string(), "hash-missing".to_string()],
+            queue: None,
         },
     ];
     let assembled = lca_core::assemble_with(&records, "system", &|hash| {

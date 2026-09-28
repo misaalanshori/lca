@@ -40,6 +40,45 @@ pub struct TurnOutcome {
     pub error: Option<String>,
 }
 
+/// How a message submitted while a turn runs behaves (ADR-0038).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitMode {
+    /// Joins the turn's input at the next model-call boundary.
+    Steer,
+    /// Runs when the turn ends.
+    FollowUp,
+}
+
+impl SubmitMode {
+    /// The marker string carried on the session record and in the
+    /// `message.extras` map extensions see (ADR-0038).
+    pub fn marker(self) -> &'static str {
+        match self {
+            SubmitMode::Steer => "steer",
+            SubmitMode::FollowUp => "follow-up",
+        }
+    }
+}
+
+/// A message queued while a turn runs (ADR-0038).
+#[derive(Debug, Clone)]
+pub struct QueuedMessage {
+    /// The message text.
+    pub text: String,
+    /// How it behaves at the boundary.
+    pub mode: SubmitMode,
+}
+
+/// The shared queue the interface fills and the turn loop drains at each
+/// model-call boundary (ADR-0038). `FollowUp` entries stay in the
+/// interface's own list; only `Steer` entries are pushed here.
+pub type SteerQueue = std::sync::Arc<std::sync::Mutex<Vec<QueuedMessage>>>;
+
+/// A new, empty steer queue.
+pub fn steer_queue() -> SteerQueue {
+    std::sync::Arc::new(std::sync::Mutex::new(Vec::new()))
+}
+
 /// Events the interface and headless mode render. Owned copies, so sinks
 /// store them freely.
 #[derive(Debug, Clone)]
@@ -100,5 +139,14 @@ pub enum TurnEvent {
         status: TurnStatus,
         /// Why.
         stop_reason: StopReason,
+    },
+    /// A queued message was injected into the turn at a model-call
+    /// boundary (ADR-0038). The interface moves it from its pending band
+    /// into the transcript.
+    UserInjected {
+        /// The injected message text.
+        text: String,
+        /// The submit-mode marker (`steer` / `follow-up`).
+        mode: String,
     },
 }

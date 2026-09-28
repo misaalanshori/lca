@@ -85,7 +85,16 @@ fn to_wit_messages(
                 )
                 .collect(),
             tool_call_id: message.tool_call_id.clone(),
-            extras: Vec::new(),
+            extras: message
+                .extras
+                .iter()
+                .map(|(key, value)| {
+                    lca_ext_abi::host::context_transform::lca::ext::types::ExtraPair {
+                        key: key.clone(),
+                        value: value.clone(),
+                    }
+                })
+                .collect(),
         })
         .collect()
 }
@@ -125,7 +134,11 @@ fn from_wit_messages(
                 .collect(),
             tool_call_id: message.tool_call_id,
             usage: None,
-            extras: Default::default(),
+            extras: message
+                .extras
+                .into_iter()
+                .map(|pair| (pair.key, pair.value))
+                .collect(),
         })
         .collect()
 }
@@ -153,4 +166,29 @@ pub(super) fn transform_work(
         Ok(list) => Ok(from_wit_messages(list)),
         Err(reason) => Err(reason),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The submit-mode marker (ADR-0038) must survive the WIT boundary, so a
+    // context-transform extension can see `extras["queue"]`.
+    #[test]
+    fn message_extras_round_trip_through_the_wit_boundary() {
+        let mut message =
+            lca_protocol::ChatMessage::text(lca_protocol::MessageRole::User, "steer me");
+        message
+            .extras
+            .insert("queue".to_string(), "steer".to_string());
+        let wit = to_wit_messages(std::slice::from_ref(&message));
+        assert_eq!(wit[0].extras.len(), 1);
+        assert_eq!(wit[0].extras[0].key, "queue");
+        assert_eq!(wit[0].extras[0].value, "steer");
+        let back = from_wit_messages(wit);
+        assert_eq!(
+            back[0].extras.get("queue").map(String::as_str),
+            Some("steer")
+        );
+    }
 }

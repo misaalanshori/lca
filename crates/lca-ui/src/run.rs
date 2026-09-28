@@ -40,6 +40,7 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     let mut turn_rx: Option<Receiver<lca_protocol::TurnEvent>> = None;
     let mut prompt_rx: Option<Receiver<PromptRequest>> = None;
     let mut cancel_flag: Option<lca_tools::CancelFlag> = None;
+    let mut aborted = false;
     let mut dirty = true;
 
     let result = 'main: loop {
@@ -68,7 +69,17 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             }
             chat.usage.cost += outcome.usage.cost;
             chat.turn_running = false;
+            chat.current_steer = None;
             terminal.set_progress(false);
+            // Steering lifecycle (ADR-0038): an aborted turn returns its
+            // queue to the editor; a completed turn runs the queued
+            // messages in order.
+            if aborted {
+                chat.restore_pending();
+                aborted = false;
+            } else if let Some(next) = chat.take_next_pending() {
+                chat.submitted = Some(next);
+            }
             dirty = true;
         }
 
@@ -80,11 +91,13 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             let (prompt_tx, prompt_rx_inner) = std::sync::mpsc::sync_channel(4);
             let cancel = lca_tools::CancelFlag::new();
             cancel_flag = Some(cancel.clone());
+            let steer = lca_protocol::steer_queue();
             let channels = TurnChannels {
                 events: event_tx,
                 prompt: prompt_tx,
+                steer: steer.clone(),
             };
-            chat.begin_turn();
+            chat.begin_turn(steer);
             terminal.set_progress(true);
             turn_rx = Some(event_rx);
             prompt_rx = Some(prompt_rx_inner);
@@ -139,6 +152,7 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                     Action::Continue => {}
                     Action::Submit => {}
                     Action::CancelTurn => {
+                        aborted = true;
                         if let Some(cancel) = &cancel_flag {
                             cancel.cancel();
                         }

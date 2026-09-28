@@ -15,6 +15,7 @@ fn user(id: &str, content: &str) -> Record {
         id: id.into(),
         content: content.into(),
         attachments: vec![],
+        queue: None,
     }
 }
 

@@ -14,8 +14,9 @@ pub mod state;
 pub mod theme;
 pub mod transcript;
 
-pub use chat::{Chat, PendingMessage, SubmitMode};
+pub use chat::{Chat, PendingMessage};
 pub use footer::Footer;
+pub use lca_protocol::{QueuedMessage, SubmitMode, steer_queue};
 pub use run::run;
 pub use state::{
     Action, CUSTOM_OPTION, CommandInvoker, LoginComplete, LoginConfirm, LoginNext, LoginPick,

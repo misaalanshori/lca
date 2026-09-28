@@ -33,16 +33,7 @@ pub struct PendingMessage {
     /// The message text.
     pub text: String,
     /// How it was submitted while the turn ran.
-    pub mode: SubmitMode,
-}
-
-/// How a message submitted during a running turn behaves (ADR-0038).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubmitMode {
-    /// Joins the turn's input at the next model-call boundary.
-    Steer,
-    /// Runs when the turn ends.
-    FollowUp,
+    pub mode: lca_protocol::SubmitMode,
 }
 
 /// The interactive chat.
@@ -65,6 +56,8 @@ pub struct Chat {
     pub world: UiState,
     /// Messages queued while a turn runs (ADR-0038).
     pub pending: Vec<PendingMessage>,
+    /// The shared queue the running turn drains at each boundary.
+    pub current_steer: Option<lca_protocol::SteerQueue>,
     /// A submitted prompt awaiting the loop's handoff.
     pub submitted: Option<String>,
     keybindings: Arc<KeybindingsManager>,
@@ -100,6 +93,7 @@ impl Chat {
             turn_status: None,
             world,
             pending: Vec::new(),
+            current_steer: None,
             submitted: None,
             keybindings,
         }
@@ -154,6 +148,15 @@ impl Chat {
                 self.transcript.push_error(message);
             }
             TurnEvent::AssistantText(_) => {}
+            TurnEvent::UserInjected { text, mode } => {
+                // A steered message crossed the boundary: it leaves the
+                // pending band and joins the transcript (ADR-0038).
+                if let Some(pos) = self.pending.iter().position(|p| p.text == text) {
+                    self.pending.remove(pos);
+                }
+                let _ = mode;
+                self.transcript.push_user(text);
+            }
             TurnEvent::ExtensionEvent {
                 extension,
                 event,
@@ -182,9 +185,10 @@ impl Chat {
         }
     }
 
-    /// Mark a turn as started.
-    pub fn begin_turn(&mut self) {
+    /// Mark a turn as started, with the queue it drains at each boundary.
+    pub fn begin_turn(&mut self, steer: lca_protocol::SteerQueue) {
         self.turn_running = true;
+        self.current_steer = Some(steer);
         self.turn_status = Some(TurnStatusLine {
             text: "running...".into(),
         });
@@ -231,14 +235,14 @@ impl Chat {
         // The pending-messages band (ADR-0038).
         for pending in &self.pending {
             let mark = match pending.mode {
-                SubmitMode::Steer => "steer",
-                SubmitMode::FollowUp => "next",
+                lca_protocol::SubmitMode::Steer => "steer",
+                lca_protocol::SubmitMode::FollowUp => "next",
             };
             out.push((self.theme.dim)(&format!("  ⏳ [{mark}] {}", pending.text)));
         }
         if !self.pending.is_empty() {
             out.push((self.theme.dim)(&format!(
-                "  {} queued · Ctrl+E restores them to the editor",
+                "  {} queued · Alt+E restores them to the editor",
                 self.pending.len()
             )));
         }
@@ -465,6 +469,19 @@ impl Chat {
                     Action::Continue
                 }
             }
+            Some("alt+e") if !self.pending.is_empty() => {
+                // Edit-all-queued: return the queue to the editor (ADR-0038).
+                self.restore_pending();
+                Action::Continue
+            }
+            Some("alt+enter") if self.turn_running => {
+                // Queue a follow-up for turn end (ADR-0038).
+                let text = self.editor.submit();
+                if !text.trim().is_empty() {
+                    self.queue_submit(text, lca_protocol::SubmitMode::FollowUp);
+                }
+                Action::Continue
+            }
             _ => Action::Continue,
         }
     }
@@ -660,9 +677,43 @@ impl Chat {
             );
             return Action::Continue;
         }
+        // ADR-0038: while a turn runs, a submitted message queues rather
+        // than starting a second turn. Enter steers (injected at the next
+        // boundary); Alt+Enter queues a follow-up for turn end.
+        if self.turn_running {
+            self.queue_submit(text, lca_protocol::SubmitMode::Steer);
+            return Action::Continue;
+        }
         self.transcript.push_user(text.clone());
         self.submitted = Some(text);
         Action::Submit
+    }
+
+    /// Queue a message submitted while a turn runs (ADR-0038). `Steer`
+    /// entries also go to the running turn's boundary queue.
+    pub fn queue_submit(&mut self, text: String, mode: lca_protocol::SubmitMode) {
+        if mode == lca_protocol::SubmitMode::Steer
+            && let Some(steer) = &self.current_steer
+        {
+            steer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(lca_protocol::QueuedMessage {
+                    text: text.clone(),
+                    mode,
+                });
+        }
+        self.pending.push(PendingMessage { text, mode });
+    }
+
+    /// Pop the next queued message to auto-submit at turn end, in order.
+    pub fn take_next_pending(&mut self) -> Option<String> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        let next = self.pending.remove(0);
+        self.transcript.push_user(next.text.clone());
+        Some(next.text)
     }
 
     /// Dispatch a slash command line.
@@ -723,6 +774,13 @@ impl Chat {
     pub fn restore_pending(&mut self) {
         if self.pending.is_empty() {
             return;
+        }
+        // A restored message must not also be injected at the next boundary.
+        if let Some(steer) = &self.current_steer {
+            steer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clear();
         }
         let mut text = String::new();
         for (i, pending) in self.pending.drain(..).enumerate() {
@@ -994,5 +1052,65 @@ mod tests {
         assert_eq!(viewport.len(), 24);
         let text = strip(&viewport).join("\n");
         assert!(text.contains("rm -rf /tmp/x"));
+    }
+
+    // Verifies: FR-CORE-11 - a message submitted while a turn runs queues
+    // (steer) instead of starting a second turn, and shows in the band.
+    #[test]
+    fn steering_queues_while_a_turn_runs() {
+        let mut chat = chat();
+        let steer = lca_protocol::steer_queue();
+        chat.begin_turn(steer.clone());
+        for c in "mid-turn note".chars() {
+            chat.handle_key(&c.to_string());
+        }
+        assert_eq!(chat.handle_key("\r"), Action::Continue);
+        assert_eq!(chat.pending.len(), 1);
+        assert_eq!(chat.pending[0].mode, lca_protocol::SubmitMode::Steer);
+        assert_eq!(
+            steer.lock().unwrap().len(),
+            1,
+            "the steer reached the running turn's boundary queue"
+        );
+        let text = strip(&chat.render(80)).join("\n");
+        assert!(text.contains("mid-turn note"), "the pending band shows it");
+    }
+
+    // Verifies: FR-CORE-12 - an aborted turn returns its queue to the editor.
+    #[test]
+    fn abort_restores_pending_to_the_editor() {
+        let mut chat = chat();
+        chat.begin_turn(lca_protocol::steer_queue());
+        chat.queue_submit("one".into(), lca_protocol::SubmitMode::Steer);
+        chat.queue_submit("two".into(), lca_protocol::SubmitMode::FollowUp);
+        chat.restore_pending();
+        assert!(chat.pending.is_empty());
+        assert_eq!(chat.editor.text(), "one\ntwo");
+    }
+
+    // Verifies: FR-CORE-11 - follow-ups auto-run in order at turn end.
+    #[test]
+    fn follow_ups_run_in_order() {
+        let mut chat = chat();
+        chat.queue_submit("first".into(), lca_protocol::SubmitMode::FollowUp);
+        chat.queue_submit("second".into(), lca_protocol::SubmitMode::FollowUp);
+        assert_eq!(chat.take_next_pending().as_deref(), Some("first"));
+        assert_eq!(chat.take_next_pending().as_deref(), Some("second"));
+        assert!(chat.take_next_pending().is_none());
+    }
+
+    // Verifies: FR-CORE-12 - edit-all-queued returns the queue to the editor
+    // and removes it from the boundary queue.
+    #[test]
+    fn edit_all_queued_restores_and_clears_the_boundary_queue() {
+        let mut chat = chat();
+        let steer = lca_protocol::steer_queue();
+        chat.begin_turn(steer.clone());
+        chat.queue_submit("one".into(), lca_protocol::SubmitMode::Steer);
+        assert_eq!(steer.lock().unwrap().len(), 1);
+        chat.handle_key("\x1be"); // Alt+E
+        assert!(chat.pending.is_empty());
+        assert_eq!(chat.editor.text(), "one");
+        assert!(steer.lock().unwrap().is_empty());
     }
 }

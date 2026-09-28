@@ -49,7 +49,7 @@ The `v` field is per record, not per file. A file written across a format upgrad
 
 `session-start` is the first record. It holds the format version, the agent version, the ABI version, and the working directory. A log without it as the first record is malformed.
 
-`user` holds one user message. Fields: `id`, `content`, and optional `attachments` as a list of hashes.
+`user` holds one user message. Fields: `id`, `content`, and optional `attachments` as a list of hashes. An optional `queue` field marks a message submitted while a turn was running (ADR-0038): `"steer"` joins the turn's input at the next model-call boundary, `"follow-up"` runs when the turn ends. Its position in the log is its injection point; absent for an ordinary message. Assembly copies the marker into the message's `extras["queue"]`, which is how a context-transform extension sees it.
 
 `assistant` holds one model message. Fields: `id`, `content`, optional `reasoning`, `model`, `provider`, and `usage` with input tokens, output tokens, cache-read, cache-write, and extended-cache-write tokens, and cost.
 

@@ -23,6 +23,7 @@ fn user_record(id: &str, content: &str) -> Record {
         id: id.to_string(),
         content: content.to_string(),
         attachments: vec![],
+        queue: None,
     }
 }
 

@@ -466,6 +466,9 @@ pub struct TurnChannels {
     pub events: SyncSender<TurnEvent>,
     /// Permission requests flow to the UI.
     pub prompt: SyncSender<PromptRequest>,
+    /// Messages the interface queues while the turn runs; the worker
+    /// drains it at each model-call boundary (ADR-0038).
+    pub steer: lca_protocol::SteerQueue,
 }
 
 /// A worker asking for permission (FR-UI-4: `action` is the exact command

@@ -751,6 +751,9 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             let mut sink = ChannelSink {
                 tx: channels.events.clone(),
             };
+            // ADR-0038: the interface's steering queue is drained by the
+            // turn loop at each model-call boundary.
+            let steer = channels.steer.clone();
             // Install this turn's modal into the shared slot before any
             // extension call runs, so an extension's own process/pty command
             // reaches the same permission prompt the model's tools do.
@@ -803,6 +806,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 let mut turn_config = agent_config;
                 turn_config.model = choice.id;
                 turn_config.model_context_window = choice.window;
+                turn_config.steer = steer;
                 let mut agent = Agent::new(
                     &runner_store,
                     &runner_session,

@@ -24,8 +24,8 @@ use std::time::Duration;
 use lca_ext_abi::ExtensionDispatch;
 use lca_permissions::{GrantStore, PermissionPrompt, Proposals};
 use lca_protocol::{
-    ChatMessage, ContentBlock, DispatchError, FORMAT_VERSION, HookAction, MessageRole, Record,
-    StreamEvent, ToolCall, ToolResult, ToolSource, Usage,
+    ChatMessage, ContentBlock, DispatchError, FORMAT_VERSION, HookAction, MessageRole,
+    QueuedMessage, Record, SteerQueue, StreamEvent, ToolCall, ToolResult, ToolSource, Usage,
 };
 use lca_provider::{CompletionRequest, ProtocolError, Provider, ToolCallAccumulator};
 use lca_session::{Session, SessionStore, ViewMode};
@@ -76,6 +76,9 @@ pub struct AgentConfig {
     /// Host-side skill sources (FR-CTX-2, ADR-0030). Empty paths collect
     /// nothing.
     pub skills_roots: SkillsRoots,
+    /// Messages the interface queued while the turn runs; drained at each
+    /// model-call boundary (ADR-0038).
+    pub steer: SteerQueue,
 }
 
 impl std::fmt::Debug for AgentConfig {
@@ -132,6 +135,7 @@ impl Default for AgentConfig {
             completion_backend: None,
             sent_stable: Arc::new(Mutex::new(None)),
             skills_roots: SkillsRoots::default(),
+            steer: lca_protocol::steer_queue(),
         }
     }
 }
@@ -396,9 +400,15 @@ pub fn assemble_with(
             Record::User {
                 content,
                 attachments,
+                queue,
                 ..
             } => {
                 let mut message = ChatMessage::text(MessageRole::User, content.clone());
+                // ADR-0038: the submit-mode marker travels in `extras`, the
+                // reserved map extensions already receive in `transform`.
+                if let Some(marker) = queue {
+                    message.extras.insert("queue".to_string(), marker.clone());
+                }
                 for hash in attachments {
                     if let Some(attachment) = resolve(hash) {
                         message.content.push(ContentBlock::Image {
@@ -692,6 +702,7 @@ impl<'a> Agent<'a> {
                 id: turn_record_id.clone(),
                 content: input.to_string(),
                 attachments: attachments.to_vec(),
+                queue: None,
             },
         ) {
             return self.fail(
@@ -718,6 +729,39 @@ impl<'a> Agent<'a> {
                     usage: turn_usage,
                     error: None,
                 };
+            }
+
+            // ADR-0038: steered messages join the turn's input at this
+            // model-call boundary (never mid-stream). They are appended as
+            // user records carrying a queue marker, so they extend the
+            // message list the way any user message does and the stable
+            // cache prefix keeps its value (ADR-0017).
+            let steered: Vec<QueuedMessage> = {
+                let mut queue = lock(&self.config.steer);
+                std::mem::take(&mut *queue)
+            };
+            for message in steered {
+                let marker = message.mode.marker().to_string();
+                if let Err(err) = self.store.append(
+                    self.session,
+                    Record::User {
+                        v: FORMAT_VERSION,
+                        ts: lca_session::now_ms(),
+                        id: lca_session::new_record_id(),
+                        content: message.text.clone(),
+                        attachments: Vec::new(),
+                        queue: Some(marker.clone()),
+                    },
+                ) {
+                    return self.fail(
+                        StopReason::Error,
+                        format!("cannot write to the session log: {err}"),
+                    );
+                }
+                sink.on_event(TurnEvent::UserInjected {
+                    text: message.text,
+                    mode: marker,
+                });
             }
 
             let mut records = match self.store.read_with(self.session, ViewMode::Display) {

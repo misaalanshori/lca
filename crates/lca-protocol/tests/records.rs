@@ -94,6 +94,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 id: "a".into(),
                 content: String::new(),
                 attachments: vec![],
+                queue: None,
             },
             "user",
         ),
@@ -263,6 +264,7 @@ fn records_serialize_with_v_t_ts_first() {
         id: "x".into(),
         content: "hi".into(),
         attachments: vec![],
+        queue: None,
     };
     let json = serde_json::to_string(&record).expect("serialize");
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");

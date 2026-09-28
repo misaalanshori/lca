@@ -44,6 +44,7 @@ fn canonical_records() -> Vec<Record> {
             id: "u-1".into(),
             content: "List the Rust files in src/.".into(),
             attachments: vec![],
+            queue: None,
         },
         Record::Assistant {
             v: 1,
@@ -100,6 +101,7 @@ fn canonical_records() -> Vec<Record> {
             id: "u-2".into(),
             content: "Thanks.".into(),
             attachments: vec![],
+            queue: None,
         },
     ]
 }
@@ -159,6 +161,7 @@ fn after_compaction_a_new_turn_stays_outside_the_stable_prefix() {
             id: "u1".into(),
             content: "old".into(),
             attachments: vec![],
+            queue: None,
         },
         Record::Assistant {
             v: 1,
@@ -186,6 +189,7 @@ fn after_compaction_a_new_turn_stays_outside_the_stable_prefix() {
             id: "u2".into(),
             content: "new turn".into(),
             attachments: vec![],
+            queue: None,
         },
     ];
     let assembled = assemble(&records, "sys");
@@ -234,6 +238,7 @@ fn a_compaction_summary_is_framed_as_the_agents_own_memory() {
             id: "u1".into(),
             content: "old".into(),
             attachments: vec![],
+            queue: None,
         },
         Record::Compaction {
             v: 1,

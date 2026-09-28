@@ -341,6 +341,7 @@ async fn compaction_and_transform_agree_across_modes_with_completion_denied() {
                 id: "01".to_string(),
                 content: "first request".to_string(),
                 attachments: Vec::new(),
+                queue: None,
             },
             lca_protocol::Record::Assistant {
                 v: lca_protocol::FORMAT_VERSION,
@@ -371,6 +372,7 @@ async fn compaction_and_transform_agree_across_modes_with_completion_denied() {
         id: "03".to_string(),
         content: "call-completion".to_string(),
         attachments: Vec::new(),
+        queue: None,
     });
     let wasm_err = wasm
         .compact(&completion_records)

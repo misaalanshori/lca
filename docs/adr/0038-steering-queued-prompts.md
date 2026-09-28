@@ -36,7 +36,17 @@ is extended in the change that implements this).
 
 **The interface makes the queue visible.** The input stays editable
 during a turn; a pending band lists queued messages, marking steer
-against follow-up; the status area shows the queue count.
+against follow-up; the status area shows the queue count. While a turn
+runs, Enter steers and Alt+Enter queues a follow-up; an aborted turn
+returns the queue to the editor in order.
+
+**Extension visibility (decided).** The submit-mode marker travels on
+the session record (`Record::User.queue`) and is copied into the
+`message.extras` map of the resolved list, so a `context-transform`
+extension reads it as `extras["queue"]` with no ABI change (the `extras`
+map is reserved for exactly this, `wit/types.wit`). A dedicated
+`pre-prompt` hook was the alternative; it was rejected because it would
+add a hook point and a signature for data that already has a home.
 
 ## Consequences
 
@@ -48,3 +58,6 @@ against follow-up; the status area shows the queue count.
 - The queue is ordinary input to the model at the next call, so prompt
   caching is preserved: steered messages extend the message list the way
   any user message does (ADR-0017's stable prefix keeps its value).
+- A queued message's mode is visible to extensions through
+  `message.extras["queue"]`, so a transform can treat a steer differently
+  from a follow-up without a new hook or ABI change.
