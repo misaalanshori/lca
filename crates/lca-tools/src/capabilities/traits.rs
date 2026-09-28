@@ -80,9 +80,9 @@ mod windows_acl_tests {
         std::fs::create_dir_all(&dir).expect("mkdir");
         let file = dir.join("cred.json");
         std::fs::write(&file, b"{}").expect("write");
-        super::windows_acl::set_owner_only(&file).expect("set owner-only");
+        crate::capabilities::windows_acl::set_owner_only(&file).expect("set owner-only");
         assert!(
-            super::windows_acl::dacl_is_protected(&file).expect("query DACL"),
+            crate::capabilities::windows_acl::dacl_is_protected(&file).expect("query DACL"),
             "the DACL must be protected (inheritance off)"
         );
         let _ = std::fs::remove_dir_all(&dir);
