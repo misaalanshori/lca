@@ -6,6 +6,16 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ctrl+J now inserts a newline.** The editor checked submit before the
+  newline binding, and a bare LF matches `enter` in a legacy terminal, so
+  Ctrl+J submitted the prompt instead of newlining - and with it the
+  documented fallback for a terminal that cannot report Shift+Enter was
+  dead too. The newline check now runs first (pi's order), accepts pi's
+  full spelling set (`\n`, `ESC CR`, `ESC [13;2~`, any ESC+CR), and a `\`
+  typed before Enter inserts a newline instead of submitting.
+
 ## [0.5.0] - 2026-09-29
 
 The TUI renovation release. Cycles 2–4 rebuilt the interface on LCA's own

@@ -242,6 +242,12 @@ impl Editor {
         self.cursor_col = 0;
     }
 
+    /// Whether the character before the cursor is a backslash, the
+    /// terminal-without-Shift+Enter workaround's trigger.
+    fn cursor_preceded_by_backslash(&self) -> bool {
+        self.cursor_col > 0 && self.current().chars().nth(self.cursor_col - 1) == Some('\\')
+    }
+
     /// Insert a newline.
     pub fn newline(&mut self) {
         self.preferred_col = None;
@@ -569,14 +575,32 @@ impl Editor {
             }
         }
 
+        // Newline, checked BEFORE submit (pi's order, `editor.ts`): a bare
+        // LF is Ctrl+J in every dialect, and a terminal that cannot report
+        // Shift+Enter still sends one of these spellings. pi's condition
+        // set is reproduced literally, including the raw sequences its
+        // `matchesKey` layer would otherwise normalize away.
+        if kb.matches(data, "tui.input.newLine")
+            || (data.starts_with('\n') && data.len() > 1)
+            || data == "\x1b\r"
+            || data == "\x1b[13;2~"
+            || (data.len() > 1 && data.contains('\x1b') && data.contains('\r'))
+            || data == "\n"
+        {
+            self.newline();
+            return EditorEvent::Changed;
+        }
         if kb.matches(data, "tui.input.submit") {
+            // Workaround for terminals without Shift+Enter support: a `\`
+            // typed before Enter inserts a newline instead of submitting.
+            if self.cursor_preceded_by_backslash() {
+                self.backspace();
+                self.newline();
+                return EditorEvent::Changed;
+            }
             let text = self.text();
             self.submit();
             return EditorEvent::Submitted(text);
-        }
-        if kb.matches(data, "tui.input.newLine") {
-            self.newline();
-            return EditorEvent::Changed;
         }
         if kb.matches(data, "tui.input.tab") {
             self.refresh_suggestions(true);
@@ -953,6 +977,33 @@ mod tests {
         let mut e = Editor::new();
         e.insert_str("a");
         e.handle_key("\x1b[13;2u");
+        e.insert_str("b");
+        assert_eq!(e.lines(), &["a", "b"]);
+    }
+
+    // A terminal that cannot report Shift+Enter at all: a `\` typed before
+    // Enter inserts a newline instead of submitting (pi's workaround).
+    #[test]
+    fn backslash_enter_inserts_a_newline() {
+        let mut e = Editor::new();
+        e.insert_str("a\\");
+        assert_eq!(
+            e.handle_key("\r"),
+            EditorEvent::Changed,
+            "newline, not submit"
+        );
+        e.insert_str("b");
+        assert_eq!(e.lines(), &["a", "b"]);
+    }
+
+    // The fallback pi documents: Ctrl+J is a newline in every dialect,
+    // including a legacy terminal where Shift+Enter is indistinguishable
+    // from Enter.
+    #[test]
+    fn ctrl_j_inserts_newline_in_every_dialect() {
+        let mut e = Editor::new();
+        e.insert_str("a");
+        assert_eq!(e.handle_key("\n"), EditorEvent::Changed, "legacy ctrl+j");
         e.insert_str("b");
         assert_eq!(e.lines(), &["a", "b"]);
     }

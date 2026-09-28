@@ -103,3 +103,7 @@ mod grants_view_renders_while_open;
 // session model-less instead of falling back.
 #[path = "31-empty-model-id-falls-back.rs"]
 mod empty_model_id_falls_back;
+// Cycle-4 finding: submit was checked before newline, so legacy Ctrl+J
+// submitted instead of inserting a newline.
+#[path = "32-ctrl-j-inserts-a-newline.rs"]
+mod ctrl_j_inserts_a_newline;
