@@ -89,3 +89,6 @@ mod net_read_body_streams;
 // terminal and corrupted the screen.
 #[path = "27-multiline-notice-render.rs"]
 mod multiline_notice_render;
+// audit: a steer left the assistant before it with a streaming marker.
+#[path = "28-steer-finalizes-assistant.rs"]
+mod steer_finalizes_assistant;

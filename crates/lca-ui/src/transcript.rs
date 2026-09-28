@@ -94,6 +94,9 @@ impl Transcript {
 
     /// Append a user prompt.
     pub fn push_user(&mut self, text: impl Into<String>) {
+        // A user message ends any assistant message before it - the
+        // steering boundary - so it never leaves a streaming marker behind.
+        self.finish_assistant();
         self.entries.push(Entry::User(text.into()));
     }
 
@@ -135,8 +138,12 @@ impl Transcript {
 
     /// Mark the current assistant message complete.
     pub fn finish_assistant(&mut self) {
-        if let Some(Entry::Assistant { streaming, .. }) = self.entries.last_mut() {
-            *streaming = false;
+        // Finish every streaming assistant, not just the last: a steered
+        // user message splits a turn into more than one assistant entry.
+        for entry in &mut self.entries {
+            if let Entry::Assistant { streaming, .. } = entry {
+                *streaming = false;
+            }
         }
     }
 
@@ -435,6 +442,21 @@ mod tests {
         t.finish_assistant();
         let done = strip(&t.render(40, &plain()));
         assert!(!done.iter().any(|l| l.contains("▍")));
+    }
+
+    // Verifies: FR-CORE-11 - a steered user message ends the assistant
+    // message before it, so no stale streaming marker survives the
+    // boundary (a turn split by a steer has more than one assistant entry).
+    #[test]
+    fn a_steer_finalizes_the_assistant_before_it() {
+        let mut t = Transcript::new();
+        t.begin_assistant();
+        t.append_text("first call");
+        t.push_user("steer");
+        t.append_text("second call");
+        let out = strip(&t.render(60, &plain()));
+        let streaming = out.iter().filter(|l| l.contains('▍')).count();
+        assert_eq!(streaming, 1, "only the live assistant streams:\n{out:?}");
     }
 
     // Verifies: FR-UI-13 - an image renders with its media type and
