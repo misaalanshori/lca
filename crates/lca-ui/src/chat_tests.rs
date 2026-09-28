@@ -204,6 +204,8 @@ fn shell_mode_shows_a_bash_card() {
         chat.handle_key(&c.to_string());
     }
     assert_eq!(chat.handle_key("\r"), Action::Continue);
+    // Tool cards are collapsed by default (R8); expand to see the output.
+    chat.transcript.toggle_tools_expanded();
     let text = strip(&chat.render(80)).join("\n");
     assert!(text.contains("bash"), "{text}");
     assert!(text.contains("echo hi"), "{text}");

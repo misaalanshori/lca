@@ -79,12 +79,25 @@ pub enum Entry {
 #[derive(Default)]
 pub struct Transcript {
     entries: Vec<Entry>,
+    /// Whether tool cards show their result (pi's `app.tools.expand`,
+    /// Ctrl+O). Collapsed by default: a card is one line.
+    tools_expanded: bool,
 }
 
 impl Transcript {
     /// An empty transcript.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether tool cards are expanded (Ctrl+O).
+    pub fn tools_expanded(&self) -> bool {
+        self.tools_expanded
+    }
+
+    /// Toggle tool-card expansion (Ctrl+O; pi's `app.tools.expand`).
+    pub fn toggle_tools_expanded(&mut self) {
+        self.tools_expanded = !self.tools_expanded;
     }
 
     /// The entries.
@@ -217,7 +230,7 @@ impl Transcript {
             if i > 0 {
                 out.push(String::new()); // separate messages (#6)
             }
-            render_entry(entry, width, theme, &mut out);
+            render_entry(entry, width, theme, self.tools_expanded, &mut out);
         }
         out
     }
@@ -235,7 +248,7 @@ impl Transcript {
                 offsets.push(line);
             }
             let mut tmp = Vec::new();
-            render_entry(entry, width, theme, &mut tmp);
+            render_entry(entry, width, theme, self.tools_expanded, &mut tmp);
             line += tmp.len();
         }
         offsets
@@ -257,7 +270,7 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
     format!("[image {media_type}, {dimensions}, {} bytes]", bytes.len())
 }
 
-fn render_entry(entry: &Entry, width: u16, theme: &Theme, out: &mut Vec<String>) {
+fn render_entry(entry: &Entry, width: u16, theme: &Theme, expanded: bool, out: &mut Vec<String>) {
     match entry {
         Entry::User(text) => render_user(text, width, theme, out),
         Entry::Assistant {
@@ -265,12 +278,7 @@ fn render_entry(entry: &Entry, width: u16, theme: &Theme, out: &mut Vec<String>)
             reasoning,
             streaming,
         } => render_assistant(text, reasoning, *streaming, width, theme, out),
-        Entry::Tool {
-            name,
-            args,
-            status,
-            result,
-        } => render_tool(name, args, *status, result.as_deref(), width, theme, out),
+        Entry::Tool { .. } => render_tool(entry, expanded, width, theme, out),
         Entry::Notice(text) => {
             out.extend(wrap_text_with_ansi(&(theme.dim)(text), width as usize));
         }
@@ -331,19 +339,67 @@ fn render_assistant(
     }
 }
 
-fn render_tool(
-    name: &str,
-    args: &str,
-    status: ToolStatus,
-    result: Option<&str>,
-    width: u16,
-    theme: &Theme,
-    out: &mut Vec<String>,
-) {
-    let args = if args.is_empty() {
+/// A one-line argument summary for a tool card (pi's per-tool formats,
+/// `messages.md` §6). Unknown tools fall back to the raw arguments.
+fn format_tool_args(name: &str, args: &str) -> String {
+    if args.trim().is_empty() {
+        return String::new();
+    }
+    let summary = match name {
+        "read" | "write" | "edit" | "ls" => json_string_field(args, "path"),
+        "bash" => json_string_field(args, "command"),
+        "grep" => json_string_field(args, "pattern").map(|pattern| format!("/{pattern}/")),
+        _ => None,
+    };
+    summary.unwrap_or_else(|| args.to_string())
+}
+
+/// Pull a string field out of a flat JSON object without a parser. Tool
+/// arguments are always a flat object the model emitted; a value that is
+/// not a plain string yields `None` and the caller keeps the raw args.
+fn json_string_field(args: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let start = args.find(&needle)? + needle.len();
+    let rest = args[start..].trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    let mut chars = rest.strip_prefix('"')?.chars();
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                'u' => {
+                    for _ in 0..4 {
+                        chars.next()?;
+                    }
+                    out.push('\u{fffd}');
+                }
+                other => out.push(other),
+            },
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &mut Vec<String>) {
+    let Entry::Tool {
+        name,
+        args,
+        status,
+        result,
+    } = entry
+    else {
+        return;
+    };
+    let summary = format_tool_args(name, args);
+    let args = if summary.is_empty() {
         String::new()
     } else {
-        format!(" {args}")
+        format!(" {summary}")
     };
     let status_text = match status {
         ToolStatus::Ok => (theme.success)(status.label()),
@@ -359,10 +415,16 @@ fn render_tool(
         status_text
     );
     out.push(truncate_to_width(&header, width as usize, "…", false));
+    // pi collapses a tool card to its one line and expands on demand
+    // (`app.tools.expand`, Ctrl+O). The hint names the key when there is
+    // more to see.
     if let Some(result) = result {
-        let preview: String = result.lines().take(6).collect::<Vec<_>>().join("\n");
-        for line in wrap_text_with_ansi(&preview, (width as usize).saturating_sub(2).max(1)) {
-            out.push(format!("  {}", (theme.dim)(&line)));
+        if expanded {
+            for line in wrap_text_with_ansi(result, (width as usize).saturating_sub(2).max(1)) {
+                out.push(format!("  {}", (theme.dim)(&line)));
+            }
+        } else if result.lines().count() > 1 {
+            out.push(format!("  {}", (theme.dim)("… (ctrl+o to expand)")));
         }
     }
     let _ = visible_width("");
@@ -420,6 +482,39 @@ mod tests {
         assert!(out[0].starts_with("> read"));
         assert!(out[0].ends_with("ok"));
         assert!(!out[0].contains("call_"));
+    }
+
+    // Verifies: R8 - a tool card collapses to one line and expands on demand.
+    #[test]
+    fn a_tool_card_collapses_and_expands() {
+        let mut t = Transcript::new();
+        t.start_tool("read", r#"{"path":"a.rs"}"#);
+        t.finish_tool(
+            ToolStatus::Ok,
+            Some("line one\nline two\nline three".into()),
+        );
+        let collapsed = strip(&t.render(60, &plain()));
+        assert_eq!(collapsed[0], "> read a.rs ok");
+        assert!(collapsed.iter().any(|l| l.contains("ctrl+o to expand")));
+        assert!(!collapsed.iter().any(|l| l.contains("line two")));
+        t.toggle_tools_expanded();
+        let expanded = strip(&t.render(60, &plain()));
+        assert!(expanded.iter().any(|l| l.contains("line two")));
+    }
+
+    // Verifies: R8 - per-tool one-line argument summaries.
+    #[test]
+    fn tool_arguments_render_as_a_one_line_summary() {
+        assert_eq!(format_tool_args("read", r#"{"path":"a.rs"}"#), "a.rs");
+        assert_eq!(
+            format_tool_args("bash", r#"{"command":"ls -la"}"#),
+            "ls -la"
+        );
+        assert_eq!(
+            format_tool_args("grep", r#"{"pattern":"foo","path":"."}"#),
+            "/foo/"
+        );
+        assert_eq!(format_tool_args("other", "raw"), "raw");
     }
 
     #[test]

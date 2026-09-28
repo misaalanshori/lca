@@ -549,6 +549,10 @@ impl Chat {
         if self.search.is_some() {
             return self.handle_search_key(data, key.as_deref());
         }
+        if key.as_deref() == Some("ctrl+o") {
+            self.transcript.toggle_tools_expanded();
+            return Action::Continue;
+        }
         if key.as_deref() == Some("ctrl+r") {
             self.search = Some(String::new());
             self.search_matches.clear();
