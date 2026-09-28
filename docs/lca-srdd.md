@@ -474,7 +474,7 @@ FR-UI-18. WHEN the agent offers an automatic decision, such as an approval timeo
 
 FR-UI-19. The stats view SHALL show tokens and cost per model, including cache-read and cache-write accounting.
 
-FR-UI-20. The status area SHALL show the working directory and its git branch, the active model, and the queued-message count.
+FR-UI-20. The status area SHALL show the working directory and its git branch, the active model and thinking level, the context use and the session cost, any extension-provided segments, and the queued-message count.
 
 FR-UI-21. The user SHALL be able to switch between the fullscreen renderer and the scrollback renderer at runtime.
 

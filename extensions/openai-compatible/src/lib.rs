@@ -69,6 +69,10 @@ pub struct Settings {
     /// (V1, ADR-0031). Default on; a strict proxy that rejects unknown
     /// body fields can turn it off with `OPENAI_PROMPT_CACHE_KEY=0`.
     pub prompt_cache_key: bool,
+    /// Whether the endpoint honors a `reasoning_effort` body field (R1).
+    /// Default on; a strict proxy that rejects unknown body fields can
+    /// turn it off with `OPENAI_SUPPORTS_REASONING=0`.
+    pub supports_reasoning: bool,
 }
 
 impl Default for Settings {
@@ -93,6 +97,10 @@ impl Default for Settings {
                 .unwrap_or(0),
             prompt_cache_key: !matches!(
                 std::env::var("OPENAI_PROMPT_CACHE_KEY").as_deref(),
+                Ok("0") | Ok("false") | Ok("off")
+            ),
+            supports_reasoning: !matches!(
+                std::env::var("OPENAI_SUPPORTS_REASONING").as_deref(),
                 Ok("0") | Ok("false") | Ok("off")
             ),
         }
@@ -505,6 +513,15 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
         {
             body["prompt_cache_key"] = serde_json::Value::String(clamp_cache_key(session));
         }
+        // R1: the session's thinking level rides the request extras as
+        // `reasoning-effort`; map it to the endpoint's reasoning parameter
+        // when the endpoint has one, and ignore it otherwise (a hint,
+        // honored where meaningful, never an error).
+        if let Some(effort) = request.extras.get("reasoning-effort")
+            && settings.supports_reasoning
+        {
+            body["reasoning_effort"] = serde_json::Value::String(effort.clone());
+        }
         let body_bytes = serde_json::to_vec(&body).map_err(|err| StreamFailure {
             message: format!("cannot build request: {err}"),
             class: "invalid",
@@ -696,6 +713,11 @@ pub struct Preset {
     pub auth: String,
     /// A curated model list (a fallback for `GET /models`).
     pub models: Vec<String>,
+    /// Whether the endpoint honors a reasoning parameter (R1). Extension
+    /// data, like everything in `provider-presets.toml`; `complete` also
+    /// gates on the `OPENAI_SUPPORTS_REASONING` setting because it reads
+    /// its endpoint from the environment, not from the picker.
+    pub supports_reasoning: bool,
 }
 
 /// Parse the preset resource.
@@ -721,6 +743,10 @@ pub fn parse_presets(text: &str) -> Vec<Preset> {
                             .unwrap_or("bearer")
                             .to_string(),
                         models: string_list(item.get("models")),
+                        supports_reasoning: item
+                            .get("supports_reasoning")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
                     })
                 })
                 .collect()

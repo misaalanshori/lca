@@ -62,6 +62,7 @@ fn settings_for(base_url: &str, key: Option<&str>) -> openai_compatible::Setting
         model: "test-model".to_string(),
         context_window: 0,
         prompt_cache_key: true,
+        supports_reasoning: true,
     }
 }
 
@@ -354,6 +355,43 @@ fn body_capture_server() -> (String, std::sync::mpsc::Receiver<String>) {
         }
     });
     (format!("http://{addr}"), rx)
+}
+
+// Verifies: R1 (the thinking level rides the request extras into the body)
+#[test]
+fn the_body_carries_the_reasoning_effort() {
+    let cap = sandbox("reasoning", true);
+    let (base, rx) = body_capture_server();
+    let settings = settings_for(&base, Some("sk-test"));
+    let mut req = request("test-model");
+    req.extras
+        .insert("reasoning-effort".to_string(), "high".to_string());
+    openai_compatible::run_provider_stream(cap.as_ref(), &settings, &req, &mut |_| true)
+        .expect("stream completes");
+    let body = rx.recv().expect("body captured");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("json body");
+    assert_eq!(
+        json.get("reasoning_effort").and_then(|v| v.as_str()),
+        Some("high"),
+        "reasoning_effort present in body: {body}"
+    );
+
+    // An endpoint without reasoning drops it.
+    let cap = sandbox("reasoning-off", true);
+    let (base, rx) = body_capture_server();
+    let mut settings = settings_for(&base, Some("sk-test"));
+    settings.supports_reasoning = false;
+    let mut req = request("test-model");
+    req.extras
+        .insert("reasoning-effort".to_string(), "high".to_string());
+    openai_compatible::run_provider_stream(cap.as_ref(), &settings, &req, &mut |_| true)
+        .expect("stream completes");
+    let body = rx.recv().expect("body captured");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("json body");
+    assert!(
+        json.get("reasoning_effort").is_none(),
+        "the endpoint opt-out drops it"
+    );
 }
 
 // Verifies: V1 / ADR-0031 (the request body carries the clamped session

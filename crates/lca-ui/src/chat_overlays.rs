@@ -1,7 +1,7 @@
 //! The chat's overlay composition, split from `chat.rs` (the 1,200-line
 //! ceiling). The modals and pickers composite over the visible viewport.
 
-use super::chat::{Chat, highlight_matches};
+use super::chat::{Chat, THINKING_LEVELS, highlight_matches};
 use super::render::{overlay_box, side_panel};
 use super::state::widget_lines;
 
@@ -28,6 +28,27 @@ impl Chat {
             body.push(String::new());
             body.push("Up/Down previews; Enter applies; Esc restores.".to_string());
             overlay_box(viewport, width, height, "theme", &body);
+            return;
+        }
+        if let Some(picker) = &self.thinking_picker {
+            let current = self.thinking_level();
+            let mut body = vec!["Thinking level:".to_string(), String::new()];
+            let unset = if picker.selected == 0 { '>' } else { ' ' };
+            let unset_current = if current.is_none() { "  ✓" } else { "" };
+            body.push(format!(" {unset} unset (provider default){unset_current}"));
+            for (index, (name, description)) in THINKING_LEVELS.iter().enumerate() {
+                let row = index + 1;
+                let mark = if picker.selected == row { '>' } else { ' ' };
+                let current_mark = if current.as_deref() == Some(*name) {
+                    "  ✓"
+                } else {
+                    ""
+                };
+                body.push(format!(" {mark} {name:<8} {description}{current_mark}"));
+            }
+            body.push(String::new());
+            body.push("Up/Down moves; Enter applies; Esc closes.".to_string());
+            overlay_box(viewport, width, height, "thinking", &body);
             return;
         }
         if let Some(picker) = &self.world.picker {

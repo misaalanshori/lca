@@ -6,6 +6,7 @@ use std::path::PathBuf;
 fn options() -> UiOptions {
     UiOptions {
         model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
+        thinking: Arc::new(std::sync::Mutex::new(None)),
         initial_lines: Vec::new(),
         plain: true,
         invoke_command: Arc::new(|_, _| CommandEffect::None),
@@ -331,6 +332,32 @@ fn theme_picker_previews_and_restores() {
     chat.handle_key("\x1b"); // Escape restores
     assert!(chat.theme_picker.is_none());
     assert_eq!(chat.theme_name, original);
+}
+
+// Verifies: FR-UI-20 (the thinking level in the status area; R1)
+#[test]
+fn thinking_picker_sets_the_level() {
+    let mut chat = chat();
+    assert!(chat.thinking_level().is_none());
+    for c in "/thinking".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(chat.thinking_picker.is_some());
+    assert_eq!(
+        chat.thinking_picker.as_ref().unwrap().selected,
+        0,
+        "unset is the current row"
+    );
+    chat.handle_key("j"); // move to `off`
+    chat.handle_key("\r");
+    assert_eq!(chat.thinking_level().as_deref(), Some("off"));
+    assert!(chat.thinking_picker.is_none());
+    let text = strip(&chat.render(120)).join("\n");
+    assert!(
+        text.contains("\u{2022} off"),
+        "footer shows the level:\n{text}"
+    );
 }
 
 // Verifies: FR-UI-12 - Ctrl+R searches the transcript, highlights

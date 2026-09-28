@@ -23,6 +23,9 @@ pub struct Footer {
     pub session: String,
     /// The active model label (`provider/model`).
     pub model: String,
+    /// The session's thinking level (`thinking`, R1); `None` when unset
+    /// (the provider's own default).
+    pub thinking: Option<String>,
     /// Accumulated usage.
     pub usage: Usage,
     /// The model's context window in tokens (0 = unknown).
@@ -115,6 +118,9 @@ impl Footer {
         if !self.model.is_empty() {
             stats.push_str(" • ");
             stats.push_str(&self.model);
+        }
+        if let Some(thinking) = &self.thinking {
+            let _ = write!(stats, " • {thinking}");
         }
         if self.context_window > 0 {
             let pct =
@@ -214,5 +220,16 @@ mod tests {
         assert!(out[1].contains("90%"));
         assert!(out[1].contains("$0.5000"));
         assert!(out[1].contains("ctx 25%"));
+    }
+
+    #[test]
+    fn stats_line_reports_the_thinking_level() {
+        let f = Footer {
+            model: "p/m".into(),
+            thinking: Some("high".into()),
+            ..Default::default()
+        };
+        let out = strip(&f.render(120, &Theme::plain()));
+        assert!(out[1].contains("p/m • high"), "{}", out[1]);
     }
 }

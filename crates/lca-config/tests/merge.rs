@@ -34,7 +34,29 @@ fn defaults_match_the_documented_key_reference() {
     assert_eq!(config.cache_noise_floor_tokens(), 1024);
     assert_eq!(config.extensions_log_limit_bytes(), 4096);
     assert_eq!(config.ui_color(), ColorMode::Auto);
+    assert!(config.thinking().is_none(), "thinking defaults to unset");
     assert!(config.permissions_proposals().is_empty());
+}
+
+// Verifies: R1 (`thinking` is a documented key with pi's level vocabulary)
+#[test]
+fn thinking_merges_and_refuses_unknown_levels() {
+    let dir = scratch("thinking");
+    write(&dir.join("user.toml"), "thinking = \"high\"\n");
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.thinking(), Some("high"));
+
+    write(&dir.join("user.toml"), "thinking = \"hihg\"\n");
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("an unknown level is refused at load");
+    assert!(err.to_string().contains("hihg"), "{err}");
 }
 
 // Verifies: FR-CFG-2 (every resolved value names the source that set it)

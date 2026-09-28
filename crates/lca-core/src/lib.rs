@@ -46,6 +46,10 @@ pub struct AgentConfig {
     pub provider: String,
     /// Active model identifier.
     pub model: String,
+    /// The thinking level for this session (`thinking`, R1). `None` means
+    /// the provider's own default; when set it rides the request extras as
+    /// `reasoning-effort`, which a provider honors where meaningful.
+    pub reasoning_effort: Option<String>,
     /// Retry attempts for retryable transport errors (FR-CORE-6).
     pub retry_limit: u32,
     /// First retry delay; doubles per attempt (FR-CORE-6). Tests use zero.
@@ -88,6 +92,7 @@ impl std::fmt::Debug for AgentConfig {
         f.debug_struct("AgentConfig")
             .field("provider", &self.provider)
             .field("model", &self.model)
+            .field("reasoning_effort", &self.reasoning_effort)
             .field("retry_limit", &self.retry_limit)
             .field("retry_base_delay", &self.retry_base_delay)
             .field("max_iterations", &self.max_iterations)
@@ -122,6 +127,7 @@ impl Default for AgentConfig {
         AgentConfig {
             provider: "openai-compatible".to_string(),
             model: String::new(),
+            reasoning_effort: None,
             retry_limit: 3,
             retry_base_delay: Duration::from_millis(250),
             max_iterations: 50,
@@ -913,6 +919,11 @@ impl<'a> Agent<'a> {
             // every request; the OpenCode Go endpoint requires its
             // header and every other endpoint ignores it.
             extras.insert("session-id".to_string(), self.session.id().to_string());
+            // R1: the session's thinking level is a hint the provider honors
+            // where meaningful (ADR-0035's settings shape; no ABI change).
+            if let Some(effort) = &self.config.reasoning_effort {
+                extras.insert("reasoning-effort".to_string(), effort.clone());
+            }
             let request = CompletionRequest {
                 messages,
                 tools,

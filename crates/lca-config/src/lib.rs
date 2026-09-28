@@ -47,6 +47,11 @@ pub enum ColorMode {
     Never,
 }
 
+/// The thinking levels a model can be asked for (`thinking`), matching pi's
+/// `ThinkingLevel` vocabulary (`packages/agent/src/types.ts`). `off` disables
+/// reasoning; the rest scale it. An unknown value is refused at load.
+pub const THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
 impl std::str::FromStr for ColorMode {
     type Err = String;
 
@@ -128,6 +133,7 @@ pub struct Config {
     extensions_log_limit_bytes: u64,
     update_check: Option<bool>,
     ui_color: ColorMode,
+    thinking: Option<String>,
     permissions_proposals: BTreeMap<String, String>,
     sources: BTreeMap<String, MergeSource>,
 }
@@ -146,6 +152,7 @@ impl Default for Config {
             extensions_log_limit_bytes: 4096,
             update_check: None,
             ui_color: ColorMode::Auto,
+            thinking: None,
             permissions_proposals: BTreeMap::new(),
             sources: BTreeMap::new(),
         }
@@ -179,6 +186,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "extensions.log_limit_bytes",
     "update.check",
     "ui.color",
+    "thinking",
 ];
 
 /// Look a dotted key up in a TOML table: literal keys (`"tool.timeout_seconds"`)
@@ -252,6 +260,16 @@ fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigEr
         "ui.color" => Ok(TypedValue::Color(
             raw.parse::<ColorMode>().map_err(invalid)?,
         )),
+        "thinking" => {
+            if THINKING_LEVELS.contains(&raw) {
+                Ok(TypedValue::Text(raw.to_string()))
+            } else {
+                Err(invalid(format!(
+                    "expected one of {}, got `{raw}`",
+                    THINKING_LEVELS.join(", ")
+                )))
+            }
+        }
         "provider.retry_limit"
         | "tool.timeout_seconds"
         | "tool.result_limit_bytes"
@@ -294,6 +312,7 @@ impl Config {
             "extensions.log_limit_bytes",
             "update.check",
             "ui.color",
+            "thinking",
         ] {
             config.sources.insert(key.to_string(), MergeSource::Default);
         }
@@ -387,6 +406,18 @@ impl Config {
                     let color: ColorMode = text.parse().map_err(invalid)?;
                     this.apply(key.to_string(), TypedValue::Color(color), source)?;
                 }
+                "thinking" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    if !THINKING_LEVELS.contains(&text) {
+                        return Err(invalid(format!(
+                            "expected one of {}, got `{text}`",
+                            THINKING_LEVELS.join(", ")
+                        )));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
                 "provider.retry_limit"
                 | "tool.timeout_seconds"
                 | "tool.result_limit_bytes"
@@ -426,6 +457,7 @@ impl Config {
             "extensions.log_limit_bytes",
             "update.check",
             "ui.color",
+            "thinking",
         ] {
             if let Some(value) = table_value(table, key) {
                 // `provider` doubles as a section: `[provider] retry_limit = N`
@@ -465,6 +497,7 @@ impl Config {
             }
             ("update.check", TypedValue::Bool(v)) => self.update_check = Some(v),
             ("ui.color", TypedValue::Color(v)) => self.ui_color = v,
+            ("thinking", TypedValue::Text(v)) => self.thinking = Some(v),
             (other, _) => {
                 return Err(ConfigError::InvalidValue {
                     key: other.to_string(),
@@ -532,6 +565,12 @@ impl Config {
         self.ui_color
     }
 
+    /// The configured thinking level (`thinking`), or `None` for the
+    /// provider's own default (pi's "unset").
+    pub fn thinking(&self) -> Option<&str> {
+        self.thinking.as_deref()
+    }
+
     /// Permission proposals read from a trusted project file (ADR-0006).
     pub fn permissions_proposals(&self) -> &BTreeMap<String, String> {
         &self.permissions_proposals
@@ -585,6 +624,12 @@ impl Config {
                     ColorMode::Never => "never",
                 }
                 .to_string(),
+            ),
+            (
+                "thinking",
+                self.thinking
+                    .clone()
+                    .unwrap_or_else(|| "<provider default>".to_string()),
             ),
             (
                 "permissions.proposals",

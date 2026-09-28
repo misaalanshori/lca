@@ -129,6 +129,9 @@ name = "OpenCode Go"
 base_url = "https://opencode.ai/zen/go/v1"
 env = ["OPENCODE_API_KEY", "OPENAI_API_KEY"]
 auth = "bearer"
+# Reasoning endpoints honor a `reasoning_effort` body field (R1); the
+# thinking level rides the request extras and lands here.
+supports_reasoning = true
 # No curated list: the endpoint's `GET /models` is the source of truth
 # (issue #3). An empty list means "discover", and the picker shows why when
 # discovery cannot be reached rather than shipping dev-harness ids.

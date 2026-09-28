@@ -16,6 +16,7 @@ use lca_ui::state::{UiOptions, widget_lines};
 fn options(plain: bool) -> UiOptions {
     UiOptions {
         model_label: Arc::new(Mutex::new("p/m".into())),
+        thinking: Arc::new(Mutex::new(None)),
         initial_lines: Vec::new(),
         plain,
         invoke_command: Arc::new(|_, _| CommandEffect::None),

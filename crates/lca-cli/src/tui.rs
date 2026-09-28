@@ -380,6 +380,11 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     } else {
         format!("{provider_name}/{model_id}")
     }));
+    // The session's thinking level (R1): `config.thinking()` seeds it,
+    // `/thinking` rewrites it, the runner reads it per turn, and the footer
+    // reads it every frame.
+    let thinking_cell: Arc<Mutex<Option<String>>> =
+        Arc::new(Mutex::new(config.thinking().map(str::to_string)));
 
     // The host login flow (`/login`, ADR-0033 / `api-key-login-plan.md` D1):
     // the CLI renders whatever the extension's `login-options` hands it,
@@ -627,6 +632,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         .collect();
     let options = UiOptions {
         model_label: label_cell.clone(),
+        thinking: thinking_cell.clone(),
         initial_lines,
         models: model_ids,
         plain: config.ui_color() == lca_config::ColorMode::Never,
@@ -861,6 +867,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             names.insert(4, "/theme".to_string());
             names.insert(5, "/tree".to_string());
             names.insert(6, "/fork".to_string());
+            names.insert(7, "/thinking".to_string());
             // Extension command names reach completion (and the screen);
             // sanitized because an extension chose these strings.
             names.extend(
@@ -888,6 +895,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         let agent_config = agent_config.clone();
         let proposals = proposals.clone();
         let model_cell = model_cell.clone();
+        let thinking_cell = thinking_cell.clone();
         let shared_prompt = shared_prompt_for_runner.clone();
         std::thread::spawn(move || {
             let mut sink = ChannelSink {
@@ -948,6 +956,10 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 let mut turn_config = agent_config;
                 turn_config.model = choice.id;
                 turn_config.model_context_window = choice.window;
+                turn_config.reasoning_effort = thinking_cell
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
                 turn_config.steer = steer;
                 let mut agent = Agent::new(
                     &runner_store,

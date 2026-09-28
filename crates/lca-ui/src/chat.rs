@@ -75,6 +75,8 @@ pub struct Chat {
     pub theme_name: String,
     /// The open `/theme` picker with live preview, when any.
     pub theme_picker: Option<ThemePicker>,
+    /// The open `/thinking` level picker, when any (R1).
+    pub thinking_picker: Option<ThinkingPicker>,
     /// The open `/tree` branch selector, when any (FR-UI-16).
     pub tree_picker: Option<TreePicker>,
 }
@@ -93,6 +95,34 @@ pub struct ThemePicker {
     pub selected: usize,
     /// The theme name to restore when the picker is cancelled.
     pub original: String,
+}
+
+/// The `/thinking` picker: the session's reasoning level (R1). Row 0 is
+/// "unset" (the provider's own default); the rest are pi's levels with
+/// their cost/latency descriptions.
+pub struct ThinkingPicker {
+    /// The highlighted row (0 = unset).
+    pub selected: usize,
+}
+
+/// The thinking levels and their descriptions, from pi's
+/// `thinking-selector.ts` (`LEVEL_DESCRIPTIONS`).
+pub const THINKING_LEVELS: &[(&str, &str)] = &[
+    ("off", "No reasoning"),
+    ("minimal", "Very brief reasoning (~1k tokens)"),
+    ("low", "Light reasoning (~2k tokens)"),
+    ("medium", "Moderate reasoning (~8k tokens)"),
+    ("high", "Deep reasoning (~16k tokens)"),
+    ("xhigh", "Extra-high reasoning (~32k tokens)"),
+    ("max", "Maximum reasoning"),
+];
+
+/// The row index a level occupies in the `/thinking` picker (0 = unset).
+pub fn thinking_row(level: Option<&str>) -> usize {
+    level
+        .and_then(|level| THINKING_LEVELS.iter().position(|(name, _)| *name == level))
+        .map(|index| index + 1)
+        .unwrap_or(0)
 }
 
 impl Chat {
@@ -142,6 +172,7 @@ impl Chat {
             search_index: 0,
             theme_name,
             theme_picker: None,
+            thinking_picker: None,
             tree_picker: None,
         }
     }
@@ -253,6 +284,16 @@ impl Chat {
             .clone()
     }
 
+    /// The session's thinking level, resolved from the shared cell (R1).
+    pub fn thinking_level(&self) -> Option<String> {
+        self.world
+            .options
+            .thinking
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
     /// Render the whole document (transcript + dock) at a width.
     pub fn render(&self, width: u16) -> Vec<String> {
         let mut out = self.transcript.render(width, &self.theme);
@@ -325,6 +366,7 @@ impl Chat {
         } else {
             model
         };
+        footer.thinking = self.thinking_level();
         if let Some(cue) = &self.turn_status {
             footer.statuses.push(cue.text.clone());
         }
@@ -360,7 +402,11 @@ impl Chat {
         let end = total.saturating_sub(scroll as usize);
         let start = end.saturating_sub(height as usize);
         let mut viewport: Vec<String> = document[start..end].to_vec();
-        if self.world.modal_active() || self.theme_picker.is_some() || self.tree_picker.is_some() {
+        if self.world.modal_active()
+            || self.theme_picker.is_some()
+            || self.thinking_picker.is_some()
+            || self.tree_picker.is_some()
+        {
             viewport.resize(height as usize, String::new());
         }
         self.compose_overlays(&mut viewport, width, height);
@@ -418,6 +464,40 @@ impl Chat {
                     self.theme_picker = Some(picker);
                 }
                 _ => self.theme_picker = Some(picker),
+            }
+            return Action::Continue;
+        }
+
+        // The `/thinking` picker owns the keyboard while open (R1).
+        if let Some(mut picker) = self.thinking_picker.take() {
+            match key.as_deref() {
+                Some("escape") => {}
+                Some("enter") => {
+                    let level = if picker.selected == 0 {
+                        None
+                    } else {
+                        Some(THINKING_LEVELS[picker.selected - 1].0.to_string())
+                    };
+                    *self
+                        .world
+                        .options
+                        .thinking
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = level.clone();
+                    self.world.notice = Some(match level {
+                        Some(level) => format!("thinking: {level}"),
+                        None => "thinking: provider default".to_string(),
+                    });
+                }
+                Some("up") | Some("k") => {
+                    picker.selected = picker.selected.saturating_sub(1);
+                    self.thinking_picker = Some(picker);
+                }
+                Some("down") | Some("j") => {
+                    picker.selected = (picker.selected + 1).min(THINKING_LEVELS.len());
+                    self.thinking_picker = Some(picker);
+                }
+                _ => self.thinking_picker = Some(picker),
             }
             return Action::Continue;
         }
@@ -907,6 +987,13 @@ impl Chat {
                 });
                 return Action::Continue;
             }
+            "thinking" => {
+                let current = self.thinking_level();
+                self.thinking_picker = Some(ThinkingPicker {
+                    selected: thinking_row(current.as_deref()),
+                });
+                return Action::Continue;
+            }
             "tree" => {
                 let entries = self
                     .world
@@ -1144,6 +1231,7 @@ fn command_help(command: &str) -> &'static str {
         "/hotkeys" => "list every key binding",
         "/fullscreen" => "toggle fullscreen and scrollback renderers",
         "/theme" => "pick a theme with live preview",
+        "/thinking" => "set the reasoning level",
         "/tree" => "browse session branches",
         "/fork" => "fork a branch at a message (usage: /fork <n>)",
         "/exit" => "leave the interface",
