@@ -89,6 +89,13 @@ impl Screen {
         }
     }
 
+    fn take_clicked_link(&mut self) -> Option<String> {
+        match self {
+            Screen::Alt(r) => r.take_clicked_link(),
+            Screen::Main(_) => None,
+        }
+    }
+
     fn set_scroll(&mut self, scroll: u16) {
         if let Screen::Alt(r) = self {
             r.scroll = scroll;
@@ -153,6 +160,21 @@ fn handle_input(
     // Mouse (selection, wheel) is the renderer's.
     if data.starts_with("\x1b[<") {
         screen.handle_mouse(data);
+        // A click on an OSC-8 link opens it (R6).
+        if let Some(url) = screen.take_clicked_link() {
+            let opened = chat
+                .world
+                .options
+                .hooks
+                .open_url
+                .as_ref()
+                .is_some_and(|open| open(&url));
+            chat.world.notice = Some(if opened {
+                format!("opened {url}")
+            } else {
+                format!("cannot open {url}")
+            });
+        }
         // Copy on release (issue #2): prefer a verified native
         // clipboard (R6); OSC 52 is the honest fallback, and the
         // notice says which one ran.

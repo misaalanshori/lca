@@ -291,6 +291,9 @@ pub type ShellHandle = Arc<dyn Fn() + Send + Sync>;
 /// unverified.
 pub type ClipboardWriter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
+/// Opens a URL from an OSC-8 link click (R6), returning whether it worked.
+pub type OpenUrl = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 /// Starts a `!`/`!!` shell command, streaming output through the sender and
 /// returning a cancel handle (R4). The `bool` is `true` for `!!`.
 pub type ShellRunner =
@@ -336,6 +339,8 @@ pub struct UiHooks {
     pub switch_session: Option<SwitchSession>,
     /// Write a selection to the system clipboard, verified (R6).
     pub copy_to_clipboard: Option<ClipboardWriter>,
+    /// Open a URL a click landed on (R6).
+    pub open_url: Option<OpenUrl>,
 }
 
 /// Static inputs for the interface.

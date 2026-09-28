@@ -161,6 +161,30 @@ fn native_clipboard(text: &str) -> bool {
     false
 }
 
+/// Open a URL in the platform's browser (R6), returning whether a launcher
+/// started. Fire-and-forget: the browser outlives this process only if the
+/// launch succeeded.
+fn open_url(url: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    let candidates: &[(&str, &[&str])] = &[("open", &[])];
+    #[cfg(target_os = "windows")]
+    let candidates: &[(&str, &[&str])] = &[("cmd", &["/C", "start", ""])];
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let candidates: &[(&str, &[&str])] = &[("xdg-open", &[]), ("x-www-browser", &[])];
+    for (program, args) in candidates {
+        let mut command = std::process::Command::new(program);
+        command
+            .args(*args)
+            .arg(url)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if command.spawn().is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Read a child pipe into the shell sink until it closes (R4). Control
 /// characters are sanitized so the card can never paint the terminal.
 fn read_into<R: std::io::Read>(
@@ -1006,6 +1030,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                 })
             }),
             copy_to_clipboard: Some(Arc::new(|text: &str| native_clipboard(text))),
+            open_url: Some(Arc::new(|url: &str| open_url(url))),
             fork_at: Some({
                 let store = store.clone();
                 let session_cell = current_session.clone();

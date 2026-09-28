@@ -97,6 +97,10 @@ pub struct AltScreenRenderer {
     /// While dragging, the edge the pointer sits on: `-1` top, `1` bottom
     /// (R6's edge auto-scroll). `None` when not at an edge.
     drag_edge: Option<i8>,
+    /// The cell a press landed on, for click-vs-drag (R6's link open).
+    press_cell: Option<(u16, u16)>,
+    /// The OSC-8 URL a completed click landed on, for the loop to open.
+    clicked_link: Option<String>,
 }
 
 impl Default for AltScreenRenderer {
@@ -119,6 +123,8 @@ impl AltScreenRenderer {
             last_click: None,
             click_count: 0,
             drag_edge: None,
+            press_cell: None,
+            clicked_link: None,
         }
     }
 
@@ -235,6 +241,8 @@ impl AltScreenRenderer {
         }
         if motion {
             if self.selection.dragging {
+                // A drag is not a click.
+                self.press_cell = None;
                 // Edge auto-scroll (R6): a drag at the top/bottom row arms a
                 // scroll that `tick_auto_scroll` advances on the loop's tick.
                 self.drag_edge = if row == 0 {
@@ -262,16 +270,30 @@ impl AltScreenRenderer {
                 _ => 1,
             };
             self.last_click = Some((now, col, row));
+            self.press_cell = Some((col, row));
             let line = self.previous.get(row as usize).cloned().unwrap_or_default();
             let granularity = Granularity::from_click_count(self.click_count);
             self.selection
                 .start(point, granularity, self.click_count, &line);
             true
         } else {
+            // A press and release on the same cell without movement is a
+            // click: open the OSC-8 link under it, if any (R6).
+            if self.press_cell == Some((col, row)) {
+                let line = self.previous.get(row as usize).cloned().unwrap_or_default();
+                self.clicked_link =
+                    crate::engine::text::get_osc8_link_at_column(&line, col as usize);
+            }
+            self.press_cell = None;
             self.selection.end();
             self.drag_edge = None;
             true
         }
+    }
+
+    /// Take the OSC-8 URL a completed click landed on, if any (R6).
+    pub fn take_clicked_link(&mut self) -> Option<String> {
+        self.clicked_link.take()
     }
 
     /// Advance an edge drag by one line (R6): scroll and extend the
@@ -421,6 +443,49 @@ mod tests {
         assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
         assert_eq!(base64_encode(b"a"), "YQ==");
         assert_eq!(base64_encode(b""), "");
+    }
+
+    // Verifies: R6 - a click on an OSC-8 link yields its URL.
+    #[test]
+    fn a_click_on_a_link_yields_the_url() {
+        let mut r = AltScreenRenderer::new();
+        r.previous = vec!["\x1b]8;;https://pi.dev\x07link\x1b]8;;\x07 here".to_string()];
+        r.width = 40;
+        r.height = 1;
+        // Press and release on the same cell (column 1).
+        r.handle_mouse(SgrMouse {
+            bits: 0,
+            x: 2,
+            y: 1,
+            press: true,
+        });
+        r.handle_mouse(SgrMouse {
+            bits: 0,
+            x: 2,
+            y: 1,
+            press: false,
+        });
+        assert_eq!(r.take_clicked_link().as_deref(), Some("https://pi.dev"));
+        // A drag does not open a link.
+        r.handle_mouse(SgrMouse {
+            bits: 0,
+            x: 2,
+            y: 1,
+            press: true,
+        });
+        r.handle_mouse(SgrMouse {
+            bits: 32, // motion
+            x: 5,
+            y: 1,
+            press: true,
+        });
+        r.handle_mouse(SgrMouse {
+            bits: 0,
+            x: 5,
+            y: 1,
+            press: false,
+        });
+        assert!(r.take_clicked_link().is_none());
     }
 
     // Verifies: R6 - a drag on a viewport edge auto-scrolls and extends.
