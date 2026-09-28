@@ -55,9 +55,10 @@ keeps the previous line loading.
 Every world that carries a message (provider, compaction, context-transform)
 sees the new content shape, and a component built against 0.1 or 1.0 keeps
 loading during the window. The native twin and the WASM component are diffed
-byte for byte, so the two delivery modes cannot drift. The terminal keeps
-rendering the image as a labelled placeholder (D7); the data path is typed
-now, the render protocol decision is deferred. `wit/CHANGELOG.md` carries the
+byte for byte, so the two delivery modes cannot drift. The terminal
+renders the image through the kitty/iTerm2 graphics ladder, with a
+labelled placeholder when the terminal has no graphics (R5); the data
+path is typed and the render protocol is decided. `wit/CHANGELOG.md` carries the
 migration note.
 
 ## Revisit conditions
