@@ -283,6 +283,8 @@ pub type ScreenModePersist = Arc<dyn Fn(bool) + Send + Sync>;
 pub type SessionTree = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
 /// Forks at the nth user message, returning the new branch's id.
 pub type ForkAt = Arc<dyn Fn(usize) -> String + Send + Sync>;
+/// Lists the project's sessions, newest first (`/resume`, R2).
+pub type SessionList = Arc<dyn Fn() -> Vec<crate::resume::SessionEntry> + Send + Sync>;
 
 /// Optional host hooks the interface calls (P6): an external editor, the
 /// `!`/`!!` shell path, and screen-mode persistence. Default: all absent,
@@ -304,6 +306,8 @@ pub struct UiHooks {
     /// Fork at the nth user message (0-based), returning the new branch's id
     /// (FR-UI-16).
     pub fork_at: Option<ForkAt>,
+    /// List the project's sessions for `/resume` (R2).
+    pub session_list: Option<SessionList>,
 }
 
 /// Static inputs for the interface.

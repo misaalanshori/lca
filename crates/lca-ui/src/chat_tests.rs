@@ -360,6 +360,52 @@ fn thinking_picker_sets_the_level() {
     );
 }
 
+// Verifies: R2 - `/resume` opens a searchable session list and reports the
+// resume command for the selected session.
+#[test]
+fn resume_picker_searches_sessions() {
+    let mut chat = chat();
+    chat.world.options.hooks.session_list = Some(Arc::new(|| {
+        vec![
+            crate::resume::SessionEntry {
+                id: "a".into(),
+                title: "parser fix".into(),
+                messages: 3,
+                age: "5m".into(),
+            },
+            crate::resume::SessionEntry {
+                id: "b".into(),
+                title: "docs pass".into(),
+                messages: 1,
+                age: "2d".into(),
+            },
+        ]
+    }));
+    for c in "/resume".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(chat.resume_picker.is_some());
+    for c in "docs".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    assert_eq!(chat.resume_picker.as_ref().unwrap().matches, vec![1]);
+    let viewport = strip(&chat.viewport(100, 30, 0)).join("\n");
+    assert!(viewport.contains("docs pass"), "{viewport}");
+    chat.handle_key("\r");
+    assert!(
+        chat.world
+            .notice
+            .as_deref()
+            .unwrap_or("")
+            .contains("lca --resume b"),
+        "{:?}",
+        chat.world.notice
+    );
+    chat.handle_key("\x1b");
+    assert!(chat.resume_picker.is_none());
+}
+
 // Verifies: FR-UI-12 - Ctrl+R searches the transcript, highlights
 // matches, and navigates between them.
 #[test]

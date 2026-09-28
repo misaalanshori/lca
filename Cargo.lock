@@ -1457,6 +1457,7 @@ dependencies = [
  "lca-testkit",
  "lca-tools",
  "lca-tui",
+ "regex",
 ]
 
 [[package]]

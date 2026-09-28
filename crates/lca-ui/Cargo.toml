@@ -12,6 +12,7 @@ lca-tui = { path = "../lca-tui" }
 lca-protocol = { path = "../lca-protocol" }
 lca-permissions = { path = "../lca-permissions" }
 lca-tools = { path = "../lca-tools" }
+regex.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]

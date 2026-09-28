@@ -79,6 +79,8 @@ pub struct Chat {
     pub thinking_picker: Option<ThinkingPicker>,
     /// The open `/tree` branch selector, when any (FR-UI-16).
     pub tree_picker: Option<TreePicker>,
+    /// The open `/resume` session picker (R2).
+    pub resume_picker: Option<crate::resume::ResumePicker>,
 }
 
 /// The `/tree` branch selector (FR-UI-16).
@@ -174,6 +176,7 @@ impl Chat {
             theme_picker: None,
             thinking_picker: None,
             tree_picker: None,
+            resume_picker: None,
         }
     }
 
@@ -406,6 +409,7 @@ impl Chat {
             || self.theme_picker.is_some()
             || self.thinking_picker.is_some()
             || self.tree_picker.is_some()
+            || self.resume_picker.is_some()
         {
             viewport.resize(height as usize, String::new());
         }
@@ -498,6 +502,45 @@ impl Chat {
                     self.thinking_picker = Some(picker);
                 }
                 _ => self.thinking_picker = Some(picker),
+            }
+            return Action::Continue;
+        }
+
+        // The `/resume` picker owns the keyboard while open (R2): a search
+        // box where up/down navigate and printable keys edit the query.
+        if let Some(mut picker) = self.resume_picker.take() {
+            match key.as_deref() {
+                Some("escape") => {}
+                Some("enter") => {
+                    if let Some(entry) = picker.selected_entry() {
+                        self.world.notice = Some(format!(
+                            "resume this session with: lca --resume {}",
+                            entry.id
+                        ));
+                    }
+                }
+                Some("up") => {
+                    picker.selected = picker.selected.saturating_sub(1);
+                    self.resume_picker = Some(picker);
+                }
+                Some("down") => {
+                    if !picker.matches.is_empty() {
+                        picker.selected = (picker.selected + 1).min(picker.matches.len() - 1);
+                    }
+                    self.resume_picker = Some(picker);
+                }
+                Some("backspace") => {
+                    picker.query.pop();
+                    picker.refilter();
+                    self.resume_picker = Some(picker);
+                }
+                _ => {
+                    if let Some(text) = printable(data) {
+                        picker.query.push_str(&text);
+                        picker.refilter();
+                    }
+                    self.resume_picker = Some(picker);
+                }
             }
             return Action::Continue;
         }
@@ -1013,6 +1056,22 @@ impl Chat {
                 }
                 return Action::Continue;
             }
+            "resume" => {
+                let entries = self
+                    .world
+                    .options
+                    .hooks
+                    .session_list
+                    .as_ref()
+                    .map(|list| list())
+                    .unwrap_or_default();
+                if entries.is_empty() {
+                    self.world.notice = Some("no sessions yet".to_string());
+                } else {
+                    self.resume_picker = Some(crate::resume::ResumePicker::new(entries));
+                }
+                return Action::Continue;
+            }
             "fork" => {
                 let Some(fork_at) = self.world.options.hooks.fork_at.clone() else {
                     self.world.notice = Some("forking is not available in this host".to_string());
@@ -1233,6 +1292,7 @@ fn command_help(command: &str) -> &'static str {
         "/theme" => "pick a theme with live preview",
         "/thinking" => "set the reasoning level",
         "/tree" => "browse session branches",
+        "/resume" => "search and reopen a session",
         "/fork" => "fork a branch at a message (usage: /fork <n>)",
         "/exit" => "leave the interface",
         "/login" => "sign in to a provider",

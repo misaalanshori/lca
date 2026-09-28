@@ -10,6 +10,7 @@ pub mod chat;
 mod chat_overlays;
 pub mod footer;
 pub mod render;
+pub mod resume;
 pub mod run;
 pub mod state;
 pub mod theme;

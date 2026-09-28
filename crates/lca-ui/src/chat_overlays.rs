@@ -19,6 +19,27 @@ impl Chat {
             overlay_box(viewport, width, height, "tree", &body);
             return;
         }
+        if let Some(picker) = &self.resume_picker {
+            let mut body = vec![format!("  search: {}", picker.query), String::new()];
+            if picker.matches.is_empty() {
+                body.push("  (no matches)".to_string());
+            }
+            for (row, index) in picker.matches.iter().enumerate() {
+                let entry = &picker.entries[*index];
+                let cur = if row == picker.selected { '>' } else { ' ' };
+                body.push(format!(
+                    " {cur} {} ({} messages, {})",
+                    entry.title, entry.messages, entry.age
+                ));
+            }
+            body.push(String::new());
+            body.push(
+                "Type to search (re:/…/, \"phrase\"); Enter shows the resume command; Esc closes."
+                    .to_string(),
+            );
+            overlay_box(viewport, width, height, "resume", &body);
+            return;
+        }
         if let Some(picker) = &self.theme_picker {
             let mut body = vec!["Theme (live preview):".to_string(), String::new()];
             for (index, name) in crate::theme::THEMES.iter().enumerate() {

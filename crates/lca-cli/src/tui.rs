@@ -108,6 +108,21 @@ fn model_effect_on(
     }
 }
 
+/// A short relative age (`now`, `5m`, `3h`, `2d`, `3w`, `2mo`, `1y`), pi's
+/// session-row format (`selectors-large.md`).
+fn age_label(now_ms: u64, then_ms: u64) -> String {
+    let seconds = now_ms.saturating_sub(then_ms) / 1000;
+    match seconds {
+        0..=59 => "now".to_string(),
+        60..=3599 => format!("{}m", seconds / 60),
+        3600..=86_399 => format!("{}h", seconds / 3600),
+        86_400..=604_799 => format!("{}d", seconds / 86_400),
+        604_800..=2_591_999 => format!("{}w", seconds / 604_800),
+        2_592_000..=31_535_999 => format!("{}mo", seconds / 2_592_000),
+        _ => format!("{}y", seconds / 31_536_000),
+    }
+}
+
 /// Enter the interactive interface for `cwd`, optionally resuming `resume`.
 pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     // The interface needs a terminal for raw mode and key events; without
@@ -820,6 +835,24 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                         .collect()
                 })
             }),
+            session_list: Some({
+                let store = store.clone();
+                let cwd = cwd.to_path_buf();
+                Arc::new(move || {
+                    let now = lca_session::now_ms();
+                    store
+                        .list_sessions(&cwd)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|summary| lca_ui::resume::SessionEntry {
+                            id: summary.id,
+                            title: summary.title,
+                            messages: summary.message_count,
+                            age: age_label(now, summary.modified_ms),
+                        })
+                        .collect()
+                })
+            }),
             fork_at: Some({
                 let store = store.clone();
                 let session = session.clone();
@@ -868,6 +901,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             names.insert(5, "/tree".to_string());
             names.insert(6, "/fork".to_string());
             names.insert(7, "/thinking".to_string());
+            names.insert(8, "/resume".to_string());
             // Extension command names reach completion (and the screen);
             // sanitized because an extension chose these strings.
             names.extend(

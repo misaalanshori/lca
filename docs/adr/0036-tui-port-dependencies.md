@@ -88,3 +88,17 @@ or a Unicode-width disagreement between `unicode-width` and a terminal
 that makes the width corrections in `utils.ts` insufficient. The width
 correction layer is deliberately on top of `unicode-width`, not instead of
 it, so it can absorb such a case without replacing the dependency.
+
+## Addendum (cycle 3, R2): `regex` for the resume search grammar
+
+`lca-ui`'s `/resume` list carries pi's session-search grammar
+(`session-selector-search.ts`): `re:<pattern>` is a case-insensitive
+regex, `"quoted phrase"` is an exact substring, and bare terms are an
+AND of case-insensitive substrings. The regex arm needs a regex engine,
+and `regex` is already a direct dependency of `lca-tools` (the grep tool)
+with the same justification: writing one is a multi-year project and the
+workspace's supply-chain footprint does not change (it is already
+resolved in `Cargo.lock`, and `lca-ui` already depends on `lca-tools`).
+The alternative — routing every keystroke's search through a host
+callback — puts the grammar in the host instead of the interface that
+owns the picker, which is the wrong layer.

@@ -91,6 +91,11 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # Unicode tables.
 unicode-width = "0.2"
 unicode-segmentation = "1.13"
+# regex - the `/resume` session-search grammar's `re:` arm (ADR-0036
+# addendum, R2). Already a direct dependency of `lca-tools` (the grep
+# tool) at this version; promoted to the workspace table so `lca-ui` can
+# name it without a second version.
+regex = "1"
 ipnet = "2"
 toml = "0.8"
 wasmtime = { version = "49.0.0", default-features = false, features = [
