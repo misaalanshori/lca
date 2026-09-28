@@ -91,22 +91,18 @@ impl AutocompleteProvider for CombinedAutocompleteProvider {
                     prefix: format!("/{rest}"),
                 });
             }
-            // A command with argument completions answers here; a command
-            // without them (or one whose argument has no matches) falls
-            // through to file completion for the last token, the way pi's
-            // provider chain does.
-            if let Some((name, argument)) = rest.split_once(' ')
-                && let Some(command) = self.commands.iter().find(|c| c.name == name)
-                && let Some(completions) = &command.argument_completions
-            {
-                let items = completions(argument);
-                if !items.is_empty() {
-                    return Some(Suggestions {
-                        items,
-                        prefix: argument.to_string(),
-                    });
-                }
+            // pi's provider returns null when the command has no argument
+            // completions (it does not fall through to file completion).
+            let (name, argument) = rest.split_once(' ')?;
+            let command = self.commands.iter().find(|c| c.name == name)?;
+            let items = command.argument_completions.as_ref()?.as_ref()(argument);
+            if items.is_empty() {
+                return None;
             }
+            return Some(Suggestions {
+                items,
+                prefix: argument.to_string(),
+            });
         }
         // Plain path completion for the last whitespace-delimited token
         // (pi completes the token at the cursor, not the whole line).

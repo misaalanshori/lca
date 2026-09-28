@@ -593,148 +593,159 @@ impl Chat {
     /// Handle a key while a modal or the panel owns the keyboard.
     fn handle_modal_key(&mut self, data: &str) -> Option<Action> {
         let key = keys::parse_key(data);
+        let key = key.as_deref();
+        self.handle_login_picker(key)
+            .or_else(|| self.handle_login_secret(data, key))
+            .or_else(|| self.handle_login_grant(key))
+            .or_else(|| self.handle_permission(key))
+            .or_else(|| self.handle_extension_modal(data, key))
+            .or_else(|| self.handle_panel(data, key))
+    }
 
-        // The list picker (`/login`).
-        if let Some(mut prompt) = self.world.picker.take() {
-            match key.as_deref() {
-                Some("escape") => self.world.notice = Some("login cancelled".to_string()),
-                Some("up") | Some("k") => {
-                    prompt.selected = prompt.selected.saturating_sub(1);
-                    self.world.picker = Some(prompt);
-                }
-                Some("down") | Some("j") => {
-                    prompt.selected =
-                        (prompt.selected + 1).min(prompt.options.len().saturating_sub(1));
-                    self.world.picker = Some(prompt);
-                }
-                Some("enter") => {
-                    if let Some(option) = prompt.options.get(prompt.selected).cloned()
-                        && let Some(pick) = self.world.options.pick_login.clone()
-                    {
-                        let next = pick(&option.provider, &option.id);
-                        self.apply_login_next(next);
-                    }
-                }
-                _ => self.world.picker = Some(prompt),
+    /// The `/login` list picker, while open.
+    fn handle_login_picker(&mut self, key: Option<&str>) -> Option<Action> {
+        let mut prompt = self.world.picker.take()?;
+        match key {
+            Some("escape") => self.world.notice = Some("login cancelled".to_string()),
+            Some("up" | "k") => {
+                prompt.selected = prompt.selected.saturating_sub(1);
+                self.world.picker = Some(prompt);
             }
-            return Some(Action::Continue);
-        }
-
-        // The single-line secret prompt (`/login`).
-        if let Some(mut prompt) = self.world.secret.take() {
-            match key.as_deref() {
-                Some("escape") => self.world.notice = Some("login cancelled".to_string()),
-                Some("enter") => {
-                    let typed = std::mem::take(&mut prompt.input);
-                    if typed.is_empty() {
-                        self.world.notice = Some("nothing was entered".to_string());
-                    } else if let Some(complete) = self.world.options.complete_login.clone() {
-                        let next = complete(&prompt.provider, &typed);
-                        self.apply_login_next(next);
-                    }
+            Some("down" | "j") => {
+                prompt.selected = (prompt.selected + 1).min(prompt.options.len().saturating_sub(1));
+                self.world.picker = Some(prompt);
+            }
+            Some("enter") => {
+                if let Some(option) = prompt.options.get(prompt.selected).cloned()
+                    && let Some(pick) = self.world.options.pick_login.clone()
+                {
+                    let next = pick(&option.provider, &option.id);
+                    self.apply_login_next(next);
                 }
-                Some("backspace") => {
-                    prompt.input.pop();
+            }
+            _ => self.world.picker = Some(prompt),
+        }
+        Some(Action::Continue)
+    }
+
+    /// The `/login` masked single-line prompt, while open.
+    fn handle_login_secret(&mut self, data: &str, key: Option<&str>) -> Option<Action> {
+        let mut prompt = self.world.secret.take()?;
+        match key {
+            Some("escape") => self.world.notice = Some("login cancelled".to_string()),
+            Some("enter") => {
+                let typed = std::mem::take(&mut prompt.input);
+                if typed.is_empty() {
+                    self.world.notice = Some("nothing was entered".to_string());
+                } else if let Some(complete) = self.world.options.complete_login.clone() {
+                    let next = complete(&prompt.provider, &typed);
+                    self.apply_login_next(next);
+                }
+            }
+            Some("backspace") => {
+                prompt.input.pop();
+                self.world.secret = Some(prompt);
+            }
+            _ => match printable(data) {
+                Some(text) => {
+                    prompt.input.push_str(&text);
                     self.world.secret = Some(prompt);
                 }
-                _ => match printable(data) {
-                    Some(text) => {
-                        prompt.input.push_str(&text);
-                        self.world.secret = Some(prompt);
-                    }
-                    None => self.world.secret = Some(prompt),
-                },
+                None => self.world.secret = Some(prompt),
+            },
+        }
+        Some(Action::Continue)
+    }
+
+    /// The ad hoc `net` grant confirm, while open.
+    fn handle_login_grant(&mut self, key: Option<&str>) -> Option<Action> {
+        let prompt = self.world.grant.take()?;
+        match key {
+            Some("y" | "Y" | "enter") => {
+                let message = self.world.options.confirm_login_grant.as_ref().map_or_else(
+                    || "nothing was changed".to_string(),
+                    |confirm| confirm(&prompt.provider, &prompt.host),
+                );
+                self.world.notice = Some(crate::state::sanitize_block(&message));
             }
+            Some("n" | "N" | "escape") => {
+                self.world.notice = Some(format!("kept {} without the ad hoc grant", prompt.host));
+            }
+            _ => self.world.grant = Some(prompt),
+        }
+        Some(Action::Continue)
+    }
+
+    /// The permission modal, while open.
+    fn handle_permission(&mut self, key: Option<&str>) -> Option<Action> {
+        use lca_permissions::Decision;
+        let crate::state::PermissionModal {
+            action,
+            respond,
+            deadline,
+        } = self.world.permission.take()?;
+        let _ = deadline;
+        let answer = |decision: Decision| {
+            if let Some(respond) = respond {
+                let _ = respond.send(decision);
+            }
+        };
+        match key {
+            Some("o") => answer(Decision::Once),
+            Some("a") => answer(Decision::Always),
+            Some("d" | "escape" | "enter") => answer(Decision::Denied),
+            _ => {
+                // Any other key cancels the countdown but keeps the modal.
+                self.world.permission = Some(crate::state::PermissionModal {
+                    action,
+                    respond: None,
+                    deadline: None,
+                });
+            }
+        }
+        Some(Action::Continue)
+    }
+
+    /// An extension modal, while open.
+    fn handle_extension_modal(&mut self, data: &str, key: Option<&str>) -> Option<Action> {
+        if !self.world.modal_open {
+            return None;
+        }
+        if key == Some("escape") {
+            self.world.modal_open = false;
             return Some(Action::Continue);
         }
-
-        // The ad hoc-grant confirm (`/login`).
-        if let Some(prompt) = self.world.grant.take() {
-            match key.as_deref() {
-                Some("y") | Some("Y") | Some("enter") => {
-                    let message = self
-                        .world
-                        .options
-                        .confirm_login_grant
-                        .as_ref()
-                        .map(|confirm| confirm(&prompt.provider, &prompt.host))
-                        .unwrap_or_else(|| "nothing was changed".to_string());
-                    self.world.notice = Some(crate::state::sanitize_block(&message));
-                }
-                Some("n") | Some("N") | Some("escape") => {
-                    self.world.notice =
-                        Some(format!("kept {} without the ad hoc grant", prompt.host));
-                }
-                _ => self.world.grant = Some(prompt),
+        let input = if key == Some("enter") {
+            lca_protocol::UiInput::Submit {
+                text: self.editor.text(),
             }
-            return Some(Action::Continue);
+        } else {
+            crate::state::key_input(key.unwrap_or(data))
+        };
+        if let Some(interactor) = self.world.options.ui_events.clone()
+            && let Some((_, effect)) = interactor("modal", &input)
+        {
+            return Some(self.apply_effect(effect));
         }
+        Some(Action::Continue)
+    }
 
-        // The permission modal.
-        if let Some(modal) = self.world.permission.take() {
-            use lca_permissions::Decision;
-            let crate::state::PermissionModal {
-                action,
-                respond,
-                deadline,
-            } = modal;
-            let _ = deadline;
-            let answer = |decision: Decision| {
-                if let Some(respond) = respond {
-                    let _ = respond.send(decision);
-                }
-            };
-            match key.as_deref() {
-                Some("o") => answer(Decision::Once),
-                Some("a") => answer(Decision::Always),
-                Some("d") | Some("escape") | Some("enter") => answer(Decision::Denied),
-                _ => {
-                    // Any other key cancels the countdown but keeps the modal.
-                    self.world.permission = Some(crate::state::PermissionModal {
-                        action,
-                        respond: None,
-                        deadline: None,
-                    });
-                }
-            }
-            return Some(Action::Continue);
+    /// The extension side panel, while open. Returns `None` when the key
+    /// belongs to the panel toggle itself.
+    fn handle_panel(&mut self, data: &str, key: Option<&str>) -> Option<Action> {
+        if !self.world.panel_open {
+            return None;
         }
-
-        // The extension modal.
-        if self.world.modal_open {
-            if key.as_deref() == Some("escape") {
-                self.world.modal_open = false;
-                return Some(Action::Continue);
-            }
-            let input = if key.as_deref() == Some("enter") {
-                lca_protocol::UiInput::Submit {
-                    text: self.editor.text(),
-                }
-            } else {
-                crate::state::key_input(key.as_deref().unwrap_or(data))
-            };
-            if let Some(interactor) = self.world.options.ui_events.clone()
-                && let Some((_, effect)) = interactor("modal", &input)
-            {
+        if key == Some("ctrl+p") {
+            return None;
+        }
+        let input = crate::state::key_input(key.unwrap_or(data));
+        if let Some(interactor) = self.world.options.ui_events.clone() {
+            if let Some((_, effect)) = interactor("panel", &input) {
                 return Some(self.apply_effect(effect));
             }
-            return Some(Action::Continue);
+            self.world.panel_open = false;
         }
-
-        // The side panel.
-        if self.world.panel_open {
-            if key.as_deref() == Some("ctrl+p") {
-                return None;
-            }
-            let input = crate::state::key_input(key.as_deref().unwrap_or(data));
-            if let Some(interactor) = self.world.options.ui_events.clone() {
-                if let Some((_, effect)) = interactor("panel", &input) {
-                    return Some(self.apply_effect(effect));
-                }
-                self.world.panel_open = false;
-            }
-        }
-
         None
     }
 
@@ -948,7 +959,7 @@ impl Chat {
         {
             match (self.world.options.invoke_command)(&name, &argument) {
                 CommandEffect::ShowWidget(text) => {
-                    self.world.notice = Some(crate::state::sanitize_block(&text))
+                    self.world.notice = Some(crate::state::sanitize_block(&text));
                 }
                 CommandEffect::AttachImage {
                     media_type,
@@ -960,7 +971,7 @@ impl Chat {
                     self.world.notice = Some(crate::state::sanitize_block(&note));
                 }
                 CommandEffect::InsertText(text) => {
-                    self.editor.insert_str(&crate::state::sanitize_block(&text))
+                    self.editor.insert_str(&crate::state::sanitize_block(&text));
                 }
                 CommandEffect::SubmitPrompt(text) => {
                     self.transcript.push_user(text.clone());

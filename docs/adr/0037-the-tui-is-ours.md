@@ -37,9 +37,12 @@ plain line strings is what makes the engine unit-testable without a
 terminal.
 
 **The renderer owns text selection.** Drag, word, and line granularity,
-edge auto-scroll, and copy through OSC 52 with verified success. This is
+and copy through OSC 52 (written unverified - the engine has no native
+clipboard to confirm it). This is
 deliberate: selection goes through the same masking the transcript does,
-and the terminal's own selection is not the product's contract.
+and the terminal's own selection is not the product's contract. Edge
+auto-scroll while dragging is not implemented (the wheel and the scroll
+offset still work); it is the next selection refinement.
 
 **One key vocabulary.** Input is parsed from raw bytes by the engine —
 Kitty keyboard protocol negotiation, xterm `modifyOtherKeys` fallback,

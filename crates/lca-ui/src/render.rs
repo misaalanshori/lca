@@ -15,7 +15,9 @@ use lca_tui::engine::text::{slice_by_column, visible_width, wrap_text_with_ansi}
 /// margin, clamping) so the compositor and the focus machine agree on
 /// where an overlay lives.
 pub fn overlay_box(base: &mut [String], width: u16, height: u16, title: &str, body: &[String]) {
-    let content_height = (body.len() as u16) + 2;
+    let content_height = u16::try_from(body.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
     let options = lca_tui::engine::core::OverlayOptions {
         width: Some(lca_tui::engine::core::SizeValue::Percent(80)),
         min_width: Some(24),

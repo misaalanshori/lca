@@ -127,6 +127,30 @@ Cancellation can arrive at any point. The core aborts the in-flight provider cal
 
 The loop between tool result and the next completion is where a turn spends most of its wall clock time in practice, and it is bounded by a configured maximum iteration count to stop a model from looping on a failing tool (FR-CORE-9).
 
+## Steering while a turn runs
+
+The input stays editable during a turn. A message submitted then is queued, never injected mid-stream (ADR-0038):
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant TUI as lca-ui (Chat)
+    participant Core as lca-core
+    participant Prov as Extension (provider)
+
+    User->>TUI: types a prompt, presses Enter (turn running)
+    TUI->>TUI: push to the pending band
+    TUI->>Core: push to the steer queue (steer mode)
+    Note over Core: ... current tool/model step finishes ...
+    Core->>Core: drain the queue at the model-call boundary
+    Core->>Core: append user record with queue:"steer"
+    Core-->>TUI: UserInjected event
+    TUI->>TUI: move it from the band to the transcript
+    Core->>Prov: next completion carries the steered message
+```
+
+`Steer` joins the next model call; `FollowUp` (Alt+Enter) waits and auto-runs at turn end, in submission order. An aborted turn returns the whole queue to the editor. The marker travels on the session record's `queue` field and in the message's `extras["queue"]`, so a `context-transform` extension can tell a steer from a follow-up. A steer never rewrites an in-flight stream; the ceiling is that it lands at the next boundary, not mid-step.
+
 ## Extension instantiation and capability resolution
 
 This runs at startup for every enabled extension, before the first user input.

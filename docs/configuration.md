@@ -27,6 +27,7 @@ Environment variables use the `LCA_` prefix with the key uppercased and dots rep
 | `extensions.log_limit_bytes` | integer | `4096` | Extension log messages above this are truncated (FR-EXT-10). |
 | `update.check` | boolean | `true` interactive, `false` headless | Daily background version check (FR-CFG-6). |
 | `ui.color` | `auto` or `never` | `auto` | `never` forces plain text on terminals without color support (FR-UI-5). |
+| `ui.fullscreen` | boolean | `true` | The `/fullscreen` toggle's persisted choice (FR-UI-21). Written to `<config dir>/ui.json` when toggled, not to the config file, so the runtime toggle never rewrites user config. |
 | `permissions.proposals` | table | empty | Project file only. Proposals with no force; see ADR-0006. |
 
 ## Environment

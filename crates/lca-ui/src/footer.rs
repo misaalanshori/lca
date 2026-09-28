@@ -6,6 +6,7 @@
 //! with the git branch. Below it, the session stats (tokens, cache, cost)
 //! and the active model with its context use.
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use lca_protocol::Usage;
@@ -109,7 +110,7 @@ impl Footer {
             u.input, u.output, u.cache_read, u.cache_write
         );
         if u.cost > 0.0 {
-            stats.push_str(&format!(" • ${:.4}", u.cost));
+            let _ = write!(stats, " • ${:.4}", u.cost);
         }
         if !self.model.is_empty() {
             stats.push_str(" • ");
@@ -118,7 +119,7 @@ impl Footer {
         if self.context_window > 0 {
             let pct =
                 (self.context_used as f64 / self.context_window as f64 * 100.0).round() as u64;
-            stats.push_str(&format!(" • ctx {pct}%"));
+            let _ = write!(stats, " • ctx {pct}%");
         }
         lines.push(truncate_to_width(
             &(theme.footer)(&stats),

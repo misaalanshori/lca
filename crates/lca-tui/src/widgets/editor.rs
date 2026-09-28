@@ -566,13 +566,45 @@ impl Editor {
     }
 
     fn insert_paste(&mut self, content: &str) {
-        let lines = content.lines().count();
-        if lines > 10 || content.len() > 1000 {
-            self.pastes.push(content.to_string());
-            let marker = format!("[paste #{} +{} lines]", self.pastes.len(), lines);
+        // tmux with `extended-keys=csi-u` re-encodes control bytes inside a
+        // bracketed paste as CSI-u Ctrl+letter; decode them back (pi's
+        // `handlePaste`), then normalize line endings and tabs.
+        let decoded = decode_csi_u_ctrl(content);
+        let normalized = decoded
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\t', "    ");
+        // Drop non-printable characters except newlines.
+        let mut filtered: String = normalized
+            .chars()
+            .filter(|c| *c == '\n' || (*c as u32) >= 32)
+            .collect();
+        // A pasted path after a word character gets a leading space.
+        if filtered.starts_with(['/', '~', '.']) {
+            let before = self.text_before_cursor();
+            if before
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            {
+                filtered.insert(0, ' ');
+            }
+        }
+        let lines = filtered.split('\n').count();
+        if lines > 10 || filtered.chars().count() > 1000 {
+            let marker = if lines > 10 {
+                format!("[paste #{} +{} lines]", self.pastes.len() + 1, lines)
+            } else {
+                format!(
+                    "[paste #{} {} chars]",
+                    self.pastes.len() + 1,
+                    filtered.chars().count()
+                )
+            };
+            self.pastes.push(filtered);
             self.insert_str(&marker);
         } else {
-            self.insert_str(content);
+            self.insert_str(&filtered);
         }
     }
 
@@ -654,6 +686,50 @@ impl Editor {
             .max()
             .unwrap_or(0)
     }
+}
+
+/// Decode tmux's CSI-u Ctrl+letter encoding of control bytes inside a
+/// bracketed paste (`ESC [ <cp> ; 5 u` -> the literal control byte).
+fn decode_csi_u_ctrl(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'[') {
+            let mut j = i + 2;
+            let start = j;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > start
+                && bytes.get(j) == Some(&b';')
+                && bytes.get(j + 1) == Some(&b'5')
+                && bytes.get(j + 2) == Some(&b'u')
+            {
+                let cp: u32 = text[start..j].parse().unwrap_or(0);
+                let decoded = if (97..=122).contains(&cp) {
+                    char::from_u32(cp - 96)
+                } else if (65..=90).contains(&cp) {
+                    char::from_u32(cp - 64)
+                } else {
+                    None
+                };
+                if let Some(c) = decoded {
+                    out.push(c);
+                    i = j + 3;
+                    continue;
+                }
+            }
+        }
+        match text[i..].chars().next() {
+            Some(c) => {
+                out.push(c);
+                i += c.len_utf8();
+            }
+            None => break,
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -746,6 +822,23 @@ mod tests {
             .join("\n");
         e.handle_key(&format!("\x1b[200~{big}\x1b[201~"));
         assert_eq!(e.text(), "[paste #1 +12 lines]");
+    }
+
+    #[test]
+    fn a_long_single_line_paste_becomes_a_chars_marker() {
+        let mut e = Editor::new();
+        let big = "x".repeat(1200);
+        e.handle_key(&format!("\x1b[200~{big}\x1b[201~"));
+        assert_eq!(e.text(), "[paste #1 1200 chars]");
+    }
+
+    #[test]
+    fn paste_decodes_tmux_csi_u_ctrl_and_normalizes() {
+        let mut e = Editor::new();
+        // tmux CSI-u Ctrl+J inside the paste becomes a newline; a tab
+        // expands to four spaces.
+        e.handle_key("\x1b[200~a\x1b[106;5ub\tc\x1b[201~");
+        assert_eq!(e.text(), "a\nb    c");
     }
 
     #[test]

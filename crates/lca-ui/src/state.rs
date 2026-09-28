@@ -6,6 +6,7 @@
 //! engine's widgets (ADR-0037: one editor, one key vocabulary). This module
 //! is single-purpose: it holds no buffer and no rendering.
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
@@ -152,7 +153,9 @@ pub fn sanitize_text(text: &str) -> String {
     for character in text.chars() {
         match character {
             '\n' | '\t' | '\r' => out.push(' '),
-            c if (c as u32) < 0x20 || c == '\x7f' => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if (c as u32) < 0x20 || c == '\x7f' => {
+                let _ = write!(out, "\\x{:02x}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -169,7 +172,9 @@ pub fn sanitize_block(text: &str) -> String {
         match character {
             '\n' => out.push('\n'),
             '\t' | '\r' => out.push(' '),
-            c if (c as u32) < 0x20 || c == '\x7f' => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if (c as u32) < 0x20 || c == '\x7f' => {
+                let _ = write!(out, "\\x{:02x}", c as u32);
+            }
             c => out.push(c),
         }
     }

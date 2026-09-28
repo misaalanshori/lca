@@ -105,7 +105,7 @@ pub(super) fn parse_kitty_sequence(data: &str) -> Option<ParsedKitty> {
 
     // Arrow: ESC [ 1 ; mod ( : event )? [ABCD]
     if matches!(bytes.last(), Some(b'A' | b'B' | b'C' | b'D')) && bytes.starts_with(b"\x1b[1;") {
-        let final_byte = *bytes.last().unwrap();
+        let final_byte = *bytes.last()?;
         let body = &bytes[2..bytes.len() - 1];
         // body == "1;mod" or "1;mod:event"
         let semi = body.iter().position(|&b| b == b';')?;
@@ -176,7 +176,7 @@ pub(super) fn parse_kitty_sequence(data: &str) -> Option<ParsedKitty> {
 
     // Home/End: ESC [ 1 ; mod ( : event )? [HF]
     if matches!(bytes.last(), Some(b'H' | b'F')) && bytes.starts_with(b"\x1b[1;") {
-        let final_byte = *bytes.last().unwrap();
+        let final_byte = *bytes.last()?;
         let body = &bytes[2..bytes.len() - 1];
         let semi = body.iter().position(|&b| b == b';')?;
         let (mod_value, mut i) = digits(body, semi + 1)?;

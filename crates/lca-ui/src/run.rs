@@ -112,6 +112,11 @@ fn switch_screen(screen: &mut Screen, fullscreen: bool, term: &mut dyn Terminal)
 }
 
 /// Run the interface until the user exits.
+///
+/// # Errors
+/// Returns an error when the terminal cannot be driven (the terminal
+/// layer surfaces the I/O failure); the loop itself handles user exit by
+/// returning `Ok(0)`.
 pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     let keybindings = Arc::new(KeybindingsManager::new());
     let mut chat = Chat::new(options, keybindings);
@@ -150,17 +155,13 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
 
     let result = 'main: loop {
         // A finished turn.
-        if active_turn.as_ref().is_some_and(|h| h.is_finished()) {
-            let outcome = active_turn
-                .take()
-                .expect("handle")
-                .join()
-                .unwrap_or_else(|_| TurnOutcome {
-                    status: TurnStatus::Error,
-                    stop_reason: StopReason::Error,
-                    usage: Usage::default(),
-                    error: Some("the turn worker panicked".to_string()),
-                });
+        if let Some(handle) = active_turn.take_if(|h| h.is_finished()) {
+            let outcome = handle.join().unwrap_or_else(|_| TurnOutcome {
+                status: TurnStatus::Error,
+                stop_reason: StopReason::Error,
+                usage: Usage::default(),
+                error: Some("the turn worker panicked".to_string()),
+            });
             if let Some(rx) = &turn_rx {
                 while let Ok(event) = rx.try_recv() {
                     chat.on_turn_event(event);
@@ -340,4 +341,24 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     terminal.drain_input(1000, 50);
     terminal.stop();
     result.map(|()| 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lca_tui::engine::terminal::FakeTerminal;
+
+    // Verifies: FR-UI-21 - the runtime toggle swaps the renderer both ways.
+    #[test]
+    fn switch_screen_toggles_the_renderer() {
+        let mut term = FakeTerminal::new(80, 24);
+        let mut screen = Screen::Main(MainScreenRenderer::new());
+        assert!(!screen.is_fullscreen());
+        switch_screen(&mut screen, true, &mut term);
+        assert!(screen.is_fullscreen());
+        // Entering the alt screen wrote the enable sequence.
+        assert!(term.output().contains("\x1b[?1049h"));
+        switch_screen(&mut screen, false, &mut term);
+        assert!(!screen.is_fullscreen());
+    }
 }

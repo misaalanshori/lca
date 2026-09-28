@@ -4,6 +4,22 @@ Notable changes to LCA. Versions follow semantic versioning for the product;
 the `lca:ext` ABI version is independent and is printed by `lca --version`.
 Dates are UTC.
 
+## [Unreleased]
+
+### Added
+
+- **Steering.** A prompt submitted while a turn runs queues instead of being dropped: `Steer` joins the turn's input at the next model-call boundary, `FollowUp` (Alt+Enter) auto-runs at turn end, the pending band and the footer show the queue, and an aborted turn returns it to the editor (ADR-0038, FR-CORE-11/12).
+- **The interaction pack.** `!`/`!!` shell mode, an external prompt editor (Ctrl+X Ctrl+E), a runtime `/fullscreen` toggle, `/hotkeys`, Alt+Up/Down prompt jump, and Ctrl+R transcript search (FR-UI-10/11/12/14/15/21).
+- **The visibility pack.** A `/theme` picker with live preview and restore-on-cancel plus `COLORFGBG` dark/light detection, a visible keyboard-interruptible permission auto-approve countdown, and a `/session` stats view (FR-UI-17/18/19).
+- **`/tree` and `/fork`.** Browse session branches and fork a new one at any user message (FR-UI-16).
+- **Streaming-tolerant markdown.** Tables wait for an intact separator row, partial pipes render as text, unpaired inline markers stay literal, and the code-block border caps at the content width (FR-UI-7/8).
+- **Image placeholders.** A `ContentBlock::Image` renders its media type, dimensions, size, and alt text rather than nothing (FR-UI-13).
+
+### Changed
+
+- **The interface runs on the ported pi widget stack.** `lca-ui`'s `Chat` owns the engine's `Editor`, transcript, footer, and theme; the completion menu is live (commands, arguments, file paths); modals composite over the viewport. `crossterm` and the interim key-event bridge are gone from `lca-ui`.
+- **`lca-tui` files are split under the 1,200-line ceiling** (`engine/text/{ansi,osc8}.rs`, `engine/keys/{legacy,kitty}.rs`); the keybindings global singleton is deleted and byte-slice indexing can no longer panic.
+
 ## [0.4.0] - 2026-09-27
 
 The backlog release: the last four undriven journeys, a build gate for every
