@@ -471,8 +471,12 @@ async fn platform_exec(
     if let (Some(job), Some(pid)) = (job.as_ref(), child.id()) {
         job.assign(pid);
     }
-    let mut stdout = child.stdout.take().expect("piped");
-    let mut stderr = child.stderr.take().expect("piped");
+    let Some(mut stdout) = child.stdout.take() else {
+        return Err(std::io::Error::other("cmd.exe's stdout was not piped"));
+    };
+    let Some(mut stderr) = child.stderr.take() else {
+        return Err(std::io::Error::other("cmd.exe's stderr was not piped"));
+    };
 
     let mut collected: Vec<u8> = Vec::new();
     let mut outcome: Option<ExecOutcome> = None;
