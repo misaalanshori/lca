@@ -95,3 +95,11 @@ mod steer_finalizes_assistant;
 // R11: cancelling the permission countdown dropped the responder.
 #[path = "29-permission-countdown-keeps-responder.rs"]
 mod permission_countdown_keeps_responder;
+// Cycle-4 finding S8: the grants overlay was composited past the viewport
+// because the resize guard did not list the new picker.
+#[path = "30-grants-view-renders-while-open.rs"]
+mod grants_view_renders_while_open;
+// Cycle-4 audit: an empty-id model from an unparseable probe left the
+// session model-less instead of falling back.
+#[path = "31-empty-model-id-falls-back.rs"]
+mod empty_model_id_falls_back;
