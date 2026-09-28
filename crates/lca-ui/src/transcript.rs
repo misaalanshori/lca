@@ -81,6 +81,10 @@ pub enum Entry {
     },
 }
 
+/// One entry's cached render: the width it was rendered at and its styled
+/// lines. `None` means the entry must be re-rendered.
+type CachedRender = Option<(u16, Vec<String>)>;
+
 /// The transcript: an ordered list of entries.
 #[derive(Default)]
 pub struct Transcript {
@@ -91,6 +95,10 @@ pub struct Transcript {
     /// Whether thinking runs show their text (pi's `hideThinkingBlock`,
     /// Ctrl+T). Collapsed by default: one dim line (R8).
     thinking_expanded: bool,
+    /// Per-entry render cache (R15): `None` means the entry must be
+    /// rendered; a streaming append invalidates only the last entry, so a
+    /// long transcript is not re-rendered from scratch on every delta.
+    cache: std::cell::RefCell<Vec<CachedRender>>,
 }
 
 impl Transcript {
@@ -107,11 +115,25 @@ impl Transcript {
     /// Toggle tool-card expansion (Ctrl+O; pi's `app.tools.expand`).
     pub fn toggle_tools_expanded(&mut self) {
         self.tools_expanded = !self.tools_expanded;
+        self.cache.borrow_mut().clear();
     }
 
     /// Toggle thinking-run expansion (Ctrl+T; pi's `hideThinkingBlock`).
     pub fn toggle_thinking_expanded(&mut self) {
         self.thinking_expanded = !self.thinking_expanded;
+        self.cache.borrow_mut().clear();
+    }
+
+    /// Drop every cached render (a mutation that is not a streaming append).
+    fn invalidate_cache(&mut self) {
+        self.cache.borrow_mut().clear();
+    }
+
+    /// Drop the last entry's cached render (the streaming hot path).
+    fn invalidate_last(&mut self) {
+        if let Some(last) = self.cache.borrow_mut().last_mut() {
+            *last = None;
+        }
     }
 
     /// The entries.
@@ -139,6 +161,7 @@ impl Transcript {
     /// Append answer text to the current assistant message, starting one if
     /// needed.
     pub fn append_text(&mut self, delta: &str) {
+        self.invalidate_last();
         if let Some(Entry::Assistant { text, .. }) = self.entries.last_mut() {
             text.push_str(delta);
         } else {
@@ -152,6 +175,7 @@ impl Transcript {
 
     /// Append reasoning text to the current assistant message.
     pub fn append_reasoning(&mut self, delta: &str) {
+        self.invalidate_last();
         if let Some(Entry::Assistant { reasoning, .. }) = self.entries.last_mut() {
             reasoning.push_str(delta);
         } else {
@@ -165,6 +189,7 @@ impl Transcript {
 
     /// Mark the current assistant message complete.
     pub fn finish_assistant(&mut self) {
+        self.invalidate_cache();
         // Finish every streaming assistant, not just the last: a steered
         // user message splits a turn into more than one assistant entry.
         for entry in &mut self.entries {
@@ -186,6 +211,7 @@ impl Transcript {
 
     /// Finish the most recent running tool call.
     pub fn finish_tool(&mut self, status: ToolStatus, result: Option<String>) {
+        self.invalidate_cache();
         for entry in self.entries.iter_mut().rev() {
             if let Entry::Tool {
                 status: s,
@@ -204,6 +230,7 @@ impl Transcript {
     /// Finish the most recent running tool call without touching its result
     /// (R4: a streamed `!`/`!!` card keeps what it already appended).
     pub fn finish_tool_status(&mut self, status: ToolStatus) {
+        self.invalidate_cache();
         for entry in self.entries.iter_mut().rev() {
             if let Entry::Tool { status: s, .. } = entry
                 && *s == ToolStatus::Running
@@ -232,6 +259,7 @@ impl Transcript {
     /// Replace the whole transcript (R3's session switch): the new session's
     /// display lines, each shown verbatim.
     pub fn replace(&mut self, lines: Vec<String>) {
+        self.invalidate_cache();
         self.entries.clear();
         for line in lines {
             self.entries.push(Entry::Raw(line));
@@ -248,6 +276,7 @@ impl Transcript {
 
     /// Append streamed tool output to the most recent running tool card.
     pub fn append_tool_output(&mut self, chunk: &str) {
+        self.invalidate_last();
         for entry in self.entries.iter_mut().rev() {
             if let Entry::Tool { result, .. } = entry {
                 result.get_or_insert_with(String::new).push_str(chunk);
@@ -264,19 +293,32 @@ impl Transcript {
 
     /// Render every entry to styled lines at `width`.
     pub fn render(&self, width: u16, theme: &Theme) -> Vec<String> {
+        let mut cache = self.cache.borrow_mut();
+        if cache.len() != self.entries.len() {
+            cache.resize(self.entries.len(), None);
+        }
         let mut out = Vec::new();
         for (i, entry) in self.entries.iter().enumerate() {
             if i > 0 {
-                out.push(String::new()); // separate messages (#6)
+                out.push(String::new());
             }
+            if let Some((cached_width, lines)) = &cache[i]
+                && *cached_width == width
+            {
+                out.extend(lines.iter().cloned());
+                continue;
+            }
+            let mut lines = Vec::new();
             render_entry(
                 entry,
                 width,
                 theme,
                 self.tools_expanded,
                 self.thinking_expanded,
-                &mut out,
+                &mut lines,
             );
+            out.extend(lines.iter().cloned());
+            cache[i] = Some((width, lines));
         }
         out
     }
@@ -558,6 +600,24 @@ mod tests {
         let expanded = strip(&t.render(40, &plain()));
         assert!(expanded[0].starts_with("∴ thinking hard"));
         assert!(expanded.iter().any(|l| l.contains("the answer")));
+    }
+
+    // Verifies: R15 - the per-entry render cache never serves stale lines.
+    #[test]
+    fn the_render_cache_reflects_appends_and_finishes() {
+        let mut t = Transcript::new();
+        t.begin_assistant();
+        t.append_text("first");
+        let a = strip(&t.render(40, &plain()));
+        assert!(a.iter().any(|l| l.contains("first")));
+        t.append_text(" second");
+        let b = strip(&t.render(40, &plain()));
+        assert!(b.iter().any(|l| l.contains("first second")), "{b:?}");
+        t.start_tool("read", r#"{"path":"a"}"#);
+        t.finish_tool(ToolStatus::Ok, Some("ok".into()));
+        t.toggle_tools_expanded();
+        let c = strip(&t.render(40, &plain()));
+        assert!(c.iter().any(|l| l.contains("ok")), "{c:?}");
     }
 
     #[test]
