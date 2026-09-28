@@ -147,3 +147,22 @@ pub(super) fn matches_legacy_modifier(data: &str, key: &str, modifier: u32) -> b
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_sequence_ids_decode() {
+        assert_eq!(legacy_sequence_key_id("\x1bOA"), Some("up"));
+        assert_eq!(legacy_sequence_key_id("\x1b[2~"), Some("insert"));
+        assert_eq!(legacy_sequence_key_id("\x1bOa"), Some("ctrl+up"));
+        assert_eq!(legacy_sequence_key_id("nope"), None);
+    }
+
+    #[test]
+    fn legacy_matching_is_exact() {
+        assert!(matches_legacy(&["\x1b[A", "\x1bOA"], "\x1bOA"));
+        assert!(!matches_legacy(&["\x1b[A"], "\x1b[B"));
+    }
+}

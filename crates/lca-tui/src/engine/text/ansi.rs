@@ -240,3 +240,15 @@ pub fn get_active_background_ansi(text: &str) -> String {
     update_tracker_from_text(text, &mut tracker);
     tracker.active_background_code()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_active_background_code_is_reported() {
+        let code = get_active_background_ansi("\x1b[41mred");
+        assert!(code.contains("41"), "{code}");
+        assert_eq!(get_active_background_ansi("plain"), "");
+    }
+}

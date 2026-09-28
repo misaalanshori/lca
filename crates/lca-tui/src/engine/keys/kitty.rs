@@ -274,3 +274,15 @@ pub(super) fn matches_modify_other_keys(
     parse_modify_other_keys(data)
         .is_some_and(|(code, modifier)| code == expected_keycode && modifier == expected_modifier)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn digits_parse_a_run_and_stop() {
+        assert_eq!(digits(b"123;45", 0), Some((123, 3)));
+        assert_eq!(digits(b";", 0), None);
+        assert_eq!(digits(b"", 0), None);
+    }
+}

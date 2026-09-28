@@ -481,4 +481,56 @@ mod tests {
         switch_screen(&mut screen, false, &mut term);
         assert!(!screen.is_fullscreen());
     }
+
+    fn chat() -> Chat {
+        Chat::new(
+            UiOptions {
+                model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
+                thinking: Arc::new(std::sync::Mutex::new(None)),
+                initial_lines: Vec::new(),
+                plain: true,
+                invoke_command: Arc::new(|_, _| lca_protocol::CommandEffect::None),
+                slash_commands: Vec::new(),
+                models: Vec::new(),
+                workspace: std::path::PathBuf::from("."),
+                render_regions: None,
+                ui_events: None,
+                update_notice: None,
+                login: None,
+                complete_login: None,
+                pick_login: None,
+                confirm_login_grant: None,
+                hooks: crate::state::UiHooks::default(),
+                fullscreen: true,
+            },
+            Arc::new(KeybindingsManager::new()),
+        )
+    }
+
+    // Verifies: R19 - the auto-approve countdown (FR-UI-18) fires exactly at
+    // its deadline, with the same decision pressing Allow would send.
+    #[test]
+    fn the_auto_approve_countdown_fires_at_the_deadline() {
+        let mut chat = chat();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        chat.world.permission = Some(PermissionModal {
+            action: "rm -rf /tmp/x".into(),
+            respond: Some(tx),
+            deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(30)),
+        });
+        let mut turns = TurnState::default();
+        // Not due: it keeps the modal and asks for a repaint.
+        assert!(turns.tick_permission(&mut chat));
+        assert!(chat.world.permission.is_some());
+        assert!(rx.try_recv().is_err(), "nothing fired yet");
+        // Due: it fires `Once` and closes the modal.
+        if let Some(modal) = chat.world.permission.as_mut() {
+            modal.deadline = Some(std::time::Instant::now());
+        }
+        assert!(turns.tick_permission(&mut chat));
+        assert!(chat.world.permission.is_none());
+        assert_eq!(rx.try_recv().ok(), Some(lca_permissions::Decision::Once));
+        // Nothing open: nothing to do.
+        assert!(!turns.tick_permission(&mut chat));
+    }
 }

@@ -91,3 +91,19 @@ pub(super) fn get_active_osc8_close(prefix: &str) -> String {
         .map(|l| format_osc8_close(l.terminator))
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_osc8_open_parses_and_a_close_is_none() {
+        let open = parse_osc8_hyperlink("\x1b]8;;https://pi.dev\x07")
+            .expect("an open")
+            .expect("a link");
+        assert_eq!(open.url, "https://pi.dev");
+        assert_eq!(open.terminator, Osc8Terminator::Bel);
+        assert_eq!(parse_osc8_hyperlink("\x1b]8;;\x07"), Some(None));
+        assert!(parse_osc8_hyperlink("nope").is_none());
+    }
+}

@@ -282,6 +282,45 @@ fn modal_focus_returns_to_the_editor_and_keeps_the_responder() {
     assert_eq!(chat.editor.text(), "hi");
 }
 
+// Verifies: R20 - `!!` tells the shell runner the command is excluded from
+// the model's context.
+#[test]
+fn a_bang_bang_command_is_marked_excluded() {
+    let mut options = options();
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    let cell = seen.clone();
+    options.hooks.run_shell = Some(Arc::new(
+        move |cmd: &str,
+              excluded: bool,
+              sink: std::sync::mpsc::SyncSender<crate::state::ShellEvent>| {
+            *cell.lock().unwrap_or_else(|p| p.into_inner()) = Some((cmd.to_string(), excluded));
+            let _ = sink.send(crate::state::ShellEvent::Done(Some(0)));
+            Arc::new(|| {}) as crate::state::ShellHandle
+        },
+    ));
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    for c in "!!ls".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert_eq!(
+        *seen.lock().unwrap_or_else(|p| p.into_inner()),
+        Some(("ls".to_string(), true))
+    );
+}
+
+// Verifies: R20 - an aborted turn returns its queued message to the editor.
+#[test]
+fn an_aborted_turn_returns_the_queue_to_the_editor() {
+    let mut chat = chat();
+    chat.begin_turn(lca_protocol::steer_queue());
+    chat.queue_submit("follow me".into(), lca_protocol::SubmitMode::FollowUp);
+    assert_eq!(chat.pending.len(), 1);
+    chat.restore_pending();
+    assert!(chat.pending.is_empty());
+    assert_eq!(chat.editor.text(), "follow me");
+}
+
 // Verifies: FR-UI-15 - Ctrl+X Ctrl+E asks the loop for the external editor.
 #[test]
 fn ctrl_x_ctrl_e_opens_the_external_editor() {
