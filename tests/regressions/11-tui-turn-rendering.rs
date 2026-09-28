@@ -21,6 +21,7 @@ fn chat() -> Chat {
     Chat::new(
         UiOptions {
             model_label: Arc::new(Mutex::new("fake/faux-1".to_string())),
+            context_window: Arc::new(std::sync::Mutex::new(0)),
             thinking: Arc::new(Mutex::new(None)),
             initial_lines: Vec::new(),
             plain: true,

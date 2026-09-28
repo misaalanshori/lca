@@ -115,6 +115,11 @@ impl Chat {
         }
         let footer = Footer {
             cwd: world.options.workspace.to_string_lossy().to_string(),
+            context_window: *world
+                .options
+                .context_window
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
             ..Default::default()
         };
         let screen_mode = world.options.fullscreen;
@@ -180,6 +185,8 @@ impl Chat {
                 self.transcript.append_tool_output(&chunk);
             }
             TurnEvent::Usage(usage) => {
+                // FR-UI-20: the live prompt size is this call's input side.
+                self.footer.context_used = usage.input + usage.cache_read + usage.cache_write;
                 self.usage.input = self.usage.input.saturating_add(usage.input);
                 self.usage.output = self.usage.output.saturating_add(usage.output);
                 self.usage.cache_read = self.usage.cache_read.saturating_add(usage.cache_read);
@@ -337,6 +344,14 @@ impl Chat {
     fn footer_lines(&self, width: u16) -> Vec<String> {
         let mut footer = self.footer.clone();
         footer.usage = self.usage.clone();
+        // FR-UI-20: the window follows the live model choice (a cell), and
+        // the used side is the last call's prompt size.
+        footer.context_window = *self
+            .world
+            .options
+            .context_window
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let model = self.model_label();
         footer.model = if model.trim().is_empty() {
             "no model".to_string()

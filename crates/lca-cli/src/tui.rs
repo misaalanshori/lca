@@ -488,6 +488,10 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     } else {
         format!("{provider_name}/{model_id}")
     }));
+    // The live context window, so the footer's meter follows `/model`
+    // (FR-UI-20). Updated alongside `model_cell`.
+    let context_window_cell: Arc<Mutex<u64>> =
+        Arc::new(Mutex::new(u64::from(agent_config.model_context_window)));
     // The session's thinking level (R1): `config.thinking()` seeds it,
     // `/thinking` rewrites it, the runner reads it per turn, and the footer
     // reads it every frame.
@@ -541,6 +545,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         let provider = provider.clone();
         let label_cell = label_cell.clone();
         let model_cell = model_cell.clone();
+        let context_window_cell = context_window_cell.clone();
         Arc::new(move |step: crate::login::Step| -> lca_ui::LoginNext {
             use crate::login::Step;
             let (target, choice, values) = match step {
@@ -622,6 +627,9 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     id: model.id.clone(),
                     window: model.context_window,
                 };
+                *context_window_cell
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = u64::from(model.context_window);
                 *label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
                     format!("{target}/{}", model.id);
             }
@@ -740,6 +748,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         .collect();
     let options = UiOptions {
         model_label: label_cell.clone(),
+        context_window: context_window_cell.clone(),
         thinking: thinking_cell.clone(),
         initial_lines,
         models: model_ids,
@@ -754,6 +763,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             let store = store.clone();
             let session_cell = current_session.clone();
             let settings_config = config.clone();
+            let context_window_cell = context_window_cell.clone();
             let extensions = agent_config.extensions.clone();
             let completion_backend = agent_config.completion_backend.clone();
             let pending = pending_attachments.clone();
@@ -801,14 +811,20 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     // world's listing; the compaction world's strategy).
                     "model" => {
                         let models = provider.list_models();
-                        model_effect_on(
+                        let effect = model_effect_on(
                             &models,
                             &provider_name,
                             argument,
                             Some(&model_cell),
                             Some(&label_cell),
                             provider_backend.as_ref(),
-                        )
+                        );
+                        // Keep the footer's window in step with the choice.
+                        *context_window_cell
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner()) =
+                            model_cell.lock().unwrap_or_else(|p| p.into_inner()).window as u64;
+                        effect
                     }
                     "compact" => match lca_core::compact_now(
                         store.clone(),

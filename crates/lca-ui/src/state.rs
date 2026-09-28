@@ -348,6 +348,9 @@ pub struct UiOptions {
     /// `provider/model` for the status line - a cell, because the
     /// status line shows the session's model and `/model` rewrites it.
     pub model_label: std::sync::Arc<std::sync::Mutex<String>>,
+    /// The active model's context window in tokens (0 = unknown), a cell so
+    /// `/model` updates it and the footer refreshes every frame (FR-UI-20).
+    pub context_window: std::sync::Arc<std::sync::Mutex<u64>>,
     /// The session's thinking level (`thinking`, R1): `None` is the
     /// provider's own default. A cell, because `/thinking` rewrites it and
     /// the footer shows it every frame.
@@ -584,6 +587,7 @@ mod tests {
     fn options() -> UiOptions {
         UiOptions {
             model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
+            context_window: Arc::new(std::sync::Mutex::new(0)),
             thinking: Arc::new(std::sync::Mutex::new(None)),
             initial_lines: Vec::new(),
             plain: true,

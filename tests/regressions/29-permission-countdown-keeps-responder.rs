@@ -18,6 +18,7 @@ fn chat() -> Chat {
     Chat::new(
         UiOptions {
             model_label: Arc::new(Mutex::new("p/m".into())),
+            context_window: Arc::new(std::sync::Mutex::new(0)),
             thinking: Arc::new(Mutex::new(None)),
             initial_lines: Vec::new(),
             plain: true,

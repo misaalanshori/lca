@@ -7,6 +7,7 @@ use std::path::PathBuf;
 fn options() -> UiOptions {
     UiOptions {
         model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
+        context_window: Arc::new(std::sync::Mutex::new(0)),
         thinking: Arc::new(std::sync::Mutex::new(None)),
         initial_lines: Vec::new(),
         plain: true,
@@ -590,6 +591,27 @@ fn model_picker_searches_and_selects() {
         *selected.lock().unwrap_or_else(|p| p.into_inner()),
         "model:beta"
     );
+}
+
+// Verifies: FR-UI-20 - the footer shows the context use from the last call.
+#[test]
+fn the_footer_shows_context_use() {
+    let mut chat = chat();
+    *chat
+        .world
+        .options
+        .context_window
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = 1000;
+    chat.on_turn_event(TurnEvent::Usage(lca_protocol::Usage {
+        input: 100,
+        cache_read: 200,
+        cache_write: 50,
+        output: 10,
+        ..Default::default()
+    }));
+    let text = strip(&chat.render(120)).join("\n");
+    assert!(text.contains("ctx 35%"), "{text}");
 }
 
 // Verifies: FR-UI-12 - Ctrl+R searches the transcript, highlights
