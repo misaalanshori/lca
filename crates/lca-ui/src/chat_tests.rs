@@ -1,4 +1,5 @@
 use super::*;
+use lca_protocol::CommandEffect;
 use lca_protocol::{ToolCall, ToolResult};
 use lca_tui::engine::text::strip_terminal_sequences;
 use std::path::PathBuf;

@@ -11,7 +11,10 @@
 #![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 pub mod chat;
+mod chat_commands;
 mod chat_overlays;
+mod chat_pickers;
+mod chat_shell;
 pub mod footer;
 pub mod render;
 pub mod resume;

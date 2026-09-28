@@ -118,6 +118,102 @@ fn switch_screen(screen: &mut Screen, fullscreen: bool, term: &mut dyn Terminal)
     }
 }
 
+/// What one input event decided about the loop.
+enum InputResult {
+    /// Keep running.
+    Continue,
+    /// Leave the interface.
+    Exit,
+}
+
+/// Handle one raw input event (R16): capability replies, mouse, and keys.
+#[allow(clippy::too_many_arguments)]
+fn handle_input(
+    data: &str,
+    chat: &mut Chat,
+    screen: &mut Screen,
+    terminal: &mut dyn Terminal,
+    input_tx: &std::sync::mpsc::Sender<String>,
+    resize_tx: &std::sync::mpsc::Sender<()>,
+    cancel_flag: &Option<lca_tools::CancelFlag>,
+    aborted: &mut bool,
+) -> InputResult {
+    // Terminal capability replies (R10): the OSC 11 background
+    // and the DSR color-scheme report drive the auto theme.
+    if lca_tui::engine::colors::is_osc11_background_color_response(data) {
+        if let Some(rgb) = lca_tui::engine::colors::parse_osc11_background_color(data) {
+            chat.apply_detected_scheme(rgb.scheme());
+        }
+        return InputResult::Continue;
+    }
+    if let Some(scheme) = lca_tui::engine::colors::parse_terminal_color_scheme_report(data) {
+        chat.apply_detected_scheme(scheme);
+        return InputResult::Continue;
+    }
+    // Mouse (selection, wheel) is the renderer's.
+    if data.starts_with("\x1b[<") {
+        screen.handle_mouse(data);
+        // Copy on release (issue #2): prefer a verified native
+        // clipboard (R6); OSC 52 is the honest fallback, and the
+        // notice says which one ran.
+        if data.ends_with('m') && screen.copy_on_select() {
+            let text = screen.selected_text();
+            if !text.is_empty() {
+                let verified = chat
+                    .world
+                    .options
+                    .hooks
+                    .copy_to_clipboard
+                    .as_ref()
+                    .is_some_and(|write| write(&text));
+                if !verified {
+                    screen.copy_osc52(terminal, &text);
+                }
+                chat.world.notice = Some(if verified {
+                    "copied to the clipboard".to_string()
+                } else {
+                    "copied via OSC 52 (unverified)".to_string()
+                });
+            }
+        }
+        return InputResult::Continue;
+    }
+    match chat.handle_key(data) {
+        Action::Continue => {}
+        Action::Submit => {}
+        Action::CancelTurn => {
+            *aborted = true;
+            if let Some(cancel) = &cancel_flag {
+                cancel.cancel();
+            }
+        }
+        Action::ExternalEditor => {
+            if let Some(editor) = chat.world.options.hooks.external_editor.clone() {
+                let text = chat.editor.text();
+                screen.leave(terminal, true);
+                terminal.stop();
+                let edited = editor(&text);
+                let itx = input_tx.clone();
+                let rtx = resize_tx.clone();
+                terminal.start(
+                    Box::new(move |d| {
+                        let _ = itx.send(d);
+                    }) as InputHandler,
+                    Box::new(move || {
+                        let _ = rtx.send(());
+                    }) as ResizeHandler,
+                );
+                screen.enter(terminal);
+                if let Some(edited) = edited {
+                    chat.editor.set_text(&edited);
+                }
+            }
+        }
+        Action::Exit => return InputResult::Exit,
+    }
+    InputResult::Continue
+}
+
 /// Run the interface until the user exits.
 ///
 /// # Errors
@@ -156,112 +252,21 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     // preference; the replies set the auto theme when they arrive.
     terminal.write("\x1b]11;?\x07\x1b[?996n");
 
-    let mut active_turn: Option<std::thread::JoinHandle<TurnOutcome>> = None;
-    let mut turn_rx: Option<Receiver<lca_protocol::TurnEvent>> = None;
-    let mut prompt_rx: Option<Receiver<PromptRequest>> = None;
-    let mut cancel_flag: Option<lca_tools::CancelFlag> = None;
-    let mut aborted = false;
+    let mut turns = TurnState::default();
     let mut dirty = true;
 
     let result = 'main: loop {
-        // A finished turn.
-        if let Some(handle) = active_turn.take_if(|h| h.is_finished()) {
-            let outcome = handle.join().unwrap_or_else(|_| TurnOutcome {
-                status: TurnStatus::Error,
-                stop_reason: StopReason::Error,
-                usage: Usage::default(),
-                error: Some("the turn worker panicked".to_string()),
-            });
-            if let Some(rx) = &turn_rx {
-                while let Ok(event) = rx.try_recv() {
-                    chat.on_turn_event(event);
-                }
-            }
-            turn_rx = None;
-            prompt_rx = None;
-            cancel_flag = None;
-            if let Some(error) = &outcome.error {
-                chat.world.notice = Some(crate::state::sanitize_text(error));
-            }
-            chat.usage.cost += outcome.usage.cost;
-            chat.turn_running = false;
-            chat.current_steer = None;
-            terminal.set_progress(false);
-            // Steering lifecycle (ADR-0038): an aborted turn returns its
-            // queue to the editor; a completed turn runs the queued
-            // messages in order.
-            if aborted {
-                chat.restore_pending();
-                aborted = false;
-            } else if let Some(next) = chat.take_next_pending() {
-                chat.submitted = Some(next);
-            }
+        // Turn lifecycle (R16: `TurnState` owns the running turn).
+        if turns.reap(&mut chat, &mut terminal) {
             dirty = true;
         }
-
-        // Start a submitted turn.
-        if !chat.turn_running
-            && let Some(text) = chat.take_submitted()
-        {
-            let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
-            let (prompt_tx, prompt_rx_inner) = std::sync::mpsc::sync_channel(4);
-            let cancel = lca_tools::CancelFlag::new();
-            cancel_flag = Some(cancel.clone());
-            let steer = lca_protocol::steer_queue();
-            let channels = TurnChannels {
-                events: event_tx,
-                prompt: prompt_tx,
-                steer: steer.clone(),
-            };
-            chat.begin_turn(steer);
-            terminal.set_progress(true);
-            turn_rx = Some(event_rx);
-            prompt_rx = Some(prompt_rx_inner);
-            active_turn = Some(runner(text, channels, cancel));
+        if turns.start(&mut chat, &runner, &mut terminal) {
             dirty = true;
         }
-
-        // Drain worker channels.
-        if let Some(rx) = &turn_rx {
-            while let Ok(event) = rx.try_recv() {
-                chat.on_turn_event(event);
-                dirty = true;
-            }
-        }
-        // Drain the running `!`/`!!` command (R4).
-        if chat.poll_shell() {
+        if turns.drain(&mut chat) {
             dirty = true;
         }
-        if chat.world.permission.is_none()
-            && let Some(rx) = &prompt_rx
-            && let Ok(request) = rx.try_recv()
-        {
-            chat.world.permission = Some(PermissionModal {
-                action: request.action,
-                respond: Some(request.respond),
-                // FR-UI-18: an auto-approve countdown, visible and
-                // keyboard-interruptible.
-                deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(30)),
-            });
-            dirty = true;
-        }
-
-        // Auto-approve countdown (FR-UI-18): fires only when the visible
-        // deadline passes with no keypress.
-        if chat
-            .world
-            .permission
-            .as_ref()
-            .is_some_and(|m| m.deadline.is_some_and(|d| std::time::Instant::now() >= d))
-        {
-            if let Some(modal) = chat.world.permission.take()
-                && let Some(respond) = modal.respond
-            {
-                let _ = respond.send(lca_permissions::Decision::Once);
-            }
-            dirty = true;
-        } else if chat.world.permission.is_some() {
-            // Repaint so the countdown ticks visibly.
+        if turns.tick_permission(&mut chat) {
             dirty = true;
         }
 
@@ -291,84 +296,17 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         // Input.
         match input_rx.recv_timeout(std::time::Duration::from_millis(50)) {
             Ok(data) => {
-                // Terminal capability replies (R10): the OSC 11 background
-                // and the DSR color-scheme report drive the auto theme.
-                if lca_tui::engine::colors::is_osc11_background_color_response(&data) {
-                    if let Some(rgb) = lca_tui::engine::colors::parse_osc11_background_color(&data)
-                    {
-                        chat.apply_detected_scheme(rgb.scheme());
-                        dirty = true;
-                    }
-                    continue;
-                }
-                if let Some(scheme) =
-                    lca_tui::engine::colors::parse_terminal_color_scheme_report(&data)
-                {
-                    chat.apply_detected_scheme(scheme);
-                    dirty = true;
-                    continue;
-                }
-                // Mouse (selection, wheel) is the renderer's.
-                if data.starts_with("\x1b[<") {
-                    screen.handle_mouse(&data);
-                    // Copy on release (issue #2): prefer a verified native
-                    // clipboard (R6); OSC 52 is the honest fallback, and the
-                    // notice says which one ran.
-                    if data.ends_with('m') && screen.copy_on_select() {
-                        let text = screen.selected_text();
-                        if !text.is_empty() {
-                            let verified = chat
-                                .world
-                                .options
-                                .hooks
-                                .copy_to_clipboard
-                                .as_ref()
-                                .is_some_and(|write| write(&text));
-                            if !verified {
-                                screen.copy_osc52(&mut terminal, &text);
-                            }
-                            chat.world.notice = Some(if verified {
-                                "copied to the clipboard".to_string()
-                            } else {
-                                "copied via OSC 52 (unverified)".to_string()
-                            });
-                        }
-                    }
-                    dirty = true;
-                    continue;
-                }
-                match chat.handle_key(&data) {
-                    Action::Continue => {}
-                    Action::Submit => {}
-                    Action::CancelTurn => {
-                        aborted = true;
-                        if let Some(cancel) = &cancel_flag {
-                            cancel.cancel();
-                        }
-                    }
-                    Action::ExternalEditor => {
-                        if let Some(editor) = chat.world.options.hooks.external_editor.clone() {
-                            let text = chat.editor.text();
-                            screen.leave(&mut terminal, true);
-                            terminal.stop();
-                            let edited = editor(&text);
-                            let itx = input_tx.clone();
-                            let rtx = resize_tx.clone();
-                            terminal.start(
-                                Box::new(move |d| {
-                                    let _ = itx.send(d);
-                                }) as InputHandler,
-                                Box::new(move || {
-                                    let _ = rtx.send(());
-                                }) as ResizeHandler,
-                            );
-                            screen.enter(&mut terminal);
-                            if let Some(edited) = edited {
-                                chat.editor.set_text(&edited);
-                            }
-                        }
-                    }
-                    Action::Exit => break 'main Ok(()),
+                if let InputResult::Exit = handle_input(
+                    &data,
+                    &mut chat,
+                    &mut screen,
+                    &mut terminal,
+                    &input_tx,
+                    &resize_tx,
+                    &turns.cancel,
+                    &mut turns.aborted,
+                ) {
+                    break 'main Ok(());
                 }
                 dirty = true;
             }
@@ -383,16 +321,146 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         }
     };
 
-    if let Some(cancel) = cancel_flag {
-        cancel.cancel();
-    }
-    if let Some(handle) = active_turn {
-        let _ = handle.join();
-    }
+    turns.shutdown();
     screen.leave(&mut terminal, false);
     terminal.drain_input(1000, 50);
     terminal.stop();
     result.map(|()| 0)
+}
+
+/// The running turn's mutable state (R16), so the loop body stays a loop.
+#[derive(Default)]
+struct TurnState {
+    active: Option<std::thread::JoinHandle<TurnOutcome>>,
+    turn_rx: Option<Receiver<lca_protocol::TurnEvent>>,
+    prompt_rx: Option<Receiver<PromptRequest>>,
+    cancel: Option<lca_tools::CancelFlag>,
+    aborted: bool,
+}
+
+impl TurnState {
+    /// Reap a finished turn (returns whether one finished).
+    fn reap(&mut self, chat: &mut Chat, terminal: &mut dyn Terminal) -> bool {
+        let Some(handle) = self.active.take_if(|h| h.is_finished()) else {
+            return false;
+        };
+        let outcome = handle.join().unwrap_or_else(|_| TurnOutcome {
+            status: TurnStatus::Error,
+            stop_reason: StopReason::Error,
+            usage: Usage::default(),
+            error: Some("the turn worker panicked".to_string()),
+        });
+        if let Some(rx) = &self.turn_rx {
+            while let Ok(event) = rx.try_recv() {
+                chat.on_turn_event(event);
+            }
+        }
+        self.turn_rx = None;
+        self.prompt_rx = None;
+        self.cancel = None;
+        if let Some(error) = &outcome.error {
+            chat.world.notice = Some(crate::state::sanitize_text(error));
+        }
+        chat.usage.cost += outcome.usage.cost;
+        chat.turn_running = false;
+        chat.current_steer = None;
+        terminal.set_progress(false);
+        // Steering lifecycle (ADR-0038): an aborted turn returns its queue
+        // to the editor; a completed turn runs the queued messages in order.
+        if self.aborted {
+            chat.restore_pending();
+            self.aborted = false;
+        } else if let Some(next) = chat.take_next_pending() {
+            chat.submitted = Some(next);
+        }
+        true
+    }
+
+    /// Start a submitted turn (returns whether one started).
+    fn start(&mut self, chat: &mut Chat, runner: &TurnRunner, terminal: &mut dyn Terminal) -> bool {
+        if chat.turn_running {
+            return false;
+        }
+        let Some(text) = chat.take_submitted() else {
+            return false;
+        };
+        let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
+        let (prompt_tx, prompt_rx_inner) = std::sync::mpsc::sync_channel(4);
+        let cancel = lca_tools::CancelFlag::new();
+        self.cancel = Some(cancel.clone());
+        let steer = lca_protocol::steer_queue();
+        let channels = TurnChannels {
+            events: event_tx,
+            prompt: prompt_tx,
+            steer: steer.clone(),
+        };
+        chat.begin_turn(steer);
+        terminal.set_progress(true);
+        self.turn_rx = Some(event_rx);
+        self.prompt_rx = Some(prompt_rx_inner);
+        self.active = Some(runner(text, channels, cancel));
+        true
+    }
+
+    /// Drain the turn, shell, and prompt channels (returns whether anything
+    /// changed).
+    fn drain(&mut self, chat: &mut Chat) -> bool {
+        let mut changed = false;
+        if let Some(rx) = &self.turn_rx {
+            while let Ok(event) = rx.try_recv() {
+                chat.on_turn_event(event);
+                changed = true;
+            }
+        }
+        // Drain the running `!`/`!!` command (R4).
+        if chat.poll_shell() {
+            changed = true;
+        }
+        if chat.world.permission.is_none()
+            && let Some(rx) = &self.prompt_rx
+            && let Ok(request) = rx.try_recv()
+        {
+            chat.world.permission = Some(PermissionModal {
+                action: request.action,
+                respond: Some(request.respond),
+                // FR-UI-18: an auto-approve countdown, visible and
+                // keyboard-interruptible.
+                deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(30)),
+            });
+            changed = true;
+        }
+        changed
+    }
+
+    /// Fire the auto-approve countdown when it expires (returns whether
+    /// anything changed). Repaints while it runs so it ticks visibly.
+    fn tick_permission(&mut self, chat: &mut Chat) -> bool {
+        if chat
+            .world
+            .permission
+            .as_ref()
+            .is_some_and(|m| m.deadline.is_some_and(|d| std::time::Instant::now() >= d))
+        {
+            if let Some(modal) = chat.world.permission.take()
+                && let Some(respond) = modal.respond
+            {
+                let _ = respond.send(lca_permissions::Decision::Once);
+            }
+            true
+        } else {
+            chat.world.permission.is_some()
+        }
+    }
+
+    /// Cancel and join the running turn on shutdown.
+    fn shutdown(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
+        if let Some(handle) = self.active.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 #[cfg(test)]

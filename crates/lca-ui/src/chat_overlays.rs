@@ -1,13 +1,44 @@
 //! The chat's overlay composition, split from `chat.rs` (the 1,200-line
 //! ceiling). The modals and pickers composite over the visible viewport.
 
-use super::chat::{Chat, THINKING_LEVELS, highlight_matches};
+use super::chat::{Chat, highlight_matches};
 use super::render::{overlay_box, side_panel};
 use super::state::widget_lines;
+use crate::chat_pickers::THINKING_LEVELS;
 
 impl Chat {
     /// Composite the modals and the side panel over the viewport.
     pub(super) fn compose_overlays(&self, viewport: &mut [String], width: u16, height: u16) {
+        if self.compose_pickers(viewport, width, height) {
+            return;
+        }
+        self.compose_modals(viewport, width, height);
+
+        if self.world.panel_open {
+            let mut panel: Vec<String> = Vec::new();
+            if let Some(render) = &self.world.options.render_regions {
+                for (_name, tree) in render("panel") {
+                    panel.extend(widget_lines(&tree.nodes));
+                }
+            }
+            if panel.is_empty() {
+                panel.push("(nothing registered for the panel)".to_string());
+            }
+            side_panel(viewport, width, &panel);
+        }
+
+        // Highlight the search matches (FR-UI-12).
+        if let Some(query) = &self.search
+            && !query.is_empty()
+        {
+            for line in viewport.iter_mut() {
+                *line = highlight_matches(line, query);
+            }
+        }
+    }
+
+    /// Draw the open picker, if any (returns true when one was drawn).
+    fn compose_pickers(&self, viewport: &mut [String], width: u16, height: u16) -> bool {
         if let Some(picker) = &self.tree_picker {
             let mut body = vec!["Session branches:".to_string(), String::new()];
             for (index, (_id, label)) in picker.entries.iter().enumerate() {
@@ -17,7 +48,7 @@ impl Chat {
             body.push(String::new());
             body.push("Up/Down moves; Enter shows the resume command; Esc closes.".to_string());
             overlay_box(viewport, width, height, "tree", &body);
-            return;
+            return true;
         }
         if let Some(picker) = &self.resume_picker {
             let mut body = vec![format!("  search: {}", picker.query), String::new()];
@@ -38,7 +69,7 @@ impl Chat {
                     .to_string(),
             );
             overlay_box(viewport, width, height, "resume", &body);
-            return;
+            return true;
         }
         if let Some(picker) = &self.theme_picker {
             let mut body = vec!["Theme (live preview):".to_string(), String::new()];
@@ -49,7 +80,7 @@ impl Chat {
             body.push(String::new());
             body.push("Up/Down previews; Enter applies; Esc restores.".to_string());
             overlay_box(viewport, width, height, "theme", &body);
-            return;
+            return true;
         }
         if let Some(picker) = &self.thinking_picker {
             let current = self.thinking_level();
@@ -70,7 +101,7 @@ impl Chat {
             body.push(String::new());
             body.push("Up/Down moves; Enter applies; Esc closes.".to_string());
             overlay_box(viewport, width, height, "thinking", &body);
-            return;
+            return true;
         }
         if let Some(picker) = &self.model_picker {
             let active = self.model_label();
@@ -91,8 +122,13 @@ impl Chat {
             body.push(String::new());
             body.push("Type to search; Enter selects; Esc closes.".to_string());
             overlay_box(viewport, width, height, "model", &body);
-            return;
+            return true;
         }
+        false
+    }
+
+    /// Draw the open login/grant/permission/extension modal, if any.
+    fn compose_modals(&self, viewport: &mut [String], width: u16, height: u16) {
         if let Some(picker) = &self.world.picker {
             let rows = 15usize.min(height.saturating_sub(7) as usize).max(1);
             let total = picker.options.len();
@@ -198,28 +234,6 @@ impl Chat {
                 }
             }
             overlay_box(viewport, width, height, &title, &body);
-        }
-
-        if self.world.panel_open {
-            let mut panel: Vec<String> = Vec::new();
-            if let Some(render) = &self.world.options.render_regions {
-                for (_name, tree) in render("panel") {
-                    panel.extend(widget_lines(&tree.nodes));
-                }
-            }
-            if panel.is_empty() {
-                panel.push("(nothing registered for the panel)".to_string());
-            }
-            side_panel(viewport, width, &panel);
-        }
-
-        // Highlight the search matches (FR-UI-12).
-        if let Some(query) = &self.search
-            && !query.is_empty()
-        {
-            for line in viewport.iter_mut() {
-                *line = highlight_matches(line, query);
-            }
         }
     }
 }
