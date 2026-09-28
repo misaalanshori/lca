@@ -102,6 +102,8 @@ fn reasoning_and_answer_are_separated() {
         status: TurnStatus::Ok,
         stop_reason: StopReason::Stop,
     });
+    // R8: thinking is collapsed by default; expand to see it.
+    chat.transcript.toggle_thinking_expanded();
     let text = strip(&chat.render(60)).join("\n");
     assert!(text.contains("thinking"));
     assert!(text.contains("the answer"));

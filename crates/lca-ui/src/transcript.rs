@@ -82,6 +82,9 @@ pub struct Transcript {
     /// Whether tool cards show their result (pi's `app.tools.expand`,
     /// Ctrl+O). Collapsed by default: a card is one line.
     tools_expanded: bool,
+    /// Whether thinking runs show their text (pi's `hideThinkingBlock`,
+    /// Ctrl+T). Collapsed by default: one dim line (R8).
+    thinking_expanded: bool,
 }
 
 impl Transcript {
@@ -98,6 +101,11 @@ impl Transcript {
     /// Toggle tool-card expansion (Ctrl+O; pi's `app.tools.expand`).
     pub fn toggle_tools_expanded(&mut self) {
         self.tools_expanded = !self.tools_expanded;
+    }
+
+    /// Toggle thinking-run expansion (Ctrl+T; pi's `hideThinkingBlock`).
+    pub fn toggle_thinking_expanded(&mut self) {
+        self.thinking_expanded = !self.thinking_expanded;
     }
 
     /// The entries.
@@ -252,7 +260,14 @@ impl Transcript {
             if i > 0 {
                 out.push(String::new()); // separate messages (#6)
             }
-            render_entry(entry, width, theme, self.tools_expanded, &mut out);
+            render_entry(
+                entry,
+                width,
+                theme,
+                self.tools_expanded,
+                self.thinking_expanded,
+                &mut out,
+            );
         }
         out
     }
@@ -270,7 +285,14 @@ impl Transcript {
                 offsets.push(line);
             }
             let mut tmp = Vec::new();
-            render_entry(entry, width, theme, self.tools_expanded, &mut tmp);
+            render_entry(
+                entry,
+                width,
+                theme,
+                self.tools_expanded,
+                self.thinking_expanded,
+                &mut tmp,
+            );
             line += tmp.len();
         }
         offsets
@@ -292,15 +314,30 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
     format!("[image {media_type}, {dimensions}, {} bytes]", bytes.len())
 }
 
-fn render_entry(entry: &Entry, width: u16, theme: &Theme, expanded: bool, out: &mut Vec<String>) {
+fn render_entry(
+    entry: &Entry,
+    width: u16,
+    theme: &Theme,
+    tools_expanded: bool,
+    thinking_expanded: bool,
+    out: &mut Vec<String>,
+) {
     match entry {
         Entry::User(text) => render_user(text, width, theme, out),
         Entry::Assistant {
             text,
             reasoning,
             streaming,
-        } => render_assistant(text, reasoning, *streaming, width, theme, out),
-        Entry::Tool { .. } => render_tool(entry, expanded, width, theme, out),
+        } => render_assistant(
+            text,
+            reasoning,
+            *streaming,
+            thinking_expanded,
+            width,
+            theme,
+            out,
+        ),
+        Entry::Tool { .. } => render_tool(entry, tools_expanded, width, theme, out),
         Entry::Notice(text) => {
             out.extend(wrap_text_with_ansi(&(theme.dim)(text), width as usize));
         }
@@ -334,16 +371,26 @@ fn render_assistant(
     text: &str,
     reasoning: &str,
     streaming: bool,
+    thinking_expanded: bool,
     width: u16,
     theme: &Theme,
     out: &mut Vec<String>,
 ) {
     if !reasoning.is_empty() {
-        for line in wrap_text_with_ansi(reasoning, (width as usize).saturating_sub(2).max(1)) {
+        if thinking_expanded {
+            for line in wrap_text_with_ansi(reasoning, (width as usize).saturating_sub(2).max(1)) {
+                out.push(format!(
+                    "{} {}",
+                    (theme.reasoning)("∴"),
+                    (theme.reasoning)(&line)
+                ));
+            }
+        } else {
+            // pi hides the run behind one dim line (`messages.md` §3).
             out.push(format!(
                 "{} {}",
                 (theme.reasoning)("∴"),
-                (theme.reasoning)(&line)
+                (theme.reasoning)("Thinking… (ctrl+t to expand)")
             ));
         }
     }
@@ -485,14 +532,18 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_is_separated_from_the_answer() {
+    fn reasoning_is_collapsed_by_default_and_expands() {
         let mut t = Transcript::new();
         t.append_reasoning("thinking hard");
         t.append_text("the answer");
         t.finish_assistant();
-        let out = strip(&t.render(40, &plain()));
-        assert!(out[0].starts_with("∴ thinking hard"));
-        assert!(out.iter().any(|l| l.contains("the answer")));
+        let collapsed = strip(&t.render(40, &plain()));
+        assert!(collapsed[0].contains("ctrl+t to expand"), "{collapsed:?}");
+        assert!(!collapsed.iter().any(|l| l.contains("thinking hard")));
+        t.toggle_thinking_expanded();
+        let expanded = strip(&t.render(40, &plain()));
+        assert!(expanded[0].starts_with("∴ thinking hard"));
+        assert!(expanded.iter().any(|l| l.contains("the answer")));
     }
 
     #[test]

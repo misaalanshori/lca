@@ -1219,7 +1219,9 @@ fn display_line(record: &Record) -> Option<String> {
             },
             content.as_deref().unwrap_or("")
         ),
-        Record::Compaction { summary, .. } => format!("[compacted: {summary}]"),
+        Record::Compaction {
+            summary, strategy, ..
+        } => format!("[compaction] {summary} (via {strategy})"),
         Record::SessionStart { working_dir, .. } => format!("[session in {working_dir}]"),
         _ => return None,
     })

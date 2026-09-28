@@ -577,6 +577,10 @@ impl Chat {
             self.transcript.toggle_tools_expanded();
             return Action::Continue;
         }
+        if key.as_deref() == Some("ctrl+t") {
+            self.transcript.toggle_thinking_expanded();
+            return Action::Continue;
+        }
         if key.as_deref() == Some("ctrl+r") {
             self.search = Some(String::new());
             self.search_matches.clear();
