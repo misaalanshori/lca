@@ -408,6 +408,7 @@ mod tests {
             .items
             .iter()
             .filter_map(|i| i.description.clone())
+            .map(|d| d.replace('\\', "/"))
             .collect();
         assert!(descs.iter().any(|d| d.contains("src/main.rs")), "{descs:?}");
         assert!(!descs.iter().any(|d| d.starts_with("target/")), "{descs:?}");

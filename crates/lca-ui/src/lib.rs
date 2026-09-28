@@ -7,6 +7,7 @@
 //! interactive loop live here.
 
 pub mod chat;
+mod chat_overlays;
 pub mod footer;
 pub mod render;
 pub mod run;
