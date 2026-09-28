@@ -303,9 +303,26 @@ fn is_table_start(lines: &[&str], i: usize) -> bool {
     if i + 1 >= lines.len() {
         return false;
     }
-    lines[i].trim_start().starts_with('|')
-        && lines[i + 1].contains('-')
-        && lines[i + 1].trim_start().starts_with('|')
+    let header = lines[i].trim();
+    // Streaming tolerance: a table needs a complete header row and an
+    // intact separator row; a partial pipe or a half-written separator
+    // renders as text until the next chunk completes it.
+    header.starts_with('|') && header.ends_with('|') && is_table_separator(lines[i + 1])
+}
+
+/// Whether a row is a complete GFM separator: every cell is `---`, `:--`,
+/// `--:`, or `:-:`.
+fn is_table_separator(line: &str) -> bool {
+    let t = line.trim();
+    if !t.starts_with('|') || !t.ends_with('|') {
+        return false;
+    }
+    let cells = split_table_row(t);
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let cell = cell.trim();
+            !cell.is_empty() && cell.contains('-') && cell.chars().all(|c| c == '-' || c == ':')
+        })
 }
 
 fn split_table_row(line: &str) -> Vec<String> {
@@ -320,7 +337,12 @@ fn collect_table(lines: &[&str], start: usize) -> (Vec<Vec<String>>, usize) {
     let header = split_table_row(lines[start]);
     rows.push(header);
     let mut i = start + 2; // skip the separator
-    while i < lines.len() && lines[i].trim_start().starts_with('|') {
+    while i < lines.len() {
+        let t = lines[i].trim();
+        // A partial row (no closing pipe) is not yet a table row.
+        if !t.starts_with('|') || !t.ends_with('|') {
+            break;
+        }
         rows.push(split_table_row(lines[i]));
         i += 1;
     }
@@ -334,7 +356,10 @@ fn render_code_block(
     theme: &MarkdownTheme,
     out: &mut Vec<String>,
 ) {
-    let inner = width.saturating_sub(4).max(1);
+    // D10: the border caps at the content width, not the terminal width.
+    let content_width = body.iter().map(|l| visible_width(l)).max().unwrap_or(0);
+    let frame = (content_width + 2).min(width).max(4);
+    let inner = frame.saturating_sub(4).max(1);
     let title = if lang.is_empty() {
         String::new()
     } else {
@@ -348,14 +373,14 @@ fn render_code_block(
                 .saturating_add(2)
         )
     ));
-    out.push(truncate_to_width(&border, width, "", false));
+    out.push(truncate_to_width(&border, frame, "", false));
     for line in body {
         let styled = (theme.code_block)(line);
         out.push(format!("│ {styled}"));
     }
     out.push((theme.code_block_border)(&format!(
         "╰{}",
-        "─".repeat(width.saturating_sub(1))
+        "─".repeat(frame.saturating_sub(1))
     )));
 }
 
@@ -479,6 +504,7 @@ pub fn render_inline(text: &str, theme: &MarkdownTheme, options: &MarkdownOption
     while i < chars.len() {
         if chars[i] == '`'
             && let Some(end) = find_char(&chars, i + 1, '`')
+            && end > i + 1
         {
             let code: String = chars[i + 1..end].iter().collect();
             out.push_str(&(theme.code)(&code));
@@ -720,5 +746,149 @@ mod tests {
             &MarkdownOptions::default(),
         );
         assert!(out.iter().all(|l| visible_width(l) <= 12));
+    }
+
+    // Verifies: FR-UI-8 - an unterminated fence draws a complete frame, so
+    // the block never appears half-drawn while streaming (pi's behavior).
+    #[test]
+    fn an_unterminated_fence_draws_a_complete_frame() {
+        let out = strip(&render_markdown(
+            "```rust\nfn main() {",
+            40,
+            &plain(),
+            &MarkdownOptions::default(),
+        ));
+        assert!(out[0].starts_with('╭'));
+        assert!(out.last().unwrap().starts_with('╰'));
+        assert!(out.iter().any(|l| l.contains("fn main() {")));
+    }
+
+    // Verifies: FR-UI-8 - a half-written opening fence is plain text.
+    #[test]
+    fn a_partial_opening_fence_is_plain_text() {
+        let out = strip(&render_markdown(
+            "``",
+            40,
+            &plain(),
+            &MarkdownOptions::default(),
+        ));
+        assert!(out.iter().any(|l| l.contains("``")));
+        assert!(!out.iter().any(|l| l.starts_with('╭')));
+    }
+
+    // Verifies: FR-UI-7 - the transcript renders markdown: headings, lists,
+    // tables with aligned columns, framed code blocks, and links.
+    #[test]
+    fn markdown_covers_the_transcript_vocabulary() {
+        let raw = render_markdown(GOLDEN, 60, &plain(), &MarkdownOptions::default());
+        let out = strip(&raw);
+        assert!(out.iter().any(|l| l == "Title"), "heading");
+        assert!(out.iter().any(|l| l.starts_with("• one")), "list");
+        assert!(out.iter().any(|l| l.starts_with('┌')), "table");
+        assert!(out.iter().any(|l| l.starts_with('╭')), "framed code");
+        assert!(out.iter().any(|l| l.contains("quoted")), "quote");
+        assert!(
+            raw.iter().any(|l| l.contains("\x1b]8;;http://x\x07")),
+            "link as OSC 8"
+        );
+    }
+
+    /// A golden document with every construct the streaming renderer must
+    /// tolerate.
+    const GOLDEN: &str = "# Title\n\nIntro with **bold**, `code`, and a [link](http://x).\n\n\
+        - one\n- two\n\n> quoted\n\n\
+        | name | value |\n| --- | --- |\n| alpha | 1 |\n\n\
+        ```rust\nfn main() {\n    let x = 1;\n}\n```\n\n\
+        Math $x^2$ and $$E=mc^2$$ stay literal.\n";
+
+    fn frame_count(lines: &[String], open: char) -> usize {
+        lines
+            .iter()
+            .filter(|l| {
+                crate::engine::text::strip_terminal_sequences(l)
+                    .trim_start()
+                    .starts_with(open)
+            })
+            .count()
+    }
+
+    // Verifies: FR-UI-8 - streaming tolerance. For every prefix of a golden
+    // document, rendering neither panics nor emits an unterminated frame,
+    // and a table never appears without its intact separator row.
+    #[test]
+    fn every_prefix_renders_without_an_unterminated_frame() {
+        for width in [40usize, 80] {
+            for end in 0..=GOLDEN.len() {
+                if !GOLDEN.is_char_boundary(end) {
+                    continue;
+                }
+                let prefix = &GOLDEN[..end];
+                let lines = render_markdown(prefix, width, &plain(), &MarkdownOptions::default());
+                let code_open = frame_count(&lines, '╭');
+                let code_close = frame_count(&lines, '╰');
+                assert_eq!(
+                    code_open, code_close,
+                    "unbalanced code frame at width {width}, prefix ending {end}\n{lines:?}"
+                );
+                let table_open = frame_count(&lines, '┌');
+                let table_close = frame_count(&lines, '└');
+                assert_eq!(
+                    table_open, table_close,
+                    "unbalanced table frame at width {width}, prefix ending {end}\n{lines:?}"
+                );
+                if !prefix.lines().any(is_table_separator) {
+                    assert_eq!(
+                        table_open, 0,
+                        "a table rendered without an intact separator at prefix ending {end}\n{lines:?}"
+                    );
+                }
+                assert!(
+                    lines.iter().all(|l| visible_width(l) <= width),
+                    "a prefix exceeded the width at {width}, ending {end}"
+                );
+            }
+        }
+    }
+
+    // Verifies: FR-UI-8 - a half-written separator row renders as text.
+    #[test]
+    fn a_partial_separator_row_is_not_yet_a_table() {
+        let out = strip(&render_markdown(
+            "| name | value |\n| --- | ---",
+            40,
+            &plain(),
+            &MarkdownOptions::default(),
+        ));
+        assert!(!out.iter().any(|l| l.starts_with('┌')), "{out:?}");
+    }
+
+    // Verifies: FR-UI-8 - unpaired inline markers and math render literally.
+    #[test]
+    fn unpaired_inline_markers_and_math_stay_literal() {
+        let out = render_inline(
+            "a **b and $x^2$ and `",
+            &plain(),
+            &MarkdownOptions::default(),
+        );
+        let stripped = crate::engine::text::strip_terminal_sequences(&out);
+        assert!(stripped.contains("**b"), "{stripped}");
+        assert!(stripped.contains("$x^2$"), "{stripped}");
+        assert!(stripped.ends_with('`'), "{stripped}");
+    }
+
+    // Verifies: FR-UI-8 / D10 - the code-block border caps at the content
+    // width, not the terminal width.
+    #[test]
+    fn a_code_block_border_caps_at_the_content_width() {
+        let out = strip(&render_markdown(
+            "```\nx\n```",
+            80,
+            &plain(),
+            &MarkdownOptions::default(),
+        ));
+        let top = visible_width(&out[0]);
+        let bottom = visible_width(out.last().unwrap());
+        assert_eq!(top, bottom);
+        assert!(top < 80, "capped at the content width, got {top}");
     }
 }
