@@ -77,6 +77,8 @@ pub struct Chat {
     pub theme_picker: Option<ThemePicker>,
     /// The open `/thinking` level picker, when any (R1).
     pub thinking_picker: Option<ThinkingPicker>,
+    /// The open `/model` picker, when any (R9).
+    pub model_picker: Option<ModelPicker>,
     /// The open `/tree` branch selector, when any (FR-UI-16).
     pub tree_picker: Option<TreePicker>,
     /// The running `!`/`!!` command, when any (R4).
@@ -120,6 +122,56 @@ pub struct ThemePicker {
 pub struct ThinkingPicker {
     /// The highlighted row (0 = unset).
     pub selected: usize,
+}
+
+/// The `/model` picker (R9): a searchable list of the provider's models,
+/// pi's `model-selector.ts` shape (minus the catalog refresh, which the
+/// host does at startup).
+pub struct ModelPicker {
+    /// Every offered model id, in the host's order.
+    pub models: Vec<String>,
+    /// The typed search query.
+    pub query: String,
+    /// The indices into `models` that match.
+    pub matches: Vec<usize>,
+    /// The highlighted row (an index into `matches`).
+    pub selected: usize,
+}
+
+impl ModelPicker {
+    /// Open the picker over a model list.
+    pub fn new(models: Vec<String>) -> ModelPicker {
+        let matches = (0..models.len()).collect();
+        ModelPicker {
+            models,
+            query: String::new(),
+            matches,
+            selected: 0,
+        }
+    }
+
+    /// Re-filter after a query change, keeping the selection in range.
+    pub fn refilter(&mut self) {
+        let needle = self.query.to_lowercase();
+        self.matches = self
+            .models
+            .iter()
+            .enumerate()
+            .filter(|(_, model)| model.to_lowercase().contains(&needle))
+            .map(|(index, _)| index)
+            .collect();
+        if self.selected >= self.matches.len() {
+            self.selected = self.matches.len().saturating_sub(1);
+        }
+    }
+
+    /// The highlighted model id, when any.
+    pub fn selected_model(&self) -> Option<&str> {
+        self.matches
+            .get(self.selected)
+            .and_then(|index| self.models.get(*index))
+            .map(String::as_str)
+    }
 }
 
 /// The thinking levels and their descriptions, from pi's
@@ -190,6 +242,7 @@ impl Chat {
             theme_name,
             theme_picker: None,
             thinking_picker: None,
+            model_picker: None,
             tree_picker: None,
             shell: None,
             resume_picker: None,
@@ -294,7 +347,7 @@ impl Chat {
     }
 
     /// The current model label, resolved from the shared cell.
-    fn model_label(&self) -> String {
+    pub fn model_label(&self) -> String {
         self.world
             .options
             .model_label
@@ -424,6 +477,7 @@ impl Chat {
         if self.world.modal_active()
             || self.theme_picker.is_some()
             || self.thinking_picker.is_some()
+            || self.model_picker.is_some()
             || self.tree_picker.is_some()
             || self.resume_picker.is_some()
         {
@@ -554,6 +608,47 @@ impl Chat {
                         picker.refilter();
                     }
                     self.resume_picker = Some(picker);
+                }
+            }
+            return Action::Continue;
+        }
+
+        // The `/model` picker owns the keyboard while open (R9): a search box
+        // where up/down navigate and printable keys edit the query.
+        if let Some(mut picker) = self.model_picker.take() {
+            match key.as_deref() {
+                Some("escape") => {}
+                Some("enter") => {
+                    if let Some(id) = picker.selected_model().map(str::to_string) {
+                        match (self.world.options.invoke_command)("model", &id) {
+                            lca_protocol::CommandEffect::ShowWidget(text) => {
+                                self.world.notice = Some(crate::state::sanitize_block(&text));
+                            }
+                            _ => self.world.notice = Some(format!("model: {id}")),
+                        }
+                    }
+                }
+                Some("up") => {
+                    picker.selected = picker.selected.saturating_sub(1);
+                    self.model_picker = Some(picker);
+                }
+                Some("down") => {
+                    if !picker.matches.is_empty() {
+                        picker.selected = (picker.selected + 1).min(picker.matches.len() - 1);
+                    }
+                    self.model_picker = Some(picker);
+                }
+                Some("backspace") => {
+                    picker.query.pop();
+                    picker.refilter();
+                    self.model_picker = Some(picker);
+                }
+                _ => {
+                    if let Some(text) = printable(data) {
+                        picker.query.push_str(&text);
+                        picker.refilter();
+                    }
+                    self.model_picker = Some(picker);
                 }
             }
             return Action::Continue;
@@ -1120,6 +1215,10 @@ impl Chat {
                 self.thinking_picker = Some(ThinkingPicker {
                     selected: thinking_row(current.as_deref()),
                 });
+                return Action::Continue;
+            }
+            "model" if argument.trim().is_empty() && !self.world.options.models.is_empty() => {
+                self.model_picker = Some(ModelPicker::new(self.world.options.models.clone()));
                 return Action::Continue;
             }
             "tree" => {

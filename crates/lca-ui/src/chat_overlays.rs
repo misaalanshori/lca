@@ -72,6 +72,27 @@ impl Chat {
             overlay_box(viewport, width, height, "thinking", &body);
             return;
         }
+        if let Some(picker) = &self.model_picker {
+            let active = self.model_label();
+            let mut body = vec![format!("  search: {}", picker.query), String::new()];
+            if picker.matches.is_empty() {
+                body.push("  (no matches)".to_string());
+            }
+            for (row, index) in picker.matches.iter().enumerate() {
+                let model = &picker.models[*index];
+                let cur = if row == picker.selected { '>' } else { ' ' };
+                let mark = if active.ends_with(&format!("/{model}")) {
+                    "  ✓"
+                } else {
+                    ""
+                };
+                body.push(format!(" {cur} {model}{mark}"));
+            }
+            body.push(String::new());
+            body.push("Type to search; Enter selects; Esc closes.".to_string());
+            overlay_box(viewport, width, height, "model", &body);
+            return;
+        }
         if let Some(picker) = &self.world.picker {
             let rows = 15usize.min(height.saturating_sub(7) as usize).max(1);
             let total = picker.options.len();

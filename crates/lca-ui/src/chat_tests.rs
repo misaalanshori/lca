@@ -479,6 +479,33 @@ fn tree_selection_switches_the_session() {
     );
 }
 
+// Verifies: R9 - `/model` opens a searchable picker and Enter selects.
+#[test]
+fn model_picker_searches_and_selects() {
+    let mut chat = chat();
+    let selected = Arc::new(std::sync::Mutex::new(String::new()));
+    let cell = selected.clone();
+    chat.world.options.invoke_command = Arc::new(move |name: &str, arg: &str| {
+        *cell.lock().unwrap_or_else(|p| p.into_inner()) = format!("{name}:{arg}");
+        CommandEffect::ShowWidget(format!("model for this session: {arg}"))
+    });
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(chat.model_picker.is_some());
+    for c in "beta".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    assert_eq!(chat.model_picker.as_ref().unwrap().matches, vec![1]);
+    chat.handle_key("\r");
+    assert!(chat.model_picker.is_none());
+    assert_eq!(
+        *selected.lock().unwrap_or_else(|p| p.into_inner()),
+        "model:beta"
+    );
+}
+
 // Verifies: FR-UI-12 - Ctrl+R searches the transcript, highlights
 // matches, and navigates between them.
 #[test]

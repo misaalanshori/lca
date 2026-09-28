@@ -729,6 +729,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             let provider_backend = provider_backend.clone();
             let store = store.clone();
             let session_cell = current_session.clone();
+            let settings_config = config.clone();
             let extensions = agent_config.extensions.clone();
             let completion_backend = agent_config.completion_backend.clone();
             let pending = pending_attachments.clone();
@@ -796,6 +797,14 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                             CommandEffect::ShowWidget(format!("nothing was compacted: {detail}"))
                         }
                     },
+                    // R9: the settings view over the real `lca-config` keys.
+                    "settings" => {
+                        let mut text = String::from("settings (key = value [source]):\n");
+                        for (key, value, source) in settings_config.resolved() {
+                            text.push_str(&format!("  {key} = {value} [{source}]\n"));
+                        }
+                        CommandEffect::ShowWidget(text)
+                    }
                     // The stats story (FR-UI-19): the same numbers the
                     // footer accumulates, with per-model cost and cache waste.
                     "session" => CommandEffect::ShowWidget(session_stats(&store, &session)),
@@ -1050,6 +1059,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             names.insert(6, "/fork".to_string());
             names.insert(7, "/thinking".to_string());
             names.insert(8, "/resume".to_string());
+            names.insert(9, "/settings".to_string());
             // Extension command names reach completion (and the screen);
             // sanitized because an extension chose these strings.
             names.extend(
