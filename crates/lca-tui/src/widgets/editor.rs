@@ -6,10 +6,10 @@
 //! a kill ring, undo, history with drafts, bracketed-paste markers, and the
 //! autocomplete popup. Owner issue #7 lives here.
 //!
-//! Not ported (documented skips): the full sticky-column decision table,
-//! jump mode, and the async/debounced autocomplete machinery. The subset
-//! here covers what the acceptance checklist drives; `ponytail:` upgrade if
-//! a specific motion turns out to matter in use.
+//! Not ported (documented skips): the full 7-case sticky-column decision
+//! table (the simple preferred-column version below covers the felt
+//! behavior, R7) and the async/debounced autocomplete machinery. Sticky
+//! columns and jump mode are ported (R7).
 
 use std::sync::Arc;
 
@@ -46,6 +46,13 @@ pub struct Editor {
     provider: Option<Arc<dyn AutocompleteProvider>>,
     suggestions: Option<Suggestions>,
     suggestion_index: usize,
+    /// The column a vertical move wants to land on, kept across shorter
+    /// lines (pi's sticky column, `editor.md` §4; R7). Cleared by any
+    /// horizontal move or edit.
+    preferred_col: Option<usize>,
+    /// Jump mode (R7): `Some(forward)` awaits the next printable character
+    /// as the jump target (`ctrl+]` / `ctrl+alt+]`).
+    jump_pending: Option<bool>,
 }
 
 impl Default for Editor {
@@ -71,6 +78,8 @@ impl Editor {
             provider: None,
             suggestions: None,
             suggestion_index: 0,
+            preferred_col: None,
+            jump_pending: None,
         }
     }
 
@@ -96,6 +105,7 @@ impl Editor {
 
     /// Replace the buffer.
     pub fn set_text(&mut self, text: &str) {
+        self.preferred_col = None;
         self.lines = text.split('\n').map(|s| s.to_string()).collect();
         if self.lines.is_empty() {
             self.lines.push(String::new());
@@ -152,6 +162,7 @@ impl Editor {
 
     /// Insert text at the cursor, handling embedded newlines.
     pub fn insert_str(&mut self, text: &str) {
+        self.preferred_col = None;
         self.snapshot();
         for (i, part) in text.split('\n').enumerate() {
             if i > 0 {
@@ -183,6 +194,7 @@ impl Editor {
 
     /// Insert a newline.
     pub fn newline(&mut self) {
+        self.preferred_col = None;
         self.snapshot();
         self.newline_no_snapshot();
         self.clear_suggestions();
@@ -190,6 +202,7 @@ impl Editor {
 
     /// Delete the character before the cursor.
     pub fn backspace(&mut self) {
+        self.preferred_col = None;
         self.snapshot();
         if self.cursor_col > 0 {
             let end = self.char_to_byte(self.cursor_col);
@@ -207,6 +220,7 @@ impl Editor {
 
     /// Delete the character after the cursor.
     pub fn delete_forward(&mut self) {
+        self.preferred_col = None;
         self.snapshot();
         let len = self.current().chars().count();
         if self.cursor_col < len {
@@ -222,6 +236,7 @@ impl Editor {
 
     /// Delete the word before the cursor.
     pub fn delete_word_backward(&mut self) {
+        self.preferred_col = None;
         self.snapshot();
         let chars: Vec<char> = self.current().chars().collect();
         let mut col = self.cursor_col;
@@ -242,6 +257,7 @@ impl Editor {
 
     /// Delete from the cursor to the end of the line (kill).
     pub fn delete_to_line_end(&mut self) {
+        self.preferred_col = None;
         self.snapshot();
         let byte = self.char_to_byte(self.cursor_col);
         let killed = self.current()[byte..].to_string();
@@ -251,6 +267,7 @@ impl Editor {
 
     /// Delete from the line start to the cursor (kill).
     pub fn delete_to_line_start(&mut self) {
+        self.preferred_col = None;
         self.snapshot();
         let byte = self.char_to_byte(self.cursor_col);
         let killed = self.current()[..byte].to_string();
@@ -262,6 +279,7 @@ impl Editor {
 
     /// Yank the most recent kill.
     pub fn yank(&mut self) {
+        self.preferred_col = None;
         if let Some(k) = self.kill_ring.last().cloned() {
             self.insert_str(&k);
         }
@@ -269,6 +287,7 @@ impl Editor {
 
     /// Undo the last change.
     pub fn undo(&mut self) {
+        self.preferred_col = None;
         if let Some((lines, line, col)) = self.undo.pop() {
             self.lines = lines;
             self.cursor_line = line.min(self.lines.len() - 1);
@@ -278,6 +297,7 @@ impl Editor {
 
     /// Move the cursor left.
     pub fn cursor_left(&mut self) {
+        self.preferred_col = None;
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
         } else if self.cursor_line > 0 {
@@ -289,6 +309,7 @@ impl Editor {
 
     /// Move the cursor right.
     pub fn cursor_right(&mut self) {
+        self.preferred_col = None;
         if self.cursor_col < self.current().chars().count() {
             self.cursor_col += 1;
         } else if self.cursor_line + 1 < self.lines.len() {
@@ -298,11 +319,13 @@ impl Editor {
         self.clear_suggestions();
     }
 
-    /// Move the cursor up (or through history at the top).
+    /// Move the cursor up (or through history at the top), keeping the
+    /// preferred column across shorter lines (pi's sticky column, R7).
     pub fn cursor_up(&mut self) {
         if self.cursor_line > 0 {
+            let preferred = *self.preferred_col.get_or_insert(self.cursor_col);
             self.cursor_line -= 1;
-            self.cursor_col = self.cursor_col.min(self.current().chars().count());
+            self.cursor_col = preferred.min(self.current().chars().count());
         } else if !self.history.is_empty() {
             if self.history_index.is_none() {
                 self.draft = self.text();
@@ -318,11 +341,13 @@ impl Editor {
         self.clear_suggestions();
     }
 
-    /// Move the cursor down (or through history).
+    /// Move the cursor down (or through history), keeping the preferred
+    /// column across shorter lines (pi's sticky column, R7).
     pub fn cursor_down(&mut self) {
         if self.cursor_line + 1 < self.lines.len() {
+            let preferred = *self.preferred_col.get_or_insert(self.cursor_col);
             self.cursor_line += 1;
-            self.cursor_col = self.cursor_col.min(self.current().chars().count());
+            self.cursor_col = preferred.min(self.current().chars().count());
         } else if let Some(idx) = self.history_index {
             if idx + 1 < self.history.len() {
                 self.history_index = Some(idx + 1);
@@ -338,16 +363,19 @@ impl Editor {
 
     /// Move the cursor to the line start.
     pub fn cursor_line_start(&mut self) {
+        self.preferred_col = None;
         self.cursor_col = 0;
     }
 
     /// Move the cursor to the line end.
     pub fn cursor_line_end(&mut self) {
+        self.preferred_col = None;
         self.cursor_col = self.current().chars().count();
     }
 
     /// Move the cursor one word left.
     pub fn cursor_word_left(&mut self) {
+        self.preferred_col = None;
         let chars: Vec<char> = self.current().chars().collect();
         let mut col = self.cursor_col;
         while col > 0 && chars[col - 1].is_whitespace() {
@@ -361,6 +389,7 @@ impl Editor {
 
     /// Move the cursor one word right.
     pub fn cursor_word_right(&mut self) {
+        self.preferred_col = None;
         let chars: Vec<char> = self.current().chars().collect();
         let mut col = self.cursor_col;
         while col < chars.len() && chars[col].is_whitespace() {
@@ -432,6 +461,15 @@ impl Editor {
             && let Some(content) = rest.strip_suffix("\x1b[201~")
         {
             self.insert_paste(content);
+            return EditorEvent::Changed;
+        }
+
+        // Jump mode (R7): the next printable character is the target.
+        if let Some(forward) = self.jump_pending {
+            self.jump_pending = None;
+            if let Some(ch) = printable_char(data) {
+                self.jump_to_char(ch, forward);
+            }
             return EditorEvent::Changed;
         }
 
@@ -546,6 +584,14 @@ impl Editor {
             self.cursor_word_right();
             return EditorEvent::Changed;
         }
+        if kb.matches(data, "tui.editor.jumpForward") {
+            self.jump_pending = Some(true);
+            return EditorEvent::Changed;
+        }
+        if kb.matches(data, "tui.editor.jumpBackward") {
+            self.jump_pending = Some(false);
+            return EditorEvent::Changed;
+        }
 
         // Printable insertion (including Kitty CSI-u decoding).
         if let Some(text) = crate::engine::keys::decode_printable_key(data) {
@@ -563,6 +609,31 @@ impl Editor {
             }
         }
         EditorEvent::None
+    }
+
+    /// Move the cursor to the next (or previous) occurrence of `target`,
+    /// searching the whole buffer from the cursor (pi's `jumpToChar`, R7).
+    fn jump_to_char(&mut self, target: char, forward: bool) {
+        let mut positions: Vec<(usize, usize)> = Vec::new();
+        for (line_index, line) in self.lines.iter().enumerate() {
+            for (col, ch) in line.chars().enumerate() {
+                if ch == target {
+                    positions.push((line_index, col));
+                }
+            }
+        }
+        let current = (self.cursor_line, self.cursor_col);
+        let next = if forward {
+            positions.iter().find(|p| **p > current)
+        } else {
+            positions.iter().rev().find(|p| **p < current)
+        };
+        if let Some((line, col)) = next {
+            self.cursor_line = *line;
+            self.cursor_col = *col;
+            self.preferred_col = None;
+            self.clear_suggestions();
+        }
     }
 
     fn insert_paste(&mut self, content: &str) {
@@ -732,6 +803,21 @@ fn decode_csi_u_ctrl(text: &str) -> String {
     out
 }
 
+/// The single printable character a key inserts, for jump mode (R7).
+fn printable_char(data: &str) -> Option<char> {
+    if let Some(text) = crate::engine::keys::decode_printable_key(data) {
+        return text.chars().next();
+    }
+    let key = crate::engine::keys::parse_key(data)?;
+    if key == "space" {
+        return Some(' ');
+    }
+    if key.chars().count() == 1 && !key.starts_with("ctrl+") {
+        return key.chars().next();
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -745,6 +831,38 @@ mod tests {
         e.insert_str("world");
         assert_eq!(e.lines(), &["hello", "world"]);
         assert_eq!(e.cursor_line, 1);
+    }
+
+    // Verifies: R7 - the sticky column survives a shorter line.
+    #[test]
+    fn the_sticky_column_survives_shorter_lines() {
+        let mut e = Editor::new();
+        e.set_text("long line here\nx\nanother long line");
+        e.cursor_up();
+        e.cursor_up();
+        e.cursor_line_start();
+        for _ in 0..14 {
+            e.cursor_right();
+        }
+        assert_eq!(e.cursor_col, 14);
+        e.cursor_down();
+        assert_eq!(e.cursor_col, 1, "clamped to the short line");
+        e.cursor_down();
+        assert_eq!(e.cursor_col, 14, "sticky column restored");
+    }
+
+    // Verifies: R7 - jump mode moves to the next occurrence of a character.
+    #[test]
+    fn jump_mode_moves_to_the_next_character() {
+        let mut e = Editor::new();
+        e.set_text("abcabc");
+        e.cursor_line_start();
+        e.handle_key("\x1d"); // Ctrl+]
+        e.handle_key("b");
+        assert_eq!(e.cursor_col, 1);
+        e.handle_key("\x1d");
+        e.handle_key("b");
+        assert_eq!(e.cursor_col, 4);
     }
 
     #[test]
