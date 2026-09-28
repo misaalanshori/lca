@@ -431,7 +431,7 @@ impl Chat {
                 Some("escape") => {}
                 Some("enter") => {
                     let (id, _) = picker.entries[picker.selected].clone();
-                    self.world.notice = Some(format!("resume this branch with: lca --resume {id}"));
+                    self.switch_or_announce(&id);
                 }
                 Some("up") | Some("k") => {
                     picker.selected = picker.selected.saturating_sub(1);
@@ -513,10 +513,8 @@ impl Chat {
                 Some("escape") => {}
                 Some("enter") => {
                     if let Some(entry) = picker.selected_entry() {
-                        self.world.notice = Some(format!(
-                            "resume this session with: lca --resume {}",
-                            entry.id
-                        ));
+                        let id = entry.id.clone();
+                        self.switch_or_announce(&id);
                     }
                 }
                 Some("up") => {
@@ -1136,6 +1134,30 @@ impl Chat {
             "unknown command /{name}"
         )));
         Action::Continue
+    }
+
+    /// Switch to a session in place when the host supports it (R3), else
+    /// print the resume command. Refused while a turn runs: the agent and
+    /// its stream must not be swapped mid-flight.
+    fn switch_or_announce(&mut self, id: &str) {
+        if self.turn_running {
+            self.world.notice =
+                Some("a turn is running; finish or cancel it before switching".to_string());
+            return;
+        }
+        match self.world.options.hooks.switch_session.as_ref() {
+            Some(switch) => match switch(id) {
+                Some(lines) => {
+                    self.transcript.replace(lines);
+                    self.pending.clear();
+                    self.world.notice = Some(format!("switched to session {id}"));
+                }
+                None => self.world.notice = Some(format!("cannot open session {id}")),
+            },
+            None => {
+                self.world.notice = Some(format!("resume this branch with: lca --resume {id}"));
+            }
+        }
     }
 
     /// Move the prompt-jump target to the previous/next user message

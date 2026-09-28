@@ -202,6 +202,15 @@ impl Transcript {
         self.entries.push(Entry::Raw(text.into()));
     }
 
+    /// Replace the whole transcript (R3's session switch): the new session's
+    /// display lines, each shown verbatim.
+    pub fn replace(&mut self, lines: Vec<String>) {
+        self.entries.clear();
+        for line in lines {
+            self.entries.push(Entry::Raw(line));
+        }
+    }
+
     /// Append an image placeholder (FR-UI-13).
     pub fn push_image(&mut self, info: ImageInfo) {
         self.entries.push(Entry::Image(info));

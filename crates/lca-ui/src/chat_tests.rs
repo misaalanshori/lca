@@ -408,6 +408,37 @@ fn resume_picker_searches_sessions() {
     assert!(chat.resume_picker.is_none());
 }
 
+// Verifies: R3 - selecting a branch in `/tree` switches the session in
+// place when the host supports it, and rebuilds the transcript.
+#[test]
+fn tree_selection_switches_the_session() {
+    let mut chat = chat();
+    chat.world.options.hooks.session_tree = Some(Arc::new(|| {
+        vec![("s1".into(), "s1 *".into()), ("s2".into(), "s2".into())]
+    }));
+    chat.world.options.hooks.switch_session = Some(Arc::new(|id: &str| {
+        (id == "s2").then(|| vec!["user: from s2".to_string()])
+    }));
+    for c in "/tree".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    chat.handle_key("j"); // move to s2
+    chat.handle_key("\r");
+    assert!(chat.tree_picker.is_none());
+    let text = strip(&chat.render(80)).join("\n");
+    assert!(text.contains("from s2"), "{text}");
+    assert!(
+        chat.world
+            .notice
+            .as_deref()
+            .unwrap_or("")
+            .contains("switched to session s2"),
+        "{:?}",
+        chat.world.notice
+    );
+}
+
 // Verifies: FR-UI-12 - Ctrl+R searches the transcript, highlights
 // matches, and navigates between them.
 #[test]

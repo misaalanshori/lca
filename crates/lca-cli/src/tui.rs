@@ -163,6 +163,10 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     };
     let _temp_guard = crate::SessionTempGuard;
     crate::init_session_temp(session.id());
+    // The session the interface is showing, swappable at runtime (`/tree`,
+    // `/resume`; R3). Every live consumer reads this cell; a switch rewrites
+    // it and rebuilds the transcript from the new log.
+    let current_session: Arc<Mutex<Session>> = Arc::new(Mutex::new(session.clone()));
 
     let provider_name = config.provider().to_string();
 
@@ -211,7 +215,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     )));
     let proposals: Option<Proposals> = trusted.then(|| config.permissions_proposals().clone());
     let stats_store = store.clone();
-    let stats_session = session.clone();
+    let stats_session = current_session.clone();
     // The one swappable prompt slot every capability engine shares; the turn
     // runner installs the interface's modal into it, so an extension's own
     // process/pty command asks the user exactly like a model command does.
@@ -230,7 +234,11 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         shared_prompt.clone(),
     );
     for handle in lca_ext_native::default_native_extensions(Arc::new(move || {
-        session_stats(&stats_store, &stats_session)
+        let session = stats_session
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        session_stats(&stats_store, &session)
     })) {
         registry.register(handle);
     }
@@ -659,85 +667,93 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             let label_cell = label_cell.clone();
             let provider_backend = provider_backend.clone();
             let store = store.clone();
-            let session = session.clone();
+            let session_cell = current_session.clone();
             let extensions = agent_config.extensions.clone();
             let completion_backend = agent_config.completion_backend.clone();
             let pending = pending_attachments.clone();
-            Arc::new(move |name, argument| match name {
-                // `/attach <path>`: stage an image for the next turn
-                // (ADR-0029). The bytes land in the session's attachment
-                // store; the stub text rides with the next user message.
-                "attach" => {
-                    let path = std::path::Path::new(argument.trim());
-                    match lca_core::stage_image(&session, path) {
-                        Ok(staged) => {
-                            let note = format!(
-                                "attached {} - it goes with your next message",
-                                &staged.hash[..8]
-                            );
-                            pending
-                                .lock()
-                                .unwrap_or_else(|p| p.into_inner())
-                                .push(staged);
-                            // Show the image placeholder at once (FR-UI-13);
-                            // fall back to the note when the bytes are gone.
-                            match std::fs::read(path).ok().and_then(|bytes| {
-                                lca_protocol::sniff_image_media_type(&bytes)
-                                    .map(|media_type| (media_type.to_string(), bytes))
-                            }) {
-                                Some((media_type, bytes)) => CommandEffect::AttachImage {
-                                    media_type,
-                                    bytes,
-                                    note,
-                                },
-                                None => CommandEffect::ShowWidget(note),
+            Arc::new(move |name, argument| {
+                let session = session_cell
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                match name {
+                    // `/attach <path>`: stage an image for the next turn
+                    // (ADR-0029). The bytes land in the session's attachment
+                    // store; the stub text rides with the next user message.
+                    "attach" => {
+                        let path = std::path::Path::new(argument.trim());
+                        match lca_core::stage_image(&session, path) {
+                            Ok(staged) => {
+                                let note = format!(
+                                    "attached {} - it goes with your next message",
+                                    &staged.hash[..8]
+                                );
+                                pending
+                                    .lock()
+                                    .unwrap_or_else(|p| p.into_inner())
+                                    .push(staged);
+                                // Show the image placeholder at once (FR-UI-13);
+                                // fall back to the note when the bytes are gone.
+                                match std::fs::read(path).ok().and_then(|bytes| {
+                                    lca_protocol::sniff_image_media_type(&bytes)
+                                        .map(|media_type| (media_type.to_string(), bytes))
+                                }) {
+                                    Some((media_type, bytes)) => CommandEffect::AttachImage {
+                                        media_type,
+                                        bytes,
+                                        note,
+                                    },
+                                    None => CommandEffect::ShowWidget(note),
+                                }
                             }
+                            Err(err) => CommandEffect::ShowWidget(format!("attach failed: {err}")),
                         }
-                        Err(err) => CommandEffect::ShowWidget(format!("attach failed: {err}")),
                     }
-                }
-                // The model picker and the manual compact: the two
-                // spec-named slots the host itself fills, both routed
-                // through surfaces that already exist (the provider
-                // world's listing; the compaction world's strategy).
-                "model" => {
-                    let models = provider.list_models();
-                    model_effect_on(
-                        &models,
-                        &provider_name,
-                        argument,
-                        Some(&model_cell),
-                        Some(&label_cell),
-                        provider_backend.as_ref(),
-                    )
-                }
-                "compact" => match lca_core::compact_now(
-                    store.clone(),
-                    session.clone(),
-                    extensions.clone(),
-                    completion_backend.clone(),
-                ) {
-                    Ok(summary) => CommandEffect::ShowWidget(format!("compacted: {summary}")),
-                    Err(detail) => {
-                        CommandEffect::ShowWidget(format!("nothing was compacted: {detail}"))
+                    // The model picker and the manual compact: the two
+                    // spec-named slots the host itself fills, both routed
+                    // through surfaces that already exist (the provider
+                    // world's listing; the compaction world's strategy).
+                    "model" => {
+                        let models = provider.list_models();
+                        model_effect_on(
+                            &models,
+                            &provider_name,
+                            argument,
+                            Some(&model_cell),
+                            Some(&label_cell),
+                            provider_backend.as_ref(),
+                        )
                     }
-                },
-                // The stats story (FR-UI-19): the same numbers the
-                // footer accumulates, with per-model cost and cache waste.
-                "session" => CommandEffect::ShowWidget(session_stats(&store, &session)),
-                // The generic identity commands dispatch across
-                // installed providers first (FR-PROV-11); with zero
-                // enabled providers FR-PROV-6's report shows instead.
-                "login" | "logout" | "usage" => {
-                    if let Some(effect) = registry.invoke_generic(name, argument, &provider_name) {
-                        effect
-                    } else {
-                        CommandEffect::ShowWidget(crate::no_model_message(&provider_name))
+                    "compact" => match lca_core::compact_now(
+                        store.clone(),
+                        session.clone(),
+                        extensions.clone(),
+                        completion_backend.clone(),
+                    ) {
+                        Ok(summary) => CommandEffect::ShowWidget(format!("compacted: {summary}")),
+                        Err(detail) => {
+                            CommandEffect::ShowWidget(format!("nothing was compacted: {detail}"))
+                        }
+                    },
+                    // The stats story (FR-UI-19): the same numbers the
+                    // footer accumulates, with per-model cost and cache waste.
+                    "session" => CommandEffect::ShowWidget(session_stats(&store, &session)),
+                    // The generic identity commands dispatch across
+                    // installed providers first (FR-PROV-11); with zero
+                    // enabled providers FR-PROV-6's report shows instead.
+                    "login" | "logout" | "usage" => {
+                        if let Some(effect) =
+                            registry.invoke_generic(name, argument, &provider_name)
+                        {
+                            effect
+                        } else {
+                            CommandEffect::ShowWidget(crate::no_model_message(&provider_name))
+                        }
                     }
+                    _ => registry
+                        .invoke_command(name, argument)
+                        .unwrap_or(CommandEffect::None),
                 }
-                _ => registry
-                    .invoke_command(name, argument)
-                    .unwrap_or(CommandEffect::None),
             })
         },
         render_regions,
@@ -750,8 +766,12 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         hooks: lca_ui::UiHooks {
             run_shell: Some({
                 let shell_store = store.clone();
-                let shell_session = session.clone();
+                let shell_session_cell = current_session.clone();
                 Arc::new(move |command: &str, excluded: bool| {
+                    let shell_session = shell_session_cell
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .clone();
                     // `!` is context; `!!` is not (FR-UI-14).
                     if !excluded {
                         let _ = shell_store.append(
@@ -811,8 +831,12 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             }),
             session_tree: Some({
                 let store = store.clone();
-                let session = session.clone();
+                let session_cell = current_session.clone();
                 Arc::new(move || {
+                    let session = session_cell
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .clone();
                     store
                         .fork_tree(&session)
                         .unwrap_or_default()
@@ -853,10 +877,27 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                         .collect()
                 })
             }),
+            switch_session: Some({
+                let store = store.clone();
+                let cwd = cwd.to_path_buf();
+                let session_cell = current_session.clone();
+                Arc::new(move |id: &str| -> Option<Vec<String>> {
+                    let session = store.session(&cwd, id).ok()?;
+                    let read = store.read_with(&session, ViewMode::Display).ok()?;
+                    let lines: Vec<String> = read.records.iter().filter_map(display_line).collect();
+                    crate::init_session_temp(session.id());
+                    *session_cell.lock().unwrap_or_else(|p| p.into_inner()) = session;
+                    Some(lines)
+                })
+            }),
             fork_at: Some({
                 let store = store.clone();
-                let session = session.clone();
+                let session_cell = current_session.clone();
                 Arc::new(move |index: usize| -> String {
+                    let session = session_cell
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .clone();
                     let outcome = match store.read_with(&session, ViewMode::Display) {
                         Ok(outcome) => outcome,
                         Err(err) => return format!("cannot read the session: {err}"),
@@ -916,7 +957,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     };
 
     let runner_store = store.clone();
-    let runner_session = session.clone();
+    let runner_session = current_session.clone();
     let shared_prompt_for_runner = shared_prompt.clone();
     let runner_pending = pending_attachments.clone();
     let runner: TurnRunner = Box::new(move |text, channels, cancel| {
@@ -995,6 +1036,12 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .clone();
                 turn_config.steer = steer;
+                // R3: read the session the interface is showing *now*, so a
+                // `/tree` or `/resume` switch takes effect on the next turn.
+                let runner_session = runner_session
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
                 let mut agent = Agent::new(
                     &runner_store,
                     &runner_session,
@@ -1018,7 +1065,11 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     lca_core::drive_blocking(async move {
         close_registry.on_session_close().await;
     });
-    let _ = store.close(&session);
+    let final_session = current_session
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
+    let _ = store.close(&final_session);
     result
 }
 

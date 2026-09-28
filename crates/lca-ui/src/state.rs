@@ -285,6 +285,9 @@ pub type SessionTree = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
 pub type ForkAt = Arc<dyn Fn(usize) -> String + Send + Sync>;
 /// Lists the project's sessions, newest first (`/resume`, R2).
 pub type SessionList = Arc<dyn Fn() -> Vec<crate::resume::SessionEntry> + Send + Sync>;
+/// Switches the live session to `id` and returns the new transcript lines
+/// (R3); `None` when the session cannot be opened.
+pub type SwitchSession = Arc<dyn Fn(&str) -> Option<Vec<String>> + Send + Sync>;
 
 /// Optional host hooks the interface calls (P6): an external editor, the
 /// `!`/`!!` shell path, and screen-mode persistence. Default: all absent,
@@ -308,6 +311,9 @@ pub struct UiHooks {
     pub fork_at: Option<ForkAt>,
     /// List the project's sessions for `/resume` (R2).
     pub session_list: Option<SessionList>,
+    /// Switch the live session in place, returning the new transcript lines
+    /// (R3).
+    pub switch_session: Option<SwitchSession>,
 }
 
 /// Static inputs for the interface.
