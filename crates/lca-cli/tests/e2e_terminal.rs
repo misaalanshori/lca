@@ -3,6 +3,7 @@
 mod common;
 
 use common::*;
+#[cfg(unix)]
 use std::process::{Command, Output};
 
 #[cfg(unix)]
