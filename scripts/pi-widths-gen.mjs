@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Generate `tests/golden/pi-widths.json` from pi's own width function (R18).
+// Generate `tests/golden/pi-widths.json` from pi's own text functions (R18).
 //
-// pi's `packages/tui/src/utils.ts` exports `visibleWidth`, the ANSI-aware
-// visual-column measure LCA's `lca-tui::text::visible_width` ports. This
-// script feeds the `utils.md` case taxonomy through pi's function and
-// writes the answer; `crates/lca-tui/tests/pi_widths.rs` diffs LCA's
-// answer against the file and fails on drift.
+// pi's `packages/tui/src/utils.ts` exports `visibleWidth`,
+// `truncateToWidth`, and `wrapTextWithAnsi` - the ANSI-aware visual-column
+// layer LCA's `lca-tui::text` ports. This script feeds the `utils.md` case
+// taxonomy through pi's functions and writes the answers;
+// `crates/lca-tui/tests/pi_widths.rs` diffs LCA's answers against the file
+// and fails on drift.
 //
 // It imports pi's TypeScript through Node's type stripping, so the run
 // needs `get-east-asian-width` resolvable from the imported file. The
@@ -22,9 +23,11 @@ import { writeFileSync } from "node:fs";
 const utilsPath =
   process.env.PI_TUI_UTILS ??
   `${process.env.HOME}/gits/pi/packages/tui/src/utils.ts`;
-const { visibleWidth } = await import(utilsPath);
+const { visibleWidth, truncateToWidth, wrapTextWithAnsi } = await import(
+  utilsPath
+);
 
-const cases = [
+const widthCases = [
   "",
   "hello",
   "hello world",
@@ -56,7 +59,40 @@ const cases = [
   "\x1b[2Kcleared",
 ];
 
-const out = cases.map((text) => ({ text, width: visibleWidth(text) }));
+const truncationCases = [
+  { text: "hello world", max: 5 },
+  { text: "hello world", max: 11 },
+  { text: "hello world", max: 20 },
+  { text: "你好世界", max: 4 },
+  { text: "你好世界", max: 5 },
+  { text: "🎉🚀", max: 3 },
+  { text: "\x1b[31mhello\x1b[0m world", max: 7 },
+  { text: "héllo wörld", max: 8 },
+];
+
+const wrapCases = [
+  { text: "the quick brown fox jumps over the lazy dog", width: 12 },
+  { text: "hello world", width: 5 },
+  { text: "你好世界你好世界", width: 4 },
+  { text: "a-very-long-token-without-spaces", width: 8 },
+  { text: "one\ntwo\nthree", width: 10 },
+];
+
+const out = {
+  widths: widthCases.map((text) => ({ text, width: visibleWidth(text) })),
+  truncations: truncationCases.map(({ text, max }) => ({
+    text,
+    max,
+    result: truncateToWidth(text, max, "...", false),
+  })),
+  wraps: wrapCases.map(({ text, width }) => ({
+    text,
+    width,
+    lines: wrapTextWithAnsi(text, width),
+  })),
+};
 const target = new URL("../tests/golden/pi-widths.json", import.meta.url);
 writeFileSync(target, JSON.stringify(out, null, 2) + "\n");
-console.log(`pi-widths: wrote ${out.length} vectors to tests/golden/pi-widths.json`);
+console.log(
+  `pi-widths: wrote ${out.widths.length} widths, ${out.truncations.length} truncations, ${out.wraps.length} wraps`,
+);

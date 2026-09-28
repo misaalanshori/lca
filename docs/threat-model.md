@@ -317,7 +317,7 @@ are the review's to make, not something this list can pre-answer.
 - **Control characters cannot reach the terminal from any
   extension-supplied string - widget, tool name, command name, or
   error message.** Receipt, per vector: widgets go through
-  `sanitize_text` in `lca-tui::widget_lines`, the single choke point
+  `sanitize_text` in `lca_ui::state::widget_lines`, the single choke point
   (`control_sequences_become_visible_text`,
   `an_extension_renders_in_all_four_regions_and_the_hostile_span_
   stays_literal` asserts the virtual buffer holds no control byte);

@@ -193,7 +193,10 @@ impl ScrollView {
 
     /// Scroll by a delta.
     pub fn scroll_by(&mut self, delta: i32) {
-        self.scroll_top = (self.scroll_top as i32 + delta).max(0) as u16;
+        // Saturate rather than wrap: past u16::MAX a truncated offset would
+        // jump the list back near the top.
+        self.scroll_top =
+            u16::try_from((i32::from(self.scroll_top) + delta).max(0)).unwrap_or(u16::MAX);
         self.follow_end = false;
     }
 

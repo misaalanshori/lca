@@ -221,7 +221,14 @@ fn image_cell_size(info: &ImageInfo, max_width: usize) -> (u32, u32) {
     let (cell_w, cell_h) = (9.0_f64, 18.0_f64);
     let natural_cols = (px_w / cell_w).ceil().max(1.0);
     let cols = natural_cols.min(max_cols).max(1.0);
-    let rows = ((px_h / cell_h) * (cols / natural_cols)).ceil().max(1.0);
+    // Cap the rows: an extreme aspect ratio would otherwise ask for a body
+    // taller than any terminal, and the float-to-int cast would saturate at
+    // u32::MAX (a nonsense placement).
+    // ponytail: a 200-row cap; thread a real max height through if a widget
+    // ever needs to fit an image to its viewport exactly.
+    let rows = ((px_h / cell_h) * (cols / natural_cols))
+        .ceil()
+        .clamp(1.0, 200.0);
     (cols as u32, rows as u32)
 }
 

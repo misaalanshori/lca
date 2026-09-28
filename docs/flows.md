@@ -61,7 +61,7 @@ This is the main loop. Everything else in the agent exists to support it. It pic
 ```mermaid
 sequenceDiagram
     actor User
-    participant TUI as lca-tui
+    participant TUI as lca-ui
     participant Core as lca-core
     participant Hooks as Extension (hooks)
     participant Perm as lca-permissions
@@ -270,7 +270,7 @@ sequenceDiagram
     participant Stream as Stream resource
     participant Core as lca-core
     participant Acc as Argument accumulator
-    participant TUI as lca-tui
+    participant TUI as lca-ui
 
     API-->>HostNet: response chunk
     HostNet-->>Ext: body bytes
@@ -325,7 +325,7 @@ The user can cancel at any point, including mid-call inside a WASM extension. Th
 ```mermaid
 sequenceDiagram
     actor User
-    participant TUI as lca-tui
+    participant TUI as lca-ui
     participant Core as lca-core
     participant WT as Wasmtime
     participant Ext as Extension instance (any world)

@@ -9,7 +9,7 @@
 
 use lca_tui::engine::text::{truncate_to_width, visible_width, wrap_text_with_ansi};
 use lca_tui::widgets::image::{ImageInfo, render_image};
-use lca_tui::widgets::markdown::{MarkdownOptions, render_markdown};
+use lca_tui::widgets::markdown::{LinkMode, MarkdownOptions, render_markdown};
 
 use crate::theme::Theme;
 
@@ -365,6 +365,20 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
     format!("[image {media_type}, {dimensions}, {} bytes]", bytes.len())
 }
 
+/// Markdown options for the terminal: the link mode follows the terminal's
+/// OSC 8 capability, so a URL never vanishes on a terminal that swallows
+/// the hyperlink (pi's `markdown.md` §6).
+fn markdown_options() -> MarkdownOptions {
+    MarkdownOptions {
+        link_mode: if lca_tui::engine::terminal::supports_hyperlinks() {
+            LinkMode::Hyperlink
+        } else {
+            LinkMode::Inline
+        },
+        ..Default::default()
+    }
+}
+
 fn render_entry(
     entry: &Entry,
     width: u16,
@@ -451,12 +465,7 @@ fn render_assistant(
         }
     }
     if !text.is_empty() {
-        let md = render_markdown(
-            text,
-            width as usize,
-            &theme.markdown(),
-            &MarkdownOptions::default(),
-        );
+        let md = render_markdown(text, width as usize, &theme.markdown(), &markdown_options());
         out.extend(md);
     }
     if streaming {

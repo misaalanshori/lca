@@ -36,13 +36,14 @@ differential scrollback renderer, switchable at runtime. Rendering to
 plain line strings is what makes the engine unit-testable without a
 terminal.
 
-**The renderer owns text selection.** Drag, word, and line granularity,
-and copy through OSC 52 (written unverified - the engine has no native
-clipboard to confirm it). This is
+**The renderer owns text selection.** Drag, word, and line granularity;
+copy through a verified native clipboard when the host provides one,
+else OSC 52 (written unverified - the engine has no native clipboard to
+confirm it). A drag on a viewport edge auto-scrolls and extends the
+selection, and a click on an OSC-8 link hands the URL to the host
+(`UiHooks.open_url`). This is
 deliberate: selection goes through the same masking the transcript does,
-and the terminal's own selection is not the product's contract. Edge
-auto-scroll while dragging is not implemented (the wheel and the scroll
-offset still work); it is the next selection refinement.
+and the terminal's own selection is not the product's contract.
 
 **One key vocabulary.** Input is parsed from raw bytes by the engine —
 Kitty keyboard protocol negotiation, xterm `modifyOtherKeys` fallback,

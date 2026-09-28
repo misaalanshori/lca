@@ -1272,10 +1272,18 @@ pub(crate) fn session_stats(store: &SessionStore, session: &Session) -> String {
     let mut cache_read = 0u64;
     let mut cache_write = 0u64;
     let mut cost = 0.0f64;
+    // FR-UI-19: tokens per model, keyed by `provider/model`.
+    let mut per_model: std::collections::BTreeMap<String, (u64, u64)> =
+        std::collections::BTreeMap::new();
     for record in &read.records {
         match record {
             Record::User { .. } => messages += 1,
-            Record::Assistant { usage, .. } => {
+            Record::Assistant {
+                model,
+                provider,
+                usage,
+                ..
+            } => {
                 messages += 1;
                 if let Some(usage) = usage {
                     input += usage.input;
@@ -1283,6 +1291,13 @@ pub(crate) fn session_stats(store: &SessionStore, session: &Session) -> String {
                     cache_read += usage.cache_read;
                     cache_write += usage.cache_write;
                     cost += usage.cost;
+                    let entry = per_model
+                        .entry(model_label_for(provider.as_deref(), model.as_deref()))
+                        .or_insert((0, 0));
+                    // Cache reads/writes are billed as input on most
+                    // endpoints, so they count toward the input side.
+                    entry.0 += usage.input + usage.cache_read + usage.cache_write;
+                    entry.1 += usage.output;
                 }
             }
             _ => {}
@@ -1301,11 +1316,32 @@ pub(crate) fn session_stats(store: &SessionStore, session: &Session) -> String {
     } else {
         String::new()
     };
+    // Only break down by model when more than one was used; a single-model
+    // session would just repeat the total.
+    let per_model_part = if per_model.len() > 1 {
+        let parts: Vec<String> = per_model
+            .iter()
+            .map(|(model, (i, o))| format!("{model}: in {i}, out {o}"))
+            .collect();
+        format!("; by model: {}", parts.join("; "))
+    } else {
+        String::new()
+    };
     format!(
         "{messages} messages, in {input} tokens (cache read {cache_read}, cache write {cache_write}), \
-         out {output} tokens{cost_part}; cache waste {} tokens{waste_cost} across {} misses",
+         out {output} tokens{cost_part}; cache waste {} tokens{waste_cost} across {} misses{per_model_part}",
         waste.missed_tokens, waste.miss_count
     )
+}
+
+/// `provider/model` when both are known, else whichever is, else `unknown`.
+fn model_label_for(provider: Option<&str>, model: Option<&str>) -> String {
+    match (provider, model) {
+        (Some(provider), Some(model)) => format!("{provider}/{model}"),
+        (_, Some(model)) => model.to_string(),
+        (Some(provider), None) => provider.to_string(),
+        _ => "unknown".to_string(),
+    }
 }
 
 /// Forwards turn events to the interface.

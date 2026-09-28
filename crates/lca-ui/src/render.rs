@@ -29,17 +29,21 @@ pub fn overlay_box(base: &mut [String], width: u16, height: u16, title: &str, bo
     let w = rect.width as usize;
     let inner = w.saturating_sub(4);
 
+    // A full frame: pi's selectors draw complete boxes (DynamicBorder),
+    // and a left-only border reads as a half-drawn frame.
     let mut box_lines: Vec<String> = Vec::new();
+    let title_w = visible_width(title);
     box_lines.push(format!(
-        "╭─ {title} {}",
-        "─".repeat(w.saturating_sub(title.chars().count() + 5))
+        "╭─ {title} {}╮",
+        "─".repeat(w.saturating_sub(title_w + 5))
     ));
     for line in body {
         for wrapped in wrap_text_with_ansi(line, inner) {
-            box_lines.push(format!("│ {wrapped}"));
+            let pad = inner.saturating_sub(visible_width(&wrapped));
+            box_lines.push(format!("│ {wrapped}{} │", " ".repeat(pad)));
         }
     }
-    box_lines.push(format!("╰{}", "─".repeat(w.saturating_sub(1))));
+    box_lines.push(format!("╰{}╯", "─".repeat(w.saturating_sub(2))));
 
     let box_h = box_lines.len().min(height as usize);
     let col = rect.col as usize;
@@ -100,5 +104,30 @@ mod tests {
         side_panel(&mut base, 80, &["panel".to_string()]);
         let line = strip_terminal_sequences(&base[0]);
         assert!(line.ends_with("panel"));
+    }
+
+    // Verifies: R11 - the overlay box is a full frame, not a half one.
+    #[test]
+    fn the_overlay_box_draws_a_full_frame() {
+        let mut base = vec![".".repeat(80); 24];
+        overlay_box(&mut base, 80, 24, "login", &["hello".to_string()]);
+        let joined: Vec<String> = base.iter().map(|l| strip_terminal_sequences(l)).collect();
+        assert!(
+            joined.iter().any(|l| l.contains('╭') && l.contains('╮')),
+            "a top frame with both corners"
+        );
+        assert!(
+            joined.iter().any(|l| l.contains('╰') && l.contains('╯')),
+            "a bottom frame with both corners"
+        );
+        let content = joined
+            .iter()
+            .find(|l| l.contains("hello"))
+            .expect("a content line");
+        let after = content.split("hello").nth(1).unwrap_or("");
+        assert!(
+            after.contains('│'),
+            "a right border after the content: {content:?}"
+        );
     }
 }

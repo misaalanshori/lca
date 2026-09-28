@@ -14,12 +14,13 @@ feature of the TUI renovation.
 
 ## Decision
 
-**Three submit modes** (`SubmitMode`): `Steer`, `FollowUp`, and `New`.
+**Two submit modes** (`SubmitMode`): `Steer` and `FollowUp`. (An
+ordinary submit with no turn running is the no-queue path, not a mode.)
 While a turn runs, `Steer` appends the message to the turn's input at the
 **next model-call boundary** — after the current tool or model step
 completes. `FollowUp` queues the message and auto-submits it when the
 turn ends. Queued messages keep their submission order regardless of
-mode, and each remembers its mode. `New` is the no-turn case.
+mode, and each remembers its mode.
 
 **A streaming response is never mutated.** Steering queues messages; it
 does not rewrite an in-flight stream. The ceiling is that a steer takes

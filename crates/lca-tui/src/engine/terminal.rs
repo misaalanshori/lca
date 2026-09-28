@@ -264,7 +264,7 @@ impl Terminal for ProcessTerminal {
             if remaining == 0 {
                 break;
             }
-            match sys::wait_stdin(remaining as i32) {
+            match sys::wait_stdin(i32::try_from(remaining).unwrap_or(i32::MAX)) {
                 Ok(true) => {
                     let _ = sys::read_stdin(&mut buf);
                     last = Instant::now();
@@ -567,6 +567,43 @@ impl Terminal for FakeTerminal {
     }
 
     fn set_progress(&mut self, _active: bool) {}
+}
+
+/// Whether the terminal forwards OSC 8 hyperlinks (pi's capability ladder,
+/// `terminal-image.md` §1).
+///
+/// tmux and screen do not forward OSC 8 by default, and an unknown terminal
+/// is treated as not forwarding: on a terminal that swallows OSC 8 the URL
+/// vanishes from the rendered output, so the conservative answer shows
+/// `text (url)` instead (`markdown.md` §6). Cached after the first call.
+pub fn supports_hyperlinks() -> bool {
+    static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let term = std::env::var("TERM").unwrap_or_default();
+        if std::env::var_os("TMUX").is_some()
+            || std::env::var_os("STY").is_some()
+            || term.starts_with("tmux")
+            || term.starts_with("screen")
+        {
+            return false;
+        }
+        for var in [
+            "KITTY_WINDOW_ID",
+            "GHOSTTY_RESOURCES_DIR",
+            "WEZTERM_PANE",
+            "ITERM_SESSION_ID",
+            "WT_SESSION",
+            "ALACRITTY_SOCKET",
+            "VSCODE_INJECTION",
+            "ZED_TERM",
+        ] {
+            if std::env::var_os(var).is_some() {
+                return true;
+            }
+        }
+        // Unknown: off, so a URL never vanishes.
+        false
+    })
 }
 
 #[cfg(test)]

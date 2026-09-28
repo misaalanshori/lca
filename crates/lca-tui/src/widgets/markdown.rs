@@ -358,29 +358,28 @@ fn render_code_block(
 ) {
     // D10: the border caps at the content width, not the terminal width.
     let content_width = body.iter().map(|l| visible_width(l)).max().unwrap_or(0);
-    let frame = (content_width + 2).min(width).max(4);
-    let inner = frame.saturating_sub(4).max(1);
+    // A full frame: 2 border + 2 padding around the content, capped at the
+    // terminal width. A left-only border reads as a half-drawn frame.
+    let frame = (content_width + 4).min(width).max(4);
+    let inner = frame.saturating_sub(4);
     let title = if lang.is_empty() {
         String::new()
     } else {
         format!(" {lang} ")
     };
-    let border = (theme.code_block_border)(&format!(
-        "╭─{title}{}",
-        "─".repeat(
-            inner
-                .saturating_sub(visible_width(&title))
-                .saturating_add(2)
-        )
-    ));
-    out.push(truncate_to_width(&border, frame, "", false));
+    let top_fill = frame.saturating_sub(visible_width(&title) + 3);
+    out.push((theme.code_block_border)(&format!(
+        "╭─{title}{}╮",
+        "─".repeat(top_fill)
+    )));
     for line in body {
         let styled = (theme.code_block)(line);
-        out.push(format!("│ {styled}"));
+        let pad = inner.saturating_sub(visible_width(line));
+        out.push(format!("│ {styled}{} │", " ".repeat(pad)));
     }
     out.push((theme.code_block_border)(&format!(
-        "╰{}",
-        "─".repeat(frame.saturating_sub(1))
+        "╰{}╯",
+        "─".repeat(frame.saturating_sub(2))
     )));
 }
 
@@ -472,15 +471,33 @@ fn render_table(rows: &[Vec<String>], width: usize, theme: &MarkdownTheme, out: 
     };
     out.push(border("┌", "┬", "┐"));
     for (r, row) in rows.iter().enumerate() {
-        let cells: Vec<String> = (0..cols)
+        // Wrap each cell to its column width, then emit as many lines as the
+        // tallest cell needs (pi's `wrapCellText`). A long cell wraps instead
+        // of being truncated.
+        let cells: Vec<Vec<String>> = (0..cols)
             .map(|c| {
                 let raw = row.get(c).map(String::as_str).unwrap_or("");
                 let rendered = render_inline(raw, theme, &MarkdownOptions::default());
-                pad_or_truncate(&rendered, widths[c])
+                let mut lines = wrap_text_with_ansi(&rendered, widths[c].max(1));
+                if lines.is_empty() {
+                    lines.push(String::new());
+                }
+                lines
             })
             .collect();
-        out.push(format!("│ {} │", cells.join(" │ ")));
-        if r == 0 {
+        let height = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        for line in 0..height {
+            let parts: Vec<String> = cells
+                .iter()
+                .enumerate()
+                .map(|(c, cell)| {
+                    pad_or_truncate(cell.get(line).map(String::as_str).unwrap_or(""), widths[c])
+                })
+                .collect();
+            out.push(format!("│ {} │", parts.join(" │ ")));
+        }
+        // pi draws a separator after every row except the last.
+        if r + 1 < rows.len() {
             out.push(border("├", "┼", "┤"));
         }
     }
@@ -890,5 +907,32 @@ mod tests {
         let bottom = visible_width(out.last().unwrap());
         assert_eq!(top, bottom);
         assert!(top < 80, "capped at the content width, got {top}");
+    }
+
+    // Verifies: D10/R16 - a code block is a full frame, not a half one.
+    #[test]
+    fn a_code_block_is_a_full_frame() {
+        let out = strip(&render_markdown(
+            "```python\nx = 1\n```",
+            80,
+            &plain(),
+            &MarkdownOptions::default(),
+        ));
+        assert!(
+            out[0].starts_with('╭') && out[0].ends_with('╮'),
+            "{:?}",
+            out[0]
+        );
+        assert!(out[0].contains("python"), "{:?}", out[0]);
+        assert!(
+            out[1].starts_with('│') && out[1].ends_with('│'),
+            "{:?}",
+            out[1]
+        );
+        let bottom = out.last().expect("a bottom");
+        assert!(
+            bottom.starts_with('╰') && bottom.ends_with('╯'),
+            "{bottom:?}"
+        );
     }
 }
