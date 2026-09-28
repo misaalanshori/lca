@@ -273,8 +273,23 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
     out
 }
 
-/// Runs a `!`/`!!` shell command; the `bool` is `true` for `!!`.
-pub type ShellRunner = Arc<dyn Fn(&str, bool) -> String + Send + Sync>;
+/// A streamed `!`/`!!` shell event (R4).
+#[derive(Debug, Clone)]
+pub enum ShellEvent {
+    /// A chunk of combined output.
+    Chunk(String),
+    /// The command finished; the shell-convention exit code (`None` when
+    /// signalled).
+    Done(Option<i32>),
+}
+
+/// Cancels a running `!`/`!!` command (Escape, R4).
+pub type ShellHandle = Arc<dyn Fn() + Send + Sync>;
+
+/// Starts a `!`/`!!` shell command, streaming output through the sender and
+/// returning a cancel handle (R4). The `bool` is `true` for `!!`.
+pub type ShellRunner =
+    Arc<dyn Fn(&str, bool, std::sync::mpsc::SyncSender<ShellEvent>) -> ShellHandle + Send + Sync>;
 /// Opens the external editor on the prompt text.
 pub type ExternalEditor = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 /// Persists a runtime screen-mode change.

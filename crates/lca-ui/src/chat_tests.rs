@@ -196,20 +196,58 @@ fn follow_ups_run_in_order() {
 #[test]
 fn shell_mode_shows_a_bash_card() {
     let mut options = options();
-    options.hooks.run_shell = Some(Arc::new(|cmd: &str, excluded: bool| {
-        format!("ran {cmd} excluded={excluded}")
-    }));
+    options.hooks.run_shell = Some(Arc::new(
+        |cmd: &str, excluded: bool, sink: std::sync::mpsc::SyncSender<crate::state::ShellEvent>| {
+            let _ = sink.send(crate::state::ShellEvent::Chunk(format!(
+                "ran {cmd} excluded={excluded}"
+            )));
+            let _ = sink.send(crate::state::ShellEvent::Done(Some(0)));
+            Arc::new(|| {}) as crate::state::ShellHandle
+        },
+    ));
     let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
     for c in "!!echo hi".chars() {
         chat.handle_key(&c.to_string());
     }
     assert_eq!(chat.handle_key("\r"), Action::Continue);
+    assert!(chat.shell_running());
+    // R4: the output streams in on the loop's poll.
+    assert!(chat.poll_shell());
     // Tool cards are collapsed by default (R8); expand to see the output.
     chat.transcript.toggle_tools_expanded();
     let text = strip(&chat.render(80)).join("\n");
     assert!(text.contains("bash"), "{text}");
     assert!(text.contains("echo hi"), "{text}");
     assert!(text.contains("excluded=true"), "{text}");
+}
+
+// Verifies: R4 - Escape cancels a running `!` command.
+#[test]
+fn escape_cancels_a_running_shell_command() {
+    let mut options = options();
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = cancelled.clone();
+    options.hooks.run_shell = Some(Arc::new(
+        move |_cmd: &str,
+              _excluded: bool,
+              _sink: std::sync::mpsc::SyncSender<crate::state::ShellEvent>| {
+            let flag = flag.clone();
+            Arc::new(move || {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            }) as crate::state::ShellHandle
+        },
+    ));
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    for c in "!sleep 9".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(chat.shell_running());
+    chat.handle_key("\x1b");
+    assert!(
+        cancelled.load(std::sync::atomic::Ordering::SeqCst),
+        "Escape called the cancel handle"
+    );
 }
 
 // Verifies: FR-UI-15 - Ctrl+X Ctrl+E asks the loop for the external editor.

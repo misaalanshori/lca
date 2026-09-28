@@ -218,6 +218,10 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                 dirty = true;
             }
         }
+        // Drain the running `!`/`!!` command (R4).
+        if chat.poll_shell() {
+            dirty = true;
+        }
         if chat.world.permission.is_none()
             && let Some(rx) = &prompt_rx
             && let Ok(request) = rx.try_recv()

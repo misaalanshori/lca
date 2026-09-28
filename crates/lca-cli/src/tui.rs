@@ -123,6 +123,29 @@ fn age_label(now_ms: u64, then_ms: u64) -> String {
     }
 }
 
+/// Read a child pipe into the shell sink until it closes (R4). Control
+/// characters are sanitized so the card can never paint the terminal.
+fn read_into<R: std::io::Read>(
+    mut reader: Option<R>,
+    sink: &std::sync::mpsc::SyncSender<lca_ui::ShellEvent>,
+) {
+    let Some(reader) = reader.as_mut() else {
+        return;
+    };
+    let mut buf = [0u8; 4096];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                let text = lca_ui::sanitize_block(&String::from_utf8_lossy(&buf[..n]));
+                if sink.send(lca_ui::ShellEvent::Chunk(text)).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 /// Enter the interactive interface for `cwd`, optionally resuming `resume`.
 pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     // The interface needs a terminal for raw mode and key events; without
@@ -767,41 +790,86 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             run_shell: Some({
                 let shell_store = store.clone();
                 let shell_session_cell = current_session.clone();
-                Arc::new(move |command: &str, excluded: bool| {
-                    let shell_session = shell_session_cell
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .clone();
-                    // `!` is context; `!!` is not (FR-UI-14).
-                    if !excluded {
-                        let _ = shell_store.append(
-                            &shell_session,
-                            Record::User {
-                                v: lca_protocol::FORMAT_VERSION,
-                                ts: lca_session::now_ms(),
-                                id: lca_session::new_record_id(),
-                                content: format!("!{command}"),
-                                attachments: Vec::new(),
-                                queue: None,
-                            },
-                        );
-                    }
-                    match std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(command)
-                        .output()
-                    {
-                        Ok(out) => {
-                            let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-                            text.push_str(&String::from_utf8_lossy(&out.stderr));
-                            if text.trim().is_empty() {
-                                text = format!("(no output; exit {:?})", out.status.code());
-                            }
-                            lca_ui::sanitize_block(&text)
+                let shell_cwd = cwd.to_path_buf();
+                Arc::new(
+                    move |command: &str,
+                          excluded: bool,
+                          sink: std::sync::mpsc::SyncSender<lca_ui::ShellEvent>|
+                          -> lca_ui::ShellHandle {
+                        let shell_session = shell_session_cell
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .clone();
+                        // `!` is context; `!!` is not (FR-UI-14).
+                        if !excluded {
+                            let _ = shell_store.append(
+                                &shell_session,
+                                Record::User {
+                                    v: lca_protocol::FORMAT_VERSION,
+                                    ts: lca_session::now_ms(),
+                                    id: lca_session::new_record_id(),
+                                    content: format!("!{command}"),
+                                    attachments: Vec::new(),
+                                    queue: None,
+                                },
+                            );
                         }
-                        Err(err) => format!("shell failed: {err}"),
-                    }
-                })
+                        // R4: the command runs on its own thread, in its own
+                        // process group (`spawn_direct`), so a long command
+                        // never freezes the interface and Escape can kill the
+                        // whole tree.
+                        let mut child = match lca_tools::spawn_direct(
+                            "sh",
+                            &["-c".to_string(), command.to_string()],
+                            &shell_cwd,
+                        ) {
+                            Ok(child) => child,
+                            Err(err) => {
+                                let _ = sink.send(lca_ui::ShellEvent::Chunk(format!(
+                                    "shell failed: {err}"
+                                )));
+                                let _ = sink.send(lca_ui::ShellEvent::Done(Some(1)));
+                                return Arc::new(|| {});
+                            }
+                        };
+                        let stdout = child.stdout();
+                        let stderr = child.stderr();
+                        let child = Arc::new(Mutex::new(child));
+                        let cancel_child = child.clone();
+                        let cancel: lca_ui::ShellHandle = Arc::new(move || {
+                            if let Ok(mut child) = cancel_child.lock() {
+                                child.kill_tree();
+                            }
+                        });
+                        let out_sink = sink.clone();
+                        let err_sink = sink.clone();
+                        std::thread::spawn(move || {
+                            let out = std::thread::spawn(move || read_into(stdout, &out_sink));
+                            let err = std::thread::spawn(move || read_into(stderr, &err_sink));
+                            // Poll rather than hold the lock across `wait()`:
+                            // the cancel closure needs the lock to kill the
+                            // tree, and a blocking `wait()` holding it would
+                            // deadlock a long-running command (R4).
+                            let code = loop {
+                                let status = {
+                                    let mut child = child.lock().unwrap_or_else(|p| p.into_inner());
+                                    child.try_wait()
+                                };
+                                match status {
+                                    Ok(Some(code)) => break Some(code),
+                                    Ok(None) => {
+                                        std::thread::sleep(std::time::Duration::from_millis(50));
+                                    }
+                                    Err(_) => break None,
+                                }
+                            };
+                            let _ = out.join();
+                            let _ = err.join();
+                            let _ = sink.send(lca_ui::ShellEvent::Done(code));
+                        });
+                        cancel
+                    },
+                )
             }),
             external_editor: Some(Arc::new(|text: &str| {
                 let editor = std::env::var("VISUAL")

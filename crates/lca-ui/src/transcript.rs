@@ -187,6 +187,19 @@ impl Transcript {
         }
     }
 
+    /// Finish the most recent running tool call without touching its result
+    /// (R4: a streamed `!`/`!!` card keeps what it already appended).
+    pub fn finish_tool_status(&mut self, status: ToolStatus) {
+        for entry in self.entries.iter_mut().rev() {
+            if let Entry::Tool { status: s, .. } = entry
+                && *s == ToolStatus::Running
+            {
+                *s = status;
+                return;
+            }
+        }
+    }
+
     /// Append a notice.
     pub fn push_notice(&mut self, text: impl Into<String>) {
         self.entries.push(Entry::Notice(text.into()));

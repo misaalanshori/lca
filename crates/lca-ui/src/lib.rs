@@ -26,8 +26,9 @@ pub use lca_protocol::{QueuedMessage, SubmitMode, steer_queue};
 pub use run::run;
 pub use state::{
     Action, CUSTOM_OPTION, CommandInvoker, LoginComplete, LoginConfirm, LoginNext, LoginPick,
-    LoginRequest, PickerOption, PromptRequest, RegionInteractor, RegionRenderer, TurnChannels,
-    TurnRunner, UiHooks, UiOptions, UiState, sanitize_block, sanitize_text, widget_lines,
+    LoginRequest, PickerOption, PromptRequest, RegionInteractor, RegionRenderer, ShellEvent,
+    ShellHandle, ShellRunner, TurnChannels, TurnRunner, UiHooks, UiOptions, UiState,
+    sanitize_block, sanitize_text, widget_lines,
 };
 pub use theme::Theme;
 pub use transcript::{Entry, ToolStatus, Transcript, image_label};
