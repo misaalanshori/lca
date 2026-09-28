@@ -152,6 +152,9 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         chat.world.options.workspace.to_string_lossy()
     ));
     chat.world.resize(terminal.columns(), terminal.rows());
+    // R10: ask the terminal for its background color and color-scheme
+    // preference; the replies set the auto theme when they arrive.
+    terminal.write("\x1b]11;?\x07\x1b[?996n");
 
     let mut active_turn: Option<std::thread::JoinHandle<TurnOutcome>> = None;
     let mut turn_rx: Option<Receiver<lca_protocol::TurnEvent>> = None;
@@ -288,6 +291,23 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         // Input.
         match input_rx.recv_timeout(std::time::Duration::from_millis(50)) {
             Ok(data) => {
+                // Terminal capability replies (R10): the OSC 11 background
+                // and the DSR color-scheme report drive the auto theme.
+                if lca_tui::engine::colors::is_osc11_background_color_response(&data) {
+                    if let Some(rgb) = lca_tui::engine::colors::parse_osc11_background_color(&data)
+                    {
+                        chat.apply_detected_scheme(rgb.scheme());
+                        dirty = true;
+                    }
+                    continue;
+                }
+                if let Some(scheme) =
+                    lca_tui::engine::colors::parse_terminal_color_scheme_report(&data)
+                {
+                    chat.apply_detected_scheme(scheme);
+                    dirty = true;
+                    continue;
+                }
                 // Mouse (selection, wheel) is the renderer's.
                 if data.starts_with("\x1b[<") {
                     screen.handle_mouse(&data);

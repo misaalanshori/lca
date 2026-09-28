@@ -17,6 +17,28 @@ pub struct RgbColor {
     pub b: u8,
 }
 
+impl RgbColor {
+    /// Whether a background of this color is dark or light, by sRGB
+    /// relative luminance (pi's `getThemeForRgbColor`).
+    pub fn scheme(self) -> ColorScheme {
+        fn channel(value: u8) -> f64 {
+            let v = f64::from(value) / 255.0;
+            if v <= 0.039_28 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        let luminance =
+            0.2126 * channel(self.r) + 0.7152 * channel(self.g) + 0.0722 * channel(self.b);
+        if luminance >= 0.5 {
+            ColorScheme::Light
+        } else {
+            ColorScheme::Dark
+        }
+    }
+}
+
 /// The terminal's reported color scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorScheme {
@@ -168,5 +190,20 @@ mod tests {
             Some(ColorScheme::Light)
         );
         assert_eq!(parse_terminal_color_scheme_report("\x1b[?997;3n"), None);
+    }
+
+    // Verifies: R10 - background luminance picks the scheme.
+    #[test]
+    fn a_light_background_is_light_and_a_dark_one_dark() {
+        assert_eq!(
+            RgbColor {
+                r: 255,
+                g: 255,
+                b: 255
+            }
+            .scheme(),
+            ColorScheme::Light
+        );
+        assert_eq!(RgbColor { r: 0, g: 0, b: 0 }.scheme(), ColorScheme::Dark);
     }
 }

@@ -376,6 +376,23 @@ fn theme_picker_previews_and_restores() {
     assert_eq!(chat.theme_name, original);
 }
 
+// Verifies: R10 - the detected scheme sets the auto theme until an explicit
+// pick wins.
+#[test]
+fn a_detected_scheme_sets_the_auto_theme() {
+    let mut options = options();
+    options.plain = false;
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    chat.apply_detected_scheme(lca_tui::engine::colors::ColorScheme::Light);
+    assert_eq!(chat.theme_name, "light");
+    chat.apply_detected_scheme(lca_tui::engine::colors::ColorScheme::Dark);
+    assert_eq!(chat.theme_name, "default");
+    // An explicit pick wins over later detection.
+    chat.set_theme("plain");
+    chat.apply_detected_scheme(lca_tui::engine::colors::ColorScheme::Light);
+    assert_eq!(chat.theme_name, "plain");
+}
+
 // Verifies: FR-UI-20 (the thinking level in the status area; R1)
 #[test]
 fn thinking_picker_sets_the_level() {

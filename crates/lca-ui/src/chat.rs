@@ -73,6 +73,9 @@ pub struct Chat {
     search_index: usize,
     /// The active theme's name (FR-UI-17).
     pub theme_name: String,
+    /// Whether the theme still follows the detected terminal scheme (R10);
+    /// an explicit pick clears it.
+    theme_auto: bool,
     /// The open `/theme` picker with live preview, when any.
     pub theme_picker: Option<ThemePicker>,
     /// The open `/thinking` level picker, when any (R1).
@@ -221,6 +224,7 @@ impl Chat {
             ..Default::default()
         };
         let screen_mode = world.options.fullscreen;
+        let theme_auto = !world.options.plain;
         Chat {
             transcript,
             editor,
@@ -240,6 +244,7 @@ impl Chat {
             search_matches: Vec::new(),
             search_index: 0,
             theme_name,
+            theme_auto,
             theme_picker: None,
             thinking_picker: None,
             model_picker: None,
@@ -710,6 +715,21 @@ impl Chat {
 
     /// Apply a theme by name and remember it.
     fn set_theme(&mut self, name: &str) {
+        self.theme_name = name.to_string();
+        self.theme_auto = false;
+        self.theme = Theme::named(name).unwrap_or_else(Theme::colored);
+    }
+
+    /// Apply a terminal color-scheme detection (R10): only while the theme
+    /// still follows detection, so an explicit pick wins.
+    pub fn apply_detected_scheme(&mut self, scheme: lca_tui::engine::colors::ColorScheme) {
+        if !self.theme_auto {
+            return;
+        }
+        let name = match scheme {
+            lca_tui::engine::colors::ColorScheme::Light => "light",
+            lca_tui::engine::colors::ColorScheme::Dark => "default",
+        };
         self.theme_name = name.to_string();
         self.theme = Theme::named(name).unwrap_or_else(Theme::colored);
     }
