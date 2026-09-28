@@ -71,17 +71,35 @@ pub struct Chat {
     search_matches: Vec<usize>,
     /// The current match.
     search_index: usize,
+    /// The active theme's name (FR-UI-17).
+    pub theme_name: String,
+    /// The open `/theme` picker with live preview, when any.
+    pub theme_picker: Option<ThemePicker>,
+}
+
+/// The `/theme` picker: a live preview that restores on cancel (FR-UI-17).
+pub struct ThemePicker {
+    /// The highlighted row.
+    pub selected: usize,
+    /// The theme name to restore when the picker is cancelled.
+    pub original: String,
 }
 
 impl Chat {
     /// Build the chat: widgets, theme, and the autocomplete chain.
     pub fn new(options: UiOptions, keybindings: Arc<KeybindingsManager>) -> Chat {
         let world = UiState::new(options);
-        let theme = if world.options.plain {
-            Theme::plain()
+        let theme_name = if world.options.plain {
+            "plain".to_string()
+        } else if matches!(
+            crate::theme::detect_scheme(),
+            Some(lca_tui::engine::colors::ColorScheme::Light)
+        ) {
+            "light".to_string()
         } else {
-            Theme::colored()
+            "default".to_string()
         };
+        let theme = Theme::named(&theme_name).unwrap_or_else(Theme::colored);
         let mut editor = Editor::new();
         editor.set_keybindings(keybindings.clone());
         editor.set_autocomplete(Arc::new(provider_for(&world.options)));
@@ -112,6 +130,8 @@ impl Chat {
             search: None,
             search_matches: Vec::new(),
             search_index: 0,
+            theme_name,
+            theme_picker: None,
         }
     }
 
@@ -329,7 +349,7 @@ impl Chat {
         let end = total.saturating_sub(scroll as usize);
         let start = end.saturating_sub(height as usize);
         let mut viewport: Vec<String> = document[start..end].to_vec();
-        if self.world.modal_active() {
+        if self.world.modal_active() || self.theme_picker.is_some() {
             viewport.resize(height as usize, String::new());
         }
         self.compose_overlays(&mut viewport, width, height);
@@ -338,6 +358,17 @@ impl Chat {
 
     /// Composite the modals and the side panel over the viewport.
     fn compose_overlays(&self, viewport: &mut [String], width: u16, height: u16) {
+        if let Some(picker) = &self.theme_picker {
+            let mut body = vec!["Theme (live preview):".to_string(), String::new()];
+            for (index, name) in crate::theme::THEMES.iter().enumerate() {
+                let cur = if index == picker.selected { '>' } else { ' ' };
+                body.push(format!(" {cur} {name}"));
+            }
+            body.push(String::new());
+            body.push("Up/Down previews; Enter applies; Esc restores.".to_string());
+            overlay_box(viewport, width, height, "theme", &body);
+            return;
+        }
         if let Some(picker) = &self.world.picker {
             let rows = 15usize.min(height.saturating_sub(7) as usize).max(1);
             let total = picker.options.len();
@@ -404,13 +435,22 @@ impl Chat {
                 &body,
             );
         } else if let Some(modal) = &self.world.permission {
-            let body = vec![
+            let mut body = vec![
                 "Allow this action?".to_string(),
                 String::new(),
                 format!("  {}", modal.action),
                 String::new(),
-                "Allow once [o] / Allow always for this pattern [a] / Deny [d]".to_string(),
             ];
+            if let Some(deadline) = modal.deadline {
+                let seconds = deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_secs();
+                body.push(format!(
+                    "auto-approves in {seconds}s - press a key to decide (FR-UI-18)"
+                ));
+                body.push(String::new());
+            }
+            body.push("Allow once [o] / Allow always for this pattern [a] / Deny [d]".to_string());
             overlay_box(viewport, width, height, "permission required", &body);
         } else if self.world.modal_open {
             let trees = self
@@ -466,6 +506,33 @@ impl Chat {
         }
 
         let key = keys::parse_key(data);
+
+        // The `/theme` picker previews live and restores on cancel (FR-UI-17).
+        if let Some(mut picker) = self.theme_picker.take() {
+            match key.as_deref() {
+                Some("escape") => {
+                    self.set_theme(&picker.original);
+                }
+                Some("enter") => {
+                    let name = crate::theme::THEMES[picker.selected].to_string();
+                    self.set_theme(&name);
+                }
+                Some("up") | Some("k") => {
+                    picker.selected = picker.selected.saturating_sub(1);
+                    self.preview_theme(picker.selected);
+                    self.theme_picker = Some(picker);
+                }
+                Some("down") | Some("j") => {
+                    picker.selected =
+                        (picker.selected + 1).min(crate::theme::THEMES.len().saturating_sub(1));
+                    self.preview_theme(picker.selected);
+                    self.theme_picker = Some(picker);
+                }
+                _ => self.theme_picker = Some(picker),
+            }
+            return Action::Continue;
+        }
+
         // The transcript search owns the keyboard while open (FR-UI-12).
         if self.search.is_some() {
             return self.handle_search_key(data, key.as_deref());
@@ -499,6 +566,19 @@ impl Chat {
             EditorEvent::Submitted(text) => self.on_submit(text),
             EditorEvent::Exit => Action::Exit,
             EditorEvent::Changed | EditorEvent::None => self.global_key(data),
+        }
+    }
+
+    /// Apply a theme by name and remember it.
+    fn set_theme(&mut self, name: &str) {
+        self.theme_name = name.to_string();
+        self.theme = Theme::named(name).unwrap_or_else(Theme::colored);
+    }
+
+    /// Preview a theme without committing it (FR-UI-17).
+    fn preview_theme(&mut self, index: usize) {
+        if let Some(name) = crate::theme::THEMES.get(index) {
+            self.theme = Theme::named(name).unwrap_or_else(Theme::colored);
         }
     }
 
@@ -704,7 +784,12 @@ impl Chat {
         // The permission modal.
         if let Some(modal) = self.world.permission.take() {
             use lca_permissions::Decision;
-            let crate::state::PermissionModal { action, respond } = modal;
+            let crate::state::PermissionModal {
+                action,
+                respond,
+                deadline,
+            } = modal;
+            let _ = deadline;
             let answer = |decision: Decision| {
                 if let Some(respond) = respond {
                     let _ = respond.send(decision);
@@ -715,9 +800,11 @@ impl Chat {
                 Some("a") => answer(Decision::Always),
                 Some("d") | Some("escape") | Some("enter") => answer(Decision::Denied),
                 _ => {
+                    // Any other key cancels the countdown but keeps the modal.
                     self.world.permission = Some(crate::state::PermissionModal {
                         action,
                         respond: None,
+                        deadline: None,
                     });
                 }
             }
@@ -908,6 +995,16 @@ impl Chat {
                         "scrollback"
                     }
                 ));
+                return Action::Continue;
+            }
+            "theme" => {
+                self.theme_picker = Some(ThemePicker {
+                    selected: crate::theme::THEMES
+                        .iter()
+                        .position(|name| *name == self.theme_name)
+                        .unwrap_or(0),
+                    original: self.theme_name.clone(),
+                });
                 return Action::Continue;
             }
             "quit" | "exit" => return Action::Exit,
@@ -1116,6 +1213,7 @@ fn command_help(command: &str) -> &'static str {
         "/help" => "list commands and keys",
         "/hotkeys" => "list every key binding",
         "/fullscreen" => "toggle fullscreen and scrollback renderers",
+        "/theme" => "pick a theme with live preview",
         "/exit" => "leave the interface",
         "/login" => "sign in to a provider",
         "/logout" => "clear the provider's stored key",
@@ -1417,6 +1515,42 @@ mod tests {
         assert!(chat.take_jump_scroll(80, 24).is_some());
         assert_eq!(chat.handle_key("\x1b[1;3B"), Action::Continue); // Alt+Down
         assert!(chat.jump_target.is_some());
+    }
+
+    // Verifies: FR-UI-18 - a permission prompt shows a visible,
+    // keyboard-interruptible auto-approve countdown.
+    #[test]
+    fn permission_modal_shows_a_countdown() {
+        let mut chat = chat();
+        chat.world.permission = Some(crate::state::PermissionModal {
+            action: "rm -rf /tmp/x".into(),
+            respond: None,
+            deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(30)),
+        });
+        let viewport = strip(&chat.viewport(100, 30, 0)).join("\n");
+        assert!(viewport.contains("auto-approves in"), "{viewport}");
+    }
+
+    // Verifies: FR-UI-17 - `/theme` previews live and restores on cancel.
+    #[test]
+    fn theme_picker_previews_and_restores() {
+        let mut chat = chat();
+        let original = chat.theme_name.clone();
+        for c in "/theme".chars() {
+            chat.handle_key(&c.to_string());
+        }
+        chat.handle_key("\r");
+        assert!(chat.theme_picker.is_some());
+        let start = chat.theme_picker.as_ref().unwrap().selected;
+        chat.handle_key("j");
+        assert_eq!(
+            chat.theme_picker.as_ref().unwrap().selected,
+            (start + 1).min(crate::theme::THEMES.len() - 1)
+        );
+        assert_eq!(chat.theme_name, original, "preview does not commit");
+        chat.handle_key("\x1b"); // Escape restores
+        assert!(chat.theme_picker.is_none());
+        assert_eq!(chat.theme_name, original);
     }
 
     // Verifies: FR-UI-12 - Ctrl+R searches the transcript, highlights

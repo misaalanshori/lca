@@ -17,7 +17,9 @@ use crate::lock;
 /// The built-in slash slots the interface itself claims; the spec's
 /// sixth built-in, `/stats`, arrives from the native hooks extension
 /// that holds the stats source (ADR-0013).
-const BUILTIN_SLOTS: [&str; 6] = ["login", "logout", "usage", "model", "compact", "attach"];
+const BUILTIN_SLOTS: [&str; 7] = [
+    "login", "logout", "usage", "model", "compact", "attach", "session",
+];
 
 /// The session's live model: the runner reads it per turn, the
 /// status-line label follows it, and the compaction backend is moved
@@ -699,6 +701,9 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                         CommandEffect::ShowWidget(format!("nothing was compacted: {detail}"))
                     }
                 },
+                // The stats story (FR-UI-19): the same numbers the
+                // footer accumulates, with per-model cost and cache waste.
+                "session" => CommandEffect::ShowWidget(session_stats(&store, &session)),
                 // The generic identity commands dispatch across
                 // installed providers first (FR-PROV-11); with zero
                 // enabled providers FR-PROV-6's report shows instead.
@@ -800,6 +805,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             names.insert(1, "/exit".to_string());
             names.insert(2, "/hotkeys".to_string());
             names.insert(3, "/fullscreen".to_string());
+            names.insert(4, "/theme".to_string());
             // Extension command names reach completion (and the screen);
             // sanitized because an extension chose these strings.
             names.extend(
@@ -1126,8 +1132,10 @@ mod tests {
         }
     }
 
-    // Verifies: FR-UI-2 (the stats line does not print `$0.0000` when the
-    // provider reports no pricing - that reads as "free", not "unknown").
+    // Verifies: FR-UI-19 (the stats story: tokens, cost, and cache waste
+    // per model) and FR-UI-2 (the stats line does not print `$0.0000` when
+    // the provider reports no pricing - that reads as "free", not
+    // "unknown").
     #[test]
     fn stats_omit_the_cost_when_no_price_is_reported() {
         let root = lca_testkit::scratch_path("lca-stats");

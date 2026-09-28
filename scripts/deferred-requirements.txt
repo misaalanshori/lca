@@ -29,6 +29,3 @@ NFR-11
 # stays meaningful for everything already shipped. The file returns to the
 # web-target list alone when cycle 2 completes.
 FR-UI-16
-FR-UI-17
-FR-UI-18
-FR-UI-19

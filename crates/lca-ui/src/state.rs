@@ -340,6 +340,10 @@ pub struct PermissionModal {
     pub action: String,
     /// The worker waiting for the decision, when live.
     pub respond: Option<SyncSender<lca_permissions::Decision>>,
+    /// When the auto-approve countdown fires (FR-UI-18), if any. The
+    /// countdown is visible and any key cancels it; it never fires
+    /// silently.
+    pub deadline: Option<std::time::Instant>,
 }
 
 /// The ui-world state: the options, the open modals, and the small flags
@@ -402,6 +406,7 @@ impl UiState {
         self.permission = Some(PermissionModal {
             action,
             respond: None,
+            deadline: None,
         });
     }
 

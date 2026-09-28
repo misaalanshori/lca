@@ -224,7 +224,29 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             chat.world.permission = Some(PermissionModal {
                 action: request.action,
                 respond: Some(request.respond),
+                // FR-UI-18: an auto-approve countdown, visible and
+                // keyboard-interruptible.
+                deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(30)),
             });
+            dirty = true;
+        }
+
+        // Auto-approve countdown (FR-UI-18): fires only when the visible
+        // deadline passes with no keypress.
+        if chat
+            .world
+            .permission
+            .as_ref()
+            .is_some_and(|m| m.deadline.is_some_and(|d| std::time::Instant::now() >= d))
+        {
+            if let Some(modal) = chat.world.permission.take()
+                && let Some(respond) = modal.respond
+            {
+                let _ = respond.send(lca_permissions::Decision::Once);
+            }
+            dirty = true;
+        } else if chat.world.permission.is_some() {
+            // Repaint so the countdown ticks visibly.
             dirty = true;
         }
 

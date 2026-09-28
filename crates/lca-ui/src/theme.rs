@@ -53,7 +53,7 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// The colored theme.
+    /// The colored theme (dark-terminal palette).
     pub fn colored() -> Self {
         Self {
             colored: true,
@@ -104,6 +104,59 @@ impl Theme {
             hr: self.dim.clone(),
         }
     }
+
+    /// A light-terminal palette (darker foregrounds for a light background).
+    pub fn light() -> Self {
+        Self {
+            colored: true,
+            dim: style("2"),
+            bold: style("1"),
+            user: style("1;34"),
+            assistant: identity(),
+            reasoning: style("2;3"),
+            tool: style("35"),
+            success: style("32"),
+            error: style("31"),
+            warn: style("33"),
+            footer: style("2"),
+            accent: style("34"),
+        }
+    }
+
+    /// A named theme, or `None` when the name is unknown.
+    pub fn named(name: &str) -> Option<Theme> {
+        match name {
+            "default" => Some(Self::colored()),
+            "light" => Some(Self::light()),
+            "plain" => Some(Self::plain()),
+            _ => None,
+        }
+    }
+
+    /// The scheme-aware default (FR-UI-17): the light palette when the
+    /// terminal reports a light background, the dark one otherwise.
+    pub fn auto() -> Self {
+        match detect_scheme() {
+            Some(lca_tui::engine::colors::ColorScheme::Light) => Self::light(),
+            _ => Self::colored(),
+        }
+    }
+}
+
+/// The available theme names (FR-UI-17's picker).
+pub const THEMES: &[&str] = &["default", "light", "plain"];
+
+/// Detect the terminal's color scheme from `COLORFGBG` (the OSC 11 / DEC
+/// report ladder is the engine's, consumed at negotiation).
+pub fn detect_scheme() -> Option<lca_tui::engine::colors::ColorScheme> {
+    use lca_tui::engine::colors::ColorScheme;
+    let value = std::env::var("COLORFGBG").ok()?;
+    let background: u32 = value.rsplit(';').next()?.trim().parse().ok()?;
+    Some(if background >= 8 {
+        ColorScheme::Light
+    } else {
+        ColorScheme::Dark
+    })
 }
 
 impl Default for Theme {
