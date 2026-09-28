@@ -75,6 +75,16 @@ pub struct Chat {
     pub theme_name: String,
     /// The open `/theme` picker with live preview, when any.
     pub theme_picker: Option<ThemePicker>,
+    /// The open `/tree` branch selector, when any (FR-UI-16).
+    pub tree_picker: Option<TreePicker>,
+}
+
+/// The `/tree` branch selector (FR-UI-16).
+pub struct TreePicker {
+    /// `(session id, display label)` entries.
+    pub entries: Vec<(String, String)>,
+    /// The highlighted row.
+    pub selected: usize,
 }
 
 /// The `/theme` picker: a live preview that restores on cancel (FR-UI-17).
@@ -132,6 +142,7 @@ impl Chat {
             search_index: 0,
             theme_name,
             theme_picker: None,
+            tree_picker: None,
         }
     }
 
@@ -349,7 +360,7 @@ impl Chat {
         let end = total.saturating_sub(scroll as usize);
         let start = end.saturating_sub(height as usize);
         let mut viewport: Vec<String> = document[start..end].to_vec();
-        if self.world.modal_active() || self.theme_picker.is_some() {
+        if self.world.modal_active() || self.theme_picker.is_some() || self.tree_picker.is_some() {
             viewport.resize(height as usize, String::new());
         }
         self.compose_overlays(&mut viewport, width, height);
@@ -358,6 +369,17 @@ impl Chat {
 
     /// Composite the modals and the side panel over the viewport.
     fn compose_overlays(&self, viewport: &mut [String], width: u16, height: u16) {
+        if let Some(picker) = &self.tree_picker {
+            let mut body = vec!["Session branches:".to_string(), String::new()];
+            for (index, (_id, label)) in picker.entries.iter().enumerate() {
+                let cur = if index == picker.selected { '>' } else { ' ' };
+                body.push(format!(" {cur} {label}"));
+            }
+            body.push(String::new());
+            body.push("Up/Down moves; Enter shows the resume command; Esc closes.".to_string());
+            overlay_box(viewport, width, height, "tree", &body);
+            return;
+        }
         if let Some(picker) = &self.theme_picker {
             let mut body = vec!["Theme (live preview):".to_string(), String::new()];
             for (index, name) in crate::theme::THEMES.iter().enumerate() {
@@ -506,6 +528,27 @@ impl Chat {
         }
 
         let key = keys::parse_key(data);
+
+        // The `/tree` selector owns the keyboard while open (FR-UI-16).
+        if let Some(mut picker) = self.tree_picker.take() {
+            match key.as_deref() {
+                Some("escape") => {}
+                Some("enter") => {
+                    let (id, _) = picker.entries[picker.selected].clone();
+                    self.world.notice = Some(format!("resume this branch with: lca --resume {id}"));
+                }
+                Some("up") | Some("k") => {
+                    picker.selected = picker.selected.saturating_sub(1);
+                    self.tree_picker = Some(picker);
+                }
+                Some("down") | Some("j") => {
+                    picker.selected = (picker.selected + 1).min(picker.entries.len() - 1);
+                    self.tree_picker = Some(picker);
+                }
+                _ => self.tree_picker = Some(picker),
+            }
+            return Action::Continue;
+        }
 
         // The `/theme` picker previews live and restores on cancel (FR-UI-17).
         if let Some(mut picker) = self.theme_picker.take() {
@@ -1007,6 +1050,36 @@ impl Chat {
                 });
                 return Action::Continue;
             }
+            "tree" => {
+                let entries = self
+                    .world
+                    .options
+                    .hooks
+                    .session_tree
+                    .as_ref()
+                    .map(|tree| tree())
+                    .unwrap_or_default();
+                if entries.is_empty() {
+                    self.world.notice = Some("no branches yet".to_string());
+                } else {
+                    self.tree_picker = Some(TreePicker {
+                        entries,
+                        selected: 0,
+                    });
+                }
+                return Action::Continue;
+            }
+            "fork" => {
+                let Some(fork_at) = self.world.options.hooks.fork_at.clone() else {
+                    self.world.notice = Some("forking is not available in this host".to_string());
+                    return Action::Continue;
+                };
+                match argument.trim().parse::<usize>() {
+                    Ok(index) => self.world.notice = Some(fork_at(index)),
+                    Err(_) => self.world.notice = Some("usage: /fork <message-index>".to_string()),
+                }
+                return Action::Continue;
+            }
             "quit" | "exit" => return Action::Exit,
             _ => {}
         }
@@ -1214,6 +1287,8 @@ fn command_help(command: &str) -> &'static str {
         "/hotkeys" => "list every key binding",
         "/fullscreen" => "toggle fullscreen and scrollback renderers",
         "/theme" => "pick a theme with live preview",
+        "/tree" => "browse session branches",
+        "/fork" => "fork a branch at a message (usage: /fork <n>)",
         "/exit" => "leave the interface",
         "/login" => "sign in to a provider",
         "/logout" => "clear the provider's stored key",
@@ -1515,6 +1590,49 @@ mod tests {
         assert!(chat.take_jump_scroll(80, 24).is_some());
         assert_eq!(chat.handle_key("\x1b[1;3B"), Action::Continue); // Alt+Down
         assert!(chat.jump_target.is_some());
+    }
+
+    // Verifies: FR-UI-16 - `/tree` browses session branches and `/fork`
+    // creates one at a message.
+    #[test]
+    fn tree_browses_branches_and_fork_creates_one() {
+        let mut options = options();
+        options.hooks.session_tree = Some(Arc::new(|| {
+            vec![
+                ("root".into(), "root * (session)".into()),
+                ("child".into(), "child (session)".into()),
+            ]
+        }));
+        options.hooks.fork_at = Some(Arc::new(|n: usize| format!("forked at {n}: newbranch")));
+        let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+        for c in "/tree".chars() {
+            chat.handle_key(&c.to_string());
+        }
+        chat.handle_key("\r");
+        assert!(chat.tree_picker.is_some());
+        let viewport = strip(&chat.viewport(100, 30, 0)).join("\n");
+        assert!(viewport.contains("root"), "{viewport}");
+        assert!(viewport.contains("child"), "{viewport}");
+        chat.handle_key("j");
+        chat.handle_key("\r");
+        assert!(
+            chat.world.notice.as_deref().unwrap().contains("--resume"),
+            "{:?}",
+            chat.world.notice
+        );
+        for c in "/fork 1".chars() {
+            chat.handle_key(&c.to_string());
+        }
+        chat.handle_key("\r");
+        assert!(
+            chat.world
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("forked at 1"),
+            "{:?}",
+            chat.world.notice
+        );
     }
 
     // Verifies: FR-UI-18 - a permission prompt shows a visible,

@@ -788,6 +788,59 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
                     let _ = std::fs::write(&path, format!("{{\"fullscreen\":{fullscreen}}}"));
                 })
             }),
+            session_tree: Some({
+                let store = store.clone();
+                let session = session.clone();
+                Arc::new(move || {
+                    store
+                        .fork_tree(&session)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|branch| {
+                            let title = store
+                                .meta(&branch)
+                                .map(|meta| meta.title)
+                                .unwrap_or_default();
+                            let marker = if branch.id() == session.id() {
+                                " *"
+                            } else {
+                                ""
+                            };
+                            (
+                                branch.id().to_string(),
+                                format!("{}{marker} ({title})", branch.id()),
+                            )
+                        })
+                        .collect()
+                })
+            }),
+            fork_at: Some({
+                let store = store.clone();
+                let session = session.clone();
+                Arc::new(move |index: usize| -> String {
+                    let outcome = match store.read_with(&session, ViewMode::Display) {
+                        Ok(outcome) => outcome,
+                        Err(err) => return format!("cannot read the session: {err}"),
+                    };
+                    let record_id = outcome
+                        .records
+                        .iter()
+                        .filter(|record| matches!(record, Record::User { .. }))
+                        .nth(index)
+                        .and_then(|record| record.id().map(str::to_string));
+                    let Some(record_id) = record_id else {
+                        return format!("no user message at index {index}");
+                    };
+                    match store.fork(&session, &record_id) {
+                        Ok(branch) => format!(
+                            "forked at message {index}: {} - resume with `lca --resume {}`",
+                            branch.id(),
+                            branch.id()
+                        ),
+                        Err(err) => format!("fork failed: {err}"),
+                    }
+                })
+            }),
         },
         fullscreen: std::fs::read_to_string(crate::config_dir().join("ui.json"))
             .map(|s| !s.contains("false"))
@@ -806,6 +859,8 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
             names.insert(2, "/hotkeys".to_string());
             names.insert(3, "/fullscreen".to_string());
             names.insert(4, "/theme".to_string());
+            names.insert(5, "/tree".to_string());
+            names.insert(6, "/fork".to_string());
             // Extension command names reach completion (and the screen);
             // sanitized because an extension chose these strings.
             names.extend(

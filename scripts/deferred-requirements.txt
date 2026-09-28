@@ -28,4 +28,3 @@ NFR-11
 # implementation and its `// Verifies:` test - so the traceability gate
 # stays meaningful for everything already shipped. The file returns to the
 # web-target list alone when cycle 2 completes.
-FR-UI-16

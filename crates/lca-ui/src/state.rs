@@ -274,6 +274,10 @@ pub type ShellRunner = Arc<dyn Fn(&str, bool) -> String + Send + Sync>;
 pub type ExternalEditor = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 /// Persists a runtime screen-mode change.
 pub type ScreenModePersist = Arc<dyn Fn(bool) + Send + Sync>;
+/// Returns the session's branch tree as `(id, label)` entries.
+pub type SessionTree = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
+/// Forks at the nth user message, returning the new branch's id.
+pub type ForkAt = Arc<dyn Fn(usize) -> String + Send + Sync>;
 
 /// Optional host hooks the interface calls (P6): an external editor, the
 /// `!`/`!!` shell path, and screen-mode persistence. Default: all absent,
@@ -289,6 +293,12 @@ pub struct UiHooks {
     pub external_editor: Option<ExternalEditor>,
     /// Persist a runtime screen-mode change (fullscreen = `true`).
     pub persist_screen_mode: Option<ScreenModePersist>,
+    /// The session's branch tree: `(session id, display label)` entries, the
+    /// current branch included (FR-UI-16).
+    pub session_tree: Option<SessionTree>,
+    /// Fork at the nth user message (0-based), returning the new branch's id
+    /// (FR-UI-16).
+    pub fork_at: Option<ForkAt>,
 }
 
 /// Static inputs for the interface.
