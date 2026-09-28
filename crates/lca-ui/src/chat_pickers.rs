@@ -21,6 +21,14 @@ pub struct TreePicker {
     pub selected: usize,
 }
 
+/// The `/grants` picker (S8): the project's grants in two groups.
+pub struct GrantPicker {
+    /// The rows, install-consent first.
+    pub entries: Vec<crate::state::GrantEntry>,
+    /// The highlighted row.
+    pub selected: usize,
+}
+
 /// The `/theme` picker: a live preview that restores on cancel (FR-UI-17).
 pub struct ThemePicker {
     /// The highlighted row.

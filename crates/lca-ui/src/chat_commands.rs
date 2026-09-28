@@ -103,6 +103,22 @@ impl Chat {
                 }
                 return Action::Continue;
             }
+            "grants" => {
+                let Some(list) = self.world.options.hooks.grants.as_ref() else {
+                    self.world.notice = Some("grants are not available in this host".to_string());
+                    return Action::Continue;
+                };
+                let entries = list();
+                if entries.is_empty() {
+                    self.world.notice = Some("no grants recorded for this project".to_string());
+                } else {
+                    self.grants_picker = Some(crate::chat_pickers::GrantPicker {
+                        entries,
+                        selected: 0,
+                    });
+                }
+                return Action::Continue;
+            }
             "fork" => {
                 let Some(fork_at) = self.world.options.hooks.fork_at.clone() else {
                     self.world.notice = Some("forking is not available in this host".to_string());

@@ -295,6 +295,27 @@ pub type ClipboardWriter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 /// (no launcher found, the launcher refused), which the notice shows.
 pub type OpenUrl = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
+/// One row in the grants view (S8).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantEntry {
+    /// `true` for the install-consent group (extension enablement and the
+    /// project's approved proposal set), `false` for the ad hoc group.
+    pub install_consent: bool,
+    /// The extension or subject the grant belongs to.
+    pub subject: String,
+    /// The granted pattern, or the enablement state.
+    pub detail: String,
+    /// Whether the grants view can revoke it in place (the store's own write
+    /// path); the install-consent group names its manual path instead.
+    pub revocable: bool,
+}
+
+/// Lists the project's grants for the view (S8).
+pub type GrantList = Arc<dyn Fn() -> Vec<GrantEntry> + Send + Sync>;
+
+/// Revokes one grant, returning the notice to show (S8).
+pub type GrantRevoke = Arc<dyn Fn(&GrantEntry) -> String + Send + Sync>;
+
 /// Starts a `!`/`!!` shell command, streaming output through the sender and
 /// returning a cancel handle (R4). The `bool` is `true` for `!!`.
 pub type ShellRunner =
@@ -342,6 +363,10 @@ pub struct UiHooks {
     pub copy_to_clipboard: Option<ClipboardWriter>,
     /// Open a URL a click landed on (R6).
     pub open_url: Option<OpenUrl>,
+    /// List the project's grants (S8).
+    pub grants: Option<GrantList>,
+    /// Revoke one grant (S8).
+    pub revoke_grant: Option<GrantRevoke>,
 }
 
 /// Static inputs for the interface.

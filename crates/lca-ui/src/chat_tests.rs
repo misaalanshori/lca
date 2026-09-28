@@ -685,3 +685,31 @@ fn edit_all_queued_restores_and_clears_the_boundary_queue() {
     assert_eq!(chat.editor.text(), "one");
     assert!(steer.lock().unwrap().is_empty());
 }
+
+// Verifies: S8 - the grants view composites the two groups over the
+// viewport, with the revocable rows called out.
+#[test]
+fn the_grants_view_composites_both_groups() {
+    let mut chat = chat();
+    chat.grants_picker = Some(GrantPicker {
+        entries: vec![
+            lca_ui_entry(true, "openai-compatible", "enabled"),
+            lca_ui_entry(false, "ad hoc", "echo tool-done"),
+        ],
+        selected: 1,
+    });
+    let text = strip(&chat.viewport(100, 24, 0)).join("\n");
+    assert!(text.contains("Grants for this project"), "{text}");
+    assert!(text.contains("Install consent"), "{text}");
+    assert!(text.contains("Ad hoc"), "{text}");
+    assert!(text.contains("echo tool-done"), "{text}");
+}
+
+fn lca_ui_entry(install_consent: bool, subject: &str, detail: &str) -> crate::state::GrantEntry {
+    crate::state::GrantEntry {
+        install_consent,
+        subject: subject.to_string(),
+        detail: detail.to_string(),
+        revocable: !install_consent,
+    }
+}

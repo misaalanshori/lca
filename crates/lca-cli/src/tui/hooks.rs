@@ -123,7 +123,77 @@ impl Ui {
             copy_to_clipboard: Some(Arc::new(|text: &str| native_clipboard(text))),
             open_url: Some(Arc::new(open_url)),
             fork_at: Some(self.fork_at()),
+            grants: Some(self.grants()),
+            revoke_grant: Some(self.revoke_grant()),
         }
+    }
+
+    /// The project's grants (S8), in the store's own granularity: extension
+    /// enablement and the approved proposal set are install consent (their
+    /// revoke path is `ext disable` / re-consent); the ad hoc patterns are
+    /// revocable in place.
+    fn grants(&self) -> lca_ui::state::GrantList {
+        let grants = self.grants.clone();
+        let cwd = self.cwd.clone();
+        Arc::new(move || {
+            let store = grants.lock().unwrap_or_else(|p| p.into_inner());
+            let mut out: Vec<lca_ui::state::GrantEntry> = Vec::new();
+            for (name, enabled) in store.extensions(&cwd) {
+                out.push(lca_ui::state::GrantEntry {
+                    install_consent: true,
+                    subject: name,
+                    detail: if enabled {
+                        "enabled".to_string()
+                    } else {
+                        "disabled".to_string()
+                    },
+                    revocable: false,
+                });
+            }
+            for pattern in store.proposal_patterns(&cwd) {
+                out.push(lca_ui::state::GrantEntry {
+                    install_consent: true,
+                    subject: "approved proposal".to_string(),
+                    detail: pattern,
+                    revocable: false,
+                });
+            }
+            for pattern in store.patterns(&cwd) {
+                out.push(lca_ui::state::GrantEntry {
+                    install_consent: false,
+                    subject: "ad hoc".to_string(),
+                    detail: pattern,
+                    revocable: true,
+                });
+            }
+            for pattern in store.net_patterns(&cwd) {
+                out.push(lca_ui::state::GrantEntry {
+                    install_consent: false,
+                    subject: "ad hoc net".to_string(),
+                    detail: pattern,
+                    revocable: true,
+                });
+            }
+            out
+        })
+    }
+
+    /// Revoke one ad hoc grant through the store's own write path (S8).
+    fn revoke_grant(&self) -> lca_ui::state::GrantRevoke {
+        let grants = self.grants.clone();
+        let cwd = self.cwd.clone();
+        Arc::new(move |entry: &lca_ui::state::GrantEntry| -> String {
+            let mut store = grants.lock().unwrap_or_else(|p| p.into_inner());
+            let result = if entry.subject == "ad hoc net" {
+                store.revoke_net_pattern(&cwd, &entry.detail)
+            } else {
+                store.revoke_pattern(&cwd, &entry.detail)
+            };
+            match result {
+                Ok(()) => format!("revoked {} - the next action will ask again", entry.detail),
+                Err(err) => format!("could not revoke {}: {err}", entry.detail),
+            }
+        })
     }
 
     /// The `!`/`!!` runner (R4): the command runs on its own thread in its

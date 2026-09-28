@@ -74,6 +74,7 @@ impl Ui {
         names.insert(7, "/thinking".to_string());
         names.insert(8, "/resume".to_string());
         names.insert(9, "/settings".to_string());
+        names.insert(10, "/grants".to_string());
         names.extend(
             self.registry
                 .command_names()
@@ -104,7 +105,8 @@ impl Ui {
             }
             // R9: the settings view over the real `lca-config` keys.
             "settings" => {
-                let mut text = String::from("settings (key = value [source]):\n");
+                let mut text =
+                    String::from("settings (key = value [source]; run /grants for permissions):\n");
                 for (key, value, source) in self.config.resolved() {
                     text.push_str(&format!("  {key} = {value} [{source}]\n"));
                 }

@@ -71,6 +71,29 @@ impl Chat {
             overlay_box(viewport, width, height, "resume", &body);
             return true;
         }
+        if let Some(picker) = &self.grants_picker {
+            let mut body = vec!["Grants for this project:".to_string(), String::new()];
+            let mut group: Option<bool> = None;
+            for (index, entry) in picker.entries.iter().enumerate() {
+                if group != Some(entry.install_consent) {
+                    group = Some(entry.install_consent);
+                    if !body.last().is_some_and(|line| line.is_empty()) {
+                        body.push(String::new());
+                    }
+                    body.push(if entry.install_consent {
+                        "Install consent (revoke with `lca ext disable <name>`):".to_string()
+                    } else {
+                        "Ad hoc (Enter revokes):".to_string()
+                    });
+                }
+                let cur = if index == picker.selected { '>' } else { ' ' };
+                body.push(format!(" {cur} {} - {}", entry.subject, entry.detail));
+            }
+            body.push(String::new());
+            body.push("Up/Down move; Enter revokes an ad hoc grant; Esc closes.".to_string());
+            overlay_box(viewport, width, height, "grants", &body);
+            return true;
+        }
         if let Some(picker) = &self.theme_picker {
             let mut body = vec!["Theme (live preview):".to_string(), String::new()];
             for (index, name) in self.theme_names.iter().enumerate() {

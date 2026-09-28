@@ -18,7 +18,7 @@ use lca_tui::widgets::editor::{Editor, EditorEvent};
 
 use crate::chat_commands::{printable, provider_for};
 use crate::chat_pickers::{
-    ModelPicker, ShellRun, THINKING_LEVELS, ThemePicker, ThinkingPicker, TreePicker,
+    GrantPicker, ModelPicker, ShellRun, THINKING_LEVELS, ThemePicker, ThinkingPicker, TreePicker,
 };
 use crate::footer::Footer;
 
@@ -89,6 +89,8 @@ pub struct Chat {
     pub thinking_picker: Option<ThinkingPicker>,
     /// The open `/model` picker, when any (R9).
     pub model_picker: Option<ModelPicker>,
+    /// The open `/grants` view, when any (S8).
+    pub grants_picker: Option<GrantPicker>,
     /// The open `/tree` branch selector, when any (FR-UI-16).
     pub tree_picker: Option<TreePicker>,
     /// The running `!`/`!!` command, when any (R4).
@@ -167,6 +169,7 @@ impl Chat {
             theme_picker: None,
             thinking_picker: None,
             model_picker: None,
+            grants_picker: None,
             tree_picker: None,
             shell: None,
             resume_picker: None,
@@ -420,6 +423,7 @@ impl Chat {
             || self.model_picker.is_some()
             || self.tree_picker.is_some()
             || self.resume_picker.is_some()
+            || self.grants_picker.is_some()
         {
             viewport.resize(height as usize, String::new());
         }
@@ -452,6 +456,42 @@ impl Chat {
                     self.tree_picker = Some(picker);
                 }
                 _ => self.tree_picker = Some(picker),
+            }
+            return Action::Continue;
+        }
+
+        // The `/grants` view owns the keyboard while open (S8): Up/Down
+        // move, Enter revokes a revocable row (or names the manual path for
+        // an install-consent one), Esc closes.
+        if let Some(mut picker) = self.grants_picker.take() {
+            match key.as_deref() {
+                Some("escape") => {}
+                Some("enter") => {
+                    if let Some(entry) = picker.entries.get(picker.selected).cloned() {
+                        self.world.notice = Some(self.revoke_grant(&entry));
+                        if let Some(list) = self.world.options.hooks.grants.as_ref()
+                            && let Ok(entries) =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| list()))
+                        {
+                            if entries.is_empty() {
+                                return Action::Continue;
+                            }
+                            picker.selected = picker.selected.min(entries.len() - 1);
+                            picker.entries = entries;
+                        }
+                    }
+                    self.grants_picker = Some(picker);
+                }
+                Some("up") | Some("k") => {
+                    picker.selected = picker.selected.saturating_sub(1);
+                    self.grants_picker = Some(picker);
+                }
+                Some("down") | Some("j") => {
+                    picker.selected =
+                        (picker.selected + 1).min(picker.entries.len().saturating_sub(1));
+                    self.grants_picker = Some(picker);
+                }
+                _ => self.grants_picker = Some(picker),
             }
             return Action::Continue;
         }
@@ -646,6 +686,22 @@ impl Chat {
             EditorEvent::Submitted(text) => self.on_submit(text),
             EditorEvent::Exit => Action::Exit,
             EditorEvent::Changed | EditorEvent::None => self.global_key(data),
+        }
+    }
+
+    /// Revoke one grant (S8): the store's own write path for an ad hoc
+    /// grant, or the manual path the install-consent group names.
+    fn revoke_grant(&self, entry: &crate::state::GrantEntry) -> String {
+        if !entry.revocable {
+            return format!(
+                "`{}` is {subject}: the extension's approved set - revoke it with `lca ext disable {subject}` (or re-run /login)",
+                entry.detail,
+                subject = entry.subject
+            );
+        }
+        match self.world.options.hooks.revoke_grant.as_ref() {
+            Some(revoke) => revoke(entry),
+            None => "revoking grants is not available in this host".to_string(),
         }
     }
 

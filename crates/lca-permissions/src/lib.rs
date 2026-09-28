@@ -404,6 +404,65 @@ impl GrantStore {
         self.save()
     }
 
+    // --- the grants view's read/write surface (S8) ------------------------
+
+    /// The ad hoc patterns approved for this project (S8's revocable group).
+    pub fn patterns(&self, project_dir: &Path) -> Vec<String> {
+        self.data
+            .projects
+            .get(&canonical_key(project_dir))
+            .map(|entry| entry.patterns.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// The patterns copied in from an approved proposal set (S8): shown as
+    /// install consent, edited only by re-approving the whole set.
+    pub fn proposal_patterns(&self, project_dir: &Path) -> Vec<String> {
+        self.data
+            .projects
+            .get(&canonical_key(project_dir))
+            .map(|entry| entry.proposal_patterns.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// The project's extension enablement as `(name, enabled)` pairs, the
+    /// install-consent group's data (S8).
+    pub fn extensions(&self, project_dir: &Path) -> Vec<(String, bool)> {
+        self.data
+            .projects
+            .get(&canonical_key(project_dir))
+            .map(|entry| {
+                entry
+                    .extensions
+                    .iter()
+                    .map(|(name, enabled)| (name.clone(), *enabled))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Remove one ad hoc pattern (the grants view's revoke path, S8).
+    pub fn revoke_pattern(&mut self, project_dir: &Path, pattern: &str) -> Result<(), Error> {
+        self.data
+            .projects
+            .entry(canonical_key(project_dir))
+            .or_default()
+            .patterns
+            .remove(pattern);
+        self.save()
+    }
+
+    /// Remove one ad hoc `net` pattern (the grants view's revoke path, S8).
+    pub fn revoke_net_pattern(&mut self, project_dir: &Path, pattern: &str) -> Result<(), Error> {
+        self.data
+            .projects
+            .entry(canonical_key(project_dir))
+            .or_default()
+            .net_patterns
+            .remove(pattern);
+        self.save()
+    }
+
     /// Difference between the project's proposals and the approved set
     /// (FR-PERM-10).
     pub fn proposal_diff(&self, project_dir: &Path, proposals: &Proposals) -> ProposalDiff {
