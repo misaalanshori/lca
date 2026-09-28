@@ -222,8 +222,11 @@ impl AltScreenRenderer {
         let point = SelectionPoint { row, col };
 
         if wheel {
-            let delta = if button == 0 { 1i32 } else { -1 };
-            self.scroll = (self.scroll as i32 + delta).max(0) as u16;
+            self.scroll = if button == 0 {
+                self.scroll.saturating_add(1)
+            } else {
+                self.scroll.saturating_sub(1)
+            };
             return true;
         }
         if motion {
@@ -304,7 +307,7 @@ impl AltScreenRenderer {
             self.height.saturating_sub(1)
         };
         let line = self.previous.get(row as usize).cloned().unwrap_or_default();
-        let col = line.chars().count().saturating_sub(1) as u16;
+        let col = u16::try_from(line.chars().count().saturating_sub(1)).unwrap_or(u16::MAX);
         self.selection.update(SelectionPoint { row, col }, &line);
         true
     }

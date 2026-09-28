@@ -98,7 +98,7 @@ pub(super) fn parse_kitty_sequence(data: &str) -> Option<ParsedKitty> {
         return Some(ParsedKitty {
             codepoint: cp as i64,
             base_layout_key: base_layout.map(|v| v as u32),
-            modifier: mod_value.saturating_sub(1) as u32,
+            modifier: u32::try_from(mod_value.saturating_sub(1)).unwrap_or(u32::MAX),
             event_type: EventType::from_str(event),
         });
     }
@@ -130,7 +130,7 @@ pub(super) fn parse_kitty_sequence(data: &str) -> Option<ParsedKitty> {
         return Some(ParsedKitty {
             codepoint: cp,
             base_layout_key: None,
-            modifier: mod_value.saturating_sub(1) as u32,
+            modifier: u32::try_from(mod_value.saturating_sub(1)).unwrap_or(u32::MAX),
             event_type: EventType::from_str(event),
         });
     }
@@ -169,7 +169,7 @@ pub(super) fn parse_kitty_sequence(data: &str) -> Option<ParsedKitty> {
         return Some(ParsedKitty {
             codepoint: cp,
             base_layout_key: None,
-            modifier: mod_value.saturating_sub(1) as u32,
+            modifier: u32::try_from(mod_value.saturating_sub(1)).unwrap_or(u32::MAX),
             event_type: EventType::from_str(event),
         });
     }
@@ -194,7 +194,7 @@ pub(super) fn parse_kitty_sequence(data: &str) -> Option<ParsedKitty> {
         return Some(ParsedKitty {
             codepoint: if final_byte == b'H' { FN_HOME } else { FN_END },
             base_layout_key: None,
-            modifier: mod_value.saturating_sub(1) as u32,
+            modifier: u32::try_from(mod_value.saturating_sub(1)).unwrap_or(u32::MAX),
             event_type: EventType::from_str(event),
         });
     }
@@ -263,7 +263,10 @@ pub(super) fn parse_modify_other_keys(data: &str) -> Option<(i64, u32)> {
     if i != body.len() {
         return None;
     }
-    Some((code as i64, mod_value.saturating_sub(1) as u32))
+    Some((
+        i64::try_from(code).unwrap_or(i64::MAX),
+        u32::try_from(mod_value.saturating_sub(1)).unwrap_or(u32::MAX),
+    ))
 }
 
 pub(super) fn matches_modify_other_keys(

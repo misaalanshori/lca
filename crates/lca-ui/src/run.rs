@@ -294,7 +294,7 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         if turns.drain(&mut chat) {
             dirty = true;
         }
-        if turns.tick_permission(&mut chat) {
+        if tick_permission(&mut chat) {
             dirty = true;
         }
 
@@ -460,26 +460,6 @@ impl TurnState {
         changed
     }
 
-    /// Fire the auto-approve countdown when it expires (returns whether
-    /// anything changed). Repaints while it runs so it ticks visibly.
-    fn tick_permission(&mut self, chat: &mut Chat) -> bool {
-        if chat
-            .world
-            .permission
-            .as_ref()
-            .is_some_and(|m| m.deadline.is_some_and(|d| std::time::Instant::now() >= d))
-        {
-            if let Some(modal) = chat.world.permission.take()
-                && let Some(respond) = modal.respond
-            {
-                let _ = respond.send(lca_permissions::Decision::Once);
-            }
-            true
-        } else {
-            chat.world.permission.is_some()
-        }
-    }
-
     /// Cancel and join the running turn on shutdown.
     fn shutdown(&mut self) {
         if let Some(cancel) = self.cancel.take() {
@@ -488,6 +468,27 @@ impl TurnState {
         if let Some(handle) = self.active.take() {
             let _ = handle.join();
         }
+    }
+}
+
+/// Fire the auto-approve countdown when it expires (returns whether
+/// anything changed). Repaints while it runs so it ticks visibly. It needs
+/// no turn state, so it is not a `TurnState` method.
+fn tick_permission(chat: &mut Chat) -> bool {
+    if chat
+        .world
+        .permission
+        .as_ref()
+        .is_some_and(|m| m.deadline.is_some_and(|d| std::time::Instant::now() >= d))
+    {
+        if let Some(modal) = chat.world.permission.take()
+            && let Some(respond) = modal.respond
+        {
+            let _ = respond.send(lca_permissions::Decision::Once);
+        }
+        true
+    } else {
+        chat.world.permission.is_some()
     }
 }
 
@@ -562,19 +563,18 @@ mod tests {
             respond: Some(tx),
             deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(30)),
         });
-        let mut turns = TurnState::default();
         // Not due: it keeps the modal and asks for a repaint.
-        assert!(turns.tick_permission(&mut chat));
+        assert!(tick_permission(&mut chat));
         assert!(chat.world.permission.is_some());
         assert!(rx.try_recv().is_err(), "nothing fired yet");
         // Due: it fires `Once` and closes the modal.
         if let Some(modal) = chat.world.permission.as_mut() {
             modal.deadline = Some(std::time::Instant::now());
         }
-        assert!(turns.tick_permission(&mut chat));
+        assert!(tick_permission(&mut chat));
         assert!(chat.world.permission.is_none());
         assert_eq!(rx.try_recv().ok(), Some(lca_permissions::Decision::Once));
         // Nothing open: nothing to do.
-        assert!(!turns.tick_permission(&mut chat));
+        assert!(!tick_permission(&mut chat));
     }
 }

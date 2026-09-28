@@ -77,7 +77,7 @@ impl AutocompleteProvider for CombinedAutocompleteProvider {
     fn get_suggestions(&self, text: &str, force: bool) -> Option<Suggestions> {
         // `@` attachment prefix.
         if let Some(query) = text.strip_prefix('@') {
-            return Some(self.fuzzy_files(query, &self.base_path));
+            return Some(fuzzy_files(query, &self.base_path));
         }
         // Slash context.
         if let Some(rest) = text.strip_prefix('/') {
@@ -189,21 +189,21 @@ impl CombinedAutocompleteProvider {
         });
         items.into_iter().take(20).map(|(_, _, _, i)| i).collect()
     }
+}
 
-    fn fuzzy_files(&self, query: &str, base: &Path) -> Suggestions {
-        let mut items = Vec::new();
-        collect_files(base, base, query, 0, &mut items);
-        items.sort_by(|a, b| {
-            b.0.cmp(&a.0)
-                .then(a.1.cmp(&b.1))
-                .then(a.2.len().cmp(&b.2.len()))
-        });
-        let items: Vec<AutocompleteItem> =
-            items.into_iter().take(20).map(|(_, _, _, i)| i).collect();
-        Suggestions {
-            items,
-            prefix: format!("@{query}"),
-        }
+/// The `@file` matcher: rank by score, then path length, then name.
+fn fuzzy_files(query: &str, base: &Path) -> Suggestions {
+    let mut items = Vec::new();
+    collect_files(base, base, query, 0, &mut items);
+    items.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(a.1.cmp(&b.1))
+            .then(a.2.len().cmp(&b.2.len()))
+    });
+    let items: Vec<AutocompleteItem> = items.into_iter().take(20).map(|(_, _, _, i)| i).collect();
+    Suggestions {
+        items,
+        prefix: format!("@{query}"),
     }
 }
 

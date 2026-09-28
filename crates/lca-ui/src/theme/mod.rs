@@ -280,6 +280,15 @@ impl Theme {
         }
     }
 
+    /// The underline decoration (pi's `chalk.underline`).
+    pub fn underline(&self) -> StyleFn {
+        if self.colored {
+            style(self.palette.get(Role::Text), "4", true)
+        } else {
+            identity()
+        }
+    }
+
     /// The style function for any role in the vocabulary.
     pub fn role(&self, role: Role) -> StyleFn {
         self.roles
@@ -297,6 +306,7 @@ impl Theme {
                 identity()
             },
             bold: self.bold.clone(),
+            underline: self.underline(),
             italic: self.reasoning.clone(),
             strike: self.dim.clone(),
             code: self.role(Role::MdCode),

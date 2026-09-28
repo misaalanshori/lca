@@ -34,6 +34,8 @@ pub struct MarkdownTheme {
     pub heading: StyleFn,
     /// Bold style.
     pub bold: StyleFn,
+    /// Underline style (pi underlines the level-1 heading).
+    pub underline: StyleFn,
     /// Italic style.
     pub italic: StyleFn,
     /// Strikethrough style.
@@ -57,6 +59,7 @@ impl Default for MarkdownTheme {
         Self {
             heading: Arc::new(identity),
             bold: Arc::new(identity),
+            underline: Arc::new(identity),
             italic: Arc::new(identity),
             strike: Arc::new(identity),
             code: Arc::new(identity),
@@ -117,11 +120,15 @@ pub fn render_markdown(
     }
 
     let mut i = 0;
+    // pi's default list rendering renumbers an ordered run from its start
+    // (`${start + i}. `) and uses `- ` for every unordered bullet.
+    let mut ordered_next: Option<u64> = None;
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim_start();
 
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            ordered_next = None;
             let fence: String = trimmed
                 .chars()
                 .take_while(|c| *c == '`' || *c == '~')
@@ -166,8 +173,10 @@ pub fn render_markdown(
         }
 
         if let Some((level, content)) = heading(trimmed) {
+            // pi: h1 is heading(bold(underline(text))), h2 is
+            // heading(bold(text)), and h3+ prepend the literal prefix.
             let styled = match level {
-                1 => (theme.heading)(&(theme.bold)(&content)),
+                1 => (theme.heading)(&(theme.bold)(&(theme.underline)(&content))),
                 2 => (theme.heading)(&(theme.bold)(&content)),
                 _ => (theme.heading)(&format!("{} {content}", "#".repeat(level))),
             };
@@ -205,7 +214,19 @@ pub fn render_markdown(
             continue;
         }
 
-        if let Some((marker, content, indent)) = list_item(trimmed) {
+        if let Some((kind, content, indent)) = list_item(trimmed) {
+            let marker = match kind {
+                ListMarker::Bullet { task } => match task {
+                    Some(true) => "- [x] ".to_string(),
+                    Some(false) => "- [ ] ".to_string(),
+                    None => "- ".to_string(),
+                },
+                ListMarker::Ordered { start } => {
+                    let n = *ordered_next.get_or_insert(start);
+                    ordered_next = Some(n + 1);
+                    format!("{n}. ")
+                }
+            };
             let rendered = render_inline(&content, theme, options);
             let prefix = " ".repeat(indent) + &marker;
             let marker_width = visible_width(&prefix);
@@ -220,6 +241,8 @@ pub fn render_markdown(
             i += 1;
             continue;
         }
+
+        ordered_next = None;
 
         if trimmed.is_empty() {
             if out.last().is_some_and(|l| !l.is_empty()) {
@@ -266,18 +289,33 @@ fn is_hr(line: &str) -> bool {
             || t.chars().all(|c| c == '_'))
 }
 
-fn list_item(line: &str) -> Option<(String, String, usize)> {
+/// The kind of list item a line starts, before rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListMarker {
+    /// An unordered item, with its task state when it is a task item.
+    Bullet { task: Option<bool> },
+    /// An ordered item carrying the number the run starts at.
+    Ordered { start: u64 },
+}
+
+fn list_item(line: &str) -> Option<(ListMarker, String, usize)> {
     let indent = line.len() - line.trim_start().len();
     let rest = line.trim_start();
     for bullet in ["- ", "* ", "+ "] {
         if let Some(content) = rest.strip_prefix(bullet) {
-            let task = content
+            // pi keeps the literal `[x]`/`[ ]` marker (`markdown.ts`'s
+            // `taskMarker`), after the bullet.
+            let (task, content) = match content
                 .strip_prefix("[x] ")
                 .or_else(|| content.strip_prefix("[X] "))
-                .map(|c| format!("☑ {c}"))
-                .or_else(|| content.strip_prefix("[ ] ").map(|c| format!("☐ {c}")));
-            let content = task.unwrap_or_else(|| content.to_string());
-            return Some(("• ".to_string(), content, indent));
+            {
+                Some(rest) => (Some(true), rest.to_string()),
+                None => match content.strip_prefix("[ ] ") {
+                    Some(rest) => (Some(false), rest.to_string()),
+                    None => (None, content.to_string()),
+                },
+            };
+            return Some((ListMarker::Bullet { task }, content, indent));
         }
     }
     // Ordered: N. or N)
@@ -288,12 +326,8 @@ fn list_item(line: &str) -> Option<(String, String, usize)> {
             .strip_prefix(". ")
             .or_else(|| after.strip_prefix(") "))
         {
-            let marker = format!(
-                "{}{} ",
-                digits,
-                if after.starts_with('.') { "." } else { ")" }
-            );
-            return Some((marker, content.to_string(), indent));
+            let start = digits.parse::<u64>().unwrap_or(1);
+            return Some((ListMarker::Ordered { start }, content.to_string(), indent));
         }
     }
     None
@@ -652,6 +686,21 @@ mod tests {
         assert!(out.iter().any(|l| l.contains("some text")));
     }
 
+    // pi: h1 = heading(bold(underline(text))), h2 = heading(bold(text)).
+    #[test]
+    fn the_level_one_heading_is_underlined() {
+        let theme = MarkdownTheme {
+            heading: Arc::new(|s| format!("[36m{s}[0m")),
+            bold: Arc::new(|s| format!("[1m{s}[0m")),
+            underline: Arc::new(|s| format!("[4m{s}[0m")),
+            ..Default::default()
+        };
+        let h1 = render_markdown("# Title", 40, &theme, &MarkdownOptions::default());
+        assert!(h1[0].contains("\x1b[4m"), "h1 underlines: {:?}", h1[0]);
+        let h2 = render_markdown("## Title", 40, &theme, &MarkdownOptions::default());
+        assert!(!h2[0].contains("\x1b[4m"), "h2 does not: {:?}", h2[0]);
+    }
+
     #[test]
     fn lists_get_bullets_and_continuation_indent() {
         let out = strip(&render_markdown(
@@ -660,8 +709,8 @@ mod tests {
             &plain(),
             &MarkdownOptions::default(),
         ));
-        assert!(out[0].starts_with("• first"));
-        assert!(out[1].starts_with("• second"));
+        assert!(out[0].starts_with("- first"), "{:?}", out[0]);
+        assert!(out[1].starts_with("- second"), "{:?}", out[1]);
         assert!(out[2].starts_with("  ")); // continuation aligns under the text
     }
 
@@ -800,7 +849,7 @@ mod tests {
         let raw = render_markdown(GOLDEN, 60, &plain(), &MarkdownOptions::default());
         let out = strip(&raw);
         assert!(out.iter().any(|l| l == "Title"), "heading");
-        assert!(out.iter().any(|l| l.starts_with("• one")), "list");
+        assert!(out.iter().any(|l| l.starts_with("- one")), "list");
         assert!(out.iter().any(|l| l.starts_with('┌')), "table");
         assert!(out.iter().any(|l| l.starts_with('╭')), "framed code");
         assert!(out.iter().any(|l| l.contains("quoted")), "quote");

@@ -61,15 +61,18 @@ fn hex_to_rgb(hex: &str) -> RgbColor {
 /// Parse one hexadecimal channel whose width implies its range, scaled to
 /// 0-255 (`f` -> 255, `ff` -> 255, `ffff` -> 255). Rejects non-hex.
 fn parse_osc_hex_channel(channel: &str) -> Option<u8> {
-    if channel.is_empty() || !channel.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    let max = 16u64.pow(channel.len() as u32) - 1;
-    if max == 0 {
+    // The input is an untrusted terminal reply: the `rgb:` dialect puts no
+    // bound on a channel's width, and `16u64.pow(len)` overflows at 16
+    // digits. Eight hex digits (32 bits) is already far past any real
+    // channel, so anything wider is not a color.
+    if channel.is_empty() || channel.len() > 8 || !channel.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let value = u64::from_str_radix(channel, 16).ok()?;
-    Some(((value * 255 + max / 2) / max) as u8)
+    // `len <= 8` keeps the shift at or below 32, and `value * 255` inside
+    // u64, so neither the scale nor the round can overflow.
+    let max = (1u64 << (4 * channel.len() as u32)) - 1;
+    Some((((value * 255) + max / 2) / max) as u8)
 }
 
 /// The ASCII body of an OSC 11 reply (`ESC ] 11 ; body (BEL | ST)`).
@@ -177,6 +180,15 @@ mod tests {
         );
         assert!(is_osc11_background_color_response("\x1b]11;#000000\x07"));
         assert!(parse_osc11_background_color("\x1b]11;notacolor\x07").is_none());
+    }
+
+    // An over-wide `rgb:` channel is an untrusted terminal reply; it must be
+    // refused, not overflow `16^len` and panic a debug build.
+    #[test]
+    fn an_over_wide_channel_is_refused_not_overflowed() {
+        assert!(parse_osc11_background_color("\x1b]11;rgb:1111111111111111/00/00\x07").is_none());
+        assert!(parse_osc11_background_color("\x1b]11;rgb:ffffffff/00/00\x07").is_some());
+        assert!(parse_osc11_background_color("\x1b]11;rgb:000000000/00/00\x07").is_none());
     }
 
     #[test]

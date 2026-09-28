@@ -41,7 +41,7 @@ impl SizeValue {
     fn resolve(self, base: u16) -> u16 {
         match self {
             SizeValue::Abs(v) => v,
-            SizeValue::Percent(p) => ((base as u32 * p as u32) / 100) as u16,
+            SizeValue::Percent(p) => ((u32::from(base) * u32::from(p.min(100))) / 100) as u16,
         }
     }
 }
@@ -182,8 +182,8 @@ pub fn extract_cursor_position(lines: &[String]) -> (Vec<String>, Option<(u16, u
     let mut out = Vec::with_capacity(lines.len());
     for (row, line) in lines.iter().enumerate() {
         if let Some(idx) = line.find(CURSOR_MARKER) {
-            let col = visible_width(&line[..idx]) as u16;
-            position = Some((row as u16, col));
+            let col = u16::try_from(visible_width(&line[..idx])).unwrap_or(u16::MAX);
+            position = Some((u16::try_from(row).unwrap_or(u16::MAX), col));
             out.push(line.replace(CURSOR_MARKER, ""));
         } else {
             out.push(line.clone());

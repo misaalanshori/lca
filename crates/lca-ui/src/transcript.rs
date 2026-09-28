@@ -370,6 +370,10 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
 /// the hyperlink (pi's `markdown.md` §6).
 fn markdown_options() -> MarkdownOptions {
     MarkdownOptions {
+        // pi renders assistant markdown with `outputPad = 1`
+        // (`assistant-message.ts`), so every line carries a one-space left
+        // margin and the text block is inset from the transcript edge.
+        padding_x: 1,
         link_mode: if lca_tui::engine::terminal::supports_hyperlinks() {
             LinkMode::Hyperlink
         } else {
@@ -622,8 +626,11 @@ mod tests {
         t.append_text("# Title\n\n- a\n- b");
         t.finish_assistant();
         let out = strip(&t.render(40, &plain()));
-        assert!(out.iter().any(|l| l == "Title"));
-        assert!(out.iter().any(|l| l.starts_with("• a")));
+        assert!(out.iter().any(|l| l.trim() == "Title"), "{out:?}");
+        assert!(
+            out.iter().any(|l| l.trim_start().starts_with("- a")),
+            "{out:?}"
+        );
     }
 
     #[test]

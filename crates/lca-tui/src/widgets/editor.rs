@@ -47,6 +47,17 @@ pub struct Editor {
     suggestions: Option<Suggestions>,
     suggestion_index: usize,
     /// The column a vertical move wants to land on, kept across shorter
+    /// The previous key was a word-character insert, so the next one (if
+    /// also a word character) continues the same undo unit (pi's fish-style
+    /// coalescing, `editor.md` §1). Reset by every other key.
+    coalesce_undo: bool,
+    /// The previous key was a kill, so this one appends (kill forward) or
+    /// prepends (kill backward) to the same ring entry instead of pushing a
+    /// new one (pi's `accumulate`, `editor.md` §5).
+    last_kill: bool,
+    /// One-shot input to the kill helpers: whether this key continues a
+    /// kill run (captured before `last_kill` is cleared for the next key).
+    kill_run: bool,
     /// lines (pi's sticky column, `editor.md` §4; R7). Cleared by any
     /// horizontal move or edit.
     preferred_col: Option<usize>,
@@ -78,6 +89,9 @@ impl Editor {
             provider: None,
             suggestions: None,
             suggestion_index: 0,
+            coalesce_undo: false,
+            last_kill: false,
+            kill_run: false,
             preferred_col: None,
             jump_pending: None,
         }
@@ -144,6 +158,25 @@ impl Editor {
         self.suggestion_index = 0;
     }
 
+    /// Record one kill, accumulating into the previous entry when the
+    /// previous key was also a kill (pi's `accumulate`).
+    fn kill(&mut self, text: String, prepend: bool) {
+        // `kill_run` carries the key handler's captured state; `last_kill`
+        // covers a direct API call (a test, or a future non-key caller).
+        if (self.kill_run || self.last_kill)
+            && let Some(last) = self.kill_ring.last_mut()
+        {
+            if prepend {
+                last.insert_str(0, &text);
+            } else {
+                last.push_str(&text);
+            }
+        } else {
+            self.kill_ring.push(text);
+        }
+        self.last_kill = true;
+    }
+
     fn snapshot(&mut self) {
         self.undo
             .push((self.lines.clone(), self.cursor_line, self.cursor_col));
@@ -160,10 +193,27 @@ impl Editor {
         &mut self.lines[self.cursor_line]
     }
 
-    /// Insert text at the cursor, handling embedded newlines.
+    /// Insert text atomically: one undo unit, whatever it spans. Paste,
+    /// programmatic insertion, and completion all take this path.
     pub fn insert_str(&mut self, text: &str) {
-        self.preferred_col = None;
+        self.coalesce_undo = false;
         self.snapshot();
+        self.insert_at_cursor(text);
+    }
+
+    /// Insert one typed character, coalescing with the previous word
+    /// character into a single undo unit (pi's fish-style coalescing).
+    fn insert_typed(&mut self, text: &str, continues: bool) {
+        let word = is_undo_word_char(text);
+        if !(continues && word) {
+            self.snapshot();
+        }
+        self.coalesce_undo = word;
+        self.insert_at_cursor(text);
+    }
+
+    fn insert_at_cursor(&mut self, text: &str) {
+        self.preferred_col = None;
         for (i, part) in text.split('\n').enumerate() {
             if i > 0 {
                 self.newline_no_snapshot();
@@ -251,7 +301,7 @@ impl Editor {
         let killed = self.current()[start..end].to_string();
         self.current_mut().replace_range(start..end, "");
         self.cursor_col = col;
-        self.kill_ring.push(killed);
+        self.kill(killed, true); // backward kill prepends
         self.refresh_suggestions(false);
     }
 
@@ -262,7 +312,7 @@ impl Editor {
         let byte = self.char_to_byte(self.cursor_col);
         let killed = self.current()[byte..].to_string();
         self.current_mut().truncate(byte);
-        self.kill_ring.push(killed);
+        self.kill(killed, false); // forward kill appends
     }
 
     /// Delete from the line start to the cursor (kill).
@@ -274,7 +324,7 @@ impl Editor {
         let rest = self.current()[byte..].to_string();
         *self.current_mut() = rest;
         self.cursor_col = 0;
-        self.kill_ring.push(killed);
+        self.kill(killed, true);
     }
 
     /// Yank the most recent kill.
@@ -454,6 +504,14 @@ impl Editor {
 
     /// Handle a raw key sequence. Returns what happened.
     pub fn handle_key(&mut self, data: &str) -> EditorEvent {
+        // Every key ends the previous coalescing run; the typed-insert path
+        // re-arms it (pi coalesces consecutive word characters).
+        let continues_undo = self.coalesce_undo;
+        self.coalesce_undo = false;
+        // A kill run is the previous key's state; the kill helpers consume
+        // it through `kill_run` and re-arm `last_kill` for the next key.
+        self.kill_run = self.last_kill;
+        self.last_kill = false;
         let kb = self.keybindings.clone();
 
         // Bracketed paste.
@@ -605,16 +663,16 @@ impl Editor {
 
         // Printable insertion (including Kitty CSI-u decoding).
         if let Some(text) = crate::engine::keys::decode_printable_key(data) {
-            self.insert_str(&text);
+            self.insert_typed(&text, continues_undo);
             return EditorEvent::Changed;
         }
         if let Some(key) = crate::engine::keys::parse_key(data) {
             if key == "space" {
-                self.insert_str(" ");
+                self.insert_typed(" ", continues_undo);
                 return EditorEvent::Changed;
             }
             if key.chars().count() == 1 && !key.starts_with("ctrl+") {
-                self.insert_str(&key);
+                self.insert_typed(&key, continues_undo);
                 return EditorEvent::Changed;
             }
         }
@@ -813,6 +871,12 @@ fn decode_csi_u_ctrl(text: &str) -> String {
     out
 }
 
+/// Whether a typed character continues an undo-coalescing run: pi merges
+/// consecutive word characters and treats anything else as a boundary.
+fn is_undo_word_char(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| c.is_alphanumeric() || c == '_')
+}
+
 /// The single printable character a key inserts, for jump mode (R7).
 fn printable_char(data: &str) -> Option<char> {
     if let Some(text) = crate::engine::keys::decode_printable_key(data) {
@@ -938,6 +1002,47 @@ mod tests {
         e.insert_str(" world");
         e.undo();
         assert_eq!(e.text(), "hello");
+    }
+
+    // pi's fish-style coalescing: a typed word is one undo unit, and a
+    // space starts the next one; an atomic insert is always its own unit.
+    #[test]
+    fn typing_coalesces_into_word_sized_undo_units() {
+        let mut e = Editor::new();
+        for c in "hello world".chars() {
+            e.handle_key(&c.to_string());
+        }
+        assert_eq!(e.text(), "hello world");
+        e.undo();
+        assert_eq!(e.text(), "hello ");
+        e.undo();
+        assert_eq!(e.text(), "hello");
+        e.undo();
+        assert_eq!(e.text(), "");
+    }
+
+    // pi accumulates consecutive kills into one ring entry: a forward kill
+    // appends, a backward kill prepends, so one yank restores the run.
+    #[test]
+    fn consecutive_kills_accumulate_in_the_ring() {
+        let mut e = Editor::new();
+        e.insert_str("one two");
+        e.cursor_line_end();
+        e.delete_word_backward(); // kills "two "
+        e.delete_word_backward(); // kills "one " and prepends
+        assert_eq!(e.text(), "");
+        assert_eq!(e.kill_ring.len(), 1, "one accumulated entry");
+        assert_eq!(e.kill_ring[0], "one two");
+        e.yank();
+        assert_eq!(e.text(), "one two");
+    }
+
+    #[test]
+    fn an_atomic_insert_is_one_undo_unit() {
+        let mut e = Editor::new();
+        e.insert_str("pasted block");
+        e.undo();
+        assert_eq!(e.text(), "");
     }
 
     // Verifies: FR-UI-10 - a multi-line paste is one atomic segment.
