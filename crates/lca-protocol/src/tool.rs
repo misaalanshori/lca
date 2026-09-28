@@ -68,6 +68,17 @@ pub struct ToolResult {
     pub truncated: bool,
     /// Images the tool returned (R5): a tool that read an image file, for
     /// example. Empty for text-only results.
+    ///
+    /// These carry the **bytes**, not an attachment hash. The turn event is
+    /// in-process: the tool already holds the bytes it just read, so a hash
+    /// would add a store round-trip for no isolation (ADR-0029's cycle-3
+    /// annotation).
+    /// ponytail: bytes are fine while producer and consumer share an
+    /// address space; a process- or network-crossing host (the NFR-11 web
+    /// host, an embedding SDK shipping events to a remote observer) wants
+    /// the hash instead - content addressing already exists on disk
+    /// (`SessionStore::attachment_path`), so the upgrade is a payload swap
+    /// in the event, not a message-shape change.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageContent>,
     /// Reserved map for non-structural extensions.

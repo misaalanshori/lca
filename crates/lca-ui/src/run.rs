@@ -133,6 +133,16 @@ enum InputResult {
     Exit,
 }
 
+/// The notice for an OSC-8 link click (S7): "opened", or "cannot open
+/// (reason)" when the opener reported one, else the bare fallback.
+fn link_notice(url: &str, outcome: Option<Result<(), String>>) -> String {
+    match outcome {
+        Some(Ok(())) => format!("opened {url}"),
+        Some(Err(reason)) => format!("cannot open {url}: {reason}"),
+        None => format!("cannot open {url}"),
+    }
+}
+
 /// Handle one raw input event (R16): capability replies, mouse, and keys.
 #[allow(clippy::too_many_arguments)]
 fn handle_input(
@@ -162,18 +172,14 @@ fn handle_input(
         screen.handle_mouse(data);
         // A click on an OSC-8 link opens it (R6).
         if let Some(url) = screen.take_clicked_link() {
-            let opened = chat
+            let outcome = chat
                 .world
                 .options
                 .hooks
                 .open_url
                 .as_ref()
-                .is_some_and(|open| open(&url));
-            chat.world.notice = Some(if opened {
-                format!("opened {url}")
-            } else {
-                format!("cannot open {url}")
-            });
+                .map(|open| open(&url));
+            chat.world.notice = Some(link_notice(&url, outcome));
         }
         // Copy on release (issue #2): prefer a verified native
         // clipboard (R6); OSC 52 is the honest fallback, and the
@@ -528,6 +534,18 @@ mod tests {
             },
             Arc::new(KeybindingsManager::new()),
         )
+    }
+
+    // Verifies: S7 - a link click names the reason when the opener fails,
+    // so "cannot open" never hides a missing launcher behind a bare no.
+    #[test]
+    fn a_failed_link_open_says_why() {
+        assert_eq!(link_notice("https://x", Some(Ok(()))), "opened https://x");
+        assert_eq!(
+            link_notice("https://x", Some(Err("no URL opener found".into()))),
+            "cannot open https://x: no URL opener found"
+        );
+        assert_eq!(link_notice("https://x", None), "cannot open https://x");
     }
 
     // Verifies: R19 - the auto-approve countdown (FR-UI-18) fires exactly at

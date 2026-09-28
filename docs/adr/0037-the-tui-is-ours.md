@@ -71,3 +71,25 @@ needs terminal input; the interactive path never translates through it.
   while the architecture moves.
 - Attribution: the design follows pi; the licensing question (NOTICE,
   dual license) remains owner-deferred.
+
+## Annotation — 2026-09-28 (cycle 3, the pre-review audit): the component
+indirection was dead code, the line-string model survives as functions
+
+The decision above stands; this records what the implementation settled
+where it left the decision's vocabulary behind.
+
+- **"Every component renders to `Vec<String>`" — the line-string model is
+  the contract, but there is no `Component` trait carrying it.** The
+  ported `Component` trait, pi's `Container`/`LayoutNode` layout trees,
+  the normalized mouse dispatch, and the primitive widgets (`Text`,
+  `SelectList`, `ScrollView`, `Loader`, `ImagePlaceholder`) had no
+  caller: the interface composes line strings directly and renders the
+  protocol `WidgetTree` through `lca-ui`'s `widget_lines`, never through
+  engine components. They were deleted (`3ff62fb`, `67e08fd`), and the
+  widgets that remain are real ones with callers: editor, markdown,
+  autocomplete, image. Rendering to plain line strings is unchanged; it
+  is now a property of functions (`transcript::render`, `editor::render`,
+  …) rather than of a trait object.
+- **"the primitive widgets" in the crate description** is therefore no
+  longer part of `lca-tui`. The crate doc and the module doc say what it
+  actually holds.

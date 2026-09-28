@@ -67,3 +67,28 @@ If a second content kind earns its place (audio, a file reference), the same
 variant grows a case — which is breaking, so it belongs to the same window. If
 the terminal render protocol is chosen, it changes the `ui` world's `image`
 widget, not this message shape.
+
+## Annotation — 2026-09-28 (cycle 3, R5): the tool-result event carries image
+bytes in-process, not a hash reference
+
+The decision above is about the **message** shape and stands unchanged.
+This records a separate, narrower choice the cycle-3 brief had sketched
+as "events carry an image reference" and the implementation made
+differently:
+
+- `ToolResult.images: Vec<ImageContent>` carries the **bytes** in the
+  in-process turn event, not a `{hash, media_type, dimensions}` reference.
+  The reason is that the event never leaves the process: the tool already
+  holds the bytes it just read, and the interface resolves them once for
+  the render. A reference would add a store round-trip for no isolation,
+  since the same process holds the attachment store.
+- **The ceiling, named:** bytes in an event are fine when producer and
+  consumer share an address space. A host that crosses a process or
+  network boundary (the NFR-11 web host, an embedding SDK shipping events
+  to a remote observer) wants the hash reference instead — content
+  addressing already exists on disk (`SessionStore::attachment_path`), so
+  the upgrade is to swap the event payload for a hash and resolve in the
+  consumer, without touching this ADR's message shape or the session log.
+- The session log keeps its attachment-reference design (a hash on the
+  record, bytes on disk); the WIT `tool-result` stays text. Only the
+  transient in-process event carries bytes.

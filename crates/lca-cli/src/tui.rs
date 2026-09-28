@@ -161,16 +161,28 @@ fn native_clipboard(text: &str) -> bool {
     false
 }
 
-/// Open a URL in the platform's browser (R6), returning whether a launcher
-/// started. Fire-and-forget: the browser outlives this process only if the
-/// launch succeeded.
-fn open_url(url: &str) -> bool {
-    #[cfg(target_os = "macos")]
-    let candidates: &[(&str, &[&str])] = &[("open", &[])];
-    #[cfg(target_os = "windows")]
-    let candidates: &[(&str, &[&str])] = &[("cmd", &["/C", "start", ""])];
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let candidates: &[(&str, &[&str])] = &[("xdg-open", &[]), ("x-www-browser", &[])];
+/// Open a URL in the platform's browser (R6/S7). Fire-and-forget: returns
+/// `Err` with the reason when no launcher is available or every candidate
+/// refused to start, so the notice can say why rather than just "cannot".
+fn open_url(url: &str) -> Result<(), String> {
+    let candidates: &[(&str, &[&str])] = {
+        #[cfg(target_os = "macos")]
+        {
+            &[("open", &[] as &[&str])]
+        }
+        #[cfg(target_os = "windows")]
+        {
+            &[("cmd", &["/C", "start", ""] as &[&str])]
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            &[
+                ("xdg-open", &[] as &[&str]),
+                ("x-www-browser", &[] as &[&str]),
+            ]
+        }
+    };
+    let mut tried: Vec<String> = Vec::new();
     for (program, args) in candidates {
         let mut command = std::process::Command::new(program);
         command
@@ -179,10 +191,11 @@ fn open_url(url: &str) -> bool {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         if command.spawn().is_ok() {
-            return true;
+            return Ok(());
         }
+        tried.push((*program).to_string());
     }
-    false
+    Err(format!("no URL opener found (tried {})", tried.join(", ")))
 }
 
 /// Read a child pipe into the shell sink until it closes (R4). Control

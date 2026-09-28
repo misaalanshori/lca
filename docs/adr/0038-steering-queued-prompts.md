@@ -62,3 +62,24 @@ add a hook point and a signature for data that already has a home.
 - A queued message's mode is visible to extensions through
   `message.extras["queue"]`, so a transform can treat a steer differently
   from a follow-up without a new hook or ABI change.
+
+## Annotation — 2026-09-28 (cycle 3): the decision text above was rewritten
+in place, and that was the wrong house procedure
+
+**The record, honestly.** The decision originally named **three** submit
+modes — `Steer`, `FollowUp`, and `New` — with `New` standing for "the
+no-turn case". During cycle 3's pre-review audit the `New` variant was
+correctly recognised as not a mode at all (the no-turn path is simply the
+absence of a queue) and deleted from `SubmitMode`. The decision text above
+was then edited from "Three submit modes" to "Two submit modes", and the
+`New` sentence was deleted, in place — the audit commit `e93a049`.
+
+That edit changed **decision text**, which the house rule (this ADR
+family's annotation rule) forbids: an ADR is annotated or superseded,
+never silently rewritten. The resulting text is correct — `SubmitMode`
+really does have two variants and `New` never was a mode — so the fix is
+this annotation, not a revert: the original three-mode wording stands on
+the record here, the current decision text is the corrected one, and this
+annotation is the trail between them. Future edits to a decision follow
+the rule the cycle-3 audit broke: append an annotation, never rewrite the
+paragraph.

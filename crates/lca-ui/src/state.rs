@@ -291,8 +291,9 @@ pub type ShellHandle = Arc<dyn Fn() + Send + Sync>;
 /// unverified.
 pub type ClipboardWriter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
-/// Opens a URL from an OSC-8 link click (R6), returning whether it worked.
-pub type OpenUrl = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+/// Opens a URL from an OSC-8 link click (R6/S7). `Err` names the reason
+/// (no launcher found, the launcher refused), which the notice shows.
+pub type OpenUrl = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
 /// Starts a `!`/`!!` shell command, streaming output through the sender and
 /// returning a cancel handle (R4). The `bool` is `true` for `!!`.
