@@ -44,6 +44,9 @@ pub struct Chat {
     pub editor: Editor,
     /// The footer data (cwd, session).
     pub footer: Footer,
+    /// The keybinding registry (app actions are looked up here, so an
+    /// embedder that rebinds is honored).
+    pub keybindings: Arc<KeybindingsManager>,
     /// The theme.
     pub theme: Theme,
     /// Accumulated session usage.
@@ -144,6 +147,7 @@ impl Chat {
         };
         let screen_mode = world.options.fullscreen;
         Chat {
+            keybindings,
             transcript,
             editor,
             footer,
@@ -457,15 +461,15 @@ impl Chat {
         if self.search.is_some() {
             return self.handle_search_key(data, key.as_deref());
         }
-        if key.as_deref() == Some("ctrl+o") {
+        if self.keybindings.matches(data, "app.tools.expand") {
             self.transcript.toggle_tools_expanded();
             return Action::Continue;
         }
-        if key.as_deref() == Some("ctrl+t") {
+        if self.keybindings.matches(data, "app.thinking.toggle") {
             self.transcript.toggle_thinking_expanded();
             return Action::Continue;
         }
-        if key.as_deref() == Some("ctrl+r") {
+        if self.keybindings.matches(data, "app.search") {
             self.search = Some(String::new());
             self.search_matches.clear();
             self.search_index = 0;
@@ -479,13 +483,13 @@ impl Chat {
                 return Action::ExternalEditor;
             }
         }
-        if key.as_deref() == Some("ctrl+x") {
+        if self.keybindings.matches(data, "app.editor.external") {
             self.pending_ctrl_x = true;
             return Action::Continue;
         }
 
-        // Ctrl+P toggles the side panel (a host binding, not an extension's).
-        if key.as_deref() == Some("ctrl+p") {
+        // The extension panel toggle is a host binding, not an extension's.
+        if self.keybindings.matches(data, "app.panel.toggle") {
             self.world.panel_open = !self.world.panel_open;
             return Action::Continue;
         }
@@ -617,49 +621,47 @@ impl Chat {
     fn global_key(&mut self, data: &str) -> Action {
         // Prompt jump (FR-UI-11): the authoritative matcher, since the
         // arrow-modifier dialects are not all round-tripped by `parse_key`.
-        if keys::matches_key(data, "alt+up") || keys::matches_key(data, "ctrl+up") {
+        if self.keybindings.matches(data, "app.prompt.previous") {
             self.jump_prompt(-1);
             return Action::Continue;
         }
-        if keys::matches_key(data, "alt+down") || keys::matches_key(data, "ctrl+down") {
+        if self.keybindings.matches(data, "app.prompt.next") {
             self.jump_prompt(1);
             return Action::Continue;
         }
-        match keys::parse_key(data).as_deref() {
-            Some("ctrl+c") => {
-                if self.turn_running {
-                    Action::CancelTurn
-                } else if self.world.ctrl_c_armed {
-                    self.world.ctrl_c_armed = false;
-                    Action::Exit
-                } else {
-                    self.world.ctrl_c_armed = true;
-                    Action::Continue
-                }
-            }
-            Some("escape") => {
-                if self.turn_running {
-                    Action::CancelTurn
-                } else {
-                    self.world.ctrl_c_armed = false;
-                    Action::Continue
-                }
-            }
-            Some("alt+e") if !self.pending.is_empty() => {
-                // Edit-all-queued: return the queue to the editor (ADR-0038).
-                self.restore_pending();
+        if self.keybindings.matches(data, "app.clear") {
+            return if self.turn_running {
+                Action::CancelTurn
+            } else if self.world.ctrl_c_armed {
+                self.world.ctrl_c_armed = false;
+                Action::Exit
+            } else {
+                self.world.ctrl_c_armed = true;
                 Action::Continue
-            }
-            Some("alt+enter") if self.turn_running => {
-                // Queue a follow-up for turn end (ADR-0038).
-                let text = self.editor.submit();
-                if !text.trim().is_empty() {
-                    self.queue_submit(text, lca_protocol::SubmitMode::FollowUp);
-                }
-                Action::Continue
-            }
-            _ => Action::Continue,
+            };
         }
+        if self.keybindings.matches(data, "app.interrupt") {
+            return if self.turn_running {
+                Action::CancelTurn
+            } else {
+                self.world.ctrl_c_armed = false;
+                Action::Continue
+            };
+        }
+        if !self.pending.is_empty() && self.keybindings.matches(data, "app.message.dequeue") {
+            // Edit-all-queued: return the queue to the editor (ADR-0038).
+            self.restore_pending();
+            return Action::Continue;
+        }
+        if self.turn_running && self.keybindings.matches(data, "app.message.followUp") {
+            // Queue a follow-up for turn end (ADR-0038).
+            let text = self.editor.submit();
+            if !text.trim().is_empty() {
+                self.queue_submit(text, lca_protocol::SubmitMode::FollowUp);
+            }
+            return Action::Continue;
+        }
+        Action::Continue
     }
 
     /// Handle a key while a modal or the panel owns the keyboard.

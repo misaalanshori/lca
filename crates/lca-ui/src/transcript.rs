@@ -464,7 +464,10 @@ fn render_assistant(
             out.push(format!(
                 "{} {}",
                 (theme.reasoning)("∴"),
-                (theme.reasoning)("Thinking… (ctrl+t to expand)")
+                (theme.reasoning)(&format!(
+                    "Thinking… ({} to expand)",
+                    lca_tui::engine::keybindings::key_text("app.thinking.toggle")
+                ))
             ));
         }
     }
@@ -575,13 +578,20 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
                 out.push(format!(
                     "  {}",
                     (theme.dim)(&format!(
-                        "… ({} more lines, ctrl+o to expand)",
-                        total - preview
+                        "… ({} more lines, {} to expand)",
+                        total - preview,
+                        lca_tui::engine::keybindings::key_text("app.tools.expand")
                     ))
                 ));
             }
         } else if total > 1 {
-            out.push(format!("  {}", (theme.dim)("… (ctrl+o to expand)")));
+            out.push(format!(
+                "  {}",
+                (theme.dim)(&format!(
+                    "… ({} to expand)",
+                    lca_tui::engine::keybindings::key_text("app.tools.expand")
+                ))
+            ));
         }
     }
     let _ = visible_width("");

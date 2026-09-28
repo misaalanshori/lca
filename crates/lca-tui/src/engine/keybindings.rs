@@ -28,6 +28,12 @@ macro_rules! def {
     };
 }
 
+/// The primary key for an action from the default table, for a hint that
+/// cannot lie when the interface is rebound through `with_user_bindings`.
+pub fn key_text(action: &str) -> String {
+    KeybindingsManager::new().primary_key(action)
+}
+
 /// The full default keybinding table, transcribed from pi's
 /// `TUI_KEYBINDINGS`. Contextual shadowing is deliberate: `up`, `pageUp`
 /// and `enter` mean different things to the editor and to a picker, decided
@@ -128,6 +134,44 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
         (
             "tui.select.pageDown",
             def!(&["pageDown"], "Selection page down"),
+        ),
+        // Application-level actions (pi's `app.*` namespace): the ones the
+        // interface itself owns. They live in the registry so an embedder
+        // that rebinds is honored and `/hotkeys` lists them.
+        ("app.tools.expand", def!(&["ctrl+o"], "Expand tool output")),
+        (
+            "app.thinking.toggle",
+            def!(&["ctrl+t"], "Expand the thinking run"),
+        ),
+        ("app.search", def!(&["ctrl+r"], "Search the transcript")),
+        (
+            "app.panel.toggle",
+            def!(&["ctrl+p"], "Toggle the extension panel"),
+        ),
+        (
+            "app.editor.external",
+            def!(&["ctrl+x"], "Open the external editor"),
+        ),
+        ("app.interrupt", def!(&["escape"], "Interrupt the turn")),
+        (
+            "app.clear",
+            def!(&["ctrl+c"], "Clear the input, twice to exit"),
+        ),
+        (
+            "app.message.followUp",
+            def!(&["alt+enter"], "Queue a follow-up message"),
+        ),
+        (
+            "app.message.dequeue",
+            def!(&["alt+e"], "Edit all queued messages"),
+        ),
+        (
+            "app.prompt.previous",
+            def!(&["alt+up", "ctrl+up"], "Jump to the previous prompt"),
+        ),
+        (
+            "app.prompt.next",
+            def!(&["alt+down", "ctrl+down"], "Jump to the next prompt"),
         ),
         ("tui.select.confirm", def!(&["enter"], "Confirm selection")),
         (
@@ -318,6 +362,11 @@ impl KeybindingsManager {
     /// User-vs-user conflicts.
     pub fn conflicts(&self) -> &[KeybindingConflict] {
         &self.conflicts
+    }
+
+    /// The primary key for an action, for a hint (`ctrl+o`).
+    pub fn primary_key(&self, action: &str) -> String {
+        self.keys(action).into_iter().next().unwrap_or_default()
     }
 
     /// The description for an action, if defined.
