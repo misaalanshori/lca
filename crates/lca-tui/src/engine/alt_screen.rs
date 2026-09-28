@@ -16,7 +16,6 @@
 //! kept.
 
 use super::core::extract_cursor_position;
-use super::layout::{LayoutNode, render_frame};
 use super::selection::{Granularity, Selection, SelectionPoint};
 use super::terminal::Terminal;
 use super::text::{strip_terminal_sequences, visible_width};
@@ -155,18 +154,6 @@ impl AltScreenRenderer {
         out.push_str("\x1b[?7h\x1b[?25h");
         term.write(&out);
         self.first_render = true;
-    }
-
-    /// Render one frame.
-    pub fn render(
-        &mut self,
-        term: &mut dyn Terminal,
-        root: &mut LayoutNode,
-        width: u16,
-        height: u16,
-    ) -> Option<(u16, u16)> {
-        let frame = render_frame(root, width, height);
-        self.render_lines(term, frame.lines, width, height)
     }
 
     /// Render already-composed lines with the selection highlight and the

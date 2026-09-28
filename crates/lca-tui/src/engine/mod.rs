@@ -10,7 +10,6 @@ pub mod colors;
 pub mod core;
 pub mod keybindings;
 pub mod keys;
-pub mod layout;
 pub mod main_screen;
 pub mod selection;
 pub mod stdin_buffer;
