@@ -52,6 +52,15 @@ published 0.5.0 binaries do not have.
   keyboard while open, so a slash command typed into one lands in its search
   box; the hint says so instead of leaving it surprising.
 
+### Notes
+
+- A previous cycle also verified against `mimo-v2.6-flash` alongside the
+  mandated model (`deepseek-v4.1-flash`); the record says so honestly. That
+  was a deviation from the model policy and is not repeated.
+- Two known gaps in the interface remain, recorded for a future cycle and
+  deliberately not built here: markdown **syntax highlighting** and the edit
+  tool's **diff card**. Both have their theme roles already; pi renders both.
+
 ## [0.5.0] - 2026-09-29
 
 The TUI renovation release. Cycles 2–4 rebuilt the interface on LCA's own
