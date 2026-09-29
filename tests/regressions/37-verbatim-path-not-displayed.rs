@@ -18,6 +18,11 @@ fn verbatim_paths_are_stripped_for_display_only() {
         display_path(r"\\?\C:\Users\me\my project"),
         r"C:\Users\me\my project"
     );
+    // A non-ASCII segment survives untouched (only the prefix is stripped).
+    assert_eq!(
+        display_path(r"\\?\C:\Users\me\projet-été"),
+        r"C:\Users\me\projet-été"
+    );
     assert_eq!(display_path(r"\\?\UNC\server\share"), r"\\server\share");
     // Already-plain and non-Windows paths are untouched.
     assert_eq!(display_path(r"C:\plain"), r"C:\plain");

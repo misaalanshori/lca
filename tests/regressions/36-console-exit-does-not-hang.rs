@@ -98,11 +98,14 @@ fn a_clean_exit_on_a_pseudo_console_writes_session_end() {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut ended = false;
     while Instant::now() < deadline {
+        // Drain the pseudo-console: a TUI writing its shutdown sequences
+        // with nobody reading can fill the pipe and block its own exit.
+        let _ = pty.read(65536);
         if find_session_end(&data) {
             ended = true;
             break;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(50));
     }
     pty.kill();
     let _ = std::fs::remove_dir_all(&root);

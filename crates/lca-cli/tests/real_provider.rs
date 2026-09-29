@@ -53,8 +53,15 @@ fn opencode_go_completes_one_turn() {
     // SAFETY: this test process is single-test-per-process under
     // nextest and sets these before any runtime thread spawns.
     unsafe {
+        // Every platform's data directory, not just XDG: on Windows the
+        // store is `%APPDATA%\lca`, so leaving APPDATA set would send the
+        // smoke at the developer's real sessions and grants.
+        std::env::set_var("HOME", &root);
+        std::env::set_var("USERPROFILE", &root);
         std::env::set_var("XDG_DATA_HOME", &data);
         std::env::set_var("XDG_CONFIG_HOME", &config);
+        std::env::set_var("APPDATA", &data);
+        std::env::set_var("LOCALAPPDATA", &data);
         std::env::set_var("OPENAI_BASE_URL", "https://opencode.ai/zen/go/v1");
         std::env::set_var("OPENAI_MODEL", "deepseek-v4.1-flash");
         std::env::remove_var("OPENAI_API_KEY");

@@ -674,6 +674,22 @@ fn the_tui_renders_a_turn_in_a_windows_console() {
         );
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+
+    // §14 also asks that the session be resumable: `lca export` reloads the
+    // log from disk and replays the turn, which is what resume does.
+    let session_id = log
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .expect("the session directory names the session");
+    let out = sandbox.run(None, &["export", &session_id]);
+    // `lca export` writes the file and prints its path; load and check it.
+    let export_path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let exported = std::fs::read_to_string(&export_path).unwrap_or_default();
+    assert!(
+        exported.contains("do a thing") && exported.contains("turn complete"),
+        "the session reloads for resume ({export_path}): {exported}"
+    );
 }
 
 // Verifies: the real-terminal checklist's secret-prompt case on Windows -
@@ -843,7 +859,7 @@ fn the_interface_opens_in_the_zero_provider_state_and_recovers_through_login() {
 // Verifies: ADR-0039's Windows surface end to end - a project carrying an
 // untrusted `.lca/config.toml` prompts at startup, the trust answer applies,
 // a `!` command runs inline (the user's own, ungated), `/grants` opens, and
-// the double Ctrl+C exits cleanly.
+// a clean `/exit` quits.
 #[cfg(windows)]
 #[test]
 fn the_trust_prompt_inline_shell_and_grants_work_on_windows() {
