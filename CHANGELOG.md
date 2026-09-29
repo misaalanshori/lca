@@ -4,17 +4,53 @@ Notable changes to LCA. Versions follow semantic versioning for the product;
 the `lca:ext` ABI version is independent and is printed by `lca --version`.
 Dates are UTC.
 
-## [Unreleased]
+## [0.5.1] - 2026-09-29
+
+A patch on the 0.5 train: **no interface changes** (`lca:ext` stays
+`@0.5.0`, every manifest stays `abi = "0.5"`). It carries the commits that
+landed after the `v0.5.0` tag, including a terminal-protocol fix the
+published 0.5.0 binaries do not have.
 
 ### Fixed
 
-- **Ctrl+J now inserts a newline.** The editor checked submit before the
-  newline binding, and a bare LF matches `enter` in a legacy terminal, so
-  Ctrl+J submitted the prompt instead of newlining - and with it the
-  documented fallback for a terminal that cannot report Shift+Enter was
-  dead too. The newline check now runs first (pi's order), accepts pi's
-  full spelling set (`\n`, `ESC CR`, `ESC [13;2~`, any ESC+CR), and a `\`
-  typed before Enter inserts a newline instead of submitting.
+- **A malformed terminal color reply could panic or misbehave.** The OSC 11
+  background-color parser passed an unbounded channel to the hex decoder, and
+  `16u64.pow(len) - 1` overflowed at 16 hex digits. The reply is untrusted
+  terminal input - any process writing to the tty can send it - so the parser
+  now caps a channel at xterm's 8 digits. Guard: `tests/regressions/33`.
+- **Ctrl+J now inserts a newline.** Submit was checked before the newline
+  binding, and a bare LF matches `enter` in a legacy terminal, so Ctrl+J
+  submitted the prompt instead of newlining - and with it the documented
+  fallback for a terminal that cannot report Shift+Enter was dead too. The
+  newline check now runs first (pi's order), accepts pi's full spelling set
+  (`\n`, `ESC CR`, `ESC [13;2~`, any ESC+CR), and a `\` typed before Enter
+  inserts a newline instead of submitting.
+- **The app-level keys go through the keybinding registry.** Ctrl+O/Ctrl+T/
+  Ctrl+R/Ctrl+P, the escape/Ctrl+C pair, the follow-up/dequeue pair, and the
+  prompt jump were raw key checks, so an embedder that rebound them was
+  ignored and `/hotkeys` could not list them.
+- **Markdown matches pi's shapes.** h1 underline, `- ` bullets, literal
+  `[x]`/`[ ]` task markers, ordered-list renumbering, and the assistant's
+  one-column left margin.
+- **The editor coalesces typed runs into one undo unit**, and consecutive
+  kills accumulate in the kill ring (forward appends, backward prepends) so
+  one yank restores the run.
+- **`/settings` and `/thinking` no longer disagree.** The `/thinking` pick
+  persists to the user config file (the same comment-preserving writer the
+  `/theme` pick uses), and `/settings` shows the resolved value with its
+  source - session pick, then config file, then `unset (provider default)`.
+  Both surfaces agree in-session and across a restart.
+- **An unknown context window reads `ctx ?`** in the footer instead of a
+  fabricated `ctx 0%`.
+- **The footer names the login preset** (`opencode-go`) when one was stored,
+  falling back to the extension name for a directly-configured provider.
+
+### Added
+
+- **A shared hint row on every picker overlay** (`↑↓ move · enter apply · esc
+  close`, plus `type to filter` on the searchable ones). A picker owns the
+  keyboard while open, so a slash command typed into one lands in its search
+  box; the hint says so instead of leaving it surprising.
 
 ## [0.5.0] - 2026-09-29
 

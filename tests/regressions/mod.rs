@@ -107,3 +107,7 @@ mod empty_model_id_falls_back;
 // submitted instead of inserting a newline.
 #[path = "32-ctrl-j-inserts-a-newline.rs"]
 mod ctrl_j_inserts_a_newline;
+// Released 0.5.0 trust-boundary defect: an overlong OSC 11 hex channel
+// could overflow the decoder; headlined in 0.5.1.
+#[path = "33-osc11-hex-overflow.rs"]
+mod osc11_hex_overflow;

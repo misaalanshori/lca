@@ -1118,3 +1118,20 @@ search, prompt jump, countdowns, stats, theme preview), and `/tree` with
 fork-from-message. The migration runs under a breaking license: phases may
 break the tree mid-move; commits and phase boundaries land green, and tmux
 driving is the proof.
+
+## TUI cycle 5 — the epilogue (v0.5.1, 2026-09-29)
+
+The bow's last knot: six commits landed after the `v0.5.0` tag, so the
+published binaries carried bugs the tree had already fixed, including an
+OSC 11 trust-boundary panic (the spec below is `tests/regressions/33`). The
+register closed: `/thinking` persists to the user config file and `/settings`
+shows the resolved value with its source (session then config then `unset`),
+`ui.theme` agrees the same way, every picker overlay carries a shared hint
+row, an unknown context window reads `ctx ?`, and the footer names the login
+preset when one is stored. **The ABI is untouched** — WIT stays
+`lca:ext@0.5.0`, every manifest stays `abi = "0.5"`, and
+`wit/CHANGELOG.md` gains no entry, so `git diff v0.5.0..v0.5.1 -- wit/` is
+empty by construction. The five-minute tour was re-driven end to end on the
+shipped bits, and the release was verified from a clean data directory
+(checksum → `--version` → install → smoke). Regressions grew 30 → 32.
+Report: `../tui-port5-report.md`.
