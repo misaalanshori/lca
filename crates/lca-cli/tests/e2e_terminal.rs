@@ -571,11 +571,16 @@ fn spawn_console(sandbox: &Sandbox, envs: &[(&'static str, String)]) -> lca_tool
 #[test]
 fn the_tui_renders_a_turn_in_a_windows_console() {
     let runtime = rt();
-    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text_with_usage(
-        "console smoke ok",
-        20,
-        0,
-    ))]));
+    // A review-class shell command (a path outside the workspace) so the
+    // analyzer does not auto-approve and the modal is exercised; `type` of a
+    // system file is harmless to actually run.
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_tool_call(
+            "shell",
+            r#"{"command":"type C:\\Windows\\win.ini"}"#,
+        )),
+        Reply::Sse(sse_text_with_usage("turn complete", 20, 0)),
+    ]));
     let sandbox = sandbox("tui-conpty");
     sandbox.approve_loopback_net(serde_json::json!({}));
 
@@ -601,15 +606,38 @@ fn the_tui_renders_a_turn_in_a_windows_console() {
         "the verbatim path prefix never reaches the screen: {screen:?}"
     );
 
-    pty.write(b"hello console\r").expect("write the prompt");
+    pty.write(b"do a thing\r").expect("write the prompt");
     assert!(
         read_until(
             &mut pty,
             &mut screen,
-            "console smoke ok",
+            "Allow this action?",
             std::time::Duration::from_secs(60)
         ),
-        "the reply renders: {screen:?}"
+        "the permission modal renders: {screen:?}"
+    );
+    pty.write(b"o").expect("approve once");
+    assert!(
+        read_until(
+            &mut pty,
+            &mut screen,
+            "turn complete",
+            std::time::Duration::from_secs(60)
+        ),
+        "the turn completes after approval: {screen:?}"
+    );
+
+    // A resize re-renders without losing the frame (FR-UI-3).
+    pty.resize(30, 100).expect("resize");
+    let mut resized = String::new();
+    assert!(
+        read_until(
+            &mut pty,
+            &mut resized,
+            "openai-compatible",
+            std::time::Duration::from_secs(15)
+        ),
+        "the frame survives a resize: {resized:?}"
     );
 
     pty.write(b"/exit\r").expect("write /exit");
@@ -789,4 +817,123 @@ fn the_interface_opens_in_the_zero_provider_state_and_recovers_through_login() {
         serde_json::json!(true),
         "the provider is enabled again"
     );
+}
+
+// Verifies: ADR-0039's Windows surface end to end - a project carrying an
+// untrusted `.lca/config.toml` prompts at startup, the trust answer applies,
+// a `!` command runs inline (the user's own, ungated), `/grants` opens, and
+// the double Ctrl+C exits cleanly.
+#[cfg(windows)]
+#[test]
+fn the_trust_prompt_inline_shell_and_grants_work_on_windows() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
+    let sandbox = sandbox("tui-conpty-trust");
+    // No seeded grants: the project must be untrusted for the prompt. An
+    // untrusted project config is what raises it at startup (FR-PERM-24).
+    std::fs::create_dir_all(sandbox.project().join(".lca")).expect("mkdir .lca");
+    std::fs::write(sandbox.project().join(".lca").join("config.toml"), "").expect("write config");
+
+    let mut envs = console_env(&sandbox, &mock, false);
+    envs.push(("OPENAI_MODEL", "test-model".to_string()));
+    // Deliver a lone Escape quickly, so it is not reassembled with the
+    // Ctrl+C that follows into an alt-sequence.
+    envs.push(("PI_TUI_ESC_TIMEOUT", "50".to_string()));
+    let mut pty = spawn_console(&sandbox, &envs);
+    let mut screen = String::new();
+
+    assert!(
+        read_until(
+            &mut pty,
+            &mut screen,
+            "Trust this project",
+            std::time::Duration::from_secs(30)
+        ),
+        "the folder-trust prompt renders: {screen:?}"
+    );
+    pty.write(b"\r").expect("trust the folder"); // row 0: trust (remember)
+
+    // `!` runs the user's own command inline, no modal.
+    pty.write(b"!echo handdrive-marker\r")
+        .expect("write ! command");
+    let mut shell = String::new();
+    assert!(
+        read_until(
+            &mut pty,
+            &mut shell,
+            "handdrive-marker",
+            std::time::Duration::from_secs(20)
+        ),
+        "the inline shell output renders: {shell:?}"
+    );
+
+    pty.write(b"/grants\r").expect("write /grants");
+    let mut grants = String::new();
+    assert!(
+        read_until(
+            &mut pty,
+            &mut grants,
+            "grants",
+            std::time::Duration::from_secs(15)
+        ),
+        "the grants view renders: {grants:?}"
+    );
+    pty.write(b"\x1b").expect("close the overlay");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    pty.write(b"/exit\r").expect("write /exit");
+    let log = find_session_log(&sandbox.state_dir()).expect("a session log");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("\"t\":\"session-end\"") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a clean quit writes session-end"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+// Verifies: the §14 keyboard row on Windows - Ctrl+C twice on an idle prompt
+// exits and writes session-end (the first arms, the second leaves).
+#[cfg(windows)]
+#[test]
+fn the_double_ctrl_c_exits_on_windows() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
+    let sandbox = sandbox("tui-conpty-ctrlc");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    let mut envs = console_env(&sandbox, &mock, false);
+    envs.push(("OPENAI_MODEL", "test-model".to_string()));
+    let mut pty = spawn_console(&sandbox, &envs);
+    let mut screen = String::new();
+    assert!(
+        read_until(
+            &mut pty,
+            &mut screen,
+            "session in",
+            std::time::Duration::from_secs(30)
+        ),
+        "startup renders: {screen:?}"
+    );
+
+    pty.write(b"\x03").expect("ctrl+c");
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    pty.write(b"\x03").expect("ctrl+c again");
+    let log = find_session_log(&sandbox.state_dir()).expect("a session log");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("\"t\":\"session-end\"") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "double Ctrl+C writes session-end"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
