@@ -1135,3 +1135,38 @@ empty by construction. The five-minute tour was re-driven end to end on the
 shipped bits, and the release was verified from a clean data directory
 (checksum → `--version` → install → smoke). Regressions grew 30 → 32.
 Report: `../tui-port5-report.md`.
+
+## TUI cycle 6 — the release and the behavior drive (v0.5.1, 2026-09-29)
+
+The owner held `v0.5.1` for an independent review; this cycle closed its
+punch list and cut the release. **C1:** `lca-permissions`'s `lib.rs`
+(1,219 lines) dropped the ADR-0039 rules engine into `rules.rs`,
+re-exported so no caller changed, bringing every workspace source under the
+1,200-line ceiling (max now 1,141). **C2:** `lca-core::AgentConfig::default()`
+still said `max_iterations = 50` while `lca-config` and
+`docs/configuration.md` said 100; the config default became the named
+`DEFAULT_TOOL_MAX_ITERATIONS` and a unit test compares the two crates.
+**C7:** the docs' `abi = "0.4"` manifest examples came to `0.5`, and
+ADR-0002's "fifteen crates" got a dated annotation (sixteen since ADR-0037
+split out `lca-ui`); the historical 0.4 mentions in `abi-versioning.md` and
+ADR-0028 are untouched. **The behavior drive** (tmux, `deepseek-v4.1-flash`
+via OpenCode Go) proved the analyzer's auto-approve/review contrast on the
+model's shell tool (in-workspace and `cd <inside> &&` auto-approve; outside
+paths, `$(…)`, egress, and a `/tmp` `cd` review), folder trust (startup
+picker, session-only, the modal `t`, `/trust`, deny-beats-allow), the
+E2/E3/E4/E5 fixes across a restart, the standard tour end to end, and a
+malformed OSC 11 reply that leaves the UI alive. It found one real
+regression: a login on a session that started logged out left the identity
+cell stale, so a later `/model` reverted the footer from the preset to the
+extension name — fixed with a unit guard beside the seam. The live pi
+side-by-side could not run a turn (the environment answers 403 "Model access
+is disabled"), so the comparison was chrome-level and the two known gaps
+(syntax highlighting, diff cards) stay recorded. **The release:** `v0.5.1`
+tagged on `e2f6407`, publish pipeline green (six attesting artifacts, the
+`abi-0.5` OCI tags reused, the skills zip), and verified from a fresh
+directory (checksum → `--version` `lca 0.5.1 / abi 0.5` → attribution →
+`ext install` → an interactive `pong` turn). The ABI is untouched:
+`git diff v0.5.0..v0.5.1 -- wit/` is empty, every manifest stays
+`abi = "0.5"`, and `wit/CHANGELOG.md` gains no entry. C3: a previous
+cycle's `mimo-v2.6-flash` verification is disclosed in the release notes.
+Regressions 34; suite 710. Report: `../tui-port6-report.md`.
