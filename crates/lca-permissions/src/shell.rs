@@ -195,7 +195,18 @@ fn segment_ok(segment: &str, cwd: &Path, workspace: &Path) -> bool {
     {
         return false;
     }
-    if name == "cd" || name == "pushd" || name == "popd" {
+    if name == "cd" {
+        // The `cd <project> && …` idiom is everywhere, so allow a `cd` whose
+        // target resolves inside the workspace. Later relative paths resolve
+        // against the original cwd, which is conservative: it can over-review,
+        // never over-allow (a path that would be inside only relative to the
+        // new, deeper cwd is refused).
+        return match toks.get(i + 1) {
+            Some(target) if !target.starts_with('-') => path_ok(target, cwd, workspace),
+            _ => false,
+        };
+    }
+    if name == "pushd" || name == "popd" {
         return false;
     }
     if name == "rm" && toks.iter().any(|t| t == "--no-preserve-root") {
@@ -406,6 +417,8 @@ mod tests {
             "node index.js",
             "make",
             "git status",
+            "cd /work/proj && cargo build",
+            "cd src && ls -la",
             "git diff --stat",
             "git add src/main.rs",
             "git commit -m 'x'",
@@ -493,6 +506,9 @@ mod tests {
             "LD_PRELOAD=/evil/x ls",
             "cd src && rm -rf /",
             "cd /tmp",
+            "cd ..",
+            "cd /work/other",
+            "cd /work/proj/../../etc && ls",
             "find . -exec rm {} ;",
             "find . -delete",
             "ls --file=/etc/passwd",

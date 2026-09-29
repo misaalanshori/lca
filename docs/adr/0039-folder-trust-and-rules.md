@@ -38,10 +38,13 @@ not "can this run code".
 
 **A strict workspace-scoped analyzer** (`lca_permissions::shell`)
 auto-approves a shell command only when it provably stays inside the
-workspace. It refuses command substitution, `cd`, shells and
-indirection, privilege and disk tools, egress clients, package
-publishes, sensitive environment variables, heredocs, and any path or
-redirection target that leaves the workspace. Everything else is allowed
+workspace. It refuses command substitution, shells and indirection,
+privilege and disk tools, egress clients, package publishes, sensitive
+environment variables, heredocs, and any path or redirection target that
+leaves the workspace. It allows a `cd` whose target resolves inside the
+workspace — the ubiquitous `cd <project> && …` idiom — resolving later
+relative paths against the original cwd, which is conservative (it can
+over-review, never over-allow). Everything else is allowed
 (`cargo`/`git status`/`rm -rf target`/`sed -i src/…`). The bias is
 deliberate: a false "review" costs one prompt, a false "allow" costs the
 boundary, so anything the analyzer cannot reason about is reviewed.
