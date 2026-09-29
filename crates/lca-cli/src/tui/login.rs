@@ -92,6 +92,11 @@ impl Ui {
             settings.push(("preset".to_string(), choice.clone()));
             choice.clone()
         };
+        // #4: remember the answer so the endpoint grant's approval can re-run
+        // model discovery; the submit's own discovery ran before the grant
+        // existed and could not reach the endpoint.
+        *self.login_answer.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some((target.clone(), choice.clone(), values.clone()));
         if let Some(secret) = values.get("api-key")
             && let Err(err) =
                 crate::store_provider_secret(&self.data, &self.cwd, &target, "api_key", secret)
@@ -229,13 +234,50 @@ impl Ui {
 
     /// Persists an ad hoc `net` grant the user approved at login.
     pub(super) fn login_confirm(self: &Arc<Self>) -> lca_ui::LoginConfirm {
-        let grants = self.grants.clone();
-        let cwd = self.cwd.clone();
+        let ui = self.clone();
         Arc::new(move |provider: &str, host: &str| -> String {
-            match crate::store_ad_hoc_grant(&grants, &cwd, host) {
-                Ok(()) => format!("{provider} may now reach {host}"),
+            match crate::store_ad_hoc_grant(&ui.grants, &ui.cwd, host) {
+                Ok(()) => {
+                    // The endpoint is reachable now; discover the model list
+                    // the submit's pre-grant attempt could not fetch (#4).
+                    ui.refresh_models_after_grant(provider);
+                    format!("{provider} may now reach {host}")
+                }
                 Err(err) => format!("could not store the ad hoc grant: {err}"),
             }
         })
+    }
+
+    /// Re-run the login's model discovery now that the endpoint's ad-hoc
+    /// grant is stored, persist the discovered list, and hand it to the live
+    /// settings cell so `/model` sees it without a restart. Best-effort: a
+    /// failure leaves the configured model as the only choice, as before.
+    fn refresh_models_after_grant(&self, provider: &str) {
+        let answer = self
+            .login_answer
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        let Some((target, choice, values)) = answer else {
+            return;
+        };
+        if target != provider || choice == lca_ui::CUSTOM_OPTION {
+            return;
+        }
+        let Some(handle) = self.registry.provider(provider).cloned() else {
+            return;
+        };
+        let answer = lca_protocol::LoginAnswer { choice, values };
+        let Ok(settings) =
+            lca_core::drive_blocking(async move { handle.login_submit(answer).await })
+        else {
+            return;
+        };
+        for (key, value) in &settings {
+            let _ = crate::store_provider_secret(&self.data, &self.cwd, &target, key, value);
+        }
+        let mut cell = self.settings_cell.lock().unwrap_or_else(|p| p.into_inner());
+        cell.clear();
+        cell.extend(settings);
     }
 }

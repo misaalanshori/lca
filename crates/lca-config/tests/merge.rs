@@ -31,7 +31,7 @@ fn defaults_match_the_documented_key_reference() {
     assert_eq!(config.provider_retry_limit(), 3);
     assert_eq!(config.tool_timeout_seconds(), 120);
     assert_eq!(config.tool_result_limit_bytes(), 65536);
-    assert_eq!(config.tool_max_iterations(), 50);
+    assert_eq!(config.tool_max_iterations(), 100);
     assert_eq!(config.cache_noise_floor_tokens(), 1024);
     assert_eq!(config.extensions_log_limit_bytes(), 4096);
     assert_eq!(config.ui_color(), ColorMode::Auto);

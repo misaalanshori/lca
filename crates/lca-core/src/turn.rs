@@ -144,7 +144,7 @@ impl Agent<'_> {
             rounds += 1;
             if rounds > self.config.max_iterations {
                 let message = format!(
-                    "iteration limit of {} tool-call rounds reached",
+                    "iteration limit of {} tool-call rounds reached; send another message to continue",
                     self.config.max_iterations
                 );
                 sink.on_event(TurnEvent::Error {
@@ -747,12 +747,10 @@ impl Agent<'_> {
         sink: &mut dyn TurnSink,
     ) -> bool {
         let threshold = self.config.compaction_threshold;
-        let window = self.config.model_context_window;
-        if window == 0 || threshold <= 0.0 {
-            // ponytail: no published window means no ratio to cross;
-            // see AgentConfig::model_context_window.
+        if threshold <= 0.0 {
             return false;
         }
+        let window = effective_context_window(self.config.model_context_window);
         if self.config.extensions.compaction_strategy().is_none() {
             return false;
         }
@@ -951,6 +949,25 @@ impl Agent<'_> {
     }
 }
 
+/// The window the compaction ratio uses: the model's published window when
+/// one is known, else a conservative estimate.
+///
+/// An endpoint that publishes no context window (`opencode-go`'s `/models`
+/// carries none) would otherwise never cross a threshold, and a long session
+/// would grow until the provider rejects it. The estimate is a safety net,
+/// not a claim: the footer still shows `ctx ?` when the window is unknown,
+/// and `OPENAI_CONTEXT_WINDOW` (or a provider that reports one) overrides it.
+/// ponytail: a fixed 128k; a per-model catalog is the accurate upgrade.
+const FALLBACK_CONTEXT_WINDOW: u32 = 128_000;
+
+fn effective_context_window(configured: u32) -> u32 {
+    if configured > 0 {
+        configured
+    } else {
+        FALLBACK_CONTEXT_WINDOW
+    }
+}
+
 fn accumulate_usage(total: &mut Usage, per_call: &Usage) {
     total.input = total.input.saturating_add(per_call.input);
     total.output = total.output.saturating_add(per_call.output);
@@ -958,4 +975,17 @@ fn accumulate_usage(total: &mut Usage, per_call: &Usage) {
     total.cache_write = total.cache_write.saturating_add(per_call.cache_write);
     total.cache_write_1h = total.cache_write_1h.saturating_add(per_call.cache_write_1h);
     total.cost += per_call.cost;
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    // A published window is used as-is; an unknown one falls back to a
+    // conservative estimate so compaction still runs.
+    #[test]
+    fn an_unknown_window_still_compacts() {
+        assert_eq!(effective_context_window(1_000_000), 1_000_000);
+        assert_eq!(effective_context_window(0), FALLBACK_CONTEXT_WINDOW);
+    }
 }

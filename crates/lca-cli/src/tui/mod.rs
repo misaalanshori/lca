@@ -92,6 +92,9 @@ pub(crate) struct Ui {
     pending_attachments: Arc<Mutex<Vec<lca_core::StagedAttachment>>>,
     /// The `/login` flow state.
     flow: Arc<Mutex<crate::login::LoginFlow>>,
+    /// The last `/login` answer, so the endpoint grant's approval can re-run
+    /// model discovery now that the host is reachable (#4).
+    login_answer: Arc<Mutex<Option<LoginAnswer>>>,
     /// The provider override presets (`provider-presets.toml`).
     preset_overrides: String,
     /// The tool executor (shared with the runner).
@@ -131,6 +134,10 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
     ui.close();
     result
 }
+
+/// A stashed `/login` answer: the provider, the chosen option id, and the
+/// typed field values, replayed to re-run discovery after the grant (#4).
+type LoginAnswer = (String, String, std::collections::BTreeMap<String, String>);
 
 /// The live cells the footer and `/model`/`/thinking` share.
 struct Cells {
@@ -344,6 +351,7 @@ impl Ui {
             agent_config,
             pending_attachments: Arc::new(Mutex::new(Vec::new())),
             flow,
+            login_answer: Arc::new(Mutex::new(None)),
             preset_overrides,
             tools,
             proposals,

@@ -327,6 +327,10 @@ pub type ScreenModePersist = Arc<dyn Fn(bool) + Send + Sync>;
 /// Persists a runtime setting choice (`ui.theme`, `thinking`) to the config
 /// file (E2); `None` removes the key, and is how `unset` is written.
 pub type SettingPersist = Arc<dyn Fn(&str, Option<String>) + Send + Sync>;
+/// The models the `/model` picker should offer *now*. A hook rather than the
+/// startup snapshot, so a login's model discovery (which can only succeed
+/// after the endpoint's ad-hoc grant) reaches the picker without a restart.
+pub type ModelList = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 /// Returns the session's branch tree as `(id, label)` entries.
 pub type SessionTree = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
 /// Forks at the nth user message, returning the new branch's id.
@@ -354,6 +358,9 @@ pub struct UiHooks {
     /// Persist a runtime setting choice to the config file (E2):
     /// `/theme` writes `ui.theme`, `/thinking` writes `thinking`.
     pub persist_setting: Option<SettingPersist>,
+    /// The live model list for `/model` (falls back to the startup
+    /// `UiOptions::models` when absent).
+    pub models: Option<ModelList>,
     /// The session's branch tree: `(session id, display label)` entries, the
     /// current branch included (FR-UI-16).
     pub session_tree: Option<SessionTree>,

@@ -21,6 +21,10 @@ impl Chat {
         let mut parts = command_line.splitn(2, ' ');
         let name = parts.next().unwrap_or("").to_string();
         let argument = parts.next().unwrap_or("").to_string();
+        // The live list, not the startup snapshot, so a login that
+        // discovered models after its grant reaches the picker (pain point
+        // #4). Computed once per command; the host hook is a cheap read.
+        let live_models = self.model_ids();
 
         match name.as_str() {
             "help" => {
@@ -64,8 +68,8 @@ impl Chat {
                 });
                 return Action::Continue;
             }
-            "model" if argument.trim().is_empty() && !self.world.options.models.is_empty() => {
-                self.model_picker = Some(ModelPicker::new(self.world.options.models.clone()));
+            "model" if argument.trim().is_empty() && !live_models.is_empty() => {
+                self.model_picker = Some(ModelPicker::new(live_models));
                 return Action::Continue;
             }
             "tree" => {

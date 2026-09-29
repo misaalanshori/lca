@@ -22,7 +22,7 @@ Environment variables use the `LCA_` prefix with the key uppercased and dots rep
 | `provider.retry_limit` | integer | `3` | Retry attempts for retryable transport errors, exponential backoff (FR-CORE-6). |
 | `tool.timeout_seconds` | integer | `120` | Shell command timeout; the command's process tree is killed on expiry (FR-TOOL-5). |
 | `tool.result_limit_bytes` | integer | `65536` | Tool results above this are truncated and marked (FR-TOOL-7). |
-| `tool.max_iterations` | integer | `50` | Maximum tool calls within one turn (FR-CORE-9). |
+| `tool.max_iterations` | integer | `100` | Maximum tool calls within one turn (FR-CORE-9). A runaway guard, not a work cap; a multi-file build-and-test turn routinely needs more than the old 50. |
 | `cache.noise_floor_tokens` | integer | `1024` | Cache misses below this are not counted (FR-CACHE-3). |
 | `extensions.log_limit_bytes` | integer | `4096` | Extension log messages above this are truncated (FR-EXT-10). |
 | `update.check` | boolean | `true` interactive, `false` headless | Daily background version check (FR-CFG-6). |

@@ -553,13 +553,7 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
             }
             let _ = cap.net_close_response(handle);
             let text = String::from_utf8_lossy(&detail);
-            let json: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-            let message = json
-                .get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown error")
-                .to_string();
+            let message = error_message(&text, status);
             // Issue #3: a model the endpoint does not offer reads as a legible
             // "pick another with /model", not a bare HTTP 400.
             let lower = message.to_lowercase();
@@ -939,9 +933,56 @@ pub use native::OpenAiCompat;
 #[allow(unsafe_code)] // generated wit-bindgen export shims
 mod wasm_mode;
 
+/// The most useful message an error body carries.
+///
+/// OpenAI's shape is `{"error":{"message":...}}`, but gateways differ:
+/// some send `{"error":"..."}`, a bare `{"message":...}`, or
+/// `{"type":"..."}`; and some send a body with no message at all (the live
+/// OpenCode Go rejection of a dangling tool call is
+/// `{"model":"deepseek-v4.1-flash"}`). Fall back to a short raw body so a
+/// failure is never reported as just "unknown error".
+fn error_message(body: &str, status: u16) -> String {
+    let text = body.trim();
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
+        for pointer in ["/error/message", "/error", "/message", "/detail", "/type"] {
+            if let Some(value) = json.pointer(pointer).and_then(|value| value.as_str())
+                && !value.trim().is_empty()
+            {
+                return value.trim().to_string();
+            }
+        }
+    }
+    if !text.is_empty() && text.len() <= 300 {
+        return text.to_string();
+    }
+    format!("HTTP {status}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Every error-body shape yields a legible message; a body with no
+    // message field falls back to the raw text, never "unknown error".
+    #[test]
+    fn error_message_reads_every_shape() {
+        assert_eq!(
+            error_message(r#"{"error":{"message":"bad key"}}"#, 401),
+            "bad key"
+        );
+        assert_eq!(error_message(r#"{"error":"plain"}"#, 400), "plain");
+        assert_eq!(error_message(r#"{"message":"top"}"#, 500), "top");
+        assert_eq!(
+            error_message(r#"{"type":"MissingSessionID"}"#, 400),
+            "MissingSessionID"
+        );
+        // The live dangling-call 400 has no message field.
+        assert_eq!(
+            error_message(r#"{"model":"deepseek-v4.1-flash"}"#, 400),
+            r#"{"model":"deepseek-v4.1-flash"}"#
+        );
+        assert_eq!(error_message("", 503), "HTTP 503");
+    }
 
     // Verifies: ADR-0029 - a message with an image maps to the OpenAI
     // content-part array with a base64 data URI; a text-only message keeps

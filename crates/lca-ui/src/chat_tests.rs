@@ -449,6 +449,25 @@ fn theme_picker_previews_and_restores() {
     assert_eq!(chat.theme_name, original);
 }
 
+// Verifies: pain point #4 - `/model` reads the live model-list hook, so a
+// login's post-grant discovery reaches the picker without a restart.
+#[test]
+fn the_live_model_hook_feeds_the_picker() {
+    let mut options = options();
+    options.hooks.models = Some(Arc::new(|| {
+        vec!["live-a".to_string(), "live-b".to_string()]
+    }));
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    assert_eq!(chat.model_ids(), vec!["live-a", "live-b"]);
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(chat.model_picker.is_some());
+    let viewport = strip(&chat.viewport(100, 30, 0)).join("\n");
+    assert!(viewport.contains("live-a"), "{viewport}");
+}
+
 // Verifies: E3 - every picker overlay carries the shared hint row, so a
 // swallowed slash command is no longer a surprise.
 #[test]

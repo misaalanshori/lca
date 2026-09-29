@@ -129,6 +129,16 @@ impl Ui {
             external_editor: Some(Arc::new(external_editor)),
             persist_screen_mode: Some(Arc::new(persist_screen_mode)),
             persist_setting: Some(persist_setting),
+            models: {
+                let provider = self.provider.clone();
+                Some(Arc::new(move || {
+                    provider
+                        .list_models()
+                        .iter()
+                        .map(|model| model.id.clone())
+                        .collect()
+                }))
+            },
             session_tree: Some(self.session_tree()),
             session_list: Some(self.session_list()),
             switch_session: Some(self.switch_session()),

@@ -148,7 +148,10 @@ impl Default for Config {
             provider_retry_limit: 3,
             tool_timeout_seconds: 120,
             tool_result_limit_bytes: 65536,
-            tool_max_iterations: 50,
+            // 100, not 50: a multi-file build-and-test turn routinely
+            // exceeds 50 tool rounds; the limit is a runaway guard, not a
+            // work cap. Tunable via `tool.max_iterations`.
+            tool_max_iterations: 100,
             cache_noise_floor_tokens: 1024,
             extensions_log_limit_bytes: 4096,
             update_check: None,

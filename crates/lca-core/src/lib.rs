@@ -72,10 +72,10 @@ pub struct AgentConfig {
     /// Context-window fraction that triggers compaction (FR-SESS-4,
     /// `compaction.threshold`). At or below zero disables the check.
     pub compaction_threshold: f64,
-    /// The active model's context window in tokens; `0` means unknown
-    /// and skips the threshold check entirely.
-    /// ponytail: an endpoint that publishes no window never compacts;
-    /// a fallback estimate is the upgrade path if that bites.
+    /// The active model's context window in tokens; `0` means unknown. The
+    /// threshold check then uses a conservative fallback
+    /// (`turn::FALLBACK_CONTEXT_WINDOW`) so the session still compacts; the
+    /// footer keeps showing `ctx ?` rather than a fabricated percentage.
     pub model_context_window: u32,
     /// The backend behind the default strategy's `completion` call,
     /// held so the compaction record can carry the summarization's

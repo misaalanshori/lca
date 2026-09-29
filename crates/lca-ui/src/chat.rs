@@ -295,6 +295,20 @@ impl Chat {
             .clone()
     }
 
+    /// The models `/model` should offer: the host's live list when one is
+    /// wired, else the startup snapshot. Live matters because a login's
+    /// model discovery can only run once the endpoint's ad-hoc grant is
+    /// approved, after the picker's snapshot was taken.
+    pub fn model_ids(&self) -> Vec<String> {
+        self.world
+            .options
+            .hooks
+            .models
+            .as_ref()
+            .map(|list| list())
+            .unwrap_or_else(|| self.world.options.models.clone())
+    }
+
     /// The session's thinking level, resolved from the shared cell (R1).
     pub fn thinking_level(&self) -> Option<String> {
         self.world
