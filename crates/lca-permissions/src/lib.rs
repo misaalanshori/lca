@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 mod net;
+pub mod shell;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
