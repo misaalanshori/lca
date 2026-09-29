@@ -6,10 +6,15 @@
 //! read"): headings, lists, tables rendered as aligned columns, framed code
 //! blocks, blockquotes, and inline styles.
 //!
-//! Not ported (documented skips): LaTeX math (the brief says skip it),
-//! mermaid (pi shells out), and syntax highlighting (a theme hook in pi;
-//! LCA's default is none). HTML is rendered as literal text by construction
-//! — no markup reaches the terminal (the hostile-input stance).
+//! Not ported (documented skips): LaTeX math (the brief says skip it) and
+//! mermaid (pi shells out). **Syntax highlighting is a known gap, corrected
+//! 2026-09-29:** cycle 4 closed it as "not a gap" from a color-stripped
+//! `tmux capture-pane`, but pi does highlight — its markdown calls
+//! `theme.highlightCode` (`markdown.ts` §523) and its read/write tool
+//! renderers highlight too. LCA's [`MarkdownTheme`] carries no `highlight`
+//! hook and the theme's `Syntax*` roles have no consumer; see the cycle-5
+//! report. HTML is rendered as literal text by construction — no markup
+//! reaches the terminal (the hostile-input stance).
 //!
 //! The tokenizer is hand-written and line-based rather than `pulldown-cmark`
 //! (ADR-0036 adds no such dependency). It covers the block and inline shapes
