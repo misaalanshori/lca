@@ -116,3 +116,8 @@ mod osc11_hex_overflow;
 // turn. `assemble` now heals it.
 #[path = "34-dangling-tool-call-healed.rs"]
 mod dangling_tool_call_healed;
+// Windows quarantine defect: the pty child was born on a fresh console, not
+// the pseudoconsole, so the pty pipe stayed empty (HPCON value/pointer and
+// the child's std handles).
+#[path = "35-conpty-pseudoconsole-attached.rs"]
+mod conpty_pseudoconsole_attached;

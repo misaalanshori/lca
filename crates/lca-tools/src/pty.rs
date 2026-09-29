@@ -300,7 +300,7 @@ fn kill_impl(inner: &mut Inner) {
 mod windows_conpty {
     use std::os::windows::io::FromRawHandle;
     use std::path::Path;
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Console::{
         COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
     };
@@ -309,7 +309,7 @@ mod windows_conpty {
         CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
         EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, INFINITE,
         InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-        PROCESS_INFORMATION, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
+        PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
         UpdateProcThreadAttribute, WaitForSingleObject,
     };
 
@@ -532,28 +532,37 @@ mod windows_conpty {
         }
         // SAFETY: STARTUPINFOW zeroed is the documented initialization.
         let zeroed_startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
-        let startup = STARTUPINFOEXW {
+        let mut startup = STARTUPINFOEXW {
             StartupInfo: STARTUPINFOW {
                 cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
                 ..zeroed_startup
             },
             lpAttributeList: attr_list.as_mut_ptr() as *mut _,
         };
-        // The attribute's value parameter is a pointer TO an HPCON,
-        // not the handle itself: passing the handle's bits as an
-        // address made the call fail (its return was ignored), the
-        // list carried no pseudoconsole, and every child was born on
-        // the parent's own console - its output went to the runner's
-        // stdout instead of the pipe, which is why three Windows pty
-        // tests saw a program that ran and printed nothing they could
-        // read, and the panel's keystrokes echoed into the void.
+        // The child's std handles must be explicitly invalid, or a parent
+        // with redirected stdio (a test harness, a daemon, an editor) leaks
+        // those handles into the pty child and its output never reaches the
+        // pseudoconsole pipe. Wezterm's `pseudocon` sets exactly this trio
+        // for exactly this reason.
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
+        startup.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
+        startup.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
+        // PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE takes the HPCON *value*
+        // itself as lpValue, with cbSize = sizeof(HPCON). Microsoft's own
+        // sample and wezterm's `procthreadattr::set_pty` both pass it this
+        // way. Passing the address of a local instead makes
+        // UpdateProcThreadAttribute return success while the child is born
+        // on a fresh default console - the pty pipe then never receives a
+        // byte. That mismatch was the root cause of the Windows pty
+        // quarantine; see docs/platform-notes.md.
         let hpc_value = console.hpc.unwrap_or(0);
         let updated = unsafe {
             UpdateProcThreadAttribute(
                 startup.lpAttributeList,
                 0,
                 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
-                &raw const hpc_value as *const core::ffi::c_void,
+                hpc_value as *const core::ffi::c_void,
                 std::mem::size_of::<HPCON>(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
