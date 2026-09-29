@@ -37,6 +37,22 @@ pub struct ThemePicker {
     pub original: String,
 }
 
+/// The `/trust` picker (ADR-0039): trust the project folder, so safe
+/// in-workspace commands run without a prompt. The four rows mirror Pi's
+/// trust selector.
+pub struct TrustPicker {
+    /// The highlighted row.
+    pub selected: usize,
+}
+
+/// The `/trust` rows, in order.
+pub const TRUST_OPTIONS: &[&str] = &[
+    "Trust this project (remember)",
+    "Trust this project (this session only)",
+    "Do not trust (remember)",
+    "Do not trust (this session only)",
+];
+
 /// The `/thinking` picker: the session's reasoning level (R1). Row 0 is
 /// "unset" (the provider's own default); the rest are pi's levels with
 /// their cost/latency descriptions.

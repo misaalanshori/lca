@@ -85,8 +85,77 @@ pub enum Decision {
     Once,
     /// Allow this call and persist its pattern.
     Always,
+    /// Allow this call and trust the project folder for this session:
+    /// later commands that provably stay inside the workspace run without a
+    /// prompt (permission-UX plan §3.1). Never persisted.
+    TrustFolder,
     /// Refuse the call.
     Denied,
+}
+
+/// An allow/deny rule's decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleDecision {
+    /// Never run a matching action (no prompt).
+    Allow,
+    /// Always refuse a matching action (no prompt).
+    Deny,
+}
+
+/// Where a rule lives (permission-UX plan §3.2): a session rule is gone on
+/// exit, a project rule is scoped to one repository, a global rule is the
+/// user's default across every project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleScope {
+    /// In-memory only, this run.
+    Session,
+    /// Stored for this project.
+    Project,
+    /// Stored for every project (the global defaults).
+    Global,
+}
+
+/// One rule as shown by the interface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleView {
+    /// Where the rule lives.
+    pub scope: RuleScope,
+    /// Allow or deny.
+    pub decision: RuleDecision,
+    /// The glob it matches.
+    pub pattern: String,
+}
+
+/// A set of allow/deny globs (global or per-project).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct RuleSet {
+    /// Patterns that auto-approve a matching action.
+    #[serde(default)]
+    pub allow: BTreeSet<String>,
+    /// Patterns that refuse a matching action.
+    #[serde(default)]
+    pub deny: BTreeSet<String>,
+}
+
+/// What a rule set says about one action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuleMatch {
+    /// A deny rule matched; refuse without prompting.
+    Deny,
+    /// An allow rule matched; run without prompting.
+    Allow,
+    /// No rule matched.
+    None,
+}
+
+/// Session-only grants. Never serialized: a `GrantStore` lives for the
+/// process, so these vanish when it exits.
+#[derive(Debug, Default)]
+struct SessionGrants {
+    /// Canonical project keys trusted for this session.
+    trust: BTreeSet<String>,
+    /// Rules attached for this session.
+    rules: RuleSet,
 }
 
 /// The difference between the approved proposal set and the project's
@@ -181,6 +250,8 @@ pub struct Outcome {
     pub reviewed: bool,
     /// The pattern persisted, when the user chose always.
     pub stored_pattern: Option<String>,
+    /// Whether a deny rule refused the action (no prompt was shown).
+    pub denied_by_rule: bool,
 }
 
 impl Outcome {
@@ -199,6 +270,9 @@ impl Outcome {
 struct StoreData {
     #[serde(default = "store_version")]
     version: u32,
+    /// Global rules, the user's defaults across every project.
+    #[serde(default)]
+    rules: RuleSet,
     #[serde(default)]
     projects: BTreeMap<String, ProjectEntry>,
 }
@@ -232,12 +306,17 @@ struct ProjectEntry {
     /// fs path, never a bare wildcard.
     #[serde(default)]
     net_patterns: BTreeSet<String>,
+    /// Project rules (allow/deny globs).
+    #[serde(default)]
+    rules: RuleSet,
 }
 
 /// The user grant store: one JSON file outside every project directory.
 pub struct GrantStore {
     path: PathBuf,
     data: StoreData,
+    /// Session-only grants (never written to `path`).
+    session: SessionGrants,
 }
 
 impl GrantStore {
@@ -248,6 +327,7 @@ impl GrantStore {
         GrantStore {
             path: PathBuf::new(),
             data: StoreData::default(),
+            session: SessionGrants::default(),
         }
     }
 
@@ -271,11 +351,180 @@ impl GrantStore {
         Ok(GrantStore {
             path: path.to_path_buf(),
             data,
+            session: SessionGrants::default(),
         })
     }
 
-    /// Whether an action is already granted for this project.
+    /// The rule decision for one action: deny first, then allow, across
+    /// session, project, and global scopes (ADR-0039).
+    fn rule_decision(&self, project_dir: &Path, action: &Action) -> RuleMatch {
+        let value = action.match_value();
+        let project = self.data.projects.get(&canonical_key(project_dir));
+        let project_rules = project.map(|entry| &entry.rules);
+        let matches_any =
+            |set: &BTreeSet<String>| set.iter().any(|rule| wildcard_match(rule, &value));
+        if matches_any(&self.session.rules.deny)
+            || project_rules.is_some_and(|rules| matches_any(&rules.deny))
+            || matches_any(&self.data.rules.deny)
+        {
+            return RuleMatch::Deny;
+        }
+        if matches_any(&self.session.rules.allow)
+            || project_rules.is_some_and(|rules| matches_any(&rules.allow))
+            || matches_any(&self.data.rules.allow)
+        {
+            return RuleMatch::Allow;
+        }
+        RuleMatch::None
+    }
+
+    /// Add a rule at one scope (ADR-0039). Global/project rules persist;
+    /// session rules do not.
+    pub fn add_rule(
+        &mut self,
+        project_dir: &Path,
+        scope: RuleScope,
+        decision: RuleDecision,
+        pattern: impl Into<String>,
+    ) -> Result<(), Error> {
+        let pattern = pattern.into();
+        if pattern.trim().is_empty() {
+            return Err(Error::Pattern("empty rule".to_string()));
+        }
+        let set = match scope {
+            RuleScope::Session => &mut self.session.rules,
+            RuleScope::Project => {
+                &mut self
+                    .data
+                    .projects
+                    .entry(canonical_key(project_dir))
+                    .or_default()
+                    .rules
+            }
+            RuleScope::Global => &mut self.data.rules,
+        };
+        match decision {
+            RuleDecision::Allow => {
+                set.allow.insert(pattern);
+            }
+            RuleDecision::Deny => {
+                set.deny.insert(pattern);
+            }
+        }
+        if scope == RuleScope::Session {
+            Ok(())
+        } else {
+            self.save()
+        }
+    }
+
+    /// Remove a rule at one scope. Returns whether it existed.
+    pub fn remove_rule(
+        &mut self,
+        project_dir: &Path,
+        scope: RuleScope,
+        decision: RuleDecision,
+        pattern: &str,
+    ) -> Result<bool, Error> {
+        let set = match scope {
+            RuleScope::Session => &mut self.session.rules,
+            RuleScope::Project => match self.data.projects.get_mut(&canonical_key(project_dir)) {
+                Some(entry) => &mut entry.rules,
+                None => return Ok(false),
+            },
+            RuleScope::Global => &mut self.data.rules,
+        };
+        let removed = match decision {
+            RuleDecision::Allow => set.allow.remove(pattern),
+            RuleDecision::Deny => set.deny.remove(pattern),
+        };
+        if !removed {
+            return Ok(false);
+        }
+        if scope == RuleScope::Session {
+            Ok(true)
+        } else {
+            self.save()?;
+            Ok(true)
+        }
+    }
+
+    /// Every rule visible for this project, session first.
+    pub fn rules(&self, project_dir: &Path) -> Vec<RuleView> {
+        let mut out = Vec::new();
+        let mut push = |scope: RuleScope, set: &RuleSet| {
+            for pattern in &set.deny {
+                out.push(RuleView {
+                    scope,
+                    decision: RuleDecision::Deny,
+                    pattern: pattern.clone(),
+                });
+            }
+            for pattern in &set.allow {
+                out.push(RuleView {
+                    scope,
+                    decision: RuleDecision::Allow,
+                    pattern: pattern.clone(),
+                });
+            }
+        };
+        push(RuleScope::Session, &self.session.rules);
+        if let Some(entry) = self.data.projects.get(&canonical_key(project_dir)) {
+            push(RuleScope::Project, &entry.rules);
+        }
+        push(RuleScope::Global, &self.data.rules);
+        out
+    }
+
+    /// Drop every session rule (not trust).
+    pub fn clear_session_rules(&mut self) {
+        self.session.rules = RuleSet::default();
+    }
+
+    /// Trust the project folder for this session only (never persisted).
+    pub fn trust_for_session(&mut self, project_dir: &Path) {
+        self.session.trust.insert(canonical_key(project_dir));
+    }
+
+    /// Whether the folder is trusted for this session.
+    pub fn is_trusted_for_session(&self, project_dir: &Path) -> bool {
+        self.session.trust.contains(&canonical_key(project_dir))
+    }
+
+    /// Whether the folder is trusted at all (persisted or session).
+    pub fn is_trusted_here(&self, project_dir: &Path) -> bool {
+        self.is_trusted(project_dir) || self.is_trusted_for_session(project_dir)
+    }
+
+    /// Whether an action is already granted for this project: a rule, the
+    /// folder's trust plus the workspace-scoped analyzer, or a stored pattern.
     pub fn is_allowed(&self, project_dir: &Path, action: &Action) -> bool {
+        match self.rule_decision(project_dir, action) {
+            RuleMatch::Deny => return false,
+            RuleMatch::Allow => return true,
+            RuleMatch::None => {}
+        }
+        if self.is_trusted_here(project_dir) {
+            let root =
+                std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
+            let inside = |path: &Path| {
+                let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+                path == root || path.starts_with(&root)
+            };
+            match action {
+                Action::Shell { command, cwd } => {
+                    if shell::workspace_scoped(command, cwd, project_dir) {
+                        return true;
+                    }
+                }
+                Action::WritePath { path } | Action::ReadPath { path } => {
+                    if inside(path) {
+                        return true;
+                    }
+                }
+                Action::Net { .. } => {}
+            }
+        }
         let Some(entry) = self.data.projects.get(&canonical_key(project_dir)) else {
             return false;
         };
@@ -296,6 +545,11 @@ impl GrantStore {
                     .any(|pattern| wildcard_match(pattern, &value))
             }
         }
+    }
+
+    /// Whether a deny rule refuses this action (no prompt).
+    pub fn rule_denied(&self, project_dir: &Path, action: &Action) -> bool {
+        self.rule_decision(project_dir, action) == RuleMatch::Deny
     }
 
     /// Persist a directly approved pattern for this project (FR-PERM-8).
@@ -570,6 +824,17 @@ pub fn authorize(
             prompted: false,
             reviewed,
             stored_pattern: None,
+            denied_by_rule: false,
+        });
+    }
+    // A deny rule refuses without prompting (permission-UX plan §3.2).
+    if store.rule_denied(project_dir, action) {
+        return Ok(Outcome {
+            allowed: false,
+            prompted: false,
+            reviewed,
+            stored_pattern: None,
+            denied_by_rule: true,
         });
     }
 
@@ -579,13 +844,25 @@ pub fn authorize(
             prompted: true,
             reviewed,
             stored_pattern: None,
+            denied_by_rule: false,
         }),
         Decision::Once => Ok(Outcome {
             allowed: true,
             prompted: true,
             reviewed,
             stored_pattern: None,
+            denied_by_rule: false,
         }),
+        Decision::TrustFolder => {
+            store.trust_for_session(project_dir);
+            Ok(Outcome {
+                allowed: true,
+                prompted: true,
+                reviewed,
+                stored_pattern: None,
+                denied_by_rule: false,
+            })
+        }
         Decision::Always => {
             let pattern = action.suggested_pattern();
             // A `net` approval goes into the host vocabulary (ADR-0022),
@@ -599,6 +876,7 @@ pub fn authorize(
                 prompted: true,
                 reviewed,
                 stored_pattern: Some(pattern),
+                denied_by_rule: false,
             })
         }
     }

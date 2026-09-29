@@ -18,7 +18,7 @@ use lca_tui::widgets::editor::{Editor, EditorEvent};
 
 use crate::chat_commands::{printable, provider_for};
 use crate::chat_pickers::{
-    GrantPicker, ModelPicker, ShellRun, ThemePicker, ThinkingPicker, TreePicker,
+    GrantPicker, ModelPicker, ShellRun, ThemePicker, ThinkingPicker, TreePicker, TrustPicker,
 };
 use crate::footer::Footer;
 
@@ -96,6 +96,8 @@ pub struct Chat {
     pub grants_picker: Option<GrantPicker>,
     /// The open `/tree` branch selector, when any (FR-UI-16).
     pub tree_picker: Option<TreePicker>,
+    /// The open `/trust` picker, when any (ADR-0039).
+    pub trust_picker: Option<TrustPicker>,
     /// The running `!`/`!!` command, when any (R4).
     pub shell: Option<ShellRun>,
     /// The open `/resume` session picker (R2).
@@ -146,6 +148,14 @@ impl Chat {
             ..Default::default()
         };
         let screen_mode = world.options.fullscreen;
+        // Pi's folder-trust prompt: open the picker at startup only when the
+        // project has something to gate and no decision yet (ADR-0039).
+        let trust_prompt = world
+            .options
+            .hooks
+            .trust_needed
+            .as_ref()
+            .is_some_and(|needed| needed());
         Chat {
             keybindings,
             transcript,
@@ -175,6 +185,7 @@ impl Chat {
             model_picker: None,
             grants_picker: None,
             tree_picker: None,
+            trust_picker: trust_prompt.then_some(TrustPicker { selected: 0 }),
             shell: None,
             resume_picker: None,
         }
@@ -440,6 +451,7 @@ impl Chat {
             || self.thinking_picker.is_some()
             || self.model_picker.is_some()
             || self.tree_picker.is_some()
+            || self.trust_picker.is_some()
             || self.resume_picker.is_some()
             || self.grants_picker.is_some()
         {
@@ -776,6 +788,9 @@ impl Chat {
         let decision = match key {
             Some("o") => Some(Decision::Once),
             Some("a") => Some(Decision::Always),
+            // Trust the folder for this session: later in-workspace commands
+            // run without a prompt (ADR-0039).
+            Some("t") => Some(Decision::TrustFolder),
             Some("d" | "escape" | "enter") => Some(Decision::Denied),
             _ => None,
         };

@@ -4,7 +4,7 @@
 use super::chat::{Chat, highlight_matches};
 use super::render::{overlay_box, side_panel};
 use super::state::widget_lines;
-use crate::chat_pickers::THINKING_LEVELS;
+use crate::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
 
 // E3: a picker owns the keyboard while open, so a slash command typed into
 // one lands in its search box. The shared hint row says what the keys do,
@@ -123,6 +123,20 @@ impl Chat {
                 body.push(format!(" {cur} {name}{current}"));
             }
             picker_overlay(viewport, width, height, "theme", &body, HINT_THEME);
+            return true;
+        }
+        if let Some(picker) = &self.trust_picker {
+            let mut body = vec![
+                "Trust this project folder?".to_string(),
+                String::new(),
+                "Trusted folders run in-workspace commands without a prompt.".to_string(),
+                String::new(),
+            ];
+            for (index, label) in TRUST_OPTIONS.iter().enumerate() {
+                let cur = if index == picker.selected { '>' } else { ' ' };
+                body.push(format!(" {cur} {label}"));
+            }
+            picker_overlay(viewport, width, height, "trust", &body, HINT_MOVE);
             return true;
         }
         if let Some(picker) = &self.thinking_picker {
@@ -247,7 +261,10 @@ impl Chat {
                 ));
                 body.push(String::new());
             }
-            body.push("Allow once [o] / Allow always for this pattern [a] / Deny [d]".to_string());
+            body.push(
+                "[o] once / [a] always this pattern / [t] trust this folder this session / [d] deny"
+                    .to_string(),
+            );
             overlay_box(viewport, width, height, "permission required", &body);
         } else if self.world.modal_open {
             let trees = self

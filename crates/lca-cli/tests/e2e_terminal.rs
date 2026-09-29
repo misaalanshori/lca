@@ -149,8 +149,10 @@ fn the_tui_renders_a_turn_in_a_real_terminal() {
         return;
     }
     let runtime = rt();
+    // An out-of-workspace path, so the folder-trust auto-approval (ADR-0039)
+    // does not skip the modal this test exercises.
     let mock = runtime.block_on(start_mock(vec![
-        Reply::Sse(sse_tool_call("shell", r#"{"command":"echo smoke-ok"}"#)),
+        Reply::Sse(sse_tool_call("shell", r#"{"command":"cat /etc/hostname"}"#)),
         Reply::Sse(sse_text_with_usage("turn complete", 20, 0)),
     ]));
     let sandbox = sandbox("tui-smoke");

@@ -139,6 +139,46 @@ impl Ui {
                         .collect()
                 }))
             },
+            trust_needed: {
+                let grants = self.grants.clone();
+                let cwd = self.cwd.clone();
+                Some(Arc::new(move || {
+                    // Prompt only when there is something to gate: a project
+                    // `.lca/config.toml` that is not trusted yet (ADR-0039).
+                    let trusted = grants
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .is_trusted_here(&cwd);
+                    !trusted && cwd.join(".lca").join("config.toml").is_file()
+                }))
+            },
+            trust_apply: {
+                let grants = self.grants.clone();
+                let cwd = self.cwd.clone();
+                Some(Arc::new(move |choice: lca_ui::state::TrustChoice| {
+                    let mut store = grants.lock().unwrap_or_else(|p| p.into_inner());
+                    match choice {
+                        lca_ui::state::TrustChoice::Persist(trusted) => {
+                            if let Err(err) = store.set_trusted(&cwd, trusted) {
+                                return format!("could not save trust: {err}");
+                            }
+                            if trusted {
+                                format!("trusted {} (remembered)", cwd.display())
+                            } else {
+                                format!("{} marked untrusted", cwd.display())
+                            }
+                        }
+                        lca_ui::state::TrustChoice::Session(trusted) => {
+                            if trusted {
+                                store.trust_for_session(&cwd);
+                                format!("trusted {} for this session", cwd.display())
+                            } else {
+                                format!("{} stays untrusted for this session", cwd.display())
+                            }
+                        }
+                    }
+                }))
+            },
             session_tree: Some(self.session_tree()),
             session_list: Some(self.session_list()),
             switch_session: Some(self.switch_session()),
@@ -160,6 +200,35 @@ impl Ui {
         Arc::new(move || {
             let store = grants.lock().unwrap_or_else(|p| p.into_inner());
             let mut out: Vec<lca_ui::state::GrantEntry> = Vec::new();
+            // ADR-0039: the trust decision and the rules come first, so the
+            // view explains why commands do (or do not) prompt.
+            out.push(lca_ui::state::GrantEntry {
+                install_consent: true,
+                subject: "trust".to_string(),
+                detail: if store.is_trusted_here(&cwd) {
+                    "trusted".to_string()
+                } else {
+                    "untrusted (run /trust)".to_string()
+                },
+                revocable: false,
+            });
+            for rule in store.rules(&cwd) {
+                let scope = match rule.scope {
+                    lca_permissions::RuleScope::Session => "session",
+                    lca_permissions::RuleScope::Project => "project",
+                    lca_permissions::RuleScope::Global => "global",
+                };
+                let decision = match rule.decision {
+                    lca_permissions::RuleDecision::Allow => "allow",
+                    lca_permissions::RuleDecision::Deny => "deny",
+                };
+                out.push(lca_ui::state::GrantEntry {
+                    install_consent: false,
+                    subject: format!("rule [{scope}]"),
+                    detail: format!("{decision} {}", rule.pattern),
+                    revocable: false,
+                });
+            }
             for (name, enabled) in store.extensions(&cwd) {
                 out.push(lca_ui::state::GrantEntry {
                     install_consent: true,

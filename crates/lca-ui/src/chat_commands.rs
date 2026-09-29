@@ -11,7 +11,9 @@ use lca_tui::widgets::autocomplete::{
 };
 
 use super::chat::Chat;
-use crate::chat_pickers::{ModelPicker, ThemePicker, ThinkingPicker, TreePicker, thinking_row};
+use crate::chat_pickers::{
+    ModelPicker, ThemePicker, ThinkingPicker, TreePicker, TrustPicker, thinking_row,
+};
 use crate::state::{Action, UiOptions};
 
 impl Chat {
@@ -66,6 +68,10 @@ impl Chat {
                 self.thinking_picker = Some(ThinkingPicker {
                     selected: thinking_row(current.as_deref()),
                 });
+                return Action::Continue;
+            }
+            "trust" => {
+                self.trust_picker = Some(TrustPicker { selected: 0 });
                 return Action::Continue;
             }
             "model" if argument.trim().is_empty() && !live_models.is_empty() => {
@@ -297,6 +303,8 @@ fn command_help(command: &str) -> &'static str {
         "/model" => "list or switch the session's model",
         "/compact" => "summarize the session to free context",
         "/attach" => "attach an image to the next message",
+        "/trust" => "trust the project folder (auto-approve in-workspace commands)",
+        "/permissions" => "manage allow/deny rules (session, project, global)",
         _ => "",
     }
 }

@@ -710,7 +710,7 @@ impl Agent<'_> {
                 return Err(self.fail(StopReason::Error, format!("permission store error: {err}")));
             }
         };
-        if outcome.prompted {
+        if outcome.prompted || outcome.denied_by_rule {
             let record = Record::Permission {
                 v: FORMAT_VERSION,
                 ts: lca_session::now_ms(),
@@ -730,10 +730,12 @@ impl Agent<'_> {
             }
         }
         if !outcome.allowed {
-            return Ok(Some(ToolResult::denied(
-                call.call_id.clone(),
-                format!("The user denied this action: {}", action.display()),
-            )));
+            let reason = if outcome.denied_by_rule {
+                format!("A permission rule denied this action: {}", action.display())
+            } else {
+                format!("The user denied this action: {}", action.display())
+            };
+            return Ok(Some(ToolResult::denied(call.call_id.clone(), reason)));
         }
         Ok(None)
     }

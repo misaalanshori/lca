@@ -3,8 +3,8 @@
 
 use super::chat::Chat;
 use super::chat_commands::printable;
-use super::chat_pickers::THINKING_LEVELS;
-use super::state::Action;
+use super::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
+use super::state::{Action, TrustChoice};
 
 impl Chat {
     /// The open picker's key handling, if any (returns `None` when no
@@ -95,6 +95,35 @@ impl Chat {
                     self.theme_picker = Some(picker);
                 }
                 _ => self.theme_picker = Some(picker),
+            }
+            return Some(Action::Continue);
+        }
+
+        // The `/trust` picker owns the keyboard while open (ADR-0039).
+        if let Some(mut picker) = self.trust_picker.take() {
+            match key {
+                Some("escape") => {}
+                Some("enter") => {
+                    let choice = match picker.selected {
+                        0 => TrustChoice::Persist(true),
+                        1 => TrustChoice::Session(true),
+                        2 => TrustChoice::Persist(false),
+                        _ => TrustChoice::Session(false),
+                    };
+                    self.world.notice = Some(match &self.world.options.hooks.trust_apply {
+                        Some(apply) => apply(choice),
+                        None => "trust is not configurable in this host".to_string(),
+                    });
+                }
+                Some("up") | Some("k") => {
+                    picker.selected = picker.selected.saturating_sub(1);
+                    self.trust_picker = Some(picker);
+                }
+                Some("down") | Some("j") => {
+                    picker.selected = (picker.selected + 1).min(TRUST_OPTIONS.len() - 1);
+                    self.trust_picker = Some(picker);
+                }
+                _ => self.trust_picker = Some(picker),
             }
             return Some(Action::Continue);
         }

@@ -809,3 +809,58 @@ fn lca_ui_entry(install_consent: bool, subject: &str, detail: &str) -> crate::st
         revocable: !install_consent,
     }
 }
+
+// Verifies: ADR-0039 - the permission modal's `t` trusts the folder for the
+// session without persisting a pattern.
+#[test]
+fn the_permission_modal_can_trust_the_folder() {
+    let mut chat = chat();
+    let (respond, response) = std::sync::mpsc::sync_channel(1);
+    chat.world.permission = Some(crate::state::PermissionModal {
+        action: "cargo build".into(),
+        respond: Some(respond),
+        deadline: None,
+    });
+    chat.handle_key("t");
+    assert_eq!(
+        response.try_recv().ok(),
+        Some(lca_permissions::Decision::TrustFolder)
+    );
+}
+
+// Verifies: ADR-0039 - the `/trust` picker applies the chosen trust scope.
+#[test]
+fn the_trust_picker_applies_a_choice() {
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    let sink = seen.clone();
+    let mut options = options();
+    options.hooks.trust_apply = Some(Arc::new(move |choice| {
+        *sink.lock().unwrap() = Some(choice);
+        "ok".to_string()
+    }));
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    for c in "/trust".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(chat.trust_picker.is_some());
+    chat.handle_key("j"); // move to "this session only"
+    chat.handle_key("\r");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        Some(crate::state::TrustChoice::Session(true))
+    );
+    assert!(chat.trust_picker.is_none());
+}
+
+// Verifies: ADR-0039 - the trust prompt opens at startup only when the host
+// says the project needs a decision (Pi's trust-requiring-resources rule).
+#[test]
+fn the_trust_prompt_opens_when_the_host_asks() {
+    let mut opts = options();
+    opts.hooks.trust_needed = Some(Arc::new(|| true));
+    let chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    assert!(chat.trust_picker.is_some());
+    let quiet = Chat::new(options(), Arc::new(KeybindingsManager::new()));
+    assert!(quiet.trust_picker.is_none());
+}

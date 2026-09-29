@@ -331,6 +331,21 @@ pub type SettingPersist = Arc<dyn Fn(&str, Option<String>) + Send + Sync>;
 /// startup snapshot, so a login's model discovery (which can only succeed
 /// after the endpoint's ad-hoc grant) reaches the picker without a restart.
 pub type ModelList = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
+/// The user's trust choice from `/trust` or the startup prompt (ADR-0039).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustChoice {
+    /// Remember this decision for the project.
+    Persist(bool),
+    /// Apply it only for this session.
+    Session(bool),
+}
+
+/// Applies a trust choice, returning the notice to show.
+pub type TrustApply = Arc<dyn Fn(TrustChoice) -> String + Send + Sync>;
+/// Whether the project still needs a trust decision (opens the modal at
+/// startup, Pi's `hasTrustRequiringProjectResources`).
+pub type TrustNeeded = Arc<dyn Fn() -> bool + Send + Sync>;
 /// Returns the session's branch tree as `(id, label)` entries.
 pub type SessionTree = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
 /// Forks at the nth user message, returning the new branch's id.
@@ -361,6 +376,10 @@ pub struct UiHooks {
     /// The live model list for `/model` (falls back to the startup
     /// `UiOptions::models` when absent).
     pub models: Option<ModelList>,
+    /// Applies a `/trust` choice.
+    pub trust_apply: Option<TrustApply>,
+    /// Whether the project needs a trust decision at startup.
+    pub trust_needed: Option<TrustNeeded>,
     /// The session's branch tree: `(session id, display label)` entries, the
     /// current branch included (FR-UI-16).
     pub session_tree: Option<SessionTree>,

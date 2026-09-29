@@ -75,6 +75,8 @@ impl Ui {
         names.insert(8, "/resume".to_string());
         names.insert(9, "/settings".to_string());
         names.insert(10, "/grants".to_string());
+        names.insert(11, "/trust".to_string());
+        names.insert(12, "/permissions".to_string());
         names.extend(
             self.registry
                 .command_names()
@@ -103,6 +105,8 @@ impl Ui {
                     }
                 }
             }
+            // ADR-0039: allow/deny rules with global defaults.
+            "permissions" => self.command_permissions(argument),
             // R9 + E2: the settings view over the real `lca-config` keys,
             // with the session's live thinking and theme overriding the file's.
             "settings" => {
@@ -141,6 +145,84 @@ impl Ui {
                 .registry
                 .invoke_command(name, argument)
                 .unwrap_or(CommandEffect::None),
+        }
+    }
+
+    /// `/permissions` (ADR-0039): manage allow/deny rules.
+    ///
+    /// ```text
+    /// /permissions                          list rules
+    /// /permissions [session|project|global] allow <glob>
+    /// /permissions [session|project|global] deny  <glob>
+    /// /permissions clear                    drop session rules
+    /// ```
+    ///
+    /// The scope defaults to project; global rules are the user's defaults
+    /// across every project, session rules vanish on exit.
+    fn command_permissions(&self, argument: &str) -> CommandEffect {
+        use lca_permissions::{RuleDecision, RuleScope};
+        let mut parts = argument.split_whitespace();
+        let first = parts.next().unwrap_or("list");
+        if first == "list" {
+            let store = self.grants.lock().unwrap_or_else(|p| p.into_inner());
+            let rules = store.rules(&self.cwd);
+            if rules.is_empty() {
+                return CommandEffect::ShowWidget(
+                    "no permission rules; e.g. `/permissions deny git push*`".to_string(),
+                );
+            }
+            let mut text = String::from("permission rules (deny beats allow):\n");
+            for rule in rules {
+                let scope = match rule.scope {
+                    RuleScope::Session => "session",
+                    RuleScope::Project => "project",
+                    RuleScope::Global => "global",
+                };
+                let decision = match rule.decision {
+                    RuleDecision::Allow => "allow",
+                    RuleDecision::Deny => "deny",
+                };
+                text.push_str(&format!("  [{scope}] {decision} {}\n", rule.pattern));
+            }
+            return CommandEffect::ShowWidget(text);
+        }
+        if first == "clear" {
+            self.grants
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clear_session_rules();
+            return CommandEffect::ShowWidget("cleared session rules".to_string());
+        }
+        // `[scope] allow|deny <glob>`; the scope is optional.
+        let (scope, decision_word) = match first {
+            "session" | "project" | "global" => (Some(first), parts.next().unwrap_or("")),
+            "allow" | "deny" => (None, first),
+            _ => (None, ""),
+        };
+        let pattern: String = parts.collect::<Vec<_>>().join(" ");
+        if decision_word.is_empty() || pattern.is_empty() {
+            return CommandEffect::ShowWidget(
+                "usage: /permissions [session|project|global] allow|deny <glob>".to_string(),
+            );
+        }
+        let rule_scope = match scope {
+            Some("session") => RuleScope::Session,
+            Some("global") => RuleScope::Global,
+            _ => RuleScope::Project,
+        };
+        let decision = match decision_word {
+            "allow" => RuleDecision::Allow,
+            "deny" => RuleDecision::Deny,
+            other => {
+                return CommandEffect::ShowWidget(format!(
+                    "unknown decision `{other}`; use allow or deny"
+                ));
+            }
+        };
+        let mut store = self.grants.lock().unwrap_or_else(|p| p.into_inner());
+        match store.add_rule(&self.cwd, rule_scope, decision, pattern.clone()) {
+            Ok(()) => CommandEffect::ShowWidget(format!("{decision_word} rule `{pattern}`")),
+            Err(err) => CommandEffect::ShowWidget(format!("could not add rule: {err}")),
         }
     }
 
