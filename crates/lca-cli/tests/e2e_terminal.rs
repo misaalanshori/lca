@@ -568,7 +568,6 @@ fn spawn_console(sandbox: &Sandbox, envs: &[(&'static str, String)]) -> lca_tool
 // the Windows harness: startup renders, a scripted turn streams and renders,
 // and a clean quit writes `session-end`.
 #[cfg(windows)]
-#[ignore = "ConPTY produced no bytes on the hosted runner (docs/platform-notes.md, Windows quarantine ledger)"]
 #[test]
 fn the_tui_renders_a_turn_in_a_windows_console() {
     let runtime = rt();
@@ -580,7 +579,11 @@ fn the_tui_renders_a_turn_in_a_windows_console() {
     let sandbox = sandbox("tui-conpty");
     sandbox.approve_loopback_net(serde_json::json!({}));
 
-    let envs = console_env(&sandbox, &mock, true);
+    // The mock needs an explicit model: there is no implicit default
+    // (issue #3), so the footer would otherwise read "no model". Matches
+    // the tmux harness's `OPENAI_MODEL=test-model`.
+    let mut envs = console_env(&sandbox, &mock, true);
+    envs.push(("OPENAI_MODEL", "test-model".to_string()));
     let mut pty = spawn_console(&sandbox, &envs);
     let mut screen = String::new();
 
@@ -624,7 +627,6 @@ fn the_tui_renders_a_turn_in_a_windows_console() {
 // Verifies: the real-terminal checklist's secret-prompt case on Windows -
 // what the user types into `/login` never reaches the visible screen.
 #[cfg(windows)]
-#[ignore = "ConPTY produced no bytes on the hosted runner (docs/platform-notes.md, Windows quarantine ledger)"]
 #[test]
 fn the_logins_secret_prompt_masks_input_in_a_windows_console() {
     let runtime = rt();
@@ -646,7 +648,9 @@ fn the_logins_secret_prompt_masks_input_in_a_windows_console() {
         ),
         "the no-model state renders: {screen:?}"
     );
-    pty.write(b"/login\r").expect("write /login");
+    // `/login <preset>` skips the picker and asks for the secret directly
+    // (ADR-0033); with no argument it would open the list picker first.
+    pty.write(b"/login openrouter\r").expect("write /login");
     assert!(
         read_until(
             &mut pty,
