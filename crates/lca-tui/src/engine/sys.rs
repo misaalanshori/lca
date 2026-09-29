@@ -204,8 +204,9 @@ mod windows_backend {
     use windows_sys::Win32::System::Console::{
         CONSOLE_SCREEN_BUFFER_INFO, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
         ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode,
-        GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, PeekConsoleInputW,
-        ReadConsoleInputW, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
+        GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD,
+        KEY_EVENT, PeekConsoleInputW, ReadConsoleInputW, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        SetConsoleMode,
     };
 
     pub(super) struct Saved {
@@ -316,29 +317,25 @@ mod windows_backend {
         if !valid(handle) {
             return Ok(false);
         }
-        const KEY_EVENT: u16 = 0x0001;
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.max(0) as u64);
         loop {
             let mut count = 0u32;
             // SAFETY: valid handle, valid out-pointer.
             if unsafe { GetNumberOfConsoleInputEvents(handle, &mut count) } != 0 && count > 0 {
-                let mut record = [0u8; 64];
+                let mut record = INPUT_RECORD::default();
                 let mut peeked = 0u32;
-                // SAFETY: the scratch buffer is at least one INPUT_RECORD.
-                if unsafe { PeekConsoleInputW(handle, record.as_mut_ptr().cast(), 1, &mut peeked) }
-                    != 0
+                // SAFETY: one INPUT_RECORD out-param, valid for the call.
+                if unsafe { PeekConsoleInputW(handle, &mut record, 1, &mut peeked) } != 0
                     && peeked > 0
                 {
-                    // INPUT_RECORD.EventType is a WORD at offset 0.
-                    let event_type = u16::from_ne_bytes([record[0], record[1]]);
-                    if event_type == KEY_EVENT {
+                    if record.EventType == KEY_EVENT as u16 {
                         return Ok(true);
                     }
                     let mut consumed = 0u32;
-                    // SAFETY: same scratch buffer, one record.
+                    // SAFETY: same record, one event consumed.
                     unsafe {
-                        ReadConsoleInputW(handle, record.as_mut_ptr().cast(), 1, &mut consumed);
+                        ReadConsoleInputW(handle, &mut record, 1, &mut consumed);
                     }
                     continue;
                 }
