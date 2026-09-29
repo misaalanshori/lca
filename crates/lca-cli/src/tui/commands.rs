@@ -104,14 +104,23 @@ impl Ui {
                 }
             }
             // R9 + E2: the settings view over the real `lca-config` keys,
-            // with the session's live thinking value overriding the file's.
+            // with the session's live thinking and theme overriding the file's.
             "settings" => {
                 let live = self
                     .thinking_cell
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .clone();
-                CommandEffect::ShowWidget(settings_text(&self.config, live.as_deref()))
+                let theme = self
+                    .theme_cell
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                CommandEffect::ShowWidget(settings_text(
+                    &self.config,
+                    live.as_deref(),
+                    Some(&theme),
+                ))
             }
             // The stats story (FR-UI-19): the same numbers the footer
             // accumulates, with per-model cost and cache waste.
@@ -212,8 +221,13 @@ impl Ui {
 /// session's live thinking value overriding the file's. The live value is
 /// labeled `session`; with neither a session pick nor a file value the row
 /// reads `unset (provider default) [default]`.
-fn settings_text(config: &lca_config::Config, live_thinking: Option<&str>) -> String {
+fn settings_text(
+    config: &lca_config::Config,
+    live_thinking: Option<&str>,
+    live_theme: Option<&str>,
+) -> String {
     let configured = config.thinking();
+    let configured_theme = config.ui_theme().unwrap_or("auto");
     let mut text = String::from("settings (key = value [source]; run /grants for permissions):\n");
     for (key, value, source) in config.resolved() {
         if key == "thinking" {
@@ -233,6 +247,13 @@ fn settings_text(config: &lca_config::Config, live_thinking: Option<&str>) -> St
                 text.push_str("  thinking = unset (provider default) [default]\n");
                 continue;
             }
+        }
+        if key == "ui.theme"
+            && let Some(live) = live_theme
+            && live != configured_theme
+        {
+            text.push_str(&format!("  ui.theme = {live} [session]\n"));
+            continue;
         }
         text.push_str(&format!("  {key} = {value} [{source}]\n"));
     }
@@ -259,7 +280,7 @@ mod tests {
     #[test]
     fn settings_label_the_session_thinking_pick() {
         let config = config_with("lca-settings-live", "");
-        let text = settings_text(&config, Some("high"));
+        let text = settings_text(&config, Some("high"), None);
         assert!(text.contains("thinking = high [session]"), "{text}");
     }
 
@@ -268,7 +289,7 @@ mod tests {
     #[test]
     fn settings_show_unset_thinking() {
         let config = config_with("lca-settings-unset", "");
-        let text = settings_text(&config, None);
+        let text = settings_text(&config, None, None);
         assert!(
             text.contains("thinking = unset (provider default) [default]"),
             "{text}"
@@ -280,7 +301,16 @@ mod tests {
     #[test]
     fn settings_agree_after_a_restart() {
         let config = config_with("lca-settings-restart", "thinking = \"high\"\n");
-        let text = settings_text(&config, Some("high"));
+        let text = settings_text(&config, Some("high"), None);
         assert!(text.contains("thinking = high [user file]"), "{text}");
+    }
+
+    // Verifies: E2 - `/settings` labels a committed `/theme` pick the same
+    // way it labels thinking, so the two surfaces agree there too.
+    #[test]
+    fn settings_label_the_session_theme_pick() {
+        let config = config_with("lca-settings-theme", "");
+        let text = settings_text(&config, None, Some("light"));
+        assert!(text.contains("ui.theme = light [session]"), "{text}");
     }
 }

@@ -113,11 +113,22 @@ fn read_into<R: std::io::Read>(
 impl Ui {
     /// The host hooks wired for this composition (S1).
     pub(super) fn hooks(&self) -> UiHooks {
+        // E2: keep the live theme cell in step with the persisted pick so
+        // `/settings` shows the session value, like it does for thinking.
+        let theme_cell = self.theme_cell.clone();
+        let persist_setting: lca_ui::state::SettingPersist =
+            Arc::new(move |key: &str, value: Option<String>| {
+                if key == "ui.theme" {
+                    *theme_cell.lock().unwrap_or_else(|p| p.into_inner()) =
+                        value.clone().unwrap_or_else(|| "auto".to_string());
+                }
+                persist_ui_setting(key, value);
+            });
         UiHooks {
             run_shell: Some(self.shell_runner()),
             external_editor: Some(Arc::new(external_editor)),
             persist_screen_mode: Some(Arc::new(persist_screen_mode)),
-            persist_setting: Some(Arc::new(persist_ui_setting)),
+            persist_setting: Some(persist_setting),
             session_tree: Some(self.session_tree()),
             session_list: Some(self.session_list()),
             switch_session: Some(self.switch_session()),

@@ -81,6 +81,9 @@ pub(crate) struct Ui {
     context_window_cell: Arc<Mutex<u64>>,
     /// The live thinking level (R1).
     thinking_cell: Arc<Mutex<Option<String>>>,
+    /// The live theme setting (E2): the committed `/theme` pick, so
+    /// `/settings` agrees with it the way it agrees on `thinking`.
+    theme_cell: Arc<Mutex<String>>,
     /// The compaction provider backend, when the bundled strategy is on.
     provider_backend: Option<Arc<lca_core::ext_provider::ProviderBackend>>,
     /// The agent config reused per turn.
@@ -318,6 +321,7 @@ impl Ui {
             std::fs::read_to_string(crate::config_dir().join("provider-presets.toml"))
                 .unwrap_or_default();
         let flow = Arc::new(Mutex::new(crate::login::LoginFlow::new()));
+        let theme_setting = config.ui_theme().unwrap_or("auto").to_string();
 
         Ok(Ui {
             cwd: cwd.to_path_buf(),
@@ -335,6 +339,7 @@ impl Ui {
             identity_cell: cells.identity,
             context_window_cell: cells.context_window,
             thinking_cell: cells.thinking,
+            theme_cell: Arc::new(Mutex::new(theme_setting)),
             provider_backend,
             agent_config,
             pending_attachments: Arc::new(Mutex::new(Vec::new())),
