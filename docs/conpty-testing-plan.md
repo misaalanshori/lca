@@ -1,8 +1,9 @@
 # Windows console testing — open TODO and plan
 
-Status: **OPEN TODO** (2026-09-27). Owner decision pending: how to get a
-machine with a Windows console attached (see "Options"). Everything else
-this needs is written, compiled, and waiting.
+Status: **RESOLVED** (2026-09-29). The five tests are green on Windows, on
+a real console and on the hosted `windows-latest` CI leg. The fault was in
+our ConPTY call, not the runner. See the update log and
+`docs/platform-notes.md`.
 
 Tracked debt: the quarantine ledger in `docs/platform-notes.md` (Windows
 section), opened 2026-09-25 under the testing plan's §13 quarantine rule.
@@ -62,6 +63,11 @@ console machine confirms or kills it. The three candidate faults named in
 the ledger: the console, the environment block `PtyChild::spawn` passes,
 or the runner — in that order of suspicion.
 
+**Killed 2026-09-29.** A real console reproduced the same zero-byte shape,
+so the runner was exonerated: the fault was ours. `mode con` inside the
+pty child reported a fresh 120x30 console instead of the requested 24x80,
+which pointed straight at the pseudoconsole attribute. See the update log.
+
 ## The plan (once a console machine exists)
 
 1. **Run the pty trio first** (`cargo nextest run -p lca-tools -p
@@ -106,3 +112,15 @@ permanent console leg.
 - 2026-09-26 (cycle 5 re-check): whole set still compiles on the Windows
   leg; none retried on a console; blocker unchanged — the machine.
 - 2026-09-27: this plan written; awaiting the owner's console route.
+- 2026-09-29: **resolved.** On a console-attached Windows machine the pty
+  trio failed with zero bytes, and the isolation ladder found the fault in
+  our ConPTY call: `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` was handed the
+  address of an `HPCON` instead of the value itself, and the child's std
+  handles were not invalidated, so every child was born on a fresh default
+  console and the output pipe stayed empty. Fixed. Rendering on ConPTY then
+  exposed a second, independent defect: `/exit` hung joining a reader
+  blocked in `ReadFile` (`wait_stdin` never timed out); fixed with
+  `WaitForSingleObject` plus `CancelSynchronousIo` before the join. All
+  five tests green on the real console *and* on the hosted `windows-latest`
+  leg, so exit criterion (a) is met with no self-hosted runner, and the
+  ledger is closed (`docs/platform-notes.md`). Regressions 35-37.

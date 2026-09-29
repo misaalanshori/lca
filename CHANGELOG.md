@@ -4,6 +4,26 @@ Notable changes to LCA. Versions follow semantic versioning for the product;
 the `lca:ext` ABI version is independent and is printed by `lca --version`.
 Dates are UTC.
 
+## [Unreleased]
+
+### Fixed
+
+- **The Windows pty/ConPTY path works on a real console.** The
+  pseudoconsole attribute was handed the address of an `HPCON` instead of
+  the value itself, so every pty child was born on a fresh default console
+  and its output pipe stayed empty; the child's std handles are now
+  invalidated so a redirected-stdio parent cannot leak its handles into it
+  either.
+- **`/exit` no longer hangs on Windows.** The input reader could not be
+  interrupted out of a blocking `ReadFile`, so shutdown hung joining it;
+  `wait_stdin` now times out and `CancelSynchronousIo` unblocks the read
+  before the join.
+- **The `\\?\` verbatim path prefix no longer appears in displayed paths**
+  (the session-start notice showed it).
+
+The five previously-quarantined Windows tests are green on a real console
+and on the hosted Windows CI leg.
+
 ## [0.5.1] - 2026-09-29
 
 A patch on the 0.5 train: **no interface changes** (`lca:ext` stays
