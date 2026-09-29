@@ -52,7 +52,9 @@ pub(super) fn display_line(record: &Record) -> Option<String> {
         Record::Compaction {
             summary, strategy, ..
         } => format!("[compaction] {summary} (via {strategy})"),
-        Record::SessionStart { working_dir, .. } => format!("[session in {working_dir}]"),
+        Record::SessionStart { working_dir, .. } => {
+            format!("[session in {}]", lca_ui::display_path(working_dir))
+        }
         _ => return None,
     })
 }

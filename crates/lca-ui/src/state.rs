@@ -181,6 +181,21 @@ pub fn sanitize_block(text: &str) -> String {
     out
 }
 
+/// Strip Windows' verbatim (`\\?\`) path prefix for **display only**.
+/// The canonical form is load-bearing: the `fs` scope-escape check and
+/// process spawn both compare against it, so this must never be used
+/// there. `\\?\UNC\server\share` keeps its meaning as `\\server\share`.
+/// Off Windows (or for an already-plain path) the string is unchanged.
+pub fn display_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    path.to_string()
+}
+
 /// One node's lines, arena-style: node0 is the root and children are
 /// indices. Every text node passes through [`sanitize_text`] - the one
 /// choke point for FR-UI-2.

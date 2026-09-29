@@ -125,3 +125,7 @@ mod conpty_pseudoconsole_attached;
 // in `ReadFile` (`wait_stdin` never timed out), so no `session-end`.
 #[path = "36-console-exit-does-not-hang.rs"]
 mod console_exit_does_not_hang;
+// Windows display defect: the session-start notice showed the canonical
+// `\\?\C:\...` working directory instead of the plain path.
+#[path = "37-verbatim-path-not-displayed.rs"]
+mod verbatim_path_not_displayed;

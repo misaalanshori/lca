@@ -596,6 +596,10 @@ fn the_tui_renders_a_turn_in_a_windows_console() {
         ),
         "startup renders the frame: {screen:?}"
     );
+    assert!(
+        !screen.contains(r"\\?\"),
+        "the verbatim path prefix never reaches the screen: {screen:?}"
+    );
 
     pty.write(b"hello console\r").expect("write the prompt");
     assert!(
