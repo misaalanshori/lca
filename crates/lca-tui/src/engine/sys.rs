@@ -204,8 +204,8 @@ mod windows_backend {
     use windows_sys::Win32::System::Console::{
         CONSOLE_SCREEN_BUFFER_INFO, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
         ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode,
-        GetConsoleScreenBufferInfo, GetStdHandle, ReadConsoleInputW, STD_INPUT_HANDLE,
-        STD_OUTPUT_HANDLE, SetConsoleMode,
+        GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, PeekConsoleInputW,
+        ReadConsoleInputW, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
     };
 
     pub(super) struct Saved {
@@ -304,25 +304,50 @@ mod windows_backend {
     }
 
     pub(super) fn wait_stdin(timeout_ms: i32) -> io::Result<bool> {
-        // A console input handle is waitable: it signals when input is
-        // available. Reporting `true` unconditionally (the old behavior)
-        // made the caller's `ReadFile` block with no way out, so the input
-        // reader thread could never be told to stop and `drain_input`
-        // hung on exit. WAIT_OBJECT_0 (0) is signaled; anything else
-        // (timeout or error) means "nothing to read this call".
+        // Report `true` only when a *key* event is pending, so the caller's
+        // `ReadFile` returns promptly. A plain "handle is signaled" wait is
+        // not enough: a console handle signals for non-key events (focus,
+        // mouse, resize) too, and `ReadFile` then blocks forever waiting for
+        // a key - which hung the reader thread on exit and `drain_input` on
+        // the way there. Non-key records are consumed here so they cannot
+        // pile up. `CancelSynchronousIo` was tried first and does not
+        // reliably abort a console `ReadFile`.
         let handle = stdin_handle();
         if !valid(handle) {
             return Ok(false);
         }
-        // SAFETY: `handle` is our own console stdin handle; the timeout is
-        // a plain millisecond count.
-        let rc = unsafe {
-            windows_sys::Win32::System::Threading::WaitForSingleObject(
-                handle,
-                timeout_ms.max(0) as u32,
-            )
-        };
-        Ok(rc == 0)
+        const KEY_EVENT: u16 = 0x0001;
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.max(0) as u64);
+        loop {
+            let mut count = 0u32;
+            // SAFETY: valid handle, valid out-pointer.
+            if unsafe { GetNumberOfConsoleInputEvents(handle, &mut count) } != 0 && count > 0 {
+                let mut record = [0u8; 64];
+                let mut peeked = 0u32;
+                // SAFETY: the scratch buffer is at least one INPUT_RECORD.
+                if unsafe { PeekConsoleInputW(handle, record.as_mut_ptr().cast(), 1, &mut peeked) }
+                    != 0
+                    && peeked > 0
+                {
+                    // INPUT_RECORD.EventType is a WORD at offset 0.
+                    let event_type = u16::from_ne_bytes([record[0], record[1]]);
+                    if event_type == KEY_EVENT {
+                        return Ok(true);
+                    }
+                    let mut consumed = 0u32;
+                    // SAFETY: same scratch buffer, one record.
+                    unsafe {
+                        ReadConsoleInputW(handle, record.as_mut_ptr().cast(), 1, &mut consumed);
+                    }
+                    continue;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     /// Drain pending console input records so stop() does not leak keystrokes.

@@ -438,7 +438,7 @@ fn a_resumed_session_compacts_at_the_turn_boundary() {
     // The resumed process writes its own clean-exit marker before it goes
     // away; run 1 already wrote one, so the log now holds two (FR-SESS-6's
     // clean-exit shape across the restart).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         if text.matches("\"t\":\"session-end\"").count() >= 2 {
@@ -564,12 +564,23 @@ fn spawn_console(sandbox: &Sandbox, envs: &[(&'static str, String)]) -> lca_tool
     .expect("spawn the TUI on a ConPTY")
 }
 
+/// Serialize the Windows ConPTY tests: each spawns a whole TUI plus a mock
+/// server, and running several at once starves them enough to miss the
+/// shutdown deadline. One at a time is still fast (each is sub-second).
+#[cfg(windows)]
+fn conpty_serial() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 // Verifies: the real-terminal checklist (docs/testing-plan.md section 14) on
 // the Windows harness: startup renders, a scripted turn streams and renders,
-// and a clean quit writes `session-end`.
+// the permission modal answers, a resize re-renders, and a clean quit writes
+// `session-end`.
 #[cfg(windows)]
 #[test]
 fn the_tui_renders_a_turn_in_a_windows_console() {
+    let _serial = conpty_serial();
     let runtime = rt();
     // A review-class shell command (a path outside the workspace) so the
     // analyzer does not auto-approve and the modal is exercised; `type` of a
@@ -642,8 +653,17 @@ fn the_tui_renders_a_turn_in_a_windows_console() {
 
     pty.write(b"/exit\r").expect("write /exit");
     let log = find_session_log(&sandbox.state_dir()).expect("a session log");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
+        // Keep draining the pseudo-console: a TUI writing its shutdown
+        // sequences while nobody reads can fill the pipe and block its own
+        // exit (and then no session-end is ever written).
+        let _ = read_until(
+            &mut pty,
+            &mut screen,
+            "\u{0}",
+            std::time::Duration::from_millis(50),
+        );
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         if text.contains("\"t\":\"session-end\"") {
             break;
@@ -661,6 +681,7 @@ fn the_tui_renders_a_turn_in_a_windows_console() {
 #[cfg(windows)]
 #[test]
 fn the_logins_secret_prompt_masks_input_in_a_windows_console() {
+    let _serial = conpty_serial();
     let runtime = rt();
     let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
     let sandbox = sandbox("tui-conpty-mask");
@@ -826,6 +847,7 @@ fn the_interface_opens_in_the_zero_provider_state_and_recovers_through_login() {
 #[cfg(windows)]
 #[test]
 fn the_trust_prompt_inline_shell_and_grants_work_on_windows() {
+    let _serial = conpty_serial();
     let runtime = rt();
     let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
     let sandbox = sandbox("tui-conpty-trust");
@@ -882,8 +904,15 @@ fn the_trust_prompt_inline_shell_and_grants_work_on_windows() {
     std::thread::sleep(std::time::Duration::from_millis(500));
     pty.write(b"/exit\r").expect("write /exit");
     let log = find_session_log(&sandbox.state_dir()).expect("a session log");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
+        // Keep draining the pseudo-console (see the render test's note).
+        let _ = read_until(
+            &mut pty,
+            &mut screen,
+            "\u{0}",
+            std::time::Duration::from_millis(50),
+        );
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         if text.contains("\"t\":\"session-end\"") {
             break;
@@ -901,6 +930,7 @@ fn the_trust_prompt_inline_shell_and_grants_work_on_windows() {
 #[cfg(windows)]
 #[test]
 fn the_double_ctrl_c_exits_on_windows() {
+    let _serial = conpty_serial();
     let runtime = rt();
     let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
     let sandbox = sandbox("tui-conpty-ctrlc");
@@ -924,8 +954,15 @@ fn the_double_ctrl_c_exits_on_windows() {
     std::thread::sleep(std::time::Duration::from_millis(400));
     pty.write(b"\x03").expect("ctrl+c again");
     let log = find_session_log(&sandbox.state_dir()).expect("a session log");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
+        // Keep draining the pseudo-console (see the render test's note).
+        let _ = read_until(
+            &mut pty,
+            &mut screen,
+            "\u{0}",
+            std::time::Duration::from_millis(50),
+        );
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         if text.contains("\"t\":\"session-end\"") {
             break;

@@ -123,6 +123,9 @@ struct Shared {
     cols: AtomicU16,
     rows: AtomicU16,
     shutdown: AtomicBool,
+    /// Set by the reader thread as it leaves, so `stop` can retry the
+    /// Windows synchronous-I/O cancel until the reader is actually gone.
+    reader_done: AtomicBool,
 }
 
 impl Shared {
@@ -168,6 +171,7 @@ impl ProcessTerminal {
                 cols: AtomicU16::new(cols),
                 rows: AtomicU16::new(rows),
                 shutdown: AtomicBool::new(false),
+                reader_done: AtomicBool::new(false),
             }),
             raw_state: None,
             reader: None,
@@ -242,7 +246,16 @@ impl Terminal for ProcessTerminal {
         self.shared.shutdown.store(true, Ordering::SeqCst);
         if let Some(handle) = self.reader.take() {
             #[cfg(windows)]
-            cancel_blocking_read(&handle);
+            {
+                // One cancel can miss: the reader can pass its `shutdown`
+                // check and slip into `ReadFile` between the flag and the
+                // cancel, then block forever. Retry until it reports done.
+                let deadline = Instant::now() + Duration::from_millis(500);
+                while !self.shared.reader_done.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    cancel_blocking_read(&handle);
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
             let _ = handle.join();
         }
         if let Some(state) = self.raw_state.take() {
@@ -412,6 +425,7 @@ fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
             shared.fire_resize();
         }
     }
+    shared.reader_done.store(true, Ordering::SeqCst);
 }
 
 fn dispatch(shared: &Shared, event: StdinEvent) {
