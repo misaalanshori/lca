@@ -384,6 +384,7 @@ mod tests {
         workspace_scoped(command, &ws(), &ws())
     }
 
+    // Verifies: FR-PERM-20 (the workspace-scoped allow table)
     #[test]
     fn plain_build_and_dev_commands_are_scoped() {
         for command in [

@@ -20,6 +20,7 @@ fn shell(project: &Path, command: &str) -> Action {
     }
 }
 
+// Verifies: FR-PERM-21 (a deny rule refuses without a prompt and beats allow)
 #[test]
 fn a_deny_rule_refuses_without_a_prompt_and_beats_allow() {
     let root = scratch("deny");
@@ -41,6 +42,7 @@ fn a_deny_rule_refuses_without_a_prompt_and_beats_allow() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// Verifies: FR-PERM-20 (trust auto-approves only in-workspace commands)
 #[test]
 fn folder_trust_auto_approves_only_workspace_scoped_commands() {
     let root = scratch("trust");
@@ -58,6 +60,7 @@ fn folder_trust_auto_approves_only_workspace_scoped_commands() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// Verifies: FR-PERM-22 (session grants do not persist)
 #[test]
 fn session_grants_do_not_persist() {
     let root = scratch("session");

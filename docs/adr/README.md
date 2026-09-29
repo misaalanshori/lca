@@ -57,6 +57,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0036 | Dependencies for the pi TUI port (`lca-tui`) | Accepted | TUI port |
 | 0037 | The TUI is ours: two crates and the line-string engine | Accepted | TUI renovation |
 | 0038 | Steering: prompts submitted while a turn runs | Accepted | TUI renovation |
+| 0039 | Folder trust, rules, and session grants | Accepted | Permission UX |
 | 0029 | Typed image content for provider messages | Accepted | Post-release review (cycle 2) |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.

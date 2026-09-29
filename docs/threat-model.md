@@ -124,6 +124,14 @@ Not possible without the `process` capability, and holding `process` only means 
 
 The real risk here is a broad pre-approved pattern. A user who approved `git *` has approved `git config core.pager` pointing at an arbitrary program. Pattern approval is where this model is weakest, and the interface should discourage broad patterns.
 
+### Folder trust auto-approves a command that reaches outside
+
+A user trusts a folder to stop the prompt fatigue (ADR-0039); an injected instruction then has the model run a command that only looks workspace-scoped.
+
+Stopped by the workspace-scoped analyzer, which refuses anything it cannot prove stays inside: command substitution, `cd`, shells and indirection, privilege and disk tools, egress clients, package publishes, sensitive environment variables, heredocs, and any path or redirection target outside the workspace. A path that leaves the tree, a `~`, or a URL all review. A deny rule can also forbid a pattern outright.
+
+Not stopped: a trusted folder can run its own build code (build scripts, proc macros) and can damage itself. This is the same trust pi's folder model already grants, and the analyzer is a convenience boundary, not a sandbox. Residual risk accepted, and named here rather than implied.
+
 ### A malicious extension spoofs a permission prompt
 
 Stopped by the rendering model. An extension returns a widget tree, not terminal bytes. It cannot draw outside its granted region, cannot move the cursor, and cannot emit control codes. Text spans are stripped of control characters before drawing.

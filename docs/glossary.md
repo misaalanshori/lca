@@ -58,6 +58,12 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Paste marker.** The atomic editor segment a large paste becomes: one unit that does not reflow into surrounding text or split across history entries. An editor behavior, not a clipboard feature; see FR-UI-10.
 
+**Folder trust.** The per-project decision (persistent or session-only, ADR-0039) that lets the workspace-scoped analyzer auto-approve in-workspace shell commands, and that gates the project's `.lca/config.toml` proposals and extension enablement. Asked once, Pi-style, and reopened with `/trust`.
+
+**Rule.** An allow or deny glob at session, project, or global scope (ADR-0039). A deny rule refuses a matching action without prompting and takes precedence over an allow rule; session rules and session trust never persist.
+
+**Workspace-scoped command.** A shell command the analyzer (`lca_permissions::shell`) can prove stays inside the workspace root, so a trusted folder runs it without a prompt. The bias is strict: a command it cannot reason about is reviewed, not allowed.
+
 **Preopen.** A WASI term: a directory handle an extension receives already opened and scoped by the host, so the extension resolves paths relative to a handle it was given rather than an absolute path it constructed itself. The mechanism underneath every `fs` capability grant.
 
 **Preset.** A named endpoint entry an extension ships in its own `resources/provider-presets.toml`: id, display name, base URL, auth kind, curated model list. Extension data, not host data - disabling the extension takes its presets with it. The host's `login-options` query maps presets to picker rows and nothing more. A user's own presets live at `<config>/provider-presets.toml`. See ADR-0031.

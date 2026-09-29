@@ -810,8 +810,8 @@ fn lca_ui_entry(install_consent: bool, subject: &str, detail: &str) -> crate::st
     }
 }
 
-// Verifies: ADR-0039 - the permission modal's `t` trusts the folder for the
-// session without persisting a pattern.
+// Verifies: FR-PERM-23 - the permission modal's `t` trusts the folder for
+// the session without persisting a pattern.
 #[test]
 fn the_permission_modal_can_trust_the_folder() {
     let mut chat = chat();
@@ -828,7 +828,7 @@ fn the_permission_modal_can_trust_the_folder() {
     );
 }
 
-// Verifies: ADR-0039 - the `/trust` picker applies the chosen trust scope.
+// Verifies: FR-PERM-24 - the `/trust` picker applies the chosen scope.
 #[test]
 fn the_trust_picker_applies_a_choice() {
     let seen = Arc::new(std::sync::Mutex::new(None));
@@ -853,8 +853,8 @@ fn the_trust_picker_applies_a_choice() {
     assert!(chat.trust_picker.is_none());
 }
 
-// Verifies: ADR-0039 - the trust prompt opens at startup only when the host
-// says the project needs a decision (Pi's trust-requiring-resources rule).
+// Verifies: FR-PERM-24 - the trust prompt opens at startup only when the
+// host says the project needs a decision (Pi's resources rule).
 #[test]
 fn the_trust_prompt_opens_when_the_host_asks() {
     let mut opts = options();

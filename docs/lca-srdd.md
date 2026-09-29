@@ -410,6 +410,16 @@ FR-PERM-18. WHEN the user attaches an ad hoc grant during a session, the agent S
 
 FR-PERM-19. The agent SHALL store project trust state, per-project extension enablement, and ad hoc grants in the user grant store, keyed by the canonical path of the current project.
 
+FR-PERM-20. WHILE a project is trusted, persistently or for the session, and a shell command provably stays inside the workspace root, the agent SHALL run it without prompting. A command the agent cannot prove stays inside the workspace SHALL be reviewed (ADR-0039).
+
+FR-PERM-21. The agent SHALL support allow and deny rules, matched as globs, at session, project, and global scope. A deny rule SHALL refuse a matching action without prompting, and SHALL take precedence over an allow rule.
+
+FR-PERM-22. Session-scoped trust and session-scoped rules SHALL NOT persist; only an explicit persistent trust or a project/global rule survives the process.
+
+FR-PERM-23. WHEN the agent asks the user to approve a sensitive action, it SHALL offer trusting the current project folder for the session as one answer (ADR-0039).
+
+FR-PERM-24. WHEN the user runs the trust command, the agent SHALL offer remembering the decision for the project or applying it only for the session, and SHALL show a trust prompt at startup only when the project carries a `.lca/config.toml` that is not yet trusted.
+
 ### Providers
 
 FR-PROV-1. The core SHALL contain no vendor-specific model logic.
