@@ -152,6 +152,18 @@ pub(crate) fn wait_stdin(timeout_ms: i32) -> io::Result<bool> {
     }
 }
 
+/// Cancel a thread's pending synchronous I/O, unblocking a `ReadFile`
+/// parked on the console input handle so the reader can observe shutdown.
+#[cfg(windows)]
+pub(super) fn cancel_blocking_read(thread: std::os::windows::io::RawHandle) {
+    // SAFETY: the caller passes a live thread handle (the JoinHandle keeps
+    // the thread alive); CancelSynchronousIo aborts that thread's pending
+    // synchronous I/O, which is exactly the intended unblock.
+    unsafe {
+        windows_sys::Win32::System::IO::CancelSynchronousIo(thread as *mut _);
+    }
+}
+
 /// The terminal's current column/row count.
 pub(crate) fn terminal_size() -> io::Result<(u16, u16)> {
     #[cfg(unix)]
@@ -292,12 +304,25 @@ mod windows_backend {
     }
 
     pub(super) fn wait_stdin(timeout_ms: i32) -> io::Result<bool> {
-        // Simplest portable wait: poll the console input record count via a
-        // zero-timeout ReadConsoleInputW peek would consume records, so instead
-        // block-read is handled by the caller with a short sleep; report
-        // readable so the reader loop does one ReadFile per iteration.
-        let _ = timeout_ms;
-        Ok(true)
+        // A console input handle is waitable: it signals when input is
+        // available. Reporting `true` unconditionally (the old behavior)
+        // made the caller's `ReadFile` block with no way out, so the input
+        // reader thread could never be told to stop and `drain_input`
+        // hung on exit. WAIT_OBJECT_0 (0) is signaled; anything else
+        // (timeout or error) means "nothing to read this call".
+        let handle = stdin_handle();
+        if !valid(handle) {
+            return Ok(false);
+        }
+        // SAFETY: `handle` is our own console stdin handle; the timeout is
+        // a plain millisecond count.
+        let rc = unsafe {
+            windows_sys::Win32::System::Threading::WaitForSingleObject(
+                handle,
+                timeout_ms.max(0) as u32,
+            )
+        };
+        Ok(rc == 0)
     }
 
     /// Drain pending console input records so stop() does not leak keystrokes.

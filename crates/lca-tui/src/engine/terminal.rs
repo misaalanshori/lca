@@ -241,6 +241,8 @@ impl Terminal for ProcessTerminal {
         self.disable_modify_other_keys();
         self.shared.shutdown.store(true, Ordering::SeqCst);
         if let Some(handle) = self.reader.take() {
+            #[cfg(windows)]
+            cancel_blocking_read(&handle);
             let _ = handle.join();
         }
         if let Some(state) = self.raw_state.take() {
@@ -358,6 +360,17 @@ fn resolve_write_log() -> Option<PathBuf> {
     } else {
         Some(path)
     }
+}
+
+/// Unblock a reader thread parked in a synchronous `ReadFile` on the
+/// console handle, so it can observe `shutdown` and return. Without this
+/// `stop()`'s join hangs forever: a console input handle can signal for
+/// non-character events, so `wait_stdin` may report readable while
+/// `ReadFile` still blocks.
+#[cfg(windows)]
+fn cancel_blocking_read(handle: &std::thread::JoinHandle<()>) {
+    use std::os::windows::io::AsRawHandle;
+    sys::cancel_blocking_read(handle.as_raw_handle());
 }
 
 fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {

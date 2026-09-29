@@ -121,3 +121,7 @@ mod dangling_tool_call_healed;
 // the child's std handles).
 #[path = "35-conpty-pseudoconsole-attached.rs"]
 mod conpty_pseudoconsole_attached;
+// Windows quarantine defect: on exit the TUI hung joining a reader blocked
+// in `ReadFile` (`wait_stdin` never timed out), so no `session-end`.
+#[path = "36-console-exit-does-not-hang.rs"]
+mod console_exit_does_not_hang;
