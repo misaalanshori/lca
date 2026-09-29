@@ -1146,7 +1146,7 @@ re-exported so no caller changed, bringing every workspace source under the
 still said `max_iterations = 50` while `lca-config` and
 `docs/configuration.md` said 100; the config default became the named
 `DEFAULT_TOOL_MAX_ITERATIONS` and a unit test compares the two crates.
-**C7:** the docs' `abi = "0.4"` manifest examples came to `0.5`, and
+**C7:** the docs' 0.4 manifest examples came to 0.5, and
 ADR-0002's "fifteen crates" got a dated annotation (sixteen since ADR-0037
 split out `lca-ui`); the historical 0.4 mentions in `abi-versioning.md` and
 ADR-0028 are untouched. **The behavior drive** (tmux, `deepseek-v4.1-flash`
