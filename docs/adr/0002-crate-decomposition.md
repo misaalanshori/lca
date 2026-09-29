@@ -53,3 +53,13 @@ Crate boundaries make the minimalism goal enforceable. A reviewer can ask which 
 ## Revisit conditions
 
 Clean build times that stop new contributors from working. A pattern of changes that routinely touch more than five crates, which would mean the boundaries are in the wrong place.
+
+---
+
+*Annotation (2026-09-29):* the count is now **sixteen** crates. The TUI
+renovation split the agent interface out of `lca-tui` into `lca-ui`
+(ADR-0037), which is the one addition to the fifteen this record names.
+The decision's boundaries are unchanged: `lca-ui` sits at the same layer
+as `lca-tui` and depends on it, and the direction rule this record fixes
+still holds. The count is annotated rather than rewritten because the
+original decision is the record of what was decided on this date.

@@ -13,7 +13,7 @@ Nothing, for the same reason as LM Studio: trust is "this is running on a machin
 ```toml
 name = "ollama"
 version = "1.0.0"
-abi = "0.4"
+abi = "0.5"
 worlds = ["provider", "command"]
 description = "Connects to a local Ollama server."
 

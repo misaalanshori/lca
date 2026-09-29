@@ -13,7 +13,7 @@ The ChatGPT subscription login, through the same loopback OAuth mechanism Antigr
 ```toml
 name = "codex"
 version = "1.0.0"
-abi = "0.4"
+abi = "0.5"
 worlds = ["provider", "command"]
 description = "OpenAI Codex models via ChatGPT subscription login."
 
