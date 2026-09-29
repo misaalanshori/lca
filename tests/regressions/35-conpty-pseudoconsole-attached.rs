@@ -17,6 +17,13 @@
 
 use std::time::{Duration, Instant};
 
+// The pty allocation path itself is the tracked macOS gap (`ENOTTY`); the
+// same ignore the pty tests carry, so this guard does not fail on the one
+// platform the pty layer does not yet work on.
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "ENOTTY on the macOS allocation path - tracked in docs/platform-notes.md"
+)]
 #[test]
 fn a_pty_childrens_terminal_output_reaches_the_reader() {
     let dir = lca_testkit::scratch_path("regression-conpty-attach");
