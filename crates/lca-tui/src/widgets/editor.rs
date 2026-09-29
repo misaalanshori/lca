@@ -31,6 +31,38 @@ pub enum EditorEvent {
     Exit,
 }
 
+/// Expand `[paste #N …]` markers to the content they stand for (pi's
+/// `expandPasteMarkers`). A marker whose id has no live entry, or one with
+/// no closing bracket, is left literal so a user who types the shape by hand
+/// is not surprised. Markers are produced by [`Editor::insert_paste`].
+fn expand_paste_markers(text: &str, pastes: &[String]) -> String {
+    const OPEN: &str = "[paste #";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(OPEN) {
+        out.push_str(&rest[..start]);
+        let marker = &rest[start..];
+        let digits: String = marker[OPEN.len()..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        match (digits.parse::<usize>(), marker.find(']')) {
+            (Ok(id), Some(close)) if id >= 1 && id <= pastes.len() => {
+                out.push_str(&pastes[id - 1]);
+                rest = &marker[close + 1..];
+            }
+            _ => {
+                // Not a marker this editor wrote: keep it and move past the
+                // opening bracket so the search cannot loop.
+                out.push('[');
+                rest = &marker[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// A multi-line prompt editor.
 pub struct Editor {
     lines: Vec<String>,
@@ -126,12 +158,23 @@ impl Editor {
         }
         self.cursor_line = self.lines.len() - 1;
         self.cursor_col = self.lines[self.cursor_line].chars().count();
+        // A new buffer owns no pastes; a stale registry would make the next
+        // marker reuse an id whose content no longer belongs to it.
+        self.pastes.clear();
         self.clear_suggestions();
     }
 
-    /// Clear the buffer and push the submitted text to history.
+    /// The buffer with paste markers expanded (pi's `getExpandedText`):
+    /// what the external editor and any other full-text consumer needs.
+    pub fn expanded_text(&self) -> String {
+        expand_paste_markers(&self.text(), &self.pastes)
+    }
+
+    /// Clear the buffer and push the submitted text to history. Paste
+    /// markers expand to their content first (pi's `submitValue`), so the
+    /// model receives what the user pasted, not `[paste #1 …]`.
     pub fn submit(&mut self) -> String {
-        let text = self.text();
+        let text = expand_paste_markers(&self.text(), &self.pastes);
         if !text.trim().is_empty() {
             self.history.push(text.clone());
         }
@@ -139,6 +182,7 @@ impl Editor {
         self.cursor_line = 0;
         self.cursor_col = 0;
         self.history_index = None;
+        self.pastes.clear();
         self.clear_suggestions();
         text
     }
@@ -598,8 +642,10 @@ impl Editor {
                 self.newline();
                 return EditorEvent::Changed;
             }
-            let text = self.text();
-            self.submit();
+            // `submit` returns the expanded text (its paste markers become
+            // their content) and resets the buffer; use its value rather
+            // than reading the buffer first, which would keep a marker.
+            let text = self.submit();
             return EditorEvent::Submitted(text);
         }
         if kb.matches(data, "tui.input.tab") {
@@ -785,7 +831,7 @@ impl Editor {
             };
             // Determine the visual row/col of the cursor on this line.
             let mut col_tracker = 0usize;
-            for (vi, visual) in wrapped.iter().enumerate() {
+            for visual in &wrapped {
                 let mut rendered = visual.clone();
                 if li == self.cursor_line && !cursor_placed {
                     let target = self.cursor_col;
@@ -802,7 +848,6 @@ impl Editor {
                     col_tracker += visual.chars().count();
                 }
                 out.push(rendered);
-                let _ = vi;
             }
             if li == self.cursor_line
                 && !cursor_placed

@@ -191,6 +191,61 @@ fn large_paste_becomes_a_marker() {
     assert_eq!(e.text(), "[paste #1 +12 lines]");
 }
 
+// Verifies: FR-UI-10 - a paste marker expands to the pasted content when
+// the buffer is submitted, so the model receives the real text.
+#[test]
+fn a_large_paste_expands_on_submit() {
+    let mut e = Editor::new();
+    let big = (0..12)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    e.handle_key(&format!("\x1b[200~{big}\x1b[201~"));
+    assert_eq!(e.text(), "[paste #1 +12 lines]");
+    assert_eq!(e.submit(), big);
+    // The registry is per-buffer: the next paste starts at #1 again.
+    e.handle_key("\x1b[200~one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\x1b[201~");
+    assert_eq!(e.text(), "[paste #1 +12 lines]");
+}
+
+// Verifies: FR-UI-10 - the real Enter path (`handle_key` -> `on_submit`)
+// expands the marker too, not just the `submit` method.
+#[test]
+fn the_enter_key_path_expands_a_large_paste() {
+    let mut e = Editor::new();
+    let big = (0..12)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    e.handle_key(&format!("\x1b[200~{big}\x1b[201~"));
+    match e.handle_key("\r") {
+        EditorEvent::Submitted(text) => assert_eq!(text, big),
+        other => panic!("expected Submitted, got {other:?}"),
+    }
+}
+
+// Verifies: FR-UI-10 - the external-editor view expands without mutating
+// the buffer (pi's `getExpandedText`).
+#[test]
+fn expanded_text_expands_without_clearing() {
+    let mut e = Editor::new();
+    let big = (0..12)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    e.handle_key(&format!("\x1b[200~{big}\x1b[201~"));
+    assert_eq!(e.expanded_text(), big);
+    assert_eq!(e.text(), "[paste #1 +12 lines]");
+}
+
+// Verifies: FR-UI-10 - a hand-typed marker shape with no entry stays literal.
+#[test]
+fn an_unknown_paste_marker_stays_literal() {
+    let mut e = Editor::new();
+    e.insert_str("see [paste #9 +3 lines] and [paste #abc]");
+    assert_eq!(e.submit(), "see [paste #9 +3 lines] and [paste #abc]");
+}
+
 #[test]
 fn a_long_single_line_paste_becomes_a_chars_marker() {
     let mut e = Editor::new();

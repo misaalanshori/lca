@@ -328,15 +328,21 @@ pub fn load(
     scheme: Option<lca_tui::engine::colors::ColorScheme>,
     dir: &Path,
 ) -> (Theme, Option<String>) {
-    let base = match setting {
+    // A built-in name resolves directly; only an unknown name is a custom
+    // theme file to look up. F2: these arms used to fall through to the
+    // file lookup, so `ui.theme = "dark"` printed a spurious "not found".
+    let (base, default_name) = match setting {
         "plain" => return (Theme::plain(), None),
         "auto" | "" => return (Theme::for_scheme(scheme), None),
-        "default" | "dark" => Theme::colored(),
-        "light" => Theme::light(),
-        _ => Theme::for_scheme(scheme).with_name(setting),
+        "default" | "dark" => return (Theme::colored(), None),
+        "light" => return (Theme::light(), None),
+        _ => {
+            let scheme_theme = Theme::for_scheme(scheme);
+            let default_name = scheme_theme.name.clone();
+            (scheme_theme.with_name(setting), default_name)
+        }
     };
     // A custom theme: `<dir>/<name>.<side>.toml` first, then `<name>.toml`.
-    let base_name = base.name.clone();
     let side = match scheme {
         Some(lca_tui::engine::colors::ColorScheme::Light) => "light",
         _ => "dark",
@@ -369,7 +375,7 @@ pub fn load(
     (
         base,
         Some(format!(
-            "theme `{setting}` not found in {}; using the {base_name} default",
+            "theme `{setting}` not found in {}; using the {default_name} default",
             dir.display(),
         )),
     )
@@ -502,6 +508,19 @@ mod tests {
         let t = Theme::plain();
         assert_eq!((t.role(Role::MdHeading))("h"), "h");
         assert_eq!((t.role(Role::SyntaxKeyword))("fn"), "fn");
+    }
+
+    // Verifies: F2 - a built-in theme name resolves without the custom-file
+    // "not found" notice, and an unknown name still says so.
+    #[test]
+    fn built_in_theme_names_resolve_without_a_notice() {
+        let dir = std::path::Path::new("/nonexistent-theme-dir");
+        assert!(load("dark", None, dir).1.is_none());
+        assert!(load("light", None, dir).1.is_none());
+        assert!(load("plain", None, dir).1.is_none());
+        assert!(load("auto", None, dir).1.is_none());
+        let notice = load("nope", None, dir).1.expect("unknown name reports");
+        assert!(notice.contains("not found"), "{notice}");
     }
 
     #[test]

@@ -217,7 +217,7 @@ fn handle_input(
         }
         Action::ExternalEditor => {
             if let Some(editor) = chat.world.options.hooks.external_editor.clone() {
-                let text = chat.editor.text();
+                let text = chat.editor.expanded_text();
                 screen.leave(terminal, true);
                 terminal.stop();
                 let edited = editor(&text);

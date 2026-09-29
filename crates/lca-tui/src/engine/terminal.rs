@@ -334,6 +334,18 @@ impl Terminal for ProcessTerminal {
     }
 }
 
+impl Drop for ProcessTerminal {
+    /// A panic that unwinds past the interactive loop skips the renderer's
+    /// `leave` and the explicit `stop`, leaving the terminal in the alt
+    /// screen with mouse tracking on and raw mode set (pi's `uncaughtCrash`).
+    /// Restore it defensively here; every write is harmless when the state
+    /// is already restored, so the normal exit path only pays a few bytes.
+    fn drop(&mut self) {
+        self.stop();
+        self.raw_write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?7h\x1b[?25h");
+    }
+}
+
 fn resolve_write_log() -> Option<PathBuf> {
     let env = std::env::var_os("PI_TUI_WRITE_LOG")?;
     if env.is_empty() {

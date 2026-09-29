@@ -7,7 +7,7 @@
 //! entries rendered to styled lines, updated incrementally as a turn
 //! streams, and the renderer repaints only what changed.
 
-use lca_tui::engine::text::{truncate_to_width, visible_width, wrap_text_with_ansi};
+use lca_tui::engine::text::{truncate_to_width, wrap_text_with_ansi};
 use lca_tui::widgets::image::{ImageInfo, render_image};
 use lca_tui::widgets::markdown::{LinkMode, MarkdownOptions, render_markdown};
 
@@ -594,7 +594,6 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
             ));
         }
     }
-    let _ = visible_width("");
 }
 
 /// The collapsed preview line count for a tool, from pi's per-tool
