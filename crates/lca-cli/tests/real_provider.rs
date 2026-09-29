@@ -56,7 +56,7 @@ fn opencode_go_completes_one_turn() {
         std::env::set_var("XDG_DATA_HOME", &data);
         std::env::set_var("XDG_CONFIG_HOME", &config);
         std::env::set_var("OPENAI_BASE_URL", "https://opencode.ai/zen/go/v1");
-        std::env::set_var("OPENAI_MODEL", "deepseek-v4-flash");
+        std::env::set_var("OPENAI_MODEL", "deepseek-v4.1-flash");
         std::env::remove_var("OPENAI_API_KEY");
     }
 
