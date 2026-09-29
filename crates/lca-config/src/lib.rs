@@ -139,6 +139,11 @@ pub struct Config {
     sources: BTreeMap<String, MergeSource>,
 }
 
+/// The default `tool.max_iterations` (docs/configuration.md): a runaway
+/// guard, not a work cap. `lca-core::AgentConfig::default` must agree with
+/// this value; the consistency test in `lca-cli` enforces it.
+pub const DEFAULT_TOOL_MAX_ITERATIONS: u64 = 100;
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -151,7 +156,7 @@ impl Default for Config {
             // 100, not 50: a multi-file build-and-test turn routinely
             // exceeds 50 tool rounds; the limit is a runaway guard, not a
             // work cap. Tunable via `tool.max_iterations`.
-            tool_max_iterations: 100,
+            tool_max_iterations: DEFAULT_TOOL_MAX_ITERATIONS,
             cache_noise_floor_tokens: 1024,
             extensions_log_limit_bytes: 4096,
             update_check: None,

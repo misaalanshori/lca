@@ -131,3 +131,16 @@ fn headless_defaults_the_update_check_off() {
     assert!(!config.update_check(true), "headless default is off");
     assert!(config.update_check(false), "interactive default is on");
 }
+
+// The core default and the configuration default must agree: a consumer
+// building `AgentConfig` directly (the embedding SDK path) gets the same
+// `tool.max_iterations` cap the configuration doc and `lca-config`
+// document. Drift here is invisible to every behavior test, so the two
+// crates' defaults are compared directly.
+#[test]
+fn the_core_default_and_the_config_default_agree() {
+    assert_eq!(
+        u64::from(lca_core::AgentConfig::default().max_iterations),
+        lca_config::DEFAULT_TOOL_MAX_ITERATIONS
+    );
+}

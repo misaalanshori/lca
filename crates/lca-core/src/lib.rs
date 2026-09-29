@@ -138,7 +138,13 @@ impl Default for AgentConfig {
             reasoning_effort: None,
             retry_limit: 3,
             retry_base_delay: Duration::from_millis(250),
-            max_iterations: 50,
+            // 100, matching `lca-config`'s `DEFAULT_TOOL_MAX_ITERATIONS`
+            // (docs/configuration.md's `tool.max_iterations` row). The two
+            // crates must not drift: a consumer building `AgentConfig`
+            // directly (the embedding SDK path) would silently get a
+            // different cap otherwise. The consistency test lives in
+            // `lca-cli`'s unit tests.
+            max_iterations: 100,
             system_prompt:
                 "You are LCA, a coding agent. Use the tools to read, write, edit, search, \
                  and run commands in the user's workspace."
