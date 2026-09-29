@@ -302,17 +302,24 @@ fn the_picker_moves_to_a_local_preset_that_needs_no_key() {
     session.send(&["/login", "Enter"]);
     session.wait_for("Sign in with", std::time::Duration::from_secs(15));
     // The list is longer than the box, so it scrolls; walk down until the
-    // hint names a local host rather than counting rows.
+    // hint names a local host rather than counting rows. CI runners are
+    // slow and can drop a redraw behind the capture, so each step gets a
+    // short poll window before the next one.
     let mut reached = false;
-    for _ in 0..24 {
+    'walk: for _ in 0..30 {
         session.send(&["Down"]);
-        std::thread::sleep(std::time::Duration::from_millis(120));
-        if session.capture().contains("localhost") {
-            reached = true;
-            break;
+        for _ in 0..4 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if session.capture().contains("localhost") {
+                reached = true;
+                break 'walk;
+            }
         }
     }
     assert!(reached, "the walk reached a local preset");
+    // The selection is on the local preset now; let the redraw settle so
+    // the Enter below lands on the chosen row.
+    std::thread::sleep(std::time::Duration::from_millis(300));
     // A local preset has no key step: Enter signs in without one.
     session.send(&["Enter"]);
     std::thread::sleep(std::time::Duration::from_millis(600));
