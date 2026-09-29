@@ -119,8 +119,9 @@ permanent console leg.
   handles were not invalidated, so every child was born on a fresh default
   console and the output pipe stayed empty. Fixed. Rendering on ConPTY then
   exposed a second, independent defect: `/exit` hung joining a reader
-  blocked in `ReadFile` (`wait_stdin` never timed out); fixed with
-  `WaitForSingleObject` plus `CancelSynchronousIo` before the join. All
+  blocked in `ReadFile` (`wait_stdin` never timed out); fixed by making the
+  wait key-event-aware (`PeekConsoleInputW`, non-key records consumed) plus
+  a `CancelSynchronousIo` retry before the join. All
   five tests green on the real console *and* on the hosted `windows-latest`
   leg, so exit criterion (a) is met with no self-hosted runner, and the
   ledger is closed (`docs/platform-notes.md`). Regressions 35-37.

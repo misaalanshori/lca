@@ -16,8 +16,9 @@ Dates are UTC.
   either.
 - **`/exit` no longer hangs on Windows.** The input reader could not be
   interrupted out of a blocking `ReadFile`, so shutdown hung joining it;
-  `wait_stdin` now times out and `CancelSynchronousIo` unblocks the read
-  before the join.
+  `wait_stdin` now reports readable only for a real key event (non-key
+  console records are consumed) and `CancelSynchronousIo` unblocks the
+  read before the join.
 - **The `\\?\` verbatim path prefix no longer appears in displayed paths**
   (the session-start notice showed it).
 
