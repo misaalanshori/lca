@@ -97,6 +97,10 @@ unicode-segmentation = "1.13"
 # name it without a second version.
 regex = "1"
 ipnet = "2"
+# toml_edit - comment-preserving edits to the user config file from the
+# `/theme` and `/thinking` pickers (E2). Already in the dependency graph
+# through `toml`; this is a direct edge, not a new crate.
+toml_edit = "0.22"
 toml = "0.8"
 wasmtime = { version = "49.0.0", default-features = false, features = [
     "component-model",

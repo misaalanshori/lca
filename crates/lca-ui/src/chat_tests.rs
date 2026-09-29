@@ -449,6 +449,28 @@ fn theme_picker_previews_and_restores() {
     assert_eq!(chat.theme_name, original);
 }
 
+// Verifies: E3 - every picker overlay carries the shared hint row, so a
+// swallowed slash command is no longer a surprise.
+#[test]
+fn pickers_show_the_hint_row() {
+    let mut chat = chat();
+    for c in "/theme".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    let viewport = strip(&chat.viewport(100, 30, 0)).join("\n");
+    assert!(viewport.contains("enter apply"), "{viewport}");
+    assert!(viewport.contains("esc restore"), "{viewport}");
+    chat.handle_key("\x1b"); // close
+
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    let viewport = strip(&chat.viewport(100, 30, 0)).join("\n");
+    assert!(viewport.contains("type to filter"), "{viewport}");
+}
+
 // Verifies: R10 - the detected scheme sets the auto theme until an explicit
 // pick wins.
 #[test]
@@ -490,6 +512,61 @@ fn thinking_picker_sets_the_level() {
         text.contains("\u{2022} off"),
         "footer shows the level:\n{text}"
     );
+}
+
+// Verifies: E2 - the `/thinking` pick persists to the config file, and
+// `unset` removes the key.
+#[test]
+fn thinking_pick_persists_to_config() {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    let mut options = options();
+    options.hooks.persist_setting = Some(Arc::new(move |key: &str, value: Option<String>| {
+        sink.lock().unwrap().push((key.to_string(), value));
+    }));
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    for c in "/thinking".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    chat.handle_key("j"); // move to `off`
+    chat.handle_key("\r");
+    assert_eq!(
+        seen.lock().unwrap().last().unwrap(),
+        &("thinking".to_string(), Some("off".to_string()))
+    );
+    // Re-open and choose unset (row 0): the key is removed.
+    for c in "/thinking".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    chat.handle_key("k"); // back up to unset
+    chat.handle_key("\r");
+    assert_eq!(
+        seen.lock().unwrap().last().unwrap(),
+        &("thinking".to_string(), None)
+    );
+}
+
+// Verifies: E2 - a committed `/theme` pick persists to the config file.
+#[test]
+fn theme_pick_persists_to_config() {
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    let sink = seen.clone();
+    let mut options = options();
+    options.hooks.persist_setting = Some(Arc::new(move |key: &str, value: Option<String>| {
+        *sink.lock().unwrap() = Some((key.to_string(), value));
+    }));
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    for c in "/theme".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    chat.handle_key("\r"); // commit the highlighted row
+    let seen = seen.lock().unwrap();
+    let (key, value) = seen.as_ref().unwrap();
+    assert_eq!(key, "ui.theme");
+    assert!(value.is_some());
 }
 
 // Verifies: R2 - `/resume` opens a searchable session list and reports the

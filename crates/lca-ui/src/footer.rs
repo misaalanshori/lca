@@ -126,6 +126,9 @@ impl Footer {
             let pct =
                 (self.context_used as f64 / self.context_window as f64 * 100.0).round() as u64;
             let _ = write!(stats, " • ctx {pct}%");
+        } else {
+            // E4: no known window is an honest unknown, never `0%`.
+            stats.push_str(" • ctx ?");
         }
         lines.push(truncate_to_width(
             &(theme.footer)(&stats),
@@ -220,6 +223,21 @@ mod tests {
         assert!(out[1].contains("90%"));
         assert!(out[1].contains("$0.5000"));
         assert!(out[1].contains("ctx 25%"));
+    }
+
+    // Verifies: FR-UI-20 (E4) - an unknown context window reads `ctx ?`,
+    // never a fabricated `0%`.
+    #[test]
+    fn stats_line_reports_an_unknown_context_window() {
+        let f = Footer {
+            model: "p/m".into(),
+            context_window: 0,
+            context_used: 0,
+            ..Default::default()
+        };
+        let out = strip(&f.render(120, &Theme::plain()));
+        assert!(out[1].contains("ctx ?"), "{}", out[1]);
+        assert!(!out[1].contains("ctx 0%"), "{}", out[1]);
     }
 
     #[test]

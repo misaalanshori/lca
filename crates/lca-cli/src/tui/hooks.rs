@@ -117,6 +117,7 @@ impl Ui {
             run_shell: Some(self.shell_runner()),
             external_editor: Some(Arc::new(external_editor)),
             persist_screen_mode: Some(Arc::new(persist_screen_mode)),
+            persist_setting: Some(Arc::new(persist_ui_setting)),
             session_tree: Some(self.session_tree()),
             session_list: Some(self.session_list()),
             switch_session: Some(self.switch_session()),
@@ -399,6 +400,14 @@ fn external_editor(text: &str) -> Option<String> {
     let edited = std::fs::read_to_string(&path).ok();
     let _ = std::fs::remove_file(&path);
     status.success().then_some(edited).flatten()
+}
+
+/// Persist a `/theme`/`/thinking` pick to the config file (E2); a write
+/// failure is a warning the user can still act on, never a crash.
+fn persist_ui_setting(key: &str, value: Option<String>) {
+    if let Err(err) = crate::persist_setting(key, value.as_deref()) {
+        tracing::warn!("could not persist {key}: {err}");
+    }
 }
 
 /// Persist the screen mode across runs (FR-UI-21).

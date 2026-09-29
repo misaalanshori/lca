@@ -6,6 +6,32 @@ use super::render::{overlay_box, side_panel};
 use super::state::widget_lines;
 use crate::chat_pickers::THINKING_LEVELS;
 
+// E3: a picker owns the keyboard while open, so a slash command typed into
+// one lands in its search box. The shared hint row says what the keys do,
+// per picker, instead of leaving that surprising. Every picker overlay is
+// composed through [`picker_overlay`], so a new picker gets the row too.
+const HINT_MOVE: &str = "↑↓ move · enter apply · esc close";
+const HINT_FILTER: &str = "↑↓ move · enter apply · esc close · type to filter";
+const HINT_TREE: &str = "↑↓ move · enter show · esc close";
+const HINT_GRANTS: &str = "↑↓ move · enter revoke · esc close";
+const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
+const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
+
+/// Compose one picker overlay: the body plus its hint row (E3).
+fn picker_overlay(
+    viewport: &mut [String],
+    width: u16,
+    height: u16,
+    title: &str,
+    body: &[String],
+    hint: &str,
+) {
+    let mut body = body.to_vec();
+    body.push(String::new());
+    body.push(hint.to_string());
+    overlay_box(viewport, width, height, title, &body);
+}
+
 impl Chat {
     /// Composite the modals and the side panel over the viewport.
     pub(super) fn compose_overlays(&self, viewport: &mut [String], width: u16, height: u16) {
@@ -45,9 +71,7 @@ impl Chat {
                 let cur = if index == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {label}"));
             }
-            body.push(String::new());
-            body.push("Up/Down moves; Enter shows the resume command; Esc closes.".to_string());
-            overlay_box(viewport, width, height, "tree", &body);
+            picker_overlay(viewport, width, height, "tree", &body, HINT_TREE);
             return true;
         }
         if let Some(picker) = &self.resume_picker {
@@ -63,12 +87,7 @@ impl Chat {
                     entry.title, entry.messages, entry.age
                 ));
             }
-            body.push(String::new());
-            body.push(
-                "Type to search (re:/…/, \"phrase\"); Enter shows the resume command; Esc closes."
-                    .to_string(),
-            );
-            overlay_box(viewport, width, height, "resume", &body);
+            picker_overlay(viewport, width, height, "resume", &body, HINT_FILTER);
             return true;
         }
         if let Some(picker) = &self.grants_picker {
@@ -89,9 +108,7 @@ impl Chat {
                 let cur = if index == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {} - {}", entry.subject, entry.detail));
             }
-            body.push(String::new());
-            body.push("Up/Down move; Enter revokes an ad hoc grant; Esc closes.".to_string());
-            overlay_box(viewport, width, height, "grants", &body);
+            picker_overlay(viewport, width, height, "grants", &body, HINT_GRANTS);
             return true;
         }
         if let Some(picker) = &self.theme_picker {
@@ -105,9 +122,7 @@ impl Chat {
                 };
                 body.push(format!(" {cur} {name}{current}"));
             }
-            body.push(String::new());
-            body.push("Up/Down previews; Enter applies; Esc restores.".to_string());
-            overlay_box(viewport, width, height, "theme", &body);
+            picker_overlay(viewport, width, height, "theme", &body, HINT_THEME);
             return true;
         }
         if let Some(picker) = &self.thinking_picker {
@@ -126,9 +141,7 @@ impl Chat {
                 };
                 body.push(format!(" {mark} {name:<8} {description}{current_mark}"));
             }
-            body.push(String::new());
-            body.push("Up/Down moves; Enter applies; Esc closes.".to_string());
-            overlay_box(viewport, width, height, "thinking", &body);
+            picker_overlay(viewport, width, height, "thinking", &body, HINT_MOVE);
             return true;
         }
         if let Some(picker) = &self.model_picker {
@@ -147,9 +160,7 @@ impl Chat {
                 };
                 body.push(format!(" {cur} {model}{mark}"));
             }
-            body.push(String::new());
-            body.push("Type to search; Enter selects; Esc closes.".to_string());
-            overlay_box(viewport, width, height, "model", &body);
+            picker_overlay(viewport, width, height, "model", &body, HINT_FILTER);
             return true;
         }
         false
@@ -177,9 +188,7 @@ impl Chat {
             if start > 0 || end < total {
                 body.push(format!("   [{}/{}]", picker.selected + 1, total));
             }
-            body.push(String::new());
-            body.push("Up/Down moves; Enter chooses; Esc cancels.".to_string());
-            overlay_box(viewport, width, height, "login", &body);
+            picker_overlay(viewport, width, height, "login", &body, HINT_LOGIN);
         } else if let Some(grant) = &self.world.grant {
             let body = vec![
                 grant.prompt.clone(),

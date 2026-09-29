@@ -282,6 +282,20 @@ pub(crate) fn openai_ad_hoc_host(data: &Path) -> Option<String> {
     ad_hoc_host_from_authority(rest)
 }
 
+/// The preset id a provider's login last stored (E5), so the footer names
+/// `opencode-go` rather than the extension. `None` for a provider set up
+/// directly (env vars, a custom endpoint) that never chose a preset.
+pub(crate) fn stored_provider_preset(data: &Path, provider: &str) -> Option<String> {
+    let path = data.join("credentials").join(format!("{provider}.json"));
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value
+        .get("preset")
+        .and_then(|preset| preset.as_str())
+        .filter(|preset| !preset.is_empty())
+        .map(str::to_string)
+}
+
 /// The host in a URL authority, or `None` when it is the default endpoint.
 pub(crate) fn ad_hoc_host_from_authority(rest: &str) -> Option<String> {
     let authority = rest.split('/').next().unwrap_or("");
@@ -522,6 +536,53 @@ pub fn config_dir() -> PathBuf {
 /// The user configuration file path for this platform.
 pub fn config_file() -> PathBuf {
     config_dir().join("lca/config.toml")
+}
+
+/// Persist one setting to the user config file (`<config dir>/lca/config.toml`),
+/// preserving every other key and its comments. `None` removes the key, which
+/// is how the `/thinking` picker's `unset` is written. This is the write path
+/// the `/theme` and `/thinking` pickers share (E2); `ui.fullscreen` keeps its
+/// separate `ui.json` state file so a toggle still never rewrites user config.
+pub fn persist_setting(key: &str, value: Option<&str>) -> std::io::Result<()> {
+    persist_setting_at(&config_file(), key, value)
+}
+
+/// [`persist_setting`] against an explicit path (the testable half).
+fn persist_setting_at(
+    path: &std::path::Path,
+    key: &str,
+    value: Option<&str>,
+) -> std::io::Result<()> {
+    use toml_edit::{DocumentMut, value as toml_value};
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut doc = text
+        .parse::<DocumentMut>()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
+    let mut parts = key.splitn(2, '.');
+    let head = parts.next().unwrap_or(key);
+    match parts.next() {
+        None => match value {
+            Some(value) => doc[head] = toml_value(value),
+            None => {
+                doc.as_table_mut().remove(head);
+            }
+        },
+        Some(tail) => match value {
+            Some(value) => doc[head][tail] = toml_value(value),
+            None => {
+                if let Some(table) = doc[head].as_table_mut() {
+                    table.remove(tail);
+                }
+            }
+        },
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Atomic publish: a sibling temp file, renamed over the target.
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, doc.to_string())?;
+    std::fs::rename(&tmp, path)
 }
 
 /// Load merged configuration for `cwd`, honoring project-file trust
@@ -918,6 +979,71 @@ mod tests {
         assert!(
             reloaded.net_patterns(&project_b).is_empty(),
             "the grant never leaks to another project"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: E2 - a persisted `/thinking` value survives a reload (the
+    // restart agreement) and the writer preserves other keys and comments;
+    // `None` removes the key.
+    #[test]
+    fn persist_setting_round_trips_and_removes() {
+        let root = lca_testkit::scratch_path("lca-persist-setting");
+        let path = root.join("config.toml");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        std::fs::write(&path, "# a comment\nprovider = \"x\"\n").expect("seed");
+        persist_setting_at(&path, "thinking", Some("high")).expect("write");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("# a comment"), "comments survive: {text}");
+        assert!(text.contains("provider = \"x\""), "keys survive: {text}");
+        let input = lca_config::LoadInput {
+            user_file: Some(path.clone()),
+            ..Default::default()
+        };
+        let loaded = lca_config::Config::load(&input).expect("load");
+        assert_eq!(loaded.thinking(), Some("high"));
+        persist_setting_at(&path, "thinking", None).expect("remove");
+        let input = lca_config::LoadInput {
+            user_file: Some(path.clone()),
+            ..Default::default()
+        };
+        assert_eq!(
+            lca_config::Config::load(&input).expect("load").thinking(),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: E5 - the login preset id is readable after a restart, so the
+    // footer names `opencode-go` rather than the extension.
+    #[test]
+    fn stored_provider_preset_reads_the_persisted_id() {
+        let root = lca_testkit::scratch_path("lca-provider-preset");
+        store_provider_secret(&root, &root, "openai-compatible", "preset", "opencode-go")
+            .expect("store");
+        assert_eq!(
+            stored_provider_preset(&root, "openai-compatible").as_deref(),
+            Some("opencode-go")
+        );
+        assert_eq!(stored_provider_preset(&root, "other"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: E2 - a nested `ui.theme` write lands in section form and
+    // round-trips through the loader.
+    #[test]
+    fn persist_setting_writes_a_nested_key() {
+        let root = lca_testkit::scratch_path("lca-persist-theme");
+        let path = root.join("config.toml");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        persist_setting_at(&path, "ui.theme", Some("light")).expect("write");
+        let input = lca_config::LoadInput {
+            user_file: Some(path.clone()),
+            ..Default::default()
+        };
+        assert_eq!(
+            lca_config::Config::load(&input).expect("load").ui_theme(),
+            Some("light")
         );
         let _ = std::fs::remove_dir_all(&root);
     }

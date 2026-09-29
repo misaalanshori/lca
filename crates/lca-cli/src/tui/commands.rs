@@ -103,14 +103,15 @@ impl Ui {
                     }
                 }
             }
-            // R9: the settings view over the real `lca-config` keys.
+            // R9 + E2: the settings view over the real `lca-config` keys,
+            // with the session's live thinking value overriding the file's.
             "settings" => {
-                let mut text =
-                    String::from("settings (key = value [source]; run /grants for permissions):\n");
-                for (key, value, source) in self.config.resolved() {
-                    text.push_str(&format!("  {key} = {value} [{source}]\n"));
-                }
-                CommandEffect::ShowWidget(text)
+                let live = self
+                    .thinking_cell
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                CommandEffect::ShowWidget(settings_text(&self.config, live.as_deref()))
             }
             // The stats story (FR-UI-19): the same numbers the footer
             // accumulates, with per-model cost and cache waste.
@@ -172,9 +173,15 @@ impl Ui {
     /// footer window, and the compaction backend together.
     fn command_model(&self, argument: &str) -> CommandEffect {
         let models = self.provider.list_models();
+        // E5: the label keeps the preset identity across a model switch.
+        let identity = self
+            .identity_cell
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
         let effect = model_effect_on(
             &models,
-            &self.provider_name,
+            &identity,
             argument,
             Some(&self.model_cell),
             Some(&self.label_cell),
@@ -198,5 +205,82 @@ impl Ui {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone()
+    }
+}
+
+/// The `/settings` text (E2): every resolved key with its source, with the
+/// session's live thinking value overriding the file's. The live value is
+/// labeled `session`; with neither a session pick nor a file value the row
+/// reads `unset (provider default) [default]`.
+fn settings_text(config: &lca_config::Config, live_thinking: Option<&str>) -> String {
+    let configured = config.thinking();
+    let mut text = String::from("settings (key = value [source]; run /grants for permissions):\n");
+    for (key, value, source) in config.resolved() {
+        if key == "thinking" {
+            if live_thinking != configured {
+                match live_thinking {
+                    Some(level) => {
+                        text.push_str(&format!("  thinking = {level} [session]\n"));
+                        continue;
+                    }
+                    None => {
+                        text.push_str("  thinking = unset (provider default) [session]\n");
+                        continue;
+                    }
+                }
+            }
+            if live_thinking.is_none() {
+                text.push_str("  thinking = unset (provider default) [default]\n");
+                continue;
+            }
+        }
+        text.push_str(&format!("  {key} = {value} [{source}]\n"));
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::settings_text;
+    use lca_config::{Config, LoadInput};
+
+    fn config_with(name: &str, text: &str) -> Config {
+        let dir = lca_testkit::scratch_path(name);
+        let path = dir.join("config.toml");
+        std::fs::write(&path, text).expect("seed config");
+        let input = LoadInput {
+            user_file: Some(path),
+            ..Default::default()
+        };
+        Config::load(&input).expect("load")
+    }
+
+    // Verifies: E2 - `/settings` labels the session's live thinking pick.
+    #[test]
+    fn settings_label_the_session_thinking_pick() {
+        let config = config_with("lca-settings-live", "");
+        let text = settings_text(&config, Some("high"));
+        assert!(text.contains("thinking = high [session]"), "{text}");
+    }
+
+    // Verifies: E2 - with no pick and no file value, the row is the honest
+    // `unset (provider default)`.
+    #[test]
+    fn settings_show_unset_thinking() {
+        let config = config_with("lca-settings-unset", "");
+        let text = settings_text(&config, None);
+        assert!(
+            text.contains("thinking = unset (provider default) [default]"),
+            "{text}"
+        );
+    }
+
+    // Verifies: E2 - once the file carries the value (a restart), the row
+    // reads it from the file and agrees with the live cell.
+    #[test]
+    fn settings_agree_after_a_restart() {
+        let config = config_with("lca-settings-restart", "thinking = \"high\"\n");
+        let text = settings_text(&config, Some("high"));
+        assert!(text.contains("thinking = high [user file]"), "{text}");
     }
 }

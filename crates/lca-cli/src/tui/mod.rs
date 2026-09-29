@@ -73,6 +73,10 @@ pub(crate) struct Ui {
     model_cell: Arc<Mutex<ModelChoice>>,
     /// The status-line label cell.
     label_cell: Arc<Mutex<String>>,
+    /// The display identity (E5): the login preset when one is known
+    /// (`opencode-go`), else the extension name. `/model` reads it so a
+    /// switch keeps the preset label.
+    identity_cell: Arc<Mutex<String>>,
     /// The live context window (FR-UI-20).
     context_window_cell: Arc<Mutex<u64>>,
     /// The live thinking level (R1).
@@ -131,11 +135,13 @@ struct Cells {
     label: Arc<Mutex<String>>,
     context_window: Arc<Mutex<u64>>,
     thinking: Arc<Mutex<Option<String>>>,
+    identity: Arc<Mutex<String>>,
 }
 
-/// Build the live cells from the resolved model (FR-UI-20, R1).
+/// Build the live cells from the resolved model (FR-UI-20, R1). `identity`
+/// is the preset id when the login stored one, else the extension name (E5).
 fn live_cells(
-    provider_name: &str,
+    identity: &str,
     model_id: &str,
     context_window: u32,
     thinking: Option<String>,
@@ -148,10 +154,11 @@ fn live_cells(
         label: Arc::new(Mutex::new(if model_id.is_empty() {
             String::new()
         } else {
-            format!("{provider_name}/{model_id}")
+            format!("{identity}/{model_id}")
         })),
         context_window: Arc::new(Mutex::new(u64::from(context_window))),
         thinking: Arc::new(Mutex::new(thinking)),
+        identity: Arc::new(Mutex::new(identity.to_string())),
     }
 }
 
@@ -294,8 +301,11 @@ impl Ui {
         let render_regions = region_renderer(registry.clone());
         let ui_events = region_interactor(registry.clone());
 
+        // E5: name the login preset when one was stored, else the extension.
+        let identity = crate::stored_provider_preset(&data, &provider_name)
+            .unwrap_or_else(|| provider_name.clone());
         let cells = live_cells(
-            &provider_name,
+            &identity,
             &model_id,
             context_window,
             config.thinking().map(str::to_string),
@@ -322,6 +332,7 @@ impl Ui {
             settings_cell,
             model_cell: cells.model,
             label_cell: cells.label,
+            identity_cell: cells.identity,
             context_window_cell: cells.context_window,
             thinking_cell: cells.thinking,
             provider_backend,
@@ -626,6 +637,17 @@ fn region_interactor(registry: Arc<ExtensionRegistry>) -> Option<RegionInteracto
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Verifies: E5 - the status label names the preset identity, not the
+    // extension, when the login stored one.
+    #[test]
+    fn live_cells_label_the_preset_identity() {
+        let cells = live_cells("opencode-go", "deepseek-v4.1-flash", 0, None);
+        assert_eq!(
+            *cells.label.lock().unwrap(),
+            "opencode-go/deepseek-v4.1-flash"
+        );
+    }
 
     // SRDD's interface section: the built-in slots, of which the five
     // spec-named ones live in this list alongside `/attach`, and /stats

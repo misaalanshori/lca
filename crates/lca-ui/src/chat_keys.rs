@@ -76,6 +76,11 @@ impl Chat {
                 Some("enter") => {
                     if let Some(name) = self.theme_names.get(picker.selected).cloned() {
                         self.set_theme(&name);
+                        // E2: the committed pick persists to the config file,
+                        // the same write path `/thinking` uses.
+                        if let Some(persist) = &self.world.options.hooks.persist_setting {
+                            persist("ui.theme", Some(name));
+                        }
                     }
                 }
                 Some("up") | Some("k") => {
@@ -110,6 +115,11 @@ impl Chat {
                         .thinking
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner()) = level.clone();
+                    // E2: persist the pick to the config file (`unset` removes
+                    // the key), so `/settings` and the next process agree.
+                    if let Some(persist) = &self.world.options.hooks.persist_setting {
+                        persist("thinking", level.clone());
+                    }
                     self.world.notice = Some(match level {
                         Some(level) => format!("thinking: {level}"),
                         None => "thinking: provider default".to_string(),

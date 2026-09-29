@@ -324,6 +324,9 @@ pub type ShellRunner =
 pub type ExternalEditor = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 /// Persists a runtime screen-mode change.
 pub type ScreenModePersist = Arc<dyn Fn(bool) + Send + Sync>;
+/// Persists a runtime setting choice (`ui.theme`, `thinking`) to the config
+/// file (E2); `None` removes the key, and is how `unset` is written.
+pub type SettingPersist = Arc<dyn Fn(&str, Option<String>) + Send + Sync>;
 /// Returns the session's branch tree as `(id, label)` entries.
 pub type SessionTree = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
 /// Forks at the nth user message, returning the new branch's id.
@@ -348,6 +351,9 @@ pub struct UiHooks {
     pub external_editor: Option<ExternalEditor>,
     /// Persist a runtime screen-mode change (fullscreen = `true`).
     pub persist_screen_mode: Option<ScreenModePersist>,
+    /// Persist a runtime setting choice to the config file (E2):
+    /// `/theme` writes `ui.theme`, `/thinking` writes `thinking`.
+    pub persist_setting: Option<SettingPersist>,
     /// The session's branch tree: `(session id, display label)` entries, the
     /// current branch included (FR-UI-16).
     pub session_tree: Option<SessionTree>,

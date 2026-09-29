@@ -65,7 +65,7 @@ impl Ui {
         // The host's universal entry has no extension behind it: the values
         // themselves are the settings. A preset delegates to its extension,
         // which stores the key and returns its own settings.
-        let settings = if choice == lca_ui::CUSTOM_OPTION {
+        let mut settings = if choice == lca_ui::CUSTOM_OPTION {
             values
                 .iter()
                 .filter(|(field, _)| *field != "api-key")
@@ -83,6 +83,14 @@ impl Ui {
                 Ok(settings) => settings,
                 Err(err) => return LoginNext::Message(format!("could not sign in: {err}")),
             }
+        };
+        // E5: the footer names the preset (`opencode-go`), not the extension.
+        // A custom endpoint has no preset, so the extension name stands in.
+        let identity = if choice == lca_ui::CUSTOM_OPTION {
+            target.clone()
+        } else {
+            settings.push(("preset".to_string(), choice.clone()));
+            choice.clone()
         };
         if let Some(secret) = values.get("api-key")
             && let Err(err) =
@@ -117,7 +125,7 @@ impl Ui {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner()) = u64::from(model.context_window);
             *self.label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
-                format!("{target}/{}", model.id);
+                format!("{identity}/{}", model.id);
         }
         // A non-default endpoint needs its ad hoc `net` grant, offered now
         // that the user is signed in (FR-PERM-16).
