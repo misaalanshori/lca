@@ -117,20 +117,25 @@ impl Ui {
             cell.clear();
             cell.extend(settings.iter().cloned());
         }
-        // Light the session up now that the provider can answer.
-        if target == self.provider_name
-            && let Some(model) = self.provider.list_models().first()
-        {
-            *self.model_cell.lock().unwrap_or_else(|p| p.into_inner()) = super::ModelChoice {
-                id: model.id.clone(),
-                window: model.context_window,
-            };
-            *self
-                .context_window_cell
-                .lock()
-                .unwrap_or_else(|p| p.into_inner()) = u64::from(model.context_window);
-            *self.label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
-                format!("{identity}/{}", model.id);
+        // Light the session up now that the provider can answer. The
+        // identity cell moves with the login too (E5, the cycle-6 drive's
+        // regression): without this, a `/model` switch after a mid-session
+        // login read the stale startup identity and the footer reverted
+        // from the preset to the extension name.
+        if target == self.provider_name {
+            super::adopt_login_identity(&self.identity_cell, &identity);
+            if let Some(model) = self.provider.list_models().first() {
+                *self.model_cell.lock().unwrap_or_else(|p| p.into_inner()) = super::ModelChoice {
+                    id: model.id.clone(),
+                    window: model.context_window,
+                };
+                *self
+                    .context_window_cell
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = u64::from(model.context_window);
+                *self.label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
+                    format!("{identity}/{}", model.id);
+            }
         }
         // A non-default endpoint needs its ad hoc `net` grant, offered now
         // that the user is signed in (FR-PERM-16).

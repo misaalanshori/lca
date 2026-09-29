@@ -172,6 +172,17 @@ fn live_cells(
     }
 }
 
+/// Adopt a finished login's identity into the live cell (E5, the cycle-6
+/// drive's regression). The login updated only the label, so a later
+/// `/model` switch read the stale startup identity and the footer reverted
+/// from the login preset to the extension name. Named so the
+/// mid-session-login regression is testable without a live provider.
+fn adopt_login_identity(identity_cell: &Arc<Mutex<String>>, identity: &str) {
+    *identity_cell
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = identity.to_string();
+}
+
 /// The active model's context window, or 0 when the provider does not
 /// publish one (the threshold check then skips, FR-SESS-4).
 fn model_context_window(provider: &dyn Provider, model_id: &str) -> u32 {
@@ -660,6 +671,27 @@ mod tests {
             *cells.label.lock().unwrap(),
             "opencode-go/deepseek-v4.1-flash"
         );
+    }
+
+    // Cycle-6 drive regression: a mid-session login must move the identity
+    // cell with the preset, or a later `/model` switch reads the stale
+    // startup identity and the footer names the extension instead of the
+    // preset. The drive reproduced this after logging in on a session that
+    // started logged out.
+    #[test]
+    fn a_mid_session_login_adopts_the_preset_into_the_identity_cell() {
+        // Startup had no stored preset, so the cell held the extension.
+        let cells = live_cells("openai-compatible", "deepseek-v4.1-flash", 0, None);
+        // The login then completes on the opencode-go preset.
+        adopt_login_identity(&cells.identity, "opencode-go");
+        assert_eq!(*cells.identity.lock().unwrap(), "opencode-go");
+        // A `/model` switch keeps the preset in the footer label.
+        let label = format!(
+            "{}/{}",
+            *cells.identity.lock().unwrap(),
+            "deepseek-v4.1-flash"
+        );
+        assert_eq!(label, "opencode-go/deepseek-v4.1-flash");
     }
 
     // SRDD's interface section: the built-in slots, of which the five
