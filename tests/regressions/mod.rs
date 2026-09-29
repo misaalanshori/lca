@@ -111,3 +111,8 @@ mod ctrl_j_inserts_a_newline;
 // could overflow the decoder; headlined in 0.5.1.
 #[path = "33-osc11-hex-overflow.rs"]
 mod osc11_hex_overflow;
+// Cycle-5 dogfood defect: an iteration-limit / cancel abort left a
+// dangling tool call, poisoning the session with HTTP 400 on every later
+// turn. `assemble` now heals it.
+#[path = "34-dangling-tool-call-healed.rs"]
+mod dangling_tool_call_healed;

@@ -227,10 +227,59 @@ pub fn assemble_with(
             }
         }
     }
+    heal_dangling_tool_calls(&mut messages);
     Assembled {
         messages,
         stable_prefix,
         compaction_seen,
+    }
+}
+
+/// Give every assistant `tool_call` a matching `tool` message when the turn
+/// that requested it ended abnormally — the iteration limit (FR-CORE-9),
+/// cancellation mid-batch, or a crash. OpenAI-shaped endpoints reject a
+/// request whose history holds a tool call with no response (HTTP 400), and
+/// because the session log is append-only, that rejection would poison every
+/// later turn: the session becomes permanently unusable with an opaque
+/// "unknown error". Healing here fixes new sessions and already-poisoned
+/// ones, and is a no-op for a normal turn (every call already has a result).
+fn heal_dangling_tool_calls(messages: &mut Vec<ChatMessage>) {
+    use std::collections::HashSet;
+    let mut i = 0;
+    while i < messages.len() {
+        if messages[i].role != MessageRole::Assistant || messages[i].tool_calls.is_empty() {
+            i += 1;
+            continue;
+        }
+        // The `tool` messages that immediately follow answer some or all of
+        // this assistant's calls.
+        let mut end = i + 1;
+        let mut answered: HashSet<String> = HashSet::new();
+        while end < messages.len() && messages[end].role == MessageRole::Tool {
+            if let Some(id) = &messages[end].tool_call_id {
+                answered.insert(id.clone());
+            }
+            end += 1;
+        }
+        let missing: Vec<String> = messages[i]
+            .tool_calls
+            .iter()
+            .filter(|call| !answered.contains(&call.call_id))
+            .map(|call| call.call_id.clone())
+            .collect();
+        let mut insert_at = end;
+        for call_id in missing {
+            messages.insert(
+                insert_at,
+                ChatMessage::tool_result(
+                    call_id,
+                    "turn ended before this tool call ran (iteration limit, cancellation, or a crash)"
+                        .to_string(),
+                ),
+            );
+            insert_at += 1;
+        }
+        i = insert_at;
     }
 }
 
@@ -280,4 +329,87 @@ pub(super) fn stable_fingerprint(message: &ChatMessage) -> String {
         .map(|call| format!("{}:{}:{}", call.call_id, call.name, call.arguments))
         .collect();
     format!("{:?}|{}|{:?}", message.role, text, calls)
+}
+
+#[cfg(test)]
+mod healing_tests {
+    use super::*;
+    use lca_protocol::ToolCall;
+
+    fn assistant_with_call(call_id: &str) -> ChatMessage {
+        let mut message = ChatMessage::text(MessageRole::Assistant, "working");
+        message.tool_calls.push(ToolCall {
+            call_id: call_id.to_string(),
+            name: "shell".to_string(),
+            arguments: "{}".to_string(),
+        });
+        message.content.push(ContentBlock::ToolCall {
+            call_id: call_id.to_string(),
+            name: "shell".to_string(),
+            arguments: "{}".to_string(),
+        });
+        message
+    }
+
+    // A dangling call (the iteration-limit / cancel shape) gains a tool
+    // result, so the next request is valid.
+    #[test]
+    fn a_dangling_tool_call_is_healed() {
+        let mut messages = vec![
+            ChatMessage::text(MessageRole::User, "hi"),
+            assistant_with_call("call_1"),
+            ChatMessage::text(MessageRole::User, "next"),
+        ];
+        heal_dangling_tool_calls(&mut messages);
+        let tool = messages
+            .iter()
+            .find(|m| m.role == MessageRole::Tool)
+            .expect("a synthetic tool result");
+        assert_eq!(tool.tool_call_id.as_deref(), Some("call_1"));
+        // It sits before the next user message.
+        let tool_at = messages
+            .iter()
+            .position(|m| m.role == MessageRole::Tool)
+            .unwrap();
+        let user_at = messages
+            .iter()
+            .rposition(|m| m.role == MessageRole::User)
+            .unwrap();
+        assert!(tool_at < user_at);
+    }
+
+    // A normal turn is untouched (no extra messages, order preserved).
+    #[test]
+    fn answered_calls_are_not_touched() {
+        let mut messages = vec![
+            assistant_with_call("call_1"),
+            ChatMessage::tool_result("call_1", "ok"),
+            ChatMessage::text(MessageRole::Assistant, "done"),
+        ];
+        let before = messages.len();
+        heal_dangling_tool_calls(&mut messages);
+        assert_eq!(messages.len(), before);
+        assert_eq!(messages[1].role, MessageRole::Tool);
+    }
+
+    // One of two calls answered: only the missing one is filled.
+    #[test]
+    fn only_the_missing_call_is_filled() {
+        let mut messages = vec![
+            assistant_with_call("call_1"),
+            ChatMessage::tool_result("call_1", "ok"),
+        ];
+        messages[0].tool_calls.push(lca_protocol::ToolCall {
+            call_id: "call_2".to_string(),
+            name: "shell".to_string(),
+            arguments: "{}".to_string(),
+        });
+        heal_dangling_tool_calls(&mut messages);
+        let ids: Vec<Option<&str>> = messages
+            .iter()
+            .filter(|m| m.role == MessageRole::Tool)
+            .map(|m| m.tool_call_id.as_deref())
+            .collect();
+        assert_eq!(ids, vec![Some("call_1"), Some("call_2")]);
+    }
 }
