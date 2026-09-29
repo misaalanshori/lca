@@ -526,7 +526,11 @@ async fn shell_streams_output_while_running() {
     };
     let call = call(
         "shell",
-        serde_json::json!({"command": "printf 'one\\ntwo\\nthree\\n'"}),
+        serde_json::json!({"command": if cfg!(target_os = "windows") {
+            "echo one & echo two & echo three"
+        } else {
+            "printf 'one\\ntwo\\nthree\\n'"
+        }}),
     );
     let result = exec.execute(&call, &mut sink, &CancelFlag::new()).await;
     assert_eq!(result.status, ToolResultStatus::Ok, "{}", result.content);
@@ -584,7 +588,12 @@ async fn shell_timeout_kills_the_process_tree() {
         &mut exec,
         &call(
             "shell",
-            serde_json::json!({"command": "sleep 30 & echo started-child $!; wait"}),
+            serde_json::json!({"command": if cfg!(target_os = "windows") {
+                // A long-lived command: the timeout must stop it.
+                "ping -n 60 127.0.0.1 >nul"
+            } else {
+                "sleep 30 & echo started-child $!; wait"
+            }}),
         ),
     )
     .await;
@@ -751,7 +760,14 @@ async fn cancellation_stops_a_running_command() {
     let handle = tokio::spawn(async move {
         let mut exec = executor(&ws);
         exec.execute(
-            &call("shell", serde_json::json!({"command": "sleep 30"})),
+            &call(
+                "shell",
+                serde_json::json!({"command": if cfg!(target_os = "windows") {
+                    "ping -n 60 127.0.0.1 >nul"
+                } else {
+                    "sleep 30"
+                }}),
+            ),
             &mut |_| {},
             &flag,
         )
@@ -795,6 +811,94 @@ fn direct_spawn_runs_a_program_without_a_shell() {
     let code = child.wait().expect("wait");
     assert_eq!(code, 0);
     child.kill_tree(); // idempotent cleanup
+}
+
+// The spawn path strips a canonical (verbatim on Windows) working directory
+// before it reaches the OS: cmd.exe reads `\\?\...` as UNC and refuses it,
+// silently running in C:\Windows instead. A regression here would send every
+// child to the wrong directory on Windows and nothing else would notice.
+#[test]
+fn direct_spawn_honors_a_canonical_cwd() {
+    let ws = scratch("direct-cwd");
+    std::fs::create_dir_all(&ws).expect("mkdir");
+    let cwd = std::fs::canonicalize(&ws).expect("canonicalize");
+    let (program, args): (&str, Vec<String>) = if cfg!(windows) {
+        ("cmd", vec!["/C".into(), "cd".into()])
+    } else {
+        ("pwd", vec![])
+    };
+    let mut child = lca_tools::spawn_direct(program, &args, &cwd).expect("spawn");
+    let mut stdout = child.stdout().expect("piped");
+    let mut out = String::new();
+    std::io::Read::read_to_string(&mut stdout, &mut out).expect("read");
+    let _ = child.wait();
+    child.kill_tree();
+    assert!(
+        out.contains("direct-cwd"),
+        "the child ran in the requested cwd, not a fallback: {out:?}"
+    );
+}
+
+/// How many `ping.exe` processes are running, per `tasklist` (Windows only).
+/// Comparing against a baseline makes the check independent of any other
+/// `ping` on the machine.
+#[cfg(windows)]
+fn ping_count() -> usize {
+    match std::process::Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq ping.exe", "/NH", "/FO", "CSV"])
+        .output()
+    {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().contains("ping.exe"))
+            .count(),
+        Err(_) => 0,
+    }
+}
+
+// Verifies: FR-TOOL-5 and platform-notes' Windows orphan class - the Job
+// Object must reap a *grandchild*, not only the direct child. `spawn_direct`
+// runs `cmd /C ping`, so `ping` is a child of `cmd` (a grandchild of the test
+// process) and `cmd` blocks on it; after `kill_tree` the ping count must
+// return to its baseline. The Unix half of this guarantee is asserted in
+// `shell_timeout_kills_the_process_tree`.
+#[cfg(windows)]
+#[test]
+fn the_job_object_reaps_a_grandchild_on_windows() {
+    let ws = scratch("win-tree");
+    std::fs::create_dir_all(&ws).expect("mkdir");
+    let before = ping_count();
+    let mut child = lca_tools::spawn_direct(
+        "cmd",
+        &[
+            "/C".into(),
+            // `cmd` waits on this child, so the whole tree is alive to kill.
+            "ping -n 120 127.0.0.1 >nul".into(),
+        ],
+        &ws,
+    )
+    .expect("spawn");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while ping_count() <= before {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the grandchild ping starts"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    child.kill_tree();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while ping_count() > before {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the Job Object reaped the grandchild ping"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = std::fs::remove_dir_all(&ws);
 }
 
 // The `pty` capability's engine (ADR-0016): a program spawned under a

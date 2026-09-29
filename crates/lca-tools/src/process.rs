@@ -195,3 +195,46 @@ pub fn write_all(writer: &mut impl Write, bytes: &[u8]) -> std::io::Result<u64> 
     writer.flush()?;
     Ok(bytes.len() as u64)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{read_up_to, without_verbatim};
+    use std::path::Path;
+
+    // A regression here breaks every child spawn on Windows at once:
+    // cmd.exe reads `\\?\C:\...` as a UNC path and refuses it.
+    #[test]
+    fn without_verbatim_strips_the_windows_prefix() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                without_verbatim(Path::new(r"\\?\C:\Users\me\proj")),
+                Path::new(r"C:\Users\me\proj")
+            );
+            assert_eq!(
+                without_verbatim(Path::new(r"\\?\UNC\server\share")),
+                Path::new(r"\\server\share")
+            );
+        }
+        // A plain path is unchanged on every platform.
+        assert_eq!(
+            without_verbatim(Path::new("/home/me/proj")),
+            Path::new("/home/me/proj")
+        );
+        assert_eq!(
+            without_verbatim(Path::new(r"C:\plain")),
+            Path::new(r"C:\plain")
+        );
+    }
+
+    #[test]
+    fn read_up_to_reports_eof_and_bounds_the_read() {
+        // EOF is `None`, not an empty chunk.
+        assert_eq!(read_up_to(&mut &b""[..], 16).expect("read"), None);
+        let data = [1u8; 100];
+        let chunk = read_up_to(&mut &data[..], 4096)
+            .expect("read")
+            .expect("some");
+        assert_eq!(chunk.len(), 100);
+    }
+}
