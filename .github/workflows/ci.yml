@@ -342,3 +342,41 @@ jobs:
         run: cargo build --release -p lca-cli
       - name: Measure against the Phase 0 thresholds
         run: bash scripts/perf-gate.sh
+
+  # Gate 10 (docs/release-policy.md): the installers. Hermetic by design -
+  # fixtures plus LCA_BASE_URL / -BaseUrl, no network. The sh suite runs on
+  # Linux (inside gate 10 with shellcheck) and on macOS, where sha256sum may
+  # be absent and the Darwin mapping is real. The PowerShell suite runs on
+  # Windows under BOTH shells FR-INSTALL-9 names: Windows PowerShell 5.1 and
+  # pwsh, because PS7-only syntax would sail through a pwsh-only run.
+  install:
+    name: install (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: gate 10 (sh suite + shellcheck)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/install-check.sh
+      - name: 'install.sh suite (macOS: shasum, Darwin mapping)'
+        if: runner.os == 'macOS'
+        shell: bash
+        run: sh tests/install/test_install_sh.sh
+      # Verifies: FR-INSTALL-9 (5.1 + pwsh, SHA256, atomic replace, PATH join)
+      - name: install.ps1 suite (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          powershell -NoProfile -File tests/install/test_install_ps1.ps1
+          exit $LASTEXITCODE
+      - name: install.ps1 suite (pwsh)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/install/test_install_ps1.ps1
+          exit $LASTEXITCODE
