@@ -90,10 +90,17 @@ hash_file() { # hash_file <file>
   fi
 }
 
-# The installed binary's first version line, or nothing.
+# The installed binary's first version line, or nothing. clap prints
+# "lca 0.5.2" for --version, so the leading name is dropped once here and
+# every message downstream can say "lca <ver>" without saying it twice.
 read_version() { # read_version <binary>
   [ -x "$1" ] || return 1
-  "$1" --version 2>/dev/null | head -n 1 | tr -d '\r'
+  line=$("$1" --version 2>/dev/null | head -n 1 | tr -d '\r')
+  [ -n "$line" ] || return 1
+  case $line in
+    "lca "*) line=${line#lca } ;;
+  esac
+  printf '%s' "$line"
 }
 
 # Remove the installer's marked block, leaving every other line alone.

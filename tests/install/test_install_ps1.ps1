@@ -119,8 +119,8 @@ try {
   if ($null -eq $probe) { $script:HasRegistry = $false } else { $probe.Close() }
 } catch { $script:HasRegistry = $false }
 
-function Skip([string]$Message) {
-  Write-Host "# SKIP $Message (named skip: no user registry on this host)"
+function Skip([string]$Message, [string]$Reason = 'no user registry on this host') {
+  Write-Host "# SKIP $Message (named skip: $Reason)"
 }
 
 $ErrorActionPreference = 'Stop'
@@ -247,6 +247,19 @@ try {
   try { $null = Get-AssetName -Arch 'sparc' } catch { $unsupported = 'unsupported' }
   Assert ($unsupported -eq 'unsupported') 'asset map: an unknown arch is not silently mapped'
   Pass 'the platform map names the right asset and refuses an unknown arch'
+
+  # Read-Version must drop the leading "lca " clap prints exactly once: a
+  # real one-liner run echoed "installed lca lca 0.5.2" before this guard.
+  if ($env:WINDIR) {
+    $fake = Join-Path ([IO.Path]::GetTempPath()) ('lca-fake-' + [Guid]::NewGuid().ToString('N') + '.cmd')
+    Set-Content -LiteralPath $fake -Value '@echo lca 9.9.9' -Encoding Ascii
+    $reported = Read-Version $fake
+    Remove-Item -LiteralPath $fake -Force -ErrorAction SilentlyContinue
+    Assert ($reported -eq '9.9.9') "Read-Version: expected '9.9.9', got '$reported'"
+    Pass 'Read-Version strips the name clap prints, once'
+  } else {
+    Skip 'Read-Version normalization' 'cmd.exe is not available on this host'
+  }
 
   #############################################################################
   # FR-INSTALL-9 / FR-INSTALL-3: one real registry round-trip, restoring the

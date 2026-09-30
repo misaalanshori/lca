@@ -37,13 +37,13 @@ hash_file() {
   fi
 }
 
-# A fixture asset is a tiny executable that prints its own version line, so
-# the installer's "read the old version before replacing" path has something
-# real to read.
+# A fixture asset is a tiny executable that prints its own version line, in
+# the shape the real binary prints it (clap's "lca 0.5.2"), so the
+# installer's read-the-old-version path has something real to read.
 make_asset() { # make_asset <path> <version>
   cat > "$1" <<EOF
 #!/bin/sh
-echo "$2"
+echo "lca $2"
 EOF
   chmod +x "$1"
 }
@@ -193,6 +193,9 @@ grep -q '^# <<< lca installer <<<$' "$rc" || die "fresh install: closing marker 
 grep -q 'export PATH="' "$rc" || die "fresh install: PATH export missing"
 grep -q "$SANDBOX/target" "$rc" || die "fresh install: block names the actual install dir"
 grep -qi "source " "$OUT" || die "fresh install: output does not say how to load the rc"
+# The version line clap prints already contains "lca"; the report must not
+# echo it twice (the defect a real one-liner run caught on 2026-10-01).
+grep -q "installed lca 0.0.0 to " "$OUT" || die "fresh install: version report is not 'installed lca 0.0.0 to <dir>'"
 ok "fresh install places an executable binary and one marked rc block"
 teardown
 
@@ -209,7 +212,7 @@ for a in $ASSETS; do make_asset "$FIX/latest/download/$a" "1.2.3"; done
 write_checksums "$FIX/latest/download"
 run_installer --install-dir "$SANDBOX/target"
 [ "$STATUS" -eq 0 ] || die "re-run: exit $STATUS"
-grep -q "0.0.0 -> 1.2.3" "$OUT" || die "re-run: output does not report '0.0.0 -> 1.2.3'"
+grep -q "lca 0.0.0 -> 1.2.3" "$OUT" || die "re-run: output does not report 'lca 0.0.0 -> 1.2.3'"
 blocks=$(grep -c '^# >>> lca installer >>>$' "$HOME_DIR/.bashrc")
 [ "$blocks" -eq 1 ] || die "re-run: $blocks marked blocks, expected 1"
 grep -q "1.2.3" "$INSTALLED" || die "re-run: binary was not replaced"
