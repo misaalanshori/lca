@@ -178,6 +178,28 @@ try {
   } finally { Teardown }
 
   #############################################################################
+  # Verifies: FR-INSTALL-4 - a re-run over an existing install replaces it
+  # through the same verify-then-move path and reports old -> new.
+  #############################################################################
+  Setup
+  try {
+    Invoke-Installer @{ BaseUrl = $script:BaseUrl; InstallDir = $script:InstallDir; NoPath = $true }
+    Assert ($script:LastCode -eq 0) "first install: exit $($script:LastCode)"
+    $bin = Join-Path $script:InstallDir 'lca.exe'
+    if (-not (Read-Version $bin)) {
+      Skip 'the re-run old -> new report' 'the fixture executable does not answer --version'
+      Teardown
+    } else {
+      Invoke-Installer @{ BaseUrl = $script:BaseUrl; InstallDir = $script:InstallDir; NoPath = $true }
+      Assert ($script:LastCode -eq 0) "re-run: exit $($script:LastCode)`n$($script:LastOutput)"
+      Assert ($script:LastOutput -match 'lca .+ -> .+') "re-run: no 'lca <old> -> <new>' line:`n$($script:LastOutput)"
+      Assert (Test-Path -LiteralPath $bin) 're-run: binary missing after the update'
+      Pass 're-running updates and reports lca <old> -> <new>'
+      Teardown
+    }
+  } finally { }
+
+  #############################################################################
   # FR-INSTALL-8: -Version installs the pinned release, not the latest.
   #############################################################################
   Setup
