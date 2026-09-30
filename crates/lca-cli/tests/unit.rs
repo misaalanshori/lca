@@ -127,7 +127,7 @@ fn headless_defaults_the_update_check_off() {
     let _ = std::fs::remove_dir_all(&grants_dir);
     std::fs::create_dir_all(&grants_dir).expect("mkdir");
     let grants = lca_permissions::GrantStore::open(&grants_dir.join("grants.json")).expect("open");
-    let config = lca_cli::load_config(&grants_dir, &grants, true).expect("config");
+    let config = lca_cli::load_config(&grants_dir, &grants, true, false).expect("config");
     assert!(!config.update_check(true), "headless default is off");
     assert!(config.update_check(false), "interactive default is on");
 }

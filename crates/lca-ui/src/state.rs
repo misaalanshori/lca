@@ -473,6 +473,9 @@ pub struct UiOptions {
     pub initial_tail_lines: Vec<String>,
     /// Plain-text rendering (FR-UI-5).
     pub plain: bool,
+    /// Permission prompts are auto-approved this session (ADR-0042); the
+    /// footer says so every frame.
+    pub yolo: bool,
     /// Invoke a registered slash command (the registry supplies the
     /// table; `/stats` fills its built-in slot through an extension,
     /// ADR-0019). Arguments are the bare typed name and its argument
@@ -726,6 +729,7 @@ mod tests {
             initial_lines: Vec::new(),
             initial_records: Vec::new(),
             initial_tail_lines: Vec::new(),
+            yolo: false,
             plain: true,
             invoke_command: Arc::new(|_, _| CommandEffect::None),
             slash_commands: Vec::new(),

@@ -554,3 +554,126 @@ fn an_always_net_approval_persists_as_an_adhoc_grant() {
     assert!(again.allowed);
     assert!(!again.prompted, "the stored grant already covers it");
 }
+
+// Verifies: FR-PERM-25 (ADR-0042) - yolo answers every prompt as "always, for this
+// exact pattern": no prompt is shown, the pattern persists like a human
+// answer, and the outcome is flagged so the session log records it.
+#[test]
+fn yolo_approves_and_records_like_an_always_answer() {
+    let root = scratch("yolo");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).expect("mkdir");
+    let action = Action::Shell {
+        command: "cargo test".into(),
+        cwd: project.clone(),
+    };
+
+    let mut store = GrantStore::open(&store_path(&root)).expect("open");
+    store.set_permission_mode(lca_permissions::PermissionMode::Yolo);
+    let mut prompt = ScriptedPrompt::new(vec![]);
+    let outcome = lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt)
+        .expect("authorize");
+    assert!(outcome.allowed(), "yolo allows");
+    assert!(!outcome.prompted, "without asking");
+    assert!(outcome.yolo, "and flags the decision for the session log");
+    assert_eq!(
+        outcome.stored_pattern.as_deref(),
+        Some("cargo test"),
+        "the exact pattern, as if the user pressed always"
+    );
+    assert!(prompt.asked.is_empty(), "the prompt was never consulted");
+
+    // The pattern is a real grant: a second call is allowed through the
+    // ordinary path, with no yolo flag needed.
+    let outcome = lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt)
+        .expect("authorize");
+    assert!(outcome.allowed());
+    assert!(!outcome.prompted);
+    assert!(!outcome.yolo, "a stored pattern is not a yolo decision");
+}
+
+// Verifies: FR-PERM-25 (ADR-0042) - yolo answers prompts; it does not overrule the
+// user's own deny rules, which refuse without prompting in both modes.
+#[test]
+fn yolo_still_honours_a_deny_rule() {
+    let root = scratch("yolo-deny");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).expect("mkdir");
+    let mut store = GrantStore::open(&store_path(&root)).expect("open");
+    store
+        .add_rule(
+            &project,
+            lca_permissions::RuleScope::Project,
+            lca_permissions::RuleDecision::Deny,
+            "rm -rf *",
+        )
+        .expect("deny rule");
+    store.set_permission_mode(lca_permissions::PermissionMode::Yolo);
+
+    let action = Action::Shell {
+        command: "rm -rf /tmp/x".into(),
+        cwd: project.clone(),
+    };
+    let mut prompt = ScriptedPrompt::new(vec![]);
+    let outcome = lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt)
+        .expect("authorize");
+    assert!(!outcome.allowed(), "the explicit deny rule wins");
+    assert!(outcome.denied_by_rule);
+    assert!(!outcome.yolo);
+    assert!(prompt.asked.is_empty(), "and it still does not prompt");
+}
+
+// Verifies: FR-PERM-27 (ADR-0042) - a read outside the workspace never prompts
+// (the fatigue cut), in ask mode, and leaves no permission record because
+// no user decision was made. A deny rule still has the last word.
+#[test]
+fn reads_outside_the_workspace_do_not_prompt() {
+    let root = scratch("read-auto");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).expect("mkdir");
+    let mut store = GrantStore::open(&store_path(&root)).expect("open");
+    let mut prompt = ScriptedPrompt::new(vec![]);
+    let read = Action::ReadPath {
+        path: PathBuf::from("/etc/hostname"),
+    };
+    let outcome = lca_permissions::authorize(&mut store, &project, &read, None, &mut prompt)
+        .expect("authorize");
+    assert!(outcome.allowed());
+    assert!(!outcome.prompted, "no prompt for a read");
+    assert!(!outcome.yolo, "and nothing to record");
+    assert!(prompt.asked.is_empty());
+
+    // A deny rule still refuses it.
+    store
+        .add_rule(
+            &project,
+            lca_permissions::RuleScope::Project,
+            lca_permissions::RuleDecision::Deny,
+            "/etc/*",
+        )
+        .expect("deny rule");
+    let outcome = lca_permissions::authorize(&mut store, &project, &read, None, &mut prompt)
+        .expect("authorize");
+    assert!(!outcome.allowed(), "the deny rule beats the read cut");
+    assert!(outcome.denied_by_rule);
+    assert!(prompt.asked.is_empty());
+}
+
+// Verifies: ADR-0042 - in ask mode a write outside the workspace still
+// prompts (the read cut is reads only).
+#[test]
+fn writes_outside_the_workspace_still_prompt_in_ask_mode() {
+    let root = scratch("write-ask");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).expect("mkdir");
+    let mut store = GrantStore::open(&store_path(&root)).expect("open");
+    let mut prompt = ScriptedPrompt::new(vec![Decision::Denied]);
+    let write = Action::WritePath {
+        path: PathBuf::from("/etc/hosts"),
+    };
+    let outcome = lca_permissions::authorize(&mut store, &project, &write, None, &mut prompt)
+        .expect("authorize");
+    assert!(!outcome.allowed());
+    assert!(outcome.prompted, "a write outside the workspace asks");
+    assert_eq!(prompt.asked.len(), 1);
+}

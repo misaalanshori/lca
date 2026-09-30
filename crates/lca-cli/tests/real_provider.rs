@@ -77,6 +77,7 @@ fn opencode_go_completes_one_turn() {
         true,
         &project,
         &[],
+        false,
     ));
     assert_eq!(
         code, 0,

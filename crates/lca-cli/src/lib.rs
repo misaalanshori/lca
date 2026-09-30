@@ -8,6 +8,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use std::collections::BTreeMap;
+
 use clap::{Parser, Subcommand};
 use lca_config::{ColorMode, Config, LoadInput, MergeSource};
 use lca_core::{Agent, AgentConfig, StopReason, TurnEvent, TurnOutcome, TurnSink, TurnStatus};
@@ -72,6 +74,11 @@ pub struct Cli {
     /// Run a single prompt and print the reply, without the interface.
     #[arg(short = 'p', long = "prompt", value_name = "PROMPT")]
     pub prompt: Option<String>,
+    // ADR-0042: `permissions.mode = "yolo"`, said out loud.
+    /// Approve every permission prompt automatically, recording each one
+    /// like a human "always" answer. Explicit deny rules still deny.
+    #[arg(long)]
+    pub yolo: bool,
     // `docs/headless.md`: the JSON-lines envelope.
     /// Print one JSON object per line, for scripts.
     #[arg(long)]
@@ -606,11 +613,22 @@ fn persist_setting_at(
 
 /// Load merged configuration for `cwd`, honoring project-file trust
 /// (FR-CFG-1, FR-PERM-9).
-pub fn load_config(cwd: &Path, grants: &GrantStore, headless: bool) -> anyhow::Result<Config> {
+pub fn load_config(
+    cwd: &Path,
+    grants: &GrantStore,
+    headless: bool,
+    yolo: bool,
+) -> anyhow::Result<Config> {
     let project_file = cwd.join(".lca").join("config.toml");
     let user_file = config_file().exists().then(config_file);
+    let mut flags: BTreeMap<String, String> = BTreeMap::new();
+    if yolo {
+        // The flag is the loudest layer (FR-CFG-1's precedence): it beats
+        // a config file that says `ask`.
+        flags.insert("permissions.mode".to_string(), "yolo".to_string());
+    }
     let input = LoadInput {
-        flags: Default::default(),
+        flags,
         env: lca_config::collect_env(),
         project_file: project_file.is_file().then_some(project_file),
         trusted: grants.is_trusted(cwd),
@@ -618,6 +636,23 @@ pub fn load_config(cwd: &Path, grants: &GrantStore, headless: bool) -> anyhow::R
         headless,
     };
     Ok(Config::load(&input)?)
+}
+
+/// One line naming yolo mode, unmissable on purpose (ADR-0042).
+pub const YOLO_BANNER: &str = "YOLO MODE: every permission prompt is auto-approved as \"always\" and recorded in the \
+session log; explicit deny rules still deny. /settings shows permissions.mode.";
+
+/// Apply `permissions.mode` to the grant store (ADR-0042) and return the
+/// banner when yolo is on. One call, both surfaces: the interface and the
+/// capability engines share this store, so every permission check
+/// (extension `process` calls included) answers the same way.
+pub fn apply_permission_mode(config: &Config, grants: &mut GrantStore) -> Option<&'static str> {
+    let mode = config
+        .permissions_mode()
+        .and_then(lca_permissions::PermissionMode::parse)
+        .unwrap_or_default();
+    grants.set_permission_mode(mode);
+    matches!(mode, lca_permissions::PermissionMode::Yolo).then_some(YOLO_BANNER)
 }
 
 /// Headless mode cannot prompt: it denies and remembers that approval was
@@ -740,8 +775,10 @@ pub async fn run(cli: Cli) -> i32 {
         }
     };
     match route(&cli) {
-        Route::Headless { prompt } => headless(&prompt, cli.json, &cwd, &cli.attach).await,
-        Route::Interactive { resume } => interactive(&cwd, resume.as_deref()),
+        Route::Headless { prompt } => {
+            headless(&prompt, cli.json, &cwd, &cli.attach, cli.yolo).await
+        }
+        Route::Interactive { resume } => interactive(&cwd, resume.as_deref(), cli.yolo),
         Route::Config => config_command(&cwd),
         Route::ResumeList => resume_list(&cwd),
         Route::Fork { session, message } => fork_command(&cwd, &session, &message),
@@ -752,10 +789,10 @@ pub async fn run(cli: Cli) -> i32 {
     }
 }
 
-fn interactive(cwd: &Path, resume: Option<&str>) -> i32 {
+fn interactive(cwd: &Path, resume: Option<&str>, yolo: bool) -> i32 {
     // Wired to `lca-tui` in this phase; kept as one seam so the headless
     // contract stays independently testable.
-    match lca_tui_entry(cwd, resume) {
+    match lca_tui_entry(cwd, resume, yolo) {
         Ok(code) => code,
         Err(err) => {
             eprintln!("error: {err:#}");
@@ -765,17 +802,56 @@ fn interactive(cwd: &Path, resume: Option<&str>) -> i32 {
 }
 
 #[cfg(feature = "bundled-openai-compat")]
-fn lca_tui_entry(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
-    crate::tui::run(cwd, resume)
+fn lca_tui_entry(cwd: &Path, resume: Option<&str>, yolo: bool) -> anyhow::Result<i32> {
+    crate::tui::run(cwd, resume, yolo)
 }
 
 #[cfg(not(feature = "bundled-openai-compat"))]
-fn lca_tui_entry(_cwd: &Path, _resume: Option<&str>) -> anyhow::Result<i32> {
+fn lca_tui_entry(_cwd: &Path, _resume: Option<&str>, _yolo: bool) -> anyhow::Result<i32> {
     anyhow::bail!("interactive mode requires a bundled provider feature")
 }
 
 #[cfg(test)]
 mod tests {
+
+    // Verifies: FR-PERM-26 (ADR-0042) - `--yolo` reaches the config through the flag
+    // layer (which beats a file that says ask), lands on the shared grant
+    // store, and returns the banner the interface and headless print.
+    #[test]
+    fn the_yolo_flag_sets_the_mode_and_banners() {
+        let root = lca_testkit::scratch_path("lca-yolo-flag");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+
+        // A file that says ask, and a flag that says yolo: the flag wins.
+        let file = root.join("config.toml");
+        std::fs::write(&file, "permissions.mode = \"ask\"\n").expect("write");
+        let mut flags = BTreeMap::new();
+        flags.insert("permissions.mode".to_string(), "yolo".to_string());
+        let config = Config::load(&lca_config::LoadInput {
+            flags,
+            user_file: Some(file),
+            ..Default::default()
+        })
+        .expect("load");
+        assert_eq!(config.permissions_mode(), Some("yolo"));
+
+        let mut grants = GrantStore::open(&root.join("grants.json")).expect("open");
+        let banner = apply_permission_mode(&config, &mut grants).expect("banner");
+        assert!(banner.contains("YOLO MODE"), "{banner}");
+        assert_eq!(
+            grants.permission_mode(),
+            lca_permissions::PermissionMode::Yolo
+        );
+
+        // Ask mode is quiet and leaves the store in the default.
+        let quiet = Config::defaults();
+        assert!(apply_permission_mode(&quiet, &mut grants).is_none());
+        assert_eq!(
+            grants.permission_mode(),
+            lca_permissions::PermissionMode::Ask
+        );
+    }
 
     // Verifies: ADR-0041 - a configured interpreter that is missing breaks
     // the backend loudly (every call fails with the resolution message),

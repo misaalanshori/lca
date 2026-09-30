@@ -336,7 +336,7 @@ FR-TOOL-1. The agent SHALL provide built-in tools for read, write, edit, list, g
 
 FR-TOOL-2. IF an edit call targets a file that changed after the last read in this session, THEN the agent SHALL reject the call and return an error to the model.
 
-FR-TOOL-3. WHEN a tool call targets a path outside the workspace root, the agent SHALL ask the user for approval before it runs the call.
+FR-TOOL-3. WHEN a tool call writes or edits a path outside the workspace root, the agent SHALL ask the user for approval before it runs the call. A read, list, glob, or grep outside the workspace does not prompt (ADR-0042's fatigue cut); a deny rule refuses either kind without prompting.
 
 FR-TOOL-4. WHILE a shell command runs, the agent SHALL stream its output to the interface.
 
@@ -421,6 +421,12 @@ FR-PERM-21. The agent SHALL support allow and deny rules, matched as globs, at s
 FR-PERM-22. Session-scoped trust and session-scoped rules SHALL NOT persist; only an explicit persistent trust or a project/global rule survives the process.
 
 FR-PERM-23. WHEN the agent asks the user to approve a sensitive action, it SHALL offer trusting the current project folder for the session as one answer (ADR-0039).
+
+FR-PERM-25. WHERE `permissions.mode` is `yolo`, the agent SHALL answer every permission prompt with an approval equivalent to "always, for this exact action's pattern": it SHALL persist the pattern and write the same `permission` record a human answer writes, and SHALL NOT show the prompt. An explicit deny rule SHALL still refuse the action, and the mode SHALL NOT be persisted by the agent.
+
+FR-PERM-26. WHILE yolo mode is active, the agent SHALL show a persistent status marker naming the mode in the interface, and one explanatory line at startup, and headless mode SHALL print the same line to standard error.
+
+FR-PERM-27. The agent SHALL NOT prompt for a read, list, glob, or grep outside the workspace root in any mode, and SHALL write no `permission` record for one; a deny rule SHALL still refuse it (ADR-0042).
 
 FR-PERM-24. WHEN the user runs the trust command, the agent SHALL offer remembering the decision for the project or applying it only for the session, and SHALL show a trust prompt at startup only when the project carries a `.lca/config.toml` that is not yet trusted.
 

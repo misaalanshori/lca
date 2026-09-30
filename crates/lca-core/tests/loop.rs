@@ -479,30 +479,76 @@ async fn denied_commands_reach_the_model_as_denied_results() {
     );
 }
 
-// Verifies: FR-TOOL-3 - a read outside the workspace reaches the permission
-// prompt before it runs, and a denial returns to the model as a denied result.
+// Verifies: FR-PERM-27 (ADR-0042) - a read outside the workspace does not
+// prompt in ask mode and leaves no permission record, while a deny rule
+// still refuses it without prompting and records the refusal.
 #[tokio::test]
-async fn reading_outside_the_workspace_asks_before_it_runs() {
+async fn reading_outside_the_workspace_does_not_prompt_unless_a_rule_denies() {
+    // Two scripted turns: an outside read, then a text reply; repeated for
+    // the deny-rule half of the test.
+    fn read_turn(t: lca_testkit::TurnBuilder) -> lca_testkit::TurnBuilder {
+        t.tool_call("read", r#"{"path":"../outside.txt"}"#)
+            .usage(fake_usage(10, 10, 0, 10))
+    }
     let provider = FakeProvider::builder()
-        .turn(|t| {
-            t.tool_call("read", r#"{"path":"../outside.txt"}"#)
-                .usage(fake_usage(10, 10, 0, 10))
-        })
-        .turn(|t| t.text("cannot").usage(fake_usage(20, 5, 10, 0)))
+        .turn(read_turn)
+        .turn(|t| t.text("done").usage(fake_usage(20, 5, 10, 0)))
+        .turn(read_turn)
+        .turn(|t| t.text("done").usage(fake_usage(20, 5, 10, 0)))
         .build();
     let mut h = harness("read-out", provider, default_config());
     let mut sink = CollectingSink::default();
     let mut prompt = Prompt {
-        answers: vec![Decision::Denied],
+        answers: vec![],
         asked: vec![],
     };
 
+    // No rule: the read runs, nothing is asked, nothing is recorded.
     let outcome = turn(&mut h, "read it", &mut sink, &mut prompt).await;
-    assert_eq!(outcome.status, lca_core::TurnStatus::Ok);
-    assert_eq!(prompt.asked.len(), 1, "the outside read asks first");
+    assert_eq!(
+        outcome.status,
+        lca_core::TurnStatus::Ok,
+        "error: {:?}",
+        outcome.error
+    );
     assert!(
-        prompt.asked[0].contains("outside.txt"),
-        "the exact path is shown: {:?}",
+        prompt.asked.is_empty(),
+        "a read outside the workspace does not prompt: {:?}",
+        prompt.asked
+    );
+    let log = h.store.read(&h.session).expect("read");
+    assert!(
+        !log.records
+            .iter()
+            .any(|r| matches!(r, Record::Permission { .. })),
+        "no user decision was made, so none is recorded: {:?}",
+        log.records
+    );
+
+    // A project deny rule still refuses it, without prompting, and the
+    // refusal is recorded like any rule denial.
+    let project = h.project.clone();
+    h.grants
+        .lock()
+        .expect("grants")
+        .add_rule(
+            &project,
+            lca_permissions::RuleScope::Project,
+            lca_permissions::RuleDecision::Deny,
+            "*outside.txt",
+        )
+        .expect("deny rule");
+    let mut sink = CollectingSink::default();
+    let outcome = turn(&mut h, "read it again", &mut sink, &mut prompt).await;
+    assert_eq!(
+        outcome.status,
+        lca_core::TurnStatus::Ok,
+        "error: {:?}",
+        outcome.error
+    );
+    assert!(
+        prompt.asked.is_empty(),
+        "a deny rule refuses without prompting: {:?}",
         prompt.asked
     );
     assert!(
@@ -510,6 +556,17 @@ async fn reading_outside_the_workspace_asks_before_it_runs() {
             |e| matches!(e, TurnEvent::ToolFinished(r) if r.status == ToolResultStatus::Denied)
         ),
         "the denial reaches the model"
+    );
+    let log = h.store.read(&h.session).expect("read");
+    assert!(
+        log.records.iter().any(|r| matches!(
+            r,
+            Record::Permission {
+                decision: lca_protocol::PermissionDecision::Denied,
+                ..
+            }
+        )),
+        "the rule denial is recorded"
     );
 }
 

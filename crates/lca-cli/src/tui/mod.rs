@@ -134,7 +134,7 @@ pub(crate) struct Ui {
 }
 
 /// Enter the interactive interface for `cwd`, optionally resuming `resume`.
-pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
+pub fn run(cwd: &Path, resume: Option<&str>, yolo: bool) -> anyhow::Result<i32> {
     // The interface needs a terminal for raw mode and key events; without
     // one the input read fails with an opaque error. Say what to do instead
     // (the headless path is the scripted one).
@@ -146,7 +146,7 @@ pub fn run(cwd: &Path, resume: Option<&str>) -> anyhow::Result<i32> {
         return Ok(crate::exit::USAGE);
     }
     let _temp_guard = crate::SessionTempGuard;
-    let ui = Arc::new(Ui::new(cwd, resume)?);
+    let ui = Arc::new(Ui::new(cwd, resume, yolo)?);
     crate::init_session_temp(&ui.session_id());
     let options = ui.options();
     let runner = ui.turn_runner();
@@ -242,7 +242,7 @@ fn agent_config_for(
 impl Ui {
     /// Build the wiring state (S1): resolve the session, provider, and
     /// tools, then assemble the extension registry and the live cells.
-    fn new(cwd: &Path, resume: Option<&str>) -> anyhow::Result<Ui> {
+    fn new(cwd: &Path, resume: Option<&str>, yolo: bool) -> anyhow::Result<Ui> {
         let Opened {
             data,
             store,
@@ -256,7 +256,7 @@ impl Ui {
             initial_records,
             mut initial_tail,
             update_notice,
-        } = open(cwd, resume)?;
+        } = open(cwd, resume, yolo)?;
 
         // ADR-0041: the interpreter is resolved once, here, so the tool
         // description, `/settings`, and every call agree - and a configured
@@ -455,7 +455,7 @@ struct Opened {
 
 /// Open the store, the grant store, the merged configuration, and the
 /// session to show (resumed or fresh).
-fn open(cwd: &Path, resume: Option<&str>) -> anyhow::Result<Opened> {
+fn open(cwd: &Path, resume: Option<&str>, yolo: bool) -> anyhow::Result<Opened> {
     let data = crate::data_dir();
     let store = Arc::new(SessionStore::new(data.clone()));
     let grants = Arc::new(Mutex::new(
@@ -463,7 +463,7 @@ fn open(cwd: &Path, resume: Option<&str>) -> anyhow::Result<Opened> {
             .map_err(|err| anyhow::anyhow!("cannot open the grant store: {err}"))?,
     ));
     let trusted = lock(&grants).is_trusted(cwd);
-    let config = crate::load_config(cwd, &lock(&grants), false)?;
+    let config = crate::load_config(cwd, &lock(&grants), false, yolo)?;
     // Today's update check, if enabled and due: stamped, then spawned - the
     // startup path never waits on it (FR-CFG-6), and the status line picks
     // the finding up from the shared cell once it lands.
@@ -472,8 +472,14 @@ fn open(cwd: &Path, resume: Option<&str>) -> anyhow::Result<Opened> {
     let session = resolve_session(&store, cwd, resume)?;
     let current_session = Arc::new(Mutex::new(session.clone()));
     let provider_name = config.provider().to_string();
-    let (initial_head, initial_records) =
+    let (mut initial_head, initial_records) =
         initial_view(&store, &session, &grants, cwd, &data, &provider_name);
+    // ADR-0042: the mode applies to the shared grant store, so the model's
+    // tool calls and an extension's `process` calls answer alike. The banner
+    // leads the transcript: hands-free must never mean invisible.
+    if let Some(banner) = crate::apply_permission_mode(&config, &mut lock(&grants)) {
+        initial_head.insert(0, banner.to_string());
+    }
     Ok(Opened {
         data,
         store,

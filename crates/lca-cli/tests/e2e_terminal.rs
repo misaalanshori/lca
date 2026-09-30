@@ -1171,3 +1171,89 @@ fn the_double_ctrl_c_exits_on_windows() {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
+
+// Verifies: FR-PERM-25 (ADR-0042; R10's permission matrix, yolo column) - `--yolo`
+// approves a review-class tool call with no modal, and the session log
+// carries the `permission` record a human "always" answer would have
+// written: approve everything, forget nothing.
+#[cfg(unix)]
+#[test]
+fn yolo_approves_without_a_modal_and_records_the_decision() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    // An out-of-workspace command: review-class, so ask mode would prompt.
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_tool_call("shell", r#"{"command":"cat /etc/hostname"}"#)),
+        Reply::Sse(sse_text_with_usage("turn complete", 20, 0)),
+    ]));
+    let sandbox = sandbox("tui-yolo");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    let session = Tmux::new("yolo");
+    session.spawn(&sandbox, Some(&mock), true, &[], &["--yolo"]);
+
+    // 1. The banner leads the transcript: hands-free is never invisible.
+    session.wait_for("YOLO MODE", std::time::Duration::from_secs(20));
+
+    // 2. The turn runs to completion with no modal in the way.
+    session.send(&["do a thing", "Enter"]);
+    session.wait_for("turn complete", std::time::Duration::from_secs(30));
+    let pane = session.capture();
+    assert!(
+        !pane.contains("Allow this action?"),
+        "yolo never shows the permission modal:\n{pane}"
+    );
+
+    // 3. The decision is in the log, exactly like a human "always" answer.
+    session.send(&["/exit", "Enter"]);
+    let log = wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    assert!(log.contains("\"t\":\"permission\""), "recorded:\n{log}");
+    assert!(log.contains("\"decision\":\"always\""), "always:\n{log}");
+    assert!(
+        log.contains("cat /etc/hostname"),
+        "the exact action is named:\n{log}"
+    );
+}
+
+// Verifies: FR-PERM-27 (ADR-0042; R10's permission matrix, read-only column) - a read
+// outside the workspace does not prompt in the default mode, and leaves no
+// permission record because no user decision was made.
+#[cfg(unix)]
+#[test]
+fn a_read_outside_the_workspace_does_not_prompt() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_tool_call("read", r#"{"path":"/etc/hostname"}"#)),
+        Reply::Sse(sse_text_with_usage("turn complete", 20, 0)),
+    ]));
+    let sandbox = sandbox("tui-read-auto");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    let session = Tmux::new("read-auto");
+    session.spawn(&sandbox, Some(&mock), true, &[], &[]);
+    session.wait_for(
+        "openai-compatible/test-model",
+        std::time::Duration::from_secs(20),
+    );
+    session.send(&["look at a file", "Enter"]);
+    session.wait_for("turn complete", std::time::Duration::from_secs(30));
+    let pane = session.capture();
+    assert!(
+        !pane.contains("Allow this action?"),
+        "a read does not prompt:\n{pane}"
+    );
+
+    session.send(&["/exit", "Enter"]);
+    let log = wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    assert!(
+        !log.contains("\"t\":\"permission\""),
+        "no decision was made, so none is recorded:\n{log}"
+    );
+}

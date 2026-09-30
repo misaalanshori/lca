@@ -92,6 +92,34 @@ fn shell_selection_merges_and_refuses_unknown_tools() {
     assert_eq!(config.shell_path(), None);
 }
 
+// Verifies: ADR-0042 - `permissions.mode` is a documented key with a
+// closed vocabulary; a bad value is refused at load, and the default is ask.
+#[test]
+fn permissions_mode_merges_and_refuses_unknown_values() {
+    let dir = scratch("perm-mode");
+    write(&dir.join("user.toml"), "permissions.mode = \"yolo\"\n");
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.permissions_mode(), Some("yolo"));
+
+    write(&dir.join("user.toml"), "permissions.mode = \"reckless\"\n");
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("an unknown mode is refused at load");
+    assert!(err.to_string().contains("reckless"), "{err}");
+
+    assert_eq!(
+        Config::defaults().permissions_mode(),
+        None,
+        "ask is the default"
+    );
+}
+
 // Verifies: FR-CFG-2 (every resolved value names the source that set it)
 #[test]
 fn every_resolved_value_carries_its_source() {

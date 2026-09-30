@@ -710,7 +710,10 @@ impl Agent<'_> {
                 return Err(self.fail(StopReason::Error, format!("permission store error: {err}")));
             }
         };
-        if outcome.prompted || outcome.denied_by_rule {
+        // A prompted answer and a yolo answer both belong in the log; a
+        // rule denial is recorded too (ADR-0042: approve everything must
+        // never mean forget everything).
+        if outcome.prompted || outcome.denied_by_rule || outcome.yolo {
             let record = Record::Permission {
                 v: FORMAT_VERSION,
                 ts: lca_session::now_ms(),

@@ -27,6 +27,7 @@ fn options(plain: bool) -> UiOptions {
         initial_lines: Vec::new(),
         initial_records: Vec::new(),
         initial_tail_lines: Vec::new(),
+        yolo: false,
         plain,
         invoke_command: Arc::new(|_, _| CommandEffect::None),
         slash_commands: Vec::new(),

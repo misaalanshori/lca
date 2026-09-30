@@ -38,6 +38,8 @@ impl Ui {
                 .map(|model| model.id.clone())
                 .collect(),
             plain: self.config.ui_color() == ColorMode::Never,
+            yolo: crate::lock(&self.grants).permission_mode()
+                == lca_permissions::PermissionMode::Yolo,
             invoke_command,
             render_regions: self.render_regions.clone(),
             ui_events: self.ui_events.clone(),

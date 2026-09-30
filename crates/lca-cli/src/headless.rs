@@ -169,6 +169,7 @@ pub async fn headless(
     json: bool,
     cwd: &Path,
     attachments: &[std::path::PathBuf],
+    yolo: bool,
 ) -> i32 {
     let data = data_dir();
     let store = SessionStore::new(data.clone());
@@ -179,7 +180,7 @@ pub async fn headless(
             return exit::INTERNAL;
         }
     };
-    let config = match load_config(cwd, &lock(&grants), true) {
+    let config = match load_config(cwd, &lock(&grants), true, yolo) {
         Ok(config) => config,
         Err(err) => {
             eprintln!("error: {err}");
@@ -207,6 +208,11 @@ pub async fn headless(
     let _temp_guard = crate::SessionTempGuard;
     crate::init_session_temp(session.id());
 
+    // ADR-0042: the same mode application as the interface, surfaced on
+    // stderr because headless has no transcript to put a banner in.
+    if let Some(banner) = crate::apply_permission_mode(&config, &mut lock(&grants)) {
+        eprintln!("{banner}");
+    }
     // ADR-0041: same resolution as the interface, surfaced on stderr
     // because headless has no transcript to put a warning in.
     let ops = crate::native_ops(&config);

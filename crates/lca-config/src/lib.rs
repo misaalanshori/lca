@@ -56,6 +56,9 @@ pub const THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high"
 /// ladder knows how to resolve exactly.
 pub const SHELL_TOOLS: &[&str] = &["auto", "bash", "pwsh", "powershell", "cmd"];
 
+/// The `permissions.mode` vocabulary (ADR-0042).
+pub const PERMISSION_MODES: &[&str] = &["ask", "yolo"];
+
 impl std::str::FromStr for ColorMode {
     type Err = String;
 
@@ -141,6 +144,7 @@ pub struct Config {
     thinking: Option<String>,
     shell_tool: Option<String>,
     shell_path: Option<String>,
+    permissions_mode: Option<String>,
     permissions_proposals: BTreeMap<String, String>,
     sources: BTreeMap<String, MergeSource>,
 }
@@ -171,6 +175,7 @@ impl Default for Config {
             thinking: None,
             shell_tool: None,
             shell_path: None,
+            permissions_mode: None,
             permissions_proposals: BTreeMap::new(),
             sources: BTreeMap::new(),
         }
@@ -208,6 +213,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "thinking",
     "shell.tool",
     "shell.path",
+    "permissions.mode",
 ];
 
 /// Look a dotted key up in a TOML table: literal keys (`"tool.timeout_seconds"`)
@@ -283,6 +289,16 @@ fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigEr
         )),
         "ui.theme" => Ok(TypedValue::Text(raw.to_string())),
         "shell.path" => Ok(TypedValue::Text(raw.to_string())),
+        "permissions.mode" => {
+            if PERMISSION_MODES.contains(&raw) {
+                Ok(TypedValue::Text(raw.to_string()))
+            } else {
+                Err(invalid(format!(
+                    "expected one of {}, got `{raw}`",
+                    PERMISSION_MODES.join(", ")
+                )))
+            }
+        }
         "shell.tool" => {
             if SHELL_TOOLS.contains(&raw) {
                 Ok(TypedValue::Text(raw.to_string()))
@@ -349,6 +365,7 @@ impl Config {
             "thinking",
             "shell.tool",
             "shell.path",
+            "permissions.mode",
         ] {
             config.sources.insert(key.to_string(), MergeSource::Default);
         }
@@ -460,6 +477,18 @@ impl Config {
                     }
                     this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
                 }
+                "permissions.mode" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    if !PERMISSION_MODES.contains(&text) {
+                        return Err(invalid(format!(
+                            "expected one of {}, got `{text}`",
+                            PERMISSION_MODES.join(", ")
+                        )));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
                 "thinking" => {
                     let text = value.as_str().ok_or_else(|| {
                         invalid(format!("expected a string, got {}", type_name(&value)))
@@ -515,6 +544,7 @@ impl Config {
             "thinking",
             "shell.tool",
             "shell.path",
+            "permissions.mode",
         ] {
             if let Some(value) = table_value(table, key) {
                 // `provider` doubles as a section: `[provider] retry_limit = N`
@@ -557,6 +587,7 @@ impl Config {
             ("ui.theme", TypedValue::Text(v)) => self.ui_theme = Some(v),
             ("shell.tool", TypedValue::Text(v)) => self.shell_tool = Some(v),
             ("shell.path", TypedValue::Text(v)) => self.shell_path = Some(v),
+            ("permissions.mode", TypedValue::Text(v)) => self.permissions_mode = Some(v),
             ("thinking", TypedValue::Text(v)) => self.thinking = Some(v),
             (other, _) => {
                 return Err(ConfigError::InvalidValue {
@@ -648,6 +679,11 @@ impl Config {
         self.shell_path.as_deref()
     }
 
+    /// `permissions.mode`: `ask` (default) or `yolo` (ADR-0042).
+    pub fn permissions_mode(&self) -> Option<&str> {
+        self.permissions_mode.as_deref()
+    }
+
     /// Permission proposals read from a trusted project file (ADR-0006).
     pub fn permissions_proposals(&self) -> &BTreeMap<String, String> {
         &self.permissions_proposals
@@ -723,6 +759,12 @@ impl Config {
                 self.shell_path
                     .clone()
                     .unwrap_or_else(|| "<ladder>".to_string()),
+            ),
+            (
+                "permissions.mode",
+                self.permissions_mode
+                    .clone()
+                    .unwrap_or_else(|| "ask".to_string()),
             ),
             (
                 "permissions.proposals",

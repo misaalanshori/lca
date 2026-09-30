@@ -146,6 +146,7 @@ impl Chat {
         }
         let footer = Footer {
             cwd: world.options.workspace.to_string_lossy().to_string(),
+            yolo: world.options.yolo,
             context_window: *world
                 .options
                 .context_window

@@ -12,7 +12,7 @@ pub(super) fn config_command(cwd: &Path) -> i32 {
             return exit::INTERNAL;
         }
     };
-    let config = match load_config(cwd, &grants, false) {
+    let config = match load_config(cwd, &grants, false, false) {
         Ok(config) => config,
         Err(err) => {
             eprintln!("error: {err}");

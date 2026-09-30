@@ -34,6 +34,8 @@ pub struct Footer {
     pub context_used: u64,
     /// Extension-provided status segments.
     pub statuses: Vec<String>,
+    /// Yolo mode is on: the marker is persistent and loud (ADR-0042).
+    pub yolo: bool,
 }
 
 /// Shorten a path under `home` to `~`.
@@ -99,6 +101,16 @@ impl Footer {
             location.push_str(&(theme.footer)(&self.session));
         }
         let mut lines = vec![truncate_to_width(&location, width, "…", false)];
+        // ADR-0042: yolo is never quiet. Its own line, error role, every
+        // frame, for as long as the mode is on.
+        if self.yolo {
+            lines.push(truncate_to_width(
+                &(theme.error)("YOLO: every permission prompt auto-approved (--yolo)"),
+                width,
+                "…",
+                false,
+            ));
+        }
 
         // Stats line.
         let u = &self.usage;
@@ -249,5 +261,27 @@ mod tests {
         };
         let out = strip(&f.render(120, &Theme::plain()));
         assert!(out[1].contains("p/m • high"), "{}", out[1]);
+    }
+
+    // Verifies: FR-PERM-26 (ADR-0042) - yolo is loud: its own footer line, error role,
+    // every frame while the mode is on, and absent when it is off.
+    #[test]
+    fn the_footer_shows_the_yolo_marker_only_when_yolo_is_on() {
+        let theme = Theme::plain();
+        let mut footer = Footer {
+            cwd: "/w".to_string(),
+            yolo: true,
+            ..Default::default()
+        };
+        let lines = footer.render(80, &theme);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("YOLO: every permission prompt auto-approved")),
+            "{lines:?}"
+        );
+        footer.yolo = false;
+        let lines = footer.render(80, &theme);
+        assert!(!lines.iter().any(|line| line.contains("YOLO")), "{lines:?}");
     }
 }
