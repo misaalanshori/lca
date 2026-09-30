@@ -47,7 +47,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0026 | Capability interfaces link in a denied state | Accepted | Post-release review |
 | 0027 | Unsigned release artifacts, provenance-attested | Accepted | Post-release review |
 | 0028 | The ABI development window — unfrozen now, frozen for good later | Accepted | Post-release review |
-| 0029 | Typed image and multi-part content | Accepted | Cycle 2 |
+| 0029 | Typed image content for provider messages | Accepted | Cycle 2 |
 | 0030 | Three bags — extension `resources`, `state`, and `credentials` | Accepted | Cycle 4 planning |
 | 0031 | The `provider` world gains a login surface; presets are extension data | Accepted | Cycle 4 planning |
 | 0032 | Embedded extensions serve their resources from the binary | Accepted | Cycle 4 planning |
@@ -58,7 +58,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0037 | The TUI is ours: two crates and the line-string engine | Accepted | TUI renovation |
 | 0038 | Steering: prompts submitted while a turn runs | Accepted | TUI renovation |
 | 0039 | Folder trust, rules, and session grants | Accepted | Permission UX |
-| 0029 | Typed image content for provider messages | Accepted | Post-release review (cycle 2) |
+| 0040 | Install and update through root-hosted one-liner scripts | Accepted | Install cycle |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
 

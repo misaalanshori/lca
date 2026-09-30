@@ -2,7 +2,7 @@
 
 Version 0.1, 2026-09-20.
 
-Source: `extensions/codex/`. Delivery: WASM, installed separately, not bundled by default. Same shape as Antigravity; documented separately mainly because a second, independent implementation of the OAuth pattern is what actually proves it generalizes rather than being specific to one vendor's flow.
+Source: not in the tree yet - this profile specifies the extension; nothing under `extensions/` builds it today. Delivery: WASM, would be installed separately rather than bundled. Same shape as Antigravity; documented separately mainly because a second, independent implementation of the OAuth pattern is what actually proves it generalizes rather than being specific to one vendor's flow.
 
 ## What it authenticates against
 

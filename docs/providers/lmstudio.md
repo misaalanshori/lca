@@ -2,7 +2,7 @@
 
 Version 0.1, 2026-09-20.
 
-Source: `extensions/lmstudio/`. Delivery: WASM, installed separately, not bundled by default. The first-party proof that `net-local`, added by ADR-0011, actually serves a real provider rather than a hypothetical one.
+Source: not in the tree yet - this profile specifies the extension; nothing under `extensions/` builds it today. Delivery: WASM, would be installed separately rather than bundled. The first-party proof that `net-local`, added by ADR-0011, actually serves a real provider rather than a hypothetical one.
 
 ## What it authenticates against
 

@@ -12,9 +12,11 @@ A full ADR is not written for each provider, because there is usually no real al
 |---|---|---|---|
 | [OpenAI-compatible](openai-compatible.md) | API key | Native-linked, enabled | Ships in the binary. Any base URL speaking the OpenAI chat completions shape. |
 | [Antigravity](antigravity.md) | OAuth | WASM, install separately | Reference implementation for the OAuth pattern; see ADR-0004, ADR-0009. |
-| [Codex](codex.md) | OAuth | WASM, install separately | Same shape as Antigravity, second proof the pattern generalizes. |
-| [LM Studio](lmstudio.md) | None | WASM, install separately | Local server, `net-local`; see ADR-0011. |
-| [Ollama](ollama.md) | None | WASM, install separately | Local server, `net-local`; see ADR-0011. |
+| [Codex](codex.md) | OAuth | WASM (specified, not in the tree) | Same shape as Antigravity, second proof the pattern generalizes. |
+| [LM Studio](lmstudio.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
+| [Ollama](ollama.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
+
+The last three rows are specifications, not shippable artifacts: the profiles are complete, nothing under `extensions/` builds them, and the release publishes only `openai-compatible`, `antigravity`, `skills`, and `compaction-default` to the registry (`.github/workflows/publish.yml`). Install the first two providers today; read the others as the design they are.
 
 OpenCode Go is deliberately absent from this list. It exposes an OpenAI-compatible endpoint with its own base URL and key, so it needs no dedicated extension; a user points the OpenAI-compatible provider at it directly.
 

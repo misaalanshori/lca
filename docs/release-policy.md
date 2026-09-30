@@ -92,6 +92,25 @@ The dependency count is a tracked number. A release that adds five dependencies 
 
 Dependency updates land in their own pull requests, not bundled with feature work, so a regression can be bisected to a single change.
 
+## Gate list
+
+Ten gates run on the pipeline; a change that turns any of them red does not land. Gate 10 joined with the installers (ADR-0040) and is registered here as well as in `docs/testing-plan.md` section 15 and the README, so this table is the canonical list.
+
+| # | Gate | What runs | Where |
+|---|---|---|---|
+| 1 | Format and lint | `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo doc` with `-D warnings` | `ci.yml` (ubuntu gates, and clippy/doc in each test job) |
+| 2 | Test suite | `cargo nextest run --workspace` on Linux, macOS, and Windows, including the real-terminal suites and the regression tests | `ci.yml` test jobs |
+| 3 | NFR timing | The five timing tests (NFR-4, NFR-5, NFR-29) on a release build, serial, on the machine to itself | `ci.yml` ubuntu gates |
+| 4 | Dependency audit and license check | `cargo-deny` against `deny.toml`, on every merge and on the weekly schedule | `ci.yml` ubuntu gates; `deny.yml` schedule |
+| 5 | Requirements traceability | `scripts/traceability.sh`: every FR/NFR carries at least one verifying test (NFR-30) | `ci.yml` ubuntu gates |
+| 6 | Fuzz targets build | `scripts/fuzz-check.sh`: every fuzz target still compiles (testing plan section 13) | `ci.yml` |
+| 7 | Extension components build | `scripts/wasm-check.sh`: every extension compiles for `wasm32-wasip2` | `ci.yml` |
+| 8 | Release targets build | `scripts/release-targets-check.sh`: all six release targets compile with the publish toolchain | `ci.yml` |
+| 9 | Size and startup | `scripts/perf-gate.sh` against the ratcheted thresholds, plus the cache-hit-ratio benchmark (NFR-7, NFR-31) | `ci.yml` |
+| 10 | Installers | `scripts/install-check.sh`: `tests/install/test_install_sh.sh` plus `shellcheck --shell=sh install.sh`; the PowerShell suite runs in the same `install` job on Windows | `ci.yml` |
+
+The manual release gate (below) is separate: it is a human on a real terminal before a tag, not a pipeline step, and no count of the ten includes it.
+
 ## Size and startup gates
 
 The pipeline measures binary size and cold start on every merge to `main`. A threshold breach fails the build.
@@ -138,7 +157,7 @@ A release that is merely broken is fixed forward with a patch release. Yanking i
 
 ## Installation channels
 
-The primary channel is a shell installer that fetches the right artifact for the platform, verifies the checksum, and places the binary. A PowerShell equivalent covers Windows, because a bash installer is not a Windows installation story.
+The primary channel is a shell installer at the repository root, `install.sh`, fetched from `raw.githubusercontent.com` and piped into `sh`: it resolves the right artifact for the platform, verifies the checksum, places the binary, and puts it on PATH. Running the same one-liner again is the update path, and `--uninstall` reverses it. `install.ps1` covers Windows with the same semantics, because a bash installer is not a Windows installation story. The full specification, the flags, and the manual alternative are `docs/installation.md`; the decision is ADR-0040; the scripts are gated by gate 10 in the table above.
 
 Package manager distribution follows once the release process is stable. Packaging is not a Phase 8 deliverable, and shipping to a package manager before the release process settles creates a support burden with stale versions.
 

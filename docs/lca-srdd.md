@@ -6,9 +6,9 @@ The project name in this document is LCA. The binary is `lca` and the crates use
 
 ## Companion documents
 
-This document sets the requirements and the architecture. Thirty-eight decisions that support it are written up separately as architecture decision records under `docs/adr/`, numbered 0001 through 0039 (0020 is unused), covering runtime selection, crate decomposition, the widget tree, the provider stream shape, filesystem scopes, the permission store split, the decision against an out-of-process runner, extension composition, the extension update path, distribution beyond OCI, local network access, provider identity operations, the three kinds of pluggability, the async execution model, compaction and context transform, the pty capability, prompt cache preservation and measurement, web-embedded extension hosting, the two-crate TUI architecture (ADR-0037), steering (ADR-0038), and folder trust with permission rules (ADR-0039). Where this document and an ADR could drift, the ADR is the more current statement of the reasoning; this document is the more current statement of the requirement itself.
+This document sets the requirements and the architecture. Thirty-nine decisions that support it are written up separately as architecture decision records under `docs/adr/`, numbered 0001 through 0040 (0020 is unused), covering runtime selection, crate decomposition, the widget tree, the provider stream shape, filesystem scopes, the permission store split, the decision against an out-of-process runner, extension composition, the extension update path, distribution beyond OCI, local network access, provider identity operations, the three kinds of pluggability, the async execution model, compaction and context transform, the pty capability, prompt cache preservation and measurement, web-embedded extension hosting, the two-crate TUI architecture (ADR-0037), steering (ADR-0038), folder trust with permission rules (ADR-0039), and install and update through root-hosted one-liner scripts (ADR-0040). Where this document and an ADR could drift, the ADR is the more current statement of the reasoning; this document is the more current statement of the requirement itself.
 
-Thirteen further documents fill in detail this one only summarizes: the capability catalog at `docs/capabilities.md`, the extension authoring guide at `docs/extension-authoring.md`, the ABI versioning policy at `docs/abi-versioning.md`, the session log format at `docs/session-log-format.md`, the runtime flows as diagrams at `docs/flows.md`, the threat model at `docs/threat-model.md`, the release and versioning policy at `docs/release-policy.md`, the software testing plan at `docs/testing-plan.md`, per-platform implementation notes at `docs/platform-notes.md`, the configuration key reference at `docs/configuration.md`, the headless and scripting contract at `docs/headless.md`, a glossary of project-specific terminology at `docs/glossary.md`, and the provenance of what this design takes from Pi and fx at `docs/inspiration.md`. First-party provider extensions are documented individually under `docs/providers/`. The extension manifest schema is at `schemas/extension-manifest.schema.json` and is the normative validation source; the manifest examples in this document are illustrative.
+Fourteen further documents fill in detail this one only summarizes: the capability catalog at `docs/capabilities.md`, the extension authoring guide at `docs/extension-authoring.md`, the ABI versioning policy at `docs/abi-versioning.md`, the session log format at `docs/session-log-format.md`, the runtime flows as diagrams at `docs/flows.md`, the threat model at `docs/threat-model.md`, the release and versioning policy at `docs/release-policy.md`, the software testing plan at `docs/testing-plan.md`, per-platform implementation notes at `docs/platform-notes.md`, the configuration key reference at `docs/configuration.md`, the headless and scripting contract at `docs/headless.md`, the installation specification at `docs/installation.md`, a glossary of project-specific terminology at `docs/glossary.md`, and the provenance of what this design takes from Pi and fx at `docs/inspiration.md`. First-party provider extensions are documented individually under `docs/providers/`. The extension manifest schema is at `schemas/extension-manifest.schema.json` and is the normative validation source; the manifest examples in this document are illustrative.
 
 ## What this is
 
@@ -508,6 +508,28 @@ FR-DIST-8. The agent SHALL load an installed extension by its recorded digest an
 
 FR-DIST-9. The agent SHALL fetch an extension from a plain HTTPS-hosted archive as an alternative to an OCI reference, applying the same digest verification and consent flow as an OCI-sourced install.
 
+### Installers
+
+The two scripts at the repository root, `install.sh` for POSIX systems and `install.ps1` for Windows, implement this section. The full specification, including flag reference, exit codes, and the manual path, is `docs/installation.md`; the decision record is ADR-0040; the tests are `tests/install/` under gate 10.
+
+FR-INSTALL-1. WHEN the installer runs on a supported platform, it SHALL place the release asset named for that platform at the install directory as an executable file, and no step other than the final move SHALL modify an already-installed binary.
+
+FR-INSTALL-2. The installer SHALL verify the downloaded asset against the release's `artifacts.sha256` before installing it; IF the digests differ or no hash tool is available, THEN it SHALL delete the download and exit non-zero without installing (FR-INSTALL-1's existing binary untouched).
+
+FR-INSTALL-3. IF the install directory is not already on the user's PATH, THEN the installer SHALL write exactly one marked PATH block to the platform's rc file (or user PATH entry on Windows), SHALL be idempotent across re-runs, and SHALL edit no file when `--no-path`/`-NoPath` is given.
+
+FR-INSTALL-4. WHEN the installer runs over an existing install, it SHALL replace the binary through the same verify-then-move path and SHALL report the previous and installed versions.
+
+FR-INSTALL-5. WHEN `--uninstall`/`-Uninstall` is given, the installer SHALL remove the installed binary and every marked PATH block it added, SHALL modify nothing outside those markers, and SHALL report each removal.
+
+FR-INSTALL-6. WHERE `LCA_BASE_URL` (or `-BaseUrl`) is set, the installer SHALL resolve every download against that base instead of the default release URL, with no other behavior change.
+
+FR-INSTALL-7. IF the detected platform and architecture pair names no release asset, THEN the installer SHALL exit with code 2 and a message naming the pair, pointing a Windows user at the PowerShell one-liner.
+
+FR-INSTALL-8. WHEN `--version`/`-Version` names a release, the installer SHALL install that release's assets rather than the latest release's.
+
+FR-INSTALL-9. The Windows installer SHALL run unmodified on Windows PowerShell 5.1 and on pwsh, SHALL verify with `Get-FileHash -Algorithm SHA256`, SHALL replace the installed binary atomically, and SHALL append its directory to the user PATH without duplicating an existing entry or clobbering entries it did not write.
+
 ### Web target
 
 FR-WEB-1. WHERE the agent is built for the web target, the agent SHALL run as a transpiled ES module in a JavaScript host.
@@ -652,6 +674,8 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 ├── Cargo.toml                  workspace manifest
 ├── rust-toolchain.toml         pinned toolchain
 ├── deny.toml                   license and advisory policy
+├── install.sh                  POSIX installer and updater (FR-INSTALL-*; docs/installation.md)
+├── install.ps1                 Windows PowerShell installer and updater
 ├── wit/
 │   ├── world-provider.wit
 │   ├── world-tool.wit
@@ -683,9 +707,9 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── hooks-example/          reference hooks implementation
 │   ├── openai-compatible/      default provider; native-linked by default
 │   ├── antigravity/            reference OAuth provider; WASM by default
-│   ├── codex/                  second OAuth provider; WASM by default
-│   ├── lmstudio/                local provider; net-local by default
-│   ├── ollama/                  local provider; net-local by default
+│   ├── codex/                  second OAuth provider; WASM - specified, not yet in the tree
+│   ├── lmstudio/               local provider; net-local - specified, not yet in the tree
+│   ├── ollama/                 local provider; net-local - specified, not yet in the tree
 │   ├── skills/                 a `context-transform` example; not registered by default (skills merge is host-side, ADR-0034)
 │   └── compaction-default/     the default compaction extension; native-linked by default
 ├── web/
@@ -693,7 +717,7 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   └── examples/
 ├── xtask/                      build, size check, release packaging
 ├── docs/
-│   ├── adr/                    architecture decision records, 0001 through 0039 (0020 unused)
+│   ├── adr/                    architecture decision records, 0001 through 0040 (0020 unused)
 │   ├── capabilities.md         the capability catalog
 │   ├── extension-authoring.md
 │   ├── abi-versioning.md
@@ -703,6 +727,7 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── release-policy.md
 │   ├── configuration.md        configuration keys, defaults, and merge sources
 │   ├── headless.md             headless output envelope and exit codes
+│   ├── installation.md         the one-liner installers, manual install, security stance
 │   ├── testing-plan.md         the software testing plan
 │   ├── platform-notes.md
 │   ├── glossary.md
@@ -712,6 +737,7 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   └── extension-manifest.schema.json
 ├── tests/
 │   ├── regressions/            one file per closed defect, named by tracking identifier
+│   ├── install/                the installers' own suite (testing plan section 15)
 │   └── ...                     workspace-level integration tests
 └── .github/workflows/
 ```

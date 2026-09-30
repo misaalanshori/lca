@@ -74,6 +74,17 @@ for root in ("crates", "extensions", "tests"):
                 i = end
             i += 1
 
+        # Shell and PowerShell suites (tests/install/, testing plan
+        # section 15) have no Rust comment blocks to walk. They carry
+        # `# Verifies: FR-X-N` and count by the pipeline rule: within the
+        # eight lines after a `Verifies` mention.
+        for suffix in ("*.sh", "*.ps1"):
+            for path in base.rglob(suffix):
+                lines = path.read_text(errors="ignore").splitlines()
+                for i, line in enumerate(lines):
+                    if "Verifies" in line:
+                        ids.update(pattern.findall("\n".join(lines[i:i + 9])))
+
 pipeline = list(pathlib.Path("scripts").glob("*.sh"))
 pipeline += list(pathlib.Path(".github").rglob("*.yml"))
 for path in pipeline:

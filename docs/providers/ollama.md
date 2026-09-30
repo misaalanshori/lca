@@ -2,7 +2,7 @@
 
 Version 0.1, 2026-09-20.
 
-Source: `extensions/ollama/`. Delivery: WASM, installed separately, not bundled by default. Same access shape as LM Studio; documented separately because the wire format is not the same.
+Source: not in the tree yet - this profile specifies the extension; nothing under `extensions/` builds it today. Delivery: WASM, would be installed separately rather than bundled. Same access shape as LM Studio; documented separately because the wire format is not the same.
 
 ## What it authenticates against
 
