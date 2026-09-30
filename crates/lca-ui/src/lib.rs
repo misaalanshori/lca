@@ -25,10 +25,10 @@ pub use footer::Footer;
 pub use lca_protocol::{QueuedMessage, SubmitMode, steer_queue};
 pub use run::run;
 pub use state::{
-    Action, CUSTOM_OPTION, CommandInvoker, LoginComplete, LoginConfirm, LoginNext, LoginPick,
-    LoginRequest, PickerOption, PromptRequest, RegionInteractor, RegionRenderer, ShellEvent,
-    ShellHandle, ShellRunner, TurnChannels, TurnRunner, UiHooks, UiOptions, UiState, display_path,
-    sanitize_block, sanitize_text, widget_lines,
+    Action, CUSTOM_OPTION, CommandInvoker, LoginCancel, LoginComplete, LoginConfirm, LoginNext,
+    LoginPick, LoginPoll, LoginRequest, PickerOption, PromptRequest, RegionInteractor,
+    RegionRenderer, ShellEvent, ShellHandle, ShellRunner, TurnChannels, TurnRunner, UiHooks,
+    UiOptions, UiState, display_path, sanitize_block, sanitize_text, widget_lines,
 };
 pub use theme::Theme;
 pub use transcript::{Entry, ToolStatus, Transcript, image_label};

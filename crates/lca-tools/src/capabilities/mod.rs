@@ -139,6 +139,10 @@ impl Service<Name> for PinnedResolver {
 struct OAuthFlow {
     rx: Option<std::sync::mpsc::Receiver<Vec<(String, String)>>>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// A live sender for the manual-callback fallback (R4): a pasted
+    /// callback URL is delivered on this channel, waking `oauth_await`
+    /// exactly as the loopback listener would.
+    tx: std::sync::mpsc::Sender<Vec<(String, String)>>,
 }
 
 /// The host-mediated model call (capability catalog `completion`): a

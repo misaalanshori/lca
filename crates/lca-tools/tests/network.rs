@@ -357,6 +357,43 @@ fn oauth_begin_binds_loopback_and_the_callback_delivers_parameters() {
     caps.oauth_end(flow).expect("end");
 }
 
+// Verifies: R4(c) - a manually pasted callback wakes the waiting flow
+// exactly as the loopback listener would, so a login completes where the
+// browser never reached `127.0.0.1` (or its auto-open failed).
+#[test]
+fn a_manually_delivered_callback_wakes_a_blocked_oauth_wait() {
+    let sandbox = Sandbox::new("oauth-manual");
+    let caps = sandbox.caps(CapabilityGrants {
+        oauth: Some(OAuthSettings {
+            redirect_path: "/callback".to_string(),
+            timeout_seconds: 30,
+        }),
+        ..CapabilityGrants::default()
+    });
+
+    let (_redirect, flow) = caps.oauth_begin("/callback").expect("begin");
+    let engine = std::sync::Arc::new(caps);
+    let waiter = engine.clone();
+    let join = std::thread::spawn(move || waiter.oauth_await(flow));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    engine
+        .oauth_deliver_manual(vec![
+            ("code".to_string(), "manual-code".to_string()),
+            ("state".to_string(), "s-1".to_string()),
+        ])
+        .expect("the manual callback delivers");
+    let params = join.join().expect("the waiter joins").expect("arrives");
+    assert!(
+        params.contains(&("code".to_string(), "manual-code".to_string())),
+        "the delivered params reach the wait: {params:?}"
+    );
+    engine.oauth_end(flow).expect("end");
+
+    // A delivery with nothing waiting is a legible error, not a panic.
+    let result = engine.oauth_deliver_manual(vec![("code".into(), "x".into())]);
+    assert!(result.is_err(), "no live waiter: {result:?}");
+}
+
 // Verifies: FR-PROV-3 against the connect-then-wait race - a client
 // that connects and then takes its time writing the request (a
 // descheduled thread on a loaded runner, a browser's preconnect) still

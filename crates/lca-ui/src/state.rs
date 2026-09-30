@@ -78,6 +78,14 @@ pub enum LoginNext {
         /// The consent text naming the host.
         prompt: String,
     },
+    /// A background step is running (R4): the interface shows a
+    /// cancellable waiting state and polls [`LoginPoll`] each frame, so a
+    /// slow OAuth callback can never freeze the app. `label` names the
+    /// step and, once known, carries the auth URL.
+    Waiting {
+        /// The line the waiting modal shows.
+        label: String,
+    },
 }
 
 /// The host's login seam: `/login` calls this to choose between a message,
@@ -99,6 +107,13 @@ pub type LoginComplete = Arc<dyn Fn(&str, &str) -> LoginNext + Send + Sync>;
 /// Persist an ad hoc `net` grant the user approved at login; returns the
 /// message to show.
 pub type LoginConfirm = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
+
+/// Poll a background login/identity step (R4): `Some` applies the next
+/// [`LoginNext`], `None` keeps the waiting state.
+pub type LoginPoll = Arc<dyn Fn() -> Option<LoginNext> + Send + Sync>;
+
+/// Cancel the background login/identity step (R4).
+pub type LoginCancel = Arc<dyn Fn() + Send + Sync>;
 
 /// A single-line prompt (the `/login` flow).
 pub struct SecretPrompt {
@@ -414,6 +429,12 @@ pub struct UiHooks {
     pub grants: Option<GrantList>,
     /// Revoke one grant (S8).
     pub revoke_grant: Option<GrantRevoke>,
+    /// Poll a background login/identity step (R4); `Some` applies the next
+    /// step, `None` keeps waiting. The loop calls it every tick.
+    pub poll_login: Option<LoginPoll>,
+    /// Cancel the background login/identity step (R4), called on Escape
+    /// while the waiting modal is open.
+    pub cancel_login: Option<LoginCancel>,
 }
 
 /// Static inputs for the interface.
@@ -500,6 +521,9 @@ pub struct UiState {
     pub picker: Option<PickerPrompt>,
     /// The open ad hoc-grant confirm, if any (`/login`).
     pub grant: Option<GrantPrompt>,
+    /// A background login/identity step is running (R4); the label names
+    /// it (and carries the auth URL once the provider has asked for one).
+    pub login_waiting: Option<String>,
     /// Ctrl+C seen once on an idle prompt.
     pub ctrl_c_armed: bool,
     /// The extension side panel is open.
@@ -528,6 +552,7 @@ impl UiState {
             secret: None,
             picker: None,
             grant: None,
+            login_waiting: None,
             ctrl_c_armed: false,
             panel_open: false,
             modal_open: false,
@@ -554,6 +579,7 @@ impl UiState {
         self.picker.is_some()
             || self.grant.is_some()
             || self.secret.is_some()
+            || self.login_waiting.is_some()
             || self.permission.is_some()
             || self.modal_open
     }
@@ -592,13 +618,20 @@ pub fn key_input(key: &str) -> lca_protocol::UiInput {
 /// [`LoginNext::Secret`] mid-flow is the next field of a multi-field
 /// login, not a refusal.
 pub fn apply_login_next(state: &mut UiState, next: LoginNext) {
+    // One step owns the screen at a time: entering one clears the others.
+    // `Waiting` is the exception that must not clear a manual-callback
+    // secret field, so it only sets the waiting label.
     match next {
-        LoginNext::Message(text) => state.notice = Some(sanitize_block(&text)),
+        LoginNext::Message(text) => {
+            state.login_waiting = None;
+            state.notice = Some(sanitize_block(&text));
+        }
         LoginNext::Secret {
             provider,
             label,
             masked,
         } => {
+            state.login_waiting = None;
             state.secret = Some(SecretPrompt {
                 provider,
                 label,
@@ -607,6 +640,7 @@ pub fn apply_login_next(state: &mut UiState, next: LoginNext) {
             });
         }
         LoginNext::Picker { options } => {
+            state.login_waiting = None;
             if options.is_empty() {
                 state.notice = Some("nothing to sign in to".to_string());
             } else {
@@ -621,11 +655,15 @@ pub fn apply_login_next(state: &mut UiState, next: LoginNext) {
             host,
             prompt,
         } => {
+            state.login_waiting = None;
             state.grant = Some(GrantPrompt {
                 provider,
                 host,
                 prompt,
             });
+        }
+        LoginNext::Waiting { label } => {
+            state.login_waiting = Some(sanitize_block(&label));
         }
     }
 }

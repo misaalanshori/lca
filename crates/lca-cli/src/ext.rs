@@ -239,6 +239,18 @@ pub async fn run(cmd: ExtCmd) -> i32 {
         },
         ExtCmd::Update { name, all, yes } => update(&tree, name, all, yes).await,
         ExtCmd::Remove { name } => {
+            // R5: accept the name, the source ref, or a digest prefix.
+            let name = match resolve_installed(&tree, &name) {
+                Ok(Some(name)) => name,
+                Ok(None) => {
+                    not_installed(&tree, &name);
+                    return crate::exit::USAGE;
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return crate::exit::USAGE;
+                }
+            };
             // ADR-0030: state is wiped on uninstall (it is the extension's
             // own scratch, not something a reinstall should inherit).
             let removed = tree.remove(&name);
@@ -455,7 +467,17 @@ async fn update(tree: &InstallTree, name: Option<String>, all: bool, yes: bool) 
         }
     } else {
         match name {
-            Some(name) => vec![name],
+            Some(name) => match resolve_installed(tree, &name) {
+                Ok(Some(name)) => vec![name],
+                Ok(None) => {
+                    not_installed(tree, &name);
+                    return crate::exit::USAGE;
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return crate::exit::USAGE;
+                }
+            },
             None => {
                 eprintln!("error: `ext update` needs a name or --all");
                 return crate::exit::USAGE;
@@ -552,10 +574,26 @@ async fn update(tree: &InstallTree, name: Option<String>, all: bool, yes: bool) 
     code
 }
 
-fn info(tree: &InstallTree, name: &str) -> i32 {
-    match tree.entry(name) {
+fn info(tree: &InstallTree, query: &str) -> i32 {
+    let name = match resolve_installed(tree, query) {
+        Ok(Some(name)) => name,
+        Ok(None) => {
+            if builtin_names().contains(&query) {
+                println!("{query}: built into this binary (native, unsandboxed)");
+                println!("denials:  {}", tree.denial_count(query));
+                return crate::exit::OK;
+            }
+            not_installed(tree, query);
+            return crate::exit::USAGE;
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            return crate::exit::USAGE;
+        }
+    };
+    match tree.entry(&name) {
         Ok(Some(entry)) => {
-            let manifest = tree.manifest(name).unwrap_or_default();
+            let manifest = tree.manifest(&name).unwrap_or_default();
             println!("{name} {} (abi {})", entry.version, entry.abi);
             println!("source:   {}", entry.source);
             println!("digest:   {}", entry.digest);
@@ -572,28 +610,85 @@ fn info(tree: &InstallTree, name: &str) -> i32 {
             }
             // FR-EXT-9: the count that notices an extension trying
             // things it never declared.
-            println!("denials:  {}", tree.denial_count(name));
+            println!("denials:  {}", tree.denial_count(&name));
             // ADR-0030: the state bag is visible (and clearable).
-            let state_bytes = state_bytes(&crate::data_dir(), name);
+            let state_bytes = state_bytes(&crate::data_dir(), &name);
             if state_bytes > 0 {
                 println!("state:    {state_bytes} bytes (`lca ext state clear {name}`)");
             }
             crate::exit::OK
         }
         Ok(None) => {
-            if builtin_names().contains(&name) {
-                println!("{name}: built into this binary (native, unsandboxed)");
-                println!("denials:  {}", tree.denial_count(name));
-                crate::exit::OK
-            } else {
-                eprintln!("error: `{name}` is not installed");
-                crate::exit::USAGE
-            }
+            // The resolver returned a name from the lockfile, so this is
+            // only reachable on a race (removed between calls).
+            eprintln!("error: `{name}` is not installed");
+            crate::exit::USAGE
         }
         Err(err) => {
             eprintln!("error: {err}");
             crate::exit::INTERNAL
         }
+    }
+}
+
+/// Resolve a user-typed extension query against the installed tree (R5):
+/// the exact name, the source reference, the full digest, or a digest
+/// prefix (full or short). An ambiguous prefix is an error naming the
+/// matches; no match returns `Ok(None)` so the caller can print what does
+/// exist.
+fn resolve_installed(tree: &InstallTree, query: &str) -> Result<Option<String>, String> {
+    let entries = tree.list().map_err(|err| err.to_string())?;
+    // Exact name wins outright, before any fuzzy matching.
+    if let Some((name, _)) = entries.iter().find(|(name, _)| name == query) {
+        return Ok(Some(name.clone()));
+    }
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(None);
+    }
+    let matches: Vec<&String> = entries
+        .iter()
+        .filter(|(_, entry)| {
+            entry.source == query
+                || entry.digest == query
+                || short_digest(&entry.digest) == query
+                || (!query.is_empty() && entry.digest.starts_with(query))
+        })
+        .map(|(name, _)| name)
+        .collect();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [name] => Ok(Some((*name).clone())),
+        many => Err(format!(
+            "`{query}` is ambiguous; it matches {}. Use the exact name.",
+            many.iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// The "not installed" report (R5): name what does exist instead of a flat
+/// refusal, so the owner's four-command transcript succeeds on attempt one.
+fn not_installed(tree: &InstallTree, query: &str) {
+    let mut known: Vec<String> = tree
+        .list()
+        .map(|entries| entries.into_iter().map(|(name, _)| name).collect())
+        .unwrap_or_default();
+    known.extend(builtin_names().iter().map(|name| (*name).to_string()));
+    known.sort();
+    known.dedup();
+    if known.is_empty() {
+        eprintln!(
+            "error: `{query}` is not installed; nothing is installed yet \
+             (install one with `lca ext install <ref>`)"
+        );
+    } else {
+        eprintln!(
+            "error: `{query}` is not installed. Known: {} (see `lca ext list`)",
+            known.join(", ")
+        );
     }
 }
 

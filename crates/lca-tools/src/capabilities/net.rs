@@ -474,6 +474,9 @@ impl Capabilities {
             .port();
         let redirect_url = format!("http://127.0.0.1:{port}{redirect_path}");
         let (tx, rx) = std::sync::mpsc::channel::<Vec<(String, String)>>();
+        // A second sender so the manual-callback fallback can wake the wait
+        // without the loopback listener (R4).
+        let tx_for_manual = tx.clone();
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop_for_thread = stop.clone();
         listener
@@ -554,7 +557,14 @@ connection: close
         let id = self
             .next_flow
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        lock(&self.flows).insert(id, OAuthFlow { rx: Some(rx), stop });
+        lock(&self.flows).insert(
+            id,
+            OAuthFlow {
+                rx: Some(rx),
+                stop,
+                tx: tx_for_manual,
+            },
+        );
         lock(&self.oauth_begun).push(redirect_url.clone());
         Ok((redirect_url, id))
     }
@@ -571,30 +581,10 @@ connection: close
         if let Some(opener) = lock(&self.browser_opener).clone() {
             return opener(url).map_err(|err| CapabilityError::Io(err.to_string()));
         }
-        #[cfg(target_os = "linux")]
-        let mut cmd = {
-            let mut c = std::process::Command::new("xdg-open");
-            c.arg(url);
-            c
-        };
-        #[cfg(target_os = "macos")]
-        let mut cmd = {
-            let mut c = std::process::Command::new("open");
-            c.arg(url);
-            c
-        };
-        #[cfg(windows)]
-        let mut cmd = {
-            let mut c = std::process::Command::new("cmd");
-            c.args(["/C", "start", "", url]);
-            c
-        };
-        cmd.stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|err| CapabilityError::Io(format!("cannot open a browser: {err}")))?;
-        Ok(())
+        // R3: the shared shell-free launcher. The old inline Windows path
+        // was `cmd /C start "" <url>`, whose parser split the authorize URL
+        // at the first `&`; see `crate::open`.
+        crate::open_url(url).map_err(CapabilityError::Io)
     }
 
     /// Wait for the flow's callback; returns its parsed query parameters,
@@ -657,5 +647,27 @@ connection: close
                 "unknown oauth flow {handle}"
             ))),
         }
+    }
+
+    /// Deliver a manually pasted OAuth callback to the flow awaiting one
+    /// (R4's manual fallback, pi's `acquireAuthCode`). The pasted redirect
+    /// URL's query parameters wake [`Self::oauth_await`] exactly as the
+    /// loopback listener would, so a browser that cannot reach the
+    /// loopback (or a failed auto-open) still completes the login. The
+    /// most recent open flow is the one waiting (one login at a time).
+    pub fn oauth_deliver_manual(
+        &self,
+        params: Vec<(String, String)>,
+    ) -> Result<(), CapabilityError> {
+        let flows = lock(&self.flows);
+        let Some((id, flow)) = flows.iter().max_by_key(|(id, _)| **id) else {
+            return Err(CapabilityError::NotFound(
+                "no oauth flow is open".to_string(),
+            ));
+        };
+        let id = *id;
+        flow.tx
+            .send(params)
+            .map_err(|_| CapabilityError::NotFound(format!("oauth flow {id} is no longer waiting")))
     }
 }

@@ -973,3 +973,89 @@ fn the_trust_prompt_opens_when_the_host_asks() {
     let quiet = Chat::new(options(), Arc::new(KeybindingsManager::new()));
     assert!(quiet.trust_picker.is_none());
 }
+
+// Verifies: R4 - a background login step renders as a cancellable waiting
+// state that owns the keyboard (so a 300-second OAuth callback can never
+// freeze the app or leak keys into the editor behind it).
+#[test]
+fn the_login_wait_state_renders_and_owns_the_keyboard() {
+    let mut chat = chat();
+    chat.apply_login_next(LoginNext::Waiting {
+        label: "waiting for browser sign-in… (esc cancels)".into(),
+    });
+    let text = strip(&chat.viewport(80, 24, 0)).join("\n");
+    assert!(
+        text.contains("waiting for browser sign-in"),
+        "the waiting state is visible:\n{text}"
+    );
+    assert!(text.contains("esc cancels"), "the cancel is named:\n{text}");
+    // The waiting state owns every key: typing cannot reach the editor.
+    for c in "secretxyz".chars() {
+        assert_eq!(
+            chat.handle_key(&c.to_string()),
+            Action::Continue,
+            "keys are swallowed while waiting"
+        );
+    }
+    assert_eq!(chat.editor.text(), "", "nothing leaked into the editor");
+}
+
+// Verifies: R4 - Escape cancels the background step through the host hook.
+#[test]
+fn escape_cancels_the_login_wait_through_the_hook() {
+    let mut chat = chat();
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    chat.world.options.hooks.cancel_login = Some(Arc::new({
+        let flag = cancelled.clone();
+        move || flag.store(true, std::sync::atomic::Ordering::SeqCst)
+    }));
+    chat.apply_login_next(LoginNext::Waiting {
+        label: "waiting…".into(),
+    });
+    chat.handle_key("\x1b");
+    assert!(
+        cancelled.load(std::sync::atomic::Ordering::SeqCst),
+        "the host hook ran"
+    );
+    assert!(
+        chat.world.login_waiting.is_none(),
+        "the waiting state is gone"
+    );
+    assert!(
+        chat.world
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("cancelled")),
+        "the user is told: {:?}",
+        chat.world.notice
+    );
+}
+
+// Verifies: R4 - the poll hands the interface the finished step, which
+// lands as an ordinary notice.
+#[test]
+fn a_finished_login_result_lands_when_the_poll_returns_it() {
+    let mut chat = chat();
+    let cell: Arc<std::sync::Mutex<Option<LoginNext>>> = Arc::new(std::sync::Mutex::new(Some(
+        LoginNext::Message("signed in via `antigravity`".into()),
+    )));
+    chat.world.options.hooks.poll_login = Some(Arc::new({
+        let cell = cell.clone();
+        move || cell.lock().unwrap().take()
+    }));
+    let poll = chat.world.options.hooks.poll_login.clone().expect("hook");
+    chat.apply_login_next(LoginNext::Waiting {
+        label: "wait".into(),
+    });
+    if let Some(next) = poll() {
+        chat.apply_login_next(next);
+    }
+    assert_eq!(
+        chat.world.notice.as_deref(),
+        Some("signed in via `antigravity`")
+    );
+    assert!(chat.world.login_waiting.is_none(), "the wait is over");
+    // A second poll with nothing pending changes nothing.
+    let poll = chat.world.options.hooks.poll_login.clone().expect("hook");
+    assert!(poll().is_none());
+}

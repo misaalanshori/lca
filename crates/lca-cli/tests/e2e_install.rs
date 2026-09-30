@@ -206,6 +206,43 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
     assert!(text.contains("digest:   sha256:"), "{text}");
     assert!(text.contains("denials:  0"), "{text}");
 
+    // R5: `ext info` accepts the source ref and a digest prefix, and a miss
+    // names what does exist instead of refusing flatly.
+    let full_digest = text
+        .lines()
+        .find_map(|line| line.strip_prefix("digest:   "))
+        .expect("the digest line")
+        .trim()
+        .to_string();
+    assert!(full_digest.starts_with("sha256:"), "{full_digest}");
+    let prefix = &full_digest[7..19];
+    let by_source = sandbox.run(Some(&model), &["ext", "info", &reference]);
+    assert_eq!(
+        by_source.status.code(),
+        Some(0),
+        "info by source ref: {}",
+        stderr(&by_source)
+    );
+    assert!(
+        stdout(&by_source).contains("digest:"),
+        "{}",
+        stdout(&by_source)
+    );
+    let by_digest = sandbox.run(Some(&model), &["ext", "info", prefix]);
+    assert_eq!(
+        by_digest.status.code(),
+        Some(0),
+        "info by digest prefix: {}",
+        stderr(&by_digest)
+    );
+    let miss = sandbox.run(Some(&model), &["ext", "info", "no-such-ext"]);
+    assert_eq!(miss.status.code(), Some(2), "a miss is a usage error");
+    let miss_err = stderr(&miss);
+    assert!(
+        miss_err.contains("Known:") && miss_err.contains("openai-compatible"),
+        "the miss names what exists: {miss_err}"
+    );
+
     // The installed WASM provider cannot read the host environment
     // (sandboxing is the point), so its endpoint and key live in its own
     // credential namespace - exactly what `/login` writes for a real

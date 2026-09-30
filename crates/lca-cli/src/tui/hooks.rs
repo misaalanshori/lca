@@ -50,41 +50,14 @@ fn native_clipboard(text: &str) -> bool {
     false
 }
 
-/// Open a URL in the platform's browser (R6/S7). Fire-and-forget: returns
-/// `Err` with the reason when no launcher is available or every candidate
-/// refused to start, so the notice can say why rather than just "cannot".
+/// Open a URL in the platform's browser (R6/S7, R3). Fire-and-forget:
+/// returns `Err` with the reason when no launcher is available or every
+/// candidate refused to start, so the notice can say why rather than just
+/// "cannot". The implementation is shared with the OAuth flow
+/// (`lca_tools::open_url`): no shell in the path, so a `&`-laden authorize
+/// URL cannot be split by a command-line parser.
 fn open_url(url: &str) -> Result<(), String> {
-    let candidates: &[(&str, &[&str])] = {
-        #[cfg(target_os = "macos")]
-        {
-            &[("open", &[] as &[&str])]
-        }
-        #[cfg(target_os = "windows")]
-        {
-            &[("cmd", &["/C", "start", ""] as &[&str])]
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            &[
-                ("xdg-open", &[] as &[&str]),
-                ("x-www-browser", &[] as &[&str]),
-            ]
-        }
-    };
-    let mut tried: Vec<String> = Vec::new();
-    for (program, args) in candidates {
-        let mut command = std::process::Command::new(program);
-        command
-            .args(*args)
-            .arg(url)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        if command.spawn().is_ok() {
-            return Ok(());
-        }
-        tried.push((*program).to_string());
-    }
-    Err(format!("no URL opener found (tried {})", tried.join(", ")))
+    lca_tools::open_url(url)
 }
 
 /// Read a child pipe into the shell sink until it closes (R4). Control
@@ -112,7 +85,7 @@ fn read_into<R: std::io::Read>(
 
 impl Ui {
     /// The host hooks wired for this composition (S1).
-    pub(super) fn hooks(&self) -> UiHooks {
+    pub(super) fn hooks(self: &Arc<Self>) -> UiHooks {
         // E2: keep the live theme cell in step with the persisted pick so
         // `/settings` shows the session value, like it does for thinking.
         let theme_cell = self.theme_cell.clone();
@@ -187,6 +160,17 @@ impl Ui {
             fork_at: Some(self.fork_at()),
             grants: Some(self.grants()),
             revoke_grant: Some(self.revoke_grant()),
+            // R4: a background login/identity step reports back through the
+            // loop's poll instead of blocking the input thread on a
+            // 300-second OAuth callback; Escape cancels it.
+            poll_login: {
+                let ui = self.clone();
+                Some(Arc::new(move || ui.poll_login()) as lca_ui::LoginPoll)
+            },
+            cancel_login: {
+                let ui = self.clone();
+                Some(Arc::new(move || ui.cancel_login()) as lca_ui::LoginCancel)
+            },
         }
     }
 

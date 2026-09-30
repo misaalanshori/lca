@@ -89,7 +89,7 @@ impl Ui {
 
     /// One built-in slash command (the slots the host itself fills, then the
     /// registry's dispatch).
-    fn dispatch_command(&self, name: &str, argument: &str) -> CommandEffect {
+    fn dispatch_command(self: &Arc<Self>, name: &str, argument: &str) -> CommandEffect {
         match name {
             "attach" => self.command_attach(argument),
             "model" => self.command_model(argument),
@@ -142,6 +142,24 @@ impl Ui {
                 .unwrap_or_else(|| {
                     CommandEffect::ShowWidget(crate::no_model_message(&self.provider_name))
                 }),
+            // R4: a provider's namespaced identity `login` blocks on a
+            // browser callback (the owner's freeze). It runs on a
+            // background thread; the interface polls the result.
+            name if name.ends_with(".login") => {
+                let provider = name.trim_end_matches(".login");
+                match self.registry.provider(provider).cloned() {
+                    Some(handle) => {
+                        self.spawn_identity_login(handle);
+                        CommandEffect::ShowWidget(
+                            "waiting for browser sign-in… (esc cancels)".to_string(),
+                        )
+                    }
+                    None => self
+                        .registry
+                        .invoke_command(name, argument)
+                        .unwrap_or(CommandEffect::None),
+                }
+            }
             _ => self
                 .registry
                 .invoke_command(name, argument)

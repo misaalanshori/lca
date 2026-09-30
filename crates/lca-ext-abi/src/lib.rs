@@ -234,6 +234,23 @@ pub mod dispatch {
             Box::pin(std::future::ready(Ok(Vec::new())))
         }
 
+        /// Deliver a manually pasted OAuth callback to the flow this
+        /// provider is waiting on (R4's manual fallback). The default:
+        /// this provider has no OAuth flow to deliver to.
+        fn oauth_manual_callback(
+            &self,
+            _params: Vec<(String, String)>,
+        ) -> Result<(), DispatchError> {
+            Ok(())
+        }
+
+        /// The most recent auth URL this provider asked the host to open,
+        /// for the interface to display when the auto-open fails (R3).
+        /// Default: none.
+        fn oauth_last_url(&self) -> Option<String> {
+            None
+        }
+
         /// The regions this handle registered under `capabilities.ui`
         /// (the host only ever asks for these: the catalog's `ui`
         /// table, deny-by-default). Empty by default - no rendering.

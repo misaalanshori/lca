@@ -43,6 +43,52 @@ pub fn picker_row(provider: &str, option: &LoginOption) -> PickerOption {
     }
 }
 
+/// Parse an OAuth redirect callback (R4(c)'s manual fallback): the query
+/// of a pasted callback URL, or a bare query string, into the `(name,
+/// value)` pairs `oauth_await` would have delivered from the loopback
+/// listener. Returns `None` when there is no query at all.
+pub fn parse_callback(value: &str) -> Option<Vec<(String, String)>> {
+    let (query, had_question) = match value.split_once('?') {
+        Some((_, query)) => (query, true),
+        None => (value, false),
+    };
+    // A redirect with no query carries no code: refuse it rather than feed
+    // a path (`/callback`) to the flow as a parameter.
+    if !had_question && !query.contains('=') {
+        return None;
+    }
+    let query = query.split('#').next().unwrap_or(query);
+    let mut pairs = Vec::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+        pairs.push((percent_decode(name), percent_decode(value)));
+    }
+    (!pairs.is_empty()).then_some(pairs)
+}
+
+/// Decode `%XX` escapes; bytes that are not valid UTF-8 after decoding are
+/// replaced lossily (the flow only cares about the ASCII `code`/`state`).
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit)
+            && bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit)
+        {
+            let hi = (bytes[i + 1] as char).to_digit(16).unwrap_or(0);
+            let lo = (bytes[i + 2] as char).to_digit(16).unwrap_or(0);
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// What [`LoginFlow::push`] produced: either the next prompt, or the
 /// collected answers for the caller to submit.
 pub enum Step {
@@ -424,6 +470,56 @@ pub fn override_presets(text: &str, provider: &str) -> Vec<(String, LoginOption)
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod callback_tests {
+    use super::parse_callback;
+
+    // Verifies: R4(c) - a pasted redirect URL yields exactly the query the
+    // loopback listener would have delivered.
+    #[test]
+    fn a_redirect_url_yields_its_query_pairs() {
+        let pairs =
+            parse_callback("http://127.0.0.1:54123/callback?code=4%2F0Ac&state=xyz&scope=a")
+                .expect("a callback URL parses");
+        assert_eq!(
+            pairs,
+            vec![
+                ("code".to_string(), "4/0Ac".to_string()),
+                ("state".to_string(), "xyz".to_string()),
+                ("scope".to_string(), "a".to_string()),
+            ]
+        );
+    }
+
+    // Verifies: a bare query string (what the browser's address bar shows
+    // after a failed navigation) parses the same way.
+    #[test]
+    fn a_bare_query_parses_too() {
+        let pairs = parse_callback("code=abc&state=s").expect("bare query");
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].1, "abc");
+    }
+
+    // Verifies: a redirect with no query carries no code, so it is refused
+    // rather than fed to the flow as a path parameter.
+    #[test]
+    fn a_redirect_without_a_query_is_refused() {
+        assert!(parse_callback("http://127.0.0.1:1/callback").is_none());
+        assert!(parse_callback("http://example.com/").is_none());
+        assert!(parse_callback("").is_none());
+    }
+
+    // Verifies: a fragment is dropped and non-UTF-8 escapes survive as
+    // replacement characters rather than a panic.
+    #[test]
+    fn fragments_and_bad_escapes_do_not_panic() {
+        let pairs = parse_callback("http://x/y?code=1#frag").expect("query");
+        assert_eq!(pairs, vec![("code".into(), "1".into())]);
+        let pairs = parse_callback("code=%FF%ZZ").expect("query");
+        assert_eq!(pairs[0].0, "code");
+    }
 }
 
 #[cfg(test)]

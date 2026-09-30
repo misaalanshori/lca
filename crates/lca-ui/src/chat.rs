@@ -694,6 +694,19 @@ impl Chat {
     fn handle_modal_key(&mut self, data: &str) -> Option<Action> {
         let key = keys::parse_key(data);
         let key = key.as_deref();
+        // R4: while a background login step runs, the waiting state owns
+        // the keyboard. Escape cancels; every other key is swallowed so it
+        // cannot leak into the editor behind the modal.
+        if self.world.login_waiting.is_some() {
+            if key == Some("escape") {
+                if let Some(cancel) = self.world.options.hooks.cancel_login.clone() {
+                    cancel();
+                }
+                self.world.login_waiting = None;
+                self.world.notice = Some("login cancelled".to_string());
+            }
+            return Some(Action::Continue);
+        }
         self.handle_login_picker(key)
             .or_else(|| self.handle_login_secret(data, key))
             .or_else(|| self.handle_login_grant(key))

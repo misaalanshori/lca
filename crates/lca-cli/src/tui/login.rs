@@ -8,6 +8,13 @@ use lca_ui::LoginNext;
 
 use super::Ui;
 
+/// What the waiting modal shows while a background login step runs (R4).
+const WAIT_LABEL: &str = "waiting for browser sign-in… (esc cancels)";
+
+/// How long the interface waits before offering the manual
+/// "paste the callback URL" fallback (R4(c)).
+const MANUAL_AFTER: std::time::Duration = std::time::Duration::from_secs(8);
+
 impl Ui {
     /// Every picker choice: each enabled provider extension's own options,
     /// plus the user's named custom endpoints (D1's override layer). The
@@ -32,24 +39,74 @@ impl Ui {
         out
     }
 
-    /// Submit the finished login: store the secret through the same atomic,
-    /// owner-only credential writer extensions use, persist the opaque
-    /// settings, light the session up, and offer the ad hoc grant.
-    fn login_apply(&self, step: crate::login::Step) -> LoginNext {
+    /// Apply one finished login step (R4). `Next` opens the next field or
+    /// message directly. `Submit` carries the blocking half: the
+    /// extension's `login_submit` runs its identity flow, which for an
+    /// OAuth provider waits out a browser callback on a 300-second loop.
+    /// That runs on a background thread and the interface shows a
+    /// cancellable `Waiting` state; the result arrives through
+    /// [`Ui::poll_login`].
+    fn login_apply(self: &Arc<Self>, step: crate::login::Step) -> LoginNext {
         use crate::login::Step;
-        let (target, choice, values) = match step {
-            Step::Next(next) => return next,
+        match step {
+            Step::Next(next) => next,
             Step::Submit {
                 provider,
                 choice,
                 values,
-            } => (provider, choice, values),
-        };
-        let target = if target.is_empty() {
-            self.provider_name.clone()
-        } else {
-            target
-        };
+            } => {
+                let target = if provider.is_empty() {
+                    self.provider_name.clone()
+                } else {
+                    provider
+                };
+                self.begin_wait(&target);
+                let ui = self.clone();
+                std::thread::spawn(move || {
+                    let next = ui.finish_login(target, choice, values);
+                    *ui.login_pending.lock().unwrap_or_else(|p| p.into_inner()) = Some(next);
+                });
+                LoginNext::Waiting {
+                    label: WAIT_LABEL.to_string(),
+                }
+            }
+        }
+    }
+
+    /// Arm a background wait against `target`'s handle (R4): reset the
+    /// manual-offer and URL state, stamp the start, and keep the handle
+    /// for cancellation and for delivering a pasted callback.
+    fn begin_wait(&self, target: &str) {
+        *self
+            .login_manual_offered
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = false;
+        *self
+            .login_url_shown
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = None;
+        *self
+            .login_cancelled
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = false;
+        *self
+            .login_wait_since
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
+        let handle = self.registry.provider(target).cloned();
+        *self.login_handle.lock().unwrap_or_else(|p| p.into_inner()) = handle;
+    }
+
+    /// The blocking half of a `Submit`, on the background thread: store
+    /// the secret through the same atomic, owner-only credential writer
+    /// extensions use, persist the opaque settings, light the session up,
+    /// and offer the ad hoc grant.
+    fn finish_login(
+        &self,
+        target: String,
+        choice: String,
+        values: std::collections::BTreeMap<String, String>,
+    ) -> LoginNext {
         // Choosing a login option for a provider that was disabled is an
         // explicit request to use it: re-enable it for this project, or the
         // settings land on something that will not run.
@@ -163,6 +220,154 @@ impl Ui {
         ))
     }
 
+    /// Poll the background login/identity step (R4): the interface calls
+    /// this every loop tick. `Some` applies a step, `None` keeps waiting.
+    pub(super) fn poll_login(&self) -> Option<LoginNext> {
+        // A finished background step wins; clearing the handle ends the
+        // wait (its manual offer and URL state go with it).
+        if let Some(next) = self
+            .login_pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+        {
+            *self.login_handle.lock().unwrap_or_else(|p| p.into_inner()) = None;
+            *self
+                .login_wait_since
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = None;
+            // A cancel the user asked for reports as a cancel; the thread's
+            // own error (`call cancelled`) would read as a failure.
+            let cancelled = {
+                let mut flag = self
+                    .login_cancelled
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                let was = *flag;
+                *flag = false;
+                was
+            };
+            if cancelled {
+                return Some(LoginNext::Message("login cancelled".to_string()));
+            }
+            return Some(next);
+        }
+        let handle = self
+            .login_handle
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()?;
+        // R3: fold the auth URL into the waiting label as soon as the
+        // extension asks the host to open it, so a failed auto-open still
+        // leaves a copyable URL on screen.
+        if let Some(url) = handle.oauth_last_url()
+            && self
+                .login_url_shown
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_deref()
+                != Some(url.as_str())
+        {
+            *self
+                .login_url_shown
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = Some(url.clone());
+            return Some(LoginNext::Waiting {
+                label: format!("{WAIT_LABEL}\n\n{url}"),
+            });
+        }
+        // R4(c): after a quiet period, offer the manual fallback — paste
+        // the callback URL (pi's `acquireAuthCode`) and the flow completes
+        // even where the loopback listener never got the browser's visit.
+        let offer = if *self
+            .login_manual_offered
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+        {
+            false
+        } else {
+            let since = *self
+                .login_wait_since
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            since.is_some_and(|t| t.elapsed() >= MANUAL_AFTER)
+        };
+        if offer {
+            *self
+                .login_manual_offered
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = true;
+            return Some(LoginNext::Secret {
+                provider: handle.name().to_string(),
+                label: "Nothing in the browser? Paste the callback URL:".to_string(),
+                masked: false,
+            });
+        }
+        None
+    }
+
+    /// Cancel the background step (R4): interrupt the extension, which
+    /// releases a blocked `oauth_await` through the capability engine's
+    /// cancel flag (NFR-21).
+    pub(super) fn cancel_login(&self) {
+        *self
+            .login_cancelled
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = true;
+        let handle = self
+            .login_handle
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let Some(handle) = handle {
+            handle.interrupt();
+        }
+    }
+
+    /// Run one provider's `login` identity command on a background thread
+    /// (R4): the namespaced `/antigravity.login` path is the owner's
+    /// freeze. Answer with a waiting step; the result arrives through
+    /// [`Ui::poll_login`].
+    pub(super) fn spawn_identity_login(self: &Arc<Self>, handle: lca_ext_native::NativeHandle) {
+        *self.login_pending.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        *self
+            .login_manual_offered
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = false;
+        *self
+            .login_url_shown
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = None;
+        *self
+            .login_cancelled
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = false;
+        *self
+            .login_wait_since
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
+        *self.login_handle.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle.clone());
+        let pending = self.login_pending.clone();
+        std::thread::spawn(move || {
+            use lca_core::drive_blocking;
+            let name = handle.name().to_string();
+            let outcome = drive_blocking(async move { handle.identity_login().await });
+            let next = match outcome {
+                Ok(lca_protocol::IdentityOutcome::Ok) => {
+                    LoginNext::Message(format!("logged in via `{name}`"))
+                }
+                Ok(lca_protocol::IdentityOutcome::NotSupported) => {
+                    LoginNext::Message(format!("login is not supported by `{name}`"))
+                }
+                Ok(lca_protocol::IdentityOutcome::Failed(reason)) => {
+                    LoginNext::Message(format!("login failed: {reason}"))
+                }
+                Err(err) => LoginNext::Message(format!("login failed: {err}")),
+            };
+            *pending.lock().unwrap_or_else(|p| p.into_inner()) = Some(next);
+        });
+    }
+
     /// The `/login` entry seam.
     pub(super) fn login_options(self: &Arc<Self>) -> lca_ui::LoginRequest {
         let ui = self.clone();
@@ -228,6 +433,15 @@ impl Ui {
     pub(super) fn login_complete(self: &Arc<Self>) -> lca_ui::LoginComplete {
         let ui = self.clone();
         Arc::new(move |provider: &str, value: &str| -> LoginNext {
+            // R4(c): while the manual fallback is open the field collects a
+            // pasted callback URL, not the next flow field.
+            if *ui
+                .login_manual_offered
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+            {
+                return ui.deliver_manual_callback(value);
+            }
             let step = ui
                 .flow
                 .lock()
@@ -235,6 +449,42 @@ impl Ui {
                 .push(provider, value);
             ui.login_apply(step)
         })
+    }
+
+    /// Hand a pasted OAuth callback URL to the waiting flow (R4(c), pi's
+    /// `acquireAuthCode`): parse the redirect URL's query, deliver it on
+    /// the flow's manual channel, and go back to waiting for the exchange.
+    pub(super) fn deliver_manual_callback(&self, value: &str) -> LoginNext {
+        let Some(params) = crate::login::parse_callback(value) else {
+            return LoginNext::Message(
+                "that is not a callback URL — paste the whole redirect (…/callback?code=…)"
+                    .to_string(),
+            );
+        };
+        let handle = self
+            .login_handle
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let Some(handle) = handle else {
+            return LoginNext::Message("no login is waiting".to_string());
+        };
+        match handle.oauth_manual_callback(params) {
+            Ok(()) => {
+                *self
+                    .login_manual_offered
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = false;
+                *self
+                    .login_wait_since
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
+                LoginNext::Waiting {
+                    label: "callback delivered — finishing sign-in… (esc cancels)".to_string(),
+                }
+            }
+            Err(err) => LoginNext::Message(format!("could not use that callback: {err}")),
+        }
     }
 
     /// Persists an ad hoc `net` grant the user approved at login.

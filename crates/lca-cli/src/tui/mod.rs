@@ -111,6 +111,23 @@ pub(crate) struct Ui {
     initial_lines: Vec<String>,
     /// The background update check's finding (FR-CFG-6).
     update_notice: Arc<std::sync::OnceLock<String>>,
+    /// R4: a background login/identity step's result, taken by the
+    /// interface's `poll_login` hook.
+    login_pending: Arc<Mutex<Option<lca_ui::LoginNext>>>,
+    /// R4: the provider handle a background step is running against, for
+    /// manual-callback delivery and cancellation.
+    login_handle: Arc<Mutex<Option<lca_ext_native::NativeHandle>>>,
+    /// R4: whether the manual "paste the callback URL" field was offered
+    /// for the current wait.
+    login_manual_offered: Arc<Mutex<bool>>,
+    /// R4: the auth URL already folded into the waiting label.
+    login_url_shown: Arc<Mutex<Option<String>>>,
+    /// R4: when the current wait began (the manual offer follows a quiet
+    /// period).
+    login_wait_since: Arc<Mutex<Option<std::time::Instant>>>,
+    /// R4: Escape cancelled the current wait, so its background result is
+    /// ours to report as a cancel rather than as a failure.
+    login_cancelled: Arc<Mutex<bool>>,
 }
 
 /// Enter the interactive interface for `cwd`, optionally resuming `resume`.
@@ -371,6 +388,12 @@ impl Ui {
             ui_events,
             initial_lines,
             update_notice,
+            login_pending: Arc::new(Mutex::new(None)),
+            login_handle: Arc::new(Mutex::new(None)),
+            login_manual_offered: Arc::new(Mutex::new(false)),
+            login_url_shown: Arc::new(Mutex::new(None)),
+            login_wait_since: Arc::new(Mutex::new(None)),
+            login_cancelled: Arc::new(Mutex::new(false)),
         })
     }
 

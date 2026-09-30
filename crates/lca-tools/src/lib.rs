@@ -10,6 +10,7 @@
 
 mod bridge;
 mod capabilities;
+mod open;
 mod ops;
 mod process;
 mod pty;
@@ -22,6 +23,7 @@ pub use capabilities::{
     RESOURCE_PACKAGE_MAX_BYTES, RESOURCE_READ_MAX_BYTES, ResourceSource, STATE_TOTAL_MAX_BYTES,
     STATE_VALUE_MAX_BYTES,
 };
+pub use open::{UrlLauncher, open_url, url_launchers, windows_url_launcher};
 pub use ops::{Entry, ExecOutcome, NativeOps, Stat, ToolOps};
 pub use process::{TreeChild, read_up_to, spawn_direct, write_all};
 pub use pty::PtyChild;

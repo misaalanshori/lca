@@ -1003,4 +1003,17 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
         // engine too, and the wait polls its way out (FR-CONC-1, NFR-21).
         self.inner.cap.cancel();
     }
+
+    fn oauth_manual_callback(&self, params: Vec<(String, String)>) -> Result<(), DispatchError> {
+        self.inner
+            .cap
+            .oauth_deliver_manual(params)
+            .map_err(|err| DispatchError::Failed(err.to_string()))
+    }
+
+    fn oauth_last_url(&self) -> Option<String> {
+        // Read, never pop: the recorded URL is also what the provider-flow
+        // tests assert on, and the host asks once per poll.
+        self.inner.cap.oauth_opened().last().cloned()
+    }
 }

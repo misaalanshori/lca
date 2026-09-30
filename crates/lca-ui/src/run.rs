@@ -297,6 +297,11 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         if tick_permission(&mut chat) {
             dirty = true;
         }
+        // R4: a background login/identity step reports back here, so a slow
+        // OAuth callback never blocks the loop.
+        if poll_login(&mut chat) {
+            dirty = true;
+        }
 
         // Edge auto-scroll while a selection drag sits on a viewport edge
         // (R6).
@@ -468,6 +473,21 @@ impl TurnState {
         if let Some(handle) = self.active.take() {
             let _ = handle.join();
         }
+    }
+}
+
+/// Poll a background login/identity step (R4). Returns whether anything
+/// changed; `None` from the hook means the step is still running.
+fn poll_login(chat: &mut Chat) -> bool {
+    let Some(poll) = chat.world.options.hooks.poll_login.clone() else {
+        return false;
+    };
+    match poll() {
+        Some(next) => {
+            chat.apply_login_next(next);
+            true
+        }
+        None => false,
     }
 }
 

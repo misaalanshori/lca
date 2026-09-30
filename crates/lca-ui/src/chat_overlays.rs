@@ -182,7 +182,12 @@ impl Chat {
 
     /// Draw the open login/grant/permission/extension modal, if any.
     fn compose_modals(&self, viewport: &mut [String], width: u16, height: u16) {
-        if let Some(picker) = &self.world.picker {
+        if let Some(label) = &self.world.login_waiting {
+            // R4: a cancellable waiting state, so a slow OAuth callback is
+            // visible and interruptible instead of freezing the app.
+            let body = vec![label.clone(), String::new(), "esc cancels".to_string()];
+            overlay_box(viewport, width, height, "login", &body);
+        } else if let Some(picker) = &self.world.picker {
             let rows = 15usize.min(height.saturating_sub(7) as usize).max(1);
             let total = picker.options.len();
             let start = (picker.selected + 1)
