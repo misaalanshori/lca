@@ -297,4 +297,22 @@ mod tests {
         let out = term.take_output();
         assert!(out.contains("x"));
     }
+
+    // Verifies: R2 - the main-screen renderer never enables mouse tracking.
+    // That absence is what returns native selection, right-click paste, and
+    // Ctrl+V to the terminal; the alt screen is the opt-in that captures
+    // them (FR-UI-21).
+    #[test]
+    fn main_screen_never_enables_mouse_tracking() {
+        let (mut r, mut term) = renderer();
+        r.render(&mut term, vec!["one".into(), "two".into()], 20, 10);
+        r.render(&mut term, vec!["one".into(), "three".into()], 20, 10);
+        let out = term.take_output();
+        for seq in ["\x1b[?1000h", "\x1b[?1002h", "\x1b[?1003h", "\x1b[?1006h"] {
+            assert!(
+                !out.contains(seq),
+                "the main screen must not emit {seq:?}:\n{out:?}"
+            );
+        }
+    }
 }

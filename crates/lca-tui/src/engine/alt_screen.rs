@@ -361,6 +361,32 @@ fn base64_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::terminal::FakeTerminal;
+
+    // Verifies: R2 - the alt-screen renderer enables exactly pi's mouse set
+    // on entry (app-owned selection) and disables every mode on exit.
+    #[test]
+    fn alt_screen_emits_exactly_the_pi_mouse_sequences() {
+        let mut term = FakeTerminal::new(80, 24);
+        let mut renderer = AltScreenRenderer::new();
+        renderer.enter(&mut term);
+        let entered = term.take_output();
+        assert!(
+            entered.contains(mouse_enable_sequences()),
+            "entry enables the environment's mouse set:\n{entered:?}"
+        );
+        assert!(entered.contains("\x1b[?1006h"), "SGR encoding is on");
+        assert!(entered.contains("\x1b[?1049h"), "the alt screen is entered");
+
+        let mut term = FakeTerminal::new(80, 24);
+        renderer.leave(&mut term, true);
+        let left = term.take_output();
+        assert!(
+            left.contains(MOUSE_DISABLE),
+            "every enabled mouse mode is disabled on exit:\n{left:?}"
+        );
+        assert!(left.contains("\x1b[?1049l"), "the alt screen is left");
+    }
 
     #[test]
     fn parses_sgr_mouse_press_release_and_wheel() {

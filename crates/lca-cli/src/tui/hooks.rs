@@ -508,3 +508,44 @@ fn persist_screen_mode(fullscreen: bool) {
     }
     let _ = std::fs::write(&path, format!("{{\"fullscreen\":{fullscreen}}}"));
 }
+
+/// The screen mode a fresh session starts in (FR-UI-21).
+///
+/// **The default is the main-screen scrollback renderer.** It leaves the
+/// terminal's own text selection, right-click paste, and Ctrl+V alone:
+/// the main-screen renderer emits no mouse-tracking sequences, so the
+/// terminal never hands clicks to the app. The alt-screen renderer (with
+/// app-owned selection and mouse capture) is the `/fullscreen` opt-in.
+///
+/// The default flipped in TUI cycle 7 (R2). Alt-screen was the default,
+/// and its `?1000h?1002h?1003h?1006h` capture killed every native
+/// affordance on a real terminal; pi's own default is the main screen
+/// (`--tui-mode regular`). A persisted `ui.json` still wins, so an
+/// existing `/fullscreen` choice survives.
+pub(super) fn initial_screen_mode(config_dir: &std::path::Path) -> bool {
+    std::fs::read_to_string(config_dir.join("ui.json"))
+        .map(|text| !text.contains("false"))
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Verifies: R2 - a fresh session defaults to the main-screen renderer
+    // (no mouse capture), and a persisted `/fullscreen` choice still wins.
+    #[test]
+    fn the_fresh_screen_mode_is_main_screen_and_a_persisted_pick_wins() {
+        let root = lca_testkit::scratch_path("lca-screen-mode");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        // No ui.json: the main screen is the default.
+        assert!(!initial_screen_mode(&root));
+        // A persisted fullscreen pick is honored.
+        std::fs::write(root.join("ui.json"), "{\"fullscreen\":true}").expect("write");
+        assert!(initial_screen_mode(&root));
+        std::fs::write(root.join("ui.json"), "{\"fullscreen\":false}").expect("write");
+        assert!(!initial_screen_mode(&root));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

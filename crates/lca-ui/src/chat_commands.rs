@@ -329,6 +329,11 @@ fn hotkeys_notice() -> String {
         let description = kb.description(&action).unwrap_or("");
         lines.push(format!("  {} - {description}", keys.join(", ")));
     }
+    // R2: the main screen never captures the mouse; `/fullscreen` does, so
+    // the terminal's own bypass is worth naming for the fullscreen case.
+    lines.push(
+        "  Shift+click (or your terminal's bypass key) selects text in fullscreen".to_string(),
+    );
     lines.join("\n")
 }
 

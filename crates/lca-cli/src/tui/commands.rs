@@ -45,9 +45,10 @@ impl Ui {
             complete_login: Some(self.login_complete()),
             confirm_login_grant: Some(self.login_confirm()),
             hooks: self.hooks(),
-            fullscreen: std::fs::read_to_string(crate::config_dir().join("ui.json"))
-                .map(|s| !s.contains("false"))
-                .unwrap_or(true),
+            // FR-UI-21/R2: a fresh session starts on the main screen (the
+            // terminal's own selection); `/fullscreen` opts into the
+            // alt-screen renderer and persists in `ui.json`.
+            fullscreen: super::hooks::initial_screen_mode(&crate::config_dir()),
             slash_commands: self.slash_commands(),
             workspace: self.cwd.clone(),
         }

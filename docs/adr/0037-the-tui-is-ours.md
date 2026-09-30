@@ -93,3 +93,40 @@ where it left the decision's vocabulary behind.
 - **"the primitive widgets" in the crate description** is therefore no
   longer part of `lca-tui`. The crate doc and the module doc say what it
   actually holds.
+
+## Annotation — 2026-09-30 (TUI cycle 7, R2): the default flipped to the
+main screen; the alt screen is the opt-in
+
+The decision above stands, with one correction the owner's real-terminal
+report forced. It says "the **alt-screen** renderer (the default) and the
+**main-screen** differential scrollback renderer, switchable at runtime".
+The alt screen had been the default since the renovation, and that default
+was wrong for the product.
+
+**What broke.** The alt screen enables mouse tracking
+(`?1000h?1002h?1003h?1006h`; multiplexer-aware) so the application can own
+selection and click-to-open links. A real terminal that has handed clicks
+to the application also stops doing its own text selection, right-click
+paste, and Ctrl+V — the owner's report: "blocks selection/left and right
+clicks", "can't right click and ctrl-v". Every native affordance died the
+moment the interface opened.
+
+**pi does not make this trade by default.** `tui-main-screen.ts` never
+touches the mouse; only pi's opt-in alt screen captures it, and pi's own
+CLI defaults to `--tui-mode regular` (verified against pi 0.87.1's
+`--help`). The main-screen renderer's whole reason to exist is that the
+transcript lands in the terminal's real scrollback, where the terminal's
+selection and links work natively.
+
+**The correction.** The **main-screen renderer is the default**; the
+alt-screen renderer is the `/fullscreen` opt-in, with app-owned selection
+and the mouse capture that implies. FR-UI-21's runtime toggle is unchanged.
+A persisted `ui.json` still wins, so an existing explicit pick survives;
+only the no-file default changed. The glossary's alt/main entries and
+`docs/configuration.md`'s `ui.fullscreen` row were updated to match.
+
+**Guards.** `main_screen::tests::main_screen_never_enables_mouse_tracking`
+asserts the absence of every mouse-enable sequence; `alt_screen::tests::
+alt_screen_emits_exactly_the_pi_mouse_sequences` asserts the exact enable
+set on entry and the disable set on exit; `lca-cli`'s hooks test asserts
+the fresh default and the persisted override.
