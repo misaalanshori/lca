@@ -726,8 +726,13 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
         None,
         h.config.clone(),
     );
+    // The timeout is a hang guard, not the requirement - the assertion
+    // below is the requirement. A shared Windows runner starved this
+    // once past 10s with the rerun green (CI 36770068204, 2026-10-01);
+    // 30s absorbs the load without loosening the 3s bound. If it fires
+    // again, testing-plan section 13's quarantine rule applies.
     let outcome = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(30),
         agent.run_turn("spin", &mut sink, &cancel),
     )
     .await
