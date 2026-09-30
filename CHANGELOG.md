@@ -6,6 +6,8 @@ Dates are UTC.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-09-30
+
 ### Fixed
 
 - **The Windows pty/ConPTY path works on a real console.** The

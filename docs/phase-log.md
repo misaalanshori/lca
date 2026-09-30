@@ -1170,3 +1170,24 @@ directory (checksum → `--version` `lca 0.5.1 / abi 0.5` → attribution →
 `abi = "0.5"`, and `wit/CHANGELOG.md` gains no entry. C3: a previous
 cycle's `mimo-v2.6-flash` verification is disclosed in the release notes.
 Regressions 34; suite 710. Report: `../tui-port6-report.md`.
+
+## The Windows console cycle (v0.5.2, 2026-09-29–30)
+
+The quarantine is closed and the verdict rewrote the story: the fault was
+ours, not the hosted runner. On a console-attached Windows machine the pty
+trio reproduced the zero-byte shape, and the isolation ladder pinned it on
+`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` being handed the address of an `HPCON`
+instead of the value (with the child's std handles not invalidated) — every
+pty child was born on a default console and the pipe read nothing. Fixed
+against Microsoft's sample and wezterm's `procthreadattr::set_pty`; all five
+quarantined tests are green on a real console and on the hosted
+`windows-latest` leg, so no self-hosted runner is needed. The ledger opened
+2026-09-25 is closed (`docs/platform-notes.md`).
+
+Two more defects fell out of the same drive: `/exit` hung because the console
+reader's blocking `ReadFile` could not be interrupted (now `wait_stdin`
+reports readable only for a pending key event and `CancelSynchronousIo`
+unblocks the join), and the `\\?\` verbatim prefix leaked into displayed
+paths (a display-only `display_path`; canonical forms stay load-bearing for
+the `fs` scope check). Regressions 35–37 guard each. The pty trio keeps its
+macOS `ENOTTY` ignore — the one remaining platform gap. Released as 0.5.2.
