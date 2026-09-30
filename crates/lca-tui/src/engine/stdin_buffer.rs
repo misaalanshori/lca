@@ -459,4 +459,69 @@ mod tests {
         let events = b.process_bytes(&[0xC1]); // 193 -> ESC + 'A'
         assert_eq!(data(events), vec!["\x1bA"]);
     }
+
+    /// Reconstruct the stream a consumer sees: `Data` sequences verbatim,
+    /// a `Paste` re-wrapped with its markers (the terminal layer does this
+    /// before forwarding).
+    fn reconstruct(events: Vec<StdinEvent>) -> String {
+        let mut out = String::new();
+        for event in events {
+            match event {
+                StdinEvent::Data(s) => out.push_str(&s),
+                StdinEvent::Paste(s) => {
+                    out.push_str(BRACKETED_PASTE_START);
+                    out.push_str(&s);
+                    out.push_str(BRACKETED_PASTE_END);
+                }
+            }
+        }
+        out
+    }
+
+    // Verifies: R6/R8 - the parser's golden contract: no byte is ever lost.
+    // A stream arriving whole, fragmented at any split point, or only via
+    // `flush` reconstructs to exactly the input. This is pi's
+    // flush-back-into-input rule asserted as a property.
+    #[test]
+    fn no_byte_is_ever_lost_at_any_split() {
+        // Deliberately exercises the tricky families: SGR mouse, a
+        // bracketed paste, a kitty CSI-u, and a legacy meta pair. It
+        // avoids the kitty-printable-echo pattern, which the dedupe rule
+        // drops on purpose.
+        let stream = "\x1b[<35;20;5mhi\x1b[200~pasted\nbytes\x1b[201~\x1b[27;1:3u\x1bA";
+        for split in 0..=stream.len() {
+            if !stream.is_char_boundary(split) {
+                continue;
+            }
+            let mut b = StdinBuffer::new();
+            let mut out = String::new();
+            out.push_str(&reconstruct(b.process(&stream[..split])));
+            out.push_str(&reconstruct(b.process(&stream[split..])));
+            out.push_str(&reconstruct(b.flush()));
+            assert_eq!(out, stream, "no byte lost when split at {split}");
+        }
+    }
+
+    // Verifies: R6 - the tmux CSI-u paste dialect arrives verbatim: the
+    // paste buffer does no sequence parsing, so the re-encoded control
+    // bytes reach the field where the shared primitive decodes them.
+    #[test]
+    fn a_csi_u_paste_arrives_verbatim() {
+        let mut b = StdinBuffer::new();
+        let events = b.process("\x1b[200~sk-a\x1b[106;5ub\x1b[201~");
+        assert_eq!(events, vec![StdinEvent::Paste("sk-a\x1b[106;5ub".into())]);
+    }
+
+    // Verifies: R6 - with paste mode never enabled, an unbracketed flood is
+    // ordinary input: no crash, no swallowed content.
+    #[test]
+    fn an_unbracketed_flood_is_plain_input() {
+        let mut b = StdinBuffer::new();
+        let events = b.process("a flood of text\nwith a newline");
+        assert_eq!(
+            data(events).concat(),
+            "a flood of text\nwith a newline",
+            "every character comes out as input"
+        );
+    }
 }

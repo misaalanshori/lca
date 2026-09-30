@@ -11,18 +11,71 @@ struct Tmux {
     name: String,
 }
 
+// The real-terminal tests get their own private tmux socket: never the
+// default socket (standing rule), and separate from the manual drive
+// socket (`lca-tui`) so a test run cannot disturb a live drive.
+#[cfg(unix)]
+const TMUX_SOCKET: &str = "lca-tui-test";
+
 #[cfg(unix)]
 impl Tmux {
     fn new(tag: &str) -> Tmux {
         let name = format!("lca-smoke-{}-{tag}", std::process::id());
         let _ = Command::new("tmux")
-            .args(["kill-session", "-t", &name])
+            .args(["-L", TMUX_SOCKET, "kill-session", "-t", &name])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
         Tmux { name }
     }
 
     fn tmux(args: &[&str]) -> Output {
-        Command::new("tmux").args(args).output().expect("run tmux")
+        let mut full = vec!["-L", TMUX_SOCKET];
+        full.extend_from_slice(args);
+        Command::new("tmux").args(&full).output().expect("run tmux")
+    }
+
+    /// A genuine paste through tmux's own paste machinery (R6). The pane
+    /// enabled bracketed-paste mode (`?2004h`), so tmux wraps the buffer
+    /// in `ESC[200~…ESC[201~` before writing it. `send-keys` cannot do
+    /// this: it synthesizes key events, which is typing by another name.
+    fn paste_text(&self, text: &str) {
+        use std::io::Write as _;
+        let buffer = format!("lca-paste-{}", std::process::id());
+        let mut child = Command::new("tmux")
+            .args(["-L", TMUX_SOCKET, "load-buffer", "-b", &buffer, "-"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn tmux load-buffer");
+        child
+            .stdin
+            .as_mut()
+            .expect("load-buffer stdin")
+            .write_all(text.as_bytes())
+            .expect("write paste buffer");
+        assert!(child.wait().expect("wait load-buffer").success());
+        let out = Self::tmux(&["paste-buffer", "-p", "-b", &buffer, "-t", &self.name, "-d"]);
+        assert!(
+            out.status.success(),
+            "tmux paste-buffer: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Inject raw bytes in fragments, with a small sleep between each, so
+    /// `stdin_buffer`'s reassembly and its dual timeouts are exercised at
+    /// the byte level (R6). `send-keys -l` sends the string's bytes
+    /// literally, escape bytes included.
+    fn send_raw_fragmented(&self, fragments: &[&str]) {
+        for fragment in fragments {
+            let out = Self::tmux(&["send-keys", "-t", &self.name, "-l", fragment]);
+            assert!(
+                out.status.success(),
+                "tmux send-keys -l: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
     }
 
     fn capture(&self) -> String {
@@ -135,7 +188,9 @@ impl Tmux {
 impl Drop for Tmux {
     fn drop(&mut self) {
         let _ = Command::new("tmux")
-            .args(["kill-session", "-t", &self.name])
+            .args(["-L", TMUX_SOCKET, "kill-session", "-t", &self.name])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
     }
 }
@@ -215,6 +270,128 @@ fn the_logins_secret_prompt_masks_input_in_a_real_terminal() {
         "the secret never appears in the frame:\n{pane}"
     );
     assert!(pane.contains("input hidden"), "still the masked prompt");
+}
+
+// Verifies: R1/R6 - a genuine tmux paste (bracketed, through tmux's own
+// paste machinery) reaches the prompt editor. `send-keys` cannot prove
+// this: it synthesizes key events, which is typing by another name.
+#[cfg(unix)]
+#[test]
+fn a_real_paste_reaches_the_prompt_editor() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("paste-editor");
+    let session = Tmux::new("paste-editor");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+    session.paste_text("pasted-into-the-editor");
+    session.wait_for("pasted-into-the-editor", std::time::Duration::from_secs(10));
+}
+
+// Verifies: R1 - a real multi-line paste (>10 lines) becomes an editor
+// marker, and the marker is what the frame shows (the content is held in
+// the paste registry and expanded at submit).
+#[cfg(unix)]
+#[test]
+fn a_real_multi_line_paste_becomes_a_marker() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("paste-marker");
+    let session = Tmux::new("paste-marker");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+    let big: String = (0..12)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    session.paste_text(&big);
+    session.wait_for("[paste #1", std::time::Duration::from_secs(10));
+}
+
+// Verifies: R1/R6 - a genuine paste into the masked secret field lands in
+// the buffer and is masked; the pasted bytes never reach the frame.
+#[cfg(unix)]
+#[test]
+fn a_real_paste_into_the_secret_field_is_masked() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("paste-secret");
+    let session = Tmux::new("paste-secret");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+    session.send(&["/login openrouter", "Enter"]);
+    session.wait_for("input hidden", std::time::Duration::from_secs(15));
+    let secret = "sk-pasted-secret-value";
+    session.paste_text(secret);
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    let pane = session.capture();
+    assert!(
+        !pane.contains(secret),
+        "the pasted secret never appears in the frame:\n{pane}"
+    );
+    assert!(pane.contains("input hidden"), "still the masked prompt");
+    // The masked buffer grew, so the asterisks are present (the field is
+    // not silently empty after the paste).
+    assert!(
+        pane.contains("********"),
+        "the paste is masked, not dropped:\n{pane}"
+    );
+}
+
+// Verifies: R1 - a genuine paste into the (unmasked) base-URL field is
+// shown as typed, so a long endpoint URL need not be typed by hand.
+#[cfg(unix)]
+#[test]
+fn a_real_paste_into_the_base_url_field_is_shown() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("paste-baseurl");
+    let session = Tmux::new("paste-baseurl");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+    session.send(&["/login", "Enter"]);
+    session.wait_for("Sign in with", std::time::Duration::from_secs(15));
+    // Walk to the host's universal entry (last row).
+    let mut reached = false;
+    for _ in 0..24 {
+        session.send(&["Down"]);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        if session.capture().contains("Custom endpoint") {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "the walk reached the custom endpoint entry");
+    session.send(&["Enter"]);
+    session.wait_for("Base URL", std::time::Duration::from_secs(15));
+    session.paste_text("https://pasted.example.com/v1");
+    session.wait_for("pasted.example.com", std::time::Duration::from_secs(10));
+}
+
+// Verifies: R6/R8 - raw bytes injected in fragments (an escape sequence
+// split across writes) are reassembled, never dropped: the pasted text
+// comes out the other side.
+#[cfg(unix)]
+#[test]
+fn a_fragmented_raw_paste_reassembles() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("paste-fragmented");
+    let session = Tmux::new("paste-fragmented");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+    session.send_raw_fragmented(&["\x1b[200~", "frag", "mented", "\x1b[201~"]);
+    session.wait_for("fragmented", std::time::Duration::from_secs(10));
 }
 
 // Verifies: ADR-0033 / `api-key-login-plan.md` D1 - `/login` with no

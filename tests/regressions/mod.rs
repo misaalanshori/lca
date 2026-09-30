@@ -129,3 +129,8 @@ mod console_exit_does_not_hang;
 // `\\?\C:\...` working directory instead of the plain path.
 #[path = "37-verbatim-path-not-displayed.rs"]
 mod verbatim_path_not_displayed;
+// Released 0.5.2 defect (owner's real-terminal report): paste worked in the
+// editor but every single-line surface dropped it. Cycle 7's shared paste
+// primitive fixes it.
+#[path = "38-paste-into-modal-fields.rs"]
+mod paste_into_modal_fields;

@@ -16,7 +16,7 @@ use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::keys;
 use lca_tui::widgets::editor::{Editor, EditorEvent};
 
-use crate::chat_commands::{printable, provider_for};
+use crate::chat_commands::{paste_text, printable, provider_for};
 use crate::chat_pickers::{
     GrantPicker, ModelPicker, ShellRun, ThemePicker, ThinkingPicker, TreePicker, TrustPicker,
 };
@@ -592,7 +592,7 @@ impl Chat {
                 query.pop();
             }
             _ => {
-                if let Some(text) = printable(data) {
+                if let Some(text) = printable(data).or_else(|| paste_text(data)) {
                     query.push_str(&text);
                 }
             }
@@ -731,6 +731,14 @@ impl Chat {
     /// The `/login` masked single-line prompt, while open.
     fn handle_login_secret(&mut self, data: &str, key: Option<&str>) -> Option<Action> {
         let mut prompt = self.world.secret.take()?;
+        // R1: paste is a primitive of every text input. A pasted key,
+        // base URL, or model id lands in the same buffer the typist
+        // fills, so it is masked when the field is masked.
+        if let Some(text) = paste_text(data) {
+            prompt.input.push_str(&text);
+            self.world.secret = Some(prompt);
+            return Some(Action::Continue);
+        }
         match key {
             Some("escape") => self.world.notice = Some("login cancelled".to_string()),
             Some("enter") => {
@@ -885,8 +893,8 @@ impl Chat {
         }
     }
 
-    /// Apply the CLI's next login step.
-    pub(crate) fn apply_login_next(&mut self, next: LoginNext) {
+    /// Apply the CLI's next login step (the host's [`LoginNext`]).
+    pub fn apply_login_next(&mut self, next: LoginNext) {
         crate::state::apply_login_next(&mut self.world, next);
     }
 

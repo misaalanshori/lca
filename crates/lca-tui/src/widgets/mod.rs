@@ -6,3 +6,4 @@ pub mod autocomplete;
 pub mod editor;
 pub mod image;
 pub mod markdown;
+pub mod paste;

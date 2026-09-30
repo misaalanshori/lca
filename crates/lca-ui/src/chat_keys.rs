@@ -2,7 +2,7 @@
 //! Each picker owns the keyboard while open (FR-UI-16/17, R1/R2/R9, S8).
 
 use super::chat::Chat;
-use super::chat_commands::printable;
+use super::chat_commands::{paste_text, printable};
 use super::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
 use super::state::{Action, TrustChoice};
 
@@ -210,7 +210,7 @@ impl Chat {
                     self.resume_picker = Some(picker);
                 }
                 _ => {
-                    if let Some(text) = printable(data) {
+                    if let Some(text) = printable(data).or_else(|| paste_text(data)) {
                         picker.query.push_str(&text);
                         picker.refilter();
                     }
@@ -259,7 +259,7 @@ impl Chat {
                     self.model_picker = Some(picker);
                 }
                 _ => {
-                    if let Some(text) = printable(data) {
+                    if let Some(text) = printable(data).or_else(|| paste_text(data)) {
                         picker.query.push_str(&text);
                         picker.refilter();
                     }

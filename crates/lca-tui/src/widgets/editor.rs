@@ -564,10 +564,8 @@ impl Editor {
         self.last_kill = false;
         let kb = self.keybindings.clone();
 
-        // Bracketed paste.
-        if let Some(rest) = data.strip_prefix("\x1b[200~")
-            && let Some(content) = rest.strip_suffix("\x1b[201~")
-        {
+        // Bracketed paste (the shared primitive, R1).
+        if let Some(content) = crate::widgets::paste::bracketed_paste_content(data) {
             self.insert_paste(content);
             return EditorEvent::Changed;
         }
@@ -775,19 +773,10 @@ impl Editor {
     }
 
     fn insert_paste(&mut self, content: &str) {
-        // tmux with `extended-keys=csi-u` re-encodes control bytes inside a
-        // bracketed paste as CSI-u Ctrl+letter; decode them back (pi's
-        // `handlePaste`), then normalize line endings and tabs.
-        let decoded = decode_csi_u_ctrl(content);
-        let normalized = decoded
-            .replace("\r\n", "\n")
-            .replace('\r', "\n")
-            .replace('\t', "    ");
-        // Drop non-printable characters except newlines.
-        let mut filtered: String = normalized
-            .chars()
-            .filter(|c| *c == '\n' || (*c as u32) >= 32)
-            .collect();
+        // The shared primitive does the tmux CSI-u decode and the
+        // CRLF/tab/non-printable normalization (TUI cycle 7, R1) so the
+        // editor and every single-line field agree on what a paste is.
+        let mut filtered = crate::widgets::paste::normalize(content);
         // A pasted path after a word character gets a leading space.
         if filtered.starts_with(['/', '~', '.']) {
             let before = self.text_before_cursor();
@@ -894,50 +883,6 @@ impl Editor {
             .max()
             .unwrap_or(0)
     }
-}
-
-/// Decode tmux's CSI-u Ctrl+letter encoding of control bytes inside a
-/// bracketed paste (`ESC [ <cp> ; 5 u` -> the literal control byte).
-fn decode_csi_u_ctrl(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = String::with_capacity(text.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'[') {
-            let mut j = i + 2;
-            let start = j;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
-                j += 1;
-            }
-            if j > start
-                && bytes.get(j) == Some(&b';')
-                && bytes.get(j + 1) == Some(&b'5')
-                && bytes.get(j + 2) == Some(&b'u')
-            {
-                let cp: u32 = text[start..j].parse().unwrap_or(0);
-                let decoded = if (97..=122).contains(&cp) {
-                    char::from_u32(cp - 96)
-                } else if (65..=90).contains(&cp) {
-                    char::from_u32(cp - 64)
-                } else {
-                    None
-                };
-                if let Some(c) = decoded {
-                    out.push(c);
-                    i = j + 3;
-                    continue;
-                }
-            }
-        }
-        match text[i..].chars().next() {
-            Some(c) => {
-                out.push(c);
-                i += c.len_utf8();
-            }
-            None => break,
-        }
-    }
-    out
 }
 
 /// Whether a typed character continues an undo-coalescing run: pi merges

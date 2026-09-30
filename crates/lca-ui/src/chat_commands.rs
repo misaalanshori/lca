@@ -228,6 +228,15 @@ pub(crate) fn printable(data: &str) -> Option<String> {
     }
 }
 
+/// The flattened text of a bracketed paste, if `data` is one (R1). Every
+/// single-line surface — the masked secret field, the base-URL and
+/// model-id fields, the picker search boxes, the transcript search —
+/// routes through this, so a paste behaves the same everywhere and a
+/// multi-line paste is flattened rather than dropped.
+pub(crate) fn paste_text(data: &str) -> Option<String> {
+    lca_tui::widgets::paste::bracketed_paste_content(data).map(lca_tui::widgets::paste::flatten)
+}
+
 /// Build the autocomplete chain: commands, arguments, and file paths.
 pub(crate) fn provider_for(options: &UiOptions) -> CombinedAutocompleteProvider {
     let models = options.models.clone();
