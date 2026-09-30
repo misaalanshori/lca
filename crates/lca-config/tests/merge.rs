@@ -60,6 +60,38 @@ fn thinking_merges_and_refuses_unknown_levels() {
     assert!(err.to_string().contains("hihg"), "{err}");
 }
 
+// Verifies: ADR-0041 - `shell.tool` and `shell.path` are documented keys;
+// the tool vocabulary is closed, and a bad value is refused at load rather
+// than silently ignored.
+#[test]
+fn shell_selection_merges_and_refuses_unknown_tools() {
+    let dir = scratch("shell");
+    write(
+        &dir.join("user.toml"),
+        "shell.tool = \"pwsh\"\nshell.path = \"C:\\\\tools\\\\pwsh.exe\"\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.shell_tool(), Some("pwsh"));
+    assert_eq!(config.shell_path(), Some("C:\\tools\\pwsh.exe"));
+
+    write(&dir.join("user.toml"), "shell.tool = \"csh\"\n");
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("an unknown shell.tool is refused at load");
+    assert!(err.to_string().contains("csh"), "{err}");
+
+    // Defaults: auto, and no explicit path.
+    let config = Config::defaults();
+    assert_eq!(config.shell_tool(), None, "`auto` is the unset default");
+    assert_eq!(config.shell_path(), None);
+}
+
 // Verifies: FR-CFG-2 (every resolved value names the source that set it)
 #[test]
 fn every_resolved_value_carries_its_source() {

@@ -61,6 +61,9 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 lca-testkit = { path = "../lca-testkit" }
+# Round-trip properties for the shell transport (ADR-0041): the invariants
+# that must hold for arbitrary command text, not only the corpus rows.
+proptest.workspace = true
 
 [lints]
 workspace = true

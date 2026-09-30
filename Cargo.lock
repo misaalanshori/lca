@@ -1429,6 +1429,7 @@ dependencies = [
  "lca-protocol",
  "lca-testkit",
  "libc",
+ "proptest",
  "regex",
  "serde_json",
  "sha2",

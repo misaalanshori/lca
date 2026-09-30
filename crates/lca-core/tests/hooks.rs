@@ -266,7 +266,7 @@ fn harness(name: &str, provider: FakeProvider, registry: ExtensionRegistry) -> H
         GrantStore::open(&root.join("grants.json")).expect("grants"),
     ));
     let tools = lca_tools::ToolExecutor::new(
-        Arc::new(lca_tools::NativeOps),
+        Arc::new(lca_tools::NativeOps::default()),
         project.clone(),
         project.clone(),
         65536,

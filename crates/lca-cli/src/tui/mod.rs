@@ -21,7 +21,7 @@ use lca_core::{AgentConfig, ExtensionRegistry};
 use lca_permissions::{GrantStore, Proposals, SharedPrompt};
 use lca_provider::Provider;
 use lca_session::{Session, SessionStore};
-use lca_tools::{NativeOps, ToolExecutor};
+use lca_tools::ToolExecutor;
 use lca_ui::{RegionInteractor, RegionRenderer};
 
 use crate::lock;
@@ -252,14 +252,23 @@ impl Ui {
             current_session,
             session_id,
             provider_name,
-            initial_head,
+            mut initial_head,
             initial_records,
             mut initial_tail,
             update_notice,
         } = open(cwd, resume)?;
 
+        // ADR-0041: the interpreter is resolved once, here, so the tool
+        // description, `/settings`, and every call agree - and a configured
+        // interpreter that is missing is loud at startup, never a silent
+        // switch to another shell.
+        let ops = crate::native_ops(&config);
+        if let Some(error) = ops.error() {
+            tracing::warn!(%error, "shell resolution failed");
+            initial_head.push(format!("warning: {error}"));
+        }
         let tools = Arc::new(Mutex::new(ToolExecutor::new(
-            Arc::new(NativeOps),
+            Arc::new(ops),
             cwd.to_path_buf(),
             cwd.to_path_buf(),
             config.tool_result_limit_bytes() as usize,

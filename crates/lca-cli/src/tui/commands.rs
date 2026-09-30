@@ -123,10 +123,19 @@ impl Ui {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .clone();
+                let (shell, shell_error) = {
+                    let tools = crate::lock(&self.tools);
+                    (
+                        tools.resolved_shell().cloned(),
+                        tools.resolved_shell_error().map(str::to_string),
+                    )
+                };
                 CommandEffect::ShowWidget(settings_text(
                     &self.config,
                     live.as_deref(),
                     Some(&theme),
+                    shell.as_ref(),
+                    shell_error.as_deref(),
                 ))
             }
             // The stats story (FR-UI-19): the same numbers the footer
@@ -328,6 +337,8 @@ fn settings_text(
     config: &lca_config::Config,
     live_thinking: Option<&str>,
     live_theme: Option<&str>,
+    shell: Option<&lca_tools::Shell>,
+    shell_error: Option<&str>,
 ) -> String {
     let configured = config.thinking();
     let configured_theme = config.ui_theme().unwrap_or("auto");
@@ -360,6 +371,15 @@ fn settings_text(
         }
         text.push_str(&format!("  {key} = {value} [{source}]\n"));
     }
+    // ADR-0041: the key rows above are what was asked for; this row is what
+    // the ladder actually resolved, which is the thing the model's tool
+    // description names.
+    match (shell, shell_error) {
+        // A broken backend must not look resolved: every call fails.
+        (_, Some(error)) => text.push_str(&format!("  shell.resolved = <unresolved: {error}>\n")),
+        (Some(shell), None) => text.push_str(&format!("  shell.resolved = {shell}\n")),
+        (None, None) => text.push_str("  shell.resolved = <host-delegated>\n"),
+    }
     text
 }
 
@@ -379,11 +399,29 @@ mod tests {
         Config::load(&input).expect("load")
     }
 
+    // Verifies: ADR-0041 - a broken backend is not shown as resolved: the
+    // row names the error, because every shell call fails until it is fixed.
+    #[test]
+    fn settings_show_an_unresolved_shell_as_broken() {
+        let config = config_with("lca-settings-shell", "");
+        let text = settings_text(
+            &config,
+            None,
+            None,
+            None,
+            Some("shell.path does not name a file: /nope"),
+        );
+        assert!(
+            text.contains("shell.resolved = <unresolved: shell.path does not name a file: /nope>"),
+            "{text}"
+        );
+    }
+
     // Verifies: E2 - `/settings` labels the session's live thinking pick.
     #[test]
     fn settings_label_the_session_thinking_pick() {
         let config = config_with("lca-settings-live", "");
-        let text = settings_text(&config, Some("high"), None);
+        let text = settings_text(&config, Some("high"), None, None, None);
         assert!(text.contains("thinking = high [session]"), "{text}");
     }
 
@@ -392,7 +430,7 @@ mod tests {
     #[test]
     fn settings_show_unset_thinking() {
         let config = config_with("lca-settings-unset", "");
-        let text = settings_text(&config, None, None);
+        let text = settings_text(&config, None, None, None, None);
         assert!(
             text.contains("thinking = unset (provider default) [default]"),
             "{text}"
@@ -404,7 +442,7 @@ mod tests {
     #[test]
     fn settings_agree_after_a_restart() {
         let config = config_with("lca-settings-restart", "thinking = \"high\"\n");
-        let text = settings_text(&config, Some("high"), None);
+        let text = settings_text(&config, Some("high"), None, None, None);
         assert!(text.contains("thinking = high [user file]"), "{text}");
     }
 
@@ -413,7 +451,7 @@ mod tests {
     #[test]
     fn settings_label_the_session_theme_pick() {
         let config = config_with("lca-settings-theme", "");
-        let text = settings_text(&config, None, Some("light"));
+        let text = settings_text(&config, None, Some("light"), None, None);
         assert!(text.contains("ui.theme = light [session]"), "{text}");
     }
 }

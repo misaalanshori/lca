@@ -149,7 +149,7 @@ impl Session {
     pub async fn send(&self, input: &str) -> TurnOutcome {
         let _turn = self.turn.lock().await;
         let mut tools = ToolExecutor::new(
-            Arc::new(NativeOps),
+            Arc::new(NativeOps::default()),
             self.cwd.clone(),
             self.cwd.clone(),
             TOOL_RESULT_LIMIT,

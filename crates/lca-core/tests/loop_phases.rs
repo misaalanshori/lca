@@ -759,7 +759,7 @@ async fn the_default_strategy_compacts_through_the_real_completion_backend() {
         GrantStore::open(&root.join("grants.json")).expect("grants"),
     ));
     let mut tools = ToolExecutor::new(
-        Arc::new(NativeOps),
+        Arc::new(NativeOps::default()),
         project.clone(),
         project.clone(),
         65536,

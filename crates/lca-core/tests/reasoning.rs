@@ -46,7 +46,7 @@ async fn the_thinking_level_rides_the_request_extras() {
         GrantStore::open(&root.join("grants.json")).expect("grants"),
     ));
     let mut tools = ToolExecutor::new(
-        Arc::new(NativeOps),
+        Arc::new(NativeOps::default()),
         project.clone(),
         project.clone(),
         65536,

@@ -207,8 +207,14 @@ pub async fn headless(
     let _temp_guard = crate::SessionTempGuard;
     crate::init_session_temp(session.id());
 
+    // ADR-0041: same resolution as the interface, surfaced on stderr
+    // because headless has no transcript to put a warning in.
+    let ops = crate::native_ops(&config);
+    if let Some(error) = ops.error() {
+        eprintln!("warning: {error}");
+    }
     let mut tools = ToolExecutor::new(
-        std::sync::Arc::new(NativeOps),
+        std::sync::Arc::new(ops),
         cwd.to_path_buf(),
         cwd.to_path_buf(),
         config.tool_result_limit_bytes() as usize,

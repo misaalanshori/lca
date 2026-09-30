@@ -74,6 +74,20 @@ pub trait ToolOps: Send + Sync {
         on_output: &'a mut (dyn FnMut(&[u8]) + Send),
         cancel: CancelFlag,
     ) -> ExecFuture<'a>;
+
+    /// The interpreter this backend runs commands in, when it owns one
+    /// (the host-delegated web backend does not). The tool description and
+    /// `/settings` report it (ADR-0041).
+    fn shell(&self) -> Option<&crate::shell::Shell> {
+        None
+    }
+
+    /// The shell resolution error, when the backend is broken (a configured
+    /// interpreter that could not be found). `/settings` reports it instead
+    /// of claiming a working interpreter.
+    fn shell_error(&self) -> Option<&str> {
+        None
+    }
 }
 
 use std::future::Future;
@@ -83,8 +97,50 @@ pub type ExecFuture<'a> =
     Pin<Box<dyn Future<Output = std::io::Result<(ExecOutcome, Vec<u8>)>> + Send + 'a>>;
 
 /// The desktop backend: real files, real processes.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NativeOps;
+#[derive(Debug, Clone)]
+pub struct NativeOps {
+    /// The interpreter the `shell` tool runs (ADR-0041), resolved once at
+    /// startup so the tool description, `/settings`, and every call agree.
+    shell: crate::shell::Shell,
+    /// Set when a *configured* interpreter could not be resolved: every
+    /// call fails with this message instead of silently running in some
+    /// other shell (ADR-0041's "never silent fallback").
+    error: Option<String>,
+}
+
+impl NativeOps {
+    /// A backend running commands in `shell`.
+    pub fn new(shell: crate::shell::Shell) -> NativeOps {
+        NativeOps { shell, error: None }
+    }
+
+    /// A backend whose configured interpreter could not be resolved. The
+    /// shell is the ladder's fallback for description purposes; every call
+    /// fails with `error`.
+    pub fn broken(shell: crate::shell::Shell, error: String) -> NativeOps {
+        NativeOps {
+            shell,
+            error: Some(error),
+        }
+    }
+
+    /// The resolution error, when this backend is broken.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// The interpreter this backend will spawn.
+    pub fn shell(&self) -> &crate::shell::Shell {
+        &self.shell
+    }
+}
+
+impl Default for NativeOps {
+    fn default() -> NativeOps {
+        use crate::shell::Probe as _;
+        NativeOps::new(crate::shell::Shell::fallback(crate::shell::Real.os()))
+    }
+}
 
 const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules"];
 
@@ -168,7 +224,21 @@ impl ToolOps for NativeOps {
         on_output: &'a mut (dyn FnMut(&[u8]) + Send),
         cancel: CancelFlag,
     ) -> ExecFuture<'a> {
-        Box::pin(async move { platform_exec(command, cwd, timeout, on_output, cancel).await })
+        let error = self.error.clone();
+        Box::pin(async move {
+            if let Some(error) = error {
+                return Err(std::io::Error::other(error));
+            }
+            platform_exec(&self.shell, command, cwd, timeout, on_output, cancel).await
+        })
+    }
+
+    fn shell(&self) -> Option<&crate::shell::Shell> {
+        Some(&self.shell)
+    }
+
+    fn shell_error(&self) -> Option<&str> {
+        self.error()
     }
 }
 
@@ -188,6 +258,7 @@ fn push_capped(buffer: &mut Vec<u8>, chunk: &[u8]) {
 
 #[cfg(unix)]
 async fn platform_exec(
+    shell: &crate::shell::Shell,
     command: &str,
     cwd: &Path,
     timeout: Duration,
@@ -203,7 +274,9 @@ async fn platform_exec(
             cwd.display()
         )));
     }
-    let mut cmd = tokio::process::Command::new("/bin/sh");
+    // The POSIX path is unchanged (ADR-0041): `-c` receives the command as
+    // one argv element, which `execve` carries byte for byte.
+    let mut cmd = tokio::process::Command::new(&shell.program);
     cmd.arg("-c")
         .arg(command)
         .current_dir(&cwd)
@@ -439,8 +512,47 @@ pub(crate) mod windows_job {
     }
 }
 
+/// A per-call command script, deleted when the call ends (including
+/// timeout, cancellation, and error paths, because a `Drop` guard cannot be
+/// forgotten the way an explicit cleanup can).
+#[cfg(windows)]
+struct TempScript {
+    path: PathBuf,
+}
+
+#[cfg(windows)]
+impl TempScript {
+    /// Write `command` in `shell`'s script dialect under the system temp
+    /// directory.
+    fn write(shell: &crate::shell::Shell, command: &str) -> std::io::Result<TempScript> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "lca-cmd-{}-{seq}.{}",
+            std::process::id(),
+            shell.script_extension()
+        ));
+        std::fs::write(&path, shell.script_text(command))?;
+        Ok(TempScript { path })
+    }
+
+    /// The path as the shell's argv wants it.
+    fn path(&self) -> String {
+        self.path.to_string_lossy().into_owned()
+    }
+}
+
+#[cfg(windows)]
+impl Drop for TempScript {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 #[cfg(windows)]
 async fn platform_exec(
+    shell: &crate::shell::Shell,
     command: &str,
     cwd: &Path,
     timeout: Duration,
@@ -458,9 +570,13 @@ async fn platform_exec(
             cwd.display()
         )));
     }
-    let mut cmd = tokio::process::Command::new("cmd.exe");
-    cmd.arg("/C")
-        .arg(command)
+    // ADR-0041's fidelity rule: the command travels in a file, never as one
+    // argv element through CreateProcess quoting into a shell that then
+    // re-parses its command line. That transport is where `"double"` became
+    // `\"double\"` and a second line vanished.
+    let script = TempScript::write(shell, command)?;
+    let mut cmd = tokio::process::Command::new(&shell.program);
+    cmd.args(shell.script_args(script.path()))
         .current_dir(&cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -472,10 +588,16 @@ async fn platform_exec(
         job.assign(pid);
     }
     let Some(mut stdout) = child.stdout.take() else {
-        return Err(std::io::Error::other("cmd.exe's stdout was not piped"));
+        return Err(std::io::Error::other(format!(
+            "{}'s stdout was not piped",
+            shell.program
+        )));
     };
     let Some(mut stderr) = child.stderr.take() else {
-        return Err(std::io::Error::other("cmd.exe's stderr was not piped"));
+        return Err(std::io::Error::other(format!(
+            "{}'s stderr was not piped",
+            shell.program
+        )));
     };
 
     let mut collected: Vec<u8> = Vec::new();

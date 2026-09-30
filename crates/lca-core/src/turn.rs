@@ -391,7 +391,7 @@ impl Agent<'_> {
     /// The request's tools, routing identity, and thinking-level hint
     /// (ADR-0023, R1).
     fn build_request(&self, messages: Vec<ChatMessage>, stable_prefix: usize) -> CompletionRequest {
-        let mut tools = ToolExecutor::specs();
+        let mut tools = ToolExecutor::specs(self.tools.resolved_shell());
         tools.extend(self.config.extensions.tool_specs());
         let mut extras = std::collections::BTreeMap::new();
         // ADR-0023: the conversation's routing identity travels on every
@@ -615,7 +615,7 @@ impl Agent<'_> {
             .tool_schema(&call.name)
             .map(|spec| spec.parameters.clone())
             .or_else(|| {
-                ToolExecutor::specs()
+                ToolExecutor::specs(self.tools.resolved_shell())
                     .into_iter()
                     .find(|spec| spec.name == call.name)
                     .map(|spec| spec.parameters)

@@ -59,6 +59,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0038 | Steering: prompts submitted while a turn runs | Accepted | TUI renovation |
 | 0039 | Folder trust, rules, and session grants | Accepted | Permission UX |
 | 0040 | Install and update through root-hosted one-liner scripts | Accepted | Install cycle |
+| 0041 | The `shell` tool's interpreter selection and command transport | Accepted | Real-world driving |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
 

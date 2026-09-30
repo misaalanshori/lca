@@ -16,7 +16,7 @@ fn scratch(name: &str) -> PathBuf {
 
 fn executor(workspace: &Path) -> ToolExecutor {
     ToolExecutor::new(
-        Arc::new(NativeOps),
+        Arc::new(NativeOps::default()),
         workspace.to_path_buf(),
         workspace.to_path_buf(),
         65536,
@@ -36,10 +36,33 @@ async fn run(exec: &mut ToolExecutor, call: &ToolCall) -> lca_protocol::ToolResu
     exec.execute(call, &mut |_| {}, &CancelFlag::new()).await
 }
 
-// Verifies: FR-TOOL-1 (the seven built-in tools exist with schemas)
+// Verifies: ADR-0041 (R1) - the shell tool's description names the
+// resolved interpreter and its dialect, so the model does not have to
+// probe to find out which shell it is in.
+#[test]
+fn the_shell_description_names_the_resolved_interpreter() {
+    let shell = lca_tools::Shell {
+        program: "/bin/bash".to_string(),
+        kind: lca_tools::ShellKind::Bash,
+        explicit: false,
+        transport: lca_tools::Transport::Argv,
+    };
+    let spec = ToolExecutor::specs(Some(&shell))
+        .into_iter()
+        .find(|spec| spec.name == "shell")
+        .expect("shell spec");
+    for expected in ["bash", "/bin/bash", "$VAR", "exactly as written"] {
+        assert!(
+            spec.description.contains(expected),
+            "{expected:?} missing from: {}",
+            spec.description
+        );
+    }
+}
+
 #[test]
 fn ships_exactly_the_documented_builtin_tools() {
-    let specs = ToolExecutor::specs();
+    let specs = ToolExecutor::specs(None);
     let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
     for expected in ["read", "write", "edit", "list", "glob", "grep", "shell"] {
         assert!(
@@ -47,7 +70,7 @@ fn ships_exactly_the_documented_builtin_tools() {
             "{expected} missing from {names:?}"
         );
     }
-    for spec in ToolExecutor::specs() {
+    for spec in ToolExecutor::specs(None) {
         assert!(
             spec.parameters.is_object(),
             "{} carries a JSON schema",
@@ -135,7 +158,7 @@ async fn read_truncates_over_the_limit_and_marks_it() {
     let big = "line\n".repeat(10_000);
     std::fs::write(ws.join("big.txt"), &big).expect("write");
     let mut exec = ToolExecutor::new(
-        Arc::new(NativeOps),
+        Arc::new(NativeOps::default()),
         ws.clone(),
         ws.clone(),
         1024,
@@ -577,7 +600,7 @@ async fn shell_reports_exit_codes_with_output() {
 async fn shell_timeout_kills_the_process_tree() {
     let ws = scratch("timeout");
     let mut exec = ToolExecutor::new(
-        Arc::new(NativeOps),
+        Arc::new(NativeOps::default()),
         ws.clone(),
         ws.clone(),
         65536,
@@ -666,7 +689,7 @@ async fn shell_uses_the_platform_shell() {
 async fn shell_output_truncates_and_marks() {
     let ws = scratch("shell-trunc");
     let mut exec = ToolExecutor::new(
-        Arc::new(NativeOps),
+        Arc::new(NativeOps::default()),
         ws.clone(),
         ws.clone(),
         256,
@@ -709,7 +732,7 @@ async fn over_limit_output_spills_by_content_hash() {
     .expect("write");
     let spill = ws.join("attachments");
     let mut exec = ToolExecutor::new(
-        Arc::new(NativeOps),
+        Arc::new(NativeOps::default()),
         ws.clone(),
         ws.clone(),
         256,

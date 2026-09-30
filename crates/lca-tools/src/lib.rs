@@ -14,6 +14,7 @@ mod open;
 mod ops;
 mod process;
 mod pty;
+pub mod shell;
 
 pub use bridge::{BridgeError, bridge_stream};
 pub use capabilities::CompletionBackend;
@@ -27,6 +28,7 @@ pub use open::{UrlLauncher, open_url, url_launchers, windows_url_launcher};
 pub use ops::{Entry, ExecOutcome, NativeOps, Stat, ToolOps};
 pub use process::{TreeChild, read_up_to, spawn_direct, write_all};
 pub use pty::PtyChild;
+pub use shell::{Kind as ShellKind, Os as ShellOs, Probe as ShellProbe, Shell, Transport};
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -132,6 +134,17 @@ pub struct ToolExecutor {
 }
 
 impl ToolExecutor {
+    /// The backend's resolved shell, when it owns one (ADR-0041): the tool
+    /// description and `/settings` read it from here.
+    pub fn resolved_shell(&self) -> Option<&Shell> {
+        self.ops.shell()
+    }
+
+    /// The shell resolution error, when the backend is broken.
+    pub fn resolved_shell_error(&self) -> Option<&str> {
+        self.ops.shell_error()
+    }
+
     /// Build an executor over a backend.
     pub fn new(
         ops: Arc<dyn ToolOps>,
@@ -218,8 +231,11 @@ impl ToolExecutor {
         &self.workspace
     }
 
-    /// The tool specs handed to the model (FR-TOOL-1).
-    pub fn specs() -> Vec<ToolSpec> {
+    /// The tool specs handed to the model (FR-TOOL-1). `shell` is the
+    /// resolved interpreter, so the `shell` tool's description names it and
+    /// its dialect (ADR-0041): the owner's log shows an agent burning ten
+    /// calls working out which shell it was in.
+    pub fn specs(shell: Option<&Shell>) -> Vec<ToolSpec> {
         let spec =
             |name: &str, description: &str, properties: serde_json::Value, required: &[&str]| {
                 ToolSpec {
@@ -303,7 +319,7 @@ impl ToolExecutor {
             ),
             spec(
                 "shell",
-                "Run a command in the platform shell in the workspace directory. Streams output; output is truncated to the last part of the run when too large. Optionally set a timeout in seconds.",
+                &shell_description(shell),
                 serde_json::json!({
                     "command": {"type": "string"},
                     "timeout": {"type": "integer", "description": "Seconds before the command is killed (default: configured tool timeout)"},
@@ -839,6 +855,18 @@ impl ToolExecutor {
             ),
         };
         self.spilled(&call.call_id, &full_text, content, truncated, status)
+    }
+}
+
+/// The `shell` tool's model-facing description (ADR-0041): what the tool
+/// does, plus the resolved interpreter, its dialect, and the fidelity
+/// guarantee. `None` when the backend owns no interpreter (the web target's
+/// host-delegated backend).
+fn shell_description(shell: Option<&Shell>) -> String {
+    let base = "Run a command in the workspace directory and return its output.                 Output streams as it runs; the tail is kept when too large.                 Optionally set a timeout in seconds.";
+    match shell {
+        Some(shell) => format!("{base} {}", shell.describe()),
+        None => base.to_string(),
     }
 }
 

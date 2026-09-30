@@ -62,7 +62,7 @@ async fn a_plain_conversation_records_no_boundary_divergence() {
         GrantStore::open(&root.join("grants.json")).expect("grants"),
     ));
     let mut tools = ToolExecutor::new(
-        Arc::new(NativeOps),
+        Arc::new(NativeOps::default()),
         project.clone(),
         project.clone(),
         65536,

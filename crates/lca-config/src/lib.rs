@@ -52,6 +52,10 @@ pub enum ColorMode {
 /// reasoning; the rest scale it. An unknown value is refused at load.
 pub const THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+/// The `shell.tool` vocabulary (ADR-0041): `auto` plus each interpreter the
+/// ladder knows how to resolve exactly.
+pub const SHELL_TOOLS: &[&str] = &["auto", "bash", "pwsh", "powershell", "cmd"];
+
 impl std::str::FromStr for ColorMode {
     type Err = String;
 
@@ -135,6 +139,8 @@ pub struct Config {
     ui_color: ColorMode,
     ui_theme: Option<String>,
     thinking: Option<String>,
+    shell_tool: Option<String>,
+    shell_path: Option<String>,
     permissions_proposals: BTreeMap<String, String>,
     sources: BTreeMap<String, MergeSource>,
 }
@@ -163,6 +169,8 @@ impl Default for Config {
             ui_color: ColorMode::Auto,
             ui_theme: None,
             thinking: None,
+            shell_tool: None,
+            shell_path: None,
             permissions_proposals: BTreeMap::new(),
             sources: BTreeMap::new(),
         }
@@ -198,6 +206,8 @@ pub const KNOWN_KEYS: &[&str] = &[
     "ui.color",
     "ui.theme",
     "thinking",
+    "shell.tool",
+    "shell.path",
 ];
 
 /// Look a dotted key up in a TOML table: literal keys (`"tool.timeout_seconds"`)
@@ -272,6 +282,17 @@ fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigEr
             raw.parse::<ColorMode>().map_err(invalid)?,
         )),
         "ui.theme" => Ok(TypedValue::Text(raw.to_string())),
+        "shell.path" => Ok(TypedValue::Text(raw.to_string())),
+        "shell.tool" => {
+            if SHELL_TOOLS.contains(&raw) {
+                Ok(TypedValue::Text(raw.to_string()))
+            } else {
+                Err(invalid(format!(
+                    "expected one of {}, got `{raw}`",
+                    SHELL_TOOLS.join(", ")
+                )))
+            }
+        }
         "thinking" => {
             if THINKING_LEVELS.contains(&raw) {
                 Ok(TypedValue::Text(raw.to_string()))
@@ -326,6 +347,8 @@ impl Config {
             "ui.color",
             "ui.theme",
             "thinking",
+            "shell.tool",
+            "shell.path",
         ] {
             config.sources.insert(key.to_string(), MergeSource::Default);
         }
@@ -419,10 +442,22 @@ impl Config {
                     let color: ColorMode = text.parse().map_err(invalid)?;
                     this.apply(key.to_string(), TypedValue::Color(color), source)?;
                 }
-                "ui.theme" => {
+                "ui.theme" | "shell.path" => {
                     let text = value.as_str().ok_or_else(|| {
                         invalid(format!("expected a string, got {}", type_name(&value)))
                     })?;
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
+                "shell.tool" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    if !SHELL_TOOLS.contains(&text) {
+                        return Err(invalid(format!(
+                            "expected one of {}, got `{text}`",
+                            SHELL_TOOLS.join(", ")
+                        )));
+                    }
                     this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
                 }
                 "thinking" => {
@@ -478,6 +513,8 @@ impl Config {
             "ui.color",
             "ui.theme",
             "thinking",
+            "shell.tool",
+            "shell.path",
         ] {
             if let Some(value) = table_value(table, key) {
                 // `provider` doubles as a section: `[provider] retry_limit = N`
@@ -518,6 +555,8 @@ impl Config {
             ("update.check", TypedValue::Bool(v)) => self.update_check = Some(v),
             ("ui.color", TypedValue::Color(v)) => self.ui_color = v,
             ("ui.theme", TypedValue::Text(v)) => self.ui_theme = Some(v),
+            ("shell.tool", TypedValue::Text(v)) => self.shell_tool = Some(v),
+            ("shell.path", TypedValue::Text(v)) => self.shell_path = Some(v),
             ("thinking", TypedValue::Text(v)) => self.thinking = Some(v),
             (other, _) => {
                 return Err(ConfigError::InvalidValue {
@@ -598,6 +637,17 @@ impl Config {
         self.thinking.as_deref()
     }
 
+    /// The configured shell tool (`shell.tool`), or `None` for `auto`
+    /// (ADR-0041).
+    pub fn shell_tool(&self) -> Option<&str> {
+        self.shell_tool.as_deref()
+    }
+
+    /// An exact interpreter path (`shell.path`), when set (ADR-0041).
+    pub fn shell_path(&self) -> Option<&str> {
+        self.shell_path.as_deref()
+    }
+
     /// Permission proposals read from a trusted project file (ADR-0006).
     pub fn permissions_proposals(&self) -> &BTreeMap<String, String> {
         &self.permissions_proposals
@@ -661,6 +711,18 @@ impl Config {
             (
                 "ui.theme",
                 self.ui_theme.clone().unwrap_or_else(|| "auto".to_string()),
+            ),
+            (
+                "shell.tool",
+                self.shell_tool
+                    .clone()
+                    .unwrap_or_else(|| "auto".to_string()),
+            ),
+            (
+                "shell.path",
+                self.shell_path
+                    .clone()
+                    .unwrap_or_else(|| "<ladder>".to_string()),
             ),
             (
                 "permissions.proposals",

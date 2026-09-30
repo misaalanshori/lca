@@ -77,7 +77,7 @@ fn harness(name: &str, provider: FakeProvider) -> Harness {
         GrantStore::open(&root.join("grants.json")).expect("grants"),
     ));
     let tools = ToolExecutor::new(
-        Arc::new(NativeOps),
+        Arc::new(NativeOps::default()),
         project.clone(),
         project.clone(),
         65536,
