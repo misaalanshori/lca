@@ -6,6 +6,40 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+
+- **Install with a one-liner.** Linux/macOS:
+  `curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh`;
+  Windows (PowerShell 5.1 or pwsh):
+  `irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1 | iex`.
+  Each one picks the release asset for your platform, verifies it against
+  `artifacts.sha256` **before** moving anything into place (a mismatch
+  refuses and leaves your existing binary untouched), installs to
+  `~/.local/bin` or `%LOCALAPPDATA%\lca\bin`, and puts it on PATH - one
+  marked rc block on POSIX, an append-only user-`Path` entry that preserves
+  the registry value kind on Windows. Running the same one-liner again is
+  the update (`lca 0.5.1 -> 0.5.2`); `--uninstall` / `-Uninstall` removes
+  the binary and every PATH entry it added, leaving pre-existing rc files
+  byte-identical. Pin a release with `--version v0.5.2` / `-Version v0.5.2`;
+  mirror or hermetic runs use `LCA_BASE_URL` / `-BaseUrl`. The full spec,
+  the manual install path, and the security stance are in
+  `docs/installation.md` (ADR-0040).
+- **`LICENSE`** (Apache-2.0, as `Cargo.toml` has always declared) and
+  **`SECURITY.md`** (the private-reporting contact that
+  `docs/release-policy.md` already pointed at).
+
+### Changed
+
+- **The README was rewritten claim by claim against the tree**: install
+  first, a quickstart carrying a transcript from a real terminal, the
+  extension/capability/permission model with links to the ADRs that own
+  it, the ten pipeline gates, and the six release assets with their
+  verification commands. Truth-up fixes found while checking it: the ADR
+  count (39 records, 0001-0040), a duplicate row in the ADR index, and
+  three provider profiles (`codex`, `lmstudio`, `ollama`) that described a
+  source tree which does not exist - they are now marked as
+  specifications, not installable extensions.
+
 ## [0.5.2] - 2026-09-30
 
 ### Fixed
