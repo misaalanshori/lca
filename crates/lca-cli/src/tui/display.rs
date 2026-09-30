@@ -1,7 +1,6 @@
-//! Display formatting and the model-choice effects (S1): conversation
-//! lines for the scrollback, the model picker's text and switch, the
-//! session age label, and the stats story. Pure functions over records and
-//! store reads - no terminal, no loop.
+//! Display formatting and the model-choice effects (S1): the model
+//! picker's text and switch, the session age label, and the stats story.
+//! Pure functions over records and store reads - no terminal, no loop.
 
 use std::sync::{Arc, Mutex};
 
@@ -9,55 +8,6 @@ use lca_protocol::{CommandEffect, Record};
 use lca_session::{Session, SessionStore, ViewMode};
 
 use super::ModelChoice;
-
-/// One conversation line for the scrollback.
-pub(super) fn display_line(record: &Record) -> Option<String> {
-    Some(match record {
-        Record::User { content, .. } => format!("user: {content}"),
-        Record::Assistant { content, .. } => {
-            let text: String = content
-                .iter()
-                .filter_map(|block| match block {
-                    lca_protocol::ContentBlock::Text { text } => Some(text.clone()),
-                    lca_protocol::ContentBlock::ToolCall { name, .. } => {
-                        Some(format!("[{name} requested]"))
-                    }
-                    lca_protocol::ContentBlock::Reasoning { .. } => None,
-                    lca_protocol::ContentBlock::Image { media_type, bytes } => {
-                        Some(lca_ui::image_label(media_type, bytes))
-                    }
-                })
-                .collect::<Vec<String>>()
-                .join(" ");
-            if text.is_empty() {
-                return None;
-            }
-            format!("assistant: {text}")
-        }
-        Record::ToolCall {
-            name, arguments, ..
-        } => format!("> {name}({arguments})"),
-        Record::ToolResult {
-            status, content, ..
-        } => format!(
-            "result: {}: {}",
-            match status {
-                lca_protocol::ToolResultStatus::Ok => "ok",
-                lca_protocol::ToolResultStatus::Error => "error",
-                lca_protocol::ToolResultStatus::Denied => "denied",
-                lca_protocol::ToolResultStatus::Timeout => "timeout",
-            },
-            content.as_deref().unwrap_or("")
-        ),
-        Record::Compaction {
-            summary, strategy, ..
-        } => format!("[compaction] {summary} (via {strategy})"),
-        Record::SessionStart { working_dir, .. } => {
-            format!("[session in {}]", lca_ui::display_path(working_dir))
-        }
-        _ => return None,
-    })
-}
 
 /// A short relative age (`now`, `5m`, `3h`, `2d`, `3w`, `2mo`, `1y`), pi's
 /// session-row format (`selectors-large.md`).

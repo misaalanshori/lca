@@ -28,6 +28,8 @@ fn chat(grants: Vec<GrantEntry>) -> Chat {
                 .map(|s| s.to_string())
                 .collect(),
             initial_lines: Vec::new(),
+            initial_records: Vec::new(),
+            initial_tail_lines: Vec::new(),
             plain: true,
             invoke_command: Arc::new(|_, _| CommandEffect::None),
             slash_commands: vec!["/grants".into()],

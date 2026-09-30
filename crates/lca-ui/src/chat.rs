@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use lca_protocol::{StopReason, TurnEvent, TurnStatus, Usage};
+use lca_protocol::{Record, StopReason, TurnEvent, TurnStatus, Usage};
 use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::keys;
 use lca_tui::widgets::editor::{Editor, EditorEvent};
@@ -108,6 +108,12 @@ impl Chat {
     /// Build the chat: widgets, theme, and the autocomplete chain.
     pub fn new(options: UiOptions, keybindings: Arc<KeybindingsManager>) -> Chat {
         let mut world = UiState::new(options);
+        // The resumed session's records replay with the live rendering and
+        // the trailing notices come after them, so both are taken out of the
+        // options before `world` moves into the chat (FR-UI-7).
+        let initial_records = std::mem::take(&mut world.options.initial_records);
+        let initial_tail = std::mem::take(&mut world.options.initial_tail_lines);
+        let attachment_loader = world.options.hooks.load_attachment.clone();
         // S5: the configured theme resolves through the auto-pair grammar
         // (a built-in, a custom file, or `auto` following the detected
         // scheme); an invalid custom file keeps the last-good palette and
@@ -156,7 +162,7 @@ impl Chat {
             .trust_needed
             .as_ref()
             .is_some_and(|needed| needed());
-        Chat {
+        let mut chat = Chat {
             keybindings,
             transcript,
             editor,
@@ -188,6 +194,32 @@ impl Chat {
             trust_picker: trust_prompt.then_some(TrustPicker { selected: 0 }),
             shell: None,
             resume_picker: None,
+        };
+        // FR-UI-7: a resumed transcript renders like the live one - user
+        // band, markdown, tool cards - instead of `user:`/`assistant:` lines.
+        chat.load_records(&initial_records, attachment_loader.as_ref());
+        for line in &initial_tail {
+            chat.transcript.push_raw(line.clone());
+        }
+        chat
+    }
+
+    /// Replay persisted records into the transcript with the rendering the
+    /// live path used, then fold their usage into the footer totals so a
+    /// resumed session reports its own history (FR-UI-7, FR-UI-20).
+    pub fn load_records(
+        &mut self,
+        records: &[Record],
+        attachment: Option<&crate::state::LoadAttachment>,
+    ) {
+        self.transcript.replay_records(records, attachment);
+        for record in records {
+            if let Record::Assistant {
+                usage: Some(usage), ..
+            } = record
+            {
+                self.on_turn_event(TurnEvent::Usage(usage.clone()));
+            }
         }
     }
 

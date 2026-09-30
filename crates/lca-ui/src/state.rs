@@ -382,9 +382,14 @@ pub type SessionTree = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
 pub type ForkAt = Arc<dyn Fn(usize) -> String + Send + Sync>;
 /// Lists the project's sessions, newest first (`/resume`, R2).
 pub type SessionList = Arc<dyn Fn() -> Vec<crate::resume::SessionEntry> + Send + Sync>;
-/// Switches the live session to `id` and returns the new transcript lines
-/// (R3); `None` when the session cannot be opened.
-pub type SwitchSession = Arc<dyn Fn(&str) -> Option<Vec<String>> + Send + Sync>;
+/// Switches the live session to `id` and returns its records (R3); `None`
+/// when the session cannot be opened. Records rather than lines: the
+/// transcript replays them with the live rendering (FR-UI-7), not a
+/// plain-text dump.
+pub type SwitchSession = Arc<dyn Fn(&str) -> Option<Vec<lca_protocol::Record>> + Send + Sync>;
+/// Resolves a user attachment hash to `(media type, bytes)` for the
+/// replayed transcript; `None` when the file is gone.
+pub type LoadAttachment = Arc<dyn Fn(&str) -> Option<(String, Vec<u8>)> + Send + Sync>;
 
 /// Optional host hooks the interface calls (P6): an external editor, the
 /// `!`/`!!` shell path, and screen-mode persistence. Default: all absent,
@@ -418,9 +423,11 @@ pub struct UiHooks {
     pub fork_at: Option<ForkAt>,
     /// List the project's sessions for `/resume` (R2).
     pub session_list: Option<SessionList>,
-    /// Switch the live session in place, returning the new transcript lines
-    /// (R3).
+    /// Switch the live session in place, returning its records (R3).
     pub switch_session: Option<SwitchSession>,
+    /// Resolve an attachment hash to media type and bytes, so a replayed
+    /// message shows its image (FR-UI-13).
+    pub load_attachment: Option<LoadAttachment>,
     /// Write a selection to the system clipboard, verified (R6).
     pub copy_to_clipboard: Option<ClipboardWriter>,
     /// Open a URL a click landed on (R6).
@@ -456,8 +463,14 @@ pub struct UiOptions {
     pub theme_dir: PathBuf,
     /// The `/theme` picker's names (built-ins plus custom files).
     pub themes: Vec<String>,
-    /// Conversation lines already resolved for display (resume).
+    /// Conversation lines already resolved for display: warnings and
+    /// status notices that surround the transcript (resume).
     pub initial_lines: Vec<String>,
+    /// The resumed session's records, replayed with the live rendering
+    /// (FR-UI-7) - user band, markdown, tool cards, image labels.
+    pub initial_records: Vec<lca_protocol::Record>,
+    /// Lines drawn after the transcript (the missing-provider report).
+    pub initial_tail_lines: Vec<String>,
     /// Plain-text rendering (FR-UI-5).
     pub plain: bool,
     /// Invoke a registered slash command (the registry supplies the
@@ -711,6 +724,8 @@ mod tests {
             theme_dir: std::path::PathBuf::new(),
             themes: crate::theme::THEMES.iter().map(|s| s.to_string()).collect(),
             initial_lines: Vec::new(),
+            initial_records: Vec::new(),
+            initial_tail_lines: Vec::new(),
             plain: true,
             invoke_command: Arc::new(|_, _| CommandEffect::None),
             slash_commands: Vec::new(),

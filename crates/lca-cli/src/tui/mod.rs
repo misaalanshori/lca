@@ -107,8 +107,11 @@ pub(crate) struct Ui {
     render_regions: Option<RegionRenderer>,
     /// Extension ui events (FR-UI-6).
     ui_events: Option<RegionInteractor>,
-    /// The initial transcript lines (resumed records, warnings).
-    initial_lines: Vec<String>,
+    /// The initial transcript: warnings that frame it (head), the session's
+    /// records for the rich replay (FR-UI-7), and trailing notices.
+    initial_head: Vec<String>,
+    initial_records: Vec<lca_protocol::Record>,
+    initial_tail: Vec<String>,
     /// The background update check's finding (FR-CFG-6).
     update_notice: Arc<std::sync::OnceLock<String>>,
     /// R4: a background login/identity step's result, taken by the
@@ -249,7 +252,9 @@ impl Ui {
             current_session,
             session_id,
             provider_name,
-            mut initial_lines,
+            initial_head,
+            initial_records,
+            mut initial_tail,
             update_notice,
         } = open(cwd, resume)?;
 
@@ -297,10 +302,11 @@ impl Ui {
         };
         if missing_provider {
             // The first frame says what is wrong and how to leave this state;
-            // the report is the same one the headless path prints.
-            initial_lines.push(String::new());
-            initial_lines.push(crate::no_model_message(&provider_name));
-            initial_lines.push("Use /login to sign in to a provider.".to_string());
+            // the report is the same one the headless path prints. It trails
+            // the transcript, after the records replay.
+            initial_tail.push(String::new());
+            initial_tail.push(crate::no_model_message(&provider_name));
+            initial_tail.push("Use /login to sign in to a provider.".to_string());
         }
 
         let provider_is_ready = crate::provider_ready(&provider_name, &data);
@@ -386,7 +392,9 @@ impl Ui {
             shared_prompt,
             render_regions,
             ui_events,
-            initial_lines,
+            initial_head,
+            initial_records,
+            initial_tail,
             update_notice,
             login_pending: Arc::new(Mutex::new(None)),
             login_handle: Arc::new(Mutex::new(None)),
@@ -430,7 +438,9 @@ struct Opened {
     current_session: Arc<Mutex<Session>>,
     session_id: String,
     provider_name: String,
-    initial_lines: Vec<String>,
+    initial_head: Vec<String>,
+    initial_records: Vec<lca_protocol::Record>,
+    initial_tail: Vec<String>,
     update_notice: Arc<std::sync::OnceLock<String>>,
 }
 
@@ -453,7 +463,8 @@ fn open(cwd: &Path, resume: Option<&str>) -> anyhow::Result<Opened> {
     let session = resolve_session(&store, cwd, resume)?;
     let current_session = Arc::new(Mutex::new(session.clone()));
     let provider_name = config.provider().to_string();
-    let initial_lines = initial_lines(&store, &session, &grants, cwd, &data, &provider_name);
+    let (initial_head, initial_records) =
+        initial_view(&store, &session, &grants, cwd, &data, &provider_name);
     Ok(Opened {
         data,
         store,
@@ -463,7 +474,9 @@ fn open(cwd: &Path, resume: Option<&str>) -> anyhow::Result<Opened> {
         current_session,
         session_id: session.id().to_string(),
         provider_name,
-        initial_lines,
+        initial_head,
+        initial_records,
+        initial_tail: Vec::new(),
         update_notice,
     })
 }
@@ -486,42 +499,27 @@ fn resolve_session(
 
 /// The initial transcript lines: the records, the truncation/skip
 /// warnings, and the ungranted-endpoint note (FR-PERM-16).
-fn initial_lines(
+/// The resumed transcript's framing: head warnings (top of screen) and the
+/// session's records, which the interface replays with the live rendering
+/// (FR-UI-7) instead of the flattened lines this used to return.
+fn initial_view(
     store: &SessionStore,
     session: &Session,
     grants: &Arc<Mutex<GrantStore>>,
     cwd: &Path,
     data: &Path,
     provider_name: &str,
-) -> Vec<String> {
+) -> (Vec<String>, Vec<lca_protocol::Record>) {
     let read = match store.read_with(session, lca_session::ViewMode::Display) {
         Ok(read) => read,
         Err(err) => {
-            return vec![format!("error: cannot read the session: {err}")];
+            return (
+                vec![format!("error: cannot read the session: {err}")],
+                Vec::new(),
+            );
         }
     };
-    let mut lines: Vec<String> = read
-        .records
-        .iter()
-        .filter_map(display::display_line)
-        .collect();
-    // A session that loaded with a truncation or a skipped line must say so:
-    // a short or empty transcript with no explanation reads as data loss.
-    if read.truncated {
-        lines.insert(
-            0,
-            "warning: the session log was truncated; only the records that loaded are shown"
-                .to_string(),
-        );
-    } else if read.skipped_unknown > 0 {
-        lines.insert(
-            0,
-            format!(
-                "warning: {} record(s) were skipped (unknown type or version)",
-                read.skipped_unknown
-            ),
-        );
-    }
+    let mut head: Vec<String> = Vec::new();
     // The configured endpoint can be outside the provider's manifest hosts;
     // without its ad hoc grant every turn fails with a permission denial. Say
     // so up front and name the one command that fixes it (FR-PERM-16). This is
@@ -529,14 +527,24 @@ fn initial_lines(
     if crate::provider_ready(provider_name, data)
         && let Some(host) = crate::ungranted_host(grants, cwd, crate::openai_ad_hoc_host(data))
     {
-        lines.insert(
-            0,
-            format!(
-                "note: the endpoint {host} is not granted for this project - run /login to approve it"
-            ),
-        );
+        head.push(format!(
+            "note: the endpoint {host} is not granted for this project - run /login to approve it"
+        ));
     }
-    lines
+    // A session that loaded with a truncation or a skipped line must say so:
+    // a short or empty transcript with no explanation reads as data loss.
+    if read.truncated {
+        head.push(
+            "warning: the session log was truncated; only the records that loaded are shown"
+                .to_string(),
+        );
+    } else if read.skipped_unknown > 0 {
+        head.push(format!(
+            "warning: {} record(s) were skipped (unknown type or version)",
+            read.skipped_unknown
+        ));
+    }
+    (head, read.records)
 }
 
 /// Load every extension: installed first (an installed copy shadows the

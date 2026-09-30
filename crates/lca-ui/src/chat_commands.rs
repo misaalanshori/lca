@@ -202,9 +202,13 @@ impl Chat {
         }
         match self.world.options.hooks.switch_session.as_ref() {
             Some(switch) => match switch(id) {
-                Some(lines) => {
-                    self.transcript.replace(lines);
+                Some(records) => {
+                    // Replayed with the live rendering (FR-UI-7), not as
+                    // plain lines: same transcript machinery as a live turn.
+                    self.transcript.clear();
                     self.pending.clear();
+                    let loader = self.world.options.hooks.load_attachment.clone();
+                    self.load_records(&records, loader.as_ref());
                     self.world.notice = Some(format!("switched to session {id}"));
                 }
                 None => self.world.notice = Some(format!("cannot open session {id}")),

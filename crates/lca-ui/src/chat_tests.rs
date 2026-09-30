@@ -13,6 +13,8 @@ fn options() -> UiOptions {
         theme_dir: std::path::PathBuf::new(),
         themes: crate::theme::THEMES.iter().map(|s| s.to_string()).collect(),
         initial_lines: Vec::new(),
+        initial_records: Vec::new(),
+        initial_tail_lines: Vec::new(),
         plain: true,
         invoke_command: Arc::new(|_, _| CommandEffect::None),
         slash_commands: vec!["/help".into(), "/model".into(), "/login".into()],
@@ -755,7 +757,16 @@ fn tree_selection_switches_the_session() {
         vec![("s1".into(), "s1 *".into()), ("s2".into(), "s2".into())]
     }));
     chat.world.options.hooks.switch_session = Some(Arc::new(|id: &str| {
-        (id == "s2").then(|| vec!["user: from s2".to_string()])
+        (id == "s2").then(|| {
+            vec![lca_protocol::Record::User {
+                v: lca_protocol::FORMAT_VERSION,
+                ts: 1,
+                id: "r1".into(),
+                content: "from s2".into(),
+                attachments: Vec::new(),
+                queue: None,
+            }]
+        })
     }));
     for c in "/tree".chars() {
         chat.handle_key(&c.to_string());
@@ -1061,4 +1072,117 @@ fn a_finished_login_result_lands_when_the_poll_returns_it() {
     // A second poll with nothing pending changes nothing.
     let poll = chat.world.options.hooks.poll_login.clone().expect("hook");
     assert!(poll().is_none());
+}
+
+// Verifies: FR-UI-7 - a session replayed through `/resume`, `/tree`, or a
+// restart renders like the live one: the user band, markdown (a table
+// stays a table), and one tool card. The plain `user:`/`assistant:` dump
+// this replaced flattened every message to a line, so a resumed table came
+// back as pipe characters (manual side-by-side against pi, 2026-10-01).
+// FR-UI-20: the replayed usage feeds the footer's session totals.
+#[test]
+fn a_replayed_session_renders_like_the_live_one() {
+    let mut chat = chat();
+    let records = vec![
+        lca_protocol::Record::User {
+            v: lca_protocol::FORMAT_VERSION,
+            ts: 1,
+            id: "r1".into(),
+            content: "show me a table".into(),
+            attachments: Vec::new(),
+            queue: None,
+        },
+        lca_protocol::Record::Assistant {
+            v: lca_protocol::FORMAT_VERSION,
+            ts: 2,
+            id: "r2".into(),
+            content: vec![lca_protocol::ContentBlock::Text {
+                text: "Fruit prices\n\n| Fruit | Price |\n|---|---|\n| Apples | $1.99 |\n\nDone."
+                    .into(),
+            }],
+            reasoning: Some("needs a table".into()),
+            model: Some("m".into()),
+            provider: Some("p".into()),
+            usage: Some(lca_protocol::Usage {
+                input: 100,
+                output: 20,
+                ..Default::default()
+            }),
+        },
+        lca_protocol::Record::ToolCall {
+            v: lca_protocol::FORMAT_VERSION,
+            ts: 3,
+            id: "r3".into(),
+            call_id: "c1".into(),
+            name: "read".into(),
+            arguments: "{\"path\":\"a.txt\"}".into(),
+            source: lca_protocol::ToolSource::Builtin,
+        },
+        lca_protocol::Record::ToolResult {
+            v: lca_protocol::FORMAT_VERSION,
+            ts: 4,
+            id: "r4".into(),
+            call_id: "c1".into(),
+            status: lca_protocol::ToolResultStatus::Ok,
+            content: Some("line one".into()),
+            attachment: None,
+            truncated: false,
+        },
+    ];
+    chat.load_records(&records, None);
+    let text = strip(&chat.render(100)).join("\n");
+    assert!(text.contains("show me a table"), "{text}");
+    assert!(
+        text.contains('┌'),
+        "the markdown table renders as a table: {text}"
+    );
+    assert!(!text.contains("assistant:"), "no plain dump: {text}");
+    assert!(!text.contains("user:"), "no plain dump: {text}");
+    assert!(
+        !text.contains("requested"),
+        "the tool card does not duplicate the assistant's tool-call block: {text}"
+    );
+    assert!(text.contains("read"), "the tool card renders: {text}");
+    assert_eq!(
+        chat.usage.input, 100,
+        "the replayed usage feeds the footer totals"
+    );
+    assert_eq!(chat.usage.output, 20, "the replayed usage feeds the footer");
+}
+
+// Verifies: FR-UI-13 - a replayed attachment renders as the image card when
+// its bytes are still on disk (the record's own stub line then being a
+// second copy of it, which the live transcript never showed), and stays as
+// the named stub when the file is gone.
+#[test]
+fn a_replayed_attachment_renders_once_or_as_a_named_placeholder() {
+    let hash = "0123456789abcdef".to_string();
+    let record = lca_protocol::Record::User {
+        v: lca_protocol::FORMAT_VERSION,
+        ts: 1,
+        id: "r1".into(),
+        content: "look at this\n[image attachment 01234567, image/png, 3 bytes]".into(),
+        attachments: vec![hash.clone()],
+        queue: None,
+    };
+    let loader: crate::state::LoadAttachment =
+        Arc::new(move |h: &str| (h == hash).then(|| ("image/png".to_string(), vec![1, 2, 3])));
+
+    let mut with_file = chat();
+    with_file.load_records(std::slice::from_ref(&record), Some(&loader));
+    let text = strip(&with_file.render(100)).join("\n");
+    assert!(text.contains("look at this"), "{text}");
+    assert!(text.contains("image/png"), "the image card renders: {text}");
+    assert!(
+        !text.contains("[image attachment"),
+        "the stub is not shown next to its own card: {text}"
+    );
+
+    let mut without_file = chat();
+    without_file.load_records(&[record], None);
+    let text = strip(&without_file.render(100)).join("\n");
+    assert!(
+        text.contains("[image attachment 01234567"),
+        "a missing image keeps its named placeholder: {text}"
+    );
 }

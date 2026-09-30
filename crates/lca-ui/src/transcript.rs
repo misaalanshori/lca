@@ -256,13 +256,147 @@ impl Transcript {
         self.entries.push(Entry::Raw(text.into()));
     }
 
-    /// Replace the whole transcript (R3's session switch): the new session's
-    /// display lines, each shown verbatim.
-    pub fn replace(&mut self, lines: Vec<String>) {
+    /// Drop every entry (R3's session switch): the new session starts its
+    /// own transcript.
+    pub fn clear(&mut self) {
         self.invalidate_cache();
         self.entries.clear();
-        for line in lines {
-            self.entries.push(Entry::Raw(line));
+    }
+
+    /// Append a replay of persisted records with the rendering the live
+    /// path produced (FR-UI-7): the user band, markdown assistant text,
+    /// tool cards, and image labels. The plain `user:`/`assistant:` dump
+    /// this replaced could not show a table after a resume - the table had
+    /// been flattened to one line per record (manual side-by-side against
+    /// pi, 2026-10-01).
+    ///
+    /// `attachment` resolves a user-attachment hash to media type and bytes
+    /// (FR-UI-13); a hash with no file replays as text alone.
+    pub fn replay_records(
+        &mut self,
+        records: &[lca_protocol::Record],
+        attachment: Option<&crate::state::LoadAttachment>,
+    ) {
+        use lca_protocol::{ContentBlock, Record};
+        for record in records {
+            match record {
+                Record::SessionStart { working_dir, .. } => {
+                    self.push_raw(format!("[session in {}]", crate::display_path(working_dir)))
+                }
+                Record::User {
+                    content,
+                    attachments,
+                    ..
+                } => {
+                    // Render each resolvable attachment as the image card the
+                    // live transcript showed; a hash with no file keeps the
+                    // record's own stub line, which then names the missing
+                    // image (FR-UI-13's named placeholder).
+                    let mut resolved: Vec<&String> = Vec::new();
+                    for hash in attachments {
+                        if let Some((media, bytes)) = attachment.and_then(|load| load(hash)) {
+                            let info = ImageInfo::new(media, &bytes);
+                            self.push_image(info, bytes);
+                            resolved.push(hash);
+                        }
+                    }
+                    // The record's text carries a stub naming each
+                    // attachment (assemble.rs: "the message text gains a stub
+                    // naming it"); once the card is on screen that stub is a
+                    // second copy of the same image. The live transcript
+                    // pushed the typed text and never showed it.
+                    let text = if resolved.is_empty() {
+                        content.clone()
+                    } else {
+                        content
+                            .lines()
+                            .filter(|line| {
+                                let stub = line.starts_with("[image attachment ");
+                                !(stub
+                                    && resolved
+                                        .iter()
+                                        .any(|hash| line.contains(&hash[..8.min(hash.len())])))
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    };
+                    if !text.trim().is_empty() {
+                        self.push_user(text);
+                    }
+                }
+                Record::Assistant {
+                    content, reasoning, ..
+                } => {
+                    let reasoning = reasoning.as_deref().filter(|text| !text.is_empty());
+                    if content.is_empty() && reasoning.is_none() {
+                        continue;
+                    }
+                    let mut index = 0;
+                    let mut reasoning_done = false;
+                    while index < content.len() {
+                        // An image is its own entry, as it renders live.
+                        if let ContentBlock::Image { media_type, bytes } = &content[index] {
+                            let info = ImageInfo::new(media_type, bytes);
+                            self.push_image(info, bytes.clone());
+                            index += 1;
+                            continue;
+                        }
+                        self.begin_assistant();
+                        if !reasoning_done {
+                            if let Some(reasoning) = reasoning {
+                                self.append_reasoning(reasoning);
+                            }
+                            reasoning_done = true;
+                        }
+                        while index < content.len()
+                            && !matches!(&content[index], ContentBlock::Image { .. })
+                        {
+                            match &content[index] {
+                                // The same call is persisted as the ToolCall
+                                // and ToolResult records that follow, and
+                                // the card comes from those - rendering the
+                                // block too would show every call twice.
+                                ContentBlock::ToolCall { .. } => {}
+                                // The record's own reasoning field carries it.
+                                ContentBlock::Reasoning { .. } => {}
+                                ContentBlock::Text { text } => self.append_text(text),
+                                ContentBlock::Image { .. } => {}
+                            }
+                            index += 1;
+                        }
+                        self.finish_assistant();
+                    }
+                    // A reasoning-only answer still earns its entry.
+                    if !reasoning_done && let Some(reasoning) = reasoning {
+                        self.begin_assistant();
+                        self.append_reasoning(reasoning);
+                        self.finish_assistant();
+                    }
+                }
+                Record::ToolCall {
+                    name, arguments, ..
+                } => self.start_tool(name.clone(), arguments.clone()),
+                Record::ToolResult {
+                    status, content, ..
+                } => {
+                    let status = match status {
+                        lca_protocol::ToolResultStatus::Ok => ToolStatus::Ok,
+                        lca_protocol::ToolResultStatus::Error => ToolStatus::Error,
+                        lca_protocol::ToolResultStatus::Denied => ToolStatus::Denied,
+                        lca_protocol::ToolResultStatus::Timeout => ToolStatus::Timeout,
+                    };
+                    self.finish_tool(status, content.clone());
+                }
+                Record::Compaction {
+                    summary, strategy, ..
+                } => {
+                    self.push_raw(format!("[compaction] {summary} (via {strategy})"));
+                }
+                // Permission decisions, extension events, fork points, and
+                // the end marker are transient or structural: the live path
+                // shows them as the bottom notice, not as transcript lines.
+                _ => {}
+            }
         }
     }
 

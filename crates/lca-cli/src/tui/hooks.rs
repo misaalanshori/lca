@@ -10,7 +10,7 @@ use lca_session::ViewMode;
 use lca_ui::{ShellEvent, ShellHandle, UiHooks};
 
 use super::Ui;
-use super::display::{age_label, display_line};
+use super::display::age_label;
 
 /// Write text to the system clipboard through a native command, returning
 /// `true` only when the command succeeded (R6). A `false` lets the
@@ -155,6 +155,7 @@ impl Ui {
             session_tree: Some(self.session_tree()),
             session_list: Some(self.session_list()),
             switch_session: Some(self.switch_session()),
+            load_attachment: Some(self.load_attachment()),
             copy_to_clipboard: Some(Arc::new(|text: &str| native_clipboard(text))),
             open_url: Some(Arc::new(open_url)),
             fork_at: Some(self.fork_at()),
@@ -409,18 +410,36 @@ impl Ui {
     }
 
     /// Switch the live session in place (`/tree`, `/resume`; R3). Returns
-    /// the reopened transcript's lines, or `None` when the id cannot open.
+    /// the reopened session's records - the interface replays them with the
+    /// live rendering (FR-UI-7) - or `None` when the id cannot open.
     fn switch_session(&self) -> lca_ui::state::SwitchSession {
         let store = self.store.clone();
         let cwd = self.cwd.clone();
         let session_cell = self.current_session.clone();
-        Arc::new(move |id: &str| -> Option<Vec<String>> {
+        Arc::new(move |id: &str| -> Option<Vec<lca_protocol::Record>> {
             let session = store.session(&cwd, id).ok()?;
             let read = store.read_with(&session, ViewMode::Display).ok()?;
-            let lines: Vec<String> = read.records.iter().filter_map(display_line).collect();
             crate::init_session_temp(session.id());
             *session_cell.lock().unwrap_or_else(|p| p.into_inner()) = session;
-            Some(lines)
+            Some(read.records)
+        })
+    }
+
+    /// Resolve an attachment hash against the *current* session (a fork's
+    /// images live in its ancestor's directory, store.attachment_path walks
+    /// the chain), so a replayed message shows its image (FR-UI-13).
+    fn load_attachment(&self) -> lca_ui::state::LoadAttachment {
+        let store = self.store.clone();
+        let session_cell = self.current_session.clone();
+        Arc::new(move |hash: &str| {
+            let session = session_cell
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            let path = store.attachment_path(&session, hash)?;
+            let bytes = std::fs::read(path).ok()?;
+            let media = lca_protocol::sniff_image_media_type(&bytes)?.to_string();
+            Some((media, bytes))
         })
     }
 

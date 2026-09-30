@@ -28,7 +28,9 @@ impl Ui {
             themes: lca_ui::theme::theme_names(&lca_ui::theme::themes_dir(
                 &crate::config_dir().join("lca"),
             )),
-            initial_lines: self.initial_lines.clone(),
+            initial_lines: self.initial_head.clone(),
+            initial_records: self.initial_records.clone(),
+            initial_tail_lines: self.initial_tail.clone(),
             models: self
                 .provider
                 .list_models()
