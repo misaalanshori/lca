@@ -314,6 +314,9 @@ fn command_help(command: &str) -> &'static str {
         "/attach" => "attach an image to the next message",
         "/trust" => "trust the project folder (auto-approve in-workspace commands)",
         "/permissions" => "manage allow/deny rules (session, project, global)",
+        "/grants" => "review this project's grants and rules",
+        "/settings" => "show the merged configuration and where each value came from",
+        "/session" => "show this session's tokens, cache, and cost",
         _ => "",
     }
 }

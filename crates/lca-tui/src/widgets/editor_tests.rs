@@ -91,6 +91,42 @@ fn ctrl_j_inserts_newline_in_every_dialect() {
     assert_eq!(e.lines(), &["a", "b"]);
 }
 
+// R8(b) verification receipt. pi synthesizes Shift+Enter by polling the
+// OS modifier state, because Apple Terminal and the Windows console send
+// bare `\r` for it and the modifier is gone by the time the byte arrives.
+// LCA does not carry a platform addon, so the dialect tables + a
+// documented fallback have to carry the same weight:
+//
+//   console spellings  ->  `\x1b[13;2u`, `ESC CR`, `\x1b[13;2~` all mean
+//                          shift+enter (asserted in keys.rs / regression 32);
+//   the one case that really cannot be distinguished (bare `\r`, as the
+//   Windows console sends) -> `\r` keeps submitting and Ctrl+J / `\`+Enter
+//                          are the newline spellings, both bound and
+//                          both asserted here.
+//
+// That is the complete matrix: there is no spelling a legacy console can
+// send that has no answer, so the native modifier poll buys nothing and
+// is deliberately not ported.
+#[test]
+fn the_console_without_a_distinct_shift_enter_uses_the_ctrl_j_fallback() {
+    // Bare `\r` — the Windows console's only Enter spelling — submits.
+    let mut e = Editor::new();
+    e.insert_str("send me");
+    assert_eq!(
+        e.handle_key("\r"),
+        EditorEvent::Submitted("send me".to_string()),
+        "the console's Enter still submits"
+    );
+
+    // …and the newline it cannot express arrives through the bound
+    // fallback (`tui.input.newLine` = [shift+enter, ctrl+j]).
+    let mut e = Editor::new();
+    e.insert_str("line one");
+    assert_eq!(e.handle_key("\n"), EditorEvent::Changed, "ctrl+j = newline");
+    e.insert_str("line two");
+    assert_eq!(e.lines(), &["line one", "line two"]);
+}
+
 #[test]
 fn backspace_joins_lines() {
     let mut e = Editor::new();

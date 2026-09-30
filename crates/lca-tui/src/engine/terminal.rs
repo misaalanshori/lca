@@ -72,13 +72,29 @@ pub trait Terminal: Send {
 
 /// Resolve the lone-ESC reassembly window: SSH-aware, env-overridable.
 pub fn resolve_escape_timeout_ms() -> u64 {
-    if let Ok(v) = std::env::var("PI_TUI_ESC_TIMEOUT")
-        && let Ok(ms) = v.parse::<u64>()
+    escape_timeout_for(
+        std::env::var("PI_TUI_ESC_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|ms| *ms > 0),
+        std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some(),
+    )
+}
+
+/// The timeout decision, extracted so the SSH branch is testable without
+/// mutating the process environment (a shared-env test would race every
+/// other env-sensitive test in the workspace).
+///
+/// pi's contract (io-reliability.md §3): 10 ms normally, 100 ms over SSH
+/// where latency lets `ESC` + char straddle two packets, and an explicit
+/// `PI_TUI_ESC_TIMEOUT`-style override for both.
+fn escape_timeout_for(override_ms: Option<u64>, ssh: bool) -> u64 {
+    if let Some(ms) = override_ms
         && ms > 0
     {
         return ms;
     }
-    if std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some() {
+    if ssh {
         return DEFAULT_SSH_ESCAPE_TIMEOUT_MS;
     }
     DEFAULT_ESCAPE_TIMEOUT_MS
@@ -399,7 +415,7 @@ fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
                 Ok(n) => {
                     last_data = Instant::now();
                     for event in buffer.process_bytes(&buf[..n]) {
-                        dispatch(&shared, event);
+                        dispatch(&shared, event, &mut |seq| write_stdout(seq));
                     }
                 }
                 Err(_) => break,
@@ -412,7 +428,7 @@ fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
             && last_data.elapsed().as_millis() as u64 >= timeout
         {
             for event in buffer.flush() {
-                dispatch(&shared, event);
+                dispatch(&shared, event, &mut |seq| write_stdout(seq));
             }
         }
 
@@ -428,10 +444,10 @@ fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
     shared.reader_done.store(true, Ordering::SeqCst);
 }
 
-fn dispatch(shared: &Shared, event: StdinEvent) {
+fn dispatch(shared: &Shared, event: StdinEvent, out: &mut dyn FnMut(&str)) {
     match event {
         StdinEvent::Data(seq) => {
-            if apply_negotiation(shared, &seq) {
+            if apply_negotiation(shared, &seq, out) {
                 return;
             }
             shared.forward_input(seq);
@@ -444,18 +460,24 @@ fn dispatch(shared: &Shared, event: StdinEvent) {
 
 /// Apply a negotiation reply, writing the fallback enable sequence when the
 /// terminal is not Kitty-capable. Returns whether the sequence was consumed.
-fn apply_negotiation(shared: &Shared, seq: &str) -> bool {
+///
+/// The invariant (io-reliability.md §4, R8(c)): **exactly one key
+/// disambiguation layer is ever active** — a Kitty answer retires
+/// `modifyOtherKeys`, and `modifyOtherKeys` is only enabled while Kitty
+/// has not answered. `out` is the write sink so the transitions are
+/// assertable in a test instead of only observable on a live terminal.
+fn apply_negotiation(shared: &Shared, seq: &str, out: &mut dyn FnMut(&str)) -> bool {
     match parse_negotiation(seq) {
         Some(Negotiation::KittyFlags(flags)) => {
             if flags != 0 {
                 if shared.modify_other_keys.swap(false, Ordering::SeqCst) {
-                    write_stdout("\x1b[>4;0m");
+                    out("\x1b[>4;0m");
                 }
                 if !shared.kitty.swap(true, Ordering::SeqCst) {
                     set_kitty_protocol_active(true);
                 }
             } else if !shared.modify_other_keys.load(Ordering::SeqCst) {
-                write_stdout("\x1b[>4;2m");
+                out("\x1b[>4;2m");
                 shared.modify_other_keys.store(true, Ordering::SeqCst);
             }
             true
@@ -464,7 +486,7 @@ fn apply_negotiation(shared: &Shared, seq: &str) -> bool {
             if !shared.kitty.load(Ordering::SeqCst)
                 && !shared.modify_other_keys.load(Ordering::SeqCst)
             {
-                write_stdout("\x1b[>4;2m");
+                out("\x1b[>4;2m");
                 shared.modify_other_keys.store(true, Ordering::SeqCst);
             }
             true
@@ -703,5 +725,85 @@ mod tests {
         unsafe { std::env::set_var("PI_TUI_ESC_TIMEOUT", "42") };
         assert_eq!(resolve_escape_timeout_ms(), 42);
         unsafe { std::env::remove_var("PI_TUI_ESC_TIMEOUT") };
+    }
+
+    // Verifies: R8(a) - pi's adaptive lone-ESC window. The SSH branch is
+    // exercised through the extracted decision, because a test that mutates
+    // `SSH_CONNECTION` would race every other env-sensitive test in the
+    // workspace.
+    #[test]
+    fn the_escape_window_adapts_to_the_transport() {
+        assert_eq!(
+            escape_timeout_for(None, false),
+            DEFAULT_ESCAPE_TIMEOUT_MS,
+            "localhost keeps pi's 10 ms window"
+        );
+        assert_eq!(
+            escape_timeout_for(None, true),
+            DEFAULT_SSH_ESCAPE_TIMEOUT_MS,
+            "SSH raises it to 100 ms: latency lets ESC+char straddle packets"
+        );
+        assert_eq!(
+            escape_timeout_for(Some(42), true),
+            42,
+            "the env override wins over the transport"
+        );
+        assert_eq!(
+            escape_timeout_for(Some(0), true),
+            DEFAULT_SSH_ESCAPE_TIMEOUT_MS,
+            "a zero override is ignored, not adopted"
+        );
+    }
+
+    // Verifies: R8(c) - the never-swap-a-layer rule. Exactly one key
+    // disambiguation layer is ever active: DA starts `modifyOtherKeys`, a
+    // later Kitty answer retires it, and a repeated reply changes nothing.
+    #[test]
+    fn the_negotiation_keeps_exactly_one_key_layer_active() {
+        let term = ProcessTerminal::new();
+        let shared = &term.shared;
+        let mut out: Vec<String> = Vec::new();
+
+        // DA arrives first: the terminal does not speak Kitty, so the
+        // fallback layer starts. Sentinel, not a timeout.
+        assert!(
+            apply_negotiation(shared, "\x1b[?62;1;2c", &mut |s| out.push(s.to_string())),
+            "DA is consumed"
+        );
+        assert!(shared.modify_other_keys.load(Ordering::SeqCst));
+        assert!(!shared.kitty.load(Ordering::SeqCst));
+        assert_eq!(out, vec!["\x1b[>4;2m".to_string()]);
+
+        // A repeated DA adds nothing (the layer is already the active one).
+        assert!(apply_negotiation(shared, "\x1b[?62;1;2c", &mut |s| out.push(s.to_string())));
+        assert_eq!(out.len(), 1, "no second enable is emitted");
+
+        // A Kitty answer retires modifyOtherKeys and starts Kitty: never both.
+        assert!(apply_negotiation(shared, "\x1b[?7u", &mut |s| out.push(s.to_string())));
+        assert!(shared.kitty.load(Ordering::SeqCst));
+        assert!(
+            !shared.modify_other_keys.load(Ordering::SeqCst),
+            "the Kitty layer retired the fallback"
+        );
+        assert_eq!(out.last().map(String::as_str), Some("\x1b[>4;0m"));
+        assert!(
+            crate::engine::keys::is_kitty_protocol_active(),
+            "the parser's Kitty state follows"
+        );
+
+        // Kitty arrives first elsewhere (no prior DA): it starts directly
+        // and never enables the fallback.
+        let term = ProcessTerminal::new();
+        let shared = &term.shared;
+        let mut out: Vec<String> = Vec::new();
+        assert!(apply_negotiation(shared, "\x1b[?1u", &mut |s| out.push(s.to_string())));
+        assert!(shared.kitty.load(Ordering::SeqCst));
+        assert!(!shared.modify_other_keys.load(Ordering::SeqCst));
+        assert!(
+            out.is_empty(),
+            "the enable sequence is write-free when it is already off"
+        );
+        // Leave the process-wide parser flag as the test found it.
+        set_kitty_protocol_active(false);
     }
 }
