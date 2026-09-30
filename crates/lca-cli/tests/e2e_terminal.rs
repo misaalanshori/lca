@@ -150,6 +150,10 @@ impl Tmux {
         );
     }
 
+    /// Poll the pane until `needle` appears (150 ms cadence). The timeout
+    /// is wall-clock margin for a loaded machine, not a performance claim:
+    /// a full parallel `cargo test -p lca-cli` blew a 10 s paste budget
+    /// once while every focused run passed (2026-10-01).
     fn wait_for(&self, needle: &str, timeout: std::time::Duration) -> String {
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -287,7 +291,7 @@ fn a_real_paste_reaches_the_prompt_editor() {
     session.spawn(&sandbox, None, false, &[], &[]);
     session.wait_for("no model", std::time::Duration::from_secs(20));
     session.paste_text("pasted-into-the-editor");
-    session.wait_for("pasted-into-the-editor", std::time::Duration::from_secs(10));
+    session.wait_for("pasted-into-the-editor", std::time::Duration::from_secs(20));
 }
 
 // Verifies: R1 - a real multi-line paste (>10 lines) becomes an editor
@@ -309,7 +313,7 @@ fn a_real_multi_line_paste_becomes_a_marker() {
         .collect::<Vec<_>>()
         .join("\n");
     session.paste_text(&big);
-    session.wait_for("[paste #1", std::time::Duration::from_secs(10));
+    session.wait_for("[paste #1", std::time::Duration::from_secs(20));
 }
 
 // Verifies: R1/R6 - a genuine paste into the masked secret field lands in
@@ -373,7 +377,7 @@ fn a_real_paste_into_the_base_url_field_is_shown() {
     session.send(&["Enter"]);
     session.wait_for("Base URL", std::time::Duration::from_secs(15));
     session.paste_text("https://pasted.example.com/v1");
-    session.wait_for("pasted.example.com", std::time::Duration::from_secs(10));
+    session.wait_for("pasted.example.com", std::time::Duration::from_secs(20));
 }
 
 // Verifies: R6/R8 - raw bytes injected in fragments (an escape sequence
@@ -391,7 +395,7 @@ fn a_fragmented_raw_paste_reassembles() {
     session.spawn(&sandbox, None, false, &[], &[]);
     session.wait_for("no model", std::time::Duration::from_secs(20));
     session.send_raw_fragmented(&["\x1b[200~", "frag", "mented", "\x1b[201~"]);
-    session.wait_for("fragmented", std::time::Duration::from_secs(10));
+    session.wait_for("fragmented", std::time::Duration::from_secs(20));
 }
 
 // Verifies: ADR-0033 / `api-key-login-plan.md` D1 - `/login` with no

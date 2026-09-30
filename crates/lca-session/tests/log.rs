@@ -257,14 +257,20 @@ fn listing_a_project_with_no_sessions_is_empty_not_an_error() {
 fn lists_sessions_newest_first() {
     let store = store("list");
     let project = scratch("list-project");
-    let _first = store.create_session(&project, "first").expect("create");
+    let first = store.create_session(&project, "first").expect("create");
+    store
+        .append(&first, user_record("r0", "hello"))
+        .expect("append");
     std::thread::sleep(std::time::Duration::from_millis(5));
     let second = store.create_session(&project, "second").expect("create");
     store
         .append(&second, user_record("r1", "hi"))
         .expect("append");
     std::thread::sleep(std::time::Duration::from_millis(5));
-    let _third = store.create_session(&project, "third").expect("create");
+    let third = store.create_session(&project, "third").expect("create");
+    store
+        .append(&third, user_record("r2", "now"))
+        .expect("append");
 
     let listed = store.list_sessions(&project).expect("list");
     let titles: Vec<&str> = listed.iter().map(|s| s.title.as_str()).collect();
@@ -275,6 +281,29 @@ fn lists_sessions_newest_first() {
         "index carries the message count"
     );
     assert_eq!(second_entry.id, second.id());
+}
+
+// Verifies: FR-SESS-2 (the listing is a list of sessions worth resuming).
+// The interface creates a session at every launch, so a listing that
+// includes message-less sessions buries real ones under a wall of
+// `0 messages` rows - the manual side-by-side against pi's picker, which
+// never shows an empty session, is what surfaced it (2026-10-01). Hidden
+// from the list only: `lca resume <id>` still opens one directly.
+#[test]
+fn sessions_without_messages_are_not_listed() {
+    let store = store("hide-empty");
+    let project = scratch("hide-empty-project");
+    let _abandoned = store
+        .create_session(&project, "never used")
+        .expect("create");
+    let used = store.create_session(&project, "used").expect("create");
+    store
+        .append(&used, user_record("r1", "hi"))
+        .expect("append");
+
+    let listed = store.list_sessions(&project).expect("list");
+    let titles: Vec<&str> = listed.iter().map(|s| s.title.as_str()).collect();
+    assert_eq!(titles, vec!["used"], "empty sessions stay out: {titles:?}");
 }
 
 // The index.json file is a cache: delete it and listing still works
@@ -691,6 +720,9 @@ fn renaming_updates_meta_and_the_index() {
     let store = store("rename");
     let project = scratch("rename-project");
     let session = store.create_session(&project, "old title").expect("create");
+    store
+        .append(&session, user_record("r1", "hi"))
+        .expect("append");
     store.rename(&session, "new title").expect("rename");
     assert_eq!(store.meta(&session).expect("meta").title, "new title");
     let listed = store.list_sessions(&project).expect("list");

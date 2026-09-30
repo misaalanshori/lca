@@ -262,7 +262,7 @@ impl Chat {
                     .saturating_duration_since(std::time::Instant::now())
                     .as_secs();
                 body.push(format!(
-                    "auto-approves in {seconds}s - press a key to decide (FR-UI-18)"
+                    "auto-approves in {seconds}s - press a key to decide"
                 ));
                 body.push(String::new());
             }

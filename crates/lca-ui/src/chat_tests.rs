@@ -534,6 +534,9 @@ fn permission_modal_shows_a_countdown() {
     });
     let viewport = strip(&chat.viewport(100, 30, 0)).join("\n");
     assert!(viewport.contains("auto-approves in"), "{viewport}");
+    // Requirement ids are for tests and docs, not for the person being
+    // asked to approve something (manual tmux pass, 2026-10-01).
+    assert!(!viewport.contains("FR-UI-18"), "{viewport}");
 }
 
 // Verifies: FR-UI-17 - `/theme` previews live and restores on cancel.

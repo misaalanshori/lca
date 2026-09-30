@@ -485,6 +485,16 @@ impl SessionStore {
                         )
                     })
                     .count();
+                // A session with no messages has nothing to resume. The
+                // interface creates one at every launch, so listing them
+                // buries real sessions under a wall of `0 messages` rows -
+                // the manual side-by-side against pi's picker (which never
+                // shows an empty session) is what surfaced it, 2026-10-01.
+                // Hidden from the list only: `lca resume <id>` still opens
+                // one directly (FR-SESS-2).
+                if message_count == 0 {
+                    continue;
+                }
                 let modified_ms = outcome
                     .records
                     .iter()
