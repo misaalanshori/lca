@@ -357,24 +357,36 @@ impl Ui {
         )
     }
 
-    /// The `/tree` branch selector (FR-UI-16).
+    /// The `/tree` branch selector (FR-UI-16). Rows carry the same label
+    /// the `/resume` picker does (first prompt while the session still has
+    /// the default title), so a branch named `179079… * (session)` tells
+    /// you which branch it is.
     fn session_tree(&self) -> lca_ui::state::SessionTree {
         let store = self.store.clone();
         let session_cell = self.current_session.clone();
+        let cwd = self.cwd.clone();
         Arc::new(move || {
             let session = session_cell
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .clone();
+            let labels: std::collections::HashMap<String, String> = store
+                .list_sessions(&cwd)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|summary| (summary.id.clone(), summary.display_title()))
+                .collect();
             store
                 .fork_tree(&session)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|branch| {
-                    let title = store
-                        .meta(&branch)
-                        .map(|meta| meta.title)
-                        .unwrap_or_default();
+                    let title = labels.get(branch.id()).cloned().unwrap_or_else(|| {
+                        store
+                            .meta(&branch)
+                            .map(|meta| meta.title)
+                            .unwrap_or_default()
+                    });
                     let marker = if branch.id() == session.id() {
                         " *"
                     } else {
@@ -399,11 +411,14 @@ impl Ui {
                 .list_sessions(&cwd)
                 .unwrap_or_default()
                 .into_iter()
-                .map(|summary| lca_ui::resume::SessionEntry {
-                    id: summary.id,
-                    title: summary.title,
-                    messages: summary.message_count,
-                    age: age_label(now, summary.modified_ms),
+                .map(|summary| {
+                    let title = summary.display_title();
+                    lca_ui::resume::SessionEntry {
+                        id: summary.id,
+                        title,
+                        messages: summary.message_count,
+                        age: age_label(now, summary.modified_ms),
+                    }
                 })
                 .collect()
         })

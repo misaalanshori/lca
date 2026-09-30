@@ -16,7 +16,10 @@ use std::path::PathBuf;
 
 pub use cache::{CacheMiss, CacheWasteTotals, collect_cache_misses, compute_cache_waste};
 pub use lca_protocol::{PermissionDecision, ToolResultStatus, ToolSource};
-pub use store::{ExportOptions, ReadOutcome, Session, SessionMeta, SessionStore, SessionSummary};
+pub use store::{
+    DEFAULT_TITLE, ExportOptions, ReadOutcome, Session, SessionMeta, SessionStore, SessionSummary,
+    row_label,
+};
 pub use view::ViewMode;
 
 /// The extension ABI version recorded in a `session-start` record, sourced

@@ -492,7 +492,7 @@ fn resolve_session(
             .session(cwd, id)
             .map_err(|err| anyhow::anyhow!("{err}"))?),
         None => store
-            .create_session(cwd, "session")
+            .create_session(cwd, lca_session::DEFAULT_TITLE)
             .map_err(|err| anyhow::anyhow!("cannot start a session: {err}")),
     }
 }

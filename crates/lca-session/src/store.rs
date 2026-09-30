@@ -74,6 +74,105 @@ pub struct SessionSummary {
     /// Parent session, when forked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session: Option<String>,
+    /// The first user prompt, when the session has one (a listing label;
+    /// see [`SessionSummary::display_title`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_user: Option<String>,
+}
+
+/// The title a fresh session gets when its creator has nothing better to
+/// give it. The listing falls back to the first prompt while a session
+/// still carries this (see [`row_label`]).
+pub const DEFAULT_TITLE: &str = "session";
+
+/// The label a session listing shows: its title when it has one, its first
+/// prompt when it still carries [`DEFAULT_TITLE`]. Pi's session rows are
+/// "name-or-first-message" (`pi-tui-re/src_re/agent-components/
+/// selectors-large.md`), and a picker full of identically-titled rows tells
+/// its user nothing - which is what a manual drive against pi showed on
+/// 2026-10-01. Control characters are stripped and the line is cut to 80
+/// columns, because a prompt can carry an escape sequence and a picker row
+/// must not render one.
+pub fn row_label(title: &str, first_user: Option<&str>) -> String {
+    if title != DEFAULT_TITLE {
+        return title.to_string();
+    }
+    let Some(text) = first_user else {
+        return title.to_string();
+    };
+    // Strip escape sequences whole before shaping: a prompt can paste an
+    // ANSI snippet, and dropping only the ESC byte would leave `[31m` as
+    // row text. States: 0 normal, 1 after ESC, 2 CSI, 3 OSC, 4 OSC's ESC.
+    let mut visible = String::with_capacity(text.len());
+    let mut state = 0u8;
+    for ch in text.chars() {
+        match state {
+            1 => {
+                state = match ch {
+                    '[' => 2,
+                    ']' => 3,
+                    _ => 0,
+                };
+            }
+            2 => {
+                if ('\x40'..='\x7e').contains(&ch) {
+                    state = 0;
+                }
+            }
+            3 => {
+                if ch == '\x07' {
+                    state = 0;
+                } else if ch == '\x1b' {
+                    state = 4;
+                }
+            }
+            4 => {
+                state = 0;
+            }
+            _ => {
+                if ch == '\x1b' {
+                    state = 1;
+                } else {
+                    visible.push(ch);
+                }
+            }
+        }
+    }
+    // The row itself: runs of control bytes and spaces collapse to one
+    // space, and the label stops at 80 columns with an ellipsis.
+    let mut label = String::with_capacity(80);
+    let mut last_space = false;
+    let mut width = 0;
+    for ch in visible.chars() {
+        if width >= 80 {
+            label.push('…');
+            break;
+        }
+        if ch.is_control() || ch == ' ' {
+            if !last_space {
+                label.push(' ');
+                last_space = true;
+                width += 1;
+            }
+        } else {
+            label.push(ch);
+            last_space = false;
+            width += 1;
+        }
+    }
+    let trimmed = label.trim().to_string();
+    if trimmed.is_empty() {
+        title.to_string()
+    } else {
+        trimmed
+    }
+}
+
+impl SessionSummary {
+    /// This session's listing label (see [`row_label`]).
+    pub fn display_title(&self) -> String {
+        row_label(&self.title, self.first_user.as_deref())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -495,6 +594,10 @@ impl SessionStore {
                 if message_count == 0 {
                     continue;
                 }
+                let first_user = resolved.records.iter().find_map(|record| match record {
+                    lca_protocol::Record::User { content, .. } => Some(content.clone()),
+                    _ => None,
+                });
                 let modified_ms = outcome
                     .records
                     .iter()
@@ -514,6 +617,7 @@ impl SessionStore {
                     modified_ms,
                     message_count,
                     parent_session: meta.parent_session,
+                    first_user,
                 });
             }
         }

@@ -898,3 +898,58 @@ fn gc_from_a_child_keeps_an_ancestors_referenced_attachment() {
         "the orphan in the ancestor directory is collected"
     );
 }
+
+// Verifies: FR-SESS-2 (a listing tells its sessions apart). Rows carry the
+// title when the session has one and the first prompt while it still has
+// the default title - pi's session rows are "name-or-first-message"
+// (pi-tui-re/src_re/agent-components/selectors-large.md), and a picker of
+// identically-titled rows gave nothing to pick by in the manual drive
+// (2026-10-01).
+#[test]
+fn listing_labels_fall_back_to_the_first_prompt() {
+    let store = store("label");
+    let project = scratch("label-project");
+    let session = store
+        .create_session(&project, lca_session::DEFAULT_TITLE)
+        .expect("create");
+    store
+        .append(
+            &session,
+            user_record("r1", "\x1b[1;31mfix the bug\x1b[0m\nwith the details"),
+        )
+        .expect("append");
+
+    let listed = store.list_sessions(&project).expect("list");
+    assert_eq!(
+        listed[0].display_title(),
+        "fix the bug with the details",
+        "the first prompt, escape sequences stripped, whitespace collapsed"
+    );
+
+    store.rename(&session, "renamed by hand").expect("rename");
+    let listed = store.list_sessions(&project).expect("list");
+    assert_eq!(
+        listed[0].display_title(),
+        "renamed by hand",
+        "a real title wins over the prompt"
+    );
+}
+
+// The label's bounds: default passthrough, an OSC sequence dropped whole,
+// and the 80-column cut with an ellipsis (a picker row is one line).
+#[test]
+fn row_labels_are_sanitized_and_bounded() {
+    use lca_session::{DEFAULT_TITLE, row_label};
+    assert_eq!(row_label("renamed", Some("ignored")), "renamed");
+    assert_eq!(row_label(DEFAULT_TITLE, None), DEFAULT_TITLE);
+    assert_eq!(row_label(DEFAULT_TITLE, Some("a\tb")), "a b");
+    assert_eq!(
+        row_label(DEFAULT_TITLE, Some("\x1b]0;pasted title\x07hello")),
+        "hello",
+        "an OSC sequence is dropped whole, not half-stripped into text"
+    );
+    let long = "x".repeat(200);
+    let label = row_label(DEFAULT_TITLE, Some(&long));
+    assert_eq!(label.chars().count(), 81, "80 columns plus the ellipsis");
+    assert!(label.ends_with('…'), "{label}");
+}

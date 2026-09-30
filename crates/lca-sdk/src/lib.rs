@@ -104,7 +104,7 @@ impl Session {
         let data = data_dir.into();
         let store = Arc::new(SessionStore::new(data.clone()));
         let session = store
-            .create_session(&cwd, "session")
+            .create_session(&cwd, lca_session::DEFAULT_TITLE)
             .map_err(|err| Error::Start(err.to_string()))?;
         let grants = GrantStore::open(&data.join("grants.json"))
             .map_err(|err| Error::Start(err.to_string()))?;

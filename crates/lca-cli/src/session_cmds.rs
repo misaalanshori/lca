@@ -49,7 +49,9 @@ pub(super) fn resume_list(cwd: &Path) -> i32 {
             for session in sessions {
                 println!(
                     "{}\t{}\t{} messages",
-                    session.id, session.title, session.message_count
+                    session.id,
+                    session.display_title(),
+                    session.message_count
                 );
             }
             exit::OK
