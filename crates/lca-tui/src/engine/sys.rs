@@ -320,6 +320,22 @@ mod windows_backend {
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.max(0) as u64);
         loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            // Wait for *any* input without polling: a console handle signals
+            // for key and non-key events alike, so the key test happens after
+            // the wait. A zero-millisecond wait would spin, hence the clamp.
+            let wait_ms = remaining.as_millis().clamp(1, u32::MAX as u128) as u32;
+            // SAFETY: `handle` is our console stdin handle.
+            if unsafe {
+                windows_sys::Win32::System::Threading::WaitForSingleObject(handle, wait_ms)
+            } != 0
+            {
+                // WAIT_TIMEOUT or failure: nothing arrived in the window.
+                return Ok(false);
+            }
             let mut count = 0u32;
             // SAFETY: valid handle, valid out-pointer.
             if unsafe { GetNumberOfConsoleInputEvents(handle, &mut count) } != 0 && count > 0 {
@@ -337,13 +353,8 @@ mod windows_backend {
                     unsafe {
                         ReadConsoleInputW(handle, &mut record, 1, &mut consumed);
                     }
-                    continue;
                 }
             }
-            if std::time::Instant::now() >= deadline {
-                return Ok(false);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
 
