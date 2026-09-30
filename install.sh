@@ -18,6 +18,10 @@ REPO_URL="https://github.com/misaalanshori/lca/releases"
 RAW_URL="https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh"
 BLOCK_BEGIN='# >>> lca installer >>>'
 BLOCK_END='# <<< lca installer <<<'
+# Inside the block, and only when this installer created the file: the one
+# thing that lets --uninstall delete a file it owns instead of leaving an
+# empty rc file behind as residue.
+BLOCK_OWNED='# created by the lca installer'
 
 progname=$(basename "$0")
 
@@ -104,13 +108,21 @@ read_version() { # read_version <binary>
 }
 
 # Remove the installer's marked block, leaving every other line alone.
+# If the file holds nothing but a block this installer created, the file
+# itself goes: an rc file we made is residue after --uninstall.
 strip_block() { # strip_block <file>
   [ -f "$1" ] || return 0
+  owned=0
+  grep -q "^$BLOCK_OWNED\$" "$1" && owned=1
   awk -v b="$BLOCK_BEGIN" -v e="$BLOCK_END" '
     $0 == b { skip = 1; next }
     $0 == e { skip = 0; next }
     !skip { print }
   ' "$1" >"$1.lca-tmp" || return 1
+  if [ "$owned" -eq 1 ] && [ ! -s "$1.lca-tmp" ]; then
+    rm -f "$1" "$1.lca-tmp"
+    return 0
+  fi
   mv "$1.lca-tmp" "$1"
 }
 
@@ -318,10 +330,23 @@ case $INSTALL_DIR in
 esac
 
 write_block() { # write_block <file>
+  # Ownership survives a re-install: a file we made still carries the flag
+  # after the first strip, and a file that was already there never gains it.
+  owned=0
+  if [ ! -f "$1" ] || grep -q "^$BLOCK_OWNED\$" "$1"; then
+    owned=1
+  fi
   strip_block "$1" || die 1 "cannot edit $1"
   [ -f "$1" ] || : >"$1"
+  # A separating newline only when the last line is unterminated; emitting
+  # one unconditionally left a blank line behind on every strip. (Command
+  # substitution would eat the newline itself, so count lines instead.)
+  if [ -s "$1" ] && [ "$(tail -c 1 "$1" | wc -l)" -eq 0 ]; then
+    printf '\n' >>"$1"
+  fi
   {
-    printf '\n%s\n' "$BLOCK_BEGIN"
+    printf '%s\n' "$BLOCK_BEGIN"
+    [ "$owned" -eq 1 ] && printf '%s\n' "$BLOCK_OWNED"
     # shellcheck disable=SC2016  # $PATH must expand when the rc is sourced
     printf 'export PATH="%s:$PATH"\n' "$block_dir"
     printf '%s\n' "$BLOCK_END"

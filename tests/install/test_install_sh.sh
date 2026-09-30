@@ -224,22 +224,43 @@ teardown
 ##############################################################################
 
 setup
+# rc files that existed before this install: --uninstall must leave them
+# byte-identical (no blank line, no marker, no ownership flag).
+echo 'alias ll="ls -l"' > "$HOME_DIR/.bashrc"
+echo '# profile line' > "$HOME_DIR/.profile"
+cp "$HOME_DIR/.bashrc" "$SANDBOX/bashrc.before"
+cp "$HOME_DIR/.profile" "$SANDBOX/profile.before"
 run_installer --install-dir "$SANDBOX/target"
 [ "$STATUS" -eq 0 ] || die "setup install: exit $STATUS"
-# a block left behind by an earlier shell flavor, plus an unrelated rc line
+grep -q '^# >>> lca installer >>>$' "$HOME_DIR/.bashrc" || die "setup: no block in .bashrc"
+grep -q '^# >>> lca installer >>>$' "$HOME_DIR/.profile" || die "setup: no block in .profile"
+# a block left behind by an earlier shell flavor (no ownership flag), plus
+# an unrelated rc line
 # shellcheck disable=SC2016  # the literal $PATH expands when the rc is sourced
 printf '\n# >>> lca installer >>>\nexport PATH="%s:$PATH"\n# <<< lca installer <<<\n' \
   "$SANDBOX/target" >> "$HOME_DIR/.zshrc"
-echo 'alias ll="ls -l"' >> "$HOME_DIR/.zshrc"
-cp "$HOME_DIR/.bashrc" "$SANDBOX/bashrc.before"
+echo 'alias zz="ls -1"' >> "$HOME_DIR/.zshrc"
 run_installer --uninstall --install-dir "$SANDBOX/target"
 [ "$STATUS" -eq 0 ] || die "--uninstall: exit $STATUS"
 [ ! -e "$INSTALLED" ] || die "--uninstall: binary still present"
-grep -q '^# >>> lca installer >>>$' "$HOME_DIR/.bashrc" && die "--uninstall: block left in .bashrc"
+cmp -s "$HOME_DIR/.bashrc" "$SANDBOX/bashrc.before" || die "--uninstall: .bashrc is not byte-identical to its pre-install content"
+cmp -s "$HOME_DIR/.profile" "$SANDBOX/profile.before" || die "--uninstall: .profile is not byte-identical to its pre-install content"
 grep -q '^# >>> lca installer >>>$' "$HOME_DIR/.zshrc" && die "--uninstall: block left in .zshrc"
-grep -q 'alias ll=' "$HOME_DIR/.zshrc" || die "--uninstall: removed a line it did not write"
+grep -q 'alias zz=' "$HOME_DIR/.zshrc" || die "--uninstall: removed a line it did not write"
 grep -qi "remov" "$OUT" || die "--uninstall: output does not report what it removed"
-ok "--uninstall removes the binary and every marked block, nothing else"
+ok "--uninstall removes the binary and every block, leaving rc files byte-identical"
+teardown
+
+setup
+# No rc file at all: the one the installer created is its own residue and
+# has to go with it, not sit there empty.
+run_installer --install-dir "$SANDBOX/target"
+[ "$STATUS" -eq 0 ] || die "setup install: exit $STATUS"
+[ -f "$HOME_DIR/.bashrc" ] || die "setup: the installer did not create .bashrc"
+run_installer --uninstall --install-dir "$SANDBOX/target"
+[ "$STATUS" -eq 0 ] || die "--uninstall (created file): exit $STATUS"
+[ ! -e "$HOME_DIR/.bashrc" ] || die "--uninstall: left behind the rc file it created"
+ok "--uninstall removes an rc file it created instead of leaving it empty"
 teardown
 
 ##############################################################################
