@@ -466,6 +466,26 @@ impl Tmux {
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
+    /// The pane with its SGR intact (`capture-pane -e`): the receipt the
+    /// color work asserts against (R5).
+    pub fn capture_e(&self) -> String {
+        let out = Self::tmux(&["capture-pane", "-t", &self.name, "-p", "-e"]);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// Poll the SGR pane until `needle` appears (for receipts that must be
+    /// read while a state is on screen).
+    pub fn wait_for_e(&self, needle: &str, timeout: std::time::Duration) -> String {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let pane = self.capture_e();
+            if pane.contains(needle) || std::time::Instant::now() >= deadline {
+                return pane;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
+    }
+
     pub fn spawn(
         &self,
         sandbox: &Sandbox,
