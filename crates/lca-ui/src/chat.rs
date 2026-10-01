@@ -1181,3 +1181,7 @@ pub(super) fn highlight_matches(line: &str, query: &str) -> String {
 #[cfg(test)]
 #[path = "chat_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "chat_overlay_tests.rs"]
+mod overlay_tests;
