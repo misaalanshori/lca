@@ -117,6 +117,9 @@ pub(crate) struct Ui {
     /// R4: a background login/identity step's result, taken by the
     /// interface's `poll_login` hook.
     login_pending: Arc<Mutex<Option<lca_ui::LoginNext>>>,
+    /// The background `/compact`'s state, read by the interface's
+    /// `poll_compact` hook so a summarization call never blocks it.
+    compact_state: Arc<Mutex<lca_ui::CompactState>>,
     /// R4: the provider handle a background step is running against, for
     /// manual-callback delivery and cancellation.
     login_handle: Arc<Mutex<Option<lca_ext_native::NativeHandle>>>,
@@ -406,6 +409,7 @@ impl Ui {
             initial_tail,
             update_notice,
             login_pending: Arc::new(Mutex::new(None)),
+            compact_state: Arc::new(Mutex::new(lca_ui::CompactState::Idle)),
             login_handle: Arc::new(Mutex::new(None)),
             login_manual_offered: Arc::new(Mutex::new(false)),
             login_url_shown: Arc::new(Mutex::new(None)),

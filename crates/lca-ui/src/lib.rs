@@ -32,5 +32,6 @@ pub use state::{
     RegionRenderer, ShellEvent, ShellHandle, ShellRunner, TurnChannels, TurnRunner, UiHooks,
     UiOptions, UiState, display_path, sanitize_block, sanitize_text, widget_lines,
 };
+pub use state::{CompactPoll, CompactState};
 pub use theme::Theme;
 pub use transcript::{Entry, ToolStatus, Transcript, image_label};

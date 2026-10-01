@@ -115,6 +115,27 @@ pub type LoginPoll = Arc<dyn Fn() -> Option<LoginNext> + Send + Sync>;
 /// Cancel the background login/identity step (R4).
 pub type LoginCancel = Arc<dyn Fn() + Send + Sync>;
 
+/// What a background `/compact` is doing. The command's summarization
+/// call runs on its own thread (it is a model round-trip, and freezing
+/// the interface for it is how pi ended up with a dedicated compaction
+/// indicator), and the loop polls this every tick - the same shape as
+/// [`LoginPoll`], including the handoff rule: a hook **consumes** its
+/// `Done` on read (like `poll_login`'s `take()`), so a finished
+/// compaction is reported once rather than on every tick.
+pub type CompactPoll = Arc<dyn Fn() -> CompactState + Send + Sync>;
+
+/// The background compaction's state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CompactState {
+    /// Nothing in flight.
+    #[default]
+    Idle,
+    /// Summarizing now.
+    Running,
+    /// Finished - or failed; the string is the notice to show either way.
+    Done(String),
+}
+
 /// A single-line prompt (the `/login` flow).
 pub struct SecretPrompt {
     /// The provider the value belongs to.
@@ -439,6 +460,9 @@ pub struct UiHooks {
     /// Poll a background login/identity step (R4); `Some` applies the next
     /// step, `None` keeps waiting. The loop calls it every tick.
     pub poll_login: Option<LoginPoll>,
+    /// Poll a background `/compact`: `Running` raises the working state,
+    /// `Done` posts the summary (or the refusal) as a notice and rests it.
+    pub poll_compact: Option<CompactPoll>,
     /// Cancel the background login/identity step (R4), called on Escape
     /// while the waiting modal is open.
     pub cancel_login: Option<LoginCancel>,

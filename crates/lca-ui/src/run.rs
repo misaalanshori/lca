@@ -302,6 +302,11 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         if poll_login(&mut chat) {
             dirty = true;
         }
+        // ...and so does a background `/compact`: the summarization call
+        // runs on its own thread and the interface keeps painting.
+        if chat.poll_compact() {
+            dirty = true;
+        }
 
         // Edge auto-scroll while a selection drag sits on a viewport edge
         // (R6).

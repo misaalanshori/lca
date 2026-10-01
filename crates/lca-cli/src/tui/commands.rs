@@ -102,17 +102,41 @@ impl Ui {
             "attach" => self.command_attach(argument),
             "model" => self.command_model(argument),
             "compact" => {
-                match lca_core::compact_now(
-                    self.store.clone(),
-                    self.session(),
-                    self.agent_config.extensions.clone(),
-                    self.agent_config.completion_backend.clone(),
-                ) {
-                    Ok(summary) => CommandEffect::ShowWidget(format!("compacted: {summary}")),
-                    Err(detail) => {
-                        CommandEffect::ShowWidget(format!("nothing was compacted: {detail}"))
-                    }
+                // Summarization is a model round-trip. It used to run on
+                // this thread, which is the interface's: the pane went
+                // unresponsive for its whole duration (measured: a typed
+                // character appeared 3.5 s later, with the notice). It now
+                // runs on its own thread and reports back through
+                // `poll_compact`, which raises the working state and posts
+                // the result - the shape pi gives it with
+                // `CompactionStatusIndicator`.
+                let mut state = self
+                    .compact_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if *state == lca_ui::CompactState::Running {
+                    // One compaction at a time; the notice says so.
+                    return CommandEffect::ShowWidget(
+                        "a compaction is already running".to_string(),
+                    );
                 }
+                *state = lca_ui::CompactState::Running;
+                drop(state);
+
+                let state = self.compact_state.clone();
+                let store = self.store.clone();
+                let session = self.session();
+                let extensions = self.agent_config.extensions.clone();
+                let backend = self.agent_config.completion_backend.clone();
+                std::thread::spawn(move || {
+                    let notice = match lca_core::compact_now(store, session, extensions, backend) {
+                        Ok(summary) => format!("compacted: {summary}"),
+                        Err(detail) => format!("nothing was compacted: {detail}"),
+                    };
+                    *state.lock().unwrap_or_else(|p| p.into_inner()) =
+                        lca_ui::CompactState::Done(notice);
+                });
+                CommandEffect::None
             }
             // ADR-0039: allow/deny rules with global defaults.
             "permissions" => self.command_permissions(argument),

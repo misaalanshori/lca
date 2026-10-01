@@ -1271,3 +1271,66 @@ fn a_flushed_queue_message_keeps_its_marker() {
     assert_eq!(chat.take_submitted().as_deref(), Some("plain prompt"));
     assert_eq!(chat.take_submitted_queue(), None);
 }
+
+// Verifies: the background `/compact` handshake. The summarization call is
+// a model round-trip; running it on the interface's thread froze the pane
+// for its whole duration (measured live: a typed character only appeared
+// 3.5 s later, together with the notice). The command now reports through
+// `poll_compact`, which raises the working state, keeps the loop
+// repainting, and posts the result - the shape pi gives the same moment
+// with `CompactionStatusIndicator`.
+#[test]
+fn a_background_compaction_drives_the_working_state() {
+    use crate::state::{CompactPoll, CompactState};
+
+    let state = Arc::new(std::sync::Mutex::new(CompactState::Idle));
+    let mut opts = options();
+    let slot = state.clone();
+    opts.hooks.poll_compact = Some(Arc::new(move || {
+        let mut guard = slot.lock().unwrap_or_else(|p| p.into_inner());
+        // The hook consumes `Done`, as the contract requires; `Running`
+        // stays put until there is something to hand over.
+        match guard.clone() {
+            CompactState::Done(notice) => {
+                *guard = CompactState::Idle;
+                CompactState::Done(notice)
+            }
+            ongoing => ongoing,
+        }
+    }) as CompactPoll);
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+
+    // Nothing in flight: no state change, no repaint.
+    assert!(!chat.poll_compact());
+    assert_eq!(chat.separator.state(), &crate::SeparatorState::Idle);
+
+    // The command starts summarizing.
+    *state.lock().unwrap() = CompactState::Running;
+    assert!(chat.poll_compact(), "the start is a repaint");
+    assert_eq!(chat.separator.state(), &crate::SeparatorState::Working);
+    assert!(
+        chat.world
+            .notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("compacting"),
+        "the interface says what is happening: {:?}",
+        chat.world.notice
+    );
+    assert!(!chat.poll_compact(), "still running: no repaint storm");
+
+    // The summary lands.
+    *state.lock().unwrap() = CompactState::Done("compacted: 42 tokens".into());
+    assert!(chat.poll_compact());
+    assert_eq!(chat.separator.state(), &crate::SeparatorState::Idle);
+    assert!(
+        chat.world
+            .notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("compacted: 42 tokens"),
+        "{:?}",
+        chat.world.notice
+    );
+    assert!(!chat.poll_compact(), "the result is consumed");
+}

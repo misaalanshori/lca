@@ -54,6 +54,9 @@ pub struct Chat {
     pub usage: Usage,
     /// Whether a turn is running.
     pub turn_running: bool,
+    /// Whether a background `/compact` is summarizing (the interface stays
+    /// responsive while it does; the separator says `Working`).
+    pub compacting: bool,
     /// The separator row's state and spinner (chrome.md's
     /// spinner-in-the-border, R2).
     pub separator: Separator,
@@ -181,6 +184,7 @@ impl Chat {
             theme,
             usage: Usage::default(),
             turn_running: false,
+            compacting: false,
             turn_status: None,
             separator: Separator::new(),
             world,
@@ -389,6 +393,47 @@ impl Chat {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// Poll a background `/compact` (the command summarizes on its own
+    /// thread, so the interface never freezes for it - the failure this
+    /// replaced typed a character and only saw it appear 3.5 s later).
+    /// `Running` raises the working state and says so; `Done` posts the
+    /// summary or the refusal and rests it (chrome.md's compaction
+    /// indicator, in LCA's generic working state).
+    ///
+    /// Returns `true` when something on screen changed.
+    pub fn poll_compact(&mut self) -> bool {
+        let Some(poll) = self.world.options.hooks.poll_compact.clone() else {
+            return false;
+        };
+        match poll() {
+            crate::state::CompactState::Idle => {
+                if self.compacting {
+                    self.compacting = false;
+                    self.separator.idle();
+                    true
+                } else {
+                    false
+                }
+            }
+            crate::state::CompactState::Running => {
+                if self.compacting {
+                    false
+                } else {
+                    self.compacting = true;
+                    self.separator.working();
+                    self.world.notice = Some("compacting this session…".to_string());
+                    true
+                }
+            }
+            crate::state::CompactState::Done(notice) => {
+                self.compacting = false;
+                self.separator.idle();
+                self.world.notice = Some(notice);
+                true
+            }
+        }
     }
 
     /// Advance the separator's spinner. Returns `true` when the frame

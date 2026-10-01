@@ -172,6 +172,27 @@ impl Ui {
                 let ui = self.clone();
                 Some(Arc::new(move || ui.cancel_login()) as lca_ui::LoginCancel)
             },
+            // `/compact` summarizes on its own thread; the loop polls the
+            // state so the interface keeps painting (and the separator can
+            // say `Working`) for the whole model round-trip.
+            poll_compact: {
+                let state = self.compact_state.clone();
+                Some(Arc::new(move || {
+                    let mut guard = state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    // Hand off a finished compaction once, the way
+                    // `poll_login` takes its result; `Running` stays put
+                    // until there is something to hand over.
+                    match guard.clone() {
+                        lca_ui::CompactState::Done(notice) => {
+                            *guard = lca_ui::CompactState::Idle;
+                            lca_ui::CompactState::Done(notice)
+                        }
+                        ongoing => ongoing,
+                    }
+                }) as lca_ui::CompactPoll)
+            },
         }
     }
 
