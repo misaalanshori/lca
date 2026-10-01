@@ -401,19 +401,19 @@ teardown
 
 setup
 mkdir -p "$FIX/download/unstable"
-for a in $ASSETS; do make_asset "$FIX/download/unstable/$a" "0.5.2.b194950"; done
+for a in $ASSETS; do make_asset "$FIX/download/unstable/$a" "0.5.2.b6573049"; done
 write_checksums "$FIX/download/unstable"
 for a in $ASSETS; do printf '%064d  %s\n' 0 "$a"; done > "$FIX/latest/download/artifacts.sha256"
 run_installer --install-dir "$SANDBOX/target" --no-path --unstable
 [ "$STATUS" -eq 0 ] || die "unstable: exit $STATUS (binary and checksums must both come from download/unstable)"
-grep -q "0.5.2.b194950" "$INSTALLED" || die "unstable: the unstable asset was not installed"
+grep -q "0.5.2.b6573049" "$INSTALLED" || die "unstable: the unstable asset was not installed"
 ok "--unstable installs from download/unstable with its own checksums"
 teardown
 
 # Mixed flags: the rolling line has no pinned form, so this is a usage error.
 setup
 mkdir -p "$FIX/download/unstable"
-for a in $ASSETS; do make_asset "$FIX/download/unstable/$a" "0.5.2.b194950"; done
+for a in $ASSETS; do make_asset "$FIX/download/unstable/$a" "0.5.2.b6573049"; done
 write_checksums "$FIX/download/unstable"
 run_installer --install-dir "$SANDBOX/target" --no-path --unstable --version v9.9.9
 [ "$STATUS" -eq 2 ] || die "mixed flags: exit $STATUS, expected 2"
@@ -425,18 +425,18 @@ teardown
 # stable (0.0.0) -> unstable -> stable.
 setup
 mkdir -p "$FIX/download/unstable"
-for a in $ASSETS; do make_asset "$FIX/download/unstable/$a" "0.5.2.b194950"; done
+for a in $ASSETS; do make_asset "$FIX/download/unstable/$a" "0.5.2.b6573049"; done
 write_checksums "$FIX/download/unstable"
 run_installer --install-dir "$SANDBOX/target" --no-path
 [ "$STATUS" -eq 0 ] || die "round trip: baseline stable install exit $STATUS"
 grep -q "0.0.0" "$INSTALLED" || die "round trip: baseline is not the stable asset"
 run_installer --install-dir "$SANDBOX/target" --no-path --unstable
 [ "$STATUS" -eq 0 ] || die "round trip: unstable install exit $STATUS"
-grep -q "lca 0.0.0 -> 0.5.2.b194950" "$OUT" || die "round trip: stable -> unstable report"
-grep -q "0.5.2.b194950" "$INSTALLED" || die "round trip: unstable bytes missing"
+grep -q "lca 0.0.0 -> 0.5.2.b6573049" "$OUT" || die "round trip: stable -> unstable report"
+grep -q "0.5.2.b6573049" "$INSTALLED" || die "round trip: unstable bytes missing"
 run_installer --install-dir "$SANDBOX/target" --no-path
 [ "$STATUS" -eq 0 ] || die "round trip: stable reinstall exit $STATUS"
-grep -q "lca 0.5.2.b194950 -> 0.0.0" "$OUT" || die "round trip: unstable -> stable report"
+grep -q "lca 0.5.2.b6573049 -> 0.0.0" "$OUT" || die "round trip: unstable -> stable report"
 grep -q "0.0.0" "$INSTALLED" || die "round trip: stable bytes missing"
 ok "stable and unstable round trip, reports the hash versions both ways"
 teardown

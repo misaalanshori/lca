@@ -133,7 +133,7 @@ function New-HashVersionExe {
   $src = Join-Path $script:Root 'hashver.cs'
   $out = Join-Path $script:Root 'hashver.exe'
   try {
-    [System.IO.File]::WriteAllText($src, 'using System; class LcaFixture { static void Main() { System.Console.WriteLine("lca 0.5.2.b194950"); } }')
+    [System.IO.File]::WriteAllText($src, 'using System; class LcaFixture { static void Main() { System.Console.WriteLine("lca 0.5.2.b6573049"); } }')
     Add-Type -Path $src -OutputAssembly $out -OutputType 'ConsoleApplication' -ErrorAction Stop
   } catch { return $null }
   try {
@@ -427,7 +427,7 @@ try {
     # The hash-version report needs the fixture to answer --version here;
     # a compiled PE cannot run on this host, so that path is a named skip.
     $newVer = Read-Version $bin
-    if ($hashver -and $newVer -eq '0.5.2.b194950') {
+    if ($hashver -and $newVer -eq '0.5.2.b6573049') {
       Assert ($script:LastOutput -match '-> 0\.5\.2\.b[0-9a-f]{7}') "unstable: hash version missing from the report:`n$($script:LastOutput)"
       Pass 'the report carries the hash version as the new side'
 

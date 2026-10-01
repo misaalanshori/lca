@@ -12,7 +12,7 @@ Dates are UTC.
   prerelease tagged `unstable`, and `install.sh --unstable` /
   `install.ps1 -Unstable` install and update that line through the same
   one-liners — same verification, same assets, versioned `X.Y.Z.b<sha7>`
-  (`lca 0.5.2.b194950`). Without the flag both installers resolve the
+  (`lca 0.5.2.b6573049`). Without the flag both installers resolve the
   stable line exactly as before, and the flag is latest-only: combined with
   `--version` it is a usage error (ADR-0043, FR-INSTALL-10).
 - **LaTeX math and mermaid diagrams (TUI-10 M3/M4).** Inline `$…$`/`\(…\)`

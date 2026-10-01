@@ -64,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh |
 curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --unstable
 ```
 
-Switching lines is just running the other form: no flag installs (or re-installs) the stable line over whatever is there, the flag installs the unstable line, and the report line says which is which (`lca 0.5.2.b194950 -> 0.5.2`). The installed binary keeps whatever it was given; nothing about a line is stored, so the next run decides again.
+Switching lines is just running the other form: no flag installs (or re-installs) the stable line over whatever is there, the flag installs the unstable line, and the report line says which is which (`lca 0.5.2.b6573049 -> 0.5.2`). The installed binary keeps whatever it was given; nothing about a line is stored, so the next run decides again.
 
 **Trust stance.** The unstable line verifies exactly like the stable one: `artifacts.sha256` from the same directory, mismatch refuses and leaves the old binary in place, and the same `actions/attest-build-provenance` attestation is produced per artifact, so `gh attestation verify ./lca --repo misaalanshori/lca` works on an unstable binary too. What it does not carry is a promise: no changelog entry, no support window, and a build that may be broken by design. When in doubt, run the one-liner without the flag.
 
