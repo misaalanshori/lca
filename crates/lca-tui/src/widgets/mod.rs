@@ -5,5 +5,7 @@
 pub mod autocomplete;
 pub mod editor;
 pub mod image;
+pub mod latex;
 pub mod markdown;
+pub mod mermaid;
 pub mod paste;

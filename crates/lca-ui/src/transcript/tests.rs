@@ -581,3 +581,20 @@ fn user_prompts_render_as_markdown_with_the_authored_markers() {
     let out = strip(&t.render(60, &plain()));
     assert!(out.iter().any(|l| l.contains("- one")), "{out:?}");
 }
+
+// Verifies: TUI-10 M4/M6 - a mermaid diagram in an answer paints through
+// the theme's diagram roles (borderMuted borders, accent edges), not as
+// a code frame.
+#[test]
+fn a_mermaid_diagram_paints_through_the_theme() {
+    let theme = Theme::colored();
+    let mut t = Transcript::new();
+    t.begin_assistant();
+    t.append_text("```mermaid\nflowchart TD\n  A[One] --> B[Two]\n```");
+    t.finish_assistant();
+    let joined = t.render(70, &theme).join("\n");
+    assert!(joined.contains('┌'), "art box: {joined}");
+    // borderMuted #808080, accent #8aa7b7-family: pi's roles as LCA paints them
+    assert!(joined.contains("38;2;"), "colored: {joined}");
+    assert!(!joined.contains('╭'), "not the code frame: {joined}");
+}

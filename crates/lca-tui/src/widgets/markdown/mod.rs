@@ -6,8 +6,15 @@
 //! read"): headings, lists, tables rendered as aligned columns, framed code
 //! blocks, blockquotes, and inline styles.
 //!
-//! Not ported (documented skips): LaTeX math (the brief says skip it) and
-//! mermaid (pi shells out). **Syntax highlighting closed in cycle 9 (R3):**
+//! **Math ships with TUI-10 (M3):** inline `$…$`/`\(…\)` and display
+//! `$$…$$`/`\[…\]` render through the `latex` widget, with pi's
+//! pending-raw-until-closed streaming rule and its fail-soft contract
+//! (unsupported input prints as source). **Mermaid ships with TUI-10
+//! (M4):** a top-level ```` ```mermaid ```` fence renders as Unicode art
+//! from the `mermaid` widget - the flowchart and sequence subset, since
+//! `grok-mermaid` itself is an npm package this tree cannot take - with
+//! pi's width guard and warning note. **Syntax highlighting closed in
+//! cycle 9 (R3):**
 //! pi's markdown calls `theme.highlightCode` (`markdown.ts` §523), so a
 //! fenced block now paints the theme's nine `Syntax*` roles through the
 //! [`MarkdownTheme::highlight`] hook - the same seam pi puts it on, because
@@ -26,6 +33,8 @@
 use std::sync::Arc;
 
 use crate::engine::text::{truncate_to_width, visible_width, wrap_text_with_ansi};
+
+mod math;
 
 /// A styling function.
 pub type StyleFn = Arc<dyn Fn(&str) -> String + Send + Sync>;
@@ -73,6 +82,18 @@ pub struct MarkdownTheme {
     pub quote_border: StyleFn,
     /// Horizontal-rule style.
     pub hr: StyleFn,
+    /// Mermaid diagram borders (pi's `borderMuted`).
+    pub mermaid_border: StyleFn,
+    /// Mermaid node text (pi's `text`).
+    pub mermaid_text: StyleFn,
+    /// Mermaid arrows and connectors (pi's `accent`).
+    pub mermaid_edge: StyleFn,
+    /// Mermaid edge labels (pi's `muted`).
+    pub mermaid_edge_label: StyleFn,
+    /// Mermaid diagram title (pi's `accent` + bold).
+    pub mermaid_title: StyleFn,
+    /// The warning note under an unrendered diagram (pi's `warning`).
+    pub warning: StyleFn,
 }
 
 impl Default for MarkdownTheme {
@@ -93,6 +114,12 @@ impl Default for MarkdownTheme {
             quote: Arc::new(identity),
             quote_border: Arc::new(identity),
             hr: Arc::new(identity),
+            mermaid_border: Arc::new(identity),
+            mermaid_text: Arc::new(identity),
+            mermaid_edge: Arc::new(identity),
+            mermaid_edge_label: Arc::new(identity),
+            mermaid_title: Arc::new(identity),
+            warning: Arc::new(identity),
         }
     }
 }
@@ -121,6 +148,12 @@ pub struct MarkdownOptions {
     /// Keep backslash escapes as written instead of normalizing them to
     /// the escaped character (pi's `preserveBackslashEscapes`).
     pub preserve_backslash_escapes: bool,
+    /// Render supported math to Unicode instead of always showing the
+    /// source (pi's `renderLatex`, default true).
+    pub render_latex: bool,
+    /// The message is still streaming: pi suppresses mermaid warnings
+    /// mid-stream and shows them once the message settles.
+    pub streaming: bool,
 }
 
 impl Default for MarkdownOptions {
@@ -131,6 +164,8 @@ impl Default for MarkdownOptions {
             link_mode: LinkMode::Hyperlink,
             preserve_ordered_list_markers: false,
             preserve_backslash_escapes: false,
+            render_latex: true,
+            streaming: false,
         }
     }
 }
@@ -221,7 +256,69 @@ fn render_blocks(
             } else {
                 i += 1; // consume the closing fence
             }
+            // Mermaid: Unicode art behind the fence (TUI-10 M4). pi runs
+            // this through a markdown *transformer* that re-encodes rows as
+            // code spans for a second parse pass; LCA renders the art
+            // directly, so the fence-length trick that protects diagram
+            // rows from markdown has nothing to do here. The fence scan
+            // above has already consumed the block, so `i` is past it.
+            if lang.eq_ignore_ascii_case("mermaid")
+                && let Some(art) = crate::widgets::mermaid::render(&body.join("\n"))
+                && art.width <= inner_width
+            {
+                if !art.warnings.is_empty() && !options.streaming {
+                    // pi keeps the raw source and appends a styled warning
+                    // note (only outside streaming).
+                    render_code_block(&body, &lang, inner_width, theme, out);
+                    out.push((theme.warning)(&format!(
+                        "Mermaid diagram not rendered: {}",
+                        art.warnings[0]
+                    )));
+                    if art.warnings.len() > 1 {
+                        out.push((theme.warning)(&format!(
+                            "(+{} more)",
+                            art.warnings.len() - 1
+                        )));
+                    }
+                } else {
+                    for row in &art.lines {
+                        out.push(style_mermaid_row(row, theme));
+                    }
+                }
+                if out.last().is_some_and(|line| !line.is_empty()) {
+                    out.push(String::new());
+                }
+                continue;
+            }
             render_code_block(&body, &lang, inner_width, theme, out);
+            continue;
+        }
+
+        // Display math: `$$…$$` / `\[…\]`, pending forms printing the
+        // raw source until a closer arrives (pi's `latexBlock` token).
+        if let Some(block) = math::block_math(lines, i) {
+            ordered_next = None;
+            let raw: Vec<String> = lines[i..i + block.consumed]
+                .iter()
+                .map(|line| (*line).to_string())
+                .collect();
+            let body = if block.pending || !options.render_latex {
+                raw
+            } else {
+                crate::widgets::latex::render_latex(&block.content, true)
+                    .map(|rendered| {
+                        rendered
+                            .split('\n')
+                            .map(str::to_string)
+                            .collect::<Vec<String>>()
+                    })
+                    .unwrap_or(raw)
+            };
+            out.extend(body);
+            i += block.consumed;
+            if out.last().is_some_and(|line| !line.is_empty()) {
+                out.push(String::new());
+            }
             continue;
         }
 
@@ -713,6 +810,21 @@ fn rearm(text: &str, prefix: &str) -> String {
         .replace("\x1b[39m", &format!("\x1b[39m{prefix}"))
 }
 
+/// Dress one mermaid row in the theme's diagram roles (pi's `styleSpan`).
+fn style_mermaid_row(row: &[crate::widgets::mermaid::Span], theme: &MarkdownTheme) -> String {
+    use crate::widgets::mermaid::Class;
+    row.iter()
+        .map(|span| match span.class {
+            Class::Border => (theme.mermaid_border)(&span.text),
+            Class::Text => (theme.mermaid_text)(&span.text),
+            Class::Edge => (theme.mermaid_edge)(&span.text),
+            Class::EdgeLabel => (theme.mermaid_edge_label)(&span.text),
+            Class::Title => (theme.mermaid_title)(&span.text),
+            Class::None => span.text.clone(),
+        })
+        .collect()
+}
+
 /// Render inline spans (bold, italic, code, strike, links) for one line.
 pub fn render_inline(text: &str, theme: &MarkdownTheme, options: &MarkdownOptions) -> String {
     let mut out = String::new();
@@ -781,6 +893,26 @@ pub fn render_inline(text: &str, theme: &MarkdownTheme, options: &MarkdownOption
             let url: String = chars[close + 2..paren].iter().collect();
             out.push_str(&render_link(&label, &url, theme, options));
             i = paren + 1;
+            continue;
+        }
+        // Inline math: `$…$`, `\(…\)`, `\[…\]` with pi's guards, and
+        // pending-raw behavior until the closer streams in (M3).
+        if matches!(chars[i], '$' | '\\')
+            && let Some(expr) = math::inline_math(&chars, i)
+        {
+            let raw: String = chars[i..i + expr.len].iter().collect();
+            if expr.pending || !options.render_latex {
+                out.push_str(&raw);
+            } else {
+                match crate::widgets::latex::render_math(
+                    &expr.content,
+                    crate::widgets::latex::MathMode::Inline,
+                ) {
+                    Some(rendered) => out.push_str(&rendered),
+                    None => out.push_str(&raw),
+                }
+            }
+            i += expr.len;
             continue;
         }
         // pi's `escape` token: the escaped character is what prints, unless

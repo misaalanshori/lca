@@ -7,6 +7,16 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **LaTeX math and mermaid diagrams (TUI-10 M3/M4).** Inline `$…$`/`\(…\)`
+  and display `$$…$$`/`\[…\]` typeset through a port of pi's `latex.ts`:
+  224 symbol commands, a recursive-descent parser, and baseline-joined 2D
+  layout for fractions, limits, scripts, matrices and cases - with pi's
+  fail-soft contract, so unsupported or malformed input prints as the raw
+  source, and streamed, still-open math stays raw until its closer
+  arrives. A ` ```mermaid ` fence renders as Unicode art (flowcharts and
+  sequence diagrams, with pi's width guard falling back to the framed
+  source and his warning note showing only once streaming settles); the
+  theme spends six of pi's own roles, none of them new.
 - **Markdown parity with pi, pass one (TUI-10 M1/M2).** Hyperlinks use pi's
   full capability ladder - the tmux client's `client_termfeatures` probe,
   the known-terminal table, and a `LCA_HYPERLINKS=1|0` override in

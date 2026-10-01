@@ -767,12 +767,18 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
     // Without the turn boundary, the cancel above would pre-cancel this
     // turn's extension call and its tool would come back cancelled.
     let fresh = lca_tools::CancelFlag::new();
+    let turn_started = std::time::Instant::now();
     let second = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         agent.run_turn("again", &mut sink, &fresh),
     )
     .await
-    .expect("the second turn returns");
+    .unwrap_or_else(|_| {
+        panic!(
+            "the second turn hung for {:?} (load-guard fired)",
+            turn_started.elapsed()
+        )
+    });
     assert_eq!(second.status, TurnStatus::Ok, "a fresh turn completes");
     assert_ne!(second.stop_reason, StopReason::Cancelled);
     let read = h.store.read(&h.session).expect("read");

@@ -408,6 +408,18 @@ impl Theme {
             quote: self.role(Role::MdQuote),
             quote_border: self.role(Role::MdQuoteBorder),
             hr: self.role(Role::MdHr),
+            // pi's mermaid roles (chrome.md §mermaid): the title is
+            // accent-over-bold, the rest are the roles pi's theme maps.
+            mermaid_border: self.role(Role::BorderMuted),
+            mermaid_text: self.role(Role::Text),
+            mermaid_edge: self.role(Role::Accent),
+            mermaid_edge_label: self.role(Role::Muted),
+            mermaid_title: {
+                let accent = self.role(Role::Accent);
+                let bold = self.decoration("1");
+                Arc::new(move |s: &str| accent(&bold(s))) as StyleFn
+            },
+            warning: self.role(Role::Warning),
             highlight: Some(hook),
         }
     }

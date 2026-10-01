@@ -362,7 +362,7 @@ const GOLDEN: &str = "# Title\n\nIntro with **bold**, `code`, and a [link](http:
     - one\n- two\n\n> quoted\n\n\
     | name | value |\n| --- | --- |\n| alpha | 1 |\n\n\
     ```rust\nfn main() {\n    let x = 1;\n}\n```\n\n\
-    Math $x^2$ and $$E=mc^2$$ stay literal.\n";
+    Math $x^2$ and $$E=mc^2$$ render as math (M3).\n";
 
 fn frame_count(lines: &[String], open: char) -> usize {
     lines
@@ -425,17 +425,31 @@ fn a_partial_separator_row_is_not_yet_a_table() {
     assert!(!out.iter().any(|l| l.starts_with('┌')), "{out:?}");
 }
 
-// Verifies: FR-UI-8 - unpaired inline markers and math render literally.
+// Verifies: FR-UI-8 + TUI-10 M3 - unpaired inline markers stay literal,
+// and math renders only when it is *closed*: streamed half-written `$x^2`
+// prints as source until the closer arrives (pi's pending rule).
 #[test]
-fn unpaired_inline_markers_and_math_stay_literal() {
+fn unpaired_markers_stay_literal_and_pending_math_stays_raw() {
+    let out = render_inline(
+        "a **b and $x^2 and `",
+        &plain(),
+        &MarkdownOptions::default(),
+    );
+    let stripped = crate::engine::text::strip_terminal_sequences(&out);
+    assert!(stripped.contains("**b"), "{stripped}");
+    assert!(stripped.contains("$x^2"), "pending math is raw: {stripped}");
+    assert!(stripped.ends_with('`'), "{stripped}");
+
+    // Closed math renders as math (M3), the unpaired markers still don't.
     let out = render_inline(
         "a **b and $x^2$ and `",
         &plain(),
         &MarkdownOptions::default(),
     );
     let stripped = crate::engine::text::strip_terminal_sequences(&out);
+    assert!(stripped.contains("x²"), "closed math renders: {stripped}");
+    assert!(!stripped.contains("$x^2$"), "{stripped}");
     assert!(stripped.contains("**b"), "{stripped}");
-    assert!(stripped.contains("$x^2$"), "{stripped}");
     assert!(stripped.ends_with('`'), "{stripped}");
 }
 
@@ -761,5 +775,184 @@ fn links_carry_the_underline_pi_paints() {
     assert!(
         inline.contains(" (http://x)"),
         "the space rides inside the linkUrl style: {inline:?}"
+    );
+}
+
+// Verifies: TUI-10 M3 - display math: `$$…$$` stacks what pi stacks,
+// closes only when the closer ends a line, and fails soft to the raw
+// source (delimiters included) on unsupported input.
+#[test]
+fn display_math_renders_and_fails_soft() {
+    let out = strip(&render_markdown(
+        "$$E=mc^2$$",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    // `=` gets pi's relation spacing (latex.ts parseSequence).
+    assert_eq!(out[0], "E = mc²", "{out:?}");
+
+    let out = strip(&render_markdown(
+        "$$\n\\frac{a}{b}\n$$",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(out[0], "a", "{out:?}");
+    assert_eq!(out[1], "─", "{out:?}");
+    assert_eq!(out[2], "b", "{out:?}");
+
+    let out = strip(&render_markdown(
+        "$$\\unknowncmd$$",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert!(out[0].contains("\\unknowncmd"), "fail-soft: {out:?}");
+    assert!(
+        out[0].contains("$$"),
+        "the raw source keeps its fences: {out:?}"
+    );
+
+    // The option turns math off the way pi's renderLatex:false does.
+    let out = strip(&render_markdown(
+        "$$E=mc^2$$",
+        40,
+        &plain(),
+        &MarkdownOptions {
+            render_latex: false,
+            ..Default::default()
+        },
+    ));
+    assert!(out[0].contains("E=mc^2"), "{out:?}");
+}
+
+// Verifies: TUI-10 M3 - a streamed, still-open display block prints as
+// source (pending), and `$…$` prose guards leave dollars alone.
+#[test]
+fn pending_display_math_prints_as_source() {
+    let out = strip(&render_markdown(
+        "$$\\frac{a}",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(out[0], "$$\\frac{a}", "the half block is raw: {out:?}");
+
+    let out = strip(&render_markdown(
+        "it costs $5 and that is that",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(out[0], "it costs $5 and that is that", "{out:?}");
+
+    let out = strip(&render_markdown(
+        "set $FOO$x here",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(out[0], "set $FOO$x here", "the identifier guard: {out:?}");
+}
+
+// Verifies: TUI-10 M3 - inline forms: `$…$`, `\(…\)`, and the escape
+// awareness (an escaped delimiter never opens math).
+#[test]
+fn inline_math_forms_and_escapes() {
+    let out = strip(&render_markdown(
+        r"area is $\pi r^2$ ok",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert!(out[0].contains("π r²"), "{out:?}");
+
+    let out = strip(&render_markdown(
+        r"inline \(a + b\) done",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(out[0], "inline a + b done", "{out:?}");
+
+    let out = strip(&render_markdown(
+        r"escaped \$x\$ stays",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(out[0], "escaped $x$ stays", "{out:?}");
+}
+
+// Verifies: TUI-10 M4 - a mermaid fence renders as Unicode art (never the
+// framed code block), a too-wide diagram falls back to the frame (pi's
+// width guard), and a diagram outside the subset keeps its source.
+#[test]
+fn mermaid_fences_render_as_art_and_fail_soft() {
+    let out = strip(&render_markdown(
+        "```mermaid\nflowchart TD\n  A[One] --> B[Two]\n```",
+        60,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert!(out.iter().any(|l| l.contains('┌')), "the art box: {out:?}");
+    assert!(out.iter().any(|l| l.contains("One")), "{out:?}");
+    assert!(
+        !out.iter().any(|l| l.starts_with('╭')),
+        "art is not the code frame: {out:?}"
+    );
+
+    let out = strip(&render_markdown(
+        "```mermaid\nflowchart TD\n  A[One] --> B[Two]\n```",
+        4,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert!(
+        out.iter().any(|l| l.starts_with('╭')),
+        "too wide for the pane: framed source: {out:?}"
+    );
+
+    let out = strip(&render_markdown(
+        "```mermaid\npie title Pets\n  \"Dogs\": 42\n```",
+        60,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert!(
+        out.iter().any(|l| l.starts_with('╭')),
+        "outside the subset: framed source: {out:?}"
+    );
+    assert!(out.iter().any(|l| l.contains("pie")), "{out:?}");
+}
+
+// Verifies: M4 - pi's warning contract: the raw source plus a styled note
+// once the message settles, art while it is still streaming.
+#[test]
+fn mermaid_warnings_show_only_after_streaming() {
+    let src = "```mermaid\nflowchart TD\n  A --> B\n  B --> A\n```";
+    let out = strip(&render_markdown(
+        src,
+        60,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert!(
+        out.iter().any(|l| l.contains("not rendered")),
+        "the warning note: {out:?}"
+    );
+    let out = strip(&render_markdown(
+        src,
+        60,
+        &plain(),
+        &MarkdownOptions {
+            streaming: true,
+            ..Default::default()
+        },
+    ));
+    assert!(
+        !out.iter().any(|l| l.contains("not rendered")),
+        "streaming suppresses the note: {out:?}"
     );
 }

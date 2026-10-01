@@ -16,7 +16,7 @@ use super::{Entry, ThinkingVisibility, ToolStatus};
 /// Markdown options for the terminal: the link mode follows the terminal's
 /// OSC 8 capability, so a URL never vanishes on a terminal that swallows
 /// the hyperlink (pi's `markdown.md` §6).
-fn markdown_options() -> MarkdownOptions {
+fn markdown_options(streaming: bool) -> MarkdownOptions {
     MarkdownOptions {
         // pi renders assistant markdown with `outputPad = 1`
         // (`assistant-message.ts`), so every line carries a one-space left
@@ -27,6 +27,9 @@ fn markdown_options() -> MarkdownOptions {
         } else {
             LinkMode::Inline
         },
+        // While the answer streams, pi suppresses mermaid's warning note
+        // and shows it once the message settles.
+        streaming,
         ..Default::default()
     }
 }
@@ -144,6 +147,8 @@ fn render_user(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
         },
         preserve_ordered_list_markers: true,
         preserve_backslash_escapes: true,
+        render_latex: true,
+        streaming: false,
     };
     let wrapped = render_markdown(text, content, &theme.markdown(), &options);
     out.push(band_row("", width, &bg));
@@ -231,7 +236,12 @@ fn render_assistant(
         }
     }
     if !text.is_empty() {
-        let md = render_markdown(text, width as usize, &theme.markdown(), &markdown_options());
+        let md = render_markdown(
+            text,
+            width as usize,
+            &theme.markdown(),
+            &markdown_options(streaming),
+        );
         out.extend(md);
     }
     if streaming {
