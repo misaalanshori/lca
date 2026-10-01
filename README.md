@@ -342,8 +342,11 @@ Apache-2.0 — see [`LICENSE`](LICENSE).
 
 LCA's design takes a great deal from [Pi](https://github.com/earendil-works/pi)
 (its minimal core, prompt compaction, testing discipline, and prompt-cache
-measurement method) and, for the native-plus-WASM build shape, from
-[fx](https://github.com/vercel-labs/fx); what comes from where is recorded
-with attribution in [`docs/inspiration.md`](docs/inspiration.md). What LCA
-adds is the sandboxed, capability-gated extension boundary — Pi's own
-extensions run unsandboxed and require full trust.
+measurement method) and takes its product form — one small, single static
+native binary — from [fx](https://github.com/vercel-labs/fx). The
+native-plus-WASM build shape, the hook point names, and the permission
+model are this project's own design; what comes from where, with the
+source that supports each claim, is recorded in
+[`docs/inspiration.md`](docs/inspiration.md). What LCA adds is the
+sandboxed, capability-gated extension boundary — Pi's own extensions run
+unsandboxed and require full trust.
