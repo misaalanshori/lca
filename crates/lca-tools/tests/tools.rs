@@ -24,6 +24,23 @@ fn executor(workspace: &Path) -> ToolExecutor {
     )
 }
 
+/// The executor the shell-plumbing rows drive: **bash**, the reference
+/// dialect, so these rows are about streaming, truncation, exit codes,
+/// timeouts, and cancellation rather than about a dialect. A host with no
+/// bash skips them by name (never a silent pass); `windows-latest` resolves
+/// Git Bash, and the cmd and PowerShell dialects have their own rows in
+/// `shell_fidelity.rs`.
+fn bash_executor(workspace: &Path, limit: usize, timeout: Duration) -> Option<ToolExecutor> {
+    let shell = lca_tools::shell::resolve("bash", None).ok()?;
+    Some(ToolExecutor::new(
+        Arc::new(NativeOps::new(shell)),
+        workspace.to_path_buf(),
+        workspace.to_path_buf(),
+        limit,
+        timeout,
+    ))
+}
+
 fn call(name: &str, args: serde_json::Value) -> ToolCall {
     ToolCall {
         call_id: "c1".to_string(),
@@ -538,7 +555,10 @@ fn permission_surface_matches_the_requirement() {
 #[tokio::test]
 async fn shell_streams_output_while_running() {
     let ws = scratch("stream");
-    let mut exec = executor(&ws);
+    let Some(mut exec) = bash_executor(&ws, 65536, Duration::from_secs(120)) else {
+        eprintln!("skip: no bash on this host");
+        return;
+    };
     let chunks: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let sink_chunks = chunks.clone();
     let mut sink = move |bytes: &[u8]| {
@@ -549,11 +569,7 @@ async fn shell_streams_output_while_running() {
     };
     let call = call(
         "shell",
-        serde_json::json!({"command": if cfg!(target_os = "windows") {
-            "echo one & echo two & echo three"
-        } else {
-            "printf 'one\\ntwo\\nthree\\n'"
-        }}),
+        serde_json::json!({"command": "printf 'one\\ntwo\\nthree\\n'"}),
     );
     let result = exec.execute(&call, &mut sink, &CancelFlag::new()).await;
     assert_eq!(result.status, ToolResultStatus::Ok, "{}", result.content);
@@ -574,18 +590,15 @@ async fn shell_streams_output_while_running() {
 #[tokio::test]
 async fn shell_reports_exit_codes_with_output() {
     let ws = scratch("exit");
-    let mut exec = executor(&ws);
+    let Some(mut exec) = bash_executor(&ws, 65536, Duration::from_secs(120)) else {
+        eprintln!("skip: no bash on this host");
+        return;
+    };
     let result = run(
         &mut exec,
         &call(
             "shell",
-            serde_json::json!({
-                "command": if cfg!(target_os = "windows") {
-                    "echo partial & exit /b 3"
-                } else {
-                    "echo partial; exit 3"
-                }
-            }),
+            serde_json::json!({"command": "echo partial; exit 3"}),
         ),
     )
     .await;
@@ -599,24 +612,17 @@ async fn shell_reports_exit_codes_with_output() {
 #[tokio::test]
 async fn shell_timeout_kills_the_process_tree() {
     let ws = scratch("timeout");
-    let mut exec = ToolExecutor::new(
-        Arc::new(NativeOps::default()),
-        ws.clone(),
-        ws.clone(),
-        65536,
-        Duration::from_millis(500),
-    );
+    let Some(mut exec) = bash_executor(&ws, 65536, Duration::from_millis(500)) else {
+        eprintln!("skip: no bash on this host");
+        return;
+    };
     let started = std::time::Instant::now();
     let result = run(
         &mut exec,
         &call(
             "shell",
-            serde_json::json!({"command": if cfg!(target_os = "windows") {
-                // A long-lived command: the timeout must stop it.
-                "ping -n 60 127.0.0.1 >nul"
-            } else {
-                "sleep 30 & echo started-child $!; wait"
-            }}),
+            // A long-lived command: the timeout must stop it.
+            serde_json::json!({"command": "sleep 30 & echo started-child $!; wait"}),
         ),
     )
     .await;
@@ -652,35 +658,50 @@ async fn shell_timeout_kills_the_process_tree() {
     }
 }
 
-// Verifies: FR-TOOL-6 (on Windows the command runs through the platform
-// shell; on unix through /bin/sh-family shells)
+// Verifies: FR-TOOL-6, FR-TOOL-8 (the shell tool runs in the interpreter
+// the ladder resolved - whatever it is - and its dialect is the one the
+// command was written for).
 #[tokio::test]
-async fn shell_uses_the_platform_shell() {
+async fn shell_uses_the_resolved_shell() {
     let ws = scratch("platform");
-    let mut exec = executor(&ws);
-    if cfg!(target_os = "windows") {
-        let result = run(
-            &mut exec,
-            &call("shell", serde_json::json!({"command": "echo %OS%"})),
-        )
-        .await;
-        assert_eq!(
-            result.status,
-            ToolResultStatus::Ok,
-            "cmd syntax works: {}",
-            result.content
-        );
-        assert!(result.content.to_lowercase().contains("windows"));
+    let Ok(shell) = lca_tools::shell::resolve("auto", None) else {
+        eprintln!("skip: no shell resolves on this host");
+        return;
+    };
+    let is_posix = shell.kind.is_posix();
+    let mut exec = ToolExecutor::new(
+        Arc::new(NativeOps::new(shell.clone())),
+        ws.clone(),
+        ws.clone(),
+        65536,
+        Duration::from_secs(30),
+    );
+    // One command per family, each written for the dialect that runs it.
+    let command = if is_posix {
+        "echo $0 | head -c 200"
+    } else if shell.kind == lca_tools::ShellKind::Cmd {
+        "echo %OS%"
     } else {
-        let result = run(
-            &mut exec,
-            &call(
-                "shell",
-                serde_json::json!({"command": "echo $0 | head -c 200"}),
-            ),
-        )
-        .await;
-        assert_eq!(result.status, ToolResultStatus::Ok, "{}", result.content);
+        "Write-Output $env:OS"
+    };
+    let result = run(
+        &mut exec,
+        &call("shell", serde_json::json!({ "command": command })),
+    )
+    .await;
+    assert_eq!(
+        result.status,
+        ToolResultStatus::Ok,
+        "the resolved shell runs its own dialect: {}",
+        result.content
+    );
+    let text = result.content.to_lowercase();
+    if is_posix {
+        // A POSIX shell echoes its own name ($0).
+        assert!(text.contains("sh") || text.contains("bash"), "{text}");
+    } else {
+        // Windows reports Windows_NT through either variable style.
+        assert!(text.contains("windows"), "{text}");
     }
 }
 
@@ -688,23 +709,16 @@ async fn shell_uses_the_platform_shell() {
 #[tokio::test]
 async fn shell_output_truncates_and_marks() {
     let ws = scratch("shell-trunc");
-    let mut exec = ToolExecutor::new(
-        Arc::new(NativeOps::default()),
-        ws.clone(),
-        ws.clone(),
-        256,
-        Duration::from_secs(30),
-    );
+    let Some(mut exec) = bash_executor(&ws, 256, Duration::from_secs(30)) else {
+        eprintln!("skip: no bash on this host");
+        return;
+    };
     let result = run(
         &mut exec,
         &call(
             "shell",
             serde_json::json!({
-                "command": if cfg!(target_os = "windows") {
-                    "for /L %i in (1,1,500) do @echo line %i"
-                } else {
-                    "for i in $(seq 1 500); do echo \"line $i\"; done"
-                }
+                "command": "for i in $(seq 1 500); do echo \"line $i\"; done"
             }),
         ),
     )
@@ -778,19 +792,16 @@ async fn over_limit_output_spills_by_content_hash() {
 #[tokio::test]
 async fn cancellation_stops_a_running_command() {
     let ws = scratch("cancel");
+    let Some(exec) = bash_executor(&ws, 65536, Duration::from_secs(120)) else {
+        eprintln!("skip: no bash on this host");
+        return;
+    };
     let cancel = CancelFlag::new();
     let flag = cancel.clone();
     let handle = tokio::spawn(async move {
-        let mut exec = executor(&ws);
+        let mut exec = exec;
         exec.execute(
-            &call(
-                "shell",
-                serde_json::json!({"command": if cfg!(target_os = "windows") {
-                    "ping -n 60 127.0.0.1 >nul"
-                } else {
-                    "sleep 30"
-                }}),
-            ),
+            &call("shell", serde_json::json!({"command": "sleep 30"})),
             &mut |_| {},
             &flag,
         )

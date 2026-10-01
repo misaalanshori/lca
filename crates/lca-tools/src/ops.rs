@@ -538,7 +538,21 @@ impl TempScript {
             std::process::id(),
             shell.script_extension()
         ));
-        std::fs::write(&path, shell.script_text(command))?;
+        // Windows PowerShell 5.1 decodes a BOM-less `.ps1` in the ANSI
+        // codepage, so a non-ASCII command arrives mojibaked: a UTF-8 BOM
+        // tells both PowerShell flavors to read UTF-8. PowerShell skips the
+        // BOM, so the command itself is untouched (ADR-0041's fidelity rule
+        // in its last platform-specific detail; the corpus row is what
+        // caught it).
+        let mut bytes = Vec::with_capacity(shell.script_text(command).len() + 3);
+        if matches!(
+            shell.kind,
+            crate::shell::Kind::Pwsh | crate::shell::Kind::PowerShell
+        ) {
+            bytes.extend_from_slice(b"\xef\xbb\xbf");
+        }
+        bytes.extend_from_slice(shell.script_text(command).as_bytes());
+        std::fs::write(&path, bytes)?;
         Ok(TempScript { path })
     }
 
@@ -677,8 +691,19 @@ mod script_transport_tests {
                 Some(extension),
                 "extension for {kind:?}"
             );
-            let written = std::fs::read_to_string(&path).expect("read back");
-            assert_eq!(written, shell.script_text(command), "{kind:?}");
+            let raw = std::fs::read(&path).expect("read back");
+            let bom = matches!(
+                kind,
+                crate::shell::Kind::Pwsh | crate::shell::Kind::PowerShell
+            );
+            let expected: Vec<u8> = if bom {
+                let mut with_bom = b"\xef\xbb\xbf".to_vec();
+                with_bom.extend_from_slice(shell.script_text(command).as_bytes());
+                with_bom
+            } else {
+                shell.script_text(command).into_bytes()
+            };
+            assert_eq!(raw, expected, "{kind:?} bytes");
             assert!(path.is_file(), "script exists while in use");
             drop(script);
             assert!(!path.exists(), "script removed on drop: {path:?}");

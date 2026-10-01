@@ -75,6 +75,11 @@ fn a_clean_exit_on_a_pseudo_console_writes_session_end() {
     ];
     let borrowed: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
+    // R7: the state tree is $HOME/.lca on every platform, and HOME above
+    // points at this sandbox - the search has to follow it or the marker
+    // is written somewhere the test never looks.
+    let state = root.join(".lca");
+
     let mut pty = lca_tools::PtyChild::spawn(&s(&bin), &[], &project, 40, 140, &borrowed)
         .expect("spawn the TUI on a ConPTY");
 
@@ -101,7 +106,7 @@ fn a_clean_exit_on_a_pseudo_console_writes_session_end() {
         // Drain the pseudo-console: a TUI writing its shutdown sequences
         // with nobody reading can fill the pipe and block its own exit.
         let _ = pty.read(65536);
-        if find_session_end(&data) {
+        if find_session_end(&state) {
             ended = true;
             break;
         }
