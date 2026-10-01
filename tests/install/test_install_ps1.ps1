@@ -132,16 +132,13 @@ function New-HashVersionExe {
   if (-not $script:Root) { return $null }
   $src = Join-Path $script:Root 'hashver.cs'
   $out = Join-Path $script:Root 'hashver.exe'
-  Set-Content -LiteralPath $src -Encoding ASCII -Value @'
-using System;
-class LcaFixture {
-  static void Main() { System.Console.WriteLine("lca 0.5.2.b194950"); }
-}
-'@
   try {
-    Add-Type -Path $src -OutputAssembly $out -OutputType ConsoleApplication -ErrorAction Stop
+    [System.IO.File]::WriteAllText($src, 'using System; class LcaFixture { static void Main() { System.Console.WriteLine("lca 0.5.2.b194950"); } }')
+    Add-Type -Path $src -OutputAssembly $out -OutputType 'ConsoleApplication' -ErrorAction Stop
   } catch { return $null }
-  if (Test-Path -LiteralPath $out) { return $out }
+  try {
+    if (Test-Path -LiteralPath $out) { return $out }
+  } catch { }
   return $null
 }
 
@@ -377,47 +374,76 @@ try {
   # ADR-0043 / U2: the unstable line. The flag picks download/unstable for the
   # binary and its artifacts.sha256 (the stable line's checksums are poisoned
   # in this fixture, so consulting them at all would fail this row), the mixed
-  # flags are a usage error, and the report carries the hash version.
+  # flags are a usage error, and - where the fixture executable can run - the
+  # report carries the hash version in both directions.
+  #
+  # Variable names in this row avoid the installer's parameter names
+  # (Version/InstallDir/NoPath/Uninstall/Unstable/BaseUrl): dot-sourcing
+  # binds them INTO this scope with their types, and assigning a string to
+  # the SwitchParameter-typed `$Unstable` throws.
   #############################################################################
   Setup
   try {
-    $unstable = Join-Path $script:BaseUrl 'download\unstable'
-    New-Item -ItemType Directory -Force -Path $unstable | Out-Null
+    $unstableDir = Join-Path $script:BaseUrl 'download\unstable'
+    New-Item -ItemType Directory -Force -Path $unstableDir | Out-Null
     $hashver = New-HashVersionExe
+    if ($hashver -and -not (Test-Path -LiteralPath $hashver)) { $hashver = $null }
     foreach ($name in $script:AssetNames) {
       if ($hashver) {
-        Copy-Item -LiteralPath $hashver -Destination (Join-Path $unstable $name) -Force
+        Copy-Item -LiteralPath $hashver -Destination (Join-Path $unstableDir $name) -Force
       } else {
-        Copy-Item -LiteralPath (Get-FixtureExe) -Destination (Join-Path $unstable $name) -Force
-        Add-Content -LiteralPath (Join-Path $unstable $name) -Encoding Ascii -Value "unstable-$name"
+        Copy-Item -LiteralPath (Get-FixtureExe) -Destination (Join-Path $unstableDir $name) -Force
+        Add-Content -LiteralPath (Join-Path $unstableDir $name) -Encoding Ascii -Value "unstable-$name"
       }
     }
-    Write-Checksums $unstable
+    Write-Checksums $unstableDir
+    $bin = Join-Path $script:InstallDir 'lca.exe'
+
+    # Baseline over the stable line: the report below needs an "old" side.
+    Invoke-Installer @{ BaseUrl = $script:BaseUrl; InstallDir = $script:InstallDir; NoPath = $true }
+    Assert ($script:LastCode -eq 0) "baseline stable install: exit $($script:LastCode)`n$($script:LastOutput)"
+    Assert (Test-Path -LiteralPath $bin) 'baseline stable install: lca.exe missing'
+
+    # Poison the stable line: wrong hashes for its own bytes. An installer
+    # that consulted latest's checksums would refuse here.
     $poison = @()
     foreach ($name in $script:AssetNames) { $poison += ('{0}  {1}' -f ('0' * 64), $name) }
     Set-Content -LiteralPath (Join-Path $script:BaseUrl 'latest\download\artifacts.sha256') -Value $poison -Encoding Ascii
 
     Invoke-Installer @{ BaseUrl = $script:BaseUrl; InstallDir = $script:InstallDir; NoPath = $true; Unstable = $true }
     Assert ($script:LastCode -eq 0) "unstable install: exit $($script:LastCode)`n$($script:LastOutput)"
-    if ($hashver) {
+
+    # The installed bytes are a file from download/unstable (byte proof: it
+    # does not depend on the fixture being executable on this host).
+    $installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $bin).Hash
+    $fromUnstable = $false
+    foreach ($name in $script:AssetNames) {
+      $candidate = Join-Path $unstableDir $name
+      if ((Get-FileHash -Algorithm SHA256 -LiteralPath $candidate).Hash -eq $installedHash) { $fromUnstable = $true; break }
+    }
+    Assert $fromUnstable 'unstable: the installed bytes are not from download/unstable'
+    Pass 'the unstable flag installs from download/unstable with its own checksums'
+
+    # The hash-version report needs the fixture to answer --version here;
+    # a compiled PE cannot run on this host, so that path is a named skip.
+    $newVer = Read-Version $bin
+    if ($hashver -and $newVer -eq '0.5.2.b194950') {
       Assert ($script:LastOutput -match '-> 0\.5\.2\.b[0-9a-f]{7}') "unstable: hash version missing from the report:`n$($script:LastOutput)"
-      Pass 'the unstable flag installs from download/unstable with its own checksums and reports the hash version'
-      # ... and back: the hash version is the *old* side of the next report.
-      $lines = @()
+      Pass 'the report carries the hash version as the new side'
+
+      $good = @()
       foreach ($name in $script:AssetNames) {
         $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $script:BaseUrl ('latest\download\' + $name))).Hash.ToLowerInvariant()
-        $lines += ('{0}  {1}' -f $hash, $name)
+        $good += ('{0}  {1}' -f $hash, $name)
       }
-      Set-Content -LiteralPath (Join-Path $script:BaseUrl 'latest\download\artifacts.sha256') -Value $lines -Encoding Ascii
+      Set-Content -LiteralPath (Join-Path $script:BaseUrl 'latest\download\artifacts.sha256') -Value $good -Encoding Ascii
       Invoke-Installer @{ BaseUrl = $script:BaseUrl; InstallDir = $script:InstallDir; NoPath = $true }
       Assert ($script:LastCode -eq 0) "stable round trip: exit $($script:LastCode)`n$($script:LastOutput)"
       Assert ($script:LastOutput -match 'lca 0\.5\.2\.b[0-9a-f]{7} -> ') "round trip: hash version not reported as old:`n$($script:LastOutput)"
       Pass 'the round trip back to stable reports the hash version as the old side'
     } else {
-      $raw = Get-Content -LiteralPath (Join-Path $script:InstallDir 'lca.exe') -Raw
-      Assert ($raw -match 'unstable-') 'unstable: the unstable bytes were not installed'
-      Pass 'the unstable flag installs from download/unstable with its own checksums'
-      Skip 'the hash-version old -> new report' 'Add-Type could not compile a fixture exe'
+      $reason = if ($hashver) { 'the compiled fixture exe cannot run on this host' } else { 'Add-Type could not compile a fixture exe' }
+      Skip 'the hash-version old -> new report' $reason
     }
 
     Invoke-Installer @{ BaseUrl = $script:BaseUrl; InstallDir = $script:InstallDir; NoPath = $true; Unstable = $true; Version = '9.9.9' }
@@ -426,7 +452,7 @@ try {
     Pass 'unstable with a pinned version is a usage error'
   } finally { Teardown }
 
-} catch {
+  } catch {
   Fail "unexpected error: $($_.Exception.Message)"
 }
 
