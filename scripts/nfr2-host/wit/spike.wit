@@ -1,0 +1,24 @@
+package lca:spike@0.1.0;
+
+interface api {
+  host-add: func(a: u64, b: u64) -> u64;
+}
+
+interface streams {
+  record event {
+    seq: u64,
+    payload: string,
+  }
+
+  resource events {
+    next: func() -> option<event>;
+  }
+
+  start: func() -> own<events>;
+}
+
+world two-func {
+  import api;
+  export streams;
+  export compute: func(n: u64) -> u64;
+}

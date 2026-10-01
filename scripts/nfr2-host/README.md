@@ -1,0 +1,1 @@
+Measurement fixture for NFR-2 (interpreter-only build under 12 MB) and NFR-15 (no compiler symbols in it): the recovered phase-0 pulley host, built by scripts/perf-gate.sh; workspace-excluded, never shipped.
