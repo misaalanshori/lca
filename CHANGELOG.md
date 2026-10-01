@@ -6,8 +6,16 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+
+- **The `shell` tool runs a real shell, chosen by a documented ladder.** `shell.tool` (`auto`, `bash`, `pwsh`, `powershell`, `cmd`) and `shell.path` (an exact interpreter) pick it; `auto` on Windows finds Git Bash by its install location - not by the `bash` on `PATH`, which is usually the WSL stub and silently changes what every path means - then `pwsh`, then `powershell`, then `cmd`. A configured interpreter that cannot be found fails loudly with the locations searched. The model is told which interpreter it got and how its dialect reads. On Windows every command now travels in a per-call script file (`.sh`/`.ps1`/`.cmd`), so quotes, newlines, and metacharacters reach the shell exactly as written: `echo "double"` is no longer `echo \"double\"`, and a multi-line command runs all of its lines. POSIX behavior is unchanged. ADR-0041, `docs/installation.md`'s sibling `docs/platform-notes.md`.
+- **Yolo mode**: `--yolo` or `permissions.mode = "yolo"` answers every permission prompt "always, for this exact action's pattern" - the pattern is persisted and the session log records the same `permission` entry a human answer writes, so approve-everything never means forget-everything. The footer shows a `YOLO` line while it is on and the session opens with one explanatory line. Explicit deny rules still deny, and the mode is never persisted for you. ADR-0042.
+- **Read-only tools outside the workspace no longer prompt** (`read`, `list`, `glob`, `grep`); a deny rule still refuses them, and writes/edits outside the workspace still ask.
+
 ### Changed
 
+- **`ui.fullscreen` defaults to `true` again**: the interface opens in the fullscreen (alt-screen) renderer, and `ui.fullscreen = false` opts into the terminal's own scrollback. Real Windows use showed ConPTY does not reliably restore scrollback under the main screen, which is what the previous default used. ADR-0037's second annotation.
+- **Thinking runs show a short snippet by default** (`ui.thinking = snippet`): the first three non-empty reasoning lines plus a `… +N lines` marker, with the expand key overriding the latest run in place. `full` and `hidden` remain as settings.
 - **The agent's data and configuration live in `~/.lca` on every platform.** Sessions, extensions, credentials, grants, state, temp, themes, `ui.json`, and `config.toml` all sit under one home dot-directory instead of the platform-specific ones (`~/.local/share/lca` and `~/.config/lca/config.toml` on Linux, `~/Library/Application Support/lca` on macOS, `%APPDATA%\lca` on Windows). **There is no migration code.** The old directories are untouched: copy the one you want across yourself, for example `cp -a ~/.local/share/lca/sessions ~/.lca/` on Linux, or `xcopy /E /I "%APPDATA%\lca" "%USERPROFILE%\.lca"` on Windows. `docs/platform-notes.md` names each old path.
 
 ### Added

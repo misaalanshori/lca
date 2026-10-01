@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use lca_tools::shell::{Kind, Shell};
+use lca_tools::shell::Shell;
 use lca_tools::{CancelFlag, ExecOutcome, NativeOps, ToolOps};
 
 /// Which shells a row's command is written for.
@@ -332,7 +332,9 @@ fn check(shell: &Shell, row: &Row, label: &str) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[cfg(unix)]
+/// Run every corpus row of `family` through `shell`. Platform-independent on
+/// purpose: the Windows leg calls it too, and a `#[cfg(unix)]` here broke
+/// the Windows build invisibly from a Linux dev machine.
 fn run_family(shell: &Shell, family: Family, label: &str) {
     for row in corpus() {
         if row.family == family {
@@ -346,6 +348,7 @@ fn run_family(shell: &Shell, family: Family, label: &str) {
 #[cfg(unix)]
 #[test]
 fn the_posix_corpus_runs_byte_exact_through_sh() {
+    use lca_tools::shell::Kind;
     let shell = Shell {
         program: "sh".to_string(),
         kind: Kind::Sh,
@@ -358,6 +361,7 @@ fn the_posix_corpus_runs_byte_exact_through_sh() {
 #[cfg(unix)]
 #[test]
 fn the_posix_corpus_runs_byte_exact_through_bash_when_present() {
+    use lca_tools::shell::Kind;
     if !Path::new("/bin/bash").is_file() {
         eprintln!("skip: no /bin/bash on this host");
         return;

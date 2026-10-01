@@ -127,6 +127,13 @@ for first are `/login`, `/logout`, `/usage`, `/model`, `/thinking`,
 `/session`, `/attach`, `/fullscreen`, and `/exit`. `!command` runs a shell
 command inline, `!!` runs one the model never sees.
 
+The status line also carries whatever the session needs to say out loud: a
+`YOLO` line while every permission prompt is being auto-approved (see
+below), and the footer's other segments. The interface opens in the
+fullscreen renderer by default (`ui.fullscreen = true`); `ui.fullscreen =
+false` switches to the terminal's own scrollback and lets its native
+selection and right-click paste through.
+
 ---
 
 ## What it is
@@ -168,6 +175,27 @@ cloning a hostile tree cannot grant itself anything. A trusted folder
 auto-approves only commands the analyzer can prove stay inside the workspace
 ([ADR-0006](docs/adr/0006-permission-store-split.md),
 [ADR-0039](docs/adr/0039-folder-trust-and-rules.md)).
+
+Two things cut the prompt fatigue without giving up the boundary.
+**Read-only tools** (`read`, `list`, `glob`, `grep`) never prompt for a path
+outside the workspace; a deny rule still refuses one. **Yolo mode**
+(`--yolo`, or `permissions.mode = "yolo"`) answers every remaining prompt
+"always, for this exact pattern": the pattern is persisted and the session
+log carries the same `permission` record a human answer writes, the footer
+says `YOLO` for as long as it is on, and explicit deny rules still deny
+([ADR-0042](docs/adr/0042-yolo-mode.md)).
+
+**The shell tool.** Commands run in a real shell, resolved once at startup
+through a documented ladder — an explicit `shell.path`, then `shell.tool`
+(`auto`, `bash`, `pwsh`, `powershell`, `cmd`), then the platform's own
+order, which on Windows finds Git Bash by its install location rather than
+by the `bash` on `PATH` (that one is usually the WSL stub, and it changes
+what every path means). The model is told which interpreter it got and how
+its dialect reads, and on Windows the command travels in a per-call script
+file so quotes, newlines, and metacharacters reach it exactly as written —
+the transport that used to turn `echo "double"` into `echo \"double\"`
+([ADR-0041](docs/adr/0041-shell-tool-transport-and-selection.md),
+[`docs/platform-notes.md`](docs/platform-notes.md)).
 
 **Sessions.** Every turn appends to an on-disk log (never rewritten in
 place), so resume, fork-at-any-message, and export are cheap and corruption
@@ -266,6 +294,16 @@ Versioning, the artifact matrix, the gate list, and the manual release gate
 are in [`docs/release-policy.md`](docs/release-policy.md).
 
 ---
+
+## Where your data lives
+
+Everything the agent owns sits under **`~/.lca`** on every platform:
+`sessions/`, `extensions/`, `credentials/`, `grants.json`, `state/`,
+`tmp/`, `themes/`, `ui.json`, and `config.toml`. One home dot-directory,
+pi's `~/.pi` shape. (This moved in 0.6.0-dev from the platform-conventional
+directories; `CHANGELOG.md` and
+[`docs/platform-notes.md`](docs/platform-notes.md) name each old path and
+say how to copy a directory across. There is no migration code.)
 
 ## Status and scope
 

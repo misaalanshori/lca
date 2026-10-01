@@ -88,6 +88,12 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Vendor-event.** The reserved, open-ended case in the provider stream's typed event variant, carrying a vendor-specific kind string and a JSON payload, for anything the other typed cases don't cover. Exists specifically so a new vendor concept doesn't force an ABI break; see ADR-0004.
 
+**Shell selection (the ladder).** The resolution order that picks the `shell` tool's interpreter (ADR-0041, R1): `shell.path`, then `shell.tool`, then the platform ladder - Git Bash by known install location, `pwsh`, `powershell`, `cmd` on Windows; `sh` on Unix. Not "the user's login shell": the tool always has an explicit interpreter, and the model is told which one in the tool description.
+
+**Thinking visibility.** The `ui.thinking` setting (`snippet`, `full`, `hidden`, R6): how much of a reasoning run the transcript shows by default, with the expand/collapse key overriding the *latest* run. Distinct from `thinking`, which is the effort level the model is asked for.
+
+**Yolo mode.** `permissions.mode = "yolo"` (or `--yolo`, R3/ADR-0042): every permission prompt is answered "always, for this exact pattern" without asking, with the pattern persisted and the `permission` record written exactly as a human answer writes it. Explicit deny rules still deny. Never persisted by the agent, and loud in the footer while it is on.
+
 **WIT.** WebAssembly Interface Types, the interface-description language the Component Model uses to define worlds and their imports and exports. The `.wit` files under `wit/` are the normative source for the extension ABI's shape.
 
 **World.** A named bundle of typed functions a component can export: `provider`, `tool`, `command`, `hooks`, `ui`, `compaction`, or `context-transform`. An extension implements as many worlds as it needs; nothing about implementing one constrains which others it can also implement.
