@@ -258,11 +258,15 @@ fn run(shell: &Shell, cwd: &Path, command: &str) -> (ExecOutcome, Vec<u8>) {
         .enable_all()
         .build()
         .expect("runtime");
+    // The exec timeout is a hang guard, not the requirement - the markers
+    // and bytes below are. A loaded Windows runner starved the pwsh
+    // multi-line row past 30s once (CI 36891621022, 2026-10-01); 60s
+    // absorbs the load without loosening what the row asserts.
     runtime
         .block_on(ops.exec(
             command,
             cwd,
-            Duration::from_secs(30),
+            Duration::from_secs(60),
             &mut |chunk: &[u8]| chunks.extend_from_slice(chunk),
             CancelFlag::new(),
         ))
