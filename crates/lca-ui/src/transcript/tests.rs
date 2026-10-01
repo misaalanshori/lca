@@ -558,3 +558,26 @@ fn image_entries_render_a_placeholder() {
         "{out:?}"
     );
 }
+
+// Verifies: TUI-10 M1 row 27 - the user's own message renders as markdown
+// with pi's preserve options (`user-message.ts`): emphasis shows as
+// emphasis instead of asterisks, and the authored `1)` marker survives.
+#[test]
+fn user_prompts_render_as_markdown_with_the_authored_markers() {
+    let mut t = Transcript::new();
+    t.push_user("**bold** and 1) first");
+    let out = strip(&t.render(60, &plain()));
+    let row = out
+        .iter()
+        .find(|l| l.contains("› "))
+        .expect("the marker row");
+    assert!(row.contains("bold"), "emphasis rendered: {out:?}");
+    assert!(!row.contains("**"), "no raw asterisks: {out:?}");
+    assert!(row.contains("1) first"), "the authored marker: {out:?}");
+
+    // A list in a user message renders as a list, inside the band.
+    let mut t = Transcript::new();
+    t.push_user("- one");
+    let out = strip(&t.render(60, &plain()));
+    assert!(out.iter().any(|l| l.contains("- one")), "{out:?}");
+}

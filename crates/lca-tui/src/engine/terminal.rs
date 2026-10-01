@@ -631,40 +631,122 @@ impl Terminal for FakeTerminal {
 }
 
 /// Whether the terminal forwards OSC 8 hyperlinks (pi's capability ladder,
-/// `terminal-image.md` §1).
+/// `terminal-image.ts` `detectCapabilitiesFromEnvironment` +
+/// `probeTmuxHyperlinks`, documented in `terminal-image.md` §1).
 ///
-/// tmux and screen do not forward OSC 8 by default, and an unknown terminal
-/// is treated as not forwarding: on a terminal that swallows OSC 8 the URL
-/// vanishes from the rendered output, so the conservative answer shows
+/// The ladder in pi's order: an env override, then the tmux client's own
+/// `client_termfeatures` (tmux only re-emits OSC 8 when it lists
+/// `hyperlinks`), then `screen` (never), then the known terminals, then
+/// unknown = off - on a terminal that swallows OSC 8 the URL would vanish
+/// from the rendered output, so the conservative answer prints
 /// `text (url)` instead (`markdown.md` §6). Cached after the first call.
+///
+/// `LCA_HYPERLINKS=1|0` mirrors pi's `PI_HYPERLINKS`: it forces the answer,
+/// which is how a receipt captures the OSC 8 bytes under tmux.
 pub fn supports_hyperlinks() -> bool {
     static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *CACHE.get_or_init(|| {
-        let term = std::env::var("TERM").unwrap_or_default();
-        if std::env::var_os("TMUX").is_some()
-            || std::env::var_os("STY").is_some()
-            || term.starts_with("tmux")
-            || term.starts_with("screen")
-        {
-            return false;
-        }
-        for var in [
-            "KITTY_WINDOW_ID",
-            "GHOSTTY_RESOURCES_DIR",
-            "WEZTERM_PANE",
-            "ITERM_SESSION_ID",
-            "WT_SESSION",
-            "ALACRITTY_SOCKET",
-            "VSCODE_INJECTION",
-            "ZED_TERM",
-        ] {
-            if std::env::var_os(var).is_some() {
-                return true;
+    *CACHE.get_or_init(|| detect_hyperlinks(tmux_forwards_hyperlinks))
+}
+
+/// The ladder itself, with the tmux probe injected so tests do not need a
+/// live tmux client.
+fn detect_hyperlinks(tmux_probe: impl Fn() -> bool) -> bool {
+    detect_hyperlinks_with(tmux_probe, |key| std::env::var(key).ok())
+}
+
+/// The ladder over an injected environment reader (tests pass a map;
+/// `lca-tui` denies `unsafe`, so tests never touch process env).
+fn detect_hyperlinks_with(
+    tmux_probe: impl Fn() -> bool,
+    env: impl Fn(&str) -> Option<String>,
+) -> bool {
+    // pi's PI_HYPERLINKS override: only `1` and `0` count.
+    match env("LCA_HYPERLINKS").as_deref() {
+        Some("1") => return true,
+        Some("0") => return false,
+        _ => {}
+    }
+    let term = env("TERM").unwrap_or_default().to_lowercase();
+    let term_program = env("TERM_PROGRAM").unwrap_or_default().to_lowercase();
+    // pi: emit OSC 8 under tmux only when tmux confirms it forwards.
+    if env("TMUX").is_some() || term.starts_with("tmux") {
+        return tmux_probe();
+    }
+    // pi: screen does not forward OSC 8.
+    if term.starts_with("screen") {
+        return false;
+    }
+    if env("KITTY_WINDOW_ID").is_some() || term_program == "kitty" {
+        return true;
+    }
+    if env("GHOSTTY_RESOURCES_DIR").is_some()
+        || term_program == "ghostty"
+        || term.contains("ghostty")
+    {
+        return true;
+    }
+    if env("WEZTERM_PANE").is_some() || term_program == "wezterm" {
+        return true;
+    }
+    if env("WARP_SESSION_ID").is_some()
+        || env("WARP_TERMINAL_SESSION_UUID").is_some()
+        || term_program == "warpterminal"
+    {
+        return true;
+    }
+    if env("ITERM_SESSION_ID").is_some() || term_program == "iterm.app" {
+        return true;
+    }
+    if env("WT_SESSION").is_some() {
+        return true;
+    }
+    if matches!(term_program.as_str(), "alacritty" | "vscode" | "zed") {
+        return true;
+    }
+    if env("TERMINAL_EMULATOR").is_some_and(|v| v.eq_ignore_ascii_case("jetbrains-jediterm")) {
+        return false;
+    }
+    // Unknown (and pi's Windows-console branch): off, so a URL never
+    // disappears from the screen.
+    false
+}
+
+/// pi's `probeTmuxHyperlinks`: ask the tmux client whether its
+/// `client_termfeatures` lists `hyperlinks`. A client that does not answer
+/// inside 250 ms (pi's timeout) is treated as not forwarding, so a hung
+/// socket cannot stall the first render.
+fn tmux_forwards_hyperlinks() -> bool {
+    use std::io::Read as _;
+    use std::process::{Command, Stdio};
+    let mut child = match Command::new("tmux")
+        .args(["display-message", "-p", "#{client_termfeatures}"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
             }
+            Err(_) => return false,
         }
-        // Unknown: off, so a URL never vanishes.
-        false
-    })
+    }
+    let mut features = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_string(&mut features);
+    }
+    features.split(',').any(|f| f.trim() == "hyperlinks")
 }
 
 #[cfg(test)]
@@ -805,5 +887,102 @@ mod tests {
         );
         // Leave the process-wide parser flag as the test found it.
         set_kitty_protocol_active(false);
+    }
+
+    /// An environment reader over a fixed map: `[(key, value), ...]`.
+    /// `+ use<>` keeps the argument's lifetime out of the return type: the
+    /// closure owns its copy of the map (edition-2024 RPIT would otherwise
+    /// capture it and outlive the caller's temporary array).
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+        let map: std::collections::HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        move |key| map.get(key).cloned()
+    }
+
+    // Verifies: M2 - pi's capability ladder (terminal-image.ts), the probe
+    // included, decides between OSC 8 and the `text (url)` fallback.
+    #[test]
+    fn the_hyperlink_ladder_matches_pis() {
+        // Unknown terminal: off, so a URL never vanishes from the screen.
+        let term = env_of(&[("TERM", "xterm-256color")]);
+        assert!(!detect_hyperlinks_with(|| false, term));
+
+        // screen never forwards OSC 8.
+        let term = env_of(&[("TERM", "screen-256color")]);
+        assert!(!detect_hyperlinks_with(
+            || panic!("no tmux under screen"),
+            term
+        ));
+
+        // Known-capable terminals answer on their own environment marker.
+        for key in [
+            "KITTY_WINDOW_ID",
+            "GHOSTTY_RESOURCES_DIR",
+            "WEZTERM_PANE",
+            "WARP_SESSION_ID",
+            "ITERM_SESSION_ID",
+            "WT_SESSION",
+        ] {
+            let term = env_of(&[("TERM", "xterm-256color"), (key, "1")]);
+            assert!(detect_hyperlinks_with(|| false, term), "{key} is capable");
+        }
+
+        let term = env_of(&[("TERM", "xterm-256color"), ("TERM_PROGRAM", "alacritty")]);
+        assert!(detect_hyperlinks_with(|| false, term));
+
+        let term = env_of(&[
+            ("TERM", "xterm-256color"),
+            ("TERMINAL_EMULATOR", "jetbrains-jediterm"),
+        ]);
+        assert!(
+            !detect_hyperlinks_with(|| false, term),
+            "JetBrains' IDE terminal is off"
+        );
+    }
+
+    // Verifies: M2 - under tmux the client's own `client_termfeatures`
+    // decides (pi's probeTmuxHyperlinks), not a blanket no.
+    #[test]
+    fn under_tmux_the_client_probe_decides() {
+        let tmux = env_of(&[
+            ("TERM", "xterm-256color"),
+            ("TMUX", "/tmp/tmux-1000/default,1,0"),
+        ]);
+        assert!(
+            detect_hyperlinks_with(|| true, tmux),
+            "a forwarding client turns it on"
+        );
+        let tmux = env_of(&[
+            ("TERM", "xterm-256color"),
+            ("TMUX", "/tmp/tmux-1000/default,1,0"),
+        ]);
+        assert!(
+            !detect_hyperlinks_with(|| false, tmux),
+            "a non-forwarding client keeps it off"
+        );
+    }
+
+    // Verifies: M2 - LCA_HYPERLINKS mirrors PI_HYPERLINKS: the override
+    // wins over detection (the receipt path under tmux).
+    #[test]
+    fn the_hyperlinks_override_wins_over_detection() {
+        let off = env_of(&[
+            ("TERM", "xterm-256color"),
+            ("LCA_HYPERLINKS", "0"),
+            ("KITTY_WINDOW_ID", "1"),
+        ]);
+        assert!(
+            !detect_hyperlinks_with(|| true, off),
+            "0 forces the fallback"
+        );
+        let on = env_of(&[("TERM", "xterm-256color"), ("LCA_HYPERLINKS", "1")]);
+        assert!(detect_hyperlinks_with(|| false, on), "1 forces OSC 8");
+        let junk = env_of(&[("TERM", "xterm-256color"), ("LCA_HYPERLINKS", "yes-please")]);
+        assert!(
+            !detect_hyperlinks_with(|| false, junk),
+            "only 1|0 count as an override"
+        );
     }
 }

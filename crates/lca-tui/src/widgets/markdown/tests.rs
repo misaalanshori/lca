@@ -266,7 +266,7 @@ fn links_use_osc8_or_inline_fallback() {
             ..Default::default()
         },
     );
-    assert!(hyper.contains("\x1b]8;;http://x\x07"));
+    assert!(hyper.contains("\x1b]8;;http://x\x1b\\"));
     assert!(!hyper.contains("(http"));
     let inline = render_inline(
         "[site](http://x)",
@@ -351,7 +351,7 @@ fn markdown_covers_the_transcript_vocabulary() {
     assert!(out.iter().any(|l| l.starts_with('╭')), "framed code");
     assert!(out.iter().any(|l| l.contains("quoted")), "quote");
     assert!(
-        raw.iter().any(|l| l.contains("\x1b]8;;http://x\x07")),
+        raw.iter().any(|l| l.contains("\x1b]8;;http://x\x1b\\")),
         "link as OSC 8"
     );
 }
@@ -479,5 +479,287 @@ fn a_code_block_is_a_full_frame() {
     assert!(
         bottom.starts_with('╰') && bottom.ends_with('╯'),
         "{bottom:?}"
+    );
+}
+
+// Verifies: M1 row 6 - pi's strict strikethrough
+// (STRICT_STRIKETHROUGH_REGEX): only a well-formed `~~text~~` strikes, so
+// mid-prose tildes and `~~~` runs stay literal.
+#[test]
+fn strikethrough_is_strict_like_pis() {
+    let plain_doc = |src: &str| {
+        strip(&render_markdown(
+            src,
+            60,
+            &plain(),
+            &MarkdownOptions::default(),
+        ))
+    };
+    assert_eq!(plain_doc("~~gone~~")[0], "gone");
+    assert_eq!(plain_doc("a ~~ b ~~ c")[0], "a ~~ b ~~ c");
+    assert_eq!(plain_doc("~~ spaced ~~")[0], "~~ spaced ~~");
+    assert_eq!(
+        plain_doc("~~a~b~~")[0],
+        "a~b",
+        "an interior tilde is content"
+    );
+    assert_eq!(
+        plain_doc("~~x~~~")[0],
+        "~~x~~~",
+        "`~~~` is not a closer run"
+    );
+    assert_eq!(plain_doc("~~")[0], "~~", "an unterminated run is literal");
+}
+
+// Verifies: M1 row 20 - the two escape modes pi has: normalized by
+// default, raw under `preserveBackslashEscapes` (the user-message path).
+#[test]
+fn backslash_escapes_follow_the_two_modes() {
+    let out = strip(&render_markdown(
+        r"not \*em\* here",
+        60,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(out[0], "not *em* here");
+    let preserve = MarkdownOptions {
+        preserve_backslash_escapes: true,
+        ..Default::default()
+    };
+    let out = strip(&render_markdown(
+        r"not \*em\* here",
+        60,
+        &plain(),
+        &preserve,
+    ));
+    assert_eq!(out[0], r"not \*em\* here");
+}
+
+// Verifies: M1 row 11/12 - the authored marker survives under
+// `preserveOrderedListMarkers`, and the default renumbers with `.`
+// exactly as pi's renderList does.
+#[test]
+fn ordered_and_unordered_markers_follow_the_preserve_option() {
+    let default = MarkdownOptions::default();
+    let out = strip(&render_markdown("1. one\n2. two", 60, &plain(), &default));
+    assert_eq!(out[0], "1. one");
+    assert_eq!(out[1], "2. two");
+    let out = strip(&render_markdown("1) one\n2) two", 60, &plain(), &default));
+    assert_eq!(out[0], "1. one", "the default renumbers `1)` to `1.`");
+    assert_eq!(out[1], "2. two");
+
+    let preserve = MarkdownOptions {
+        preserve_ordered_list_markers: true,
+        ..Default::default()
+    };
+    let out = strip(&render_markdown("1) one\n2) two", 60, &plain(), &preserve));
+    assert_eq!(out[0], "1) one", "the authored delimiter prints");
+    assert_eq!(out[1], "2) two");
+    let out = strip(&render_markdown("+ plus", 60, &plain(), &preserve));
+    assert_eq!(out[0], "+ plus", "the authored bullet prints");
+    let out = strip(&render_markdown("+ plus", 60, &plain(), &default));
+    assert_eq!(out[0], "- plus", "the default normalizes to `- `");
+}
+
+// Verifies: M1 row 14 - a blank line makes the list *loose*; it does not
+// restart the ordered run (pi keeps counting inside one list token).
+#[test]
+fn an_ordered_run_keeps_counting_across_a_blank_line() {
+    let out = strip(&render_markdown(
+        "1. one\n\n1. two",
+        60,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(out[0], "1. one");
+    assert!(
+        out.iter().any(|l| l == "2. two"),
+        "the second `1.` continues the run: {out:?}"
+    );
+}
+
+// Verifies: M1 row 9 - a blockquote renders its children as blocks (pi's
+// recursive blockquote case), and `>>` nests a second level instead of
+// flattening.
+#[test]
+fn a_blockquote_renders_its_children_as_blocks() {
+    let out = strip(&render_markdown(
+        "> - item one\n> - item two",
+        60,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(out[0], "│ - item one", "{out:?}");
+    assert_eq!(out[1], "│ - item two", "{out:?}");
+
+    let out = strip(&render_markdown(
+        "> ## Inside",
+        60,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(
+        out[0], "│ Inside",
+        "a heading inside a quote renders as one: {out:?}"
+    );
+
+    let out = strip(&render_markdown(
+        "> ```\n> x\n> ```",
+        60,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert!(
+        out[0].contains('╭'),
+        "a framed fence inside a quote: {out:?}"
+    );
+    assert!(out.iter().any(|l| l.contains('x')), "{out:?}");
+    assert!(
+        out.iter().all(|l| l.starts_with("│ ")),
+        "every quote line carries the border: {out:?}"
+    );
+
+    let out = strip(&render_markdown(
+        ">> deep",
+        60,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(out[0], "│ │ deep", "two `>` levels nest: {out:?}");
+}
+
+// Verifies: M1 row 17 - GFM autolink literals (marked's default, so pi
+// gets them free): bare URLs and emails become links, `www.` gains the
+// scheme in its href, and mid-word text never linkifies.
+#[test]
+fn bare_urls_and_emails_become_links() {
+    let theme = plain();
+    let inline = MarkdownOptions {
+        link_mode: LinkMode::Inline,
+        ..Default::default()
+    };
+    let text = |src: &str| strip(&render_markdown(src, 80, &theme, &inline))[0].clone();
+    // A trailing sentence period is not part of the URL, and the link
+    // prints like plain text (label == href), so prove the match in the
+    // OSC 8 form instead: the URL inside the escape has no period.
+    assert_eq!(
+        text("see https://example.com/a."),
+        "see https://example.com/a."
+    );
+    assert_eq!(
+        text("visit www.example.com now"),
+        "visit www.example.com (http://www.example.com) now"
+    );
+    assert_eq!(text("mail me@example.com"), "mail me@example.com");
+    assert_eq!(
+        text("ahttps://x.com"),
+        "ahttps://x.com",
+        "mid-word: no link"
+    );
+
+    // The OSC 8 form carries the URL, never prints it, and excludes the
+    // sentence's period from the link target.
+    let hyper = render_markdown(
+        "see https://example.com/a.",
+        80,
+        &theme,
+        &MarkdownOptions::default(),
+    );
+    assert!(
+        hyper[0].contains("\x1b]8;;https://example.com/a\x1b\\"),
+        "the period stays outside the URL: {:?}",
+        hyper[0]
+    );
+    assert!(!hyper[0].contains("(https"), "{:?}", hyper[0]);
+}
+
+// Verifies: M1 row 18 - pi's `image` token falls to the default inline
+// case and prints its alt text only; the URL never renders (the picture
+// itself is a transcript entry).
+#[test]
+fn an_image_prints_its_alt_text_only() {
+    let out = strip(&render_markdown(
+        "![alt text](http://img/x.png)",
+        60,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert_eq!(out[0], "alt text");
+    let out = strip(&render_markdown(
+        "![alt text](http://img/x.png)",
+        60,
+        &plain(),
+        &MarkdownOptions {
+            link_mode: LinkMode::Inline,
+            ..Default::default()
+        },
+    ));
+    assert_eq!(out[0], "alt text");
+}
+
+// Verifies: M1 row 15 - a table narrower than 3n+1 falls back to the raw
+// markdown source (pi's renderTable fallback), not to a pipe-stripped join.
+#[test]
+fn a_too_narrow_table_falls_back_to_the_raw_source() {
+    let out = strip(&render_markdown(
+        "| a | b |\n| - | - |\n| 1 | 2 |",
+        6,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert!(out[0].starts_with('|'), "the raw source line: {out:?}");
+    assert!(out.iter().any(|l| l.contains("| - |")), "{out:?}");
+}
+
+// Verifies: M1 row 15 - pi's wrapCellText: the narrow styles reset after
+// every non-final fragment of a wrapped cell, so a style inside the cell
+// cannot bleed into the next fragment.
+#[test]
+fn a_wrapped_cell_resets_narrow_styles_between_fragments() {
+    let raw = render_markdown(
+        "| h |\n| - |\n| aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa |",
+        20,
+        &plain(),
+        &MarkdownOptions::default(),
+    );
+    assert!(
+        raw.iter()
+            .any(|l| l.contains("\x1b[22;23;24;25;27;28;29;39m")),
+        "the fragment reset is present: {raw:?}"
+    );
+}
+
+// Verifies: M1 row 16 - the link is `link(underline(text))` in both modes
+// (pi's inline renderer).
+#[test]
+fn links_carry_the_underline_pi_paints() {
+    let theme = MarkdownTheme {
+        link: Arc::new(|s| format!("\x1b[38;2;7;7;7m{s}\x1b[39m")),
+        underline: Arc::new(|s| format!("\x1b[4m{s}\x1b[24m")),
+        ..Default::default()
+    };
+    let hyper = render_inline(
+        "[site](http://x)",
+        &theme,
+        &MarkdownOptions {
+            link_mode: LinkMode::Hyperlink,
+            ..Default::default()
+        },
+    );
+    assert!(
+        hyper.contains("\x1b[4msite\x1b[24m"),
+        "underline inside the link style: {hyper:?}"
+    );
+    let inline = render_inline(
+        "[site](http://x)",
+        &theme,
+        &MarkdownOptions {
+            link_mode: LinkMode::Inline,
+            ..Default::default()
+        },
+    );
+    assert!(
+        inline.contains(" (http://x)"),
+        "the space rides inside the linkUrl style: {inline:?}"
     );
 }

@@ -125,14 +125,27 @@ fn render_custom(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
 
 fn render_user(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
     // pi's user bubble: `Box(outputPad = 1, 1, theme.bg("userMessageBg"))`
-    // around the user's own markdown in `userMessageText` - a full-width
+    // around the user's own *markdown* in `userMessageText` - a full-width
     // band, content padded one column inside it, one blank band row above
-    // and below. The `› ` marker stays: color is never the only signal
-    // (NFR-28).
+    // and below. pi passes `preserveOrderedListMarkers` and
+    // `preserveBackslashEscapes` for the user's own text (`user-message.ts`),
+    // so `1)` stays `1)` and `\*` stays `\*`. The `› ` marker stays:
+    // color is never the only signal (NFR-28).
     let width = width as usize;
     let bg = theme.bg(Role::UserMessageBg);
     let content = width.saturating_sub(3).max(1);
-    let wrapped = wrap_text_with_ansi(text, content);
+    let options = MarkdownOptions {
+        padding_x: 0,
+        padding_y: 0,
+        link_mode: if lca_tui::engine::terminal::supports_hyperlinks() {
+            LinkMode::Hyperlink
+        } else {
+            LinkMode::Inline
+        },
+        preserve_ordered_list_markers: true,
+        preserve_backslash_escapes: true,
+    };
+    let wrapped = render_markdown(text, content, &theme.markdown(), &options);
     out.push(band_row("", width, &bg));
     for (i, line) in wrapped.iter().enumerate() {
         let prefix = if i == 0 { "› " } else { "  " };

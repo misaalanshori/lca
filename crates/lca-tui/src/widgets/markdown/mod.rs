@@ -115,6 +115,12 @@ pub struct MarkdownOptions {
     pub padding_y: usize,
     /// Link rendering.
     pub link_mode: LinkMode,
+    /// Keep the authored ordered marker (`1.` vs `1)`) instead of
+    /// renumbering the run (pi's `preserveOrderedListMarkers`).
+    pub preserve_ordered_list_markers: bool,
+    /// Keep backslash escapes as written instead of normalizing them to
+    /// the escaped character (pi's `preserveBackslashEscapes`).
+    pub preserve_backslash_escapes: bool,
 }
 
 impl Default for MarkdownOptions {
@@ -123,6 +129,8 @@ impl Default for MarkdownOptions {
             padding_x: 0,
             padding_y: 0,
             link_mode: LinkMode::Hyperlink,
+            preserve_ordered_list_markers: false,
+            preserve_backslash_escapes: false,
         }
     }
 }
@@ -144,6 +152,33 @@ pub fn render_markdown(
         out.push(String::new());
     }
 
+    render_blocks(&lines, inner_width, theme, options, &mut out);
+
+    // Apply horizontal padding.
+    if options.padding_x > 0 {
+        let pad = " ".repeat(options.padding_x);
+        out = out.into_iter().map(|l| format!("{pad}{l}")).collect();
+    }
+    for _ in 0..options.padding_y {
+        out.push(String::new());
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// One pass over a block sequence: every top-level branch of the
+/// renderer. A blockquote re-invokes this on its children, which is how
+/// pi renders quote bodies as blocks (`markdown.md` §4, `renderToken`'s
+/// `blockquote` case) rather than as inline text.
+fn render_blocks(
+    lines: &[&str],
+    inner_width: usize,
+    theme: &MarkdownTheme,
+    options: &MarkdownOptions,
+    out: &mut Vec<String>,
+) {
     let mut i = 0;
     // pi's default list rendering renumbers an ordered run from its start
     // (`${start + i}. `) and uses `- ` for every unordered bullet.
@@ -186,13 +221,13 @@ pub fn render_markdown(
             } else {
                 i += 1; // consume the closing fence
             }
-            render_code_block(&body, &lang, inner_width, theme, &mut out);
+            render_code_block(&body, &lang, inner_width, theme, out);
             continue;
         }
 
-        if is_table_start(&lines, i) {
-            let (table, consumed) = collect_table(&lines, i);
-            render_table(&table, inner_width, theme, &mut out);
+        if is_table_start(lines, i) {
+            let (table, consumed) = collect_table(lines, i);
+            render_table(&table, &lines[i..i + consumed], inner_width, theme, out);
             i += consumed;
             continue;
         }
@@ -229,30 +264,41 @@ pub fn render_markdown(
         }
 
         if trimmed.starts_with('>') {
-            let mut body = Vec::new();
+            // One `>` level per pass: the children re-enter as blocks, so a
+            // list, heading, or code fence inside a quote renders as what it
+            // is (pi's recursive blockquote case in `renderToken`), and `>>`
+            // nests a second level instead of flattening.
+            let mut body: Vec<&str> = Vec::new();
             while i < lines.len() && lines[i].trim_start().starts_with('>') {
-                body.push(
-                    lines[i]
-                        .trim_start()
-                        .trim_start_matches('>')
-                        .trim_start()
-                        .to_string(),
-                );
+                let rest = lines[i].trim_start().strip_prefix('>').unwrap_or(" ");
+                body.push(rest.strip_prefix(' ').unwrap_or(rest));
                 i += 1;
             }
-            for line in &body {
-                // pi (markdown.md §4): the quote's *text* is quote+italic
-                // with the style re-armed after every nested reset; only
-                // the border character takes `mdQuoteBorder`.
-                let rendered = render_inline(line, theme, options);
-                let quote_style = |text: &str| (theme.quote)(&(theme.italic)(text));
-                let prefix = format!(
-                    "{}{}",
-                    style_prefix(&theme.quote),
-                    style_prefix(&theme.italic)
-                );
-                let styled = quote_style(&rearm(&rendered, &prefix));
-                let border = (theme.quote_border)("│ ");
+            let mut children = Vec::new();
+            render_blocks(
+                &body,
+                inner_width.saturating_sub(2),
+                theme,
+                options,
+                &mut children,
+            );
+            // pi drops the trailing blank lines before the quote's own
+            // spacing rule runs.
+            while children.last().is_some_and(|line| line.is_empty()) {
+                children.pop();
+            }
+            // pi (markdown.md §4): every child line is dressed in quote+italic
+            // with the style re-armed after nested resets; only the border
+            // character takes `mdQuoteBorder`.
+            let quote_style = |text: &str| (theme.quote)(&(theme.italic)(text));
+            let prefix = format!(
+                "{}{}",
+                style_prefix(&theme.quote),
+                style_prefix(&theme.italic)
+            );
+            let border = (theme.quote_border)("│ ");
+            for line in children {
+                let styled = quote_style(&rearm(&line, &prefix));
                 for wrapped in wrap_text_with_ansi(&styled, inner_width.saturating_sub(2)) {
                     out.push(format!("{border}{wrapped}"));
                 }
@@ -261,16 +307,31 @@ pub fn render_markdown(
         }
 
         if let Some((kind, content, indent)) = list_item(trimmed) {
+            // pi's two modes: the default renumbers an ordered run from its
+            // start and uses `- ` for every unordered bullet; with
+            // `preserveOrderedListMarkers` the authored marker (`1.` vs `1)`,
+            // `-`/`+`/`*`) is what prints (`markdown.ts` renderList).
             let mut marker = match kind {
-                ListMarker::Bullet { task } => match task {
-                    Some(true) => "- [x] ".to_string(),
-                    Some(false) => "- [ ] ".to_string(),
-                    None => "- ".to_string(),
-                },
-                ListMarker::Ordered { start } => {
-                    let n = *ordered_next.get_or_insert(start);
-                    ordered_next = Some(n + 1);
-                    format!("{n}. ")
+                ListMarker::Bullet { task, sym } => {
+                    let bullet = if options.preserve_ordered_list_markers {
+                        format!("{sym} ")
+                    } else {
+                        "- ".to_string()
+                    };
+                    match task {
+                        Some(true) => format!("{bullet}[x] "),
+                        Some(false) => format!("{bullet}[ ] "),
+                        None => bullet,
+                    }
+                }
+                ListMarker::Ordered { start, delim } => {
+                    if options.preserve_ordered_list_markers {
+                        format!("{start}{delim} ")
+                    } else {
+                        let n = *ordered_next.get_or_insert(start);
+                        ordered_next = Some(n + 1);
+                        format!("{n}. ")
+                    }
                 }
             };
             // pi colors the bullet with `mdListBullet`; an ordered marker
@@ -293,8 +354,8 @@ pub fn render_markdown(
             continue;
         }
 
-        ordered_next = None;
-
+        // pi keeps counting an ordered run across the blank lines that make
+        // it a *loose* list; only a real non-list line ends the run.
         if trimmed.is_empty() {
             if out.last().is_some_and(|l| !l.is_empty()) {
                 out.push(String::new());
@@ -303,24 +364,13 @@ pub fn render_markdown(
             continue;
         }
 
+        ordered_next = None;
+
         // Paragraph.
         let rendered = render_inline(trimmed, theme, options);
         out.extend(wrap_text_with_ansi(&rendered, inner_width));
         i += 1;
     }
-
-    // Apply horizontal padding.
-    if options.padding_x > 0 {
-        let pad = " ".repeat(options.padding_x);
-        out = out.into_iter().map(|l| format!("{pad}{l}")).collect();
-    }
-    for _ in 0..options.padding_y {
-        out.push(String::new());
-    }
-    if out.is_empty() {
-        out.push(String::new());
-    }
-    out
 }
 
 fn heading(line: &str) -> Option<(usize, String)> {
@@ -343,16 +393,17 @@ fn is_hr(line: &str) -> bool {
 /// The kind of list item a line starts, before rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ListMarker {
-    /// An unordered item, with its task state when it is a task item.
-    Bullet { task: Option<bool> },
-    /// An ordered item carrying the number the run starts at.
-    Ordered { start: u64 },
+    /// An unordered item: its task state and the authored bullet char.
+    Bullet { task: Option<bool>, sym: char },
+    /// An ordered item: the number the run starts at and the authored
+    /// delimiter (`.` or `)`), which `preserveOrderedListMarkers` keeps.
+    Ordered { start: u64, delim: char },
 }
 
 fn list_item(line: &str) -> Option<(ListMarker, String, usize)> {
     let indent = line.len() - line.trim_start().len();
     let rest = line.trim_start();
-    for bullet in ["- ", "* ", "+ "] {
+    for (sym, bullet) in [('-', "- "), ('*', "* "), ('+', "+ ")] {
         if let Some(content) = rest.strip_prefix(bullet) {
             // pi keeps the literal `[x]`/`[ ]` marker (`markdown.ts`'s
             // `taskMarker`), after the bullet.
@@ -366,19 +417,23 @@ fn list_item(line: &str) -> Option<(ListMarker, String, usize)> {
                     None => (None, content.to_string()),
                 },
             };
-            return Some((ListMarker::Bullet { task }, content, indent));
+            return Some((ListMarker::Bullet { task, sym }, content, indent));
         }
     }
     // Ordered: N. or N)
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     if !digits.is_empty() {
         let after = &rest[digits.len()..];
-        if let Some(content) = after
-            .strip_prefix(". ")
-            .or_else(|| after.strip_prefix(") "))
+        let delim = after.chars().next()?;
+        if (delim == '.' || delim == ')')
+            && let Some(content) = after[1..].strip_prefix(' ')
         {
             let start = digits.parse::<u64>().unwrap_or(1);
-            return Some((ListMarker::Ordered { start }, content.to_string(), indent));
+            return Some((
+                ListMarker::Ordered { start, delim },
+                content.to_string(),
+                indent,
+            ));
         }
     }
     None
@@ -479,7 +534,13 @@ fn render_code_block(
     )));
 }
 
-fn render_table(rows: &[Vec<String>], width: usize, theme: &MarkdownTheme, out: &mut Vec<String>) {
+fn render_table(
+    rows: &[Vec<String>],
+    raw: &[&str],
+    width: usize,
+    theme: &MarkdownTheme,
+    out: &mut Vec<String>,
+) {
     #[allow(clippy::needless_range_loop)] // columns index parallel width vectors
     if rows.is_empty() {
         return;
@@ -488,10 +549,11 @@ fn render_table(rows: &[Vec<String>], width: usize, theme: &MarkdownTheme, out: 
     if cols == 0 {
         return;
     }
-    // Border overhead is 3n+1; too narrow to be stable -> raw fallback.
+    // Border overhead is 3n+1; too narrow to be stable -> pi falls back to
+    // the raw markdown source, wrapped.
     if width < cols * 3 + 1 {
-        for row in rows {
-            out.push(row.join(" | "));
+        for line in raw {
+            out.extend(wrap_text_with_ansi(line, width));
         }
         return;
     }
@@ -575,6 +637,13 @@ fn render_table(rows: &[Vec<String>], width: usize, theme: &MarkdownTheme, out: 
                 let raw = row.get(c).map(String::as_str).unwrap_or("");
                 let rendered = render_inline(raw, theme, &MarkdownOptions::default());
                 let mut lines = wrap_text_with_ansi(&rendered, widths[c].max(1));
+                // pi's wrapCellText: the narrow styles reset after every
+                // non-final fragment, so a style inside a multi-line cell
+                // cannot bleed into the next fragment or the padding.
+                let fragments = lines.len();
+                for line in lines.iter_mut().take(fragments.saturating_sub(1)) {
+                    line.push_str("\x1b[22;23;24;25;27;28;29;39m");
+                }
                 if lines.is_empty() {
                     lines.push(String::new());
                 }
@@ -669,10 +738,11 @@ pub fn render_inline(text: &str, theme: &MarkdownTheme, options: &MarkdownOption
             i = end + 2;
             continue;
         }
+        // pi's strict strikethrough: only a well-formed `~~text~~` strikes.
         if chars[i] == '~'
             && i + 1 < chars.len()
             && chars[i + 1] == '~'
-            && let Some(end) = find_str(&chars, i + 2, &['~', '~'])
+            && let Some(end) = find_strict_strike(&chars, i + 2)
         {
             let inner: String = chars[i + 2..end].iter().collect();
             out.push_str(&(theme.strike)(&inner));
@@ -688,6 +758,20 @@ pub fn render_inline(text: &str, theme: &MarkdownTheme, options: &MarkdownOption
             i = end + 1;
             continue;
         }
+        // pi: an `image` token falls to the default inline case and prints
+        // its alt text only - the URL never renders (the image itself is a
+        // transcript entry, `widgets::image`).
+        if chars[i] == '!'
+            && chars.get(i + 1) == Some(&'[')
+            && let Some(close) = find_char(&chars, i + 2, ']')
+            && chars.get(close + 1) == Some(&'(')
+            && let Some(paren) = find_char(&chars, close + 2, ')')
+        {
+            let alt: String = chars[i + 2..close].iter().collect();
+            out.push_str(&alt);
+            i = paren + 1;
+            continue;
+        }
         if chars[i] == '['
             && let Some(close) = find_char(&chars, i + 1, ']')
             && chars.get(close + 1) == Some(&'(')
@@ -699,6 +783,25 @@ pub fn render_inline(text: &str, theme: &MarkdownTheme, options: &MarkdownOption
             i = paren + 1;
             continue;
         }
+        // pi's `escape` token: the escaped character is what prints, unless
+        // the caller asked to preserve the source form.
+        if chars[i] == '\\'
+            && let Some(&next) = chars.get(i + 1)
+            && next.is_ascii_punctuation()
+        {
+            if options.preserve_backslash_escapes {
+                out.push('\\');
+            }
+            out.push(next);
+            i += 2;
+            continue;
+        }
+        // GFM autolink literal: bare URLs and emails become links.
+        if let Some((shown, href, len)) = autolink_at(&chars, i) {
+            out.push_str(&render_link(&shown, &href, theme, options));
+            i += len;
+            continue;
+        }
         out.push(chars[i]);
         i += 1;
     }
@@ -706,26 +809,143 @@ pub fn render_inline(text: &str, theme: &MarkdownTheme, options: &MarkdownOption
 }
 
 fn render_link(label: &str, url: &str, theme: &MarkdownTheme, options: &MarkdownOptions) -> String {
-    let styled = (theme.link)(label);
+    // pi: the label is `link(underline(text))`, OSC 8 closes with ST
+    // (`\x1b\\`), and the fallback prints ` (url)` *inside* the linkUrl
+    // style (`markdown.ts` §6).
+    let styled = (theme.link)(&(theme.underline)(label));
     match options.link_mode {
-        LinkMode::Hyperlink => format!("\x1b]8;;{url}\x07{styled}\x1b]8;;\x07"),
+        LinkMode::Hyperlink => format!("\x1b]8;;{url}\x1b\\{styled}\x1b]8;;\x1b\\"),
         LinkMode::Inline => {
             if label == url || url.strip_prefix("mailto:") == Some(label) {
                 styled
             } else {
-                format!("{styled} {}", (theme.link_url)(&format!("({url})")))
+                format!("{styled}{}", (theme.link_url)(&format!(" ({url})")))
             }
         }
     }
 }
 
 fn find_char(chars: &[char], from: usize, target: char) -> Option<usize> {
-    (from..chars.len()).find(|&j| chars[j] == target)
+    (from..chars.len()).find(|&j| chars[j] == target && !is_escaped(chars, j))
 }
 
 fn find_str(chars: &[char], from: usize, target: &[char; 2]) -> Option<usize> {
     (from..chars.len().saturating_sub(1))
-        .find(|&j| chars[j] == target[0] && chars[j + 1] == target[1])
+        .find(|&j| chars[j] == target[0] && chars[j + 1] == target[1] && !is_escaped(chars, j))
+}
+
+/// Whether the character at `index` is backslash-escaped (pi's `isEscaped`:
+/// an odd run of backslashes in front), which is what keeps `\*` from
+/// opening an emphasis.
+fn is_escaped(chars: &[char], index: usize) -> bool {
+    let mut backslashes = 0;
+    let mut j = index;
+    while j > 0 && chars[j - 1] == '\\' {
+        backslashes += 1;
+        j -= 1;
+    }
+    backslashes % 2 == 1
+}
+
+/// pi's strict strikethrough (`STRICT_STRIKETHROUGH_REGEX`): `~~text~~`
+/// only when the content neither starts nor ends with whitespace or a tilde,
+/// escapes count as content, and the closing run is exactly two tildes -
+/// so mid-prose tildes do not strike. Returns the closer's index.
+fn find_strict_strike(chars: &[char], from: usize) -> Option<usize> {
+    if from >= chars.len() || chars[from].is_whitespace() || chars[from] == '~' {
+        return None;
+    }
+    let mut j = from;
+    while j < chars.len() {
+        if chars[j] == '\\' && j + 1 < chars.len() {
+            j += 2;
+            continue;
+        }
+        if chars[j] == '~' && chars.get(j + 1) == Some(&'~') {
+            if chars.get(j + 2) == Some(&'~') {
+                return None; // `~~~`: not a closer
+            }
+            let prev = chars.get(j.checked_sub(1)?)?;
+            return if prev.is_whitespace() || *prev == '~' {
+                None
+            } else {
+                Some(j)
+            };
+        }
+        j += 1;
+    }
+    None
+}
+
+/// A GFM autolink literal (marked's default lexer behavior, so pi gets
+/// these for free): a bare URL, a `www.` address, or an email becomes a
+/// link. Returns (shown text, href, consumed length).
+fn autolink_at(chars: &[char], i: usize) -> Option<(String, String, usize)> {
+    if i > 0 {
+        let prev = chars[i - 1];
+        if prev.is_alphanumeric() || matches!(prev, '.' | '/' | '@') {
+            return None;
+        }
+    }
+    let starts_with = |word: &str| {
+        word.chars()
+            .enumerate()
+            .all(|(k, c)| chars.get(i + k) == Some(&c))
+    };
+    let is_url = starts_with("http://") || starts_with("https://");
+    let is_www = !is_url && starts_with("www.");
+    if is_url || is_www {
+        let mut j = i;
+        while j < chars.len()
+            && !chars[j].is_whitespace()
+            && !matches!(chars[j], '<' | '>' | '"' | '\'')
+        {
+            j += 1;
+        }
+        // Trailing punctuation marked would not include in the URL.
+        while j > i && matches!(chars[j - 1], '.' | ',' | ';' | ':' | '!' | '?') {
+            j -= 1;
+        }
+        while j > i
+            && chars[j - 1] == ')'
+            && chars[i..j].iter().filter(|&&c| c == '(').count()
+                < chars[i..j].iter().filter(|&&c| c == ')').count()
+        {
+            j -= 1;
+        }
+        if j == i {
+            return None;
+        }
+        let text: String = chars[i..j].iter().collect();
+        let href = if is_www {
+            format!("http://{text}")
+        } else {
+            text.clone()
+        };
+        return Some((text, href, j - i));
+    }
+    // Bare email: local part, `@`, a dotted domain.
+    let mut j = i;
+    while j < chars.len()
+        && (chars[j].is_ascii_alphanumeric()
+            || matches!(chars[j], '.' | '_' | '%' | '+' | '-' | '@'))
+    {
+        j += 1;
+    }
+    if j > i {
+        let text: String = chars[i..j].iter().collect();
+        if let Some(at) = text.find('@')
+            && at > 0
+            && at + 1 < text.len()
+            && text[at + 1..].contains('.')
+            && !text.contains("..")
+            && !text.ends_with('.')
+            && !text.ends_with('-')
+        {
+            return Some((text.clone(), format!("mailto:{text}"), j - i));
+        }
+    }
+    None
 }
 
 /// A markdown component wrapper.

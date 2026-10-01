@@ -7,6 +7,17 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Markdown parity with pi, pass one (TUI-10 M1/M2).** Hyperlinks use pi's
+  full capability ladder - the tmux client's `client_termfeatures` probe,
+  the known-terminal table, and a `LCA_HYPERLINKS=1|0` override in
+  `PI_HYPERLINKS`'s shape - with pi's ST-terminated OSC 8 and
+  `link(underline(text))`. Autolink literals (bare URLs, `www.`, emails)
+  linkify; strikethrough is pi's strict `~~…~~`; backslash escapes carry
+  both of pi's modes; authored list markers (`1)`, `+`) survive under the
+  preserve options; a blockquote renders its children as blocks and `>>`
+  nests; a too-narrow table falls back to the raw source and wrapped cells
+  reset the narrow styles between fragments; an image prints its alt text;
+  and the user's own message renders as markdown inside the band.
 
 - **The transcript and chrome use color the way pi does.** User messages render as a full-width `userMessageBg` band with the content padded inside it; tool cards carry their state's background (`toolPendingBg` while the call is in flight, `toolSuccessBg` when it settled, `toolErrorBg` when it did not); `[type]` headers (`[session in …]`, `[compaction] …`) take pi's `customMessageBg` band with the label in `customMessageLabel`; a picker's selected row is `selectedBg` on accent text; the footer paints the thinking level with its own `thinking*` role and the context share by threshold (warning above 70%, error above 90%). The theme's role table was already pi's; the renderers now spend it.
 - **The separator row carries pi's spinner-in-the-border**: `── ⠴ Working ─────…` while a turn runs - the whole row one color, spinner, label and dashes alike, exactly how pi paints its embedded indicator - , `Retrying (n/m) in Ns…` counting down through a provider backoff (warning spinner), and plain border dashes at rest. The row is always exactly one terminal row, fills the width, and animates on the interface's own tick - an idle interface never repaints. The dashes carry the thinking level, the way pi colors its editor border (`thinkingOff`, the same darkGray as `borderMuted`, when no level is set).
