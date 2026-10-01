@@ -153,6 +153,11 @@ impl Shell {
         )
     }
 
+    /// The script file's extension for this dialect.
+    pub fn script_extension(&self) -> &'static str {
+        self.kind.script_extension()
+    }
+
     /// The argv, after the program, that runs `script` as a file.
     pub fn script_args(&self, script: &str) -> Vec<String> {
         match self.kind {

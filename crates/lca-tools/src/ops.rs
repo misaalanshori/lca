@@ -515,12 +515,17 @@ pub(crate) mod windows_job {
 /// A per-call command script, deleted when the call ends (including
 /// timeout, cancellation, and error paths, because a `Drop` guard cannot be
 /// forgotten the way an explicit cleanup can).
-#[cfg(windows)]
+///
+/// Deliberately *not* `#[cfg(windows)]`: it is only used by the Windows
+/// transport, but compiling and testing it everywhere is what keeps its
+/// types checked on a Linux or macOS dev machine. Two Windows-only compile
+/// errors reached CI before this note existed.
+#[allow(dead_code)]
 struct TempScript {
     path: PathBuf,
 }
 
-#[cfg(windows)]
+#[allow(dead_code)]
 impl TempScript {
     /// Write `command` in `shell`'s script dialect under the system temp
     /// directory.
@@ -543,7 +548,6 @@ impl TempScript {
     }
 }
 
-#[cfg(windows)]
 impl Drop for TempScript {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
@@ -576,7 +580,7 @@ async fn platform_exec(
     // `\"double\"` and a second line vanished.
     let script = TempScript::write(shell, command)?;
     let mut cmd = tokio::process::Command::new(&shell.program);
-    cmd.args(shell.script_args(script.path()))
+    cmd.args(shell.script_args(&script.path()))
         .current_dir(&cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -640,4 +644,54 @@ async fn platform_exec(
     let status = child.wait().await?;
     let code = status.code().unwrap_or(1);
     Ok((ExecOutcome::Exit { code }, collected))
+}
+
+#[cfg(test)]
+mod script_transport_tests {
+    use super::TempScript;
+
+    // Verifies: FR-TOOL-9 (ADR-0041) - the Windows transport's script file
+    // is written with the dialect's extension and the command's exact
+    // bytes, and is deleted when the guard drops. Compiled and run on every
+    // platform: this is the half of the Windows path that used to be
+    // invisible to a Linux dev machine.
+    #[test]
+    fn the_script_transport_writes_and_removes_the_file() {
+        use crate::shell::{Kind, Os, Shell, Transport};
+        let cases = [
+            (Kind::Bash, "sh", "echo \"double\"\necho two"),
+            (Kind::Pwsh, "ps1", "'double'\r\n'two'"),
+            (Kind::Cmd, "cmd", "echo \"double\"\r\necho two"),
+        ];
+        for (kind, extension, command) in cases {
+            let shell = Shell {
+                program: "shell.exe".to_string(),
+                kind,
+                explicit: false,
+                transport: Transport::ScriptFile,
+            };
+            let script = TempScript::write(&shell, command).expect("write");
+            let path = std::path::PathBuf::from(script.path());
+            assert_eq!(
+                path.extension().and_then(|e| e.to_str()),
+                Some(extension),
+                "extension for {kind:?}"
+            );
+            let written = std::fs::read_to_string(&path).expect("read back");
+            assert_eq!(written, shell.script_text(command), "{kind:?}");
+            assert!(path.is_file(), "script exists while in use");
+            drop(script);
+            assert!(!path.exists(), "script removed on drop: {path:?}");
+        }
+        // And for a POSIX shell the transport is argv, not a file: the
+        // script text and argv are both the command itself.
+        let sh = Shell {
+            program: "sh".to_string(),
+            kind: Kind::Sh,
+            explicit: false,
+            transport: Transport::Argv,
+        };
+        assert_eq!(sh.script_text("a\nb"), "a\nb");
+        let _ = Os::Unix;
+    }
 }
