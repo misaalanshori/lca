@@ -76,6 +76,8 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Scope.** In the `fs` capability specifically, one of the named vocabulary entries, `workspace`, `private`, `home-config`, or `temp`, that a manifest grants read or write access to. See `workspace` below for a term collision worth knowing about.
 
+**Separator.** The one-row divider between the transcript and the composer. Plain dashes at rest, in the thinking-level border color (`thinkingOff`, the same darkGray as `borderMuted`, when no level is set - pi's editor-border rule); while work runs it carries pi's spinner-in-the-border - `── ⠴ Working ─────…` (accent spinner, muted label) or `Retrying (n/m) in Ns…` on a warning spinner - animated by `Chat::tick`, one frame per 80 ms, and never while idle, so an idle interface does not repaint. LCA's composer has no border of its own, so this row plays both parts pi composes (its editor's top border and the status embedded in it).
+
 **Session.** One durable, append-only conversation record on disk, with its own log, its own metadata, and its own identity, forkable and resumable. See `docs/session-log-format.md`.
 
 **Stable prefix.** The leading portion of a resolved message list, up to and including the most recent compaction, that a provider's prompt cache can reuse across turns unchanged. The host computes this boundary and passes it to the active provider extension on every completion call. See ADR-0017.
@@ -83,6 +85,8 @@ Terms as used across this document set specifically. Several of these have a bro
 **State (bag).** An extension's own mutable, non-secret data, served by `lca:host/state` from `<state_dir>/state/<name>/`: caches, last-used values, counters. Keyed by the extension's own identity so a cross-namespace read has no address; size-capped; wiped on uninstall. Not secret-grade - secrets go in `credentials`. Not session state and not the `stable prefix`/`dynamic suffix` sense of "state" used elsewhere. See ADR-0030.
 
 **Steering.** A prompt submitted while a turn runs that joins the turn's input at the next model-call boundary, after the current tool or model step completes. It never mutates a streaming response. The counterpart of `follow-up` above; see ADR-0038.
+
+**Theme role.** One named entry in the palette (`Role`, `crates/lca-ui/src/theme/mod.rs`): pi's `ThemeColor`/`ThemeBg` tokens - including the background roles and the nine `syntax*` classes - fifty-six in all, each a color in every built-in palette and overridable from a custom theme file. Two accessors: `theme.role(r)` paints the foreground and `theme.bg(r)` the background, and both reset only the channel they opened (`ESC[39m` / `ESC[49m`). A role is data, never a literal in a renderer; the cycle-9 audit (role to where it is used to pi's own usage) is in the cycle report.
 
 **Turn.** One round of the agent loop: a user or system input, a model's response, any tool calls that response triggers and their results, repeated until the model stops without requesting a tool. Not the same as a single model API call; a turn with three sequential tool calls involves four calls to the provider.
 

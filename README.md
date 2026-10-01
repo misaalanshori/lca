@@ -120,6 +120,15 @@ A real turn, captured from a real terminal:
 done
 ```
 
+The transcript is colored the way pi is: user messages sit on a full-width
+background band, tool cards are tinted by their state (pending, ok,
+failed), `[type]` headers get their own band, and code blocks are
+syntax-highlighted through the theme's `syntax*` roles. The divider above
+the composer carries the spinner while a turn runs - `── ⠴ Working ─────…`
+- and `Retrying (n/m) in Ns…` through a provider backoff; at rest it is
+plain dashes. Every state is one row and says its condition in words, so
+color is never the only signal.
+
 The status line reads tokens up/down, reasoning tokens, cache reads/writes,
 context use, and cost. `/help` lists the commands; the ones you will reach
 for first are `/login`, `/logout`, `/usage`, `/model`, `/thinking`,
