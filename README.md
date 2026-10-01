@@ -247,9 +247,10 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --check
 bash scripts/traceability.sh         # every FR/NFR has a verifying test
 bash scripts/install-check.sh        # gate 10: the installers
+bash scripts/ceiling-check.sh        # gate 11: 1,200-line file ceiling
 ```
 
-Ten gates run on the pipeline; the canonical list, with what each one runs
+Eleven gates run on the pipeline; the canonical list, with what each one runs
 and where, is the gate table in
 [`docs/release-policy.md`](docs/release-policy.md#gate-list):
 
@@ -263,6 +264,7 @@ and where, is the gate table in
 8. Release targets build, all six (`scripts/release-targets-check.sh`)
 9. Size, startup, and the cache-hit-ratio benchmark (`scripts/perf-gate.sh`)
 10. Installers (`scripts/install-check.sh` + the PowerShell suite on Windows)
+11. File-size ceiling (`scripts/ceiling-check.sh`, 1,200 lines per tracked `.rs`)
 
 Real-terminal tests run inside tmux (Unix) and ConPTY (Windows) and assert
 what is actually on the screen, including the `load-buffer`/`paste-buffer`

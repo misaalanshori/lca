@@ -33,7 +33,8 @@ concurrency:
 #   * ubuntu-gates    - the five timing tests (NFR-4, NFR-5, NFR-29),
 #                       serial on a release build with the machine to
 #                       itself - where their thresholds were measured
-#                       - plus cargo-deny and the traceability gate.
+#                       - plus cargo-deny, the traceability gate, and
+#                       the 1,200-line file-ceiling gate (gate 11).
 #
 # The timing tests are excluded from every ordinary suite invocation
 # by the same predicate that selects them here: never skipped,
@@ -187,7 +188,7 @@ jobs:
           if-no-files-found: ignore
 
   ubuntu-gates:
-    name: ubuntu gates (timing, deny, traceability)
+    name: ubuntu gates (timing, deny, traceability, ceiling)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -232,6 +233,11 @@ jobs:
       - name: requirements traceability (NFR-30)
         shell: bash
         run: bash scripts/traceability.sh
+      # Gate 11: the workspace's 1,200-line per-file ceiling, twice
+      # breached by hand before this check existed (see testing plan 13).
+      - name: file-size ceiling (gate 11)
+        shell: bash
+        run: bash scripts/ceiling-check.sh
       - name: Keep gate output
         if: always()
         uses: actions/upload-artifact@v4

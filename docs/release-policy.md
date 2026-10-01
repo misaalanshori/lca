@@ -94,7 +94,7 @@ Dependency updates land in their own pull requests, not bundled with feature wor
 
 ## Gate list
 
-Ten gates run on the pipeline; a change that turns any of them red does not land. Gate 10 joined with the installers (ADR-0040) and is registered here as well as in `docs/testing-plan.md` section 15 and the README, so this table is the canonical list.
+Eleven gates run on the pipeline; a change that turns any of them red does not land. Gate 10 joined with the installers (ADR-0040) and is registered here as well as in `docs/testing-plan.md` section 15 and the README, so this table is the canonical list.
 
 | # | Gate | What runs | Where |
 |---|---|---|---|
@@ -108,8 +108,9 @@ Ten gates run on the pipeline; a change that turns any of them red does not land
 | 8 | Release targets build | `scripts/release-targets-check.sh`: all six release targets compile with the publish toolchain | `ci.yml` |
 | 9 | Size and startup | `scripts/perf-gate.sh` against the ratcheted thresholds, plus the cache-hit-ratio benchmark (NFR-7, NFR-31) | `ci.yml` |
 | 10 | Installers | `scripts/install-check.sh`: `tests/install/test_install_sh.sh` plus `shellcheck --shell=sh install.sh`; the PowerShell suite runs in the same `install` job on Windows | `ci.yml` |
+| 11 | File-size ceiling | `scripts/ceiling-check.sh`: every tracked `*.rs` file stays at or under the workspace's 1,200-line ceiling; the offenders are printed | `ci.yml` ubuntu gates |
 
-The manual release gate (below) is separate: it is a human on a real terminal before a tag, not a pipeline step, and no count of the ten includes it.
+The manual release gate (below) is separate: it is a human on a real terminal before a tag, not a pipeline step, and no count of the eleven includes it.
 
 ## Size and startup gates
 
