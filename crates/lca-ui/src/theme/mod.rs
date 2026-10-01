@@ -10,8 +10,10 @@
 //! (TOML, pi's `theme-json.ts` shape) overlays individual roles; an invalid
 //! file keeps the last-good palette and reports why.
 
+mod highlight;
 mod palette;
 
+pub use highlight::{SyntaxStyles, highlight};
 pub use palette::Palette;
 
 use std::collections::BTreeMap;
@@ -349,6 +351,29 @@ impl Theme {
 
     /// The markdown theme derived from these roles.
     pub fn markdown(&self) -> MarkdownTheme {
+        // pi's `getCliHighlightTheme`: the nine `syntax*` roles resolved
+        // once per call. An operator/punctuation role that paints exactly
+        // like `text` (pi's own defaults do) stays `None`, so a block of
+        // code carries no no-op escapes.
+        let syntax = SyntaxStyles {
+            comment: self.role(Role::SyntaxComment),
+            keyword: self.role(Role::SyntaxKeyword),
+            function: self.role(Role::SyntaxFunction),
+            variable: self.role(Role::SyntaxVariable),
+            string: self.role(Role::SyntaxString),
+            number: self.role(Role::SyntaxNumber),
+            type_: self.role(Role::SyntaxType),
+            operator: (self.palette.get(Role::SyntaxOperator) != self.palette.get(Role::Text))
+                .then(|| self.role(Role::SyntaxOperator)),
+            punctuation: (self.palette.get(Role::SyntaxPunctuation)
+                != self.palette.get(Role::Text))
+            .then(|| self.role(Role::SyntaxPunctuation)),
+        };
+        // `(code, lang)` -> styled lines, or `None` for a language this
+        // port does not know; the markdown renderer then paints every line
+        // `mdCodeBlock`, exactly pi's unknown-language path.
+        let hook: lca_tui::widgets::markdown::HighlightFn =
+            Arc::new(move |code, lang| highlight(code, lang, &syntax));
         MarkdownTheme {
             heading: if self.colored {
                 style(self.palette.get(Role::MdHeading), "1", true)
@@ -367,6 +392,7 @@ impl Theme {
             list_bullet: self.role(Role::MdListBullet),
             quote: self.role(Role::MdQuote),
             hr: self.role(Role::MdHr),
+            highlight: Some(hook),
         }
     }
 }

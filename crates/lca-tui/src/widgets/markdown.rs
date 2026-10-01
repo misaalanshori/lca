@@ -7,14 +7,16 @@
 //! blocks, blockquotes, and inline styles.
 //!
 //! Not ported (documented skips): LaTeX math (the brief says skip it) and
-//! mermaid (pi shells out). **Syntax highlighting is a known gap, corrected
-//! 2026-09-29:** cycle 4 closed it as "not a gap" from a color-stripped
-//! `tmux capture-pane`, but pi does highlight — its markdown calls
-//! `theme.highlightCode` (`markdown.ts` §523) and its read/write tool
-//! renderers highlight too. LCA's [`MarkdownTheme`] carries no `highlight`
-//! hook and the theme's `Syntax*` roles have no consumer; see the cycle-5
-//! report. HTML is rendered as literal text by construction — no markup
-//! reaches the terminal (the hostile-input stance).
+//! mermaid (pi shells out). **Syntax highlighting closed in cycle 9 (R3):**
+//! pi's markdown calls `theme.highlightCode` (`markdown.ts` §523), so a
+//! fenced block now paints the theme's nine `Syntax*` roles through the
+//! [`MarkdownTheme::highlight`] hook - the same seam pi puts it on, because
+//! highlighting belongs to the theme, not to this widget. A fence with no
+//! language, or one the port does not know, keeps `code_block`, which is
+//! pi's own unknown-language fallback; the grammars are hand-written in
+//! `lca-ui`'s `theme/highlight.rs`, so ADR-0036's no-new-dependency rule
+//! still holds. HTML is rendered as literal text by construction - no
+//! markup reaches the terminal (the hostile-input stance).
 //!
 //! The tokenizer is hand-written and line-based rather than `pulldown-cmark`
 //! (ADR-0036 adds no such dependency). It covers the block and inline shapes
@@ -27,6 +29,9 @@ use crate::engine::text::{truncate_to_width, visible_width, wrap_text_with_ansi}
 
 /// A styling function.
 pub type StyleFn = Arc<dyn Fn(&str) -> String + Send + Sync>;
+
+/// The syntax-highlighting hook (pi's `theme.highlightCode`).
+pub type HighlightFn = Arc<dyn Fn(&str, &str) -> Option<Vec<String>> + Send + Sync>;
 
 fn identity(s: &str) -> String {
     s.to_string()
@@ -51,6 +56,11 @@ pub struct MarkdownTheme {
     pub code_block: StyleFn,
     /// Code-block border style.
     pub code_block_border: StyleFn,
+    /// Syntax highlighting for a fenced block (pi's `theme.highlightCode`):
+    /// `(code, language)` to styled lines, or `None` when the language is
+    /// one it does not know - the caller then paints every line with
+    /// [`Self::code_block`], which is pi's own unknown-language fallback.
+    pub highlight: Option<HighlightFn>,
     /// Link style.
     pub link: StyleFn,
     /// The link's URL when it prints inline (pi's `linkUrl`).
@@ -74,6 +84,7 @@ impl Default for MarkdownTheme {
             code: Arc::new(identity),
             code_block: Arc::new(identity),
             code_block_border: Arc::new(identity),
+            highlight: None,
             link: Arc::new(identity),
             link_url: Arc::new(identity),
             list_bullet: Arc::new(identity),
@@ -422,10 +433,21 @@ fn render_code_block(
         "╭─{title}{}╮",
         "─".repeat(top_fill)
     )));
-    for line in body {
-        let styled = (theme.code_block)(line);
-        let pad = inner.saturating_sub(visible_width(line));
-        out.push(format!("│ {styled}{} │", " ".repeat(pad)));
+    // pi's order: highlight when the theme can (and the fence named a
+    // language it knows), otherwise paint the whole block `mdCodeBlock`.
+    let fallback = || {
+        body.iter()
+            .map(|line| (theme.code_block)(line))
+            .collect::<Vec<String>>()
+    };
+    let rendered = theme
+        .highlight
+        .as_ref()
+        .and_then(|highlight| highlight(&body.join("\n"), lang))
+        .unwrap_or_else(fallback);
+    for line in rendered {
+        let pad = inner.saturating_sub(visible_width(&line));
+        out.push(format!("│ {line}{} │", " ".repeat(pad)));
     }
     out.push((theme.code_block_border)(&format!(
         "╰{}╯",
@@ -741,6 +763,52 @@ mod tests {
         assert!(out[0].starts_with('╭'));
         assert!(out.iter().any(|l| l.starts_with("│ let x = 1;")));
         assert!(out.last().unwrap().starts_with('╰'));
+    }
+
+    // Verifies: R3 - a fence that names a language goes through the
+    // theme's `highlight` hook (pi's `theme.highlightCode`); a fence with
+    // no language keeps `code_block`, which is also what pi does when
+    // `highlightCode` declines a language.
+    #[test]
+    fn code_blocks_highlight_through_the_hook() {
+        let mut theme = MarkdownTheme {
+            code_block: Arc::new(|s| format!("\x1b[32m{s}\x1b[0m")),
+            highlight: Some(Arc::new(|code, lang| {
+                (lang == "rust").then(|| vec![format!("\x1b[35m{code}\x1b[0m")])
+            })),
+            ..Default::default()
+        };
+        let rust = render_markdown(
+            "```rust\nlet x = 1;\n```",
+            30,
+            &theme,
+            &MarkdownOptions::default(),
+        );
+        assert!(
+            rust.iter().any(|l| l.contains("\x1b[35mlet x = 1;\x1b[0m")),
+            "highlighted: {rust:?}"
+        );
+        let bare = render_markdown(
+            "```\nlet x = 1;\n```",
+            30,
+            &theme,
+            &MarkdownOptions::default(),
+        );
+        assert!(
+            bare.iter().any(|l| l.contains("\x1b[32mlet x = 1;\x1b[0m")),
+            "the block style, not the highlight: {bare:?}"
+        );
+        theme.highlight = None;
+        let off = render_markdown(
+            "```rust\nlet x = 1;\n```",
+            30,
+            &theme,
+            &MarkdownOptions::default(),
+        );
+        assert!(
+            off.iter().any(|l| l.contains("\x1b[32mlet x = 1;\x1b[0m")),
+            "no hook, no highlighting: {off:?}"
+        );
     }
 
     #[test]

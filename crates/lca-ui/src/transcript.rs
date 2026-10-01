@@ -959,6 +959,27 @@ mod tests {
         assert!(row.contains("hello there"), "{out:?}");
     }
 
+    // Verifies: R3 - a fenced block in a real answer carries the syntax
+    // roles pi's palette defines: comment, keyword, and string are three
+    // different colors inside one block.
+    #[test]
+    fn a_fenced_rust_block_carries_the_syntax_roles() {
+        let theme = Theme::colored();
+        let mut t = Transcript::new();
+        t.begin_assistant();
+        t.append_text("```rust\n// hi\nfn main() { let s = \"x\"; }\n```");
+        t.finish_assistant();
+        let joined = t.render(80, &theme).join("\n");
+        // syntaxComment #6a9955, syntaxKeyword #569cd6, syntaxString #ce9178
+        assert!(joined.contains("38;2;106;153;85"), "comment: {joined}");
+        assert!(joined.contains("38;2;86;156;214"), "keyword: {joined}");
+        assert!(joined.contains("38;2;206;145;120"), "string: {joined}");
+        assert!(
+            joined.contains("38;2;220;220;170"),
+            "`main(` is a function: {joined}"
+        );
+    }
+
     // Verifies: R1 - the user prompt renders as a full-width
     // `userMessageBg` band: every row painted on the background role, each
     // exactly the render width, with the marker row inside it.
