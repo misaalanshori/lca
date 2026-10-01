@@ -9,6 +9,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 mod common;
 
+// The rows are Unix-only (tmux), so the glob import is too: an ungated
+// `use common::*` is an unused import on Windows, which clippy denies.
+#[cfg(unix)]
 use common::*;
 
 // Verifies: FR-PERM-25 (ADR-0042; R10's permission matrix, yolo column) - `--yolo`
