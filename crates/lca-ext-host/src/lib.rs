@@ -346,6 +346,7 @@ impl ExtHost {
                 limits: effective_limits,
                 enabled: Arc::new(AtomicBool::new(true)),
                 in_flight: AtomicU64::new(0),
+                interrupted: AtomicBool::new(false),
                 logs: Arc::new(Mutex::new(Vec::new())),
                 cap,
             }),
@@ -380,6 +381,14 @@ struct Inner {
     /// *running* call, so a test that must know the guest is running
     /// (rather than still building its store) watches this.
     in_flight: AtomicU64,
+    /// Set when this extension is interrupted during a turn (FR-CONC-1).
+    /// A bump that lands while the next store is still being built is
+    /// absorbed by `set_epoch_deadline`, whose target is measured from
+    /// the epoch at set time, so `build_store` re-arms it; the flag then
+    /// holds for the rest of the turn and is cleared by
+    /// `turn_started`. Without it, a cancel that races call setup is
+    /// lost and the guest spins (the 2026-10-01 Windows CI hang).
+    interrupted: AtomicBool,
 }
 
 impl Inner {
@@ -422,6 +431,14 @@ impl Inner {
         store
             .set_fuel(self.limits.fuel_per_call)
             .map_err(|err| CallError::InvalidArguments(err.to_string()))?;
+        // Re-arm an interrupt that landed while this store was being
+        // built: its epoch bump was absorbed by the deadline set above
+        // (`current_epoch + 1` from now), so without this the call would
+        // never trap. The check after the set closes the race for any
+        // interleaving with `interrupt` (FR-CONC-1).
+        if self.interrupted.load(Ordering::SeqCst) {
+            self.engine.increment_epoch();
+        }
         Ok(store)
     }
 
@@ -997,11 +1014,22 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
 
     fn interrupt(&self) {
         // FR-CONC-1: epoch interruption, independent of the fuel budget.
+        // Flag first: a store built concurrently must see it, because its
+        // own deadline is measured from the epoch *after* this bump.
+        self.inner.interrupted.store(true, Ordering::SeqCst);
         self.inner.engine.increment_epoch();
         // An epoch bump only fires at a guest code point, so a host import
         // blocked in a long wait would never see it: flag the capability
         // engine too, and the wait polls its way out (FR-CONC-1, NFR-21).
         self.inner.cap.cancel();
+    }
+
+    fn turn_started(&self) {
+        // The turn boundary clears both halves of the previous turn's
+        // cancellation, so this turn's first call starts clean
+        // (FR-CONC-1).
+        self.inner.interrupted.store(false, Ordering::SeqCst);
+        self.inner.cap.reset_cancellation();
     }
 
     fn oauth_manual_callback(&self, params: Vec<(String, String)>) -> Result<(), DispatchError> {

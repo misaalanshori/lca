@@ -699,7 +699,11 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
             t.tool_call("conformance", r#"{"mode":"loop"}"#)
                 .usage(fake_usage(10, 10, 0, 10))
         })
-        .turn(|t| t.text("never").usage(fake_usage(10, 5, 0, 0)))
+        .turn(|t| {
+            t.tool_call("conformance", r#"{"mode":"ok"}"#)
+                .usage(fake_usage(10, 5, 0, 0))
+        })
+        .turn(|t| t.text("done").usage(fake_usage(10, 5, 0, 0)))
         .build();
     let mut h = harness("cancel-ext", provider, registry);
 
@@ -727,10 +731,15 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
         h.config.clone(),
     );
     // The timeout is a hang guard, not the requirement - the assertion
-    // below is the requirement. A shared Windows runner starved this
-    // once past 10s with the rerun green (CI 36770068204, 2026-10-01);
-    // 30s absorbs the load without loosening the 3s bound. If it fires
-    // again, testing-plan section 13's quarantine rule applies.
+    // below is the requirement. It fired twice on Windows: first at 10s
+    // (starved runner, CI 36770068204, rerun green), then at 30s (CI
+    // 36864779928, 2026-10-01), and the second firing was diagnosed
+    // rather than quarantined: the cancel's epoch bump was absorbed by
+    // the store's own deadline set during setup (`current_epoch + 1`
+    // measured from set time), so the guest never trapped. Fixed by
+    // re-arming the interrupt after the deadline is set and clearing it
+    // at the turn boundary (`Dispatch::turn_started`); the 30s guard
+    // stays.
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         agent.run_turn("spin", &mut sink, &cancel),
@@ -752,6 +761,30 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
             .iter()
             .any(|r| matches!(r, Record::User { .. })),
         "completed records are kept (FR-CONC-3)"
+    );
+
+    // The other half of the same defect: a fresh turn must start clean.
+    // Without the turn boundary, the cancel above would pre-cancel this
+    // turn's extension call and its tool would come back cancelled.
+    let fresh = lca_tools::CancelFlag::new();
+    let second = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        agent.run_turn("again", &mut sink, &fresh),
+    )
+    .await
+    .expect("the second turn returns");
+    assert_eq!(second.status, TurnStatus::Ok, "a fresh turn completes");
+    assert_ne!(second.stop_reason, StopReason::Cancelled);
+    let read = h.store.read(&h.session).expect("read");
+    assert!(
+        read.records.iter().any(|r| matches!(
+            r,
+            Record::ToolResult {
+                status: ToolResultStatus::Ok,
+                ..
+            }
+        )),
+        "the next turn's extension call ran (the cancel did not stick)"
     );
 }
 

@@ -317,6 +317,12 @@ pub mod dispatch {
         /// WASM handles (FR-CONC-1), a no-op for native code that shares
         /// the caller's cancellation flag.
         fn interrupt(&self) {}
+
+        /// Start-of-turn bookkeeping on the host side: clear the
+        /// cancellation `interrupt` left behind, so the next turn's first
+        /// call is not pre-cancelled by the previous turn's cancel
+        /// (FR-CONC-1). Called once per turn, before that turn's work.
+        fn turn_started(&self) {}
     }
 }
 

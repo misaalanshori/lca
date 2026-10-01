@@ -283,6 +283,13 @@ impl<'a> Agent<'a> {
     ) -> TurnOutcome {
         let handles: Vec<Arc<dyn lca_ext_abi::ExtensionDispatch>> =
             self.config.extensions.enabled().cloned().collect();
+        // The turn boundary for host-side cancellation: whatever the
+        // previous turn interrupted is cleared before this one starts, so
+        // the first call of a fresh turn cannot be pre-cancelled, and
+        // neither can its blocking waits (FR-CONC-1).
+        for handle in &handles {
+            handle.turn_started();
+        }
         // A plain thread, not a task: a synchronous WASM call blocks the
         // runtime thread it runs on, and cancellation must still reach a
         // spinning instance from a thread that is definitely running

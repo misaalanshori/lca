@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::sync::{Arc, Mutex};
 
+use lca_ext_abi::ExtensionDispatch as _;
 use lca_ext_host::{CallError, ExtHost, ExtensionLimits, HostEnvironment, LoadError, Manifest};
 use lca_permissions::{Decision, GrantStore, PermissionPrompt, ProposalDiff, ScopeRoots};
 use lca_protocol::{ToolCall, ToolResultStatus};
@@ -149,7 +150,16 @@ fn epoch_interrupt_cancels_a_running_call() {
     let extension = host.load(fixture(), manifest()).expect("loads");
 
     let engine = host.engine().clone();
+    let watcher = extension.clone();
     let stopper = std::thread::spawn(move || {
+        // Wait for the guest to be running before bumping: a bump that
+        // lands while the store is still being built is absorbed by its
+        // deadline set (`current_epoch + 1` measured from then), which
+        // is the race this test used to be exposed to on a loaded
+        // machine.
+        while watcher.in_flight() == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         std::thread::sleep(std::time::Duration::from_millis(50));
         engine.increment_epoch();
     });
@@ -161,6 +171,50 @@ fn epoch_interrupt_cancels_a_running_call() {
         started.elapsed() < std::time::Duration::from_millis(500),
         "epoch interruption is prompt (NFR-29's shape)"
     );
+}
+
+// Verifies: FR-CONC-1 (an interrupt raised before the call reaches the
+// guest still traps it). Wasmtime measures a store's deadline from the
+// epoch at `set_epoch_deadline` time, so a bump that lands while the
+// store is still being built is otherwise absorbed and the guest spins
+// until its fuel budget - the race behind the 2026-10-01 Windows CI
+// hang (CI 36864779928).
+#[test]
+fn an_interrupt_raised_before_the_call_still_cancels_it() {
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            fuel_per_call: u64::MAX,
+            ..limits()
+        },
+        env("h6"),
+    );
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    extension.interrupt();
+
+    let started = std::time::Instant::now();
+    let err = extension.execute(&call("loop")).expect_err("cancelled");
+    assert!(matches!(err, CallError::Cancelled), "got {err:?}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "the pre-cancelled call traps at the first epoch check"
+    );
+}
+
+// Verifies: FR-CONC-1's turn boundary - a fresh turn's first call runs
+// instead of inheriting the previous turn's cancellation (the other
+// half of the same defect: a sticky cancel would fail every later turn).
+#[test]
+fn turn_started_clears_a_leftover_interrupt() {
+    let mut host = ExtHost::new(limits(), env("h7"));
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    extension.interrupt();
+
+    let err = extension.execute(&call("loop")).expect_err("pre-cancelled");
+    assert!(matches!(err, CallError::Cancelled), "got {err:?}");
+
+    extension.turn_started();
+    let result = extension.execute(&call("ok")).expect("runs");
+    assert_eq!(result.status, ToolResultStatus::Ok);
 }
 
 // Verifies: FR-EXT-5 (exceeding the memory limit stops the instance and

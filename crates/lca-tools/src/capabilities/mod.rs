@@ -541,6 +541,15 @@ impl Capabilities {
         self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Clear the cancellation a finished turn left behind: a new turn
+    /// starts clean, so this turn's blocking waits and the host's store
+    /// deadline see this turn's state only (FR-CONC-1, the turn
+    /// boundary that `Dispatch::turn_started` calls).
+    pub fn reset_cancellation(&self) {
+        self.cancelled
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// How many attempts were refused (FR-EXT-9).
     pub fn denial_count(&self) -> usize {
         lock(&self.denials).len()
