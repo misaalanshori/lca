@@ -379,6 +379,209 @@ pub fn tmux_available() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(unix)]
+pub struct Tmux {
+    pub name: String,
+}
+
+// The real-terminal tests get their own private tmux socket: never the
+// default socket (standing rule), and separate from the manual drive
+// socket (`lca-tui`) so a test run cannot disturb a live drive.
+#[cfg(unix)]
+const TMUX_SOCKET: &str = "lca-tui-test";
+
+#[cfg(unix)]
+impl Tmux {
+    pub fn new(tag: &str) -> Tmux {
+        let name = format!("lca-smoke-{}-{tag}", std::process::id());
+        let _ = Command::new("tmux")
+            .args(["-L", TMUX_SOCKET, "kill-session", "-t", &name])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        Tmux { name }
+    }
+
+    pub fn tmux(args: &[&str]) -> Output {
+        let mut full = vec!["-L", TMUX_SOCKET];
+        full.extend_from_slice(args);
+        Command::new("tmux").args(&full).output().expect("run tmux")
+    }
+
+    /// The pane's own cursor column (R5's receipt: the terminal, not the
+    /// app, says where the caret is).
+    pub fn cursor_x(&self) -> i64 {
+        let out = Self::tmux(&["display-message", "-p", "-t", &self.name, "#{cursor_x}"]);
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .expect("tmux reports a cursor column")
+    }
+
+    /// A genuine paste through tmux's own paste machinery (R6). The pane
+    /// enabled bracketed-paste mode (`?2004h`), so tmux wraps the buffer
+    /// in `ESC[200~…ESC[201~` before writing it. `send-keys` cannot do
+    /// this: it synthesizes key events, which is typing by another name.
+    pub fn paste_text(&self, text: &str) {
+        use std::io::Write as _;
+        let buffer = format!("lca-paste-{}", std::process::id());
+        let mut child = Command::new("tmux")
+            .args(["-L", TMUX_SOCKET, "load-buffer", "-b", &buffer, "-"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn tmux load-buffer");
+        child
+            .stdin
+            .as_mut()
+            .expect("load-buffer stdin")
+            .write_all(text.as_bytes())
+            .expect("write paste buffer");
+        assert!(child.wait().expect("wait load-buffer").success());
+        let out = Self::tmux(&["paste-buffer", "-p", "-b", &buffer, "-t", &self.name, "-d"]);
+        assert!(
+            out.status.success(),
+            "tmux paste-buffer: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Inject raw bytes in fragments, with a small sleep between each, so
+    /// `stdin_buffer`'s reassembly and its dual timeouts are exercised at
+    /// the byte level (R6). `send-keys -l` sends the string's bytes
+    /// literally, escape bytes included.
+    pub fn send_raw_fragmented(&self, fragments: &[&str]) {
+        for fragment in fragments {
+            let out = Self::tmux(&["send-keys", "-t", &self.name, "-l", fragment]);
+            assert!(
+                out.status.success(),
+                "tmux send-keys -l: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+    }
+
+    pub fn capture(&self) -> String {
+        let out = Self::tmux(&["capture-pane", "-t", &self.name, "-p"]);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    pub fn spawn(
+        &self,
+        sandbox: &Sandbox,
+        mock: Option<&Mock>,
+        with_key: bool,
+        extra_env: &[(&str, &str)],
+        args: &[&str],
+    ) {
+        let key = if with_key {
+            " OPENAI_API_KEY=test-key"
+        } else {
+            ""
+        };
+        let endpoint = mock
+            .map(|mock| format!(" OPENAI_BASE_URL={}", mock.url()))
+            .unwrap_or_default();
+        // Issue #3: no implicit default model, so a mock-backed session picks
+        // one explicitly. `extra_env` (appended last) can still override it.
+        let model = if mock.is_some() {
+            " OPENAI_MODEL=test-model"
+        } else {
+            ""
+        };
+        let extra: String = extra_env
+            .iter()
+            .map(|(key, value)| format!(" {key}={value}"))
+            .collect();
+        let arguments: String = args.iter().map(|arg| format!(" {arg}")).collect();
+        let command = format!(
+            "cd {project} && HOME={home} USERPROFILE={home} XDG_DATA_HOME={data} \
+             APPDATA={data} LOCALAPPDATA={data} XDG_CONFIG_HOME={config} \
+             LCA_UPDATE_CHECK=false{endpoint}{key}{model}{extra} {bin}{arguments}",
+            project = sandbox.project().display(),
+            home = sandbox.home.display(),
+            data = sandbox.data.display(),
+            config = sandbox.home.join(".config").display(),
+            bin = env!("CARGO_BIN_EXE_lca"),
+        );
+        let out = Self::tmux(&[
+            "new-session",
+            "-d",
+            "-s",
+            &self.name,
+            "-x",
+            "140",
+            "-y",
+            "40",
+            &command,
+        ]);
+        assert!(
+            out.status.success(),
+            "tmux new-session: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    pub fn send(&self, keys: &[&str]) {
+        let mut args = vec!["send-keys", "-t", &self.name];
+        args.extend_from_slice(keys);
+        let out = Self::tmux(&args);
+        assert!(
+            out.status.success(),
+            "tmux send-keys: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Poll the pane until `needle` appears (150 ms cadence). The timeout
+    /// is wall-clock margin for a loaded machine, not a performance claim:
+    /// a full parallel `cargo test -p lca-cli` blew a 10 s paste budget
+    /// once while every focused run passed (2026-10-01).
+    pub fn wait_for(&self, needle: &str, timeout: std::time::Duration) -> String {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let pane = self.capture();
+            if pane.contains(needle) {
+                return pane;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("`{needle}` never appeared in the pane:\n{pane}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+    }
+
+    pub fn resize(&self, cols: u32, rows: u32) -> String {
+        let out = Self::tmux(&[
+            "resize-window",
+            "-t",
+            &self.name,
+            "-x",
+            &cols.to_string(),
+            "-y",
+            &rows.to_string(),
+        ]);
+        assert!(
+            out.status.success(),
+            "tmux resize-window: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        self.capture()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Tmux {
+    fn drop(&mut self) {
+        let _ = Command::new("tmux")
+            .args(["-L", TMUX_SOCKET, "kill-session", "-t", &self.name])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
 /// One tmux session on its own socket name; dropping it kills only that
 /// session, never the server or anyone else's panes.
 pub fn find_session_log(state: &std::path::Path) -> Option<std::path::PathBuf> {
