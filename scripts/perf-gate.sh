@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# Verifies: NFR-1 (size threshold), NFR-2 (the interpreter-only host's
-# size budget), NFR-3 (startup threshold), NFR-6 (idle memory), NFR-7
-# (the pipeline enforces all on every merge to main), NFR-15 (the
-# interpreter build carries no compiler), and NFR-31 (the cache-hit-
-# ratio benchmark runs in this same gate too). Thresholds were fixed at
-# the Phase 0 exit test (docs/phase0-report.md; the cache ratio's 0.90
-# at the Phase 3 exit) and only move with a recorded measurement.
+# Verifies: NFR-1 (size threshold), NFR-3 (startup threshold), NFR-6
+# (idle memory), NFR-7 (the pipeline enforces all on every merge to
+# main), and NFR-31 (the cache-hit-ratio benchmark runs in this same
+# gate too). Thresholds were fixed at the Phase 0 exit test
+# (docs/phase0-report.md; the cache ratio's 0.90 at the Phase 3 exit)
+# and only move with a recorded measurement.
+#
+# Two more used to be checked here, on the phase-0 spike host's pulley
+# build: the interpreter-only build's size budget and its
+# no-compiler-symbol count. That workspace was removed on 2026-10-01
+# (commit 6a17652), so both requirements are named in
+# scripts/deferred-requirements.txt instead of being checked against a
+# build the tree no longer contains. Restore a build worth measuring
+# and take them back out of that file.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -46,35 +53,6 @@ fi
 # binary-size regression does (testing-plan section9).
 cargo test --release -p lca-core --test loop \
   twenty_clean_turns_report_zero_cache_waste_and_hold_the_ratio
-
-# Verifies: NFR-2 (the interpreter-only host stays under12 MB) and
-# NFR-15 (it carries no compiler: no executable-memory path at all).
-# This is the Phase 0 spike host - the build whose receipt fixed both
-# numbers - rebuilt so a size regression or a compiler sneaking back
-# in fails here too.
-( cd phase0/host && cargo build --release --no-default-features --features pulley >/dev/null )
-# The excluded phase0 member builds into phase0/target, its own root.
-interpreter=phase0/target/release/host
-interpreter_size=$(stat -c %s "$interpreter" 2>/dev/null || stat -f %z "$interpreter")
-max_interpreter=$((12 * 1024 * 1024))
-echo "interpreter-only host: $interpreter_size bytes (limit $max_interpreter)"
-if [ "$interpreter_size" -gt "$max_interpreter" ]; then
-  echo "NFR-2 exceeded: interpreter-only build is larger than12 MB"
-  exit 1
-fi
-# The compiler proper, not the name: wasmtime-environ's data structures
-# (cranelift-entity, cranelift-bforest) and one config-error string ride
-# along in every pulley-only build, but cranelift-codegen's paths or
-# symbols mean executable-memory codegen reached the binary. Counted,
-# not grep -q: under pipefail grep -q's early exit can SIGPIPE strings
-# and read a match as a failure (or hide one), which made this check
-# non-deterministic between machines.
-compiler_hits=$(strings "$interpreter" | grep -c -E '/cranelift-(codegen|opt|control|simple)|cranelift_codegen|compile_function' || true)
-if [ "$compiler_hits" -gt 0 ]; then
-  echo "NFR-15 violated: the interpreter-only build contains compiler code ($compiler_hits hits)"
-  exit 1
-fi
-echo "interpreter build: no cranelift compiler, size within budget"
 
 # Verifies: NFR-6 (idle memory with no extensions enabled). The
 # interface idles in a pty until we sample its resident set.

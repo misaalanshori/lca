@@ -28,3 +28,15 @@ NFR-11
 # implementation and its `// Verifies:` test - so the traceability gate
 # stays meaningful for everything already shipped. The file returns to the
 # web-target list alone when cycle 2 completes.
+
+# The docs truth cycle (2026-10-01): NFR-2 and NFR-15 lost their only
+# build when the phase-0 spike workspace was removed (commit 6a17652).
+# Both were enforced on `phase0/host`'s pulley (interpreter-only) build -
+# its size budget and the count of compiler symbols in it - which the tree
+# no longer contains; the findings live in docs/phase0-report.md and the
+# code in git history before that commit. The product's own budget (NFR-1,
+# 25 MB on the shipped binary) and the rest of gate 9 still run. Bring
+# back a build worth measuring and delete these two lines: the gate will
+# then demand a verifying test again.
+NFR-2
+NFR-15
