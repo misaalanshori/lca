@@ -24,16 +24,13 @@ fn opencode_go_completes_one_turn() {
     // or grants (the testkit's isolation rule, applied in-process).
     let root = lca_testkit::scratch_path("lca-real");
     let _ = std::fs::remove_dir_all(&root);
-    let data = root.join("data");
-    let config = root.join("config");
     let project = root.join("project");
-    for dir in [&data, &config, &project] {
-        std::fs::create_dir_all(dir).expect("mkdir");
-    }
+    std::fs::create_dir_all(&project).expect("mkdir");
     // The ad hoc net grant the login modal will attach when the base
-    // URL is named (FR-PERM-16, ADR-0022); until that flow lands in
-    // Phase 7 the test writes the consent the user would give, exactly
-    // as the e2e sandbox does.
+    // URL is named (FR-PERM-16, ADR-0022); the test writes the consent
+    // the user would give, exactly as the e2e sandbox does. The store is
+    // `<home>/.lca` on every platform (the 2026-10-01 data-dir move),
+    // and HOME below points that home at this sandbox.
     let grants = serde_json::json!({
         "version": 1,
         "projects": {
@@ -43,9 +40,9 @@ fn opencode_go_completes_one_turn() {
             }
         },
     });
-    std::fs::create_dir_all(data.join("lca")).expect("mkdir lca");
+    std::fs::create_dir_all(root.join(".lca")).expect("mkdir .lca");
     std::fs::write(
-        data.join("lca/grants.json"),
+        root.join(".lca/grants.json"),
         serde_json::to_vec_pretty(&grants).expect("grants serialize"),
     )
     .expect("write grants");
@@ -53,13 +50,12 @@ fn opencode_go_completes_one_turn() {
     // SAFETY: this test process is single-test-per-process under
     // nextest and sets these before any runtime thread spawns.
     unsafe {
-        // Every platform's data directory, not just XDG: on Windows the
-        // store is `%APPDATA%\lca`, so leaving APPDATA set would send the
-        // smoke at the developer's real sessions and grants.
+        // HOME and USERPROFILE are what `~/.lca` resolves from; pointing
+        // them at the sandbox keeps the smoke off the developer's real
+        // sessions and grants (the store left the XDG and %APPDATA%
+        // paths on 2026-10-01).
         std::env::set_var("HOME", &root);
         std::env::set_var("USERPROFILE", &root);
-        std::env::set_var("XDG_DATA_HOME", &data);
-        std::env::set_var("XDG_CONFIG_HOME", &config);
         std::env::set_var("OPENAI_BASE_URL", "https://opencode.ai/zen/go/v1");
         std::env::set_var("OPENAI_MODEL", "deepseek-v4.1-flash");
         std::env::remove_var("OPENAI_API_KEY");

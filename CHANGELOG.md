@@ -61,6 +61,27 @@ Dates are UTC.
   source tree which does not exist - they are now marked as
   specifications, not installable extensions.
 
+### Fixed
+
+- **A cancel that raced call setup no longer loses the interrupt.**
+  Wasmtime measures a store's epoch deadline from the epoch at
+  `set_epoch_deadline` time, so an `interrupt` landing while the store
+  was still being built was absorbed and the guest spun until its fuel
+  budget - which is what fired the 30-second hang guard in
+  `cancelling_a_turn_interrupts_a_running_extension_call` on a loaded
+  Windows runner (CI 36864779928). The host flags the interrupt before
+  bumping the epoch, re-arms it after the deadline is set
+  (`build_store`), and clears it - with the capability engine's own
+  cancel flag - at the turn boundary through the new
+  `Dispatch::turn_started`, so a fresh turn cannot start pre-cancelled.
+  FR-CONC-1.
+- **The live-provider smoke writes its grant where the store reads
+  it.** `real_provider.rs` still placed `grants.json` under
+  `$XDG_DATA_HOME/lca`, the pre-move layout, so since the data dir
+  became `~/.lca` (dae9470) the smoke's `opencode.ai` pattern never
+  landed and the daily run failed with "permission denied:
+  opencode.ai:443 matches no granted pattern".
+
 ## [0.5.2] - 2026-09-30
 
 ### Fixed
