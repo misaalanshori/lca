@@ -3,6 +3,7 @@
 #
 # Verifies: FR-INSTALL-1 FR-INSTALL-2 FR-INSTALL-3 FR-INSTALL-4 FR-INSTALL-5
 # Verifies: FR-INSTALL-6 FR-INSTALL-7 FR-INSTALL-8
+# Verifies: FR-INSTALL-10
 #
 # Hermetic: a sandbox HOME, a fixture directory laid out like a release,
 # LCA_BASE_URL pointed at it (file:// - the fetch seam, FR-INSTALL-6), and a
@@ -390,6 +391,54 @@ STATUS=$?
 [ "$STATUS" -eq 0 ] || die "mirror: exit $STATUS"
 grep -q "7.7.7-mirror" "$INSTALLED" || die "mirror: bytes did not come from the base"
 ok "LCA_BASE_URL is the only source the fetch path consults"
+teardown
+
+##############################################################################
+# ADR-0043 / U2: the unstable line. The flag picks download/unstable for the
+# binary and its artifacts.sha256 - in the first case the stable line's
+# checksums are poisoned, so consulting them at all would fail this row.
+##############################################################################
+
+setup
+mkdir -p "$FIX/download/unstable"
+for a in $ASSETS; do make_asset "$FIX/download/unstable/$a" "0.5.2.b194950"; done
+write_checksums "$FIX/download/unstable"
+for a in $ASSETS; do printf '%064d  %s\n' 0 "$a"; done > "$FIX/latest/download/artifacts.sha256"
+run_installer --install-dir "$SANDBOX/target" --no-path --unstable
+[ "$STATUS" -eq 0 ] || die "unstable: exit $STATUS (binary and checksums must both come from download/unstable)"
+grep -q "0.5.2.b194950" "$INSTALLED" || die "unstable: the unstable asset was not installed"
+ok "--unstable installs from download/unstable with its own checksums"
+teardown
+
+# Mixed flags: the rolling line has no pinned form, so this is a usage error.
+setup
+mkdir -p "$FIX/download/unstable"
+for a in $ASSETS; do make_asset "$FIX/download/unstable/$a" "0.5.2.b194950"; done
+write_checksums "$FIX/download/unstable"
+run_installer --install-dir "$SANDBOX/target" --no-path --unstable --version v9.9.9
+[ "$STATUS" -eq 2 ] || die "mixed flags: exit $STATUS, expected 2"
+grep -q "cannot be combined" "$OUT" || die "mixed flags: no usage message"
+ok "--unstable with --version is a usage error (exit 2)"
+teardown
+
+# Round trip with hash versions in the report, both directions:
+# stable (0.0.0) -> unstable -> stable.
+setup
+mkdir -p "$FIX/download/unstable"
+for a in $ASSETS; do make_asset "$FIX/download/unstable/$a" "0.5.2.b194950"; done
+write_checksums "$FIX/download/unstable"
+run_installer --install-dir "$SANDBOX/target" --no-path
+[ "$STATUS" -eq 0 ] || die "round trip: baseline stable install exit $STATUS"
+grep -q "0.0.0" "$INSTALLED" || die "round trip: baseline is not the stable asset"
+run_installer --install-dir "$SANDBOX/target" --no-path --unstable
+[ "$STATUS" -eq 0 ] || die "round trip: unstable install exit $STATUS"
+grep -q "lca 0.0.0 -> 0.5.2.b194950" "$OUT" || die "round trip: stable -> unstable report"
+grep -q "0.5.2.b194950" "$INSTALLED" || die "round trip: unstable bytes missing"
+run_installer --install-dir "$SANDBOX/target" --no-path
+[ "$STATUS" -eq 0 ] || die "round trip: stable reinstall exit $STATUS"
+grep -q "lca 0.5.2.b194950 -> 0.0.0" "$OUT" || die "round trip: unstable -> stable report"
+grep -q "0.0.0" "$INSTALLED" || die "round trip: stable bytes missing"
+ok "stable and unstable round trip, reports the hash versions both ways"
 teardown
 
 printf '1..%d\n' "$PASSED"

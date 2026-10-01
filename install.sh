@@ -28,10 +28,13 @@ progname=$(basename "$0")
 usage() {
   cat <<EOF
 Usage: $progname [--version <X.Y.Z|vX.Y.Z>] [--install-dir <dir>] [--no-path]
-                 [--uninstall] [--help]
+                 [--unstable] [--uninstall] [--help]
 
 Options:
   --version <ver>     install that release instead of the latest
+  --unstable          install the latest build of the unstable line: a
+                      rolling pre-release (ADR-0043), latest-only, so it
+                      cannot be combined with --version
   --install-dir <dir> install directory (default: \${LCA_INSTALL_DIR:-\$HOME/.local/bin})
   --no-path           do not edit any shell rc file
   --uninstall         remove the installed binary and the installer's PATH block
@@ -47,6 +50,9 @@ Install:
 
 Install a pinned version:
   curl -fsSL $RAW_URL | sh -s -- --version v0.5.2
+
+Install (or update) the unstable line:
+  curl -fsSL $RAW_URL | sh -s -- --unstable
 
 Uninstall:
   curl -fsSL $RAW_URL | sh -s -- --uninstall
@@ -138,6 +144,7 @@ VERSION=""
 INSTALL_DIR="${LCA_INSTALL_DIR:-$HOME/.local/bin}"
 WANT_PATH=1
 UNINSTALL=0
+UNSTABLE=0
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -163,6 +170,10 @@ while [ $# -gt 0 ]; do
       WANT_PATH=0
       shift
       ;;
+    --unstable)
+      UNSTABLE=1
+      shift
+      ;;
     --uninstall)
       UNINSTALL=1
       shift
@@ -178,6 +189,13 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+# The unstable line is "latest of the rolling line" by design: it has no
+# pinned form (ADR-0043), so mixing the flags is a usage error rather than
+# a silent precedence rule.
+if [ "$UNSTABLE" -eq 1 ] && [ -n "$VERSION" ]; then
+  die 2 "--unstable and --version cannot be combined: the unstable line is latest-only"
+fi
 
 # A relative install dir would break the rc block, which is written for
 # future shells, not this one.
@@ -243,7 +261,12 @@ esac
 ###############################################################################
 
 base="${LCA_BASE_URL:-$REPO_URL}"
-if [ -n "$VERSION" ]; then
+if [ "$UNSTABLE" -eq 1 ]; then
+  # The rolling release: one fixed directory, replaced per green commit
+  # (ADR-0043). Binary and artifacts.sha256 come from the same place, so
+  # verification runs unchanged.
+  prefix="$base/download/unstable"
+elif [ -n "$VERSION" ]; then
   version=${VERSION#v}
   prefix="$base/download/v$version"
 else

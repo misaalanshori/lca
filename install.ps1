@@ -16,6 +16,7 @@ param(
   [string]$InstallDir,
   [switch]$NoPath,
   [switch]$Uninstall,
+  [switch]$Unstable,
   [string]$BaseUrl
 )
 
@@ -150,7 +151,12 @@ function Read-Version {
 # <base>/download/v<V>/<name> (FR-INSTALL-6, FR-INSTALL-8).
 function Get-ReleaseItem {
   param([Parameter(Mandatory = $true)][string]$Name)
-  $segments = if ($script:LcaVersion) {
+  # The unstable line: one fixed directory, replaced per green commit
+  # (ADR-0043); the checksums live beside the binaries, so verification
+  # runs unchanged.
+  $segments = if ($script:LcaUnstable) {
+    "download/unstable/$($Name)"
+  } elseif ($script:LcaVersion) {
     "download/v$($script:LcaVersion)/$($Name)"
   } else {
     "latest/download/$($Name)"
@@ -262,6 +268,11 @@ try {
   $script:LcaBaseRoot = [string]$resolved.Root
   $script:LcaVersion = ''
   if ($Version) { $script:LcaVersion = $Version.TrimStart('v') }
+  $script:LcaUnstable = [bool]$Unstable
+  if ($script:LcaUnstable -and $script:LcaVersion) {
+    Write-Output 'error: -Unstable and -Version cannot be combined: the unstable line is latest-only'
+    exit 2
+  }
 
   $temp = Join-Path ([IO.Path]::GetTempPath()) ('lca-install-' + [Guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Force -Path $temp | Out-Null

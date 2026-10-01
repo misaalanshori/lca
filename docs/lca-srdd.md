@@ -550,6 +550,8 @@ FR-INSTALL-8. WHEN `--version`/`-Version` names a release, the installer SHALL i
 
 FR-INSTALL-9. The Windows installer SHALL run unmodified on Windows PowerShell 5.1 and on pwsh, SHALL verify with `Get-FileHash -Algorithm SHA256`, SHALL replace the installed binary atomically, and SHALL append its directory to the user PATH without duplicating an existing entry or clobbering entries it did not write.
 
+FR-INSTALL-10. WHEN `--unstable`/`-Unstable` is given, the installer SHALL install the unstable line's assets and their `artifacts.sha256` from the unstable release directory, SHALL verify them exactly as it verifies the stable line, and SHALL otherwise behave as it does without the flag; WHERE `--unstable`/`-Unstable` is combined with `--version`/`-Version`, the installer SHALL exit with code 2 naming the conflict, because the rolling line has no pinned form (ADR-0043).
+
 ### Web target
 
 FR-WEB-1. WHERE the agent is built for the web target, the agent SHALL run as a transpiled ES module in a JavaScript host.
