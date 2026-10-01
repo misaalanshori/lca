@@ -7,11 +7,11 @@
 //! entries rendered to styled lines, updated incrementally as a turn
 //! streams, and the renderer repaints only what changed.
 
-use lca_tui::engine::text::{truncate_to_width, wrap_text_with_ansi};
+use lca_tui::engine::text::{truncate_to_width, visible_width, wrap_text_with_ansi};
 use lca_tui::widgets::image::{ImageInfo, render_image};
 use lca_tui::widgets::markdown::{LinkMode, MarkdownOptions, render_markdown};
 
-use crate::theme::Theme;
+use crate::theme::{Role, StyleFn, Theme};
 
 /// A tool call's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +196,12 @@ impl Transcript {
     /// Drop every cached render (a mutation that is not a streaming append).
     fn invalidate_cache(&mut self) {
         self.cache.borrow_mut().clear();
+    }
+
+    /// Drop the render cache from outside (the theme changed, so every
+    /// cached line carries the old palette's bytes).
+    pub fn invalidate(&mut self) {
+        self.invalidate_cache();
     }
 
     /// Drop the last entry's cached render (the streaming hot path).
@@ -619,14 +625,19 @@ fn render_entry(
             out,
         ),
         Entry::Tool { .. } => render_tool(entry, tools_expanded, width, theme, out),
-        Entry::Notice(text) => {
-            out.extend(wrap_text_with_ansi(&(theme.dim)(text), width as usize));
-        }
+        Entry::Notice(text) => render_custom(text, width, theme, out),
         Entry::Error(text) => {
             out.extend(wrap_text_with_ansi(&(theme.error)(text), width as usize));
         }
         Entry::Raw(text) => {
-            out.extend(wrap_text_with_ansi(text, width as usize));
+            // A bracketed header (`[compaction] …`, `[session in …]`) is
+            // pi's custom-message shape: a `customMessageBg` band with the
+            // type in `customMessageLabel`. Anything else is verbatim.
+            if text.starts_with('[') && text.contains(']') {
+                render_custom(text, width, theme, out);
+            } else {
+                out.extend(wrap_text_with_ansi(text, width as usize));
+            }
         }
         Entry::Image { info, bytes } => {
             out.extend(render_image(
@@ -639,18 +650,63 @@ fn render_entry(
     }
 }
 
-fn render_user(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
-    // A distinct band: the prompt on a styled, indented row (#5).
-    let prefix = (theme.user)("› ");
-    let inner_width = (width as usize).saturating_sub(2).max(1);
-    let wrapped = wrap_text_with_ansi(text, inner_width);
-    for (i, line) in wrapped.iter().enumerate() {
-        if i == 0 {
-            out.push(format!("{prefix}{}", (theme.user)(line)));
-        } else {
-            out.push(format!("  {}", (theme.user)(line)));
-        }
+/// One row of a background band: the row padded to the full width, then
+/// wrapped in the role's background (pi's `Box::applyBg`, which pads and
+/// then paints - `messages.md` §2). The background closes its own channel
+/// only, so a styled run inside the row keeps its own color.
+fn band_row(row: &str, width: usize, bg: &StyleFn) -> String {
+    let pad = width.saturating_sub(visible_width(row));
+    bg(&format!("{row}{}", " ".repeat(pad)))
+}
+
+/// pi's custom message (`custom-message.ts`): a `customMessageBg` box with
+/// the `[type]` label in `customMessageLabel` and the body in
+/// `customMessageText`. LCA's `[compaction]` and `[session in …]` headers
+/// are the same shape, so they take the same treatment.
+fn render_custom(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
+    let width = width as usize;
+    let (label, body) = match (text.starts_with('['), text.find(']')) {
+        (true, Some(close)) => (&text[..=close], text[close + 1..].trim_start()),
+        _ => ("", text),
+    };
+    let content = width.saturating_sub(3).max(1);
+    let styled = if label.is_empty() {
+        (theme.role(Role::CustomMessageText))(body)
+    } else {
+        format!(
+            "{} {}",
+            (theme.role(Role::CustomMessageLabel))(label),
+            (theme.role(Role::CustomMessageText))(body)
+        )
+    };
+    let bg = theme.bg(Role::CustomMessageBg);
+    out.push(band_row("", width, &bg));
+    for line in wrap_text_with_ansi(&styled, content) {
+        out.push(band_row(&format!(" {line}"), width, &bg));
     }
+    out.push(band_row("", width, &bg));
+}
+
+fn render_user(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
+    // pi's user bubble: `Box(outputPad = 1, 1, theme.bg("userMessageBg"))`
+    // around the user's own markdown in `userMessageText` - a full-width
+    // band, content padded one column inside it, one blank band row above
+    // and below. The `› ` marker stays: color is never the only signal
+    // (NFR-28).
+    let width = width as usize;
+    let bg = theme.bg(Role::UserMessageBg);
+    let content = width.saturating_sub(3).max(1);
+    let wrapped = wrap_text_with_ansi(text, content);
+    out.push(band_row("", width, &bg));
+    for (i, line) in wrapped.iter().enumerate() {
+        let prefix = if i == 0 { "› " } else { "  " };
+        out.push(band_row(
+            &format!(" {}{}", prefix, (theme.user)(line)),
+            width,
+            &bg,
+        ));
+    }
+    out.push(band_row("", width, &bg));
 }
 
 fn render_assistant(
@@ -786,6 +842,8 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
     else {
         return;
     };
+    let width = width as usize;
+    let inner = width.saturating_sub(3).max(1);
     let summary = format_tool_args(name, args);
     let args = if summary.is_empty() {
         String::new()
@@ -798,34 +856,40 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
         ToolStatus::Timeout => (theme.warn)(status.label()),
         ToolStatus::Running => (theme.dim)(status.label()),
     };
+    // pi paints a shell card's title in `bashMode` (`bash-execution.ts`:
+    // `fg("bashMode", bold("$ cmd"))`); every other tool keeps `toolTitle`.
+    let title_style = if matches!(name.as_str(), "bash" | "shell") {
+        theme.role(Role::BashMode)
+    } else {
+        theme.tool.clone()
+    };
     let header = format!(
         "{} {}{} {}",
         (theme.tool)(">"),
-        (theme.tool)(name),
+        title_style(name),
         args,
         status_text
     );
-    out.push(truncate_to_width(&header, width as usize, "…", false));
+    let mut rows = vec![truncate_to_width(&header, inner, "…", false)];
     // pi shows a bounded preview of command output (`bash.ts`
     // `BASH_PREVIEW_LINES` = 5, `ls.ts` 20, `grep.ts` 15) and a one-line
     // card for the rest; Ctrl+O expands to the full result.
     if let Some(result) = result {
-        let inner = (width as usize).saturating_sub(2).max(1);
         let preview = preview_lines(name);
         let total = result.lines().count();
         if expanded {
-            for line in wrap_text_with_ansi(result, inner) {
-                out.push(format!("  {}", (theme.dim)(&line)));
+            for line in wrap_text_with_ansi(result, inner.saturating_sub(2)) {
+                rows.push(format!("  {}", (theme.role(Role::ToolOutput))(&line)));
             }
         } else if preview > 0 && total > 0 {
             let shown: String = result.lines().take(preview).collect::<Vec<_>>().join("\n");
-            for line in wrap_text_with_ansi(&shown, inner) {
-                out.push(format!("  {}", (theme.dim)(&line)));
+            for line in wrap_text_with_ansi(&shown, inner.saturating_sub(2)) {
+                rows.push(format!("  {}", (theme.role(Role::ToolOutput))(&line)));
             }
             if total > preview {
-                out.push(format!(
+                rows.push(format!(
                     "  {}",
-                    (theme.dim)(&format!(
+                    (theme.role(Role::Muted))(&format!(
                         "… ({} more lines, {} to expand)",
                         total - preview,
                         lca_tui::engine::keybindings::key_text("app.tools.expand")
@@ -833,15 +897,30 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
                 ));
             }
         } else if total > 1 {
-            out.push(format!(
+            rows.push(format!(
                 "  {}",
-                (theme.dim)(&format!(
+                (theme.role(Role::Muted))(&format!(
                     "… ({} to expand)",
                     lca_tui::engine::keybindings::key_text("app.tools.expand")
                 ))
             ));
         }
     }
+
+    // The card's background is the call's state (pi's `updateDisplay`):
+    // `toolPendingBg` while the call is in flight or its output is still
+    // streaming, the quiet success tint when it settled, the error tint
+    // when it did not (`messages.md` §6).
+    let bg = theme.bg(match status {
+        ToolStatus::Running => Role::ToolPendingBg,
+        ToolStatus::Ok => Role::ToolSuccessBg,
+        ToolStatus::Error | ToolStatus::Denied | ToolStatus::Timeout => Role::ToolErrorBg,
+    });
+    out.push(band_row("", width, &bg));
+    for row in &rows {
+        out.push(band_row(&format!(" {row}"), width, &bg));
+    }
+    out.push(band_row("", width, &bg));
 }
 
 /// The collapsed preview line count for a tool, from pi's per-tool
@@ -873,7 +952,113 @@ mod tests {
         let mut t = Transcript::new();
         t.push_user("hello there");
         let out = strip(&t.render(40, &plain()));
-        assert_eq!(out[0], "› hello there");
+        let row = out
+            .iter()
+            .find(|l| l.contains("› "))
+            .expect("the marker row");
+        assert!(row.contains("hello there"), "{out:?}");
+    }
+
+    // Verifies: R1 - the user prompt renders as a full-width
+    // `userMessageBg` band: every row painted on the background role, each
+    // exactly the render width, with the marker row inside it.
+    #[test]
+    fn the_user_message_is_a_full_width_band() {
+        let theme = Theme::colored();
+        let width = 40usize;
+        let mut t = Transcript::new();
+        t.push_user("hello there");
+        let rows = t.render(width as u16, &theme);
+        let bg = "\x1b[48;2;52;53;65m"; // #343541, pi's dark `userMessageBg`
+        assert!(
+            rows.iter().all(|r| r.contains(bg)),
+            "every band row is on the user background: {rows:?}"
+        );
+        for row in &rows {
+            assert_eq!(
+                lca_tui::engine::text::visible_width(row),
+                width,
+                "the band fills the row: {row:?}"
+            );
+        }
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("› ") && r.contains("hello there")),
+            "the marker sits inside the band: {rows:?}"
+        );
+        assert!(
+            rows.iter().all(|r| r.ends_with("\x1b[49m")),
+            "the band closes its own channel, so the row beside it is clean"
+        );
+        // Assistant text stays on the default background (pi's choice -
+        // the contrast is the point).
+        let mut t = Transcript::new();
+        t.begin_assistant();
+        t.append_text("an answer");
+        t.finish_assistant();
+        assert!(
+            t.render(width as u16, &theme)
+                .iter()
+                .all(|r| !r.contains(bg)),
+            "assistant text is not banded"
+        );
+    }
+
+    // Verifies: R1 - a tool card's background is its state: pending while
+    // the call is in flight, the quiet success tint when it settled, the
+    // error tint when it did not (pi's `updateDisplay`).
+    #[test]
+    fn tool_cards_carry_the_states_background() {
+        let theme = Theme::colored();
+        let paint = |status: ToolStatus, result: Option<&str>| {
+            let mut t = Transcript::new();
+            t.start_tool("read", r#"{"path":"a.rs"}"#);
+            t.finish_tool(status, result.map(str::to_string));
+            t.render(60, &theme)
+        };
+        let pending = paint(ToolStatus::Running, Some("partial"));
+        let ok = paint(ToolStatus::Ok, Some("done"));
+        let failed = paint(ToolStatus::Error, Some("boom"));
+        // #282832, #283228, #3c2828
+        for (rows, expected) in [
+            (&pending, "\x1b[48;2;40;40;50m"),
+            (&ok, "\x1b[48;2;40;50;40m"),
+            (&failed, "\x1b[48;2;60;40;40m"),
+        ] {
+            assert!(
+                rows.iter().all(|r| r.contains(expected)),
+                "every card row carries {expected}: {rows:?}"
+            );
+            assert!(
+                rows.iter()
+                    .all(|r| { lca_tui::engine::text::visible_width(r) == 60 }),
+                "the card fills each row: {rows:?}"
+            );
+        }
+        assert!(
+            pending.iter().any(|r| r.contains("…")),
+            "the pending state carries its own symbol, not just a color (NFR-28): {pending:?}"
+        );
+        assert!(ok.iter().any(|r| r.contains("ok")), "{ok:?}");
+        assert!(failed.iter().any(|r| r.contains("error")), "{failed:?}");
+    }
+
+    // Verifies: FR-UI-5 - the plain theme paints no background at all, so
+    // an 80-column colorless terminal reads the same bands as text.
+    #[test]
+    fn the_plain_theme_paints_no_band() {
+        let mut t = Transcript::new();
+        t.push_user("hi");
+        t.start_tool("read", r#"{"path":"a.rs"}"#);
+        t.finish_tool(ToolStatus::Ok, Some("ok".into()));
+        let rows = strip(&t.render(50, &plain()));
+        assert!(rows.iter().any(|r| r.contains("› hi")), "{rows:?}");
+        assert!(rows.iter().any(|r| r.contains("> read")), "{rows:?}");
+        let raw = t.render(50, &plain());
+        assert!(
+            raw.iter().all(|r| !r.contains('\x1b')),
+            "the plain theme emits no SGR at all: {raw:?}"
+        );
     }
 
     #[test]
@@ -1008,9 +1193,12 @@ mod tests {
         t.start_tool("read", r#"{"path":"a.rs"}"#);
         t.finish_tool(ToolStatus::Ok, Some("ok".into()));
         let out = strip(&t.render(60, &plain()));
-        assert!(out[0].starts_with("> read"));
-        assert!(out[0].ends_with("ok"));
-        assert!(!out[0].contains("call_"));
+        let header = out
+            .iter()
+            .find(|l| l.contains("> read"))
+            .expect("the card header row");
+        assert!(header.contains("ok"), "{out:?}");
+        assert!(!header.contains("call_"));
     }
 
     // Verifies: R8 - a tool card collapses to one line and expands on demand.
@@ -1023,7 +1211,10 @@ mod tests {
             Some("line one\nline two\nline three".into()),
         );
         let collapsed = strip(&t.render(60, &plain()));
-        assert_eq!(collapsed[0], "> read a.rs ok");
+        assert!(
+            collapsed.iter().any(|l| l.contains("> read a.rs ok")),
+            "{collapsed:?}"
+        );
         assert!(collapsed.iter().any(|l| l.contains("ctrl+o to expand")));
         assert!(!collapsed.iter().any(|l| l.contains("line two")));
         t.toggle_tools_expanded();
@@ -1055,7 +1246,7 @@ mod tests {
         let output: String = (1..=8).map(|i| format!("line {i}\n")).collect();
         t.finish_tool(ToolStatus::Ok, Some(output));
         let out = strip(&t.render(60, &plain()));
-        assert_eq!(out[0], "> shell ls ok");
+        assert!(out.iter().any(|l| l.contains("> shell ls ok")), "{out:?}");
         assert!(out.iter().any(|l| l.contains("line 1")), "{out:?}");
         assert!(out.iter().any(|l| l.contains("line 5")), "{out:?}");
         assert!(!out.iter().any(|l| l.contains("line 6")), "{out:?}");
@@ -1069,7 +1260,7 @@ mod tests {
         t.start_tool("read", r#"{"path":"a.rs"}"#);
         t.finish_tool(ToolStatus::Ok, Some("1  fn main() {}\n2  more\n".into()));
         let out = strip(&t.render(60, &plain()));
-        assert_eq!(out[0], "> read a.rs ok");
+        assert!(out.iter().any(|l| l.contains("> read a.rs ok")), "{out:?}");
         assert!(out.iter().any(|l| l.contains("ctrl+o to expand")));
         assert!(!out.iter().any(|l| l.contains("fn main")), "{out:?}");
     }

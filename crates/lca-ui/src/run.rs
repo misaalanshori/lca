@@ -315,6 +315,12 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             dirty = true;
         }
 
+        // The separator's spinner animates while a turn runs (R2): one
+        // frame per cadence, never while idle.
+        if chat.tick() {
+            dirty = true;
+        }
+
         if dirty {
             let width = terminal.columns();
             let height = terminal.rows();
@@ -394,6 +400,9 @@ impl TurnState {
         if let Some(error) = &outcome.error {
             chat.world.notice = Some(crate::state::sanitize_text(error));
         }
+        // A turn that ends without its `TurnEnded` event still rests the
+        // separator.
+        chat.separator.idle();
         chat.usage.cost += outcome.usage.cost;
         chat.turn_running = false;
         chat.current_steer = None;

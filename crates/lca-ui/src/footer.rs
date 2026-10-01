@@ -6,13 +6,12 @@
 //! with the git branch. Below it, the session stats (tokens, cache, cost)
 //! and the active model with its context use.
 
-use std::fmt::Write as _;
 use std::path::Path;
 
 use lca_protocol::Usage;
 use lca_tui::engine::text::{truncate_to_width, visible_width};
 
-use crate::theme::Theme;
+use crate::theme::{Role, StyleFn, Theme};
 
 /// The footer's data.
 #[derive(Debug, Clone, Default)]
@@ -85,6 +84,22 @@ pub fn git_branch(dir: &str) -> Option<String> {
 }
 
 impl Footer {
+    /// The style a thinking level wears: its own `thinking*` role, or the
+    /// footer's muted color for a level outside the vocabulary.
+    fn thinking_style(theme: &Theme, level: &str) -> StyleFn {
+        let role = match level {
+            "off" => Role::ThinkingOff,
+            "minimal" => Role::ThinkingMinimal,
+            "low" => Role::ThinkingLow,
+            "medium" => Role::ThinkingMedium,
+            "high" => Role::ThinkingHigh,
+            "xhigh" => Role::ThinkingXhigh,
+            "max" => Role::ThinkingMax,
+            _ => return theme.footer.clone(),
+        };
+        theme.role(role)
+    }
+
     /// Render the footer to lines.
     pub fn render(&self, width: u16, theme: &Theme) -> Vec<String> {
         let width = width as usize;
@@ -120,34 +135,44 @@ impl Footer {
         } else {
             0
         };
-        let mut stats = format!(
+        let mut stats = String::new();
+        let muted = theme.footer.clone();
+        stats.push_str(&muted(&format!(
             "↑{} ↓{} R{} W{} {cache_pct}%",
             u.input, u.output, u.cache_read, u.cache_write
-        );
+        )));
         if u.cost > 0.0 {
-            let _ = write!(stats, " • ${:.4}", u.cost);
+            stats.push_str(&muted(&format!(" • ${:.4}", u.cost)));
         }
         if !self.model.is_empty() {
-            stats.push_str(" • ");
-            stats.push_str(&self.model);
+            stats.push_str(&muted(" • "));
+            stats.push_str(&muted(&self.model));
         }
         if let Some(thinking) = &self.thinking {
-            let _ = write!(stats, " • {thinking}");
+            // pi colors the thinking level with its own role (the seven
+            // `thinking*` tokens) - a level you can see at a glance.
+            stats.push_str(&muted(" • "));
+            stats.push_str(&Self::thinking_style(theme, thinking)(thinking));
         }
         if self.context_window > 0 {
             let pct =
                 (self.context_used as f64 / self.context_window as f64 * 100.0).round() as u64;
-            let _ = write!(stats, " • ctx {pct}%");
+            // chrome.md §1: the context share is colorized by threshold -
+            // over 90% error, over 70% warning.
+            let share = theme.role(if pct > 90 {
+                Role::Error
+            } else if pct > 70 {
+                Role::Warning
+            } else {
+                Role::Muted
+            });
+            stats.push_str(&muted(" • ctx "));
+            stats.push_str(&share(&format!("{pct}%")));
         } else {
             // E4: no known window is an honest unknown, never `0%`.
-            stats.push_str(" • ctx ?");
+            stats.push_str(&muted(" • ctx ?"));
         }
-        lines.push(truncate_to_width(
-            &(theme.footer)(&stats),
-            width,
-            "…",
-            false,
-        ));
+        lines.push(truncate_to_width(&stats, width, "…", false));
 
         if !self.statuses.is_empty() {
             let joined = self.statuses.join(" • ");

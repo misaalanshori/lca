@@ -2,7 +2,7 @@
 //! ceiling). The modals and pickers composite over the visible viewport.
 
 use super::chat::{Chat, highlight_matches};
-use super::render::{overlay_box, side_panel};
+use super::render::{overlay_box, overlay_box_selected, side_panel};
 use super::state::widget_lines;
 use crate::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
 
@@ -18,6 +18,9 @@ const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
 const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
 
 /// Compose one picker overlay: the body plus its hint row (E3).
+// Geometry, title, body, hint, theme, selection: seven inputs is the
+// picker contract; a parameter struct would only rename them.
+#[allow(clippy::too_many_arguments)]
 fn picker_overlay(
     viewport: &mut [String],
     width: u16,
@@ -26,11 +29,14 @@ fn picker_overlay(
     body: &[String],
     hint: &str,
     theme: &crate::theme::Theme,
+    selected: Option<usize>,
 ) {
     let mut body = body.to_vec();
     body.push(String::new());
     body.push(hint.to_string());
-    overlay_box(viewport, width, height, title, &body, theme);
+    // The hint rows sit past the caller's body, so its index still lands
+    // on the selected row.
+    overlay_box_selected(viewport, width, height, title, &body, theme, selected);
 }
 
 impl Chat {
@@ -80,6 +86,7 @@ impl Chat {
                 &body,
                 HINT_TREE,
                 &self.theme,
+                Some(2 + picker.selected),
             );
             return true;
         }
@@ -104,12 +111,14 @@ impl Chat {
                 &body,
                 HINT_FILTER,
                 &self.theme,
+                (!picker.matches.is_empty()).then_some(2 + picker.selected),
             );
             return true;
         }
         if let Some(picker) = &self.grants_picker {
             let mut body = vec!["Grants for this project:".to_string(), String::new()];
             let mut group: Option<bool> = None;
+            let mut selected_row = None;
             for (index, entry) in picker.entries.iter().enumerate() {
                 if group != Some(entry.install_consent) {
                     group = Some(entry.install_consent);
@@ -124,6 +133,9 @@ impl Chat {
                 }
                 let cur = if index == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {} - {}", entry.subject, entry.detail));
+                if index == picker.selected {
+                    selected_row = Some(body.len() - 1);
+                }
             }
             picker_overlay(
                 viewport,
@@ -133,6 +145,7 @@ impl Chat {
                 &body,
                 HINT_GRANTS,
                 &self.theme,
+                selected_row,
             );
             return true;
         }
@@ -155,6 +168,7 @@ impl Chat {
                 &body,
                 HINT_THEME,
                 &self.theme,
+                Some(2 + picker.selected),
             );
             return true;
         }
@@ -177,6 +191,7 @@ impl Chat {
                 &body,
                 HINT_MOVE,
                 &self.theme,
+                Some(4 + picker.selected),
             );
             return true;
         }
@@ -204,6 +219,7 @@ impl Chat {
                 &body,
                 HINT_MOVE,
                 &self.theme,
+                Some(2 + picker.selected),
             );
             return true;
         }
@@ -231,6 +247,7 @@ impl Chat {
                 &body,
                 HINT_FILTER,
                 &self.theme,
+                (!picker.matches.is_empty()).then_some(2 + picker.selected),
             );
             return true;
         }
@@ -272,6 +289,7 @@ impl Chat {
                 &body,
                 HINT_LOGIN,
                 &self.theme,
+                Some(2 + picker.selected.saturating_sub(start)),
             );
         } else if let Some(grant) = &self.world.grant {
             let body = vec![

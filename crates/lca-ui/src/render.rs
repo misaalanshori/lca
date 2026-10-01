@@ -24,6 +24,25 @@ pub fn overlay_box(
     body: &[String],
     theme: &Theme,
 ) {
+    overlay_box_selected(base, width, height, title, body, theme, None);
+}
+
+/// [`overlay_box`] with one body row marked selected: pi's selectors paint
+/// the selected row in the `selectedBg` background with the accent text
+/// (`theme.bg("selectedBg", …)` in `session-selector.ts` /
+/// `tree-selector.ts`, `getSelectListTheme`'s `selectedText`).
+///
+/// `selected` is an index into `body` (the caller's rows, before any hint
+/// rows the picker appends - pass `None` to paint nothing).
+pub fn overlay_box_selected(
+    base: &mut [String],
+    width: u16,
+    height: u16,
+    title: &str,
+    body: &[String],
+    theme: &Theme,
+    selected: Option<usize>,
+) {
     let content_height = u16::try_from(body.len())
         .unwrap_or(u16::MAX)
         .saturating_add(2);
@@ -41,18 +60,23 @@ pub fn overlay_box(
     // A full frame: pi's selectors draw complete boxes (DynamicBorder),
     // and a left-only border reads as a half-drawn frame.
     let mut box_lines: Vec<String> = Vec::new();
+    // Which body row each box row belongs to (`usize::MAX` = frame).
+    let mut owner: Vec<usize> = Vec::new();
     let title_w = visible_width(title);
     box_lines.push(format!(
         "╭─ {title} {}╮",
         "─".repeat(w.saturating_sub(title_w + 5))
     ));
-    for line in body {
+    owner.push(usize::MAX);
+    for (index, line) in body.iter().enumerate() {
         for wrapped in wrap_text_with_ansi(line, inner) {
             let pad = inner.saturating_sub(visible_width(&wrapped));
             box_lines.push(format!("│ {wrapped}{} │", " ".repeat(pad)));
+            owner.push(index);
         }
     }
     box_lines.push(format!("╰{}╯", "─".repeat(w.saturating_sub(2))));
+    owner.push(usize::MAX);
 
     let box_h = box_lines.len().min(height as usize);
     let col = rect.col as usize;
@@ -64,6 +88,8 @@ pub fn overlay_box(
     // therefore painted whole: a reset, the frame in the border role, a
     // reset, and then the untouched fragments on either side.
     let border = theme.role(Role::Border);
+    let accent = theme.role(Role::Accent);
+    let selected_bg = theme.bg(Role::SelectedBg);
     for (i, line) in box_lines.iter().take(box_h).enumerate() {
         let row = top + i;
         if let Some(base_line) = base.get_mut(row) {
@@ -75,7 +101,26 @@ pub fn overlay_box(
             let after_start = col + visible_width(line);
             let after = slice_by_column(base_line, after_start, 10_000, false);
             let pad = " ".repeat(w.saturating_sub(visible_width(line)));
-            let row_text = border(&format!("{line}{pad}"));
+            let row_text = if selected == Some(owner[i]) {
+                // Frame in the border role, the row's cells in accent on
+                // the selected background - so the highlight stops at the
+                // frame like pi's.
+                let inner_span = format!("{line}{pad}");
+                match inner_span
+                    .strip_prefix("│ ")
+                    .and_then(|s| s.strip_suffix(" │"))
+                {
+                    Some(cells) => format!(
+                        "{}{}{}",
+                        border("│ "),
+                        selected_bg(&accent(cells)),
+                        border(" │")
+                    ),
+                    None => border(&inner_span),
+                }
+            } else {
+                border(&format!("{line}{pad}"))
+            };
             *base_line = format!("{before}{SEGMENT_RESET}{row_text}{SEGMENT_RESET}{after}");
         }
     }
@@ -214,6 +259,48 @@ mod tests {
         assert!(
             row.contains(&left),
             "the left fragment is untouched: {row:?}"
+        );
+    }
+
+    // Verifies: R1 - a picker's selected row is pi's `selectedBg`
+    // highlight: the cells in accent on the selected background, the
+    // frame still in the border role, and the rows around it untouched.
+    #[test]
+    fn the_selected_picker_row_carries_the_selected_background() {
+        let theme = Theme::colored();
+        let mut base = vec![".".repeat(80); 24];
+        overlay_box_selected(
+            &mut base,
+            80,
+            24,
+            "model",
+            &["first".to_string(), "second".to_string()],
+            &theme,
+            Some(1),
+        );
+        let selected = base
+            .iter()
+            .find(|l| l.contains("second"))
+            .expect("the selected row");
+        let other = base
+            .iter()
+            .find(|l| l.contains("first"))
+            .expect("the other row");
+        assert!(
+            selected.contains("\x1b[48;2;58;58;74m"),
+            "selectedBg #3a3a4a: {selected:?}"
+        );
+        assert!(
+            selected.contains("\x1b[38;2;138;190;183m"),
+            "the selected cells are accent #8abeb7: {selected:?}"
+        );
+        assert!(
+            selected.contains(&theme.role(Role::Border)("│ ")),
+            "the frame keeps the border role: {selected:?}"
+        );
+        assert!(
+            !other.contains("48;2;58;58;74"),
+            "only the selected row is highlighted: {other:?}"
         );
     }
 }

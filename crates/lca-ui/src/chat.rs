@@ -22,6 +22,7 @@ use crate::chat_pickers::{
 };
 use crate::footer::Footer;
 
+use crate::separator::Separator;
 use crate::state::{Action, LoginNext, TurnStatusLine, UiOptions, UiState, widget_lines};
 use crate::theme::Theme;
 use crate::transcript::{ToolStatus, Transcript};
@@ -53,6 +54,9 @@ pub struct Chat {
     pub usage: Usage,
     /// Whether a turn is running.
     pub turn_running: bool,
+    /// The separator row's state and spinner (chrome.md's
+    /// spinner-in-the-border, R2).
+    pub separator: Separator,
     /// The status-line turn state.
     pub turn_status: Option<TurnStatusLine>,
     /// The ui-world adapter (options + modals).
@@ -173,6 +177,7 @@ impl Chat {
             usage: Usage::default(),
             turn_running: false,
             turn_status: None,
+            separator: Separator::new(),
             world,
             pending: Vec::new(),
             current_steer: None,
@@ -270,8 +275,12 @@ impl Chat {
                 attempt,
                 max,
                 error,
+                delay_ms,
                 ..
             } => {
+                // The separator counts the backoff down (chrome.md's
+                // `RetryStatusIndicator`); the error text stays a notice.
+                self.separator.retrying(attempt, max, delay_ms);
                 self.world.notice = Some(format!("retry {attempt}/{max} after: {error}"));
             }
             TurnEvent::Error { message, .. } => {
@@ -300,6 +309,10 @@ impl Chat {
             } => {
                 self.transcript.finish_assistant();
                 self.turn_running = false;
+                // pi clears the indicator on stop; the transcript's error
+                // line and the footer's status carry a stop that was not
+                // clean (chrome.md has no error kind).
+                self.separator.idle();
                 self.turn_status = Some(TurnStatusLine {
                     text: match (status, stop_reason) {
                         (TurnStatus::Ok, StopReason::Stop) => "done".to_string(),
@@ -318,6 +331,7 @@ impl Chat {
     /// Mark a turn as started, with the queue it drains at each boundary.
     pub fn begin_turn(&mut self, steer: lca_protocol::SteerQueue) {
         self.turn_running = true;
+        self.separator.working();
         self.current_steer = Some(steer);
         self.turn_status = Some(TurnStatusLine {
             text: "running...".into(),
@@ -365,6 +379,12 @@ impl Chat {
             .clone()
     }
 
+    /// Advance the separator's spinner. Returns `true` when the frame
+    /// moved, so the loop repaints; idle never wakes the renderer.
+    pub fn tick(&mut self) -> bool {
+        self.separator.tick()
+    }
+
     /// Render the whole document (transcript + dock) at a width.
     pub fn render(&self, width: u16) -> Vec<String> {
         let mut out = self.transcript.render(width, &self.theme);
@@ -378,9 +398,13 @@ impl Chat {
             }
         }
 
-        // A separator above the dock.
+        // A separator above the dock: border dashes, with pi's spinner set
+        // into them while work runs (R2). The dashes carry the thinking
+        // level, the way pi colors its editor border.
         out.push(String::new());
-        out.push((self.theme.dim)(&"─".repeat(width as usize)));
+        let border =
+            crate::separator::separator_border(&self.theme, self.thinking_level().as_deref());
+        out.push(self.separator.render(width, &self.theme, &border));
 
         if let Some(notice) = &self.world.notice {
             // A notice can be multi-line (`/help`, `/hotkeys`, a command's
@@ -583,6 +607,9 @@ impl Chat {
         let (theme, notice) =
             crate::theme::load(name, crate::theme::detect_scheme(), &self.theme_dir);
         self.theme = theme;
+        // The transcript caches styled lines per entry: a new palette
+        // invalidates every one of them, or the bands keep the old colors.
+        self.transcript.invalidate();
         self.theme_name = name.to_string();
         self.theme_auto = false;
         self.world.notice = notice;
@@ -597,6 +624,7 @@ impl Chat {
         let (theme, _) = crate::theme::load(&self.theme_setting, Some(scheme), &self.theme_dir);
         self.theme_name = theme.name.clone();
         self.theme = theme;
+        self.transcript.invalidate();
     }
 
     /// Preview a theme without committing it (FR-UI-17).
@@ -605,6 +633,7 @@ impl Chat {
             let (theme, _) =
                 crate::theme::load(&name, crate::theme::detect_scheme(), &self.theme_dir);
             self.theme = theme;
+            self.transcript.invalidate();
         }
     }
 

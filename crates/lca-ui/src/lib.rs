@@ -16,6 +16,7 @@ pub mod footer;
 pub mod render;
 pub mod resume;
 pub mod run;
+pub mod separator;
 pub mod state;
 pub mod theme;
 pub mod transcript;
@@ -24,6 +25,7 @@ pub use chat::{Chat, PendingMessage};
 pub use footer::Footer;
 pub use lca_protocol::{QueuedMessage, SubmitMode, steer_queue};
 pub use run::run;
+pub use separator::{Separator, SeparatorState};
 pub use state::{
     Action, CUSTOM_OPTION, CommandInvoker, LoginCancel, LoginComplete, LoginConfirm, LoginNext,
     LoginPick, LoginPoll, LoginRequest, PickerOption, PromptRequest, RegionInteractor,

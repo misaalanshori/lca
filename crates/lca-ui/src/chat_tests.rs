@@ -1188,3 +1188,65 @@ fn a_replayed_attachment_renders_once_or_as_a_named_placeholder() {
         "a missing image keeps its named placeholder: {text}"
     );
 }
+
+// Verifies: R1 - a theme change repaints the transcript. The render cache
+// is keyed by width only, so switching palettes has to drop it or the
+// bands keep the previous theme's bytes (this is also what made a live
+// `/theme` preview lie about the user band).
+#[test]
+fn a_theme_change_repaints_the_cached_transcript() {
+    let mut opts = options();
+    opts.plain = false;
+    opts.theme = "dark".to_string();
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    chat.transcript.push_user("hello");
+    let painted = chat.render(60);
+    assert!(
+        painted.iter().any(|l| l.contains("\x1b[48;2;52;53;65m")),
+        "the user band is painted in the dark theme: {painted:?}"
+    );
+    chat.set_theme("plain");
+    let plain = chat.render(60);
+    assert!(
+        plain
+            .iter()
+            .all(|l| !l.contains("\x1b[48;2;") && !l.contains("\x1b[38;2;")),
+        "the cached rows were dropped: {plain:?}"
+    );
+    assert!(
+        plain.iter().any(|l| l.contains("› hello")),
+        "the band still renders, now as text: {plain:?}"
+    );
+}
+
+// Verifies: R2 - the separator follows the turn: rest when idle, pi's
+// spinner row while a turn runs, exactly one full row, and back to rest
+// when the turn ends.
+#[test]
+fn the_separator_follows_the_turn() {
+    let mut chat = chat();
+    assert_eq!(chat.separator.state(), &crate::SeparatorState::Idle);
+    chat.begin_turn(lca_protocol::steer_queue());
+    assert_eq!(chat.separator.state(), &crate::SeparatorState::Working);
+    let working: Vec<String> = chat.render(60);
+    let row = working
+        .iter()
+        .find(|l| l.contains("Working"))
+        .expect("the working separator is on screen")
+        .clone();
+    assert_eq!(lca_tui::engine::text::visible_width(&row), 60);
+    assert_eq!(
+        working.iter().filter(|l| l.contains("Working")).count(),
+        1,
+        "exactly one separator row: {working:?}"
+    );
+    chat.on_turn_event(lca_protocol::TurnEvent::TurnEnded {
+        status: lca_protocol::TurnStatus::Ok,
+        stop_reason: lca_protocol::StopReason::Stop,
+    });
+    assert_eq!(chat.separator.state(), &crate::SeparatorState::Idle);
+    assert!(
+        !chat.render(60).iter().any(|l| l.contains("Working")),
+        "the indicator clears when the turn ends"
+    );
+}

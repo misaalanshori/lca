@@ -53,6 +53,10 @@ pub struct MarkdownTheme {
     pub code_block_border: StyleFn,
     /// Link style.
     pub link: StyleFn,
+    /// The link's URL when it prints inline (pi's `linkUrl`).
+    pub link_url: StyleFn,
+    /// List bullet style (pi's `listBullet`).
+    pub list_bullet: StyleFn,
     /// Blockquote border style.
     pub quote: StyleFn,
     /// Horizontal-rule style.
@@ -71,6 +75,8 @@ impl Default for MarkdownTheme {
             code_block: Arc::new(identity),
             code_block_border: Arc::new(identity),
             link: Arc::new(identity),
+            link_url: Arc::new(identity),
+            list_bullet: Arc::new(identity),
             quote: Arc::new(identity),
             hr: Arc::new(identity),
         }
@@ -220,7 +226,7 @@ pub fn render_markdown(
         }
 
         if let Some((kind, content, indent)) = list_item(trimmed) {
-            let marker = match kind {
+            let mut marker = match kind {
                 ListMarker::Bullet { task } => match task {
                     Some(true) => "- [x] ".to_string(),
                     Some(false) => "- [ ] ".to_string(),
@@ -232,6 +238,11 @@ pub fn render_markdown(
                     format!("{n}. ")
                 }
             };
+            // pi colors the bullet with `mdListBullet`; an ordered marker
+            // is a number, not a bullet, and keeps the default.
+            if matches!(kind, ListMarker::Bullet { .. }) {
+                marker = (theme.list_bullet)(&marker);
+            }
             let rendered = render_inline(&content, theme, options);
             let prefix = " ".repeat(indent) + &marker;
             let marker_width = visible_width(&prefix);
@@ -621,7 +632,7 @@ fn render_link(label: &str, url: &str, theme: &MarkdownTheme, options: &Markdown
             if label == url || url.strip_prefix("mailto:") == Some(label) {
                 styled
             } else {
-                format!("{styled} ({url})")
+                format!("{styled} {}", (theme.link_url)(&format!("({url})")))
             }
         }
     }

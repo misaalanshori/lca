@@ -119,36 +119,67 @@ pub enum Color {
     Ansi256(u8),
 }
 
-impl Color {
-    /// The SGR parameters that select this color, or `None` for the
-    /// terminal default.
-    fn sgr(self) -> Option<String> {
-        match self {
-            Color::Default => None,
-            Color::Rgb(r, g, b) => Some(format!("38;2;{r};{g};{b}")),
-            Color::Ansi256(index) => Some(format!("38;5;{index}")),
-        }
+/// The SGR parameters that select this color on the given channel, or
+/// `None` for the terminal default. `channel` is `38` (foreground) or `48`
+/// (background) - pi's `getFgAnsi`/`getBgAnsi` pair.
+fn color_sgr(color: Color, channel: u8) -> Option<String> {
+    match color {
+        Color::Default => None,
+        Color::Rgb(r, g, b) => Some(format!("{channel};2;{r};{g};{b}")),
+        Color::Ansi256(index) => Some(format!("{channel};5;{index}")),
     }
 }
 
-/// Build a style function from a color and an SGR decoration prefix.
+/// The SGR code that turns one decoration back off. A style closes only
+/// what it opened, so a nested style cannot kill the one around it
+/// (`theme.md` §2's channel-scoped reset, extended to decorations).
+fn decoration_reset(decoration: &str) -> &'static str {
+    match decoration {
+        "1" | "2" => "22", // bold, dim share the reset code
+        "3" => "23",       // italic
+        "4" => "24",       // underline
+        "9" => "27",       // strikethrough
+        _ => "22",
+    }
+}
+
+/// Build a foreground style function: pi's `fg()` - opens the color (and
+/// any decoration) and resets **only those channels** (`ESC[39m`), so
+/// layered styles compose and a nested reset cannot blank the outer color.
 fn style(color: Color, decoration: &str, colored: bool) -> StyleFn {
     let decoration = decoration.to_string();
     Arc::new(move |text: &str| {
         if !colored {
             return text.to_string();
         }
-        let mut codes = Vec::new();
+        let mut open = Vec::new();
+        let mut close = Vec::new();
         if !decoration.is_empty() {
-            codes.push(decoration.clone());
+            open.push(decoration.clone());
+            close.push(decoration_reset(&decoration).to_string());
         }
-        if let Some(color) = color.sgr() {
-            codes.push(color);
+        if let Some(color) = color_sgr(color, 38) {
+            open.push(color);
+            close.push("39".to_string());
         }
-        if codes.is_empty() {
+        if open.is_empty() {
             text.to_string()
         } else {
-            format!("\x1b[{}m{text}\x1b[0m", codes.join(";"))
+            format!("\x1b[{}m{text}\x1b[{}m", open.join(";"), close.join(";"))
+        }
+    })
+}
+
+/// Build a background style function: pi's `bg()` - same discipline on the
+/// background channel (`ESC[49m`).
+fn bg_style(color: Color, colored: bool) -> StyleFn {
+    Arc::new(move |text: &str| {
+        if !colored {
+            return text.to_string();
+        }
+        match color_sgr(color, 48) {
+            Some(open) => format!("\x1b[{open}m{text}\x1b[49m"),
+            None => text.to_string(),
         }
     })
 }
@@ -190,6 +221,8 @@ pub struct Theme {
     pub accent: StyleFn,
     /// Every role's style, precomputed for `role()`.
     roles: BTreeMap<Role, StyleFn>,
+    /// Every role's background style, precomputed for `bg()`.
+    bgs: BTreeMap<Role, StyleFn>,
 }
 
 impl Theme {
@@ -199,6 +232,10 @@ impl Theme {
         let roles: BTreeMap<Role, StyleFn> = Role::ALL
             .iter()
             .map(|role| (*role, style(palette.get(*role), "", colored)))
+            .collect();
+        let bgs: BTreeMap<Role, StyleFn> = Role::ALL
+            .iter()
+            .map(|role| (*role, bg_style(palette.get(*role), colored)))
             .collect();
         let dim = style(palette.get(Role::Dim), "2", colored);
         let bold = style(palette.get(Role::Text), "1", colored);
@@ -226,6 +263,7 @@ impl Theme {
             footer,
             accent,
             roles,
+            bgs,
         }
     }
 
@@ -253,6 +291,7 @@ impl Theme {
         plain.footer = identity();
         plain.accent = identity();
         plain.roles = Role::ALL.iter().map(|role| (*role, identity())).collect();
+        plain.bgs = Role::ALL.iter().map(|role| (*role, identity())).collect();
         plain
     }
 
@@ -297,6 +336,17 @@ impl Theme {
             .unwrap_or_else(|| style(self.palette.get(role), "", self.colored))
     }
 
+    /// The background style function for any role in the vocabulary (pi's
+    /// `theme.bg(...)`): wraps a run of text - or a row padded to the
+    /// screen width - in the role's background and resets only that
+    /// channel.
+    pub fn bg(&self, role: Role) -> StyleFn {
+        self.bgs
+            .get(&role)
+            .cloned()
+            .unwrap_or_else(|| bg_style(self.palette.get(role), self.colored))
+    }
+
     /// The markdown theme derived from these roles.
     pub fn markdown(&self) -> MarkdownTheme {
         MarkdownTheme {
@@ -313,6 +363,8 @@ impl Theme {
             code_block: self.role(Role::MdCodeBlock),
             code_block_border: self.role(Role::MdCodeBlockBorder),
             link: self.role(Role::MdLink),
+            link_url: self.role(Role::MdLinkUrl),
+            list_bullet: self.role(Role::MdListBullet),
             quote: self.role(Role::MdQuote),
             hr: self.role(Role::MdHr),
         }
@@ -446,8 +498,44 @@ mod tests {
     #[test]
     fn colored_styles_wrap_and_reset() {
         let t = Theme::colored();
-        assert_eq!((t.bold)("x"), "\x1b[1;38;2;212;212;212mx\x1b[0m");
+        // `theme.md` §2: a style closes only the channels it opened - the
+        // decoration and the color - so a style around it survives.
+        assert_eq!((t.bold)("x"), "\x1b[1;38;2;212;212;212mx\x1b[22;39m");
         assert!(t.colored);
+    }
+
+    // Verifies: R1 - `fg()`/`bg()` reset only their own channel, so a
+    // colored run inside another colored run composes instead of blanking
+    // the outer style.
+    #[test]
+    fn fg_and_bg_reset_only_their_own_channel() {
+        let t = Theme::colored();
+        assert!(
+            (t.role(Role::Accent))("x").ends_with("\x1b[39m"),
+            "foreground closes with 39"
+        );
+        let bg = (t.bg(Role::UserMessageBg))("x");
+        assert!(
+            bg.starts_with("\x1b[48;2;"),
+            "background opens on channel 48: {bg:?}"
+        );
+        assert!(
+            bg.ends_with("\x1b[49m"),
+            "background closes with 49: {bg:?}"
+        );
+        // The band's content color inside the band's background: the
+        // inner close must not be `0m`, or the band would go transparent
+        // for the rest of the row.
+        let inner = (t.role(Role::UserMessageText))("hello");
+        let row = (t.bg(Role::UserMessageBg))(&inner);
+        assert!(
+            !row.contains("\x1b[0m") && row.ends_with("\x1b[49m"),
+            "no full reset inside a band: {row:?}"
+        );
+        assert!(
+            row.contains("\x1b[39m"),
+            "the inner color still closes: {row:?}"
+        );
     }
 
     #[test]
