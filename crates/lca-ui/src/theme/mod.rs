@@ -375,15 +375,22 @@ impl Theme {
         let hook: lca_tui::widgets::markdown::HighlightFn =
             Arc::new(move |code, lang| highlight(code, lang, &syntax));
         MarkdownTheme {
+            // pi's heading is a color and nothing else - the renderer adds
+            // the bold (markdown.md §4), and h3+ gets no bold at all.
             heading: if self.colored {
-                style(self.palette.get(Role::MdHeading), "1", true)
+                style(self.palette.get(Role::MdHeading), "", true)
             } else {
                 identity()
             },
-            bold: self.bold.clone(),
-            underline: self.underline(),
-            italic: self.reasoning.clone(),
-            strike: self.dim.clone(),
+            // pi's markdown decorations are chalk: bold, italic, underline
+            // and strikethrough are decoration-only, so a colored style
+            // around them survives (markdown.md §3 - a nested reset must
+            // never carry a color, or `heading(bold(x))` renders in the
+            // body color instead of `mdHeading`).
+            bold: self.decoration("1"),
+            underline: self.decoration("4"),
+            italic: self.decoration("3"),
+            strike: self.decoration("9"),
             code: self.role(Role::MdCode),
             code_block: self.role(Role::MdCodeBlock),
             code_block_border: self.role(Role::MdCodeBlockBorder),
@@ -391,8 +398,19 @@ impl Theme {
             link_url: self.role(Role::MdLinkUrl),
             list_bullet: self.role(Role::MdListBullet),
             quote: self.role(Role::MdQuote),
+            quote_border: self.role(Role::MdQuoteBorder),
             hr: self.role(Role::MdHr),
             highlight: Some(hook),
+        }
+    }
+
+    /// A decoration-only style: SGR code on, its own close code off, no
+    /// color touched.
+    fn decoration(&self, code: &'static str) -> StyleFn {
+        if self.colored {
+            style(Color::Default, code, true)
+        } else {
+            identity()
         }
     }
 }

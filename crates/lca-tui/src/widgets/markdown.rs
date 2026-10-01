@@ -67,8 +67,10 @@ pub struct MarkdownTheme {
     pub link_url: StyleFn,
     /// List bullet style (pi's `listBullet`).
     pub list_bullet: StyleFn,
-    /// Blockquote border style.
+    /// Blockquote style (pi's `quote`).
     pub quote: StyleFn,
+    /// Blockquote border style (pi's `quoteBorder`).
+    pub quote_border: StyleFn,
     /// Horizontal-rule style.
     pub hr: StyleFn,
 }
@@ -89,6 +91,7 @@ impl Default for MarkdownTheme {
             link_url: Arc::new(identity),
             list_bullet: Arc::new(identity),
             quote: Arc::new(identity),
+            quote_border: Arc::new(identity),
             hr: Arc::new(identity),
         }
     }
@@ -195,13 +198,24 @@ pub fn render_markdown(
         }
 
         if let Some((level, content)) = heading(trimmed) {
-            // pi: h1 is heading(bold(underline(text))), h2 is
-            // heading(bold(text)), and h3+ prepend the literal prefix.
-            let styled = match level {
-                1 => (theme.heading)(&(theme.bold)(&(theme.underline)(&content))),
-                2 => (theme.heading)(&(theme.bold)(&content)),
-                _ => (theme.heading)(&format!("{} {content}", "#".repeat(level))),
+            // pi (markdown.md §4): a heading runs its *inline* tokens
+            // inside the heading style - h1 is heading(bold(underline(…))),
+            // h2 heading(bold(…)), and h3+ prepends a styled literal prefix.
+            // The style is re-armed after every nested reset (§3's
+            // style-prefix trick), so an inline code span in a heading
+            // cannot desaturate the rest of the line.
+            let inner = rearm(
+                &render_inline(&content, theme, options),
+                &style_prefix(&theme.heading),
+            );
+            let decorate = |text: &str| match level {
+                1 => (theme.heading)(&(theme.bold)(&(theme.underline)(text))),
+                _ => (theme.heading)(&(theme.bold)(text)),
             };
+            let mut styled = decorate(&inner);
+            if level >= 3 {
+                styled = format!("{}{}", decorate(&format!("{} ", "#".repeat(level))), styled);
+            }
             out.extend(wrap_text_with_ansi(&styled, inner_width));
             out.push(String::new());
             i += 1;
@@ -227,10 +241,20 @@ pub fn render_markdown(
                 i += 1;
             }
             for line in &body {
+                // pi (markdown.md §4): the quote's *text* is quote+italic
+                // with the style re-armed after every nested reset; only
+                // the border character takes `mdQuoteBorder`.
                 let rendered = render_inline(line, theme, options);
-                let prefix = (theme.quote)("│ ");
-                for wrapped in wrap_text_with_ansi(&rendered, inner_width.saturating_sub(2)) {
-                    out.push(format!("{prefix}{wrapped}"));
+                let quote_style = |text: &str| (theme.quote)(&(theme.italic)(text));
+                let prefix = format!(
+                    "{}{}",
+                    style_prefix(&theme.quote),
+                    style_prefix(&theme.italic)
+                );
+                let styled = quote_style(&rearm(&rendered, &prefix));
+                let border = (theme.quote_border)("│ ");
+                for wrapped in wrap_text_with_ansi(&styled, inner_width.saturating_sub(2)) {
+                    out.push(format!("{border}{wrapped}"));
                 }
             }
             continue;
@@ -566,7 +590,19 @@ fn render_table(rows: &[Vec<String>], width: usize, theme: &MarkdownTheme, out: 
                     pad_or_truncate(cell.get(line).map(String::as_str).unwrap_or(""), widths[c])
                 })
                 .collect();
-            out.push(format!("│ {} │", parts.join(" │ ")));
+            // pi bolds the header cells and only the header cells
+            // (`markdown.ts` renderTable: `theme.bold(padded)` per cell) -
+            // the border characters stay unstyled.
+            let joined = if r == 0 {
+                parts
+                    .iter()
+                    .map(|part| (theme.bold)(part))
+                    .collect::<Vec<String>>()
+                    .join(" │ ")
+            } else {
+                parts.join(" │ ")
+            };
+            out.push(format!("│ {joined} │"));
         }
         // pi draws a separator after every row except the last.
         if r + 1 < rows.len() {
@@ -583,6 +619,29 @@ fn pad_or_truncate(text: &str, width: usize) -> String {
     } else {
         format!("{text}{}", " ".repeat(width - w))
     }
+}
+
+/// The pure open prefix a style function emits: render a sentinel and keep
+/// everything before it (pi's `getStylePrefix`, markdown.md §3) - what lets
+/// a nested style re-arm the one around it.
+fn style_prefix(style: &StyleFn) -> String {
+    const SENTINEL: &str = "\u{0}";
+    style(SENTINEL)
+        .split(SENTINEL)
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Re-arm an enclosing style after every nested reset that would kill it:
+/// a nested color closes with `39` (or a full `0m`), which would otherwise
+/// leave the rest of the line in the body color (markdown.md §3).
+fn rearm(text: &str, prefix: &str) -> String {
+    if prefix.is_empty() || text.is_empty() {
+        return text.to_string();
+    }
+    text.replace("\x1b[0m", &format!("\x1b[0m{prefix}"))
+        .replace("\x1b[39m", &format!("\x1b[39m{prefix}"))
 }
 
 /// Render inline spans (bold, italic, code, strike, links) for one line.
@@ -724,6 +783,85 @@ mod tests {
         assert!(out.iter().any(|l| l.contains("some text")));
     }
 
+    // Verifies: cycle 9 - a heading runs its *inline* tokens inside the
+    // heading style (markdown.md §4), so `**b**` and `c` render instead of
+    // showing their markup, and the heading color is re-armed after the
+    // code span's reset (§3's style-prefix trick) instead of the rest of
+    // the line falling back to the body color.
+    #[test]
+    fn headings_run_inline_tokens_in_the_heading_style() {
+        let theme = MarkdownTheme {
+            heading: Arc::new(|s| format!("\x1b[38;2;1;2;3m{s}\x1b[39m")),
+            bold: Arc::new(|s| format!("\x1b[1m{s}\x1b[22m")),
+            underline: Arc::new(|s| format!("\x1b[4m{s}\x1b[24m")),
+            code: Arc::new(|s| format!("\x1b[38;2;9;9;9m{s}\x1b[39m")),
+            ..Default::default()
+        };
+        let raw = render_markdown(
+            "## A **b** and `c` here\n\n### Three",
+            60,
+            &theme,
+            &MarkdownOptions::default(),
+        );
+        let out = strip(&raw);
+        assert_eq!(out[0], "A b and c here", "inline markup rendered: {out:?}");
+        assert!(
+            raw[0].contains("\x1b[39m\x1b[38;2;1;2;3m"),
+            "the heading color is re-armed after the code span: {:?}",
+            raw[0]
+        );
+        assert!(
+            raw[0].starts_with("\x1b[38;2;1;2;3m\x1b[1m"),
+            "the heading carries its own color and the bold: {:?}",
+            raw[0]
+        );
+        assert_eq!(out[2], "### Three", "h3+ keeps the literal prefix: {out:?}");
+        // An h1 also underlines (pi: heading(bold(underline(…)))).
+        let h1 = render_markdown("# One", 40, &theme, &MarkdownOptions::default());
+        assert!(h1[0].contains("\x1b[4m"), "h1 underlines: {h1:?}");
+        assert!(
+            h1[0].contains("\x1b[38;2;1;2;3m"),
+            "and keeps the heading color: {h1:?}"
+        );
+    }
+
+    // Verifies: cycle 9 - a blockquote's *text* is quote+italic and its
+    // border is `mdQuoteBorder`, the two roles pi splits (markdown.md §4);
+    // the style survives a nested reset inside the quote.
+    #[test]
+    fn a_blockquote_paints_its_text_and_its_border_separately() {
+        let theme = MarkdownTheme {
+            quote: Arc::new(|s| format!("\x1b[38;2;5;5;5m{s}\x1b[39m")),
+            quote_border: Arc::new(|s| format!("\x1b[38;2;6;6;6m{s}\x1b[39m")),
+            italic: Arc::new(|s| format!("\x1b[3m{s}\x1b[23m")),
+            code: Arc::new(|s| format!("\x1b[38;2;9;9;9m{s}\x1b[39m")),
+            ..Default::default()
+        };
+        let raw = render_markdown(
+            "> quoted with `code` inside",
+            60,
+            &theme,
+            &MarkdownOptions::default(),
+        );
+        let line = raw
+            .iter()
+            .find(|l| l.contains('│'))
+            .expect("the quote border row");
+        assert!(
+            line.starts_with("\x1b[38;2;6;6;6m│ "),
+            "the border is mdQuoteBorder: {line:?}"
+        );
+        assert!(
+            line.contains("\x1b[38;2;5;5;5m\x1b[3m"),
+            "the text is quote+italic: {line:?}"
+        );
+        assert!(
+            line.contains("\x1b[39m\x1b[38;2;5;5;5m\x1b[3m"),
+            "re-armed after the code span: {line:?}"
+        );
+        assert_eq!(strip(&raw)[0], "│ quoted with code inside");
+    }
+
     // pi: h1 = heading(bold(underline(text))), h2 = heading(bold(text)).
     #[test]
     fn the_level_one_heading_is_underlined() {
@@ -808,6 +946,41 @@ mod tests {
         assert!(
             off.iter().any(|l| l.contains("\x1b[32mlet x = 1;\x1b[0m")),
             "no hook, no highlighting: {off:?}"
+        );
+    }
+
+    // Verifies: cycle 9 - the table header is bold, and only the header is
+    // (pi's `renderTable` wraps each header cell in `theme.bold`; the data
+    // cells and the border characters stay unstyled).
+    #[test]
+    fn the_table_header_is_bold() {
+        let theme = MarkdownTheme {
+            bold: Arc::new(|s| format!("\x1b[1m{s}\x1b[22m")),
+            ..Default::default()
+        };
+        let raw = render_markdown(
+            "| a | b |\n| - | - |\n| 1 | 2 |",
+            40,
+            &theme,
+            &MarkdownOptions::default(),
+        );
+        let header = raw
+            .iter()
+            .find(|l| l.contains('a') && l.contains('\u{2502}'))
+            .expect("the header row");
+        assert!(
+            header.contains("\x1b[1ma"),
+            "the header cell is bold: {header:?}"
+        );
+        // Match on the stripped row: the header's own `\x1b[1m` contains a
+        // literal '1', which is how this assertion first fooled itself.
+        let data = raw
+            .iter()
+            .find(|l| strip(&[(*l).to_string()])[0].contains("\u{2502} 1 \u{2502}"))
+            .expect("the data row");
+        assert!(
+            !data.contains("\x1b[1m"),
+            "only the header is bold: {data:?}"
         );
     }
 
