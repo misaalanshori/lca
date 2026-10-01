@@ -14,6 +14,8 @@ The user file is **`~/.lca/config.toml`** on every platform (R7). Theme files li
 
 Environment variables use the `LCA_` prefix with the key uppercased and dots replaced by underscores, so `tool.timeout_seconds` is `LCA_TOOL_TIMEOUT_SECONDS`.
 
+`LCA_HYPERLINKS` is the one host variable outside that scheme: `1` forces OSC 8 terminal hyperlinks on, `0` forces the `text (url)` fallback, and unset leaves it to the capability ladder (the tmux client's own features, `screen` off, known-capable terminals on, unknown off), which is pi's `PI_HYPERLINKS` shape.
+
 ## Keys
 
 | Key | Type | Default | Notes |

@@ -57,8 +57,8 @@ fn flow_node_shapes_draw_themselves() {
     assert!(text.contains("Decide") && text.contains("Done"), "{text}");
 }
 
-// Verifies: M4 - LR direction lays columns out left to right, and RL
-// mirrors the column order so arrows still meet their boxes.
+// Verifies: M4 - LR direction lays its columns out left to right (RL
+// renders the same left-to-right layout; the subset does not mirror).
 #[test]
 fn flow_directions_lay_out() {
     let art = render("flowchart LR\n  A[Start] --> B[End]\n").expect("renders");

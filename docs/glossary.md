@@ -44,7 +44,11 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Host.** The `lca` process itself, from the perspective of an extension running inside it: the thing that instantiates a component, builds its import table, and implements every host import the extension calls. Not "host operating system," though the two senses are related; where ambiguity is possible, "host process" or "host OS" is used instead.
 
+**Hyperlink.** An OSC 8 escape that makes rendered text clickable, carrying the URL invisibly instead of printing it. Whether it survives the trip to the screen is a capability question with a ladder: under tmux the client's `client_termfeatures` decides (probed, 250 ms), `screen` is off, known-capable terminals are on, an IDE terminal is off, and an unknown terminal is off so a URL can never vanish from the display. `LCA_HYPERLINKS=1|0` forces the answer (pi's `PI_HYPERLINKS` shape), which is how a receipt captures the bytes under tmux. Off, markdown prints `text (url)` instead. Not OSC 52, which is clipboard, not a link.
+
 **Interpreter, JIT, AOT.** The three ways a WASM runtime can execute a component. An interpreter walks bytecode with no code generation and needs no executable memory. A JIT compiles to native code at load or call time and needs executable memory, which some environments forbid. AOT compiles once, ahead of time, to a cached native artifact that runs like ordinary native code afterward with no runtime compiler resident. See ADR-0001.
+
+**LaTeX.** The math notation `$…$`/`\(…\)` inline and `$$…$$`/`\[…\]` display, typeset to Unicode by the `latex` widget (a port of pi's `latex.ts`): fractions, limits, scripts, matrices, cases, accents, and 224 symbol commands, stacked by a baseline-joined layout. Fail-soft by contract: unsupported or malformed input prints the raw source, and math that has not finished streaming stays raw until its closing delimiter arrives. An unsupported command is not an error state - it is the source showing.
 
 **Lockfile.** The extension lockfile `lca-registry` owns, recording each installed extension's resolved digest, source reference, and approved-capability hash. Not `Cargo.lock`, which also exists in this project and means the ordinary Rust-ecosystem thing; where both could be meant, "extension lockfile" and "Cargo lockfile" are used explicitly.
 
@@ -53,6 +57,8 @@ Terms as used across this document set specifically. Several of these have a bro
 **Main screen.** The scrollback rendering mode where the transcript is appended to the terminal's own buffer and remains after exit, so the terminal's native history and selection apply. It emits no mouse-tracking sequences, so the terminal keeps its own selection, right-click paste, and Ctrl+V. The default between TUI cycle 7 and 2026-10-01; now the opt-in (`ui.fullscreen = false`) after real Windows use showed ConPTY scrollback loss, and runtime-switchable against `alt screen` with `/fullscreen`. See ADR-0037 and its two dated annotations.
 
 **Manifest.** The TOML file, `extension.toml`, declaring an extension's identity, ABI target, implemented worlds, and requested capabilities. The install-time consent surface; see `schemas/extension-manifest.schema.json`.
+
+**Mermaid.** A ```` ```mermaid ```` fenced diagram rendered as Unicode art by the `mermaid` widget: the flowchart and sequence subset, painted through the theme with grok-mermaid's span classes (border, text, edge, edgeLabel, title). A diagram too wide for the pane, or outside the subset (`pie`, `classDiagram`, and the rest), falls back to the framed source; a parse warning appears under the raw block only after streaming settles. It is that subset, not the full mermaid language - the fence is what makes the difference visible.
 
 **OCI artifact.** A component and its manifest, published to any registry implementing the OCI Distribution Specification, resolved by reference and pinned by digest. One of the source kinds `lca-registry` understands; see ADR-0010 for the others.
 

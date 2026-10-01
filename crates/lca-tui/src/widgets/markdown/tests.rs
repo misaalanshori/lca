@@ -362,7 +362,9 @@ const GOLDEN: &str = "# Title\n\nIntro with **bold**, `code`, and a [link](http:
     - one\n- two\n\n> quoted\n\n\
     | name | value |\n| --- | --- |\n| alpha | 1 |\n\n\
     ```rust\nfn main() {\n    let x = 1;\n}\n```\n\n\
-    Math $x^2$ and $$E=mc^2$$ render as math (M3).\n";
+    Math $x^2$ and $$E=mc^2$$ render as math (M3).\n\n\
+    - [x] shipped\n- [ ] todo\n\n\
+    ```mermaid\nflowchart TD\n  A[One] --> B[Two]\n```\n";
 
 fn frame_count(lines: &[String], open: char) -> usize {
     lines
@@ -955,4 +957,74 @@ fn mermaid_warnings_show_only_after_streaming() {
         !out.iter().any(|l| l.contains("not rendered")),
         "streaming suppresses the note: {out:?}"
     );
+}
+
+// Verifies: TUI-10 M5 - pi's streaming tolerance in the nested contexts
+// (markdown.md section 1 trims partial fences recursively): a quote's
+// fence and a list's fence balance at every chunk boundary.
+#[test]
+fn partial_fences_stay_balanced_inside_quotes_and_lists() {
+    // Inside a blockquote: the child block loop runs the same fence path.
+    let out = strip(&render_markdown(
+        "> ```\n> code\n> `",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert!(out.iter().any(|l| l.contains('╭')), "{out:?}");
+    assert!(out.iter().any(|l| l.contains("code")), "{out:?}");
+    assert!(
+        out.iter().all(|l| l.starts_with("│ ")),
+        "the quote border stays on every row: {out:?}"
+    );
+    let opens = out.iter().filter(|l| l.contains('╭')).count();
+    let closes = out.iter().filter(|l| l.contains('╰')).count();
+    assert_eq!(opens, closes, "balanced inside the quote: {out:?}");
+
+    // Inside a list item: the fence is still a fence, partial or whole.
+    let out = strip(&render_markdown(
+        "- item\n```\ncode\n```",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert!(out.iter().any(|l| l.contains("item")), "{out:?}");
+    assert!(out.iter().any(|l| l.contains("code")), "{out:?}");
+    let opens = out.iter().filter(|l| l.contains('╭')).count();
+    let closes = out.iter().filter(|l| l.contains('╰')).count();
+    assert_eq!(opens, closes, "balanced inside the list: {out:?}");
+}
+
+// Verifies: M5 - a half-drawn mermaid diagram cannot parse, so it renders
+// as source (pi: grok-mermaid returns nothing, the transformer keeps the
+// raw block) and becomes art the moment it does.
+#[test]
+fn partial_mermaid_renders_as_source_until_it_parses() {
+    let art = crate::widgets::mermaid::render("flowchart TD\n  A[One] -->");
+    assert!(art.is_none(), "an unfinished edge cannot parse");
+
+    let art = crate::widgets::mermaid::render("flowchart TD\n  A[One] --> B[Two]");
+    assert!(art.is_some(), "the finished edge parses");
+
+    let out = strip(&render_markdown(
+        "```mermaid\nflowchart TD\n  A[One] -->",
+        40,
+        &plain(),
+        &MarkdownOptions::default(),
+    ));
+    assert!(
+        out.iter().any(|l| l.starts_with('╭')),
+        "half a diagram renders as framed source: {out:?}"
+    );
+    let opens = out.iter().filter(|l| l.contains('╭')).count();
+    let closes = out.iter().filter(|l| l.contains('╰')).count();
+    assert_eq!(opens, closes, "{out:?}");
+}
+
+// Verifies: M5 - tasks and mermaid live in the golden document, so the
+// every-prefix streaming sweep covers them byte by byte.
+#[test]
+fn the_golden_document_carries_tasks_and_a_diagram() {
+    assert!(GOLDEN.contains("- [x] shipped"), "task row");
+    assert!(GOLDEN.contains("```mermaid"), "diagram row");
 }
