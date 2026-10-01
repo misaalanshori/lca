@@ -90,9 +90,17 @@ fn bands_card_states_and_the_separator_render_on_a_real_pane() {
         working.contains("Working"),
         "the separator says it:\n{working}"
     );
+    let working_row = working
+        .lines()
+        .find(|line| line.contains("Working"))
+        .expect("the working separator is on screen");
     assert!(
-        working.contains("38;2;138;190;183"),
-        "the spinner carries the accent role (#8abeb7):\n{working}"
+        working_row.contains("38;2;80;80;80"),
+        "the whole row is one `separator_border` color (#505050, no level set): {working_row}"
+    );
+    assert!(
+        !working_row.contains("38;2;138;190;183") && !working_row.contains("38;2;128;128;128"),
+        "no accent or muted left on the working row (F3): {working_row}"
     );
     assert!(
         !working.contains(TOOL_SUCCESS) && !working.contains(TOOL_ERROR),

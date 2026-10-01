@@ -25,7 +25,8 @@ const FRAME_MS: Duration = Duration::from_millis(80);
 pub enum SeparatorState {
     /// The rest state: plain border dashes.
     Idle,
-    /// A turn is running: accent spinner + muted `Working`.
+    /// A turn is running: the whole row in `separator_border` - spinner,
+    /// label and dashes in one color, pi's *rendered* working row.
     Working,
     /// A provider call is waiting out a backoff: warning spinner +
     /// `Retrying (n/m) in Ns...`, counting down live (pi's
@@ -123,9 +124,18 @@ impl Separator {
         if width == 0 {
             return String::new();
         }
-        let (spinner, label) = match &self.state {
+        // The working row is one color end to end - spinner, label and
+        // dashes alike - which is how pi actually paints it when the
+        // indicator is embedded (`interactive-mode.ts:2251` passes the
+        // editor's border color as the indicator's own color function, so
+        // a live pi row measures `38;5;109` from the first dash to the
+        // last). The register's "accent spinner + muted text" described
+        // `WorkingStatusIndicator`'s *unembedded* defaults; the owner has
+        // ruled for pi's rendered look. Retry keeps its two roles: pi
+        // gives that state a warning spinner and a muted countdown.
+        let (spinner, label_style, label) = match &self.state {
             SeparatorState::Idle => return border(&"─".repeat(width)),
-            SeparatorState::Working => (theme.role(Role::Accent), "Working".to_string()),
+            SeparatorState::Working => (border.clone(), border.clone(), "Working".to_string()),
             SeparatorState::Retrying {
                 attempt,
                 max,
@@ -137,6 +147,7 @@ impl Separator {
                 let secs = left.as_millis().div_ceil(1000);
                 (
                     theme.role(Role::Warning),
+                    theme.role(Role::Muted),
                     format!("Retrying ({attempt}/{max}) in {secs}s..."),
                 )
             }
@@ -151,7 +162,7 @@ impl Separator {
         } else {
             label
         };
-        let status = format!("{} {}", spinner(frame), (theme.role(Role::Muted))(&label));
+        let status = format!("{} {}", spinner(frame), label_style(&label));
         // The row's invariant is "exactly one row at any width": cap the
         // status at the budget so the fill can never push past it.
         let status = truncate_to_width(&status, budget, "", false);
@@ -204,10 +215,11 @@ mod tests {
         assert_eq!(visible_width(&row), 60, "exactly one full row");
     }
 
-    // Verifies: R2 - the working state is pi's spinner-in-the-border:
-    // accent spinner, muted `Working`, border dashes, one row, full width.
+    // Verifies: R2 (owner's ruling, cycle 9-fix F3) - the working row is
+    // pi's *rendered* one: spinner, label and dashes all in
+    // `separator_border`, one color end to end, one row, full width.
     #[test]
-    fn working_carries_the_spinner_and_label_in_one_full_row() {
+    fn working_row_paints_one_color_end_to_end() {
         let theme = Theme::colored();
         let mut sep = Separator::new();
         sep.working();
@@ -215,17 +227,30 @@ mod tests {
         let plain = strip(&row);
         assert_eq!(plain, format!("── ⠋ Working ─{}", "─".repeat(60 - 14)));
         assert_eq!(visible_width(&row), 60, "one row, no overflow: {plain:?}");
+        let border = border_of(&theme);
         assert!(
-            row.contains(&theme.role(Role::Accent)("⠋")),
-            "the spinner is the accent role: {row:?}"
+            row.contains(&border("⠋")),
+            "spinner in the border color: {row:?}"
         );
         assert!(
-            row.contains(&theme.role(Role::Muted)("Working")),
-            "the label is the muted role: {row:?}"
+            row.contains(&border("Working")),
+            "label in the border color too: {row:?}"
+        );
+        assert!(row.contains(&border("── ")), "and the dashes: {row:?}");
+        // Exactly one foreground color on the row: nothing accent, muted,
+        // or warning left over from the register's earlier wording.
+        let colors: Vec<&str> = row
+            .split('\x1b')
+            .filter(|s| s.starts_with("[38;2;"))
+            .collect();
+        assert_eq!(
+            colors.len(),
+            4,
+            "three styled spans plus the closing prefix, all one color: {row:?}"
         );
         assert!(
-            row.contains(&border_of(&theme)("── ")),
-            "the dashes are the editor-border role: {row:?}"
+            !row.contains("38;2;138;190;183") && !row.contains("38;2;128;128;128"),
+            "no accent or muted on the working row: {row:?}"
         );
         assert!(!row.contains("\x1b[0m"), "channel resets only: {row:?}");
     }
