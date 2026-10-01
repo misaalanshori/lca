@@ -5,7 +5,10 @@ Wasmtime 49.0.0, wit-bindgen 0.41.0. Machine: 4 cores, 8 GB RAM class.
 
 This report is the Phase 0 exit-test evidence required by `docs/lca-srdd.md`:
 the size, startup, and streaming numbers exist, and the default backend is
-picked. The spike lives under `phase0/`: a guest component implementing a
+picked. The spike lived under `phase0/` (the workspace was removed on
+2026-10-01 now that its findings are recorded here and superseded by
+`lca-ext-host`; the code remains in git history before that commit): a
+guest component implementing a
 two-function world (`compute` plus a pull-based `events` resource exporting
 10,000 events) and a host that instantiates it through `wasmtime::component::bindgen!`,
 mirroring the shape ADR-0004 and ADR-0014 settle on (pull resource, host-driven
@@ -97,7 +100,7 @@ decisions, not ABI cost, will dominate.
 
 ## Cross-compilation matrix (six native targets)
 
-`phase0/matrix.sh` builds the spike host for every release target and records
+`phase0/matrix.sh` built the spike host for every release target and recorded
 the result. Raw log: `phase0/matrix.log` (gitignored; summary here).
 
 First run (with the since-removed `wasmtime` `cache` feature present):
