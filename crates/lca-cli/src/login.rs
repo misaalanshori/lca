@@ -390,7 +390,7 @@ mod tests {
     }
 }
 
-/// The user's own presets, `<config>/provider-presets.toml` (D1's override
+/// The user's own presets, `~/.lca/provider-presets.toml` (D1's override
 /// layer): named custom endpoints, merged with the extension's own list.
 ///
 /// These are user data, not vendor data in the core - the file lives in the

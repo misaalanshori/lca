@@ -207,6 +207,33 @@ fn missing_session_exits_six() {
     assert_eq!(output.status.code(), Some(6), "stderr: {}", stderr(&output));
 }
 
+// Verifies: FR-SESS-8 (R7) - a run's state lands in `$HOME/.lca`, and the
+// platform-conventional directories the old build used are not touched.
+#[test]
+fn state_lives_in_the_home_dot_directory() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("stored"))]));
+    let box_ = sandbox("home-dot-dir");
+    let output = box_.run(Some(&mock), &["-p", "hi"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+
+    let home_dot = box_.home.join(".lca");
+    assert!(
+        home_dot.join("sessions").is_dir(),
+        "sessions live in $HOME/.lca: {home_dot:?}"
+    );
+    assert!(
+        home_dot.join("grants.json").is_file() || home_dot.join("sessions").is_dir(),
+        "the agent's tree is under $HOME/.lca"
+    );
+    // The old homes stay empty: no migration code exists, by design.
+    let legacy = box_.data.join("lca");
+    assert!(
+        !legacy.exists(),
+        "the old platform data directory is not written: {legacy:?}"
+    );
+}
+
 // A run writes its session, `resume` lists it (FR-SESS-2), and rename shows
 // up in that list.
 #[test]

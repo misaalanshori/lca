@@ -146,19 +146,13 @@ pub fn sandbox(name: &str) -> Sandbox {
 }
 
 impl Sandbox {
-    /// Where the binary under test keeps its state on this platform -
-    /// `default_data_dir()` honored the spawn environment (XDG_DATA_HOME
-    /// on Linux, HOME on macOS where Library is the documented home by
-    /// convention, APPDATA on Windows), and every grants/extension path
-    /// here must land in the same place or macOS silently reads an empty
-    /// grant store (docs/platform-notes.md: macOS state lives under
-    /// ~/Library/Application Support/lca).
+    /// Where the binary under test keeps its state: `$HOME/.lca` on every
+    /// platform (R7). `HOME` is the only knob that matters now, and the
+    /// sandbox sets it; the XDG/APPDATA variables the spawn still carries
+    /// are inert for the data directory and kept only because some
+    /// dependency may read them.
     pub fn state_dir(&self) -> PathBuf {
-        if cfg!(target_os = "macos") {
-            self.home.join("Library/Application Support/lca")
-        } else {
-            self.data.join("lca")
-        }
+        self.home.join(".lca")
     }
 }
 

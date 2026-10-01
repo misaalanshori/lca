@@ -520,7 +520,7 @@ fn persist_ui_setting(key: &str, value: Option<String>) {
 
 /// Persist the screen mode across runs (FR-UI-21).
 fn persist_screen_mode(fullscreen: bool) {
-    let path = crate::config_dir().join("ui.json");
+    let path = crate::data_dir().join("ui.json");
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }

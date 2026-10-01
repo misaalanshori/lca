@@ -6,6 +6,10 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Changed
+
+- **The agent's data and configuration live in `~/.lca` on every platform.** Sessions, extensions, credentials, grants, state, temp, themes, `ui.json`, and `config.toml` all sit under one home dot-directory instead of the platform-specific ones (`~/.local/share/lca` and `~/.config/lca/config.toml` on Linux, `~/Library/Application Support/lca` on macOS, `%APPDATA%\lca` on Windows). **There is no migration code.** The old directories are untouched: copy the one you want across yourself, for example `cp -a ~/.local/share/lca/sessions ~/.lca/` on Linux, or `xcopy /E /I "%APPDATA%\lca" "%USERPROFILE%\.lca"` on Windows. `docs/platform-notes.md` names each old path.
+
 ### Added
 
 - **Install with a one-liner.** Linux/macOS:

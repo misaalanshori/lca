@@ -953,3 +953,47 @@ fn row_labels_are_sanitized_and_bounded() {
     assert_eq!(label.chars().count(), 81, "80 columns plus the ellipsis");
     assert!(label.ends_with('…'), "{label}");
 }
+
+// Verifies: FR-SESS-9 (R7b) - what is stored is the display form of the
+// working directory: a Windows `\\?\` verbatim path is stripped (and a
+// `\\?\UNC\server\share` restored), while an ordinary path is untouched.
+#[test]
+fn stored_working_dirs_are_the_display_form() {
+    use lca_session::display_path;
+    use std::path::Path;
+    assert_eq!(
+        display_path(Path::new(r"\\?\C:\Users\misapw\pi")),
+        r"C:\Users\misapw\pi"
+    );
+    assert_eq!(
+        display_path(Path::new(r"\\?\UNC\server\share\dir")),
+        r"\\server\share\dir"
+    );
+    assert_eq!(display_path(Path::new("/home/me/proj")), "/home/me/proj");
+    assert_eq!(display_path(Path::new(r"C:\plain")), r"C:\plain");
+}
+
+// Verifies: FR-SESS-9 (R7b) - the session-start record and meta.json carry
+// the display path, not the canonicalized (possibly verbatim) one.
+#[test]
+fn session_start_records_the_display_working_dir() {
+    let store = store("display-dir");
+    let project = scratch("display-dir-project");
+    let session = store
+        .create_session(&project, lca_session::DEFAULT_TITLE)
+        .expect("create");
+    let meta = store.meta(&session).expect("meta");
+    assert!(
+        !meta.working_dir.starts_with(r"\\?\"),
+        "the stored path is the display form: {}",
+        meta.working_dir
+    );
+    let read = store.read(&session).expect("read");
+    match &read.records[0] {
+        lca_protocol::Record::SessionStart { working_dir, .. } => assert!(
+            !working_dir.starts_with(r"\\?\"),
+            "the record's working_dir is the display form: {working_dir}"
+        ),
+        other => panic!("first record is the session start: {other:?}"),
+    }
+}

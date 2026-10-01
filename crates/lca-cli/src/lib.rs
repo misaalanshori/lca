@@ -482,7 +482,7 @@ pub(crate) fn skills_roots(cwd: &Path) -> lca_core::SkillsRoots {
         .unwrap_or_default();
     lca_core::SkillsRoots {
         project: cwd.to_path_buf(),
-        user: config_dir().join("skills"),
+        user: data_dir().join("skills"),
         extensions: data_dir().join("extensions"),
         disabled,
     }
@@ -559,12 +559,15 @@ pub fn config_dir() -> PathBuf {
     }
 }
 
-/// The user configuration file path for this platform.
+/// The user configuration file: `~/.lca/config.toml` (R7). It lives with
+/// the rest of the agent's data, not in the platform config directory -
+/// `config_dir` stays what it always was, the `home-config` scope another
+/// tool's logins resolve to.
 pub fn config_file() -> PathBuf {
-    config_dir().join("lca/config.toml")
+    data_dir().join("config.toml")
 }
 
-/// Persist one setting to the user config file (`<config dir>/lca/config.toml`),
+/// Persist one setting to the user config file (`~/.lca/config.toml`),
 /// preserving every other key and its comments. `None` removes the key, which
 /// is how the `/thinking` picker's `unset` is written. This is the write path
 /// the `/theme` and `/thinking` pickers share (E2); `ui.fullscreen` keeps its

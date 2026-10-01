@@ -24,10 +24,9 @@ impl Ui {
             context_window: self.context_window_cell.clone(),
             thinking: self.thinking_cell.clone(),
             theme: self.config.ui_theme().unwrap_or("auto").to_string(),
-            theme_dir: lca_ui::theme::themes_dir(&crate::config_dir().join("lca")),
-            themes: lca_ui::theme::theme_names(&lca_ui::theme::themes_dir(
-                &crate::config_dir().join("lca"),
-            )),
+            // R7: themes live with the rest of the agent's data.
+            theme_dir: lca_ui::theme::themes_dir(&crate::data_dir()),
+            themes: lca_ui::theme::theme_names(&lca_ui::theme::themes_dir(&crate::data_dir())),
             initial_lines: self.initial_head.clone(),
             initial_records: self.initial_records.clone(),
             initial_tail_lines: self.initial_tail.clone(),
@@ -57,7 +56,7 @@ impl Ui {
             // FR-UI-21/R2: a fresh session starts on the main screen (the
             // terminal's own selection); `/fullscreen` opts into the
             // alt-screen renderer and persists in `ui.json`.
-            fullscreen: super::hooks::initial_screen_mode(&crate::config_dir()),
+            fullscreen: super::hooks::initial_screen_mode(&crate::data_dir()),
             slash_commands: self.slash_commands(),
             workspace: self.cwd.clone(),
         }

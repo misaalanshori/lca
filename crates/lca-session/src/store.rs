@@ -181,6 +181,24 @@ struct IndexFile {
     sessions: Vec<SessionSummary>,
 }
 
+/// The path as a human (and a model) should read it: Windows' verbatim
+/// `\\?\` prefix stripped, and `\\?\UNC\server\share` restored to
+/// `\\server\share`. Canonicalization stays load-bearing for identity and
+/// project-key derivation; this is the display form only (R7b).
+pub fn display_path(path: &std::path::Path) -> String {
+    // One implementation, applied on every platform: the prefix can only be
+    // produced on Windows, so the branches are inert elsewhere and the rule
+    // stays unit-testable where it is written.
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    text.into_owned()
+}
+
 /// A handle to one session directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
@@ -237,6 +255,9 @@ impl SessionStore {
     }
 
     fn project_key(&self, project_dir: &Path) -> String {
+        // Identity keys on the canonical path - verbatim included - so two
+        // spellings of one directory are one project (ADR-0006). Only the
+        // *stored display* form is stripped (R7b, `display_path`).
         let canonical =
             std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
         ids::project_key(&canonical.to_string_lossy())
@@ -255,15 +276,22 @@ impl SessionStore {
         let dir = project.join(&id);
         std::fs::create_dir_all(&dir)?;
 
+        // R7b: identity and project keys use the canonical (possibly
+        // verbatim) path; what lands in `meta.json` and the session-start
+        // record is the display form. A `\\?\C:\Users\me` in the stored
+        // `working_dir` is what the owner's log showed, and it is a
+        // Windows implementation detail, not a path a human or a model
+        // should ever read.
         let canonical =
             std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
+        let display = display_path(&canonical);
         let meta = SessionMeta {
             format_version: lca_protocol::FORMAT_VERSION,
             created_ms: now,
             agent_version: env!("CARGO_PKG_VERSION").to_string(),
             model: None,
             provider: None,
-            working_dir: canonical.to_string_lossy().into_owned(),
+            working_dir: display.clone(),
             title: title.to_string(),
             parent_session: None,
             parent_record: None,

@@ -368,7 +368,7 @@ impl Ui {
         // plus the user's named custom endpoints (D1's override layer). The
         // host's universal "Custom endpoint..." entry is appended by the flow.
         let preset_overrides =
-            std::fs::read_to_string(crate::config_dir().join("provider-presets.toml"))
+            std::fs::read_to_string(crate::data_dir().join("provider-presets.toml"))
                 .unwrap_or_default();
         let flow = Arc::new(Mutex::new(crate::login::LoginFlow::new()));
         let theme_setting = config.ui_theme().unwrap_or("auto").to_string();

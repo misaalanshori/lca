@@ -18,7 +18,7 @@ pub use cache::{CacheMiss, CacheWasteTotals, collect_cache_misses, compute_cache
 pub use lca_protocol::{PermissionDecision, ToolResultStatus, ToolSource};
 pub use store::{
     DEFAULT_TITLE, ExportOptions, ReadOutcome, Session, SessionMeta, SessionStore, SessionSummary,
-    row_label,
+    display_path, row_label,
 };
 pub use view::ViewMode;
 
@@ -27,24 +27,22 @@ pub use view::ViewMode;
 /// version (`docs/session-log-format.md`: "the ABI version").
 pub use lca_ext_abi::ABI_VERSION;
 
-/// Resolve the user data directory the way each platform documents it
-/// (`docs/platform-notes.md`): `$XDG_DATA_HOME` or `~/.local/share` on
-/// Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows.
+/// Resolve the user data directory: `$HOME/.lca` on every platform
+/// (`USERPROFILE` on Windows when `HOME` is unset).
+///
+/// One predictable home dot-directory, pi's `~/.pi` shape (R7,
+/// 2026-10-01). The platform-conventional split - `~/.local/share` vs
+/// `~/Library/Application Support` vs `%APPDATA%` - meant the owner's own
+/// agent could not find its state on Windows, and "where is my data" is not
+/// a question the product should leave to a specification. The whole tree
+/// lives here: `sessions/`, `extensions/`, `credentials/`, `grants.json`,
+/// `state/`, `tmp/`, `themes/`, `ui.json`, and `config.toml`.
+///
+/// **No migration.** The old platform directories are left untouched; the
+/// CHANGELOG and `docs/platform-notes.md` name them and say to copy the
+/// directory across if the old sessions are wanted.
 pub fn default_data_dir() -> PathBuf {
-    if cfg!(target_os = "linux") {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .unwrap_or_else(|| home_dir().join(".local/share"))
-            .join("lca")
-    } else if cfg!(target_os = "macos") {
-        home_dir().join("Library/Application Support/lca")
-    } else {
-        std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home_dir().join("AppData/Roaming"))
-            .join("lca")
-    }
+    home_dir().join(".lca")
 }
 
 /// A fresh record identifier: sortable by creation order, unique within the

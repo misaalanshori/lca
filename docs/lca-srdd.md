@@ -304,6 +304,10 @@ FR-SESS-5. The agent SHALL perform compaction exclusively through a `compaction`
 
 FR-SESS-6. IF a session log contains a record that fails to parse, THEN the agent SHALL load the records before the failure and report a truncated session.
 
+FR-SESS-8. The agent SHALL resolve its data directory and its user configuration to `$HOME/.lca` on every platform, so sessions, extensions, credentials, grants, state, temp, themes, and the user config live under one predictable home dot-directory (R7).
+
+FR-SESS-9. The agent SHALL store the display form of a working directory in `meta.json` and the `session-start` record; the canonical (possibly Windows-verbatim) form SHALL remain load-bearing only for identity and project-key derivation (R7b).
+
 FR-SESS-7. WHEN the user runs the export command, the agent SHALL produce the export specified in `docs/session-log-format.md`, including redaction and the stripping of `permission` and `extension-event` records unless an audit flag is passed.
 
 ### Compaction and context transformation

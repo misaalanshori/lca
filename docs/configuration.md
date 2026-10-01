@@ -10,6 +10,8 @@ Highest first: command line flags, environment variables, the project file at `.
 
 The project file is read only after the user marks the project as trusted. An untrusted project file cannot enable extensions or change permission defaults (FR-PERM-9).
 
+The user file is **`~/.lca/config.toml`** on every platform (R7). Theme files live under `~/.lca/themes/`, the `/fullscreen` toggle writes `~/.lca/ui.json`, and `make`/provider preset overrides live at `~/.lca/provider-presets.toml`. The platform config directory (`$XDG_CONFIG_HOME` or `~/.config` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows) is *not* where the agent's own files live; it is what the `fs` capability's `home-config` scope resolves to, for reading another tool's configuration.
+
 Environment variables use the `LCA_` prefix with the key uppercased and dots replaced by underscores, so `tool.timeout_seconds` is `LCA_TOOL_TIMEOUT_SECONDS`.
 
 ## Keys
