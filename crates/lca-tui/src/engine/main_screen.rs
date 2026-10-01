@@ -55,6 +55,9 @@ pub struct MainScreenRenderer {
     height: u16,
     /// The index of the line the hardware cursor is on.
     cursor_row: usize,
+    /// The caret from the last frame, so a caret that moved without any text
+    /// changing still repaints its row (R5).
+    last_cursor: Option<(u16, u16)>,
     first_render: bool,
 }
 
@@ -95,6 +98,12 @@ impl MainScreenRenderer {
         }
 
         let resize = self.first_render || width != self.width || height != self.height;
+        // R5: the caret is frame state. A frame whose only difference is the
+        // caret column has nothing for the text diff to repaint, and a bare
+        // cursor-move sequence does not make every terminal redraw the
+        // cursor cell - Windows consoles do not, which reads as "the space
+        // did not register". When the caret moved, its row is repainted.
+        let cursor_moved = cursor != self.last_cursor;
         let mut out = String::new();
         out.push_str("\x1b[?2026h"); // synchronized output
 
@@ -194,6 +203,21 @@ impl MainScreenRenderer {
                 }
                 out.push_str(SEGMENT_RESET);
             }
+        } else if cursor_moved && let Some((row, _)) = cursor {
+            // Only the caret moved: repaint the row it sits on.
+            let doc_row = (row as usize).min(lines.len().saturating_sub(1));
+            let target = screen_row(doc_row)
+                .max(0)
+                .min(height.saturating_sub(1) as i64) as usize;
+            if self.cursor_row > target {
+                out.push_str(&format!("\x1b[{}A", self.cursor_row - target));
+            } else if self.cursor_row < target {
+                out.push_str(&format!("\x1b[{}B", target - self.cursor_row));
+            }
+            out.push_str("\r\x1b[2K");
+            out.push_str(&lines[doc_row]);
+            out.push_str(SEGMENT_RESET);
+            self.cursor_row = target;
         }
 
         // Position the hardware cursor at the CURSOR_MARKER's screen row.
@@ -216,6 +240,7 @@ impl MainScreenRenderer {
         out.push_str("\x1b[?2026l"); // end synchronized output
         term.write(&out);
         self.previous = lines;
+        self.last_cursor = cursor;
         cursor
     }
 
@@ -287,6 +312,40 @@ mod tests {
         let out = term.take_output();
         assert!(out.contains("\x1b[2A"));
         assert!(out.contains("ONE"));
+    }
+
+    // Verifies: FR-UI-24 (R5) - a frame whose only change is the caret
+    // column still repaints the caret's row, so a typed space is visible
+    // on the next frame rather than on the next letter.
+    #[test]
+    fn a_caret_only_move_repaints_its_row() {
+        use crate::engine::core::CURSOR_MARKER;
+        let (mut r, mut term) = renderer();
+        // Same visible text both frames; only the caret moves, exactly as
+        // typing a space then leaving the caret after it does.
+        r.render(
+            &mut term,
+            vec![format!("ab{CURSOR_MARKER} "), "footer".into()],
+            20,
+            10,
+        );
+        let _ = term.take_output();
+        r.render(
+            &mut term,
+            vec![format!("ab {CURSOR_MARKER}"), "footer".into()],
+            20,
+            10,
+        );
+        let out = term.take_output();
+        assert!(
+            out.contains("\r\x1b[2Kab "),
+            "the caret row repaints: {out:?}"
+        );
+        assert!(out.contains("\x1b[4G"), "and the column moves: {out:?}");
+        assert!(
+            !out.contains("footer"),
+            "the other rows are untouched: {out:?}"
+        );
     }
 
     #[test]

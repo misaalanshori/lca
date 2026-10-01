@@ -59,6 +59,10 @@ pub const SHELL_TOOLS: &[&str] = &["auto", "bash", "pwsh", "powershell", "cmd"];
 /// The `permissions.mode` vocabulary (ADR-0042).
 pub const PERMISSION_MODES: &[&str] = &["ask", "yolo"];
 
+/// The `ui.thinking` vocabulary (R6): how much of a reasoning run
+/// the transcript shows, separate from `thinking`'s effort level.
+pub const THINKING_VISIBILITIES: &[&str] = &["snippet", "full", "hidden"];
+
 impl std::str::FromStr for ColorMode {
     type Err = String;
 
@@ -145,6 +149,7 @@ pub struct Config {
     shell_tool: Option<String>,
     shell_path: Option<String>,
     permissions_mode: Option<String>,
+    thinking_visibility: Option<String>,
     permissions_proposals: BTreeMap<String, String>,
     sources: BTreeMap<String, MergeSource>,
 }
@@ -176,6 +181,7 @@ impl Default for Config {
             shell_tool: None,
             shell_path: None,
             permissions_mode: None,
+            thinking_visibility: None,
             permissions_proposals: BTreeMap::new(),
             sources: BTreeMap::new(),
         }
@@ -214,6 +220,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "shell.tool",
     "shell.path",
     "permissions.mode",
+    "ui.thinking",
 ];
 
 /// Look a dotted key up in a TOML table: literal keys (`"tool.timeout_seconds"`)
@@ -289,6 +296,16 @@ fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigEr
         )),
         "ui.theme" => Ok(TypedValue::Text(raw.to_string())),
         "shell.path" => Ok(TypedValue::Text(raw.to_string())),
+        "ui.thinking" => {
+            if THINKING_VISIBILITIES.contains(&raw) {
+                Ok(TypedValue::Text(raw.to_string()))
+            } else {
+                Err(invalid(format!(
+                    "expected one of {}, got `{raw}`",
+                    THINKING_VISIBILITIES.join(", ")
+                )))
+            }
+        }
         "permissions.mode" => {
             if PERMISSION_MODES.contains(&raw) {
                 Ok(TypedValue::Text(raw.to_string()))
@@ -366,6 +383,7 @@ impl Config {
             "shell.tool",
             "shell.path",
             "permissions.mode",
+            "ui.thinking",
         ] {
             config.sources.insert(key.to_string(), MergeSource::Default);
         }
@@ -477,6 +495,18 @@ impl Config {
                     }
                     this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
                 }
+                "ui.thinking" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    if !THINKING_VISIBILITIES.contains(&text) {
+                        return Err(invalid(format!(
+                            "expected one of {}, got `{text}`",
+                            THINKING_VISIBILITIES.join(", ")
+                        )));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
                 "permissions.mode" => {
                     let text = value.as_str().ok_or_else(|| {
                         invalid(format!("expected a string, got {}", type_name(&value)))
@@ -545,6 +575,7 @@ impl Config {
             "shell.tool",
             "shell.path",
             "permissions.mode",
+            "ui.thinking",
         ] {
             if let Some(value) = table_value(table, key) {
                 // `provider` doubles as a section: `[provider] retry_limit = N`
@@ -588,6 +619,7 @@ impl Config {
             ("shell.tool", TypedValue::Text(v)) => self.shell_tool = Some(v),
             ("shell.path", TypedValue::Text(v)) => self.shell_path = Some(v),
             ("permissions.mode", TypedValue::Text(v)) => self.permissions_mode = Some(v),
+            ("ui.thinking", TypedValue::Text(v)) => self.thinking_visibility = Some(v),
             ("thinking", TypedValue::Text(v)) => self.thinking = Some(v),
             (other, _) => {
                 return Err(ConfigError::InvalidValue {
@@ -684,6 +716,14 @@ impl Config {
         self.permissions_mode.as_deref()
     }
 
+    /// `ui.thinking`: `snippet` (default), `full`, or `hidden` (R6).
+    /// Distinct from [`Config::thinking`], which is the effort level; a
+    /// dotted `thinking.*` key cannot exist beside a `thinking = "..."`
+    /// string in TOML, which is why this one lives under `ui`.
+    pub fn thinking_visibility(&self) -> Option<&str> {
+        self.thinking_visibility.as_deref()
+    }
+
     /// Permission proposals read from a trusted project file (ADR-0006).
     pub fn permissions_proposals(&self) -> &BTreeMap<String, String> {
         &self.permissions_proposals
@@ -765,6 +805,12 @@ impl Config {
                 self.permissions_mode
                     .clone()
                     .unwrap_or_else(|| "ask".to_string()),
+            ),
+            (
+                "ui.thinking",
+                self.thinking_visibility
+                    .clone()
+                    .unwrap_or_else(|| "snippet".to_string()),
             ),
             (
                 "permissions.proposals",

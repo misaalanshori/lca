@@ -40,6 +40,11 @@ impl Ui {
             plain: self.config.ui_color() == ColorMode::Never,
             yolo: crate::lock(&self.grants).permission_mode()
                 == lca_permissions::PermissionMode::Yolo,
+            thinking_visibility: self
+                .config
+                .thinking_visibility()
+                .and_then(lca_ui::transcript::ThinkingVisibility::parse)
+                .unwrap_or_default(),
             invoke_command,
             render_regions: self.render_regions.clone(),
             ui_events: self.ui_events.clone(),

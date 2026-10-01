@@ -114,6 +114,7 @@ impl Chat {
         let initial_records = std::mem::take(&mut world.options.initial_records);
         let initial_tail = std::mem::take(&mut world.options.initial_tail_lines);
         let attachment_loader = world.options.hooks.load_attachment.clone();
+        let thinking_visibility = world.options.thinking_visibility;
         // S5: the configured theme resolves through the auto-pair grammar
         // (a built-in, a custom file, or `auto` following the detected
         // scheme); an invalid custom file keeps the last-good palette and
@@ -196,6 +197,7 @@ impl Chat {
             shell: None,
             resume_picker: None,
         };
+        chat.transcript.set_thinking_visibility(thinking_visibility);
         // FR-UI-7: a resumed transcript renders like the live one - user
         // band, markdown, tool cards - instead of `user:`/`assistant:` lines.
         chat.load_records(&initial_records, attachment_loader.as_ref());

@@ -120,6 +120,33 @@ fn permissions_mode_merges_and_refuses_unknown_values() {
     );
 }
 
+// Verifies: R6 - `ui.thinking` is a separate key from `thinking`'s
+// effort level, with a closed vocabulary and a snippet default.
+#[test]
+fn thinking_visibility_merges_beside_the_effort_level() {
+    let dir = scratch("thinking-vis");
+    write(
+        &dir.join("user.toml"),
+        "thinking = \"high\"\nui.thinking = \"full\"\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.thinking(), Some("high"), "the effort level");
+    assert_eq!(config.thinking_visibility(), Some("full"), "the visibility");
+
+    write(&dir.join("user.toml"), "ui.thinking = \"verbose\"\n");
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("an unknown visibility is refused");
+    assert!(err.to_string().contains("verbose"), "{err}");
+    assert_eq!(Config::defaults().thinking_visibility(), None, "snippet");
+}
+
 // Verifies: FR-CFG-2 (every resolved value names the source that set it)
 #[test]
 fn every_resolved_value_carries_its_source() {

@@ -496,7 +496,13 @@ FR-UI-19. The stats view SHALL show tokens and cost per model, including cache-r
 
 FR-UI-20. The status area SHALL show the working directory and its git branch, the active model and thinking level, the context use and the session cost, any extension-provided segments, and the queued-message count.
 
-FR-UI-21. The user SHALL be able to switch between the fullscreen renderer and the scrollback renderer at runtime.
+FR-UI-21. The user SHALL be able to switch between the fullscreen renderer and the scrollback renderer at runtime, and the fullscreen renderer SHALL be the default (`ui.fullscreen = true`; ADR-0037's 2026-10-01 annotation).
+
+FR-UI-23. The overlay/dialog painter SHALL emit every dialog row with explicit, complete styles - the frame in a border role, a reset on either side - so no dialog cell renders with inherited style state from the transcript behind it, and the transcript beside a dialog does not render in the dialog's style.
+
+FR-UI-24. The hardware caret SHALL be frame state: WHEN the caret moves without any text changing, the renderer SHALL repaint the row the caret sits on and position the caret there, so a typed space is visible immediately on every terminal.
+
+FR-UI-22. The transcript SHALL render a reasoning run according to `ui.thinking`: `snippet` (the default) SHALL show the first three non-empty lines and then a count of the remaining lines, `full` SHALL show the whole run, and `hidden` SHALL show a single collapsed line. The expand/collapse key SHALL override the setting for the run it is pressed on without changing other runs.
 
 ### Distribution and installation
 

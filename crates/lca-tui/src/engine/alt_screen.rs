@@ -82,6 +82,9 @@ pub enum CopyOutcome {
 /// The fullscreen renderer.
 pub struct AltScreenRenderer {
     previous: Vec<String>,
+    /// The caret from the last frame: a caret that moved with no text change
+    /// still repaints its cell (R5).
+    last_cursor: Option<(u16, u16)>,
     width: u16,
     height: u16,
     first_render: bool,
@@ -113,6 +116,7 @@ impl AltScreenRenderer {
     pub fn new() -> Self {
         Self {
             previous: Vec::new(),
+            last_cursor: None,
             width: 0,
             height: 0,
             first_render: true,
@@ -173,12 +177,16 @@ impl AltScreenRenderer {
         let (lines, cursor) = extract_cursor_position(&lines);
 
         let resize = self.first_render || width != self.width || height != self.height;
+        // R5: the caret is frame state; see the main-screen renderer's note.
+        // The row the caret sits on repaints whenever the caret moved.
+        let cursor_moved = cursor != self.last_cursor;
         let mut out = String::from("\x1b[?2026h");
         if resize {
             out.push_str("\x1b[2J\x1b[H");
         }
         for (row, line) in lines.iter().enumerate() {
-            if !resize && self.previous.get(row) == Some(line) {
+            let caret_row = cursor.is_some_and(|(r, _)| r as usize == row);
+            if !resize && self.previous.get(row) == Some(line) && !(cursor_moved && caret_row) {
                 continue;
             }
             out.push_str(&format!("\x1b[{};1H\x1b[2K", row + 1));
@@ -195,6 +203,7 @@ impl AltScreenRenderer {
         self.width = width;
         self.height = height;
         self.first_render = false;
+        self.last_cursor = cursor;
         cursor
     }
 
@@ -362,6 +371,35 @@ fn base64_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::engine::terminal::FakeTerminal;
+
+    // Verifies: FR-UI-24 (R5) - a caret-only move repaints the caret's cell
+    // (the row is not skipped as "unchanged") and positions the column.
+    #[test]
+    fn a_caret_only_move_repaints_its_cell() {
+        use crate::engine::core::CURSOR_MARKER;
+        let mut term = FakeTerminal::new(20, 10);
+        let mut renderer = AltScreenRenderer::new();
+        renderer.render_lines(
+            &mut term,
+            vec![format!("ab{CURSOR_MARKER} "), "footer".into()],
+            20,
+            10,
+        );
+        let _ = term.take_output();
+        renderer.render_lines(
+            &mut term,
+            vec![format!("ab {CURSOR_MARKER}"), "footer".into()],
+            20,
+            10,
+        );
+        let out = term.take_output();
+        assert!(out.contains("\x1b[1;1H"), "row 1 repainted: {out:?}");
+        assert!(out.contains("\x1b[1;4H"), "caret column placed: {out:?}");
+        assert!(
+            !out.contains("footer"),
+            "the untouched row stays untouched: {out:?}"
+        );
+    }
 
     // Verifies: R2 - the alt-screen renderer enables exactly pi's mouse set
     // on entry (app-owned selection) and disables every mode on exit.

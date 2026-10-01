@@ -35,6 +35,16 @@ impl Tmux {
         Command::new("tmux").args(&full).output().expect("run tmux")
     }
 
+    /// The pane's own cursor column (R5's receipt: the terminal, not the
+    /// app, says where the caret is).
+    fn cursor_x(&self) -> i64 {
+        let out = Self::tmux(&["display-message", "-p", "-t", &self.name, "#{cursor_x}"]);
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .expect("tmux reports a cursor column")
+    }
+
     /// A genuine paste through tmux's own paste machinery (R6). The pane
     /// enabled bracketed-paste mode (`?2004h`), so tmux wraps the buffer
     /// in `ESC[200~…ESC[201~` before writing it. `send-keys` cannot do
@@ -1255,5 +1265,44 @@ fn a_read_outside_the_workspace_does_not_prompt() {
     assert!(
         !log.contains("\"t\":\"permission\""),
         "no decision was made, so none is recorded:\n{log}"
+    );
+}
+
+// Verifies: FR-UI-24 (R5) - a typed space advances the caret immediately:
+// the pane's own cursor column moves on the space keystroke itself, before
+// any letter follows. This is the receipt the owner's report asked for; on
+// Linux the caret row's repaint is asserted too.
+#[cfg(unix)]
+#[test]
+fn a_typed_space_advances_the_caret_immediately() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("caret-space");
+    let session = Tmux::new("caret");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+
+    session.send(&["a", "b"]);
+    let after_letters = session.cursor_x();
+    session.send(&[" "]);
+    let after_first_space = session.cursor_x();
+    assert_eq!(
+        after_first_space,
+        after_letters + 1,
+        "the first space moved the caret"
+    );
+    session.send(&[" "]);
+    assert_eq!(
+        session.cursor_x(),
+        after_first_space + 1,
+        "the second space moved it again"
+    );
+    session.send(&["c"]);
+    assert_eq!(
+        session.cursor_x(),
+        after_first_space + 2,
+        "and the next letter keeps the column"
     );
 }

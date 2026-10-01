@@ -130,3 +130,13 @@ asserts the absence of every mouse-enable sequence; `alt_screen::tests::
 alt_screen_emits_exactly_the_pi_mouse_sequences` asserts the exact enable
 set on entry and the disable set on exit; `lca-cli`'s hooks test asserts
 the fresh default and the persisted override.
+
+## Annotation — 2026-10-01 (the real-world driving cycle, R8): the default flipped back to alt-screen
+
+**What changed the answer.** Cycle 7 moved the default to the main-screen renderer for its native selection and scrollback. The owner then drove v0.5.2 on Windows and reported the other half of the trade: under ConPTY the main-screen renderer gave them **no usable scrollback at all**, because the console does not reliably restore what scrolled past. Alt-screen's app-owned scroll is exactly the thing that works there, and on every other terminal it is merely different rather than broken.
+
+**The correction.** `ui.fullscreen` **defaults to `true`** (alt-screen, app-owned scroll) on every platform again; `ui.fullscreen = false` opts into the main-screen renderer for a terminal whose native selection and scrollback are worth more. The runtime `/fullscreen` toggle is unchanged, both renderers remain, and a persisted `ui.json` still wins over the default. FR-UI-21's contract did not move; only the no-file default did.
+
+**What did not change.** Both renderers' contracts are the same as cycle 7 left them, including the mouse-sequence rule: the main-screen renderer never enables mouse tracking, and alt-screen emits exactly pi's set on entry and the disable set on exit. Those assertions are per-mode and stay green; only the fresh-default assertion inverted, and it now asserts the persisted override in both directions.
+
+**What to watch.** The cycle-7 rationale has not been disproved, it has been outweighed: a terminal that *does* restore scrollback well is a better home for the transcript, and a user who wants that now sets one key. If a future terminal layer can detect ConPTY reliably, a per-terminal default is the natural third step - and that would be a new record, not a third flip of this one.

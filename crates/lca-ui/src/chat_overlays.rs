@@ -25,11 +25,12 @@ fn picker_overlay(
     title: &str,
     body: &[String],
     hint: &str,
+    theme: &crate::theme::Theme,
 ) {
     let mut body = body.to_vec();
     body.push(String::new());
     body.push(hint.to_string());
-    overlay_box(viewport, width, height, title, &body);
+    overlay_box(viewport, width, height, title, &body, theme);
 }
 
 impl Chat {
@@ -71,7 +72,15 @@ impl Chat {
                 let cur = if index == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {label}"));
             }
-            picker_overlay(viewport, width, height, "tree", &body, HINT_TREE);
+            picker_overlay(
+                viewport,
+                width,
+                height,
+                "tree",
+                &body,
+                HINT_TREE,
+                &self.theme,
+            );
             return true;
         }
         if let Some(picker) = &self.resume_picker {
@@ -87,7 +96,15 @@ impl Chat {
                     entry.title, entry.messages, entry.age
                 ));
             }
-            picker_overlay(viewport, width, height, "resume", &body, HINT_FILTER);
+            picker_overlay(
+                viewport,
+                width,
+                height,
+                "resume",
+                &body,
+                HINT_FILTER,
+                &self.theme,
+            );
             return true;
         }
         if let Some(picker) = &self.grants_picker {
@@ -108,7 +125,15 @@ impl Chat {
                 let cur = if index == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {} - {}", entry.subject, entry.detail));
             }
-            picker_overlay(viewport, width, height, "grants", &body, HINT_GRANTS);
+            picker_overlay(
+                viewport,
+                width,
+                height,
+                "grants",
+                &body,
+                HINT_GRANTS,
+                &self.theme,
+            );
             return true;
         }
         if let Some(picker) = &self.theme_picker {
@@ -122,7 +147,15 @@ impl Chat {
                 };
                 body.push(format!(" {cur} {name}{current}"));
             }
-            picker_overlay(viewport, width, height, "theme", &body, HINT_THEME);
+            picker_overlay(
+                viewport,
+                width,
+                height,
+                "theme",
+                &body,
+                HINT_THEME,
+                &self.theme,
+            );
             return true;
         }
         if let Some(picker) = &self.trust_picker {
@@ -136,7 +169,15 @@ impl Chat {
                 let cur = if index == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {label}"));
             }
-            picker_overlay(viewport, width, height, "trust", &body, HINT_MOVE);
+            picker_overlay(
+                viewport,
+                width,
+                height,
+                "trust",
+                &body,
+                HINT_MOVE,
+                &self.theme,
+            );
             return true;
         }
         if let Some(picker) = &self.thinking_picker {
@@ -155,7 +196,15 @@ impl Chat {
                 };
                 body.push(format!(" {mark} {name:<8} {description}{current_mark}"));
             }
-            picker_overlay(viewport, width, height, "thinking", &body, HINT_MOVE);
+            picker_overlay(
+                viewport,
+                width,
+                height,
+                "thinking",
+                &body,
+                HINT_MOVE,
+                &self.theme,
+            );
             return true;
         }
         if let Some(picker) = &self.model_picker {
@@ -174,7 +223,15 @@ impl Chat {
                 };
                 body.push(format!(" {cur} {model}{mark}"));
             }
-            picker_overlay(viewport, width, height, "model", &body, HINT_FILTER);
+            picker_overlay(
+                viewport,
+                width,
+                height,
+                "model",
+                &body,
+                HINT_FILTER,
+                &self.theme,
+            );
             return true;
         }
         false
@@ -186,7 +243,7 @@ impl Chat {
             // R4: a cancellable waiting state, so a slow OAuth callback is
             // visible and interruptible instead of freezing the app.
             let body = vec![label.clone(), String::new(), "esc cancels".to_string()];
-            overlay_box(viewport, width, height, "login", &body);
+            overlay_box(viewport, width, height, "login", &body, &self.theme);
         } else if let Some(picker) = &self.world.picker {
             let rows = 15usize.min(height.saturating_sub(7) as usize).max(1);
             let total = picker.options.len();
@@ -207,7 +264,15 @@ impl Chat {
             if start > 0 || end < total {
                 body.push(format!("   [{}/{}]", picker.selected + 1, total));
             }
-            picker_overlay(viewport, width, height, "login", &body, HINT_LOGIN);
+            picker_overlay(
+                viewport,
+                width,
+                height,
+                "login",
+                &body,
+                HINT_LOGIN,
+                &self.theme,
+            );
         } else if let Some(grant) = &self.world.grant {
             let body = vec![
                 grant.prompt.clone(),
@@ -222,6 +287,7 @@ impl Chat {
                 height,
                 &format!("ad hoc grant: {}", grant.provider),
                 &body,
+                &self.theme,
             );
         } else if let Some(secret) = &self.world.secret {
             let shown = if secret.masked {
@@ -249,6 +315,7 @@ impl Chat {
                 height,
                 &format!("login: {}", secret.provider),
                 &body,
+                &self.theme,
             );
         } else if let Some(modal) = &self.world.permission {
             let mut body = vec![
@@ -270,7 +337,14 @@ impl Chat {
                 "[o] once / [a] always this pattern / [t] trust this folder this session / [d] deny"
                     .to_string(),
             );
-            overlay_box(viewport, width, height, "permission required", &body);
+            overlay_box(
+                viewport,
+                width,
+                height,
+                "permission required",
+                &body,
+                &self.theme,
+            );
         } else if self.world.modal_open {
             let trees = self
                 .world
@@ -292,7 +366,7 @@ impl Chat {
                     body.push(name.clone());
                 }
             }
-            overlay_box(viewport, width, height, &title, &body);
+            overlay_box(viewport, width, height, &title, &body, &self.theme);
         }
     }
 }

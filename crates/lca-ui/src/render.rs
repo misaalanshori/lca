@@ -6,7 +6,9 @@
 //! write escape sequences - their widget trees pass through
 //! `widget_lines` (ADR-0003).
 
-use lca_tui::engine::core::resolve_overlay_layout;
+use lca_tui::engine::core::{SEGMENT_RESET, resolve_overlay_layout};
+
+use crate::theme::{Role, Theme};
 use lca_tui::engine::text::{slice_by_column, visible_width, wrap_text_with_ansi};
 
 /// A centered box drawn over `base`, which is the visible viewport.
@@ -14,7 +16,14 @@ use lca_tui::engine::text::{slice_by_column, visible_width, wrap_text_with_ansi}
 /// The rectangle is resolved by the engine's overlay layout (anchor,
 /// margin, clamping) so the compositor and the focus machine agree on
 /// where an overlay lives.
-pub fn overlay_box(base: &mut [String], width: u16, height: u16, title: &str, body: &[String]) {
+pub fn overlay_box(
+    base: &mut [String],
+    width: u16,
+    height: u16,
+    title: &str,
+    body: &[String],
+    theme: &Theme,
+) {
     let content_height = u16::try_from(body.len())
         .unwrap_or(u16::MAX)
         .saturating_add(2);
@@ -48,6 +57,13 @@ pub fn overlay_box(base: &mut [String], width: u16, height: u16, title: &str, bo
     let box_h = box_lines.len().min(height as usize);
     let col = rect.col as usize;
     let top = rect.row as usize;
+    // R4: the diff renderer writes only the spans that changed, so a cell
+    // without an explicit style inherits whatever SGR the terminal last
+    // saw - which is how transcript colors used to bleed into dialogs (and
+    // dialog borders into the transcript beside them). Every dialog row is
+    // therefore painted whole: a reset, the frame in the border role, a
+    // reset, and then the untouched fragments on either side.
+    let border = theme.role(Role::Border);
     for (i, line) in box_lines.iter().take(box_h).enumerate() {
         let row = top + i;
         if let Some(base_line) = base.get_mut(row) {
@@ -59,7 +75,8 @@ pub fn overlay_box(base: &mut [String], width: u16, height: u16, title: &str, bo
             let after_start = col + visible_width(line);
             let after = slice_by_column(base_line, after_start, 10_000, false);
             let pad = " ".repeat(w.saturating_sub(visible_width(line)));
-            *base_line = format!("{before}{line}{pad}{after}");
+            let row_text = border(&format!("{line}{pad}"));
+            *base_line = format!("{before}{SEGMENT_RESET}{row_text}{SEGMENT_RESET}{after}");
         }
     }
 }
@@ -88,7 +105,14 @@ mod tests {
     #[test]
     fn overlay_box_centers_over_the_viewport() {
         let mut base = vec![".".repeat(80); 24];
-        overlay_box(&mut base, 80, 24, "login", &["hello".to_string()]);
+        overlay_box(
+            &mut base,
+            80,
+            24,
+            "login",
+            &["hello".to_string()],
+            &Theme::plain(),
+        );
         let joined: String = base
             .iter()
             .map(|l| strip_terminal_sequences(l))
@@ -110,7 +134,14 @@ mod tests {
     #[test]
     fn the_overlay_box_draws_a_full_frame() {
         let mut base = vec![".".repeat(80); 24];
-        overlay_box(&mut base, 80, 24, "login", &["hello".to_string()]);
+        overlay_box(
+            &mut base,
+            80,
+            24,
+            "login",
+            &["hello".to_string()],
+            &Theme::plain(),
+        );
         let joined: Vec<String> = base.iter().map(|l| strip_terminal_sequences(l)).collect();
         assert!(
             joined.iter().any(|l| l.contains('╭') && l.contains('╮')),
@@ -128,6 +159,61 @@ mod tests {
         assert!(
             after.contains('│'),
             "a right border after the content: {content:?}"
+        );
+    }
+
+    // Verifies: FR-UI-23 (R4) - every dialog row carries explicit styles:
+    // a reset, the frame in the border role, a reset - so a transcript
+    // color behind the dialog cannot bleed in, and the border cannot bleed
+    // into the transcript beside it.
+    #[test]
+    fn dialog_rows_override_the_styles_around_them() {
+        let theme = Theme::colored();
+        let border = theme.role(Role::Border);
+        // A base line painted with a strong color, as the transcript's
+        // markdown and tool cards are.
+        let painted = format!("\x1b[41m{}\x1b[0m", ".".repeat(80));
+        let mut base = vec![painted.clone(); 24];
+        overlay_box(&mut base, 80, 24, "login", &["hello".to_string()], &theme);
+        let row = base
+            .iter()
+            .find(|line| line.contains("hello"))
+            .expect("the dialog row rendered");
+
+        let reset_at = row.find(SEGMENT_RESET).expect("a reset before the frame");
+        let after_reset = &row[reset_at + SEGMENT_RESET.len()..];
+        assert!(
+            strip_terminal_sequences(after_reset).starts_with("│ hello"),
+            "the frame starts right after the reset: {row:?}"
+        );
+        let border_sgr = border("x");
+        let prefix = border_sgr.split('x').next().unwrap_or("");
+        assert!(
+            !prefix.is_empty() && row.contains(prefix),
+            "the frame carries the border role's SGR: {row:?}"
+        );
+        assert!(
+            row.matches(SEGMENT_RESET).count() >= 2,
+            "a reset on both sides of the dialog text: {row:?}"
+        );
+    }
+
+    // Verifies: FR-UI-23 (R4) - the base fragments keep their own styling:
+    // the transcript to the left of a dialog keeps the color it had.
+    #[test]
+    fn the_fragments_around_a_dialog_keep_their_own_bytes() {
+        let theme = Theme::colored();
+        let left = format!("\x1b[42m{}\x1b[0m", "L".repeat(6));
+        let line = format!("{left}{}", ".".repeat(74));
+        let mut base = vec![line; 24];
+        overlay_box(&mut base, 80, 24, "login", &["hello".to_string()], &theme);
+        let row = base
+            .iter()
+            .find(|line| line.contains("hello"))
+            .expect("the dialog row rendered");
+        assert!(
+            row.contains(&left),
+            "the left fragment is untouched: {row:?}"
         );
     }
 }

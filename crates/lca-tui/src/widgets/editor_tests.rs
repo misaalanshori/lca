@@ -373,3 +373,26 @@ fn tab_applies_a_single_candidate_silently() {
     assert_eq!(e.text(), "read README.md");
     assert!(e.suggestions().is_none());
 }
+
+// Verifies: FR-UI-24 (R5) - a trailing space moves the caret: the marker's
+// column advances on the space keystroke itself, not on the next letter.
+#[test]
+fn a_trailing_space_advances_the_cursor_column() {
+    let mut e = Editor::new();
+    for ch in "a b".chars() {
+        e.handle_key(&ch.to_string());
+    }
+    let (_, before) = extract_cursor_position(&e.render(80));
+    assert_eq!(before.map(|(_, col)| col), Some(3), "after the b");
+
+    e.handle_key(" ");
+    let lines = e.render(80);
+    let (_, after) = extract_cursor_position(&lines);
+    assert_eq!(
+        after.map(|(_, col)| col),
+        Some(4),
+        "the space moved the caret: {lines:?}"
+    );
+    // And the trailing space is really in the buffer, not trimmed away.
+    assert_eq!(e.lines(), &["a b "], "the space is in the line");
+}

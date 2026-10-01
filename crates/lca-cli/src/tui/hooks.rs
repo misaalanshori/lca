@@ -529,36 +529,38 @@ fn persist_screen_mode(fullscreen: bool) {
 
 /// The screen mode a fresh session starts in (FR-UI-21).
 ///
-/// **The default is the main-screen scrollback renderer.** It leaves the
-/// terminal's own text selection, right-click paste, and Ctrl+V alone:
-/// the main-screen renderer emits no mouse-tracking sequences, so the
-/// terminal never hands clicks to the app. The alt-screen renderer (with
-/// app-owned selection and mouse capture) is the `/fullscreen` opt-in.
+/// **The default is the alt-screen (fullscreen) renderer again.** Cycle 7
+/// flipped it to main-screen for its native selection and scrollback; the
+/// owner's real Windows use on 2026-10-01 showed the other side of that
+/// trade: ConPTY does not reliably restore scrollback, so the main screen
+/// left them with no usable history at all. Alt-screen keeps its own
+/// scroll and selection, which is what a real console needed.
 ///
-/// The default flipped in TUI cycle 7 (R2). Alt-screen was the default,
-/// and its `?1000h?1002h?1003h?1006h` capture killed every native
-/// affordance on a real terminal; pi's own default is the main screen
-/// (`--tui-mode regular`). A persisted `ui.json` still wins, so an
-/// existing `/fullscreen` choice survives.
+/// Both renderers stay; one key decides. `ui.fullscreen = false` opts back
+/// into the main-screen renderer (native selection, terminal scrollback),
+/// and a persisted `ui.json` still wins over the default, so an explicit
+/// `/fullscreen` choice survives either way. ADR-0037 carries the dated
+/// annotations for both flips.
 pub(super) fn initial_screen_mode(config_dir: &std::path::Path) -> bool {
     std::fs::read_to_string(config_dir.join("ui.json"))
         .map(|text| !text.contains("false"))
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Verifies: R2 - a fresh session defaults to the main-screen renderer
-    // (no mouse capture), and a persisted `/fullscreen` choice still wins.
+    // Verifies: R8 (ADR-0037's 2026-10-01 annotation) - a fresh session
+    // defaults to the alt-screen renderer, and a persisted `/fullscreen`
+    // choice still wins either way.
     #[test]
-    fn the_fresh_screen_mode_is_main_screen_and_a_persisted_pick_wins() {
+    fn the_fresh_screen_mode_is_fullscreen_and_a_persisted_pick_wins() {
         let root = lca_testkit::scratch_path("lca-screen-mode");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("mkdir");
-        // No ui.json: the main screen is the default.
-        assert!(!initial_screen_mode(&root));
+        // No ui.json: fullscreen is the default.
+        assert!(initial_screen_mode(&root));
         // A persisted fullscreen pick is honored.
         std::fs::write(root.join("ui.json"), "{\"fullscreen\":true}").expect("write");
         assert!(initial_screen_mode(&root));

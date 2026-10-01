@@ -53,6 +53,9 @@ pub enum Entry {
         reasoning: String,
         /// Whether the message is still streaming.
         streaming: bool,
+        /// This run's thinking visibility, when the user toggled it
+        /// (R6); `None` follows [`Transcript`]'s configured default.
+        thinking_override: Option<bool>,
     },
     /// A tool call and its result.
     Tool {
@@ -85,6 +88,42 @@ pub enum Entry {
 /// lines. `None` means the entry must be re-rendered.
 type CachedRender = Option<(u16, Vec<String>)>;
 
+/// How a thinking run renders (R6, pi's `thinkingVisibility`): a per-run
+/// override on top of this default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ThinkingVisibility {
+    /// The first few non-empty lines, then a `… +N lines` marker. The
+    /// default: the owner asked to *see* the thinking, not to read all of
+    /// it (R6).
+    #[default]
+    Snippet,
+    /// The whole run, rendered as it streams.
+    Full,
+    /// One dim line, pi's original `hideThinkingBlock` behavior.
+    Hidden,
+}
+
+impl ThinkingVisibility {
+    /// The config spelling (`ui.thinking`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThinkingVisibility::Snippet => "snippet",
+            ThinkingVisibility::Full => "full",
+            ThinkingVisibility::Hidden => "hidden",
+        }
+    }
+
+    /// Parse the config spelling.
+    pub fn parse(text: &str) -> Option<ThinkingVisibility> {
+        match text {
+            "snippet" => Some(ThinkingVisibility::Snippet),
+            "full" => Some(ThinkingVisibility::Full),
+            "hidden" => Some(ThinkingVisibility::Hidden),
+            _ => None,
+        }
+    }
+}
+
 /// The transcript: an ordered list of entries.
 #[derive(Default)]
 pub struct Transcript {
@@ -92,9 +131,8 @@ pub struct Transcript {
     /// Whether tool cards show their result (pi's `app.tools.expand`,
     /// Ctrl+O). Collapsed by default: a card is one line.
     tools_expanded: bool,
-    /// Whether thinking runs show their text (pi's `hideThinkingBlock`,
-    /// Ctrl+T). Collapsed by default: one dim line (R8).
-    thinking_expanded: bool,
+    /// How a thinking run renders unless its entry overrides it (R6).
+    thinking: ThinkingVisibility,
     /// Per-entry render cache (R15): `None` means the entry must be
     /// rendered; a streaming append invalidates only the last entry, so a
     /// long transcript is not re-rendered from scratch on every delta.
@@ -118,10 +156,41 @@ impl Transcript {
         self.cache.borrow_mut().clear();
     }
 
-    /// Toggle thinking-run expansion (Ctrl+T; pi's `hideThinkingBlock`).
+    /// The configured default for thinking runs (R6).
+    pub fn thinking_visibility(&self) -> ThinkingVisibility {
+        self.thinking
+    }
+
+    /// Set the default for thinking runs (R6's `ui.thinking`).
+    pub fn set_thinking_visibility(&mut self, visibility: ThinkingVisibility) {
+        self.thinking = visibility;
+        self.invalidate_cache();
+    }
+
+    /// Toggle the *most recent* thinking run's visibility (Ctrl+T; pi's
+    /// per-run `thinkingVisibilityOverrides`, `assistant-message.ts`). Runs
+    /// already rendered keep the configured default, so expanding the one
+    /// being read does not rewrite the transcript behind it.
     pub fn toggle_thinking_expanded(&mut self) {
-        self.thinking_expanded = !self.thinking_expanded;
-        self.cache.borrow_mut().clear();
+        let default_expanded = matches!(self.thinking, ThinkingVisibility::Full);
+        let Some(Entry::Assistant {
+            reasoning,
+            thinking_override,
+            ..
+        }) = self
+            .entries
+            .iter_mut()
+            .rev()
+            .find(|entry| matches!(entry, Entry::Assistant { .. }))
+        else {
+            return;
+        };
+        if reasoning.trim().is_empty() {
+            return;
+        }
+        let visible = thinking_override.unwrap_or(default_expanded);
+        *thinking_override = Some(!visible);
+        self.invalidate_cache();
     }
 
     /// Drop every cached render (a mutation that is not a streaming append).
@@ -155,6 +224,7 @@ impl Transcript {
             text: String::new(),
             reasoning: String::new(),
             streaming: true,
+            thinking_override: None,
         });
     }
 
@@ -169,6 +239,7 @@ impl Transcript {
                 text: delta.to_string(),
                 reasoning: String::new(),
                 streaming: true,
+                thinking_override: None,
             });
         }
     }
@@ -183,6 +254,7 @@ impl Transcript {
                 text: String::new(),
                 reasoning: delta.to_string(),
                 streaming: true,
+                thinking_override: None,
             });
         }
     }
@@ -448,7 +520,7 @@ impl Transcript {
                 width,
                 theme,
                 self.tools_expanded,
-                self.thinking_expanded,
+                self.thinking,
                 &mut lines,
             );
             out.extend(lines.iter().cloned());
@@ -475,7 +547,7 @@ impl Transcript {
                 width,
                 theme,
                 self.tools_expanded,
-                self.thinking_expanded,
+                self.thinking,
                 &mut tmp,
             );
             line += tmp.len();
@@ -522,7 +594,7 @@ fn render_entry(
     width: u16,
     theme: &Theme,
     tools_expanded: bool,
-    thinking_expanded: bool,
+    thinking: ThinkingVisibility,
     out: &mut Vec<String>,
 ) {
     match entry {
@@ -531,11 +603,17 @@ fn render_entry(
             text,
             reasoning,
             streaming,
+            thinking_override,
         } => render_assistant(
             text,
             reasoning,
             *streaming,
-            thinking_expanded,
+            // R6: the run's own toggle wins over the configured default.
+            match thinking_override {
+                Some(true) => ThinkingVisibility::Full,
+                Some(false) => ThinkingVisibility::Hidden,
+                None => thinking,
+            },
             width,
             theme,
             out,
@@ -579,30 +657,66 @@ fn render_assistant(
     text: &str,
     reasoning: &str,
     streaming: bool,
-    thinking_expanded: bool,
+    thinking: ThinkingVisibility,
     width: u16,
     theme: &Theme,
     out: &mut Vec<String>,
 ) {
     if !reasoning.is_empty() {
-        if thinking_expanded {
-            for line in wrap_text_with_ansi(reasoning, (width as usize).saturating_sub(2).max(1)) {
+        match thinking {
+            ThinkingVisibility::Full => {
+                for line in
+                    wrap_text_with_ansi(reasoning, (width as usize).saturating_sub(2).max(1))
+                {
+                    out.push(format!(
+                        "{} {}",
+                        (theme.reasoning)("∴"),
+                        (theme.reasoning)(&line)
+                    ));
+                }
+            }
+            // R6's default: enough thinking to see where the model is
+            // going, then a count of what is left.
+            ThinkingVisibility::Snippet => {
+                const SNIPPET_LINES: usize = 3;
+                let lines: Vec<&str> = reasoning
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .collect();
+                for line in lines.iter().take(SNIPPET_LINES) {
+                    for wrapped in
+                        wrap_text_with_ansi(line, (width as usize).saturating_sub(2).max(1))
+                    {
+                        out.push(format!(
+                            "{} {}",
+                            (theme.reasoning)("∴"),
+                            (theme.reasoning)(&wrapped)
+                        ));
+                    }
+                }
+                if lines.len() > SNIPPET_LINES {
+                    out.push(format!(
+                        "{} {}",
+                        (theme.reasoning)("∴"),
+                        (theme.reasoning)(&format!(
+                            "… +{} lines ({} to expand)",
+                            lines.len() - SNIPPET_LINES,
+                            lca_tui::engine::keybindings::key_text("app.thinking.toggle")
+                        ))
+                    ));
+                }
+            }
+            ThinkingVisibility::Hidden => {
+                // pi's original: one dim line (`messages.md` §3).
                 out.push(format!(
                     "{} {}",
                     (theme.reasoning)("∴"),
-                    (theme.reasoning)(&line)
+                    (theme.reasoning)(&format!(
+                        "Thinking… ({} to expand)",
+                        lca_tui::engine::keybindings::key_text("app.thinking.toggle")
+                    ))
                 ));
             }
-        } else {
-            // pi hides the run behind one dim line (`messages.md` §3).
-            out.push(format!(
-                "{} {}",
-                (theme.reasoning)("∴"),
-                (theme.reasoning)(&format!(
-                    "Thinking… ({} to expand)",
-                    lca_tui::engine::keybindings::key_text("app.thinking.toggle")
-                ))
-            ));
         }
     }
     if !text.is_empty() {
@@ -776,19 +890,98 @@ mod tests {
         );
     }
 
+    // Verifies: FR-UI-22 (R6) - a thinking run shows a short snippet by
+    // default: the first few non-empty lines, then a count of the rest.
     #[test]
-    fn reasoning_is_collapsed_by_default_and_expands() {
+    fn reasoning_shows_a_snippet_by_default() {
         let mut t = Transcript::new();
-        t.append_reasoning("thinking hard");
+        t.append_reasoning("one\ntwo\nthree\nfour\nfive");
         t.append_text("the answer");
         t.finish_assistant();
-        let collapsed = strip(&t.render(40, &plain()));
-        assert!(collapsed[0].contains("ctrl+t to expand"), "{collapsed:?}");
-        assert!(!collapsed.iter().any(|l| l.contains("thinking hard")));
+        let lines = strip(&t.render(40, &plain()));
+        let shown: Vec<&String> = lines.iter().filter(|l| l.starts_with('∴')).collect();
+        assert_eq!(shown.len(), 4, "three lines plus the marker: {lines:?}");
+        assert!(shown[0].contains("one"), "{lines:?}");
+        assert!(shown[2].contains("three"), "{lines:?}");
+        assert!(
+            shown[3].contains("… +2 lines") && shown[3].contains("ctrl+t to expand"),
+            "{lines:?}"
+        );
+        assert!(!lines.iter().any(|l| l.contains("four")), "{lines:?}");
+    }
+
+    // Verifies: FR-UI-22 (R6) - the toggle expands the run it is on, in
+    // place, to the full block; the answer below it is untouched.
+    #[test]
+    fn the_thinking_toggle_expands_the_run_in_place() {
+        let mut t = Transcript::new();
+        t.append_reasoning("one\ntwo\nthree\nfour\nfive");
+        t.append_text("the answer");
+        t.finish_assistant();
         t.toggle_thinking_expanded();
-        let expanded = strip(&t.render(40, &plain()));
-        assert!(expanded[0].starts_with("∴ thinking hard"));
-        assert!(expanded.iter().any(|l| l.contains("the answer")));
+        let lines = strip(&t.render(40, &plain()));
+        for expected in ["one", "two", "three", "four", "five"] {
+            assert!(
+                lines.iter().any(|l| l.contains(expected)),
+                "{expected} after expanding: {lines:?}"
+            );
+        }
+        assert!(
+            !lines.iter().any(|l| l.contains("+2 lines")),
+            "no marker once expanded: {lines:?}"
+        );
+        assert!(lines.iter().any(|l| l.contains("the answer")));
+    }
+
+    // Verifies: FR-UI-22 (R6) - `full` and `hidden` are settings values:
+    // each renders its shape with no per-run toggle involved.
+    #[test]
+    fn thinking_visibility_full_and_hidden_are_settings() {
+        let mut full = Transcript::new();
+        full.set_thinking_visibility(ThinkingVisibility::Full);
+        full.append_reasoning("alpha\nbeta\ngamma\ndelta");
+        full.append_text("answer");
+        full.finish_assistant();
+        let lines = strip(&full.render(40, &plain()));
+        assert!(lines.iter().any(|l| l.contains("delta")), "{lines:?}");
+        assert!(!lines.iter().any(|l| l.contains("+1 lines")), "{lines:?}");
+
+        let mut hidden = Transcript::new();
+        hidden.set_thinking_visibility(ThinkingVisibility::Hidden);
+        hidden.append_reasoning("alpha\nbeta");
+        hidden.append_text("answer");
+        hidden.finish_assistant();
+        let lines = strip(&hidden.render(40, &plain()));
+        assert!(lines.iter().any(|l| l.contains("Thinking…")), "{lines:?}");
+        assert!(!lines.iter().any(|l| l.contains("alpha")), "{lines:?}");
+    }
+
+    // Verifies: FR-UI-22 (R6) - the toggle is per run (pi's
+    // thinkingVisibilityOverrides): expanding the latest run leaves the
+    // earlier one on the configured default.
+    #[test]
+    fn the_thinking_toggle_only_changes_the_latest_run() {
+        let mut t = Transcript::new();
+        t.append_reasoning("first run");
+        t.append_text("answer one");
+        t.finish_assistant();
+        t.append_reasoning("second run");
+        t.append_text("answer two");
+        t.finish_assistant();
+        t.toggle_thinking_expanded();
+        let lines = strip(&t.render(40, &plain()));
+        // The second run's reasoning is now shown as-is; the first run's
+        // still shows as a snippet (one line, so no marker).
+        assert_eq!(
+            lines.iter().filter(|l| l.contains("second run")).count(),
+            1,
+            "{lines:?}"
+        );
+        assert_eq!(
+            lines.iter().filter(|l| l.contains("first run")).count(),
+            1,
+            "{lines:?}"
+        );
     }
 
     // Verifies: R15 - the per-entry render cache never serves stale lines.
