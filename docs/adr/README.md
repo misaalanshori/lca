@@ -61,6 +61,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0040 | Install and update through root-hosted one-liner scripts | Accepted | Install cycle |
 | 0041 | The `shell` tool's interpreter selection and command transport | Accepted | Real-world driving |
 | 0042 | Yolo mode, and the read-only fatigue cut | Accepted | Real-world driving |
+| 0043 | The unstable release line | Accepted | Unstable line |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
 

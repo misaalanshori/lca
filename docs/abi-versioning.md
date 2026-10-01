@@ -123,8 +123,12 @@ The known punch list going into Phase 8, each already decided and awaiting imple
 
 **This is the active regime during the ADR-0028 development window.**
 
-Before 1.0, minor versions break. The support window still applies, so 0.4 loads 0.3 extensions, but an author should expect to rebuild each cycle.
+Before 1.0, minor versions break. The support window still applies, so 0.5 loads 0.4 extensions, but an author should expect to rebuild each cycle.
 
-During the ADR-0028 window, the live train (`0.4` at this release) is a single **in-place** line: breaking changes land inside it without a minor bump, and the changelog's running development section is the record of what changed. An author should expect to rebuild after a same-line change, but the host cannot tell an early train build from a late one (the named limitation above). The registry tag for this line is `abi-0.4`; a rebuild is a new push under the same tag until the line moves.
+During the ADR-0028 window, the live train (`0.5` at this release) is a single **in-place** line: breaking changes land inside it without a minor bump, and the changelog's running development section is the record of what changed. An author should expect to rebuild after a same-line change, but the host cannot tell an early train build from a late one (the named limitation above). The registry tag for this line is `abi-0.5`; a rebuild is a new push under the same tag until the line moves.
 
 Authors publishing during 0.x should track the changelog and push a rebuilt artifact within one cycle of each minor release. The ABI line tag in the registry makes this mechanical: a rebuild is a new push under a new `abi-0.N` tag.
+
+## The unstable line is not an ABI channel
+
+An unstable build carries the ABI of the commit it was built from: `lca 0.5.2.b194950` prints `abi 0.5`, because the ABI label tracks the product minor and the `.b<sha7>` bake only decorates the first version line (ADR-0043). Installing the unstable line therefore moves a host to a *snapshot of the current train*, never to a new interface line: two unstable builds of the same train are as interchangeable to the extension host as two stable builds of that train, and just as indistinguishable inside it — the named limitation above applies to them the same way. An author testing against unstable is testing a moment on the same line they already target.

@@ -7,6 +7,14 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **The unstable release line.** Every green commit on `main` now publishes
+  six binaries, `artifacts.sha256`, and provenance attestations to a rolling
+  prerelease tagged `unstable`, and `install.sh --unstable` /
+  `install.ps1 -Unstable` install and update that line through the same
+  one-liners — same verification, same assets, versioned `X.Y.Z.b<sha7>`
+  (`lca 0.5.2.b194950`). Without the flag both installers resolve the
+  stable line exactly as before, and the flag is latest-only: combined with
+  `--version` it is a usage error (ADR-0043, FR-INSTALL-10).
 - **LaTeX math and mermaid diagrams (TUI-10 M3/M4).** Inline `$…$`/`\(…\)`
   and display `$$…$$`/`\[…\]` typeset through a port of pi's `latex.ts`:
   224 symbol commands, a recursive-descent parser, and baseline-joined 2D

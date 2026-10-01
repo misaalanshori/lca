@@ -54,6 +54,12 @@ There is no calendar cadence during Phase 0 through Phase 6. A release happens w
 
 After 1.0, minor releases are cut when there is something worth shipping, and patch releases are cut as needed. A security fix ships as soon as it is ready and does not wait for anything else.
 
+## Two release lines
+
+**Stable** is every rule in this document: a tag on `main`, a changelog entry, six assets, checksums, attestations. **Unstable** (ADR-0043) is one rolling pre-release for every commit that passed the pipeline: a GitHub release tagged `unstable`, marked `prerelease`, whose assets are replaced after each green commit and whose binaries report `X.Y.Z.b<sha7>` as their first `--version` line. It guarantees three things: it was built from a green `main` commit, its checksums come from the same directory as its binaries, and it is provenance-attested exactly as a stable artifact is. It guarantees nothing else — it may break, it gets no changelog entry (the history is git and the CI run artifacts, kept per build for 90 days), and the next green commit replaces it.
+
+Annotation, 2026-10-02 (ADR-0043), on the tag rule above: `unstable` is the exception. It is a channel pointer, not a release announcement. The tag is created once and never moved; what rolls is the release it heads — its assets are replaced — so the tag's target SHA is explicitly *not* the provenance of the binaries currently behind it, which is what the attestation and the baked version are for. `releases/latest` never resolves to it, because it is marked `prerelease` and `--latest=false`, which is exactly what keeps the stable installers' redirect path true. Every other tag stays as immutable as it was.
+
 ## Artifact matrix
 
 Every release builds six native targets. The seventh row is deferred with NFR-11 (`scripts/deferred-requirements.txt`): until the web target ships, a release publishes no npm package.
@@ -158,7 +164,7 @@ A release that is merely broken is fixed forward with a patch release. Yanking i
 
 ## Installation channels
 
-The primary channel is a shell installer at the repository root, `install.sh`, fetched from `raw.githubusercontent.com` and piped into `sh`: it resolves the right artifact for the platform, verifies the checksum, places the binary, and puts it on PATH. Running the same one-liner again is the update path, and `--uninstall` reverses it. `install.ps1` covers Windows with the same semantics, because a bash installer is not a Windows installation story. The full specification, the flags, and the manual alternative are `docs/installation.md`; the decision is ADR-0040; the scripts are gated by gate 10 in the table above.
+The primary channel is a shell installer at the repository root, `install.sh`, fetched from `raw.githubusercontent.com` and piped into `sh`: it resolves the right artifact for the platform, verifies the checksum, places the binary, and puts it on PATH. Running the same one-liner again is the update path, and `--uninstall` reverses it. `install.ps1` covers Windows with the same semantics, because a bash installer is not a Windows installation story. The full specification, the flags, and the manual alternative are `docs/installation.md`; the decision is ADR-0040; the scripts are gated by gate 10 in the table above. Both release lines install through those same scripts: no flag resolves the stable line exactly as before, `--unstable`/`-Unstable` resolves the rolling line's `download/unstable` directory with the same mandatory verification, and the flag is latest-only, so it is a usage error next to `--version` (FR-INSTALL-10, ADR-0043).
 
 Package manager distribution follows once the release process is stable. Packaging is not a Phase 8 deliverable, and shipping to a package manager before the release process settles creates a support burden with stale versions.
 

@@ -74,6 +74,17 @@ curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh |
 irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1 | iex
 ```
 
+**The unstable line** — the latest green commit, as a rolling pre-release
+(`X.Y.Z.b<sha7>`, may break; [ADR-0043](docs/adr/0043-unstable-release-line.md)):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --unstable
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1))) -Unstable
+```
+
 Pin a release by passing it as an argument (both invocations below are the
 ones the CI job exercises):
 
@@ -380,7 +391,7 @@ document and the index for everything else. From there:
 
 | Document | What it answers |
 |---|---|
-| [`docs/adr/`](docs/adr/README.md) | 41 decision records, 0001–0042 (0020 unused): why, what was rejected, when to revisit |
+| [`docs/adr/`](docs/adr/README.md) | 42 decision records, 0001–0043 (0020 unused): why, what was rejected, when to revisit |
 | [`docs/capabilities.md`](docs/capabilities.md) | every capability an extension can hold, normatively |
 | [`docs/extension-authoring.md`](docs/extension-authoring.md) | writing and publishing an extension |
 | [`docs/installation.md`](docs/installation.md) | the installers, manual install, security stance |

@@ -37,6 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh |
 | Flag | Meaning |
 |---|---|
 | `--version <X.Y.Z\|vX.Y.Z>` | Install that release instead of the latest. |
+| `--unstable` (`-Unstable`) | Install the **unstable line** instead: the rolling pre-release at `<base>/download/unstable/<A>`, newest green commit, `X.Y.Z.b<sha7>`. Latest-only (ADR-0043), so combining it with `--version` is a usage error (exit 2). |
 | `--install-dir <dir>` | Install directory. Default `$HOME/.local/bin`; the `LCA_INSTALL_DIR` environment variable supplies the default when set, and the flag wins over both (flag > environment > default). |
 | `--no-path` | Do not edit any shell rc file. |
 | `--uninstall` | Remove the installed binary and every marked PATH block this installer added, then report what was removed. |
@@ -54,6 +55,18 @@ curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh |
 | `-Verbose` | Print the download URL before fetching. |
 
 `LCA_BASE_URL` (sh) and `-BaseUrl` (ps1) replace the release URL prefix (FR-INSTALL-6). The environment variable works on both scripts.
+
+## The unstable line
+
+`--unstable` / `-Unstable` swaps one thing: the URL pattern above goes to `download/unstable/`, where a rolling pre-release carries the newest commit that passed the whole pipeline (ADR-0043). Everything else — platform mapping, the mandatory checksum from the same directory, PATH handling, `--no-path`, `--uninstall` — is the same code path as a stable install.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --unstable
+```
+
+Switching lines is just running the other form: no flag installs (or re-installs) the stable line over whatever is there, the flag installs the unstable line, and the report line says which is which (`lca 0.5.2.b194950 -> 0.5.2`). The installed binary keeps whatever it was given; nothing about a line is stored, so the next run decides again.
+
+**Trust stance.** The unstable line verifies exactly like the stable one: `artifacts.sha256` from the same directory, mismatch refuses and leaves the old binary in place, and the same `actions/attest-build-provenance` attestation is produced per artifact, so `gh attestation verify ./lca --repo misaalanshori/lca` works on an unstable binary too. What it does not carry is a promise: no changelog entry, no support window, and a build that may be broken by design. When in doubt, run the one-liner without the flag.
 
 ## Platform matrix
 
@@ -77,8 +90,9 @@ One base, two patterns, for asset `A` and optional version `V`:
 - default base: `https://github.com/misaalanshori/lca/releases`
 - latest: `<base>/latest/download/<A>`
 - pinned: `<base>/download/v<V>/<A>`
+- unstable: `<base>/download/unstable/<A>` (`--unstable`/`-Unstable`)
 
-`releases/latest/download` is a redirect GitHub resolves for any asset on the latest release, so "what is the newest version" costs one HTTP request with no API call, no JSON parsing, and no rate limit (ADR-0040). The checksum file sits beside the binary under the name `artifacts.sha256`, fetched with the same pattern.
+`releases/latest/download` is a redirect GitHub resolves for any asset on the latest release, so "what is the newest version" costs one HTTP request with no API call, no JSON parsing, and no rate limit (ADR-0040). The checksum file sits beside the binary under the name `artifacts.sha256`, fetched with the same pattern — the unstable line's checksums live beside its binaries in `download/unstable/`, so verification is identical on both lines (FR-INSTALL-10).
 
 `LCA_BASE_URL` (or `-BaseUrl`) replaces the base and nothing else, so a mirror with the same layout is a drop-in (FR-INSTALL-6). A base that is a local path — `file://` or a bare directory — is read with a copy instead of a network fetch, which is what makes the test suite hermetic; the fixture directory mirrors the release layout (`<base>/latest/download/`, `<base>/download/v<V>/`).
 
@@ -137,7 +151,7 @@ Nothing outside the markers, and no file the installer did not create, is modifi
 |---|---|
 | 0 | Success: installed, updated, uninstalled, or help printed. |
 | 1 | Fetch, checksum, hash-tool, or write failure. The previous binary is untouched. |
-| 2 | Unsupported platform/architecture, or an unknown flag. |
+| 2 | Unsupported platform/architecture, an unknown flag, or `--unstable` combined with `--version` (the rolling line has no pinned form). |
 
 ## Manual installation
 
