@@ -52,14 +52,29 @@ pub fn version_static() -> &'static str {
 
 /// `lca --version`: agent version, ABI version, crate version, build target
 /// (release policy, ABI policy host version reporting).
+///
+/// The first line carries the *product* version: the crate version on the
+/// stable line, `X.Y.Z.b<sha7>` on an unstable build (ADR-0043). The
+/// `crate` line keeps the crate version, so the other three lines hold
+/// their shape on both lines.
 pub fn version_text() -> String {
     format!(
         "{}\nabi {}\ncrate {}\ntarget {}",
-        env!("CARGO_PKG_VERSION"),
+        env!("PRODUCT_VERSION"),
         lca_session::ABI_VERSION,
         env!("CARGO_PKG_VERSION"),
         env!("LCA_BUILD_TARGET"),
     )
+}
+
+/// Split a product version into its `X.Y.Z` base and its optional
+/// `.b<sha7>` unstable suffix (ADR-0043's scheme). `--version`'s shape
+/// test runs it over both forms.
+pub fn split_product_version(product: &str) -> (&str, Option<&str>) {
+    match product.split_once(".b") {
+        Some((base, sha)) => (base, Some(sha)),
+        None => (product, None),
+    }
 }
 
 /// The parsed command line.

@@ -144,3 +144,50 @@ fn the_core_default_and_the_config_default_agree() {
         lca_config::DEFAULT_TOOL_MAX_ITERATIONS
     );
 }
+
+// Verifies: ADR-0043 / U1 - the product version is either the crate
+// version (the stable line) or `X.Y.Z.b<sha7>` (what the unstable
+// workflow bakes), and `--version`'s first line is the same string.
+#[test]
+fn the_product_version_is_stable_or_unstable_shape() {
+    let product = env!("PRODUCT_VERSION");
+    let (base, suffix) = lca_cli::split_product_version(product);
+    let parts: Vec<&str> = base.split('.').collect();
+    assert_eq!(parts.len(), 3, "X.Y.Z base: {product}");
+    assert!(
+        parts
+            .iter()
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit())),
+        "every base part is digits: {product}"
+    );
+    match suffix {
+        Some(sha) => {
+            assert_eq!(sha.len(), 7, "the sha is seven hex digits: {product}");
+            assert!(
+                sha.chars().all(|c| c.is_ascii_hexdigit()),
+                "hex only: {product}"
+            );
+        }
+        None => assert_eq!(
+            product,
+            env!("CARGO_PKG_VERSION"),
+            "no suffix: crate version"
+        ),
+    }
+    // The build-time override is what the shape above reflects.
+    match std::env::var("LCA_BUILD_VERSION") {
+        Ok(baked) => assert_eq!(product, baked, "the override won at build time"),
+        Err(_) => assert_eq!(product, env!("CARGO_PKG_VERSION")),
+    }
+    assert!(lca_cli::version_text().starts_with(product), "line one");
+}
+
+// Verifies: both forms of the scheme parse (the unstable workflow's
+// composition and the stable default).
+#[test]
+fn both_product_version_forms_split() {
+    let (base, sha) = lca_cli::split_product_version("0.5.2");
+    assert_eq!((base, sha), ("0.5.2", None));
+    let (base, sha) = lca_cli::split_product_version("0.5.2.b194950");
+    assert_eq!((base, sha), ("0.5.2", Some("194950")));
+}

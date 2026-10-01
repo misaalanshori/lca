@@ -1,0 +1,173 @@
+name: unstable
+
+# The unstable release line (ADR-0043): every green push to main ships the
+# six release binaries, their checksums, and their provenance attestations
+# to ONE rolling pre-release tagged `unstable`.
+#
+# The `unstable` tag is a channel pointer, not a release pin: its assets are
+# replaced (--clobber) after each green commit, and the baked
+# `X.Y.Z.b<sha7>` version names the commit the binaries came from. The
+# release is marked prerelease (and explicitly not "latest") so
+# `releases/latest` keeps resolving to the stable line - which is what the
+# installers use when they run without `--unstable`.
+#
+# Test gating: this workflow runs only after the `ci` workflow completes
+# successfully on `main` (ADR-0043 records the choice: `workflow_run` reuses
+# the pipeline's own signal instead of doubling the test compute).
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The commit CI proved green (workflow_run), or the dispatched ref.
+  BUILD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+# Rolling line: the newest green commit wins, so a superseded build must
+# not clobber assets from a newer one. (publish.yml queues instead of
+# cancelling because a tagged release is deliberate; this one is a
+# channel.)
+concurrency:
+  group: unstable-line
+  cancel-in-progress: true
+
+jobs:
+  artifacts:
+    # workflow_run fires for every conclusion; only green builds ship.
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+            targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          - os: ubuntu-latest
+            name: windows
+            targets: x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+          - os: macos-14
+            name: darwin-x86_64
+            targets: x86_64-apple-darwin
+          - os: macos-14
+            name: darwin-aarch64
+            targets: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit CI proved green, not whatever main moved to since.
+          ref: ${{ env.BUILD_SHA }}
+      - name: Bake the product version (X.Y.Z.b<sha7>)
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")
+          echo "LCA_BUILD_VERSION=${base}.b${BUILD_SHA:0:7}" >> "$GITHUB_ENV"
+          echo "baked: ${base}.b${BUILD_SHA:0:7}"
+      - name: Install the pinned toolchain
+        shell: bash
+        run: |
+          rustup set profile minimal
+          for target in ${{ matrix.targets }}; do rustup target add "$target"; done
+      - name: LLVM19 for the MSVC build scripts
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSfL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 19
+          sudo apt-get install -y -q clang-19
+      - uses: taiki-e/install-action@v2
+        if: runner.os == 'Linux'
+        with:
+          tool: cargo-zigbuild@0.23.4,cargo-xwin@0.23.1
+      - uses: mlugg/setup-zig@v2
+        if: runner.os == 'Linux'
+        with:
+          version: "0.16.0"
+      - name: Build the assigned targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [[ "${{ matrix.name }}" == "windows" ]]; then
+            # Same shim arrangement publish.yml needs (docs/platform-notes.md).
+            sudo mkdir -p /opt/cc-shim
+            sudo install -m755 ci/clang-shim /opt/cc-shim/clang
+            export PATH="/opt/cc-shim:/usr/lib/llvm-19/bin:$PATH"
+            export CC_x86_64_pc_windows_msvc=clang
+            export CC_aarch64_pc_windows_msvc=clang
+          fi
+          for target in ${{ matrix.targets }}; do
+            if [[ "$target" == *musl ]]; then
+              cargo zigbuild --release --target "$target" -p lca-cli
+              cp "target/$target/release/lca" "dist/lca-$target"
+            elif [[ "$target" == *windows-msvc ]]; then
+              cargo xwin build --release --target "$target" -p lca-cli
+              cp "target/$target/release/lca.exe" "dist/lca-$target.exe"
+            else
+              cargo build --release --target "$target" -p lca-cli
+              cp "target/$target/release/lca" "dist/lca-$target"
+            fi
+          done
+          for artifact in dist/lca-*; do
+            test -s "$artifact" || { echo "missing or empty binary: $artifact"; exit 1; }
+          done
+          ls -l dist
+      - name: Upload this leg's artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: unstable-binaries-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_SHA }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: unstable-binaries-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        run: |
+          cd dist && sha256sum * > artifacts.sha256 && cat artifacts.sha256
+      - name: Sign the artifacts (provenance attestation)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*
+      - name: Create the rolling release if it is missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view unstable >/dev/null 2>&1; then
+            echo "the rolling release exists; its assets are replaced below"
+          else
+            gh release create unstable \
+              --target "$BUILD_SHA" \
+              --prerelease \
+              --latest=false \
+              --title "unstable (rolling pre-release)" \
+              --notes "Rolling pre-release of every green commit on main (ADR-0043). The tag names the channel; the assets are replaced per commit and each binary reports \`X.Y.Z.b<sha7>\` from \`lca --version\`. Not a release pin: no changelog entry, and it may break. Stable stays at releases/latest."
+          fi
+      - name: Replace the rolling release's assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload unstable dist/* --clobber
+          gh release view unstable --json tagName,isPrerelease,publishedAt,assets \
+            --jq '{tag: .tagName, prerelease: .isPrerelease, published: .publishedAt, assets: [.assets[].name]}'
