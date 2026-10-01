@@ -663,6 +663,42 @@ mod tests {
         assert!(notice.contains("not found"), "{notice}");
     }
 
+    // Verifies: R3 - the operator and punctuation roles are painted only
+    // when the palette paints them differently from `text` (pi's own
+    // defaults are the text color), so a default block carries no no-op
+    // escapes while a custom theme that colors them does.
+    #[test]
+    fn operator_roles_paint_only_when_the_palette_colors_them() {
+        let code = "a = 1;";
+        let run = |theme: &Theme| {
+            let hook = theme.markdown().highlight.expect("a highlight hook");
+            hook(code, "rust").expect("rust is known")
+        };
+
+        let default = run(&Theme::colored());
+        assert!(
+            !default.iter().any(|l| l.contains("38;2;212;212;212")),
+            "the default palette paints operators exactly like text, so it skips them: {default:?}"
+        );
+        assert!(
+            default.iter().any(|l| l.contains("38;2;156;220;254")),
+            "the variable is still a variable: {default:?}"
+        );
+
+        let (palette, _) = Palette::dark()
+            .overlay("syntaxOperator = \"#ff0000\"\nsyntaxPunctuation = \"#00ff00\"\n")
+            .expect("a valid overlay");
+        let custom = run(&Theme::from_palette("custom", palette, true));
+        assert!(
+            custom.iter().any(|l| l.contains("38;2;255;0;0")),
+            "a palette that colors operators gets them: {custom:?}"
+        );
+        assert!(
+            custom.iter().any(|l| l.contains("38;2;0;255;0")),
+            "and punctuation too: {custom:?}"
+        );
+    }
+
     #[test]
     fn role_keys_round_trip() {
         for role in Role::ALL {
