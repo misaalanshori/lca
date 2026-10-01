@@ -67,6 +67,12 @@ pub enum Entry {
         status: ToolStatus,
         /// Result preview, once finished.
         result: Option<String>,
+        /// The call came from the editor's `!`/`!!` line rather than from
+        /// the model. pi splits these into two components
+        /// (`BashExecutionComponent` in `bashMode`, the tool card in
+        /// `toolTitle`); LCA has one card, so the flag carries which
+        /// pi treatment applies to its title.
+        manual: bool,
     },
     /// A transient notice (command output, info).
     Notice(String),
@@ -278,13 +284,26 @@ impl Transcript {
         }
     }
 
-    /// Record a tool call.
+    /// Record a tool call the model asked for.
     pub fn start_tool(&mut self, name: impl Into<String>, args: impl Into<String>) {
         self.entries.push(Entry::Tool {
             name: name.into(),
             args: args.into(),
             status: ToolStatus::Running,
             result: None,
+            manual: false,
+        });
+    }
+
+    /// Record a `!`/`!!` run from the editor (FR-UI-14): the same card,
+    /// with pi's `bashMode` title instead of `toolTitle`.
+    pub fn start_manual_tool(&mut self, name: impl Into<String>, args: impl Into<String>) {
+        self.entries.push(Entry::Tool {
+            name: name.into(),
+            args: args.into(),
+            status: ToolStatus::Running,
+            result: None,
+            manual: true,
         });
     }
 
@@ -501,6 +520,7 @@ impl Transcript {
             args: String::new(),
             status: ToolStatus::Running,
             result: Some(chunk.to_string()),
+            manual: false,
         });
     }
 
@@ -845,6 +865,7 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
         args,
         status,
         result,
+        manual,
     } = entry
     else {
         return;
@@ -852,31 +873,41 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
     let width = width as usize;
     let inner = width.saturating_sub(3).max(1);
     let summary = format_tool_args(name, args);
-    let args = if summary.is_empty() {
-        String::new()
-    } else {
-        format!(" {summary}")
-    };
     let status_text = match status {
         ToolStatus::Ok => (theme.success)(status.label()),
         ToolStatus::Error | ToolStatus::Denied => (theme.error)(status.label()),
         ToolStatus::Timeout => (theme.warn)(status.label()),
         ToolStatus::Running => (theme.dim)(status.label()),
     };
-    // pi paints a shell card's title in `bashMode` (`bash-execution.ts`:
-    // `fg("bashMode", bold("$ cmd"))`); every other tool keeps `toolTitle`.
-    let title_style = if matches!(name.as_str(), "bash" | "shell") {
-        theme.role(Role::BashMode)
+    // pi's tool-card roles, read off its renderers (`renderers/*.ts` and
+    // `tool-execution.ts`): the name is `toolTitle` **plus bold** -
+    // `bashMode` for the editor's own `!` runs, which pi draws as its own
+    // `BashExecutionComponent`; a path or pattern argument is `accent`;
+    // a shell command rides inside the bold title (`formatShellCall`);
+    // an unknown tool's JSON arguments stay plain (the card fallback).
+    let name_style = theme.role_bold(if *manual {
+        Role::BashMode
     } else {
-        theme.tool.clone()
-    };
-    let header = format!(
-        "{} {}{} {}",
-        (theme.tool)(">"),
-        title_style(name),
-        args,
-        status_text
+        Role::ToolTitle
+    });
+    let shell = matches!(name.as_str(), "bash" | "shell");
+    let path_tool = matches!(
+        name.as_str(),
+        "read" | "write" | "edit" | "list" | "ls" | "glob" | "grep"
     );
+    let (title, args_span) = if summary.is_empty() {
+        (name_style(name), String::new())
+    } else if shell {
+        (name_style(&format!("{name} {summary}")), String::new())
+    } else if path_tool {
+        (
+            name_style(name),
+            format!(" {}", (theme.role(Role::Accent))(&summary)),
+        )
+    } else {
+        (name_style(name), format!(" {summary}"))
+    };
+    let header = format!("{} {title}{args_span} {status_text}", (theme.tool)(">"));
     let mut rows = vec![truncate_to_width(&header, inner, "…", false)];
     // pi shows a bounded preview of command output (`bash.ts`
     // `BASH_PREVIEW_LINES` = 5, `ls.ts` 20, `grep.ts` 15) and a one-line
@@ -1057,6 +1088,75 @@ mod tests {
         assert!(
             quote.matches("38;2;128;128;128").count() >= 1,
             "the quote text is mdQuote-colored: {quote:?}"
+        );
+    }
+
+    // Verifies: R1 - "Tool name/args lines get the roles pi gives them",
+    // read off pi's own renderers: the name is `toolTitle` **plus bold**
+    // (`renderers/read.ts`, `tool-execution.ts`), a path argument is
+    // `accent` (`renderToolPath`), a shell command rides inside the bold
+    // title (`renderers/bash.ts` `formatShellCall`), an unknown tool's
+    // JSON arguments stay plain, and the editor's `!` run titles itself in
+    // `bashMode` the way pi's `BashExecutionComponent` does.
+    #[test]
+    fn tool_card_titles_and_arguments_carry_the_roles_pi_gives() {
+        let theme = Theme::colored();
+        // Match on the stripped row: the marker is styled, so "> " is not
+        // contiguous in the raw bytes.
+        let header_of = |t: &Transcript| {
+            t.render(80, &theme)
+                .into_iter()
+                .find(|row| strip_terminal_sequences(row).trim_start().starts_with("> "))
+                .expect("the card header row")
+        };
+
+        // read: bold toolTitle name, accent path, plain status text.
+        let mut t = Transcript::new();
+        t.start_tool("read", r#"{"path":"src/main.rs"}"#);
+        t.finish_tool(ToolStatus::Ok, Some("1  fn main() {}".into()));
+        let header = header_of(&t);
+        assert!(
+            header.contains("\x1b[1;38;2;212;212;212mread\x1b[22;39m"),
+            "the name is toolTitle + bold: {header:?}"
+        );
+        assert!(
+            header.contains("\x1b[38;2;138;190;183msrc/main.rs\x1b[39m"),
+            "the path argument is accent: {header:?}"
+        );
+
+        // A model-requested shell call: name and command in one bold title.
+        let mut t = Transcript::new();
+        t.start_tool("shell", r#"{"command":"ls -la"}"#);
+        t.finish_tool(ToolStatus::Ok, Some("total 0".into()));
+        let header = header_of(&t);
+        assert!(
+            header.contains("\x1b[1;38;2;212;212;212mshell ls -la\x1b[22;39m"),
+            "the command rides in the bold title: {header:?}"
+        );
+
+        // The editor's own `!` run: bashMode, bold (pi's bash component).
+        let mut t = Transcript::new();
+        t.start_manual_tool("bash", r#"{"command":"ls -la"}"#);
+        t.finish_tool(ToolStatus::Ok, Some("total 0".into()));
+        let header = header_of(&t);
+        assert!(
+            header.contains("\x1b[1;38;2;181;189;104mbash ls -la\x1b[22;39m"),
+            "the editor's run titles itself in bashMode: {header:?}"
+        );
+
+        // An unknown tool: bold name, plain JSON arguments (pi's card
+        // fallback prints them unstyled).
+        let mut t = Transcript::new();
+        t.start_tool("frobnicate", r#"{"target":"x"}"#);
+        t.finish_tool(ToolStatus::Ok, Some("ok".into()));
+        let header = header_of(&t);
+        assert!(
+            header.contains("\x1b[1;38;2;212;212;212mfrobnicate\x1b[22;39m"),
+            "the name is still toolTitle + bold: {header:?}"
+        );
+        assert!(
+            header.contains(r#"{"target":"x"}"#) && !header.contains("38;2;138;190;183"),
+            "an unknown tool's arguments are plain: {header:?}"
         );
     }
 

@@ -21,7 +21,10 @@ impl Chat {
         };
         // The command card is visible either way; the host records the
         // command for the model's context only when it is not `!!`.
-        self.transcript.start_tool("bash", command.to_string());
+        // The editor's own run, so the card takes pi's `bashMode` title
+        // instead of the model card's `toolTitle` (FR-UI-14).
+        self.transcript
+            .start_manual_tool("bash", command.to_string());
         let (tx, rx) = std::sync::mpsc::sync_channel(256);
         let cancel = run_shell(command, excluded, tx);
         self.shell = Some(ShellRun {

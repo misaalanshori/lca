@@ -338,6 +338,14 @@ impl Theme {
             .unwrap_or_else(|| style(self.palette.get(role), "", self.colored))
     }
 
+    /// A role's color with pi's bold on top: every tool-card title is
+    /// `theme.fg("toolTitle", theme.bold(name))` in pi's renderers, and a
+    /// colorless bold is what lets the role's color survive (`theme.md`
+    /// §3's nesting rule).
+    pub fn role_bold(&self, role: Role) -> StyleFn {
+        style(self.palette.get(role), "1", self.colored)
+    }
+
     /// The background style function for any role in the vocabulary (pi's
     /// `theme.bg(...)`): wraps a run of text - or a row padded to the
     /// screen width - in the role's background and resets only that
