@@ -1250,3 +1250,24 @@ fn the_separator_follows_the_turn() {
         "the indicator clears when the turn ends"
     );
 }
+
+// Verifies: ADR-0038 - a queued message that becomes the next turn keeps
+// the marker it was queued with, and an ordinary submit carries none. The
+// flush used to hand over only the text, so the record this turn wrote
+// called a queued message an ordinary prompt.
+#[test]
+fn a_flushed_queue_message_keeps_its_marker() {
+    let mut chat = chat();
+    chat.queue_submit("later".into(), lca_protocol::SubmitMode::FollowUp);
+    assert_eq!(chat.take_next_pending().as_deref(), Some("later"));
+    assert_eq!(
+        chat.take_submitted_queue(),
+        Some(lca_protocol::SubmitMode::FollowUp),
+        "the flush hands the marker to the turn"
+    );
+
+    // An ordinary submit carries none (the queued flag is cleared with it).
+    assert_eq!(chat.on_submit("plain prompt".to_string()), Action::Submit);
+    assert_eq!(chat.take_submitted().as_deref(), Some("plain prompt"));
+    assert_eq!(chat.take_submitted_queue(), None);
+}

@@ -354,3 +354,56 @@ async fn a_cancelled_turn_reports_cancellation() {
     assert_eq!(outcome.status, TurnStatus::Ok);
     let _ = h.root;
 }
+
+// Verifies: ADR-0038 / `docs/session-log-format.md` - a message queued
+// while a *previous* turn ran and flushed as its own turn still records as
+// queued. The flush used to take only the text, so the log called it an
+// ordinary prompt; the marker now travels with the text into the turn.
+#[tokio::test]
+async fn a_flushed_queue_message_records_its_marker() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("answer").usage(fake_usage(10, 5, 0, 10)))
+        .build();
+    let mut h = harness("steer-flush", provider);
+    let mut sink = SteeringSink {
+        events: Vec::new(),
+        steer: h.steer.clone(),
+        to_push: Vec::new(),
+        pushed: 0,
+    };
+    let mut prompt = Prompt;
+    let mut agent = Agent::new(
+        &h.store,
+        &h.session,
+        h.provider.as_ref(),
+        &mut h.tools,
+        h.grants.clone(),
+        &mut prompt,
+        None,
+        h.config.clone(),
+    );
+    agent
+        .run_turn_queued(
+            "queued while busy",
+            Some(SubmitMode::FollowUp),
+            &[],
+            &mut sink,
+            &CancelFlag::new(),
+        )
+        .await;
+
+    let records = h
+        .store
+        .read_with(&h.session, ViewMode::Display)
+        .expect("read")
+        .records;
+    assert!(
+        records.iter().any(|r| matches!(
+            r,
+            Record::User { content, queue: Some(marker), .. }
+                if content == "queued while busy" && marker == "follow-up"
+        )),
+        "the flush records its queue mode: {:?}",
+        records
+    );
+}

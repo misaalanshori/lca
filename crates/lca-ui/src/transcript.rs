@@ -173,21 +173,22 @@ impl Transcript {
     /// being read does not rewrite the transcript behind it.
     pub fn toggle_thinking_expanded(&mut self) {
         let default_expanded = matches!(self.thinking, ThinkingVisibility::Full);
-        let Some(Entry::Assistant {
-            reasoning,
-            thinking_override,
-            ..
-        }) = self
-            .entries
-            .iter_mut()
-            .rev()
-            .find(|entry| matches!(entry, Entry::Assistant { .. }))
+        // FR-UI-22: the key overrides *the run it is pressed on*. With no
+        // pointer, that is the newest run that actually has reasoning - the
+        // newest assistant message is often a tool report with none, and a
+        // dead key while a `ctrl+t to expand` marker is on screen is a
+        // broken promise.
+        let Some(index) = self.entries.iter().rposition(|entry| {
+            matches!(entry, Entry::Assistant { reasoning, .. } if !reasoning.trim().is_empty())
+        }) else {
+            return;
+        };
+        let Entry::Assistant {
+            thinking_override, ..
+        } = &mut self.entries[index]
         else {
             return;
         };
-        if reasoning.trim().is_empty() {
-            return;
-        }
         let visible = thinking_override.unwrap_or(default_expanded);
         *thinking_override = Some(!visible);
         self.invalidate_cache();
@@ -724,6 +725,12 @@ fn render_assistant(
                 for line in
                     wrap_text_with_ansi(reasoning, (width as usize).saturating_sub(2).max(1))
                 {
+                    // A blank line inside the run stays blank: a bare `∴`
+                    // reads like a row that failed to render.
+                    if line.trim().is_empty() {
+                        out.push(String::new());
+                        continue;
+                    }
                     out.push(format!(
                         "{} {}",
                         (theme.reasoning)("∴"),
@@ -980,6 +987,79 @@ mod tests {
         );
     }
 
+    // Verifies: FR-UI-22 - the key toggles the newest run that has
+    // reasoning, not merely the newest assistant message: a tool report
+    // after a thinking run must not swallow the key while a
+    // `ctrl+t to expand` marker is on screen.
+    #[test]
+    fn the_thinking_toggle_skips_a_run_without_reasoning() {
+        let mut t = Transcript::new();
+        t.append_reasoning("one\ntwo\nthree\nfour");
+        t.append_text("the answer");
+        t.finish_assistant();
+        // A later assistant message with no reasoning of its own.
+        t.append_text("just a tool report");
+        t.finish_assistant();
+
+        let before = strip(&t.render(60, &plain()));
+        assert!(
+            before.iter().any(|l| l.contains("+1 lines")),
+            "the snippet is collapsed: {before:?}"
+        );
+        t.toggle_thinking_expanded();
+        let after = strip(&t.render(60, &plain()));
+        assert!(
+            after.iter().any(|l| l.contains("four")),
+            "the run with reasoning expanded: {after:?}"
+        );
+        assert!(
+            !after.iter().any(|l| l.contains("+1 lines")),
+            "the marker is gone: {after:?}"
+        );
+        // And once there is no reasoning anywhere, the key is a no-op.
+        let mut empty = Transcript::new();
+        empty.append_text("no thinking here");
+        empty.finish_assistant();
+        let before = empty.render(60, &plain());
+        empty.toggle_thinking_expanded();
+        assert_eq!(
+            empty.render(60, &plain()),
+            before,
+            "no reasoning, nothing to expand"
+        );
+    }
+
+    // Verifies: cycle 9 - a heading reaches the transcript in `mdHeading`
+    // (it used to come out in the body color, because the markdown bold
+    // carried a color of its own), and a blockquote paints its text in
+    // `mdQuote` + italic instead of coloring only the border glyph.
+    #[test]
+    fn headings_and_quotes_carry_their_roles() {
+        let theme = Theme::colored();
+        let mut t = Transcript::new();
+        t.begin_assistant();
+        t.append_text("## Title\n\n> quoted");
+        t.finish_assistant();
+        let rows = t.render(60, &theme);
+        let joined = rows.join("\n");
+        assert!(
+            joined.contains("38;2;240;198;116"),
+            "mdHeading #f0c674 on the heading: {joined}"
+        );
+        let quote = rows
+            .iter()
+            .find(|l| l.contains('\u{2502}'))
+            .expect("the quote border row");
+        assert!(
+            quote.contains("\x1b[3m"),
+            "the quote's text is italic: {quote:?}"
+        );
+        assert!(
+            quote.matches("38;2;128;128;128").count() >= 1,
+            "the quote text is mdQuote-colored: {quote:?}"
+        );
+    }
+
     // Verifies: R1 - the user prompt renders as a full-width
     // `userMessageBg` band: every row painted on the background role, each
     // exactly the render width, with the marker row inside it.
@@ -1040,11 +1120,13 @@ mod tests {
         let pending = paint(ToolStatus::Running, Some("partial"));
         let ok = paint(ToolStatus::Ok, Some("done"));
         let failed = paint(ToolStatus::Error, Some("boom"));
+        let refused = paint(ToolStatus::Denied, Some("denied"));
         // #282832, #283228, #3c2828
         for (rows, expected) in [
             (&pending, "\x1b[48;2;40;40;50m"),
             (&ok, "\x1b[48;2;40;50;40m"),
             (&failed, "\x1b[48;2;60;40;40m"),
+            (&refused, "\x1b[48;2;60;40;40m"),
         ] {
             assert!(
                 rows.iter().all(|r| r.contains(expected)),
@@ -1062,6 +1144,10 @@ mod tests {
         );
         assert!(ok.iter().any(|r| r.contains("ok")), "{ok:?}");
         assert!(failed.iter().any(|r| r.contains("error")), "{failed:?}");
+        assert!(
+            refused.iter().any(|r| r.contains("denied")),
+            "a refusal names itself: {refused:?}"
+        );
     }
 
     // Verifies: FR-UI-5 - the plain theme paints no background at all, so

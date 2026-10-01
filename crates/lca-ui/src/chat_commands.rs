@@ -178,6 +178,7 @@ impl Chat {
                 }
                 CommandEffect::SubmitPrompt(text) => {
                     self.transcript.push_user(text.clone());
+                    self.submitted_queue = None;
                     self.submitted = Some(text);
                     return Action::Submit;
                 }

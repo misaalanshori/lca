@@ -264,6 +264,23 @@ impl<'a> Agent<'a> {
         sink: &mut dyn TurnSink,
         cancel: &CancelFlag,
     ) -> TurnOutcome {
+        self.run_turn_queued(input, None, attachments, sink, cancel)
+            .await
+    }
+
+    /// Like [`Agent::run_turn_with_attachments`], with the ADR-0038 queue
+    /// marker the input was submitted under: a message queued while an
+    /// earlier turn ran and flushed as this turn is still "submitted while
+    /// a turn was running", and `docs/session-log-format.md` says so in the
+    /// record (`steer` / `follow-up`). `None` is an ordinary prompt.
+    pub async fn run_turn_queued(
+        &mut self,
+        input: &str,
+        queue: Option<lca_protocol::SubmitMode>,
+        attachments: &[String],
+        sink: &mut dyn TurnSink,
+        cancel: &CancelFlag,
+    ) -> TurnOutcome {
         let handles: Vec<Arc<dyn lca_ext_abi::ExtensionDispatch>> =
             self.config.extensions.enabled().cloned().collect();
         // A plain thread, not a task: a synchronous WASM call blocks the
@@ -288,7 +305,9 @@ impl<'a> Agent<'a> {
                 }
             }))
         };
-        let outcome = self.turn_body(input, attachments, sink, cancel).await;
+        let outcome = self
+            .turn_body(input, queue, attachments, sink, cancel)
+            .await;
         shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(watcher) = watcher {
             let _ = watcher.join();

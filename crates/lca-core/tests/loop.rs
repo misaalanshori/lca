@@ -734,3 +734,67 @@ async fn twenty_clean_turns_report_zero_cache_waste_and_hold_the_ratio() {
 }
 
 // ---------------------------------------------------------------------------
+
+// Verifies: cycle 9 - a tool call the user denies still *reaches* the
+// interface. The start event used to fire only after the permission check,
+// so a denied call produced a `tool-result` with no `tool-call` before it
+// (docs/headless.md pairs them) and the transcript showed nothing at all:
+// no card, no `denied` label, no tint. The start now fires when the model
+// asks, which is also when the session log records the request.
+#[tokio::test]
+async fn a_denied_tool_call_is_announced_before_it_settles() {
+    let provider = FakeProvider::builder()
+        .turn(|t| {
+            t.tool_call("shell", r#"{"command":"rm -rf /"}"#)
+                .usage(fake_usage(10, 10, 0, 10))
+        })
+        .turn(|t| t.text("understood").usage(fake_usage(20, 5, 10, 0)))
+        .build();
+    let mut h = harness("denied-start", provider, default_config());
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: vec![],
+        asked: vec![],
+    };
+
+    let outcome = turn(&mut h, "clean up", &mut sink, &mut prompt).await;
+    assert_eq!(
+        outcome.status,
+        lca_core::TurnStatus::Ok,
+        "error: {:?}",
+        outcome.error
+    );
+    assert_eq!(prompt.asked.len(), 1, "the denial came from the prompt");
+    let started = sink
+        .events
+        .iter()
+        .position(|e| matches!(e, TurnEvent::ToolStarted(_)))
+        .expect("the request was announced");
+    let finished = sink
+        .events
+        .iter()
+        .position(
+            |e| matches!(e, TurnEvent::ToolFinished(r) if r.status == ToolResultStatus::Denied),
+        )
+        .expect("and it settled as denied");
+    assert!(
+        started < finished,
+        "start precedes result: {:?}",
+        sink.events
+    );
+
+    // The session log agrees with the events: the request was recorded
+    // before the refusal, in both directions.
+    let log = h.store.read(&h.session).expect("read");
+    let call = log
+        .records
+        .iter()
+        .position(|r| matches!(r, Record::ToolCall { .. }))
+        .expect("tool-call record");
+    let result = log
+        .records
+        .iter()
+        .position(|r| matches!(r, Record::ToolResult { .. }))
+        .expect("tool-result record");
+    assert!(call < result, "record order: {:?}", log.records);
+}

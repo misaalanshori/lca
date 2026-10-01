@@ -695,6 +695,9 @@ pub struct TurnChannels {
     /// Messages the interface queues while the turn runs; the worker
     /// drains it at each model-call boundary (ADR-0038).
     pub steer: lca_protocol::SteerQueue,
+    /// How the submitted prompt was queued (`None` for an ordinary
+    /// submit): the ADR-0038 marker the turn's user record carries.
+    pub queue: Option<lca_protocol::SubmitMode>,
 }
 
 /// A worker asking for permission (FR-UI-4: `action` is the exact command

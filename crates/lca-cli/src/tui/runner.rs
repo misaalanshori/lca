@@ -32,6 +32,9 @@ fn turn_worker(
     channels: TurnChannels,
     cancel: lca_tools::CancelFlag,
 ) -> TurnOutcome {
+    // ADR-0038's marker rides the channels: a prompt that was queued while
+    // an earlier turn ran still records as queued when it becomes a turn.
+    let queue = channels.queue;
     let mut sink = ChannelSink {
         tx: channels.events.clone(),
     };
@@ -114,7 +117,7 @@ fn turn_worker(
             turn_config,
         );
         agent
-            .run_turn_with_attachments(&turn_text, &turn_attachments, &mut sink, &cancel)
+            .run_turn_queued(&turn_text, queue, &turn_attachments, &mut sink, &cancel)
             .await
     })
 }

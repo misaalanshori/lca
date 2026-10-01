@@ -45,6 +45,7 @@ impl Agent<'_> {
     pub(super) async fn turn_body(
         &mut self,
         input: &str,
+        queue: Option<lca_protocol::SubmitMode>,
         attachments: &[String],
         sink: &mut dyn TurnSink,
         cancel: &CancelFlag,
@@ -59,7 +60,9 @@ impl Agent<'_> {
                 id: turn_record_id.clone(),
                 content: input.to_string(),
                 attachments: attachments.to_vec(),
-                queue: None,
+                // ADR-0038's marker: the record says how the message was
+                // submitted, wherever it finally lands in the log.
+                queue: queue.map(|mode| mode.marker().to_string()),
             },
         ) {
             return self.fail(
@@ -554,6 +557,16 @@ impl Agent<'_> {
             }
         }
 
+        // The card exists from the moment the model *asks*: pi builds tool
+        // cards while the call is still streaming, and the session log has
+        // already recorded the request (`Record::ToolCall` is written with
+        // the response, before any permission). Emitting the start here is
+        // what makes a denied, hook-refused, or schema-invalid call visible
+        // at all - it settles into the same card instead of leaving the
+        // transcript silent - and it keeps the `tool-call` envelope always
+        // preceding its `tool-result` (docs/headless.md).
+        sink.on_event(TurnEvent::ToolStarted(effective.clone()));
+
         let result = match action {
             HookAction::Deny(reason) => {
                 // No permission prompt: the hook already answered
@@ -635,8 +648,6 @@ impl Agent<'_> {
                 Err(outcome) => return Err(outcome),
             }
         }
-
-        sink.on_event(TurnEvent::ToolStarted(call.clone()));
 
         // Extension tool or built-in: one dispatch table, no mode
         // branching at this call site beyond asking who owns the name

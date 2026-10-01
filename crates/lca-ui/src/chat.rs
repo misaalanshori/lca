@@ -67,6 +67,11 @@ pub struct Chat {
     pub current_steer: Option<lca_protocol::SteerQueue>,
     /// A submitted prompt awaiting the loop's handoff.
     pub submitted: Option<String>,
+    /// How that prompt was queued (ADR-0038): `None` for an ordinary
+    /// submit, `steer`/`follow-up` when it was queued while a turn ran and
+    /// is now flushing as this turn - the record carries the marker
+    /// (`docs/session-log-format.md`).
+    pub(crate) submitted_queue: Option<lca_protocol::SubmitMode>,
     /// Whether the fullscreen (alt-screen) renderer is active (FR-UI-21).
     pub screen_mode: bool,
     /// Ctrl+X seen, waiting for the chord's second key (external editor).
@@ -182,6 +187,7 @@ impl Chat {
             pending: Vec::new(),
             current_steer: None,
             submitted: None,
+            submitted_queue: None,
             screen_mode,
             pending_ctrl_x: false,
             jump_target: None,
@@ -343,6 +349,12 @@ impl Chat {
     /// Take the submitted prompt the loop should run, if any.
     pub fn take_submitted(&mut self) -> Option<String> {
         self.submitted.take()
+    }
+
+    /// Take the queue marker the submitted prompt was handed in, after
+    /// [`Self::take_submitted`] (ADR-0038's record marker).
+    pub(crate) fn take_submitted_queue(&mut self) -> Option<lca_protocol::SubmitMode> {
+        self.submitted_queue.take()
     }
 
     /// The current model label, resolved from the shared cell.
@@ -964,6 +976,7 @@ impl Chat {
                 Action::Continue
             }
             UiEffect::SubmitPrompt(text) => {
+                self.submitted_queue = None;
                 self.submitted = Some(text);
                 Action::Submit
             }
@@ -1004,6 +1017,7 @@ impl Chat {
             return Action::Continue;
         }
         self.transcript.push_user(text.clone());
+        self.submitted_queue = None;
         self.submitted = Some(text);
         Action::Submit
     }
@@ -1032,6 +1046,10 @@ impl Chat {
         }
         let next = self.pending.remove(0);
         self.transcript.push_user(next.text.clone());
+        // The flush keeps the marker the message was queued with: a steer
+        // that never reached a boundary is still "submitted while a turn
+        // was running", and the record this turn writes has to say so.
+        self.submitted_queue = Some(next.mode);
         Some(next.text)
     }
 

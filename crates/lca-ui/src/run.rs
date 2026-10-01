@@ -426,6 +426,7 @@ impl TurnState {
         let Some(text) = chat.take_submitted() else {
             return false;
         };
+        let queue = chat.take_submitted_queue();
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
         let (prompt_tx, prompt_rx_inner) = std::sync::mpsc::sync_channel(4);
         let cancel = lca_tools::CancelFlag::new();
@@ -435,6 +436,7 @@ impl TurnState {
             events: event_tx,
             prompt: prompt_tx,
             steer: steer.clone(),
+            queue,
         };
         chat.begin_turn(steer);
         terminal.set_progress(true);
