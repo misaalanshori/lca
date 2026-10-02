@@ -60,3 +60,16 @@ let a workaround bake a wrong shape into 1.0.
   happens to have stored, which is the current bug.
 - **Do nothing and document the env-only shape.** Rejected: the window is
   open precisely so this is cheap now and expensive later.
+
+*Annotation (2026-10-02, G3 / issue #2):* the `model` key's precedence
+chain, settled against `docs/configuration.md` (environment variables win
+over what a login persisted) and now implemented identically in both
+delivery modes: environment, then the passed `model` pair, then the
+extension's own credential namespace as a fallback. The pair was already
+passed and already ignored for the singular key - a login's model was
+therefore invisible to `list-models` until a restart, which is the
+issue #2 symptom. The pairs stay preferred over anything the extension
+reads itself (this ADR's rule); the credentials read is the same fallback
+the `models` list already used while the host's settings cell starts empty
+at every startup, not a second source of truth: when the pair exists, the
+pair wins.
