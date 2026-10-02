@@ -49,6 +49,14 @@ impl ExtensionDispatch for OpenAiCompat {
         self.cap.cancel();
     }
 
+    fn turn_started(&self) {
+        // The other half of `interrupt`: without this the flag latches and
+        // every later turn's first call is pre-cancelled - one Ctrl+C and
+        // the provider answers "request cancelled by the user" forever
+        // (FR-CONC-1's turn boundary; the WASM host already does both).
+        self.cap.reset_cancellation();
+    }
+
     fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, DispatchError> {
         Err(DispatchError::MissingWorld {
             extension: "openai-compatible".to_string(),

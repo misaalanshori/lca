@@ -24,6 +24,9 @@ use hyper_util::rt::TokioIo;
 pub enum Reply {
     /// A complete SSE body.
     Sse(String),
+    /// An SSE body the mock serves after a delay, so a test can cancel a
+    /// turn while it is genuinely in flight.
+    SseAfter(u64, String),
     /// An HTTP error status with a JSON error body.
     Status(u16),
 }
@@ -123,6 +126,15 @@ pub async fn start_mock(replies: Vec<Reply>) -> Mock {
                                 .header("content-type", "text/event-stream")
                                 .body(Full::new(Bytes::from(body)))
                                 .expect("response"),
+                            Reply::SseAfter(delay_ms, body) => {
+                                tokio::time::sleep(std::time::Duration::from_millis(delay_ms))
+                                    .await;
+                                Response::builder()
+                                    .status(200)
+                                    .header("content-type", "text/event-stream")
+                                    .body(Full::new(Bytes::from(body)))
+                                    .expect("response")
+                            }
                             Reply::Status(status) => Response::builder()
                                 .status(status)
                                 .header("content-type", "application/json")

@@ -1020,3 +1020,47 @@ fn the_footer_line_carries_the_working_directory_and_branch() {
     session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
 }
+
+// Verifies: FR-CONC-1's turn boundary in the real interface - a cancelled
+// turn must not poison the next one. The native provider's cancel flag
+// used to latch (its `turn_started` was the trait's default no-op while
+// `interrupt` flagged the capability engine): Ctrl+C once, and every
+// later turn answered "request cancelled by the user (retries exhausted
+// after 3)" until restart. The mock's first reply is delayed so the
+// cancel lands while the call is genuinely in flight.
+#[cfg(unix)]
+#[test]
+fn a_cancelled_turn_does_not_poison_the_next_one() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::SseAfter(8_000, sse_text("first reply")),
+        Reply::Sse(sse_text("second reply")),
+    ]));
+    let sandbox = sandbox("cancel-next-turn");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    let session = Tmux::new("cancel-next");
+    session.spawn(&sandbox, Some(&mock), true, &[], &[]);
+    session.wait_for(
+        "openai-compatible/test-model",
+        std::time::Duration::from_secs(20),
+    );
+
+    // Turn one, cancelled while its provider call is in flight.
+    session.send(&["count to ten", "Enter"]);
+    session.wait_for("running...", std::time::Duration::from_secs(10));
+    session.send(&["C-c"]);
+    session.wait_for("cancelled", std::time::Duration::from_secs(10));
+
+    // Turn two runs normally: the leftover flag was cleared at the
+    // boundary instead of pre-cancelling this call too.
+    session.send(&["second turn", "Enter"]);
+    session.wait_for("second reply", std::time::Duration::from_secs(25));
+
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}

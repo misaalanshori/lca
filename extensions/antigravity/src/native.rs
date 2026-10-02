@@ -42,6 +42,13 @@ impl ExtensionDispatch for Antigravity {
         self.cap.cancel();
     }
 
+    fn turn_started(&self) {
+        // The other half of `interrupt`: the flag must not outlive the
+        // turn that set it, or every later turn starts pre-cancelled
+        // (FR-CONC-1's turn boundary).
+        self.cap.reset_cancellation();
+    }
+
     fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, DispatchError> {
         Err(DispatchError::MissingWorld {
             extension: "antigravity".to_string(),

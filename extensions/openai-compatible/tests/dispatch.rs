@@ -311,6 +311,25 @@ fn interrupt_flags_the_capability_engine() {
     assert!(cap.is_cancelled(), "the engine is flagged for the net wait");
 }
 
+// Verifies: FR-CONC-1's turn boundary, the native half - `turn_started`
+// clears the flag `interrupt` left behind, so the next turn's first call
+// is not pre-cancelled (the WASM host's
+// `turn_started_clears_a_leftover_interrupt` is the other half). Without
+// this, one Ctrl+C made every later turn answer "request cancelled by the
+// user (retries exhausted after 3)" until restart.
+#[test]
+fn turn_started_clears_the_interrupt_left_behind() {
+    let cap = sandbox("turn-started", false);
+    let ext = openai_compatible::OpenAiCompat::new(cap.clone());
+    ext.interrupt();
+    assert!(cap.is_cancelled(), "the cancelled turn's flag is set");
+    ext.turn_started();
+    assert!(
+        !cap.is_cancelled(),
+        "the new turn starts with a clean cancellation state"
+    );
+}
+
 /// A loopback server that captures the request body and answers with a
 /// minimal SSE stream (for the V1 cache-pin test).
 fn body_capture_server() -> (String, std::sync::mpsc::Receiver<String>) {

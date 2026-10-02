@@ -322,8 +322,17 @@ impl lca_ext_abi::ExtensionDispatch for NativeConformance {
         // to bump: flag the capability engine directly, and a blocked
         // host wait (the oauth callback) polls its way out (FR-CONC-1,
         // NFR-21). This is the pattern a native extension with a
-        // blocking host wait must follow.
+        // blocking host wait must follow - together with `turn_started`
+        // below, which clears the flag again.
         self.cap.cancel();
+    }
+
+    fn turn_started(&self) {
+        // The other half of `interrupt` (FR-CONC-1's turn boundary): clear
+        // the flag the previous turn's cancel left behind. The WASM host
+        // does the same in its own `turn_started`; the native/WASM diff in
+        // the conformance run depends on the two behaving alike.
+        self.cap.reset_cancellation();
     }
 
     fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {

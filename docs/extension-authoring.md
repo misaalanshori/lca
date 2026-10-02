@@ -247,6 +247,8 @@ The trait that `wit-bindgen` generates is an ordinary Rust trait. An implementat
 
 Native mode is for first-party code only. A third-party extension compiled into the binary has no capability boundary at all, and the agent labels it unsandboxed in the extension list.
 
+Native code that can be cancelled must implement two dispatch methods as a pair. `interrupt` flags the capability engine (`cap.cancel()`) so a blocked host wait returns promptly, because no epoch bump can reach code sharing the caller's thread. `turn_started` clears that flag again (`cap.reset_cancellation()`); the host calls it once at every turn boundary. Implementing only `interrupt` latches the flag: after one cancelled turn, every later call in the session fails with "request cancelled by the user". The WASM host does both sides itself; a native implementation must do its own half. The conformance extension carries the pair, and `openai-compatible`'s `turn_started_clears_the_interrupt_left_behind` is the regression row.
+
 ## Publishing
 
 An extension is an OCI artifact. Any registry that implements the OCI distribution specification works, including a personal namespace on a public container registry.
