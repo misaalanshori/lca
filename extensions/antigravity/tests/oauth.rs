@@ -449,6 +449,81 @@ fn model_listing_reads_the_catalog_or_falls_back() {
     assert_eq!(models[0].id, "gemini-3.8-flash");
 }
 
+// Verifies: F2 - the parity guard asserting FALLBACK_MODELS matches
+// pi-antigravity's ANTIGRAVITY_MODELS at commit a3d8caba1b10263420060406de57112ce16490d0
+// byte-for-byte on IDs, display names, context windows, and max output tokens.
+#[test]
+fn antigravity_fallback_models_match_pi_antigravity_ground_truth() {
+    // Expected ground truth transcribed from ~/gits/pi-antigravity/src/models/models.ts:216
+    // at commit a3d8caba1b10263420060406de57112ce16490d0 (release 0.9.0).
+    let expected = [
+        (
+            "gemini-3.8-flash",
+            "Gemini 3.8 Flash (Antigravity)",
+            1048576,
+            65536,
+        ),
+        (
+            "gemini-3.7-flash",
+            "Gemini 3.7 Flash (Antigravity)",
+            1048576,
+            65536,
+        ),
+        (
+            "gemini-3.6-flash",
+            "Gemini 3.6 Flash (Antigravity)",
+            1048576,
+            65536,
+        ),
+        (
+            "claude-opus-4-6",
+            "Claude Opus 4.6 (Antigravity)",
+            250000,
+            64000,
+        ),
+        (
+            "claude-sonnet-4-6",
+            "Claude Sonnet 4.6 (Antigravity)",
+            200000,
+            64000,
+        ),
+        (
+            "gemini-3.1-pro",
+            "Gemini 3.1 Pro (Antigravity)",
+            1048576,
+            65535,
+        ),
+        (
+            "gemini-3.5-flash",
+            "Gemini 3.5 Flash (Antigravity)",
+            1048576,
+            65536,
+        ),
+        ("gpt-oss-120b", "GPT-OSS 120B (Antigravity)", 131072, 32768),
+    ];
+
+    let mock = mock_server();
+    let empty = sandbox("models-parity-guard", &mock);
+    let models = antigravity::list_models(empty.as_ref());
+    assert_eq!(models.len(), expected.len(), "model count mismatch");
+
+    for (actual, (exp_id, exp_name, exp_ctx, exp_max)) in models.iter().zip(expected.iter()) {
+        assert_eq!(&actual.id, exp_id, "model id must match exactly");
+        assert_eq!(
+            &actual.name, exp_name,
+            "model display name must match exactly"
+        );
+        assert_eq!(
+            actual.context_window, *exp_ctx,
+            "context window for {exp_id} must match"
+        );
+        assert_eq!(
+            actual.max_tokens, *exp_max,
+            "max output tokens for {exp_id} must match"
+        );
+    }
+}
+
 // Verifies: the generic and namespaced `/usage` (ADR-0012, FR-PROV-10)
 // answer in the standard shape, with the raw quota summary preserved.
 #[test]
