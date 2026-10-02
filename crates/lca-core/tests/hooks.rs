@@ -662,7 +662,20 @@ async fn a_trapping_extension_is_reported_and_the_session_survives() {
 
 // Verifies: FR-CONC-1 (cancelling a turn interrupts a running extension
 // call rather than waiting for its fuel or natural end).
+//
+// Quarantined on Windows under testing-plan section 13 (2026-10-02): the
+// SECOND turn of this test tripped its 30-second hang guard twice on the
+// hosted runner (CI 36881146884, 36943299928) while turn one's
+// cancellation assertions passed both times and Linux/macOS stayed green
+// in every run. The mechanism is not yet named - the ledger entry in
+// docs/platform-notes.md carries what is known, and the guard prints the
+// elapsed time when it fires so the next observation has its number.
+// Remove the cfg_attr to un-quarantine; the assertions below are intact.
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "second-turn hang under load - tracked in docs/platform-notes.md"
+)]
 async fn cancelling_a_turn_interrupts_a_running_extension_call() {
     let root = scratch("cancel-ext");
     let env = Arc::new(HostEnvironment {
@@ -766,6 +779,8 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
     // The other half of the same defect: a fresh turn must start clean.
     // Without the turn boundary, the cancel above would pre-cancel this
     // turn's extension call and its tool would come back cancelled.
+    // (This is the turn that hangs on Windows under load - see the
+    // quarantine note at the top of the test; the assertion is unchanged.)
     let fresh = lca_tools::CancelFlag::new();
     let turn_started = std::time::Instant::now();
     let second = tokio::time::timeout(
