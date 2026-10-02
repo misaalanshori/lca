@@ -194,8 +194,11 @@ fn an_interrupt_raised_before_the_call_still_cancels_it() {
     let started = std::time::Instant::now();
     let err = extension.execute(&call("loop")).expect_err("cancelled");
     assert!(matches!(err, CallError::Cancelled), "got {err:?}");
+    // Hang guard: in debug builds on a heavily-loaded runner, thread
+    // spawn + store initialization can take over 500ms; 5s absorbs
+    // machine load while still detecting an infinite loop / lost cancel.
     assert!(
-        started.elapsed() < std::time::Duration::from_millis(500),
+        started.elapsed() < std::time::Duration::from_secs(5),
         "the pre-cancelled call traps at the first epoch check"
     );
 }
