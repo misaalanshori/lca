@@ -193,8 +193,8 @@ fn the_product_version_is_stable_or_unstable_shape() {
 // composition and the stable default).
 #[test]
 fn both_product_version_forms_split() {
-    let (base, sha) = lca_cli::split_product_version("0.5.2");
-    assert_eq!((base, sha), ("0.5.2", None));
-    let (base, sha) = lca_cli::split_product_version("0.5.2.b194950");
-    assert_eq!((base, sha), ("0.5.2", Some("194950")));
+    let (base, sha) = lca_cli::split_product_version("0.5.3");
+    assert_eq!((base, sha), ("0.5.3", None));
+    let (base, sha) = lca_cli::split_product_version("0.5.3.b194950");
+    assert_eq!((base, sha), ("0.5.3", Some("194950")));
 }

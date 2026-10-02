@@ -89,11 +89,11 @@ Pin a release by passing it as an argument (both invocations below are the
 ones the CI job exercises):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --version v0.5.2
+curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --version v0.5.3
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1))) -Version v0.5.2
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1))) -Version v0.5.3
 ```
 
 | | Default install directory | Overrides |
@@ -361,7 +361,7 @@ are in [`docs/release-policy.md`](docs/release-policy.md).
 
 ## Status and scope
 
-Implemented, gated, and released — currently **0.5.2**, extension ABI **0.5**
+Implemented, gated, and released — currently **0.5.3**, extension ABI **0.5**
 — with phase-by-phase receipts in [`docs/phase-log.md`](docs/phase-log.md):
 
 | Area | Status |

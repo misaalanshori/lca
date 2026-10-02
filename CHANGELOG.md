@@ -4,7 +4,7 @@ Notable changes to LCA. Versions follow semantic versioning for the product;
 the `lca:ext` ABI version is independent and is printed by `lca --version`.
 Dates are UTC.
 
-## [Unreleased]
+## [0.5.3] - 2026-10-02
 
 ### Added
 - **The composer stops fighting its user (UI/UX Phase 1).** The caret is
@@ -51,28 +51,12 @@ Dates are UTC.
   nests; a too-narrow table falls back to the raw source and wrapped cells
   reset the narrow styles between fragments; an image prints its alt text;
   and the user's own message renders as markdown inside the band.
-
 - **The transcript and chrome use color the way pi does.** User messages render as a full-width `userMessageBg` band with the content padded inside it; tool cards carry their state's background (`toolPendingBg` while the call is in flight, `toolSuccessBg` when it settled, `toolErrorBg` when it did not); `[type]` headers (`[session in …]`, `[compaction] …`) take pi's `customMessageBg` band with the label in `customMessageLabel`; a picker's selected row is `selectedBg` on accent text; the footer paints the thinking level with its own `thinking*` role and the context share by threshold (warning above 70%, error above 90%). The theme's role table was already pi's; the renderers now spend it.
 - **The separator row carries pi's spinner-in-the-border**: `── ⠴ Working ─────…` while a turn runs - the whole row one color, spinner, label and dashes alike, exactly how pi paints its embedded indicator - , `Retrying (n/m) in Ns…` counting down through a provider backoff (warning spinner), and plain border dashes at rest. The row is always exactly one terminal row, fills the width, and animates on the interface's own tick - an idle interface never repaints. The dashes carry the thinking level, the way pi colors its editor border (`thinkingOff`, the same darkGray as `borderMuted`, when no level is set).
 - **Code blocks are syntax-highlighted.** A fence that names a language the theme knows (rust, javascript/typescript, python, go, c/c++, java, sh/bash, sql, json, yaml, toml - and their usual aliases) paints pi's nine `syntax*` classes: comment, keyword, function, variable, string, number, type, operator, punctuation. A fence with no language, or one the highlighter does not know, keeps pi's fallback - the whole block in `mdCodeBlock` - and language auto-detection stays off, for pi's stated reason (it colors prose). The grammars are hand-written token classes, not a new dependency.
 - **The `shell` tool runs a real shell, chosen by a documented ladder.** `shell.tool` (`auto`, `bash`, `pwsh`, `powershell`, `cmd`) and `shell.path` (an exact interpreter) pick it; `auto` on Windows finds Git Bash by its install location - not by the `bash` on `PATH`, which is usually the WSL stub and silently changes what every path means - then `pwsh`, then `powershell`, then `cmd`. A configured interpreter that cannot be found fails loudly with the locations searched. The model is told which interpreter it got and how its dialect reads. On Windows every command now travels in a per-call script file (`.sh`/`.ps1`/`.cmd`), so quotes, newlines, and metacharacters reach the shell exactly as written: `echo "double"` is no longer `echo \"double\"`, and a multi-line command runs all of its lines. POSIX behavior is unchanged. ADR-0041; the ladder, its traps, and the transport table are in `docs/platform-notes.md`.
 - **Yolo mode**: `--yolo` or `permissions.mode = "yolo"` answers every permission prompt "always, for this exact action's pattern" - the pattern is persisted and the session log records the same `permission` entry a human answer writes, so approve-everything never means forget-everything. The footer shows a `YOLO` line while it is on and the session opens with one explanatory line. Explicit deny rules still deny, and the mode is never persisted for you. ADR-0042.
 - **Read-only tools outside the workspace no longer prompt** (`read`, `list`, `glob`, `grep`); a deny rule still refuses them, and writes/edits outside the workspace still ask.
-
-### Changed
-
-- **Style functions reset only their own SGR channel** (`ESC[39m` for a foreground, `ESC[49m` for a background, the decoration's own close code for a decoration) instead of a full `ESC[0m`, which is pi's `fg()`/`bg()` semantics: a styled run inside a background band keeps its color, and a nested style cannot blank the one around it. Dialog rows still reset explicitly around the frame, so the cycle-8 bleed fix is untouched and its assertions are unchanged.
-- **Markdown paints the way pi's does**, from a row-by-row diff against a live pi: headings take `mdHeading` (they used to come out in the body color, because the markdown `bold` carried a color of its own), headings render their inline markup instead of printing `**`, a blockquote colors its text `mdQuote` + italic and its border glyph `mdQuoteBorder`, and a table header is bold. All four were found by driving LCA beside pi, not by a test - the tests that now hold each are in `docs/testing-plan.md` §14.
-- **A denied tool call shows a card.** The start event used to fire only after the permission check, so refusing a command left the transcript silent (no card, no `denied` label) and `--json` printed a `tool-result` with no `tool-call` before it. The card now exists from the moment the model asks, which is also where the session log records the request.
-- **`ctrl+t` expands the run it is pressed on** even when the newest assistant message is a tool report: the key used to target only the newest message, so it was dead whenever a `ctrl+t to expand` marker was on screen. An expanded run also renders its blank lines blank instead of as bare `∴` rows.
-- **A queued message keeps its `steer`/`follow-up` marker** when it flushes as the next turn: the record now says how it was submitted, as `docs/session-log-format.md` requires, instead of calling it an ordinary prompt.
-- **A theme change repaints the transcript.** The per-entry render cache is keyed by width, so `/theme`, its live preview, and a detected-scheme swap now drop it instead of serving rows painted in the previous palette.
-- **`ui.fullscreen` defaults to `true` again**: the interface opens in the fullscreen (alt-screen) renderer, and `ui.fullscreen = false` opts into the terminal's own scrollback. Real Windows use showed ConPTY does not reliably restore scrollback under the main screen, which is what the previous default used. ADR-0037's second annotation.
-- **Thinking runs show a short snippet by default** (`ui.thinking = snippet`): the first three non-empty reasoning lines plus a `… +N lines` marker, with the expand key overriding the latest run in place. `full` and `hidden` remain as settings.
-- **The agent's data and configuration live in `~/.lca` on every platform.** Sessions, extensions, credentials, grants, state, temp, themes, `ui.json`, and `config.toml` all sit under one home dot-directory instead of the platform-specific ones (`~/.local/share/lca` and `~/.config/lca/config.toml` on Linux, `~/Library/Application Support/lca` on macOS, `%APPDATA%\lca` on Windows). **There is no migration code.** The old directories are untouched: copy the one you want across yourself, for example `cp -a ~/.local/share/lca/sessions ~/.lca/` on Linux, or `xcopy /E /I "%APPDATA%\lca" "%USERPROFILE%\.lca"` on Windows. `docs/platform-notes.md` names each old path.
-
-### Added
-
 - **Install with a one-liner.** Linux/macOS:
   `curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh`;
   Windows (PowerShell 5.1 or pwsh):
@@ -83,18 +67,40 @@ Dates are UTC.
   `~/.local/bin` or `%LOCALAPPDATA%\lca\bin`, and puts it on PATH - one
   marked rc block on POSIX, an append-only user-`Path` entry that preserves
   the registry value kind on Windows. Running the same one-liner again is
-  the update (`lca 0.5.1 -> 0.5.2`); `--uninstall` / `-Uninstall` removes
+  the update (`lca 0.5.2 -> 0.5.3`); `--uninstall` / `-Uninstall` removes
   the binary and every PATH entry it added, leaving pre-existing rc files
-  byte-identical. Pin a release with `--version v0.5.2` / `-Version v0.5.2`;
+  byte-identical. Pin a release with `--version v0.5.3` / `-Version v0.5.3`;
   mirror or hermetic runs use `LCA_BASE_URL` / `-BaseUrl`. The full spec,
   the manual install path, and the security stance are in
   `docs/installation.md` (ADR-0040).
 - **`LICENSE`** (Apache-2.0, as `Cargo.toml` has always declared) and
   **`SECURITY.md`** (the private-reporting contact that
   `docs/release-policy.md` already pointed at).
+- **Pi CLI parity and provider polish (UI/UX Phase 4).** Added `-c` / `--continue`
+  to auto-resume the latest session in the working directory, `-r` / `--resume <ID>`
+  alias, and `--model <ID>` override flag. Model picker labels display as
+  `model (provider)` (pi style) while passing the raw un-decorated model ID
+  structurally to provider requests and logs.
+- **Live generation throughput (`tok/s`) and metrics refinement.** Footer
+  reports generation rate (`tok/s`) measuring provider output tokens over
+  active streaming duration (excluding tool execution), cache hit percentage
+  at one-decimal precision (`CH60.9%`), compact count formatting (`1.0k`,
+  `1.3M`), and position indicator in the `/model` picker.
+- **Antigravity wire parity with `pi-antigravity`.** Wire envelope, headers,
+  User-Agent (`antigravity/cli/1.2.4`), metadata, and fallback catalog
+  aligned byte-for-byte with upstream `pi-antigravity` release 0.9.0
+  (`a3d8caba1b10263420060406de57112ce16490d0`).
 
 ### Changed
-
+- **Style functions reset only their own SGR channel** (`ESC[39m` for a foreground, `ESC[49m` for a background, the decoration's own close code for a decoration) instead of a full `ESC[0m`, which is pi's `fg()`/`bg()` semantics: a styled run inside a background band keeps its color, and a nested style cannot blank the one around it. Dialog rows still reset explicitly around the frame, so the cycle-8 bleed fix is untouched and its assertions are unchanged.
+- **Markdown paints the way pi's does**, from a row-by-row diff against a live pi: headings take `mdHeading` (they used to come out in the body color, because the markdown `bold` carried a color of its own), headings render their inline markup instead of printing `**`, a blockquote colors its text `mdQuote` + italic and its border glyph `mdQuoteBorder`, and a table header is bold. All four were found by driving LCA beside pi, not by a test - the tests that now hold each are in `docs/testing-plan.md` §14.
+- **A denied tool call shows a card.** The start event used to fire only after the permission check, so refusing a command left the transcript silent (no card, no `denied` label) and `--json` printed a `tool-result` with no `tool-call` before it. The card now exists from the moment the model asks, which is also where the session log records the request.
+- **`ctrl+t` expands the run it is pressed on** even when the newest assistant message is a tool report: the key used to target only the newest message, so it was dead whenever a `ctrl+t to expand` marker was on screen. An expanded run also renders its blank lines blank instead of as bare `∴` rows.
+- **A queued message keeps its `steer`/`follow-up` marker** when it flushes as the next turn: the record now says how it was submitted, as `docs/session-log-format.md` requires, instead of calling it an ordinary prompt.
+- **A theme change repaints the transcript.** The per-entry render cache is keyed by width, so `/theme`, its live preview, and a detected-scheme swap now drop it instead of serving rows painted in the previous palette.
+- **`ui.fullscreen` defaults to `false` (main screen / scrollback mode)**: the transcript appends directly to terminal scrollback so native selection and scrollbars work out of the box, with `/fullscreen` available for alt-screen mode.
+- **Thinking runs show a short snippet by default** (`ui.thinking = snippet`): the first three non-empty reasoning lines plus a `… +N lines` marker, with the expand key overriding the latest run in place. `full` and `hidden` remain as settings.
+- **The agent's data and configuration live in `~/.lca` on every platform.** Sessions, extensions, credentials, grants, state, temp, themes, `ui.json`, and `config.toml` all sit under one home dot-directory instead of the platform-specific ones (`~/.local/share/lca` and `~/.config/lca/config.toml` on Linux, `~/Library/Application Support/lca` on macOS, `%APPDATA%\lca` on Windows). **There is no migration code.** The old directories are untouched: copy the one you want across yourself, for example `cp -a ~/.local/share/lca/sessions ~/.lca/` on Linux, or `xcopy /E /I "%APPDATA%\lca" "%USERPROFILE%\.lca"` on Windows. `docs/platform-notes.md` names each old path.
 - **The README was rewritten claim by claim against the tree**: install
   first, a quickstart carrying a transcript from a real terminal, the
   extension/capability/permission model with links to the ADRs that own
@@ -106,7 +112,6 @@ Dates are UTC.
   specifications, not installable extensions.
 
 ### Fixed
-
 - **A cancel that raced call setup no longer loses the interrupt.**
   Wasmtime measures a store's epoch deadline from the epoch at
   `set_epoch_deadline` time, so an `interrupt` landing while the store
@@ -119,12 +124,21 @@ Dates are UTC.
   cancel flag - at the turn boundary through the new
   `Dispatch::turn_started`, so a fresh turn cannot start pre-cancelled.
   FR-CONC-1.
+- **Native extensions clear cancel flag at turn boundary.** Previously,
+  an `interrupt()` call latched the cancellation state in native extensions,
+  causing all subsequent turns to fail with "request cancelled by the user"
+  until process restart.
+- **Live model catalog refresh after login.** Dynamic model discovery
+  immediately exposes newly authorized models upon successful login without
+  requiring an agent restart.
 - **The live-provider smoke writes its grant where the store reads
   it.** `real_provider.rs` still placed `grants.json` under
   `$XDG_DATA_HOME/lca`, the pre-move layout, so since the data dir
   became `~/.lca` (dae9470) the smoke's `opencode.ai` pattern never
   landed and the daily run failed with "permission denied:
   opencode.ai:443 matches no granted pattern".
+- **Session metadata tracks last used model and provider.** `meta.json`
+  now accurately records `model` and `provider` upon turn completion.
 
 ## [0.5.2] - 2026-09-30
 

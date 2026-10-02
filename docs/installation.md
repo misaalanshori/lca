@@ -23,11 +23,11 @@ irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1 | iex
 A pinned version passes as an argument. The sh form is an ordinary invocation of the downloaded script; the PowerShell form wraps the fetched text in a script block so named parameters bind on 5.1 (verified in CI, not on paper):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --version v0.5.2
+curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --version v0.5.3
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1))) -Version v0.5.2
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1))) -Version v0.5.3
 ```
 
 ## Flags
