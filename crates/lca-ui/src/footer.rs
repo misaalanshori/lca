@@ -169,35 +169,51 @@ impl Footer {
         if u.cost > 0.0 {
             stats.push_str(&muted(&format!(" • ${:.4}", u.cost)));
         }
-        if !self.model.is_empty() {
-            stats.push_str(&muted(" • "));
-            stats.push_str(&muted(&self.model));
-        }
-        if let Some(thinking) = &self.thinking {
-            // pi colors the thinking level with its own role (the seven
-            // `thinking*` tokens) - a level you can see at a glance.
-            stats.push_str(&muted(" • "));
-            stats.push_str(&Self::thinking_style(theme, thinking)(thinking));
-        }
-        if self.context_window > 0 {
-            let pct =
-                (self.context_used as f64 / self.context_window as f64 * 100.0).round() as u64;
-            // chrome.md §1: the context share is colorized by threshold -
-            // over 90% error, over 70% warning.
-            let share = theme.role(if pct > 90 {
-                Role::Error
-            } else if pct > 70 {
-                Role::Warning
+        // The right-hand segments (model, thinking, context) build over a
+        // label pi's ladder may shorten first (chrome.md footer.ts
+        // "graceful degradation"): full label → drop the provider prefix
+        // → truncate. At 80 columns (NFR-26) the tail is the glanceable
+        // part, and the prefix is the most redundant piece of it, so it
+        // goes before anything else does.
+        let tail_for = |model: &str| -> String {
+            let mut tail = String::new();
+            if !model.is_empty() {
+                tail.push_str(&muted(" • "));
+                tail.push_str(&muted(model));
+            }
+            if let Some(thinking) = &self.thinking {
+                // pi colors the thinking level with its own role (the seven
+                // `thinking*` tokens) - a level you can see at a glance.
+                tail.push_str(&muted(" • "));
+                tail.push_str(&Self::thinking_style(theme, thinking)(thinking));
+            }
+            if self.context_window > 0 {
+                let pct =
+                    (self.context_used as f64 / self.context_window as f64 * 100.0).round() as u64;
+                // chrome.md §1: the context share is colorized by threshold -
+                // over 90% error, over 70% warning.
+                let share = theme.role(if pct > 90 {
+                    Role::Error
+                } else if pct > 70 {
+                    Role::Warning
+                } else {
+                    Role::Muted
+                });
+                tail.push_str(&muted(" • ctx "));
+                tail.push_str(&share(&format!("{pct}%")));
             } else {
-                Role::Muted
-            });
-            stats.push_str(&muted(" • ctx "));
-            stats.push_str(&share(&format!("{pct}%")));
-        } else {
-            // E4: no known window is an honest unknown, never `0%`.
-            stats.push_str(&muted(" • ctx ?"));
+                // E4: no known window is an honest unknown, never `0%`.
+                tail.push_str(&muted(" • ctx ?"));
+            }
+            tail
+        };
+        let mut line = format!("{stats}{}", tail_for(&self.model));
+        if visible_width(&line) > width
+            && let Some((_, bare)) = self.model.split_once('/')
+        {
+            line = format!("{stats}{}", tail_for(bare));
         }
-        lines.push(truncate_to_width(&stats, width, "…", false));
+        lines.push(truncate_to_width(&line, width, "…", false));
 
         if !self.statuses.is_empty() {
             let joined = self.statuses.join(" • ");
@@ -319,6 +335,46 @@ mod tests {
         assert!(out[1].contains("142 tok/s"), "{}", out[1]);
         let quiet = strip(&Footer::default().render(140, &Theme::plain()));
         assert!(!quiet[1].contains("tok/s"), "{}", quiet[1]);
+    }
+
+    // Verifies: pi's footer degradation ladder (chrome.md footer.ts,
+    // "graceful degradation") with NFR-26's 80 columns - the stats line
+    // drops the provider prefix before it truncates, so the model and the
+    // context share still reach the eye on a narrow pane, and a wide pane
+    // keeps the full label.
+    #[test]
+    fn the_stats_line_drops_the_provider_prefix_before_truncating() {
+        let footer = Footer {
+            model: "openai-compatible/mimo-v2.6-flash".into(),
+            thinking: Some("high".into()),
+            usage: Usage {
+                input: 2_600,
+                output: 1_300,
+                cache_read: 4_100,
+                cache_write: 0,
+                ..Default::default()
+            },
+            context_window: 200_000,
+            context_used: 12_400,
+            tok_s: Some(142),
+            ..Default::default()
+        };
+        let at80 = strip(&footer.render(80, &Theme::plain()));
+        let stats80 = at80[1].clone();
+        assert!(stats80.contains("mimo-v2.6-flash"), "{stats80}");
+        assert!(stats80.contains("ctx 6%"), "{stats80}");
+        assert!(stats80.contains("142 tok/s"), "{stats80}");
+        assert!(
+            !stats80.contains("openai-compatible/"),
+            "the prefix is what goes first: {stats80}"
+        );
+
+        let at140 = strip(&footer.render(140, &Theme::plain()));
+        assert!(
+            at140[1].contains("openai-compatible/mimo-v2.6-flash"),
+            "a wide pane keeps the full label: {}",
+            at140[1]
+        );
     }
 
     // Verifies: FR-UI-20 (E4) - an unknown context window reads `ctx ?`,

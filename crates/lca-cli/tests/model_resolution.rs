@@ -57,6 +57,16 @@ fn startup_from_env_resolves_the_model_and_runs_a_turn() {
 
     session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+
+    // docs/session-log-format §meta.json: the metadata carries the model
+    // and provider last used - the raw env id, never a decorated label.
+    let log = find_session_log(&sandbox.state_dir()).expect("a session log");
+    let meta = std::fs::read_to_string(log.parent().expect("session directory").join("meta.json"))
+        .expect("meta.json");
+    assert!(
+        meta.contains("\"deepseek-v4.1-flash\"") && meta.contains("\"openai-compatible\""),
+        "meta.json names the model and provider last used: {meta}"
+    );
 }
 
 // Verifies: G1(b) - `--model` wins over the environment and over the config

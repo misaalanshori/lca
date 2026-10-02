@@ -508,6 +508,25 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Record the model and provider last used on this session - the two
+    /// fields `docs/session-log-format.md` promises `meta.json` carries
+    /// (they were documented but never written). Called where they are
+    /// known: the assistant record's persist. Only writes when a value
+    /// changed, so a turn costs at most one small atomic write; an empty
+    /// model (the zero-provider state) is not "last used" and is ignored.
+    pub fn record_model_used(&self, session: &Session, provider: &str, model: &str) -> Result<()> {
+        if model.is_empty() {
+            return Ok(());
+        }
+        let mut meta = self.meta(session)?;
+        if meta.model.as_deref() == Some(model) && meta.provider.as_deref() == Some(provider) {
+            return Ok(());
+        }
+        meta.model = Some(model.to_string());
+        meta.provider = Some(provider.to_string());
+        write_atomic(&session.meta_path(), &serde_json::to_vec_pretty(&meta)?)
+    }
+
     /// Session metadata (`meta.json`).
     pub fn meta(&self, session: &Session) -> Result<SessionMeta> {
         let text = std::fs::read_to_string(session.meta_path())?;

@@ -997,3 +997,42 @@ fn session_start_records_the_display_working_dir() {
         other => panic!("first record is the session start: {other:?}"),
     }
 }
+
+// Verifies: docs/session-log-format.md §meta.json - the metadata carries
+// the model and provider last used (documented since the format's writing
+// and never actually stored), updates when they change, and the
+// zero-provider state does not overwrite a real one with an empty model.
+#[test]
+fn meta_records_the_model_and_provider_last_used() {
+    let store = store("meta-model");
+    let project = scratch("meta-model-project");
+    let session = store.create_session(&project, "test").expect("create");
+
+    store
+        .record_model_used(&session, "openai-compatible", "m1")
+        .expect("record");
+    let meta = store.meta(&session).expect("meta");
+    assert_eq!(meta.model.as_deref(), Some("m1"));
+    assert_eq!(meta.provider.as_deref(), Some("openai-compatible"));
+
+    // A new model replaces it; the same values are a no-op.
+    store
+        .record_model_used(&session, "openai-compatible", "m1")
+        .expect("record again");
+    store
+        .record_model_used(&session, "openai-compatible", "m2")
+        .expect("record2");
+    assert_eq!(
+        store.meta(&session).expect("meta").model.as_deref(),
+        Some("m2")
+    );
+
+    // An empty model is the zero-provider state, not "last used".
+    store
+        .record_model_used(&session, "openai-compatible", "")
+        .expect("empty ignored");
+    assert_eq!(
+        store.meta(&session).expect("meta").model.as_deref(),
+        Some("m2")
+    );
+}

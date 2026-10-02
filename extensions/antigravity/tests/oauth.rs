@@ -442,9 +442,11 @@ fn model_listing_reads_the_catalog_or_falls_back() {
     assert!(!requests_of(&mock, "fetchAvailableModels").is_empty());
 
     // No login: the static fallback, no panic (the picker still works).
+    // Uses pi-antigravity's 8 ANTIGRAVITY_MODELS.
     let empty = sandbox("models-empty", &mock);
     let models = antigravity::list_models(empty.as_ref());
-    assert_eq!(models.len(), 2, "fallback list");
+    assert_eq!(models.len(), 8, "fallback list matching pi-antigravity");
+    assert_eq!(models[0].id, "gemini-3.8-flash");
 }
 
 // Verifies: the generic and namespaced `/usage` (ADR-0012, FR-PROV-10)

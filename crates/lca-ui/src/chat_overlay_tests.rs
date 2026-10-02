@@ -653,3 +653,42 @@ fn the_model_picker_shows_its_position_and_size() {
     let viewport = strip(&chat.viewport(120, 30, 0)).join("\n");
     assert!(viewport.contains("(1/2)"), "{viewport}");
 }
+
+// Verifies: issue #1 - the namespaced `<ext>.login` goes through the
+// host's login flow (the picker seam) and never reaches the raw command
+// dispatch whose "no API key is configured" answer the owner hit.
+#[test]
+fn the_namespaced_login_routes_to_the_host_login_flow() {
+    let targets: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let mut options = options();
+    let seen = targets.clone();
+    options.login = Some(Arc::new(move |target: &str| {
+        seen.lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(target.to_string());
+        LoginNext::Message("picker opened".to_string())
+    }));
+    let hit = invoked.clone();
+    options.invoke_command = Arc::new(move |_, _| {
+        hit.store(true, std::sync::atomic::Ordering::SeqCst);
+        CommandEffect::None
+    });
+
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    for c in "/antigravity.login".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert_eq!(
+        targets.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+        vec!["antigravity".to_string()],
+        "the hook receives the provider the name carries"
+    );
+    assert!(
+        !invoked.load(std::sync::atomic::Ordering::SeqCst),
+        "the raw command dispatch never runs"
+    );
+    assert_eq!(chat.world.notice.as_deref(), Some("picker opened"));
+}

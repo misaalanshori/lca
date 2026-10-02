@@ -501,6 +501,18 @@ impl Agent<'_> {
                 format!("cannot write to the session log: {err}"),
             ));
         }
+        // The doc's promise (session-log-format §meta.json): meta carries
+        // the model and provider last used. Written here, where both are
+        // known; `record_model_used` skips the write when nothing changed.
+        if let Err(err) =
+            self.store
+                .record_model_used(self.session, &self.config.provider, &self.config.model)
+        {
+            return Err(self.fail(
+                StopReason::Error,
+                format!("cannot update the session metadata: {err}"),
+            ));
+        }
         for (index, call) in response.calls.iter().enumerate() {
             if let Err(err) = self.store.append(
                 self.session,

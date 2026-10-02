@@ -484,10 +484,20 @@ impl Ui {
     /// Hand a pasted OAuth callback URL to the waiting flow (R4(c), pi's
     /// `acquireAuthCode`): parse the redirect URL's query, deliver it on
     /// the flow's manual channel, and go back to waiting for the exchange.
+    ///
+    /// The paste window's state table (issue #8): every path that means the
+    /// wait is over - delivered, exchange failed, no handle left - disarms
+    /// `login_manual_offered`, so later input reaches the normal flow again
+    /// instead of being judged as a URL. The parse-failure path stays armed
+    /// on purpose (nothing was delivered; the flow still wants the real
+    /// redirect, so a bad paste must stay retryable) and its message now
+    /// says so - which is what issue #8 was missing when the repeat
+    /// complaint read as a stuck dialog.
     pub(super) fn deliver_manual_callback(&self, value: &str) -> LoginNext {
         let Some(params) = crate::login::parse_callback(value) else {
             return LoginNext::Message(
-                "that is not a callback URL — paste the whole redirect (…/callback?code=…)"
+                "that is not a callback URL — paste the whole redirect (…/callback?code=…). \
+                 The sign-in is still waiting for it; Esc cancels the sign-in."
                     .to_string(),
             );
         };
@@ -497,6 +507,12 @@ impl Ui {
             .unwrap_or_else(|p| p.into_inner())
             .clone();
         let Some(handle) = handle else {
+            // Nothing waits any more: settle the window, so the next input
+            // is not judged as a callback either (issue #8's class).
+            *self
+                .login_manual_offered
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = false;
             return LoginNext::Message("no login is waiting".to_string());
         };
         match handle.oauth_manual_callback(params) {

@@ -221,3 +221,59 @@ pub(super) fn gc_command(cwd: &Path, id: &str) -> i32 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn route_of(args: &[&str]) -> Route {
+        let cli = Cli::parse_from(args);
+        route(&cli)
+    }
+
+    // Verifies: issue #6 (pi's CLI surface) - `-r <id>` opens that session,
+    // `resume <id>` is its long form, a bare `lca` opens fresh, `--model`
+    // rides every one of them into the interface, and `-p` stays headless.
+    #[test]
+    fn resume_and_continue_flags_route_to_the_interface() {
+        assert_eq!(
+            route_of(&["lca", "-r", "abc", "--model", "m"]),
+            Route::Interactive {
+                resume: Some("abc".to_string()),
+                model: Some("m".to_string()),
+            }
+        );
+        assert_eq!(
+            route_of(&["lca", "resume", "abc"]),
+            Route::Interactive {
+                resume: Some("abc".to_string()),
+                model: None,
+            }
+        );
+        assert_eq!(
+            route_of(&["lca"]),
+            Route::Interactive {
+                resume: None,
+                model: None,
+            }
+        );
+        assert_eq!(
+            route_of(&["lca", "-p", "hi"]),
+            Route::Headless {
+                prompt: "hi".to_string(),
+            }
+        );
+    }
+
+    // `-c` resolves this directory's latest session (whatever the machine
+    // happens to hold), so the guarantee under test is the shape: it opens
+    // the interface, with the model flag still attached.
+    #[test]
+    fn continue_opens_the_interface_with_the_model_flag() {
+        match route_of(&["lca", "-c", "--model", "x"]) {
+            Route::Interactive { model, .. } => {
+                assert_eq!(model, Some("x".to_string()));
+            }
+            other => panic!("-c opens the interface, not {other:?}"),
+        }
+    }
+}
