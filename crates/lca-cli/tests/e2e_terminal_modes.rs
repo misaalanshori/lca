@@ -116,10 +116,17 @@ fn a_typed_space_advances_the_caret_immediately() {
     session.spawn(&sandbox, None, false, &[], &[]);
     session.wait_for("no model", std::time::Duration::from_secs(20));
 
+    let base = session.cursor_x();
+    let settle = std::time::Duration::from_secs(2);
     session.send(&["a", "b"]);
-    let after_letters = session.cursor_x();
+    let after_letters = session.cursor_x_settled(base + 2, settle);
+    assert_eq!(
+        after_letters,
+        base + 2,
+        "two letters moved the caret by two"
+    );
     session.send(&[" "]);
-    let after_first_space = session.cursor_x();
+    let after_first_space = session.cursor_x_settled(after_letters + 1, settle);
     assert_eq!(
         after_first_space,
         after_letters + 1,
@@ -127,13 +134,13 @@ fn a_typed_space_advances_the_caret_immediately() {
     );
     session.send(&[" "]);
     assert_eq!(
-        session.cursor_x(),
+        session.cursor_x_settled(after_first_space + 1, settle),
         after_first_space + 1,
         "the second space moved it again"
     );
     session.send(&["c"]);
     assert_eq!(
-        session.cursor_x(),
+        session.cursor_x_settled(after_first_space + 2, settle),
         after_first_space + 2,
         "and the next letter keeps the column"
     );

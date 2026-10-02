@@ -418,6 +418,24 @@ impl Tmux {
             .expect("tmux reports a cursor column")
     }
 
+    /// The cursor column once it has reached `expected`, or the last
+    /// reading when `timeout` passes. `send-keys` injects input and the
+    /// app paints asynchronously, so a single immediate read races the
+    /// render on a loaded runner (this row flaked twice in full-suite
+    /// runs before the wait existed, 2026-10-02). The expected value and
+    /// the assertion around it are unchanged - only the wait is new, and
+    /// a column that never arrives still fails the caller's equality.
+    pub fn cursor_x_settled(&self, expected: i64, timeout: std::time::Duration) -> i64 {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let x = self.cursor_x();
+            if x == expected || std::time::Instant::now() >= deadline {
+                return x;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+    }
+
     /// A genuine paste through tmux's own paste machinery (R6). The pane
     /// enabled bracketed-paste mode (`?2004h`), so tmux wraps the buffer
     /// in `ESC[200~…ESC[201~` before writing it. `send-keys` cannot do
