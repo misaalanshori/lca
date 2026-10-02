@@ -36,6 +36,62 @@ pub(super) fn open_store() -> Result<(SessionStore, PathBuf), i32> {
     Ok((SessionStore::new(data.clone()), data))
 }
 
+/// Resolve a parsed command line to a route.
+pub fn route(cli: &Cli) -> Route {
+    if let Some(id) = &cli.resume_id {
+        return Route::Interactive {
+            resume: Some(id.clone()),
+        };
+    }
+    match &cli.command {
+        None => match &cli.prompt {
+            Some(prompt) => Route::Headless {
+                prompt: prompt.clone(),
+            },
+            None => {
+                if cli.r#continue {
+                    let data = data_dir();
+                    let store = SessionStore::new(data.join("sessions"));
+                    let cwd = std::env::current_dir().unwrap_or_default();
+                    let latest = store
+                        .list_sessions(&cwd)
+                        .ok()
+                        .and_then(|list| list.into_iter().next())
+                        .map(|s| s.id);
+                    Route::Interactive { resume: latest }
+                } else {
+                    Route::Interactive { resume: None }
+                }
+            }
+        },
+        Some(Command::Config) => Route::Config,
+        Some(Command::Resume { id }) => match id {
+            None => Route::ResumeList,
+            Some(id) => Route::Interactive {
+                resume: Some(id.clone()),
+            },
+        },
+        Some(Command::Fork { session, message }) => Route::Fork {
+            session: session.clone(),
+            message: message.clone(),
+        },
+        Some(Command::Rename { session, title }) => Route::Rename {
+            session: session.clone(),
+            title: title.clone(),
+        },
+        Some(Command::Export { session, audit }) => Route::Export {
+            session: session.clone(),
+            audit: *audit,
+        },
+        Some(Command::Session { cmd }) => match cmd {
+            SessionCmd::Gc { session } => Route::Gc {
+                session: session.clone(),
+            },
+        },
+        Some(Command::Ext { cmd }) => Route::Ext(cmd.clone()),
+    }
+}
+
 pub(super) fn resume_list(cwd: &Path) -> i32 {
     let Ok((store, _)) = open_store() else {
         return exit::INTERNAL;

@@ -34,7 +34,16 @@ impl Ui {
                 .provider
                 .list_models()
                 .iter()
-                .map(|model| model.id.clone())
+                .filter_map(|model| {
+                    let id = model.id.trim();
+                    if id.is_empty() {
+                        None
+                    } else if id.contains('/') {
+                        Some(id.to_string())
+                    } else {
+                        Some(format!("{id} ({})", self.provider_name))
+                    }
+                })
                 .collect(),
             plain: self.config.ui_color() == ColorMode::Never,
             yolo: crate::lock(&self.grants).permission_mode()

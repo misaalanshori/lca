@@ -144,10 +144,15 @@ impl Chat {
             _ => {}
         }
 
-        if name == "login"
+        if (name == "login" || name.ends_with(".login"))
             && let Some(login) = self.world.options.login.clone()
         {
-            let next = login(&argument);
+            let target = if name.ends_with(".login") {
+                name.trim_end_matches(".login")
+            } else {
+                argument.as_str()
+            };
+            let next = login(target);
             self.apply_login_next(next);
             return Action::Continue;
         }

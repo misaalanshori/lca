@@ -250,8 +250,12 @@ impl Chat {
             }
             for (row, index) in picker.matches.iter().enumerate() {
                 let model = &picker.models[*index];
+                if model.trim().is_empty() {
+                    continue;
+                }
                 let cur = if row == picker.selected { '>' } else { ' ' };
-                let mark = if active.ends_with(&format!("/{model}")) {
+                let raw_id = model.split_once(" (").map(|(m, _)| m).unwrap_or(model);
+                let mark = if active.ends_with(&format!("/{raw_id}")) || active == raw_id {
                     "  ✓"
                 } else {
                     ""

@@ -102,6 +102,18 @@ pub struct Cli {
     /// Attach an image file to the turn (repeat for several).
     #[arg(long = "attach", value_name = "PATH")]
     pub attach: Vec<std::path::PathBuf>,
+    // RC-G (issue #6): continue previous session.
+    /// Continue previous session.
+    #[arg(short = 'c', long = "continue")]
+    pub r#continue: bool,
+    // RC-G (issue #6): alias to resume session by id.
+    /// Resume session by ID.
+    #[arg(short = 'r', long = "resume", value_name = "ID")]
+    pub resume_id: Option<String>,
+    // RC-G (issue #6): override model.
+    /// Model identifier.
+    #[arg(long = "model", value_name = "MODEL")]
+    pub model: Option<String>,
     #[command(subcommand)]
     /// A subcommand, when one is present.
     pub command: Option<Command>,
@@ -746,42 +758,7 @@ pub enum Route {
     },
 }
 
-/// Resolve a parsed command line to a route.
-pub fn route(cli: &Cli) -> Route {
-    match &cli.command {
-        None => match &cli.prompt {
-            Some(prompt) => Route::Headless {
-                prompt: prompt.clone(),
-            },
-            None => Route::Interactive { resume: None },
-        },
-        Some(Command::Config) => Route::Config,
-        Some(Command::Resume { id }) => match id {
-            None => Route::ResumeList,
-            Some(id) => Route::Interactive {
-                resume: Some(id.clone()),
-            },
-        },
-        Some(Command::Fork { session, message }) => Route::Fork {
-            session: session.clone(),
-            message: message.clone(),
-        },
-        Some(Command::Rename { session, title }) => Route::Rename {
-            session: session.clone(),
-            title: title.clone(),
-        },
-        Some(Command::Export { session, audit }) => Route::Export {
-            session: session.clone(),
-            audit: *audit,
-        },
-        Some(Command::Session { cmd }) => match cmd {
-            SessionCmd::Gc { session } => Route::Gc {
-                session: session.clone(),
-            },
-        },
-        Some(Command::Ext { cmd }) => Route::Ext(cmd.clone()),
-    }
-}
+pub use session_cmds::route;
 
 /// Dispatch a parsed command line; returns the process exit code.
 pub async fn run(cli: Cli) -> i32 {

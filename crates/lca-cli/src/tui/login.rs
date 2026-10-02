@@ -483,7 +483,13 @@ impl Ui {
                     label: "callback delivered — finishing sign-in… (esc cancels)".to_string(),
                 }
             }
-            Err(err) => LoginNext::Message(format!("could not use that callback: {err}")),
+            Err(err) => {
+                *self
+                    .login_manual_offered
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = false;
+                LoginNext::Message(format!("could not use that callback: {err}"))
+            }
         }
     }
 
