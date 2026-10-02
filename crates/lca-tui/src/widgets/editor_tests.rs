@@ -326,7 +326,7 @@ fn the_caret_is_painted_and_the_marker_sits_on_it() {
 fn the_keystroke_matrix_paints_the_caret_every_frame() {
     let mut e = Editor::new();
     let mut cols: Vec<usize> = Vec::new();
-    let mut snap = |e: &Editor, cols: &mut Vec<usize>| {
+    let snap = |e: &Editor, cols: &mut Vec<usize>| {
         let lines = e.render(40);
         let (clean, pos) = extract_cursor_position(&lines);
         let (row, col, _painted) = pos.expect("every frame carries the caret marker");

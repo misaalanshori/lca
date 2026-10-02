@@ -135,15 +135,15 @@ impl Editor {
     }
 
     /// Use a specific keybinding set.
+    pub fn set_keybindings(&mut self, kb: Arc<KeybindingsManager>) {
+        self.keybindings = kb;
+    }
+
     /// Choose how the caret is shown: painted into the row (colored
     /// themes) or left to the hardware cursor (the plain theme, which
     /// renders no escapes - FR-UI-5).
     pub fn set_paint_caret(&mut self, on: bool) {
         self.paint_caret = on;
-    }
-
-    pub fn set_keybindings(&mut self, kb: Arc<KeybindingsManager>) {
-        self.keybindings = kb;
     }
 
     /// Install an autocomplete provider.
