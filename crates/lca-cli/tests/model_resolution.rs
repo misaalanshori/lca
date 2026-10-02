@@ -6,6 +6,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 mod common;
 
+// The rows are Unix-only (tmux), so the glob import is too.
+#[cfg(unix)]
 use common::*;
 
 // ---------------------------------------------------------------------------

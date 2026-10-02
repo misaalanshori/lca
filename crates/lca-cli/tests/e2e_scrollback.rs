@@ -3,6 +3,8 @@
 #[path = "common/mod.rs"]
 mod common;
 
+// The rows are Unix-only (tmux), so the glob import is too.
+#[cfg(unix)]
 use common::*;
 
 // Verifies: S1 - main-screen mode incrementally appends to real terminal
