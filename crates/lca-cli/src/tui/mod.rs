@@ -99,6 +99,13 @@ pub(crate) struct Ui {
     preset_overrides: String,
     /// The tool executor (shared with the runner).
     tools: Arc<Mutex<ToolExecutor>>,
+    /// The shell the executor resolved at startup, mirrored so `/settings`
+    /// never locks `tools` (the runner holds that lock for a whole turn -
+    /// #20 / V1).
+    resolved_shell: Option<lca_tools::Shell>,
+    /// The shell resolution error, when the backend is broken (mirrored
+    /// with the shell for the same reason).
+    resolved_shell_error: Option<String>,
     /// The project's proposed permission patterns, when trusted.
     proposals: Option<Proposals>,
     /// The swappable prompt slot capability engines share.
@@ -277,6 +284,17 @@ impl Ui {
             config.tool_result_limit_bytes() as usize,
             std::time::Duration::from_secs(config.tool_timeout_seconds()),
         )));
+        // V1 (#20): the resolved shell, mirrored out of the executor once,
+        // because `/settings` renders on the input thread while the turn
+        // worker holds `tools` for the whole turn - locking it there froze
+        // the interface and queued Ctrl+C behind a running turn.
+        let (resolved_shell, resolved_shell_error) = {
+            let guard = tools.lock().unwrap_or_else(|p| p.into_inner());
+            (
+                guard.resolved_shell().cloned(),
+                guard.resolved_shell_error().map(str::to_string),
+            )
+        };
         let proposals: Option<Proposals> = trusted.then(|| config.permissions_proposals().clone());
         // The one swappable prompt slot every capability engine shares; the
         // turn runner installs the interface's modal into it, so an
@@ -400,6 +418,8 @@ impl Ui {
             login_answer: Arc::new(Mutex::new(None)),
             preset_overrides,
             tools,
+            resolved_shell,
+            resolved_shell_error,
             proposals,
             shared_prompt,
             render_regions,

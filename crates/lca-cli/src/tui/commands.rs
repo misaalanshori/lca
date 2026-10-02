@@ -153,19 +153,15 @@ impl Ui {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .clone();
-                let (shell, shell_error) = {
-                    let tools = crate::lock(&self.tools);
-                    (
-                        tools.resolved_shell().cloned(),
-                        tools.resolved_shell_error().map(str::to_string),
-                    )
-                };
+                // V1 (#20): read the startup mirror, never `tools` - the
+                // runner holds that lock for a whole turn, and this arm
+                // runs on the input thread (frozen UI, Ctrl+C queued).
                 CommandEffect::ShowWidget(settings_text(
                     &self.config,
                     live.as_deref(),
                     Some(&theme),
-                    shell.as_ref(),
-                    shell_error.as_deref(),
+                    self.resolved_shell.as_ref(),
+                    self.resolved_shell_error.as_deref(),
                 ))
             }
             // The stats story (FR-UI-19): the same numbers the footer
