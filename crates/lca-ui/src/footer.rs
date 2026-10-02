@@ -33,8 +33,22 @@ pub struct Footer {
     pub context_used: u64,
     /// Extension-provided status segments.
     pub statuses: Vec<String>,
+    /// The last finished turn's generation speed, in output tokens per
+    /// second of streaming time (the owner's "can we add tok/s to the
+    /// footer?" ask). `None` before the first measurable turn.
+    pub tok_s: Option<u64>,
     /// Yolo mode is on: the marker is persistent and loud (ADR-0042).
     pub yolo: bool,
+}
+
+/// A token count in pi's compact form: `999`, `2.6k`, `1.2M` - the
+/// owner's own paste showed `↑121194`, which no one reads at a glance.
+pub fn compact(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        1000..=999_999 => format!("{:.1}k", f64::from(n as u32) / 1_000.0),
+        _ => format!("{:.1}M", n as f64 / 1_000_000.0),
+    }
 }
 
 /// Shorten a path under `home` to `~`.
@@ -130,17 +144,28 @@ impl Footer {
         // Stats line.
         let u = &self.usage;
         let cache = u.cache_read + u.cache_write;
+        // One decimal, pi's precision (`CH60.9%`): a whole percent hides
+        // the difference between 89 and 91, which is what the number is
+        // there to show (owner issue: "is our cache hit % rounded to full
+        // integer? Pi has at least once decimal precision").
         let cache_pct = if u.input + cache > 0 {
-            (cache as f64 / (u.input + cache) as f64 * 100.0).round() as u64
+            (cache as f64 / (u.input + cache) as f64 * 100.0 * 10.0).round() / 10.0
         } else {
-            0
+            0.0
         };
         let mut stats = String::new();
         let muted = theme.footer.clone();
         stats.push_str(&muted(&format!(
-            "↑{} ↓{} R{} W{} {cache_pct}%",
-            u.input, u.output, u.cache_read, u.cache_write
+            "↑{} ↓{} R{} W{} {cache_pct:.1}%",
+            compact(u.input),
+            compact(u.output),
+            compact(u.cache_read),
+            compact(u.cache_write)
         )));
+        if let Some(rate) = self.tok_s {
+            stats.push_str(&muted(" • "));
+            stats.push_str(&muted(&format!("{rate} tok/s")));
+        }
         if u.cost > 0.0 {
             stats.push_str(&muted(&format!(" • ${:.4}", u.cost)));
         }
@@ -257,9 +282,43 @@ mod tests {
         let out = strip(&f.render(120, &Theme::plain()));
         assert!(out[1].contains("↑100"));
         assert!(out[1].contains("R900"));
-        assert!(out[1].contains("90%"));
+        // One decimal, pi's precision (the owner asked: "is our cache hit
+        // % rounded to full integer? Pi has at least once decimal").
+        assert!(out[1].contains("90.0%"), "{}", out[1]);
         assert!(out[1].contains("$0.5000"));
         assert!(out[1].contains("ctx 25%"));
+    }
+
+    // Verifies: FR-UI-20's numbers in pi's compact form (the owner's own
+    // paste showed `↑121194`).
+    #[test]
+    fn token_counts_render_compact() {
+        assert_eq!(compact(0), "0");
+        assert_eq!(compact(999), "999");
+        assert_eq!(compact(1_000), "1.0k");
+        assert_eq!(compact(2_640), "2.6k");
+        assert_eq!(compact(121_194), "121.2k");
+        assert_eq!(compact(1_300_000), "1.3M");
+    }
+
+    // Verifies: the owner's "can we add tok/s to the footer?" ask - the
+    // last turn's generation speed rides the stats line when there is one,
+    // and no number is invented before the first measurable turn.
+    #[test]
+    fn the_footer_shows_the_last_turn_tokens_per_second() {
+        let f = Footer {
+            usage: Usage {
+                input: 10,
+                output: 40,
+                ..Default::default()
+            },
+            tok_s: Some(142),
+            ..Default::default()
+        };
+        let out = strip(&f.render(140, &Theme::plain()));
+        assert!(out[1].contains("142 tok/s"), "{}", out[1]);
+        let quiet = strip(&Footer::default().render(140, &Theme::plain()));
+        assert!(!quiet[1].contains("tok/s"), "{}", quiet[1]);
     }
 
     // Verifies: FR-UI-20 (E4) - an unknown context window reads `ctx ?`,

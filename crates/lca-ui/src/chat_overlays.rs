@@ -261,6 +261,15 @@ impl Chat {
                 };
                 body.push(format!(" {cur} {label}{mark}"));
             }
+            // pi's `(1/126)` position/size row (model-selector.ts): the
+            // list says where you are in it and how big it is.
+            if !picker.matches.is_empty() {
+                body.push(format!(
+                    "  ({}/{})",
+                    picker.selected + 1,
+                    picker.matches.len()
+                ));
+            }
             picker_overlay(
                 viewport,
                 width,

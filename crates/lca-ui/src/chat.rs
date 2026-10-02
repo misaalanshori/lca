@@ -52,6 +52,8 @@ pub struct Chat {
     pub theme: Theme,
     /// Accumulated session usage.
     pub usage: Usage,
+    /// The turn's generation-time meter (the footer's tok/s reading).
+    meter: crate::turn_metrics::StreamMeter,
     /// Whether a turn is running.
     pub turn_running: bool,
     /// Whether a background `/compact` is summarizing (the interface stays
@@ -80,13 +82,13 @@ pub struct Chat {
     /// Ctrl+X seen, waiting for the chord's second key (external editor).
     pending_ctrl_x: bool,
     /// A pending prompt-jump target (a document line index).
-    jump_target: Option<usize>,
+    pub(crate) jump_target: Option<usize>,
     /// The open transcript search query (FR-UI-12), when any.
     pub search: Option<String>,
     /// Document lines matching the search query.
-    search_matches: Vec<usize>,
+    pub(crate) search_matches: Vec<usize>,
     /// The current match.
-    search_index: usize,
+    pub(crate) search_index: usize,
     /// The active theme's name (FR-UI-17).
     pub theme_name: String,
     /// The configured theme setting (`ui.theme`, S5).
@@ -202,6 +204,7 @@ impl Chat {
             search: None,
             search_matches: Vec::new(),
             search_index: 0,
+            meter: Default::default(),
             theme_name,
             theme_setting,
             theme_dir,
@@ -250,11 +253,16 @@ impl Chat {
         match event {
             TurnEvent::TextDelta(delta) => {
                 self.transcript.append_text(&delta);
+                self.meter.open();
             }
             TurnEvent::ReasoningDelta(delta) => {
                 self.transcript.append_reasoning(&delta);
+                self.meter.open();
             }
             TurnEvent::ToolStarted(call) => {
+                // A tool run is not generation: the meter closes so its
+                // latency never lands in the tok/s reading.
+                self.meter.close();
                 self.transcript.start_tool(call.name, call.arguments);
             }
             TurnEvent::ToolFinished(result) => {
@@ -279,6 +287,8 @@ impl Chat {
             TurnEvent::Usage(usage) => {
                 // FR-UI-20: the live prompt size is this call's input side.
                 self.footer.context_used = usage.input + usage.cache_read + usage.cache_write;
+                // The turn's own output side, for the tok/s reading at its end.
+                self.meter.note_usage(usage.output);
                 self.usage.input = self.usage.input.saturating_add(usage.input);
                 self.usage.output = self.usage.output.saturating_add(usage.output);
                 self.usage.cache_read = self.usage.cache_read.saturating_add(usage.cache_read);
@@ -321,6 +331,9 @@ impl Chat {
                 status,
                 stop_reason,
             } => {
+                // The footer's throughput reading (owner ask): measured
+                // over streaming time only, with the provider's own count.
+                self.meter.finish_turn(&mut self.footer);
                 self.transcript.finish_assistant();
                 self.turn_running = false;
                 // pi clears the indicator on stop; the transcript's error
@@ -705,76 +718,6 @@ impl Chat {
             self.theme = theme;
             self.transcript.invalidate();
         }
-    }
-
-    /// Handle a key while the transcript search is open (FR-UI-12).
-    fn handle_search_key(&mut self, data: &str, key: Option<&str>) -> Action {
-        let mut query = self.search.take().unwrap_or_default();
-        match key {
-            Some("escape") => {
-                self.search = None;
-                self.search_matches.clear();
-                self.world.notice = None;
-                return Action::Continue;
-            }
-            Some("enter") => {
-                self.search_next();
-                self.search = Some(query);
-                return Action::Continue;
-            }
-            Some("backspace") => {
-                query.pop();
-            }
-            _ => {
-                if let Some(text) = printable(data).or_else(|| paste_text(data)) {
-                    query.push_str(&text);
-                }
-            }
-        }
-        self.search = Some(query.clone());
-        self.refresh_search();
-        self.world.notice = Some(format!(
-            "search: {query}{}",
-            if self.search_matches.is_empty() {
-                "  (no matches)".to_string()
-            } else {
-                format!(
-                    "  [{}/{}]",
-                    self.search_index + 1,
-                    self.search_matches.len()
-                )
-            }
-        ));
-        Action::Continue
-    }
-
-    /// Recompute the search matches against the current document.
-    fn refresh_search(&mut self) {
-        let query = self.search.clone().unwrap_or_default();
-        self.search_matches.clear();
-        self.search_index = 0;
-        if query.is_empty() {
-            return;
-        }
-        let width = self.world.size.0.max(1);
-        let lower = query.to_lowercase();
-        for (index, line) in self.render(width).iter().enumerate() {
-            if strip_ansi(line).to_lowercase().contains(&lower) {
-                self.search_matches.push(index);
-            }
-        }
-        if let Some(&first) = self.search_matches.first() {
-            self.jump_target = Some(first);
-        }
-    }
-
-    /// Move to the next search match (FR-UI-12).
-    fn search_next(&mut self) {
-        if self.search_matches.is_empty() {
-            return;
-        }
-        self.search_index = (self.search_index + 1) % self.search_matches.len();
-        self.jump_target = Some(self.search_matches[self.search_index]);
     }
 
     /// Keys the editor does not claim (the escape ladder, cancel, exit).

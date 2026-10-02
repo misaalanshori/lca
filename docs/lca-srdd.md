@@ -502,6 +502,8 @@ FR-UI-19. The stats view SHALL show tokens and cost per model, including cache-r
 
 FR-UI-20. The status area SHALL show the working directory and its git branch, the active model and thinking level, the context use and the session cost, any extension-provided segments, and the queued-message count.
 
+*Annotation (2026-10-02): the status line also shows the token counters and the cache share (pi's `CH` number, at one decimal - `60.9%`, never a rounded integer) and the last turn's generation speed as `N tok/s`: its output tokens over its streaming time, measured from the provider's own usage and excluding tool runs, with no reading invented before the first measurable turn. Token counts render compactly (`2.6k`, `121.2k`, `1.3M`). These are the owner's tok/s and cache-precision asks from the 2026-10-02 list; the renderings live in `lca-ui::footer`. 
+
 FR-UI-21. The user SHALL be able to switch between the fullscreen renderer and the scrollback renderer at runtime, and the scrollback (main-screen) renderer SHALL be the default (`ui.fullscreen = false`; S1, ADR-0037's third annotation).
 
 FR-UI-23. The overlay/dialog painter SHALL emit every dialog row with explicit, complete styles - the frame in a border role, a reset on either side - so no dialog cell renders with inherited style state from the transcript behind it, and the transcript beside a dialog does not render in the dialog's style.

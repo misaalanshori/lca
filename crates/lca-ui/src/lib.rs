@@ -11,6 +11,7 @@ mod chat_commands;
 mod chat_keys;
 mod chat_overlays;
 mod chat_pickers;
+mod chat_search;
 mod chat_shell;
 pub mod footer;
 pub mod render;
@@ -20,6 +21,7 @@ pub mod separator;
 pub mod state;
 pub mod theme;
 pub mod transcript;
+mod turn_metrics;
 
 pub use chat::{Chat, PendingMessage};
 pub use chat_pickers::ModelPicker;

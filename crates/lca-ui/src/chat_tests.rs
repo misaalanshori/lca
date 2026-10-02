@@ -800,3 +800,68 @@ fn theme_pick_persists_to_config() {
 
 // Verifies: R2 - `/resume` opens a searchable session list and reports the
 // resume command for the selected session.
+
+// Verifies: the owner's "can we add tok/s to the footer?" ask - a finished
+// turn reports its own generation speed from the provider's token count,
+// and a tool run's latency is not part of it (the window closes at the
+// tool call and reopens at the next delta).
+#[test]
+fn a_finished_turn_reports_tokens_per_second() {
+    let mut chat = chat();
+    chat.on_turn_event(TurnEvent::TextDelta("chunk".into()));
+    chat.on_turn_event(TurnEvent::ToolStarted(ToolCall {
+        call_id: "c1".into(),
+        name: "shell".into(),
+        arguments: "{}".into(),
+    }));
+    // The tool's wall-clock time must not reach the reading: counting it
+    // would cap 40 tokens at 40/0.15 = 266 tok/s.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    chat.on_turn_event(TurnEvent::ToolFinished(ToolResult::ok("c1", "out")));
+    chat.on_turn_event(TurnEvent::Usage(Usage {
+        output: 40,
+        ..Default::default()
+    }));
+    chat.on_turn_event(TurnEvent::TurnEnded {
+        status: TurnStatus::Ok,
+        stop_reason: StopReason::Stop,
+    });
+    let rate = chat.footer.tok_s.expect("the turn reports a rate");
+    assert!(rate > 400, "rate {rate} includes tool time");
+    let text = strip(&chat.render(120)).join("\n");
+    assert!(text.contains("tok/s"), "{text}");
+}
+
+// Verifies: a turn with no streaming (tools only, or an immediate error)
+// measures nothing and keeps the previous reading instead of inventing
+// one or clearing a good number.
+#[test]
+fn a_turn_without_streaming_keeps_the_previous_rate() {
+    let mut chat = chat();
+    chat.on_turn_event(TurnEvent::TextDelta("chunk".into()));
+    chat.on_turn_event(TurnEvent::Usage(Usage {
+        output: 40,
+        ..Default::default()
+    }));
+    chat.on_turn_event(TurnEvent::TurnEnded {
+        status: TurnStatus::Ok,
+        stop_reason: StopReason::Stop,
+    });
+    let rate = chat.footer.tok_s.expect("the first turn reports a rate");
+
+    chat.on_turn_event(TurnEvent::ToolStarted(ToolCall {
+        call_id: "c2".into(),
+        name: "shell".into(),
+        arguments: "{}".into(),
+    }));
+    chat.on_turn_event(TurnEvent::ToolFinished(ToolResult::ok("c2", "out")));
+    chat.on_turn_event(TurnEvent::Usage(Usage {
+        output: 5,
+        ..Default::default()
+    }));
+    chat.on_turn_event(TurnEvent::TurnEnded {
+        status: TurnStatus::Ok,
+        stop_reason: StopReason::Stop,
+    });
+    assert_eq!(chat.footer.tok_s, Some(rate), "no stream, no new reading");
+}

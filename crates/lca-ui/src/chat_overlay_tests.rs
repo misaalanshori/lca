@@ -638,3 +638,18 @@ fn a_background_compaction_drives_the_working_state() {
     );
     assert!(!chat.poll_compact(), "the result is consumed");
 }
+
+// Verifies: pi's model-selector row count (`(1/126)` in
+// `model-selector.ts`) - the /model list says where you are in it and how
+// many rows it has.
+#[test]
+fn the_model_picker_shows_its_position_and_size() {
+    let mut chat = chat();
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(chat.model_picker.is_some());
+    let viewport = strip(&chat.viewport(120, 30, 0)).join("\n");
+    assert!(viewport.contains("(1/2)"), "{viewport}");
+}
