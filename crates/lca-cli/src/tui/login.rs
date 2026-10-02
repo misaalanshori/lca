@@ -174,26 +174,9 @@ impl Ui {
             cell.clear();
             cell.extend(settings.iter().cloned());
         }
-        // Light the session up now that the provider can answer. The
-        // identity cell moves with the login too (E5, the cycle-6 drive's
-        // regression): without this, a `/model` switch after a mid-session
-        // login read the stale startup identity and the footer reverted
-        // from the preset to the extension name.
-        if target == self.provider_name {
-            super::adopt_login_identity(&self.identity_cell, &identity);
-            if let Some(model) = self.provider.list_models().first() {
-                *self.model_cell.lock().unwrap_or_else(|p| p.into_inner()) = super::ModelChoice {
-                    id: model.id.clone(),
-                    window: model.context_window,
-                };
-                *self
-                    .context_window_cell
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner()) = u64::from(model.context_window);
-                *self.label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
-                    format!("{identity}/{}", model.id);
-            }
-        }
+        // Light the session up now that the provider can answer (G3: one
+        // seam for both login paths, see `adopt_login_success`).
+        self.adopt_login_success(&target, &identity);
         // A non-default endpoint needs its ad hoc `net` grant, offered now
         // that the user is signed in (FR-PERM-16).
         if let Some(host) = crate::ungranted_host(
@@ -324,6 +307,39 @@ impl Ui {
         }
     }
 
+    /// Light the session up after a successful sign-in: the identity cell
+    /// (E5's footer regression) and the same model refresh the `/model`
+    /// picker does - the first model the provider now lists, not the empty
+    /// startup state (G3, issue #2: the list is refreshed at login success,
+    /// so a sign-in resolves the session's model with no restart). One seam
+    /// for both login paths: the host's submit flow and a provider's own
+    /// `login` export.
+    pub(super) fn adopt_login_success(&self, target: &str, identity: &str) {
+        if target != self.provider_name {
+            return;
+        }
+        super::adopt_login_identity(&self.identity_cell, identity);
+        // First *non-empty* id: a provider with nothing listed yet leaves
+        // the session as it was rather than resolving to a blank model.
+        if let Some(model) = self
+            .provider
+            .list_models()
+            .into_iter()
+            .find(|model| !model.id.is_empty())
+        {
+            *self.model_cell.lock().unwrap_or_else(|p| p.into_inner()) = super::ModelChoice {
+                id: model.id.clone(),
+                window: model.context_window,
+            };
+            *self
+                .context_window_cell
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = u64::from(model.context_window);
+            *self.label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
+                format!("{identity}/{}", model.id);
+        }
+    }
+
     /// Run one provider's `login` identity command on a background thread
     /// (R4): the namespaced `/antigravity.login` path is the owner's
     /// freeze. Answer with a waiting step; the result arrives through
@@ -348,13 +364,27 @@ impl Ui {
             .unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
         *self.login_handle.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle.clone());
         let pending = self.login_pending.clone();
+        let ui = self.clone();
         std::thread::spawn(move || {
             use lca_core::drive_blocking;
             let name = handle.name().to_string();
             let outcome = drive_blocking(async move { handle.identity_login().await });
             let next = match outcome {
                 Ok(lca_protocol::IdentityOutcome::Ok) => {
-                    LoginNext::Message(format!("logged in via `{name}`"))
+                    // G3: the same refresh the submit flow runs - the
+                    // model list is read now, not at the next startup.
+                    let identity = crate::stored_provider_preset(&ui.data, &name)
+                        .unwrap_or_else(|| name.clone());
+                    ui.adopt_login_success(&name, &identity);
+                    if name == ui.provider_name {
+                        LoginNext::Message(format!("logged in via `{name}`"))
+                    } else {
+                        LoginNext::Message(format!(
+                            "signed in `{name}`; this session still uses `{}` - set \
+                             provider = {name} to switch",
+                            ui.provider_name
+                        ))
+                    }
                 }
                 Ok(lca_protocol::IdentityOutcome::NotSupported) => {
                     LoginNext::Message(format!("login is not supported by `{name}`"))

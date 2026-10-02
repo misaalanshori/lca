@@ -975,3 +975,48 @@ fn the_double_ctrl_c_exits_on_windows() {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
+
+// Verifies: G4 (issue #9) - the footer's first line is the working
+// directory, `~`-shortened under home, with the git branch beside it -
+// pi's `~/path (branch)` shape. The theme roles are untouched (the path
+// wears the accent role, the rest the footer role).
+#[cfg(unix)]
+#[test]
+fn the_footer_line_carries_the_working_directory_and_branch() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
+    let sandbox = sandbox("footer-cwd");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+    // A branch the footer can name: `.git/HEAD` is all `git_branch` reads.
+    std::fs::create_dir_all(sandbox.project().join(".git")).expect("mkdir .git");
+    std::fs::write(
+        sandbox.project().join(".git").join("HEAD"),
+        "ref: refs/heads/main\n",
+    )
+    .expect("write HEAD");
+
+    let session = Tmux::new("footer-cwd");
+    session.spawn(&sandbox, Some(&mock), true, &[], &[]);
+    session.wait_for(
+        "openai-compatible/test-model",
+        std::time::Duration::from_secs(20),
+    );
+
+    let pane = session.capture();
+    let project = sandbox.project().display().to_string();
+    assert!(
+        pane.contains(&project),
+        "the footer shows the working directory ({project}):\n{pane}"
+    );
+    assert!(
+        pane.contains("(main)"),
+        "the footer shows the git branch beside it:\n{pane}"
+    );
+
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}

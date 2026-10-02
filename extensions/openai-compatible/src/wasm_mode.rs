@@ -282,7 +282,23 @@ impl GuestCompletionStream for WasmStream {
 impl ModelsGuest for OpenAiCompatWasm {
     fn list_models(pairs: Vec<ExtraPair>) -> Vec<WasmModel> {
         let settings = Settings::default();
-        // ADR-0035: the passed settings carry the discovered list.
+        // ADR-0035: the passed settings carry the discovered list - and the
+        // `model` a login just persisted, so it is offered immediately
+        // (G3, issue #2): environment first (documented precedence), then
+        // the pair, then this extension's credential namespace. Never an
+        // empty row.
+        let configured = if !settings.model.is_empty() {
+            settings.model.clone()
+        } else {
+            pairs
+                .iter()
+                .find(|pair| pair.key == "model")
+                .map(|pair| pair.value.clone())
+                .filter(|value| !value.is_empty())
+                .or_else(|| GUEST_CAP.credentials_get("model").filter(|v| !v.is_empty()))
+                .unwrap_or_default()
+        };
+        // The list `login-submit` discovered (or the preset's short list).
         let stored = pairs
             .iter()
             .find(|pair| pair.key == "models")
@@ -302,13 +318,15 @@ impl ModelsGuest for OpenAiCompatWasm {
         if !out.is_empty() {
             return out;
         }
-        out.push(WasmModel {
-            id: settings.model.clone(),
-            name: settings.model,
-            context_window: Settings::default().context_window,
-            max_tokens: 0,
-            extras: Vec::new(),
-        });
+        if !configured.is_empty() {
+            out.push(WasmModel {
+                id: configured.clone(),
+                name: configured,
+                context_window: settings.context_window,
+                max_tokens: 0,
+                extras: Vec::new(),
+            });
+        }
         out
     }
 }

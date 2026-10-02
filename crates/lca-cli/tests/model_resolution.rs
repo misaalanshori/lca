@@ -222,3 +222,88 @@ fn the_model_picker_label_never_reaches_the_provider_call() {
         "the label never enters session metadata: {meta}"
     );
 }
+
+// Verifies: G3 (issue #2) - after a provider login the model list is
+// there immediately: no restart. Fixture-based (the custom-endpoint flow,
+// which needs no browser and no network), fresh HOME, no env key: the
+// session starts in `no model` with an empty `/model`, and the sign-in
+// that follows lights both up.
+#[cfg(unix)]
+#[test]
+fn a_login_right_after_startup_shows_the_providers_models() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    // The mock exists so the base URL has somewhere real to point; no turn
+    // runs here, so nothing is served.
+    let _mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
+    let sandbox = sandbox("login-refresh");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    let session = Tmux::new("login-refresh");
+    // No OPENAI_* env: the provider is installed but has no key, model, or
+    // endpoint - the state a fresh install starts in.
+    session.spawn(&sandbox, None, false, &[], &[]);
+
+    // 1. Pre-login: no model resolved, and nothing of the login's model
+    //    anywhere (the assertion is about the user-visible state, not
+    //    about which empty form it takes - HEAD listed one blank row).
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+    session.send(&["/model", "Enter"]);
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    let pane = session.capture();
+    assert!(
+        !pane.contains("fixture-model"),
+        "nothing to show before the login:\n{pane}"
+    );
+    session.send(&["\x1b"]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    // 2. Sign in through the custom-endpoint flow (fixture: no browser).
+    session.send(&["/login", "Enter"]);
+    session.wait_for("Sign in with", std::time::Duration::from_secs(15));
+    let mut reached = false;
+    for _ in 0..24 {
+        session.send(&["Down"]);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        if session.capture().contains("Custom endpoint") {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "the walk reached the custom endpoint entry");
+    session.send(&["Enter"]);
+    session.wait_for("Base URL", std::time::Duration::from_secs(15));
+    session.send(&["https://api.example.test/v1", "Enter"]);
+    session.wait_for("input hidden", std::time::Duration::from_secs(15));
+    session.send(&["sk-fixture", "Enter"]);
+    session.wait_for("Model id", std::time::Duration::from_secs(15));
+    session.send(&["fixture-model", "Enter"]);
+    session.wait_for("ad hoc grant", std::time::Duration::from_secs(15));
+    session.send(&["y"]);
+
+    // 3. Immediately after the sign-in: the footer resolves the model.
+    session.wait_for(
+        "openai-compatible/fixture-model",
+        std::time::Duration::from_secs(20),
+    );
+
+    // 4. And `/model` lists it, marked active - no restart.
+    session.send(&["/model", "Enter"]);
+    let pane = session.wait_for(
+        "fixture-model (openai-compatible)",
+        std::time::Duration::from_secs(15),
+    );
+    assert!(
+        pane.contains("✓"),
+        "the model is offered and active:\n{pane}"
+    );
+
+    session.send(&["\x1b"]);
+    // Let the picker close before the command line takes the next keys.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}

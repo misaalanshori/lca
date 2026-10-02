@@ -88,14 +88,41 @@ impl ExtensionDispatch for OpenAiCompat {
         settings: &[(String, String)],
     ) -> Result<Vec<ModelInfo>, DispatchError> {
         // D2: the list `login-submit` discovered (or the preset's
-        // curated short list) is what `/model` offers. The configured
-        // model leads, then the rest of the stored list.
-        let mut models = vec![ModelInfo {
-            id: self.settings.model.clone(),
-            name: self.settings.model.clone(),
-            context_window: self.settings.context_window,
-            max_tokens: 0,
-        }];
+        // curated short list) is what `/model` offers.
+        //
+        // The configured model leads, and "configured" now includes what a
+        // login just persisted: the environment first (documented
+        // precedence over stored settings), then the `model` pair the host
+        // passes (ADR-0035: list-models takes settings), then the
+        // extension's own credential namespace. A login's model therefore
+        // appears the moment it lands, with no restart, and an
+        // unconfigured provider lists no empty row (G3, issue #2).
+        let configured = if self.settings.model.is_empty() {
+            settings
+                .iter()
+                .find(|(key, _)| key == "model")
+                .map(|(_, value)| value.clone())
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    self.cap
+                        .credentials_get("model")
+                        .ok()
+                        .flatten()
+                        .filter(|value| !value.is_empty())
+                })
+                .unwrap_or_default()
+        } else {
+            self.settings.model.clone()
+        };
+        let mut models: Vec<ModelInfo> = Vec::new();
+        if !configured.is_empty() {
+            models.push(ModelInfo {
+                id: configured.clone(),
+                name: configured,
+                context_window: self.settings.context_window,
+                max_tokens: 0,
+            });
+        }
         // ADR-0035: the passed settings are the source of truth -
         // the same pairs `complete` gets in its `extras`. The
         // credential read is the fallback for a caller that has not
