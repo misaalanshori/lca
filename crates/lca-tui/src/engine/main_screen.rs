@@ -516,10 +516,9 @@ mod tests {
         assert!(out.contains("x"));
     }
 
-    // Verifies: R2 - the main-screen renderer never enables mouse tracking.
-    // That absence is what returns native selection, right-click paste, and
-    // Ctrl+V to the terminal; the alt screen is the opt-in that captures
-    // them (FR-UI-21).
+    // Verifies: S3 (issue #7) - mouse capture policy follows the renderer mode:
+    // the default main-screen mode never enables mouse capture (?1000h, ?1002h, ?1003h, ?1006h),
+    // guaranteeing native selection, right-click paste, and Ctrl+V work by construction.
     #[test]
     fn main_screen_never_enables_mouse_tracking() {
         let (mut r, mut term) = renderer();

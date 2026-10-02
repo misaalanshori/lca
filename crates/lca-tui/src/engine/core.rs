@@ -116,9 +116,11 @@ pub fn resolve_overlay_layout(
     term_height: u16,
     content_height: u16,
 ) -> Rect {
-    let margin = options.margin;
-    let avail_w = term_width.saturating_sub(margin * 2);
-    let avail_h = term_height.saturating_sub(margin * 2);
+    // Margin adapts when viewport is constrained so dialogs remain visible.
+    let margin_w = options.margin.min(term_width.saturating_sub(4) / 2);
+    let margin_h = options.margin.min(term_height.saturating_sub(4) / 2);
+    let avail_w = term_width.saturating_sub(margin_w * 2).max(1);
+    let avail_h = term_height.saturating_sub(margin_h * 2).max(1);
 
     let mut width = options.width.map(|w| w.resolve(avail_w)).unwrap_or(avail_w);
     if let Some(min) = options.min_width {
@@ -162,10 +164,10 @@ pub fn resolve_overlay_layout(
     // Clamp into the margin box.
     let row = row
         .min(term_height.saturating_sub(height))
-        .max(margin.min(term_height));
+        .max(margin_h.min(term_height));
     let col = col
         .min(term_width.saturating_sub(width))
-        .max(margin.min(term_width));
+        .max(margin_w.min(term_width));
     Rect {
         row,
         col,

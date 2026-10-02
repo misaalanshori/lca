@@ -406,8 +406,9 @@ mod tests {
         );
     }
 
-    // Verifies: R2 - the alt-screen renderer enables exactly pi's mouse set
-    // on entry (app-owned selection) and disables every mode on exit.
+    // Verifies: S3 (issue #7) - the alt-screen renderer enables exactly pi's mouse set
+    // on entry (app-owned selection) and disables every mode on exit. In contrast to
+    // default main-screen mode, mouse capture is explicitly opt-in here.
     #[test]
     fn alt_screen_emits_exactly_the_pi_mouse_sequences() {
         let mut term = FakeTerminal::new(80, 24);

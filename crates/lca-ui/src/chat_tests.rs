@@ -261,9 +261,56 @@ fn modals_composite_over_the_viewport() {
     let mut chat = chat();
     chat.world.show_permission("rm -rf /tmp/x".into());
     let viewport = chat.viewport(80, 24, 0);
-    assert_eq!(viewport.len(), 24);
+    // In default scrollback mode, document length is preserved and overlays are bottom-anchored
     let text = strip(&viewport).join("\n");
     assert!(text.contains("rm -rf /tmp/x"));
+}
+
+// Verifies: S2 (issue #18) - dialogs are fully visible and centered in both
+// scrollback (main-screen) and app-owned (alt-screen) modes, even at small terminal heights.
+#[test]
+fn dialogs_anchor_and_center_in_both_screen_modes() {
+    let mut chat = chat();
+    chat.world.show_permission("rm -rf /tmp/x".into());
+
+    // 1. Main-screen (scrollback) mode at small height (12 rows)
+    chat.screen_mode = false;
+    let main_lines = chat.viewport(60, 12, 0);
+    let main_text = strip(&main_lines).join("\n");
+    assert!(
+        main_text.contains("rm -rf /tmp/x"),
+        "permission action is visible in main-screen mode"
+    );
+    assert!(
+        main_text.contains("Allow this action?"),
+        "modal title is visible in main-screen mode"
+    );
+    assert!(
+        main_text.contains("╭─") && main_text.contains("╰─"),
+        "modal frame is complete"
+    );
+
+    // 2. Alt-screen (fullscreen) mode at small height (12 rows)
+    chat.screen_mode = true;
+    let alt_lines = chat.viewport(60, 12, 0);
+    let alt_text = strip(&alt_lines).join("\n");
+    assert_eq!(
+        alt_lines.len(),
+        12,
+        "alt screen sizes exactly to viewport height"
+    );
+    assert!(
+        alt_text.contains("rm -rf /tmp/x"),
+        "permission action is visible in alt-screen mode"
+    );
+    assert!(
+        alt_text.contains("Allow this action?"),
+        "modal title is visible in alt-screen mode"
+    );
+    assert!(
+        alt_text.contains("╭─") && alt_text.contains("╰─"),
+        "modal frame is complete"
+    );
 }
 
 // Verifies: FR-CORE-11 - a message submitted while a turn runs queues
