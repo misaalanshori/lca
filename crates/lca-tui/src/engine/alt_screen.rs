@@ -160,6 +160,11 @@ impl AltScreenRenderer {
         self.first_render = true;
     }
 
+    /// The lines from the last render.
+    pub fn previous(&self) -> &[String] {
+        &self.previous
+    }
+
     /// Render already-composed lines with the selection highlight and the
     /// full-screen diff. Used by the agent interface, which composes its
     /// own viewport (transcript + dock) rather than a `LayoutNode`.

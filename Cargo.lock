@@ -1444,6 +1444,7 @@ name = "lca-tui"
 version = "0.5.2"
 dependencies = [
  "libc",
+ "proptest",
  "serde_json",
  "unicode-segmentation",
  "unicode-width",
