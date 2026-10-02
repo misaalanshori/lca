@@ -376,10 +376,10 @@ impl Chat {
     }
 
     /// The models `/model` should offer: the host's live list when one is
-    /// wired, else the startup snapshot. Live matters because a login's
-    /// model discovery can only run once the endpoint's ad-hoc grant is
-    /// approved, after the picker's snapshot was taken.
-    pub fn model_ids(&self) -> Vec<String> {
+    /// wired, else the startup snapshot (a login's discovery reaches the
+    /// picker without a restart). Rows, not bare ids: the label decorates,
+    /// the id stays raw (G2).
+    pub fn model_rows(&self) -> Vec<crate::state::ModelRow> {
         self.world
             .options
             .hooks

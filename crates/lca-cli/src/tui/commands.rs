@@ -30,21 +30,7 @@ impl Ui {
             initial_lines: self.initial_head.clone(),
             initial_records: self.initial_records.clone(),
             initial_tail_lines: self.initial_tail.clone(),
-            models: self
-                .provider
-                .list_models()
-                .iter()
-                .filter_map(|model| {
-                    let id = model.id.trim();
-                    if id.is_empty() {
-                        None
-                    } else if id.contains('/') {
-                        Some(id.to_string())
-                    } else {
-                        Some(format!("{id} ({})", self.provider_name))
-                    }
-                })
-                .collect(),
+            models: super::display::model_rows(&self.provider.list_models(), &self.provider_name),
             plain: self.config.ui_color() == ColorMode::Never,
             yolo: crate::lock(&self.grants).permission_mode()
                 == lca_permissions::PermissionMode::Yolo,

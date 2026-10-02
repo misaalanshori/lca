@@ -234,13 +234,9 @@ impl Chat {
             match key {
                 Some("escape") => {}
                 Some("enter") => {
-                    if let Some(raw_id) = picker.selected_model().map(str::to_string) {
-                        // Strip any trailing ` (provider)` label before invoking
-                        let id = raw_id
-                            .split_once(" (")
-                            .map(|(m, _)| m)
-                            .unwrap_or(&raw_id)
-                            .to_string();
+                    if let Some(id) = picker.selected_model().map(str::to_string) {
+                        // The row's id, raw: the label decoration never
+                        // reaches this path (G2).
                         match (self.world.options.invoke_command)("model", &id) {
                             lca_protocol::CommandEffect::ShowWidget(text) => {
                                 self.world.notice = Some(crate::state::sanitize_block(&text));

@@ -378,10 +378,18 @@ pub type ScreenModePersist = Arc<dyn Fn(bool) + Send + Sync>;
 /// Persists a runtime setting choice (`ui.theme`, `thinking`) to the config
 /// file (E2); `None` removes the key, and is how `unset` is written.
 pub type SettingPersist = Arc<dyn Fn(&str, Option<String>) + Send + Sync>;
+/// One `/model` picker row: `(raw id, display label)`.
+///
+/// The label may carry pi's `model (provider)` decoration (issue #3); the
+/// id is what resolution, session metadata, and provider calls use and is
+/// never decorated (G2: labels decorate display only, both directions
+/// tested).
+pub type ModelRow = (String, String);
+
 /// The models the `/model` picker should offer *now*. A hook rather than the
 /// startup snapshot, so a login's model discovery (which can only succeed
 /// after the endpoint's ad-hoc grant) reaches the picker without a restart.
-pub type ModelList = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+pub type ModelList = Arc<dyn Fn() -> Vec<ModelRow> + Send + Sync>;
 
 /// The user's trust choice from `/trust` or the startup prompt (ADR-0039).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -509,8 +517,9 @@ pub struct UiOptions {
     pub invoke_command: CommandInvoker,
     /// Slash commands offered by completion.
     pub slash_commands: Vec<String>,
-    /// Model ids offered by `/model <Tab>` argument completion.
-    pub models: Vec<String>,
+    /// Model rows (`(id, label)`) offered by `/model <Tab>` argument
+    /// completion: the menu shows the label, the insert is the id.
+    pub models: Vec<crate::state::ModelRow>,
     /// Workspace root for path completion.
     pub workspace: PathBuf,
     /// Extension trees per region (`None`: no ui-capable extension is

@@ -22,13 +22,14 @@ pub mod theme;
 pub mod transcript;
 
 pub use chat::{Chat, PendingMessage};
+pub use chat_pickers::ModelPicker;
 pub use footer::Footer;
 pub use lca_protocol::{QueuedMessage, SubmitMode, steer_queue};
 pub use run::run;
 pub use separator::{Separator, SeparatorState};
 pub use state::{
     Action, CUSTOM_OPTION, CommandInvoker, LoginCancel, LoginComplete, LoginConfirm, LoginNext,
-    LoginPick, LoginPoll, LoginRequest, PickerOption, PromptRequest, RegionInteractor,
+    LoginPick, LoginPoll, LoginRequest, ModelRow, PickerOption, PromptRequest, RegionInteractor,
     RegionRenderer, ShellEvent, ShellHandle, ShellRunner, TurnChannels, TurnRunner, UiHooks,
     UiOptions, UiState, display_path, sanitize_block, sanitize_text, widget_lines,
 };

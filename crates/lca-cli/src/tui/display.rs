@@ -46,6 +46,34 @@ pub(super) fn model_picker_text(models: &[lca_protocol::ModelInfo], current: &st
     lines.join("\n")
 }
 
+/// One `/model` row for a provider's list: the raw id, and pi's
+/// `model (provider)` label for it (issue #3). Both hosts that build a
+/// model list - the live `hooks.models` hook and the startup
+/// `UiOptions.models` snapshot - go through here, so the decoration rule
+/// exists once and only the label half ever carries it (G2: labels are
+/// display-only; selection, completion inserts, resolution, session
+/// metadata, and provider calls keep the raw id).
+pub(super) fn model_rows(
+    models: &[lca_protocol::ModelInfo],
+    provider: &str,
+) -> Vec<lca_ui::ModelRow> {
+    models
+        .iter()
+        .filter_map(|model| {
+            let id = model.id.trim();
+            if id.is_empty() {
+                return None;
+            }
+            Some(if id.contains('/') {
+                // Already provider-qualified: printing it twice helps nobody.
+                (id.to_string(), id.to_string())
+            } else {
+                (id.to_string(), format!("{id} ({provider})"))
+            })
+        })
+        .collect()
+}
+
 /// One `/model` invocation: no argument lists (the picker), a known
 /// argument switches the session's model everywhere it is read, an
 /// unknown one refuses with the real alternatives. The cells are
@@ -198,6 +226,62 @@ mod tests {
                 max_tokens: 8_192,
             })
             .collect()
+    }
+
+    // Verifies: G2 (issue #3's safety half) - the `model (provider)` label
+    // is display-only, asserted in both directions: the row decorates the
+    // label and leaves the id raw, and what the picker hands to selection
+    // is that raw id. `weird (v2)` is in the row on purpose - the old
+    // label-strip cut at the first ` (` and would have returned `weird`.
+    #[test]
+    fn the_picker_label_maps_both_ways_without_touching_the_id() {
+        let offered = models(&["deepseek-v4.1-flash", "org/qualified", "weird (v2)"]);
+        let rows = model_rows(&offered, "openai-compatible");
+
+        // Direction one: id -> label.
+        assert_eq!(
+            rows[0],
+            (
+                "deepseek-v4.1-flash".to_string(),
+                "deepseek-v4.1-flash (openai-compatible)".to_string()
+            ),
+            "a bare id gets the provider label"
+        );
+        assert_eq!(
+            rows[1],
+            ("org/qualified".to_string(), "org/qualified".to_string()),
+            "a provider-qualified id is not decorated twice"
+        );
+        assert_eq!(
+            rows[2],
+            (
+                "weird (v2)".to_string(),
+                "weird (v2) (openai-compatible)".to_string()
+            ),
+            "an id containing its own parenthesis decorates without losing text"
+        );
+
+        // Direction two: label -> id. The picker's selection is the row's
+        // raw id for every row, whatever the label shows.
+        for row in &rows {
+            let picker = lca_ui::ModelPicker::new(vec![row.clone()]);
+            assert_eq!(
+                picker.selected_model(),
+                Some(row.0.as_str()),
+                "selection returns the raw id of {}",
+                row.1
+            );
+            assert_eq!(picker.models[0].1, row.1, "the label shows as built");
+        }
+
+        // The decorated label stays searchable, and so does the raw id.
+        let mut picker = lca_ui::ModelPicker::new(rows);
+        picker.query = "deepseek".to_string();
+        picker.refilter();
+        assert_eq!(picker.matches, vec![0], "the label matches by model id");
+        picker.query = "weird (v2)".to_string();
+        picker.refilter();
+        assert_eq!(picker.matches, vec![2], "the raw id matches by itself");
     }
 
     // Verifies: FR-PROV-2 (the model picker lists every model the

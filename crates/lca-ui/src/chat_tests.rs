@@ -20,7 +20,10 @@ pub(super) fn options() -> UiOptions {
         plain: true,
         invoke_command: Arc::new(|_, _| CommandEffect::None),
         slash_commands: vec!["/help".into(), "/model".into(), "/login".into()],
-        models: vec!["alpha".into(), "beta".into()],
+        models: vec![
+            ("alpha".into(), "alpha".into()),
+            ("beta".into(), "beta".into()),
+        ],
         workspace: PathBuf::from("."),
         render_regions: None,
         ui_events: None,
@@ -86,6 +89,38 @@ fn argument_completion_offers_models() {
     }
     chat.handle_key("\t");
     assert_eq!(chat.editor.text(), "/model alpha");
+}
+
+// Verifies: G2 (issue #3's safety half) - the `/model` completion menu
+// shows the `model (provider)` label, but what Tab inserts is the raw id:
+// a decorated insert would reach `/model <arg>` and be refused as an
+// unknown model.
+#[test]
+fn model_completion_inserts_the_raw_id_and_shows_the_label() {
+    let mut options = options();
+    options.models = vec![(
+        "deepseek-v4.1-flash".to_string(),
+        "deepseek-v4.1-flash (openai-compatible)".to_string(),
+    )];
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    for c in "/model deep".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    let suggestions = chat.editor.suggestions().expect("the popup is open");
+    assert_eq!(
+        suggestions.items[0].label, "deepseek-v4.1-flash (openai-compatible)",
+        "the menu row shows the label"
+    );
+    assert_eq!(
+        suggestions.items[0].value, "deepseek-v4.1-flash",
+        "the menu row's value is the raw id"
+    );
+    chat.handle_key("\t");
+    assert_eq!(
+        chat.editor.text(),
+        "/model deepseek-v4.1-flash",
+        "the insert is the raw id"
+    );
 }
 
 #[test]
@@ -216,7 +251,10 @@ fn paste_into_the_secret_field_decodes_the_csi_u_dialect() {
 #[test]
 fn paste_into_the_model_picker_search_filters_the_list() {
     let mut chat = chat();
-    chat.model_picker = Some(ModelPicker::new(vec!["alpha-1".into(), "beta-2".into()]));
+    chat.model_picker = Some(ModelPicker::new(vec![
+        ("alpha-1".into(), "alpha-1".into()),
+        ("beta-2".into(), "beta-2".into()),
+    ]));
     chat.handle_key(&bracketed("beta"));
     let picker = chat.model_picker.as_ref().expect("picker");
     assert_eq!(picker.query, "beta");
@@ -618,10 +656,19 @@ fn theme_picker_previews_and_restores() {
 fn the_live_model_hook_feeds_the_picker() {
     let mut options = options();
     options.hooks.models = Some(Arc::new(|| {
-        vec!["live-a".to_string(), "live-b".to_string()]
+        vec![
+            ("live-a".to_string(), "live-a".to_string()),
+            ("live-b".to_string(), "live-b (some-provider)".to_string()),
+        ]
     }));
     let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
-    assert_eq!(chat.model_ids(), vec!["live-a", "live-b"]);
+    assert_eq!(
+        chat.model_rows(),
+        vec![
+            ("live-a".to_string(), "live-a".to_string()),
+            ("live-b".to_string(), "live-b (some-provider)".to_string()),
+        ]
+    );
     for c in "/model".chars() {
         chat.handle_key(&c.to_string());
     }

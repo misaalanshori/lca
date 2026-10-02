@@ -249,18 +249,17 @@ impl Chat {
                 body.push("  (no matches)".to_string());
             }
             for (row, index) in picker.matches.iter().enumerate() {
-                let model = &picker.models[*index];
-                if model.trim().is_empty() {
+                let (raw_id, label) = &picker.models[*index];
+                if label.trim().is_empty() {
                     continue;
                 }
                 let cur = if row == picker.selected { '>' } else { ' ' };
-                let raw_id = model.split_once(" (").map(|(m, _)| m).unwrap_or(model);
-                let mark = if active.ends_with(&format!("/{raw_id}")) || active == raw_id {
+                let mark = if active.ends_with(&format!("/{raw_id}")) || active == raw_id.as_str() {
                     "  ✓"
                 } else {
                     ""
                 };
-                body.push(format!(" {cur} {model}{mark}"));
+                body.push(format!(" {cur} {label}{mark}"));
             }
             picker_overlay(
                 viewport,

@@ -106,21 +106,7 @@ impl Ui {
                 let provider = self.provider.clone();
                 let provider_name = self.provider_name.clone();
                 Some(Arc::new(move || {
-                    provider
-                        .list_models()
-                        .iter()
-                        .filter_map(|model| {
-                            let id = model.id.trim();
-                            if id.is_empty() {
-                                return None;
-                            }
-                            if id.contains('/') {
-                                Some(id.to_string())
-                            } else {
-                                Some(format!("{id} ({provider_name})"))
-                            }
-                        })
-                        .collect()
+                    super::display::model_rows(&provider.list_models(), &provider_name)
                 }))
             },
             trust_needed: {

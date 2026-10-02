@@ -65,8 +65,9 @@ pub struct ThinkingPicker {
 /// pi's `model-selector.ts` shape (minus the catalog refresh, which the
 /// host does at startup).
 pub struct ModelPicker {
-    /// Every offered model id, in the host's order.
-    pub models: Vec<String>,
+    /// Every offered row: `(raw id, display label)`. Selection returns the
+    /// id; rendering shows the label (G2: labels are display-only).
+    pub models: Vec<crate::state::ModelRow>,
     /// The typed search query.
     pub query: String,
     /// The indices into `models` that match.
@@ -76,8 +77,8 @@ pub struct ModelPicker {
 }
 
 impl ModelPicker {
-    /// Open the picker over a model list.
-    pub fn new(models: Vec<String>) -> ModelPicker {
+    /// Open the picker over a list of `(id, label)` rows.
+    pub fn new(models: Vec<crate::state::ModelRow>) -> ModelPicker {
         let matches = (0..models.len()).collect();
         ModelPicker {
             models,
@@ -87,14 +88,15 @@ impl ModelPicker {
         }
     }
 
-    /// Re-filter after a query change, keeping the selection in range.
+    /// Re-filter after a query change, keeping the selection in range. The
+    /// label starts with the id, so matching on it covers both.
     pub fn refilter(&mut self) {
         let needle = self.query.to_lowercase();
         self.matches = self
             .models
             .iter()
             .enumerate()
-            .filter(|(_, model)| model.to_lowercase().contains(&needle))
+            .filter(|(_, (_, label))| label.to_lowercase().contains(&needle))
             .map(|(index, _)| index)
             .collect();
         if self.selected >= self.matches.len() {
@@ -102,12 +104,12 @@ impl ModelPicker {
         }
     }
 
-    /// The highlighted model id, when any.
+    /// The highlighted row's raw id, when any: what selection passes on.
     pub fn selected_model(&self) -> Option<&str> {
         self.matches
             .get(self.selected)
             .and_then(|index| self.models.get(*index))
-            .map(String::as_str)
+            .map(|(id, _)| id.as_str())
     }
 }
 

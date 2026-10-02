@@ -26,7 +26,7 @@ impl Chat {
         // The live list, not the startup snapshot, so a login that
         // discovered models after its grant reaches the picker (pain point
         // #4). Computed once per command; the host hook is a cheap read.
-        let live_models = self.model_ids();
+        let live_models = self.model_rows();
 
         match name.as_str() {
             "help" => {
@@ -268,10 +268,12 @@ pub(crate) fn provider_for(options: &UiOptions) -> CombinedAutocompleteProvider 
                     Some(Arc::new(move |prefix: &str| {
                         models
                             .iter()
-                            .filter(|m| m.starts_with(prefix))
-                            .map(|m| AutocompleteItem {
-                                value: m.clone(),
-                                label: m.clone(),
+                            .filter(|(id, _)| id.starts_with(prefix))
+                            .map(|(id, label)| AutocompleteItem {
+                                // The insert is the raw id; only the menu
+                                // row shows the label (G2).
+                                value: id.clone(),
+                                label: label.clone(),
                                 description: None,
                             })
                             .collect()

@@ -52,6 +52,7 @@ pub fn sse_tool_call(name: &str, args: &str) -> String {
 pub struct Mock {
     pub addr: SocketAddr,
     requests: std::sync::Arc<Mutex<Vec<String>>>,
+    bodies: std::sync::Arc<Mutex<Vec<String>>>,
 }
 
 impl Mock {
@@ -62,6 +63,12 @@ impl Mock {
     pub fn request_count(&self) -> usize {
         self.requests.lock().expect("lock").len()
     }
+
+    /// Every request body the mock received, in order (G2's receipt: the
+    /// model id the provider call actually carries, not the picker label).
+    pub fn bodies(&self) -> Vec<String> {
+        self.bodies.lock().expect("lock").iter().cloned().collect()
+    }
 }
 
 pub async fn start_mock(replies: Vec<Reply>) -> Mock {
@@ -69,9 +76,11 @@ pub async fn start_mock(replies: Vec<Reply>) -> Mock {
 
     let replies = std::sync::Arc::new(Mutex::new(VecDeque::from(replies)));
     let requests = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let bodies = std::sync::Arc::new(Mutex::new(Vec::new()));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let recorded = requests.clone();
+    let recorded_bodies = bodies.clone();
     tokio::spawn(async move {
         loop {
             let Ok((stream, _)) = listener.accept().await else {
@@ -79,11 +88,13 @@ pub async fn start_mock(replies: Vec<Reply>) -> Mock {
             };
             let replies = replies.clone();
             let recorded = recorded.clone();
+            let recorded_bodies = recorded_bodies.clone();
             tokio::spawn(async move {
                 let io = TokioIo::new(stream);
                 let service = service_fn(move |req: Request<hyper::body::Incoming>| {
                     let replies = replies.clone();
                     let recorded = recorded.clone();
+                    let recorded_bodies = recorded_bodies.clone();
                     async move {
                         let (parts, mut body) = req.into_parts();
                         let mut bytes = Vec::new();
@@ -97,6 +108,10 @@ pub async fn start_mock(replies: Vec<Reply>) -> Mock {
                             parts.method,
                             parts.uri.path()
                         ));
+                        recorded_bodies
+                            .lock()
+                            .expect("lock")
+                            .push(String::from_utf8_lossy(&bytes).into_owned());
                         let reply = replies
                             .lock()
                             .expect("lock")
@@ -125,7 +140,11 @@ pub async fn start_mock(replies: Vec<Reply>) -> Mock {
             });
         }
     });
-    Mock { addr, requests }
+    Mock {
+        addr,
+        requests,
+        bodies,
+    }
 }
 
 pub struct Sandbox {
