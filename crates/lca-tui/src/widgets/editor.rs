@@ -68,6 +68,10 @@ pub struct Editor {
     lines: Vec<String>,
     cursor_line: usize,
     cursor_col: usize, // in chars
+    /// Whether the caret is painted into the row (reverse video). The
+    /// plain theme renders no escapes at all (FR-UI-5), so there the
+    /// hardware cursor - positioned at the marker - stays the caret.
+    paint_caret: bool,
     history: Vec<String>,
     history_index: Option<usize>,
     draft: String,
@@ -111,6 +115,7 @@ impl Editor {
             lines: vec![String::new()],
             cursor_line: 0,
             cursor_col: 0,
+            paint_caret: true,
             history: Vec::new(),
             history_index: None,
             draft: String::new(),
@@ -130,6 +135,13 @@ impl Editor {
     }
 
     /// Use a specific keybinding set.
+    /// Choose how the caret is shown: painted into the row (colored
+    /// themes) or left to the hardware cursor (the plain theme, which
+    /// renders no escapes - FR-UI-5).
+    pub fn set_paint_caret(&mut self, on: bool) {
+        self.paint_caret = on;
+    }
+
     pub fn set_keybindings(&mut self, kb: Arc<KeybindingsManager>) {
         self.keybindings = kb;
     }
@@ -305,10 +317,12 @@ impl Editor {
         self.preferred_col = None;
         self.snapshot();
         if self.cursor_col > 0 {
+            // Delete the whole cluster before the cursor (pi's snap).
+            let boundary = Self::prev_cluster_boundary(self.current(), self.cursor_col);
             let end = self.char_to_byte(self.cursor_col);
-            let start = self.char_to_byte(self.cursor_col - 1);
+            let start = self.char_to_byte(boundary);
             self.current_mut().replace_range(start..end, "");
-            self.cursor_col -= 1;
+            self.cursor_col = boundary;
         } else if self.cursor_line > 0 {
             let current = self.lines.remove(self.cursor_line);
             self.cursor_line -= 1;
@@ -324,8 +338,10 @@ impl Editor {
         self.snapshot();
         let len = self.current().chars().count();
         if self.cursor_col < len {
+            // Delete the whole cluster after the cursor (pi's snap).
+            let boundary = Self::next_cluster_boundary(self.current(), self.cursor_col);
             let start = self.char_to_byte(self.cursor_col);
-            let end = self.char_to_byte(self.cursor_col + 1);
+            let end = self.char_to_byte(boundary);
             self.current_mut().replace_range(start..end, "");
         } else if self.cursor_line + 1 < self.lines.len() {
             let next = self.lines.remove(self.cursor_line + 1);
@@ -399,7 +415,8 @@ impl Editor {
     pub fn cursor_left(&mut self) {
         self.preferred_col = None;
         if self.cursor_col > 0 {
-            self.cursor_col -= 1;
+            // Grapheme-snapped (pi): step over a whole cluster.
+            self.cursor_col = Self::prev_cluster_boundary(self.current(), self.cursor_col);
         } else if self.cursor_line > 0 {
             self.cursor_line -= 1;
             self.cursor_col = self.current().chars().count();
@@ -411,7 +428,9 @@ impl Editor {
     pub fn cursor_right(&mut self) {
         self.preferred_col = None;
         if self.cursor_col < self.current().chars().count() {
-            self.cursor_col += 1;
+            // Grapheme-snapped (pi): a cluster entered by a stale column
+            // is left whole.
+            self.cursor_col = Self::next_cluster_boundary(self.current(), self.cursor_col);
         } else if self.cursor_line + 1 < self.lines.len() {
             self.cursor_line += 1;
             self.cursor_col = 0;
@@ -806,11 +825,20 @@ impl Editor {
         }
     }
 
-    /// Render the buffer at a width, including the `CURSOR_MARKER` at the
-    /// cursor position.
+    /// Render the buffer at a width. The caret is *painted into the row*
+    /// (pi's model, `editor.md` §5): the grapheme cluster under it in
+    /// reverse video, an end-of-line caret as a reverse-video space, and
+    /// the zero-width `CURSOR_MARKER` immediately before either form, so
+    /// the engine can still position the (hidden) hardware cursor for IME
+    /// candidate windows while the painted caret is what the user sees.
+    ///
+    /// The cursor is cluster-snapped and row-boundary-snapped exactly as
+    /// pi's `layoutText`: on a middle wrapped row the caret sits strictly
+    /// inside it (a boundary lands at the start of the next row), and only
+    /// the line's last row owns the end-of-line position.
     pub fn render(&self, width: u16) -> Vec<String> {
         let width = width as usize;
-        let mut out = Vec::new();
+        let mut out: Vec<String> = Vec::new();
         let mut cursor_placed = false;
         for (li, line) in self.lines.iter().enumerate() {
             let wrapped = if line.is_empty() {
@@ -818,23 +846,39 @@ impl Editor {
             } else {
                 wrap_text_with_ansi(line, width.max(1))
             };
-            // Determine the visual row/col of the cursor on this line.
+            let last_row = wrapped.len().saturating_sub(1);
             let mut col_tracker = 0usize;
-            for visual in &wrapped {
+            for (ri, visual) in wrapped.iter().enumerate() {
                 let mut rendered = visual.clone();
                 if li == self.cursor_line && !cursor_placed {
                     let target = self.cursor_col;
-                    if target >= col_tracker && target <= col_tracker + visual.chars().count() {
+                    let row_chars = visual.chars().count();
+                    let on_row = if ri == last_row {
+                        target >= col_tracker && target <= col_tracker + row_chars
+                    } else {
+                        target >= col_tracker && target < col_tracker + row_chars
+                    };
+                    if on_row {
                         let offset = target - col_tracker;
-                        let byte = visual
-                            .char_indices()
-                            .nth(offset)
-                            .map(|(b, _)| b)
-                            .unwrap_or(visual.len());
-                        rendered = format!("{}{CURSOR_MARKER}{}", &visual[..byte], &visual[byte..]);
+                        let (before, cluster, after) = Self::caret_split(visual, offset);
+                        rendered = if self.paint_caret {
+                            match cluster {
+                                Some(g) => {
+                                    format!("{before}{CURSOR_MARKER}\x1b[7m{g}\x1b[0m{after}")
+                                }
+                                None => format!("{before}{CURSOR_MARKER}\x1b[7m \x1b[0m"),
+                            }
+                        } else {
+                            // The cluster is still text: keep it, and put
+                            // the marker where the caret is.
+                            match cluster {
+                                Some(g) => format!("{before}{CURSOR_MARKER}{g}{after}"),
+                                None => format!("{before}{CURSOR_MARKER}{after}"),
+                            }
+                        };
                         cursor_placed = true;
                     }
-                    col_tracker += visual.chars().count();
+                    col_tracker += row_chars;
                 }
                 out.push(rendered);
             }
@@ -842,11 +886,69 @@ impl Editor {
                 && !cursor_placed
                 && let Some(last) = out.last_mut()
             {
+                // The cursor landed past every wrapped row (a trimmed
+                // tail): park the painted caret at the line's end anyway.
                 last.push_str(CURSOR_MARKER);
+                if self.paint_caret {
+                    last.push_str("\x1b[7m \x1b[0m");
+                }
                 cursor_placed = true;
             }
         }
         out
+    }
+
+    /// The char index of the previous grapheme-cluster boundary strictly
+    /// before `col` (pi's grapheme-snapped movement: clusters are stepped over
+    /// whole, never entered).
+    fn prev_cluster_boundary(line: &str, col: usize) -> usize {
+        use unicode_segmentation::UnicodeSegmentation as _;
+        let mut boundary = 0usize;
+        let mut pos = 0usize;
+        for cluster in line.graphemes(true) {
+            let next = pos + cluster.chars().count();
+            if next >= col {
+                break;
+            }
+            boundary = next;
+            pos = next;
+        }
+        boundary
+    }
+
+    /// The char index of the next grapheme-cluster boundary after `col`.
+    fn next_cluster_boundary(line: &str, col: usize) -> usize {
+        use unicode_segmentation::UnicodeSegmentation as _;
+        let mut pos = 0usize;
+        for cluster in line.graphemes(true) {
+            pos += cluster.chars().count();
+            if pos > col {
+                return pos;
+            }
+        }
+        pos
+    }
+
+    /// Split a visual row at the grapheme cluster containing the char
+    /// `offset`, snapped to the cluster's start (pi's grapheme-snapped
+    /// caret: a multi-code-point cluster is painted whole, never in half).
+    /// `(before, cluster, after)`; `cluster` is `None` at end of line.
+    fn caret_split(visual: &str, offset: usize) -> (&str, Option<&str>, &str) {
+        use unicode_segmentation::UnicodeSegmentation as _;
+        let mut char_pos = 0usize;
+        let mut byte_pos = 0usize;
+        for cluster in visual.graphemes(true) {
+            if offset < char_pos + cluster.chars().count() {
+                return (
+                    &visual[..byte_pos],
+                    Some(cluster),
+                    &visual[byte_pos + cluster.len()..],
+                );
+            }
+            char_pos += cluster.chars().count();
+            byte_pos += cluster.len();
+        }
+        (visual, None, "")
     }
 
     /// Render the autocomplete popup (to be placed near the editor).

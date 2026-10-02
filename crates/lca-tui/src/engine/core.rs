@@ -176,14 +176,20 @@ pub fn resolve_overlay_layout(
 
 /// Find the cursor position (row, col) from `CURSOR_MARKER` in rendered
 /// lines, stripping the marker. Returns the (possibly modified) lines and
-/// the position if present.
-pub fn extract_cursor_position(lines: &[String]) -> (Vec<String>, Option<(u16, u16)>) {
+/// the position if present, plus whether the component painted its caret
+/// (a reverse-video cell) right after the marker: painted means the
+/// hardware cursor stays hidden, unpainted means the hardware cursor *is*
+/// the caret (V2 - pi's `showHardwareCursor` default, honored per row).
+pub fn extract_cursor_position(lines: &[String]) -> (Vec<String>, Option<(u16, u16, bool)>) {
     let mut position = None;
     let mut out = Vec::with_capacity(lines.len());
     for (row, line) in lines.iter().enumerate() {
         if let Some(idx) = line.find(CURSOR_MARKER) {
             let col = u16::try_from(visible_width(&line[..idx])).unwrap_or(u16::MAX);
-            position = Some((u16::try_from(row).unwrap_or(u16::MAX), col));
+            let painted = line
+                .get(idx + CURSOR_MARKER.len()..)
+                .is_some_and(|rest| rest.starts_with("\x1b[7m"));
+            position = Some((u16::try_from(row).unwrap_or(u16::MAX), col, painted));
             out.push(line.replace(CURSOR_MARKER, ""));
         } else {
             out.push(line.clone());
@@ -280,7 +286,7 @@ mod tests {
     fn cursor_marker_is_extracted_and_stripped() {
         let lines = vec!["hello".to_string(), format!("ab{CURSOR_MARKER}cd")];
         let (out, pos) = extract_cursor_position(&lines);
-        assert_eq!(pos, Some((1, 2)));
+        assert_eq!(pos, Some((1, 2, false)), "no painted caret in this row");
         assert_eq!(out[1], "abcd");
         assert!(!out[1].contains("pi:c"));
     }

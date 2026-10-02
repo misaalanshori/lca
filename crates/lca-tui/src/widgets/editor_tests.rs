@@ -299,15 +299,133 @@ fn paste_decodes_tmux_csi_u_ctrl_and_normalizes() {
     assert_eq!(e.text(), "a\nb    c");
 }
 
+// Verifies: V2 (issues #10/#11) - the caret is painted by the component
+// (pi's model): reverse-video grapheme under the cursor, marker on the
+// caret cell, buffer text unchanged.
 #[test]
-fn cursor_marker_sits_at_the_cursor() {
+fn the_caret_is_painted_and_the_marker_sits_on_it() {
     let mut e = Editor::new();
     e.insert_str("abc");
     e.cursor_left();
     let lines = e.render(40);
-    let (stripped, pos) = extract_cursor_position(&lines);
-    assert_eq!(stripped[0], "abc");
-    assert_eq!(pos, Some((0, 2)));
+    let (clean, pos) = extract_cursor_position(&lines);
+    assert_eq!(pos, Some((0, 2, true)), "the marker sits on the caret cell");
+    assert!(
+        clean[0].contains("\x1b[7mc\x1b[0m"),
+        "the grapheme under the caret is reverse video: {:?}",
+        clean[0]
+    );
+    let plain = crate::engine::text::strip_terminal_sequences(&clean[0]);
+    assert_eq!(plain, "abc", "the buffer text is unchanged");
+}
+
+// Verifies: V2 - the keystroke matrix from the brief: every frame paints
+// the caret and reports the column the keystrokes imply (`a`, space,
+// space, Home, End, a typed letter).
+#[test]
+fn the_keystroke_matrix_paints_the_caret_every_frame() {
+    let mut e = Editor::new();
+    let mut cols: Vec<usize> = Vec::new();
+    let mut snap = |e: &Editor, cols: &mut Vec<usize>| {
+        let lines = e.render(40);
+        let (clean, pos) = extract_cursor_position(&lines);
+        let (row, col, _painted) = pos.expect("every frame carries the caret marker");
+        assert_eq!(row, 0, "one line under test");
+        assert!(
+            clean[0].contains("\x1b[7m"),
+            "the caret is painted into the row: {:?}",
+            clean[0]
+        );
+        cols.push(col as usize);
+    };
+    snap(&e, &mut cols); // empty buffer
+    e.insert_str("a");
+    snap(&e, &mut cols);
+    e.insert_str(" ");
+    snap(&e, &mut cols);
+    e.insert_str(" ");
+    snap(&e, &mut cols);
+    e.cursor_line_start();
+    snap(&e, &mut cols);
+    e.cursor_line_end();
+    snap(&e, &mut cols);
+    e.insert_str("z");
+    snap(&e, &mut cols);
+    assert_eq!(
+        cols,
+        vec![0, 1, 2, 3, 0, 3, 4],
+        "columns after each key: {cols:?}"
+    );
+}
+
+// Verifies: V2 - trailing spaces: the caret at the end of `a b  ` sits on
+// a painted cell, and moving onto a typed space paints that space (the
+// owner's "invisible spaces" complaint).
+#[test]
+fn the_caret_on_trailing_spaces_is_visible() {
+    let mut e = Editor::new();
+    e.insert_str("a b  ");
+    let lines = e.render(40);
+    let (clean, pos) = extract_cursor_position(&lines);
+    assert_eq!(
+        pos,
+        Some((0, 5, true)),
+        "end of line after the trailing spaces"
+    );
+    assert!(
+        clean[0].contains("\x1b[7m \x1b[0m"),
+        "an end-of-line caret is a reverse-video space: {:?}",
+        clean[0]
+    );
+    let plain = crate::engine::text::strip_terminal_sequences(&clean[0]);
+    assert!(plain.starts_with("a b  "), "the spaces stay: {plain:?}");
+
+    e.cursor_left(); // onto the second typed space
+    let lines = e.render(40);
+    let (clean, pos) = extract_cursor_position(&lines);
+    assert_eq!(pos, Some((0, 4, true)), "on the typed space");
+    assert!(
+        clean[0].contains("\x1b[7m \x1b[0m"),
+        "the space under the caret is painted: {:?}",
+        clean[0]
+    );
+}
+
+// Verifies: V2 - a wide or clustered grapheme is painted whole (never in
+// half), and deletion removes the whole cluster (pi's snap).
+#[test]
+fn the_caret_paints_whole_graphemes_and_deletes_them() {
+    let mut e = Editor::new();
+    e.insert_str("a👍b");
+    e.cursor_left(); // on 'b'
+    e.cursor_left(); // on the emoji
+    let lines = e.render(40);
+    let (clean, pos) = extract_cursor_position(&lines);
+    assert_eq!(pos, Some((0, 1, true)), "on the wide grapheme");
+    assert!(
+        clean[0].contains("\x1b[7m👍\x1b[0m"),
+        "the whole grapheme is reverse video: {:?}",
+        clean[0]
+    );
+    // Backspace deletes the cluster *before* the cursor: step past the
+    // emoji first so the deletion targets it.
+    e.cursor_right();
+    e.backspace();
+    assert_eq!(e.text(), "ab", "the grapheme is deleted whole");
+
+    // A ZWJ cluster is one movement and one deletion.
+    let mut e = Editor::new();
+    e.insert_str("👨‍👩‍👧");
+    e.cursor_left();
+    let (clean, pos) = extract_cursor_position(&e.render(40));
+    assert_eq!(pos, Some((0, 0, true)), "one step back leaves the cluster");
+    assert!(
+        clean[0].contains("\x1b[7m👨‍👩‍👧\x1b[0m"),
+        "the cluster is painted whole: {:?}",
+        clean[0]
+    );
+    e.delete_forward();
+    assert_eq!(e.text(), "", "and deleted whole");
 }
 
 #[test]
@@ -383,16 +501,39 @@ fn a_trailing_space_advances_the_cursor_column() {
         e.handle_key(&ch.to_string());
     }
     let (_, before) = extract_cursor_position(&e.render(80));
-    assert_eq!(before.map(|(_, col)| col), Some(3), "after the b");
+    assert_eq!(before.map(|(_, col, _)| col), Some(3), "after the b");
 
     e.handle_key(" ");
     let lines = e.render(80);
     let (_, after) = extract_cursor_position(&lines);
     assert_eq!(
-        after.map(|(_, col)| col),
+        after.map(|(_, col, _)| col),
         Some(4),
         "the space moved the caret: {lines:?}"
     );
     // And the trailing space is really in the buffer, not trimmed away.
     assert_eq!(e.lines(), &["a b "], "the space is in the line");
+}
+
+// Verifies: V2 + FR-UI-5 - the plain theme keeps its no-escape contract:
+// the caret is not painted, the marker still tells the engine where to
+// put the (visible) hardware cursor.
+#[test]
+fn the_plain_theme_does_not_paint_the_caret() {
+    let mut e = Editor::new();
+    e.set_paint_caret(false);
+    e.insert_str("abc");
+    e.cursor_left();
+    let lines = e.render(40);
+    let (clean, pos) = extract_cursor_position(&lines);
+    assert_eq!(pos, Some((0, 2, false)), "positioned, not painted");
+    assert!(
+        !clean[0].contains('\x1b'),
+        "no escape at all in plain mode: {:?}",
+        clean[0]
+    );
+    assert_eq!(
+        crate::engine::text::strip_terminal_sequences(&clean[0]),
+        "abc"
+    );
 }

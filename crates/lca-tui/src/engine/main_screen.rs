@@ -103,7 +103,7 @@ impl MainScreenRenderer {
         // cursor-move sequence does not make every terminal redraw the
         // cursor cell - Windows consoles do not, which reads as "the space
         // did not register". When the caret moved, its row is repainted.
-        let cursor_moved = cursor != self.last_cursor;
+        let cursor_moved = cursor.map(|(r, c, _)| (r, c)) != self.last_cursor;
         let mut out = String::new();
         out.push_str("\x1b[?2026h"); // synchronized output
 
@@ -203,7 +203,7 @@ impl MainScreenRenderer {
                 }
                 out.push_str(SEGMENT_RESET);
             }
-        } else if cursor_moved && let Some((row, _)) = cursor {
+        } else if cursor_moved && let Some((row, _, _)) = cursor {
             // Only the caret moved: repaint the row it sits on.
             let doc_row = (row as usize).min(lines.len().saturating_sub(1));
             let target = screen_row(doc_row)
@@ -221,7 +221,7 @@ impl MainScreenRenderer {
         }
 
         // Position the hardware cursor at the CURSOR_MARKER's screen row.
-        if let Some((row, col)) = cursor {
+        if let Some((row, col, painted)) = cursor {
             let target = screen_row(row as usize).max(0) as usize;
             if target != self.cursor_row {
                 if self.cursor_row > target {
@@ -232,7 +232,9 @@ impl MainScreenRenderer {
                 self.cursor_row = target;
             }
             out.push_str(&format!("\x1b[{}G", col + 1));
-            out.push_str("\x1b[?25h");
+            // Positioned at the marker either way (IME reads it); shown only
+            // when the component did not paint its caret (V2).
+            out.push_str(if painted { "\x1b[?25l" } else { "\x1b[?25h" });
         } else {
             out.push_str("\x1b[?25l");
         }
@@ -240,8 +242,8 @@ impl MainScreenRenderer {
         out.push_str("\x1b[?2026l"); // end synchronized output
         term.write(&out);
         self.previous = lines;
-        self.last_cursor = cursor;
-        cursor
+        self.last_cursor = cursor.map(|(r, c, _)| (r, c));
+        cursor.map(|(r, c, _)| (r, c))
     }
 
     /// Park the cursor below the content so the shell prompt lands cleanly.

@@ -179,21 +179,26 @@ impl AltScreenRenderer {
         let resize = self.first_render || width != self.width || height != self.height;
         // R5: the caret is frame state; see the main-screen renderer's note.
         // The row the caret sits on repaints whenever the caret moved.
-        let cursor_moved = cursor != self.last_cursor;
+        let cursor_moved = cursor.map(|(r, c, _)| (r, c)) != self.last_cursor;
         let mut out = String::from("\x1b[?2026h");
         if resize {
             out.push_str("\x1b[2J\x1b[H");
         }
         for (row, line) in lines.iter().enumerate() {
-            let caret_row = cursor.is_some_and(|(r, _)| r as usize == row);
+            let caret_row = cursor.is_some_and(|(r, _, _)| r as usize == row);
             if !resize && self.previous.get(row) == Some(line) && !(cursor_moved && caret_row) {
                 continue;
             }
             out.push_str(&format!("\x1b[{};1H\x1b[2K", row + 1));
             out.push_str(line);
         }
-        if let Some((row, col)) = cursor {
-            out.push_str(&format!("\x1b[{};{}H\x1b[?25h", row + 1, col + 1));
+        if let Some((row, col, painted)) = cursor {
+            // Position at the marker either way (IME candidate windows read
+            // the hardware cursor); show it only when the component did not
+            // paint its own caret - V2, pi's default `showHardwareCursor =
+            // false`, honored per row.
+            out.push_str(&format!("\x1b[{};{}H", row + 1, col + 1));
+            out.push_str(if painted { "\x1b[?25l" } else { "\x1b[?25h" });
         } else {
             out.push_str("\x1b[?25l");
         }
@@ -203,8 +208,8 @@ impl AltScreenRenderer {
         self.width = width;
         self.height = height;
         self.first_render = false;
-        self.last_cursor = cursor;
-        cursor
+        self.last_cursor = cursor.map(|(r, c, _)| (r, c));
+        cursor.map(|(r, c, _)| (r, c))
     }
 
     /// Handle raw input: mouse selection, wheel scroll, and viewport keys.

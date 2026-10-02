@@ -153,6 +153,10 @@ impl Chat {
         let mut editor = Editor::new();
         editor.set_keybindings(keybindings.clone());
         editor.set_autocomplete(Arc::new(provider_for(&world.options)));
+        // V2: the caret is painted into the row on colored themes; the
+        // plain theme renders no escapes at all (FR-UI-5), so there the
+        // hardware cursor keeps the job it already had.
+        editor.set_paint_caret(theme.colored);
         let mut transcript = Transcript::new();
         for line in &world.options.initial_lines {
             transcript.push_raw(line.clone());
