@@ -198,9 +198,10 @@ fn handle_input(
                     screen.copy_osc52(terminal, &text);
                 }
                 chat.world.notice = Some(if verified {
-                    "copied to the clipboard".to_string()
+                    "copied to clipboard".to_string()
                 } else {
-                    "copied via OSC 52 (unverified)".to_string()
+                    "copied (if your terminal blocked the clipboard, nothing was copied)"
+                        .to_string()
                 });
             }
         }
@@ -586,8 +587,11 @@ mod tests {
     fn a_failed_link_open_says_why() {
         assert_eq!(link_notice("https://x", Some(Ok(()))), "opened https://x");
         assert_eq!(
-            link_notice("https://x", Some(Err("no URL opener found".into()))),
-            "cannot open https://x: no URL opener found"
+            link_notice(
+                "https://x",
+                Some(Err("no web browser found to open link".into()))
+            ),
+            "cannot open https://x: no web browser found to open link"
         );
         assert_eq!(link_notice("https://x", None), "cannot open https://x");
     }

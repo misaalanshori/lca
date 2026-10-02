@@ -178,55 +178,63 @@ fn render_assistant(
                 for line in
                     wrap_text_with_ansi(reasoning, (width as usize).saturating_sub(2).max(1))
                 {
-                    // A blank line inside the run stays blank: a bare `∴`
-                    // reads like a row that failed to render.
+                    // A blank line inside the run stays blank.
                     if line.trim().is_empty() {
                         out.push(String::new());
                         continue;
                     }
-                    out.push(format!(
-                        "{} {}",
-                        (theme.reasoning)("∴"),
-                        (theme.reasoning)(&line)
-                    ));
+                    out.push(format!("  {}", (theme.reasoning)(&line)));
                 }
             }
             // R6's default: enough thinking to see where the model is
             // going, then a count of what is left.
+            // W3: When streaming, follow the tail (the latest lines are what the user watches).
             ThinkingVisibility::Snippet => {
                 const SNIPPET_LINES: usize = 3;
                 let lines: Vec<&str> = reasoning
                     .lines()
                     .filter(|line| !line.trim().is_empty())
                     .collect();
-                for line in lines.iter().take(SNIPPET_LINES) {
-                    for wrapped in
-                        wrap_text_with_ansi(line, (width as usize).saturating_sub(2).max(1))
-                    {
-                        out.push(format!(
-                            "{} {}",
-                            (theme.reasoning)("∴"),
-                            (theme.reasoning)(&wrapped)
-                        ));
-                    }
-                }
-                if lines.len() > SNIPPET_LINES {
+                if streaming && lines.len() > SNIPPET_LINES {
+                    // Tailing view during streaming: show header count of previous lines, then the last 3 lines
                     out.push(format!(
-                        "{} {}",
-                        (theme.reasoning)("∴"),
+                        "  {}",
                         (theme.reasoning)(&format!(
-                            "… +{} lines ({} to expand)",
-                            lines.len() - SNIPPET_LINES,
-                            lca_tui::engine::keybindings::key_text("app.thinking.toggle")
+                            "Thinking… ({} earlier lines)",
+                            lines.len() - SNIPPET_LINES
                         ))
                     ));
+                    for line in lines.iter().skip(lines.len() - SNIPPET_LINES) {
+                        for wrapped in
+                            wrap_text_with_ansi(line, (width as usize).saturating_sub(2).max(1))
+                        {
+                            out.push(format!("  {}", (theme.reasoning)(&wrapped)));
+                        }
+                    }
+                } else {
+                    for line in lines.iter().take(SNIPPET_LINES) {
+                        for wrapped in
+                            wrap_text_with_ansi(line, (width as usize).saturating_sub(2).max(1))
+                        {
+                            out.push(format!("  {}", (theme.reasoning)(&wrapped)));
+                        }
+                    }
+                    if lines.len() > SNIPPET_LINES {
+                        out.push(format!(
+                            "  {}",
+                            (theme.reasoning)(&format!(
+                                "… +{} lines ({} to expand)",
+                                lines.len() - SNIPPET_LINES,
+                                lca_tui::engine::keybindings::key_text("app.thinking.toggle")
+                            ))
+                        ));
+                    }
                 }
             }
             ThinkingVisibility::Hidden => {
                 // pi's original: one dim line (`messages.md` §3).
                 out.push(format!(
-                    "{} {}",
-                    (theme.reasoning)("∴"),
+                    "  {}",
                     (theme.reasoning)(&format!(
                         "Thinking… ({} to expand)",
                         lca_tui::engine::keybindings::key_text("app.thinking.toggle")

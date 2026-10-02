@@ -197,6 +197,13 @@ pub fn render_markdown(
     for _ in 0..options.padding_y {
         out.push(String::new());
     }
+    // RC-C (issue #5): Close all active SGR styles and OSC 8 links at every non-empty line end
+    // when formatting was present, so open formatting never leaks into subsequent rows or terminal history.
+    for line in out.iter_mut() {
+        if line.contains('\x1b') {
+            line.push_str(FULL_LINE_RESET);
+        }
+    }
     if out.is_empty() {
         out.push(String::new());
     }
@@ -799,15 +806,27 @@ fn style_prefix(style: &StyleFn) -> String {
         .to_string()
 }
 
+/// Full line-end reset: resets all text styles and foreground color,
+/// plus OSC 8 hyperlink close, so unclosed spans never leak across line ends or repaints.
+pub const FULL_LINE_RESET: &str = "\x1b[22;23;24;25;27;28;29;39m\x1b]8;;\x07";
+
 /// Re-arm an enclosing style after every nested reset that would kill it:
-/// a nested color closes with `39` (or a full `0m`), which would otherwise
-/// leave the rest of the line in the body color (markdown.md §3).
+/// a nested span or reset closes with `39`, `22`, `23`, `24`, `27`, `29`, or a full `0m`,
+/// which would otherwise leave the rest of the line unstyled (markdown.md §3).
 fn rearm(text: &str, prefix: &str) -> String {
     if prefix.is_empty() || text.is_empty() {
         return text.to_string();
     }
-    text.replace("\x1b[0m", &format!("\x1b[0m{prefix}"))
+    let mut s = text
+        .replace("\x1b[0m", &format!("\x1b[0m{prefix}"))
         .replace("\x1b[39m", &format!("\x1b[39m{prefix}"))
+        .replace(FULL_LINE_RESET, &format!("{FULL_LINE_RESET}{prefix}"));
+    // Also re-arm after the narrow multi-style reset if present
+    s = s.replace(
+        "\x1b[22;23;24;25;27;28;29;39m",
+        &format!("\x1b[22;23;24;25;27;28;29;39m{prefix}"),
+    );
+    s
 }
 
 /// Dress one mermaid row in the theme's diagram roles (pi's `styleSpan`).

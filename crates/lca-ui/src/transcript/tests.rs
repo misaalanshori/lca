@@ -318,8 +318,22 @@ fn reasoning_shows_a_snippet_by_default() {
     t.append_text("the answer");
     t.finish_assistant();
     let lines = strip(&t.render(40, &plain()));
-    let shown: Vec<&String> = lines.iter().filter(|l| l.starts_with('∴')).collect();
-    assert_eq!(shown.len(), 4, "three lines plus the marker: {lines:?}");
+    // Quiet indented lines, no cute symbols (W2, issue #14)
+    let shown: Vec<&String> = lines
+        .iter()
+        .filter(|l| {
+            l.starts_with("  ")
+                && (l.contains("one")
+                    || l.contains("two")
+                    || l.contains("three")
+                    || l.contains("… +"))
+        })
+        .collect();
+    assert_eq!(
+        shown.len(),
+        4,
+        "three lines plus the continuation: {lines:?}"
+    );
     assert!(shown[0].contains("one"), "{lines:?}");
     assert!(shown[2].contains("three"), "{lines:?}");
     assert!(
@@ -350,6 +364,49 @@ fn the_thinking_toggle_expands_the_run_in_place() {
         "no marker once expanded: {lines:?}"
     );
     assert!(lines.iter().any(|l| l.contains("the answer")));
+}
+
+// Verifies: W3 (issue #16) - during streaming, reasoning follows the tail:
+// the visible window displays the latest lines as they arrive.
+#[test]
+fn reasoning_follows_tail_while_streaming() {
+    let mut t = Transcript::new();
+    t.begin_assistant();
+    t.append_reasoning("line 1\nline 2\nline 3\nline 4\nline 5\nline 6");
+    // While streaming:
+    let streaming_lines = strip(&t.render(40, &plain()));
+    assert!(
+        streaming_lines.iter().any(|l| l.contains("earlier lines")),
+        "header indicates earlier lines in tail mode: {streaming_lines:?}"
+    );
+    assert!(
+        streaming_lines.iter().any(|l| l.contains("line 6")),
+        "latest line visible: {streaming_lines:?}"
+    );
+    assert!(
+        streaming_lines.iter().any(|l| l.contains("line 5")),
+        "latest line visible: {streaming_lines:?}"
+    );
+    assert!(
+        streaming_lines.iter().any(|l| l.contains("line 4")),
+        "latest line visible: {streaming_lines:?}"
+    );
+    assert!(
+        !streaming_lines.iter().any(|l| l.contains("line 1")),
+        "earliest line hidden in tail mode: {streaming_lines:?}"
+    );
+
+    // When streaming finishes: settled view shows head snippet + expansion hint
+    t.finish_assistant();
+    let finished_lines = strip(&t.render(40, &plain()));
+    assert!(
+        finished_lines.iter().any(|l| l.contains("line 1")),
+        "head line visible: {finished_lines:?}"
+    );
+    assert!(
+        finished_lines.iter().any(|l| l.contains("… +3 lines")),
+        "expansion hint present: {finished_lines:?}"
+    );
 }
 
 // Verifies: FR-UI-22 (R6) - `full` and `hidden` are settings values:

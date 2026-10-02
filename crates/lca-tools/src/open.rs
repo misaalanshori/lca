@@ -85,7 +85,7 @@ pub fn open_url(url: &str) -> Result<(), String> {
         }
         tried.push(launcher.program.to_string());
     }
-    Err(format!("no URL opener found (tried {})", tried.join(", ")))
+    Err("no web browser found to open link".to_string())
 }
 
 #[cfg(test)]

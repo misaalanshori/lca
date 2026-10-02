@@ -140,7 +140,8 @@ fn decoration_reset(decoration: &str) -> &'static str {
         "1" | "2" => "22", // bold, dim share the reset code
         "3" => "23",       // italic
         "4" => "24",       // underline
-        "9" => "27",       // strikethrough
+        "7" => "27",       // reverse video
+        "9" => "29",       // strikethrough (ECMA-48 / ANSI SGR 29)
         _ => "22",
     }
 }

@@ -25,8 +25,22 @@ use super::text::visible_width;
 /// cursor there for IME candidate windows.
 pub const CURSOR_MARKER: &str = "\x1b_pi:c\x07";
 
+/// Full line-end reset: resets all text styles and foreground color,
+/// plus OSC 8 hyperlink close, so unclosed spans never leak across line ends or repaints.
+pub const FULL_LINE_RESET: &str = "\x1b[22;23;24;25;27;28;29;39m\x1b]8;;\x07";
+
 /// Style reset plus OSC 8 hyperlink close, applied to every rendered line.
 pub const SEGMENT_RESET: &str = "\x1b[0m\x1b]8;;\x07";
+
+/// Apply line resets to rendered line strings so that open text styles, colors,
+/// or hyperlinks never leak into subsequent lines or terminal rows.
+pub fn apply_line_resets(lines: &mut [String]) {
+    for line in lines.iter_mut() {
+        if !line.is_empty() {
+            line.push_str(FULL_LINE_RESET);
+        }
+    }
+}
 
 /// A size that is absolute or a percentage of the available space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
