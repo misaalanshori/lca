@@ -44,17 +44,29 @@ fn settings_during_a_running_turn_responds_and_ctrl_c_still_cancels() {
     session.send(&["run the sleeper", "Enter"]);
     session.wait_for("running", std::time::Duration::from_secs(20));
 
-    // Submit /settings mid-turn. The notice must land within five seconds
-    // WHILE the turn is still running - that simultaneity is the whole
-    // regression: before the fix the notice only appeared after the turn
-    // released the lock, by which time `running` was gone.
+    // Submit /settings mid-turn. The notice must be on screen WITH the
+    // turn's `running` cue within five seconds - that simultaneity is the
+    // whole regression: before the fix the notice only appeared after the
+    // turn released the lock, by which time `running` was gone. Polled
+    // rather than read off one capture: the status row is the last row
+    // painted, and a torn frame failed this row once on a loaded runner
+    // (2026-10-02) while the turn was demonstrably still running.
     session.send(&["/settings", "Enter"]);
-    let mid = session.wait_for(
-        "settings (key = value [source]",
-        std::time::Duration::from_secs(5),
-    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mid = loop {
+        let pane = session.capture();
+        if pane.contains("settings (key = value [source]") && pane.contains("running") {
+            break pane;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "the settings notice did not share the screen with the running turn within 5s:\n{pane}"
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    };
     assert!(
-        mid.contains("running") || !mid.contains("long-done"),
+        mid.contains("running"),
         "the settings notice arrived while the turn was still running:\n{mid}"
     );
 
