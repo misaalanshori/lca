@@ -452,18 +452,18 @@ fn fullscreen_toggles_and_persists() {
     let persisted = Arc::new(std::sync::Mutex::new(None));
     let sink = persisted.clone();
     let mut options = options();
-    options.fullscreen = true;
+    options.fullscreen = false;
     options.hooks.persist_screen_mode = Some(Arc::new(move |fullscreen| {
         *sink.lock().unwrap() = Some(fullscreen);
     }));
     let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
-    assert!(chat.screen_mode);
+    assert!(!chat.screen_mode);
     for c in "/fullscreen".chars() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
-    assert!(!chat.screen_mode);
-    assert_eq!(*persisted.lock().unwrap(), Some(false));
+    assert!(chat.screen_mode);
+    assert_eq!(*persisted.lock().unwrap(), Some(true));
 }
 
 // Verifies: FR-UI-11 - Alt+Up/Down hop between the user's own messages.

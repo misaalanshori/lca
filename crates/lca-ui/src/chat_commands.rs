@@ -45,9 +45,9 @@ impl Chat {
                 self.world.notice = Some(format!(
                     "screen mode: {}",
                     if self.screen_mode {
-                        "fullscreen"
+                        "app-owned screen (fullscreen)"
                     } else {
-                        "scrollback"
+                        "terminal scrollback"
                     }
                 ));
                 return Action::Continue;
@@ -304,7 +304,7 @@ fn command_help(command: &str) -> &'static str {
     match command {
         "/help" => "list commands and keys",
         "/hotkeys" => "list every key binding",
-        "/fullscreen" => "toggle fullscreen and scrollback renderers",
+        "/fullscreen" => "toggle terminal scrollback and app-owned screen (fullscreen)",
         "/theme" => "pick a theme with live preview",
         "/thinking" => "set the reasoning level",
         "/tree" => "browse session branches",

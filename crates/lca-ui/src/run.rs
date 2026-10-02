@@ -574,7 +574,7 @@ mod tests {
                 pick_login: None,
                 confirm_login_grant: None,
                 hooks: crate::state::UiHooks::default(),
-                fullscreen: true,
+                fullscreen: false,
             },
             Arc::new(KeybindingsManager::new()),
         )

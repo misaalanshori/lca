@@ -773,7 +773,7 @@ mod tests {
             pick_login: None,
             confirm_login_grant: None,
             hooks: UiHooks::default(),
-            fullscreen: true,
+            fullscreen: false,
         }
     }
 

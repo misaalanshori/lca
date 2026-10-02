@@ -484,6 +484,12 @@ impl Tmux {
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
+    /// Capture pane including full scrollback history (`capture-pane -S -`).
+    pub fn capture_with_history(&self) -> String {
+        let out = Self::tmux(&["capture-pane", "-t", &self.name, "-p", "-S", "-"]);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
     /// The pane with its SGR intact (`capture-pane -e`): the receipt the
     /// color work asserts against (R5).
     pub fn capture_e(&self) -> String {

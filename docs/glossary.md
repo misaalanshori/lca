@@ -8,7 +8,7 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Ad hoc grant.** A single specific path or host the user attaches to an extension's grant outside the manifest's fixed vocabulary, at install time or later, with consent text naming the exact path or host. A manifest can never request one; see `docs/capabilities.md` and FR-PERM-16.
 
-**Alt screen.** The fullscreen rendering mode where the interface owns the whole terminal and restores the previous screen on exit. Text selection in it belongs to the renderer, not the terminal, because entering it enables mouse tracking. The default again since 2026-10-01 (ADR-0037's second annotation: ConPTY does not reliably restore scrollback under the main screen); `/fullscreen` toggles, and `ui.fullscreen = false` opts into `main screen` below.
+**Alt screen.** The fullscreen rendering mode where the interface owns the whole terminal and restores the previous screen on exit. Text selection in it belongs to the renderer, not the terminal, because entering it enables mouse tracking. Swapped at runtime with `/fullscreen`, or persisted via `ui.fullscreen = true` in `<config dir>/ui.json`. Opt-in since S1 (ADR-0037 third annotation).
 
 **Build-time backend.** In the sense of ADR-0013, code with more than one implementation, all supplied by the project and chosen when the binary or web bundle is built: no manifest, no consent screen. The read, write, and shell tools are the clearest case. Distinct from both fixed core and a runtime extension.
 
@@ -54,7 +54,7 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Login surface.** The `provider-login` export (ADR-0033): `login-options` returns the picker choices the host renders, and `login-submit` consumes the user's answers, stores the secret in the extension's own credentials namespace, and returns opaque `setting: value` pairs the host persists. The host is UI, courier, and consent only - it never interprets a preset's shape. Not the same as `login`, which is the extension's own self-contained authentication flow (an OAuth dance).
 
-**Main screen.** The scrollback rendering mode where the transcript is appended to the terminal's own buffer and remains after exit, so the terminal's native history and selection apply. It emits no mouse-tracking sequences, so the terminal keeps its own selection, right-click paste, and Ctrl+V. The default between TUI cycle 7 and 2026-10-01; now the opt-in (`ui.fullscreen = false`) after real Windows use showed ConPTY scrollback loss, and runtime-switchable against `alt screen` with `/fullscreen`. See ADR-0037 and its two dated annotations.
+**Main screen.** The scrollback rendering mode where the transcript is appended to the terminal's real scrollback buffer and remains after exit, so the terminal's native history, selection, scrollbar, right-click paste, and Ctrl+V apply. It emits no mouse-tracking sequences. The default mode (S1 / ADR-0037 third annotation), matching pi's regular mode contract. `/fullscreen` toggles to alt screen.
 
 **Manifest.** The TOML file, `extension.toml`, declaring an extension's identity, ABI target, implemented worlds, and requested capabilities. The install-time consent surface; see `schemas/extension-manifest.schema.json`.
 

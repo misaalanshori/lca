@@ -550,38 +550,35 @@ fn persist_screen_mode(fullscreen: bool) {
 
 /// The screen mode a fresh session starts in (FR-UI-21).
 ///
-/// **The default is the alt-screen (fullscreen) renderer again.** Cycle 7
-/// flipped it to main-screen for its native selection and scrollback; the
-/// owner's real Windows use on 2026-10-01 showed the other side of that
-/// trade: ConPTY does not reliably restore scrollback, so the main screen
-/// left them with no usable history at all. Alt-screen keeps its own
-/// scroll and selection, which is what a real console needed.
+/// **The default is the main-screen (terminal scrollback) renderer (S1).**
+/// S1 ported pi's bottom-anchored incremental append contract so that real
+/// scrollback history survives in the terminal and the terminal's native
+/// selection and scrollbar just work. The alt screen is the app-owned-selection
+/// opt-in (`ui.fullscreen = true` or `/fullscreen`).
 ///
-/// Both renderers stay; one key decides. `ui.fullscreen = false` opts back
-/// into the main-screen renderer (native selection, terminal scrollback),
-/// and a persisted `ui.json` still wins over the default, so an explicit
+/// A persisted `ui.json` still wins over the default, so an explicit
 /// `/fullscreen` choice survives either way. ADR-0037 carries the dated
-/// annotations for both flips.
+/// annotations.
 pub(super) fn initial_screen_mode(config_dir: &std::path::Path) -> bool {
     std::fs::read_to_string(config_dir.join("ui.json"))
-        .map(|text| !text.contains("false"))
-        .unwrap_or(true)
+        .map(|text| text.contains("true"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Verifies: R8 (ADR-0037's 2026-10-01 annotation) - a fresh session
-    // defaults to the alt-screen renderer, and a persisted `/fullscreen`
-    // choice still wins either way.
+    // Verifies: S1 (ADR-0037 third annotation) - a fresh session defaults
+    // to the main-screen renderer (terminal scrollback), and a persisted
+    // `/fullscreen` choice still wins either way.
     #[test]
-    fn the_fresh_screen_mode_is_fullscreen_and_a_persisted_pick_wins() {
+    fn the_fresh_screen_mode_is_scrollback_and_a_persisted_pick_wins() {
         let root = lca_testkit::scratch_path("lca-screen-mode");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("mkdir");
-        // No ui.json: fullscreen is the default.
-        assert!(initial_screen_mode(&root));
+        // No ui.json: scrollback (main screen, false) is the default.
+        assert!(!initial_screen_mode(&root));
         // A persisted fullscreen pick is honored.
         std::fs::write(root.join("ui.json"), "{\"fullscreen\":true}").expect("write");
         assert!(initial_screen_mode(&root));

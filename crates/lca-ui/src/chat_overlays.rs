@@ -40,6 +40,25 @@ fn picker_overlay(
 }
 
 impl Chat {
+    /// Composite overlays bottom-anchored into a full document line buffer
+    /// for main-screen (scrollback) rendering.
+    pub(super) fn compose_overlays_bottom_anchored(
+        &self,
+        lines: &mut Vec<String>,
+        width: u16,
+        height: u16,
+    ) {
+        // Pad to at least terminal height so overlays have screen-relative positions
+        // at the visible bottom.
+        let working_height = lines.len().max(height as usize);
+        if lines.len() < working_height {
+            lines.resize(working_height, String::new());
+        }
+        let viewport_start = lines.len().saturating_sub(height as usize);
+        let viewport_slice = &mut lines[viewport_start..];
+        self.compose_overlays(viewport_slice, width, height);
+    }
+
     /// Composite the modals and the side panel over the viewport.
     pub(super) fn compose_overlays(&self, viewport: &mut [String], width: u16, height: u16) {
         if self.compose_pickers(viewport, width, height) {

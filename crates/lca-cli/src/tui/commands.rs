@@ -406,6 +406,14 @@ fn settings_text(
         (Some(shell), None) => text.push_str(&format!("  shell.resolved = {shell}\n")),
         (None, None) => text.push_str("  shell.resolved = <host-delegated>\n"),
     }
+    // S1: the active screen renderer mode from ui.json / session default
+    let is_fullscreen = super::hooks::initial_screen_mode(&crate::data_dir());
+    let mode_desc = if is_fullscreen {
+        "app-owned screen (fullscreen) [ui.json]"
+    } else {
+        "terminal scrollback [default]"
+    };
+    text.push_str(&format!("  ui.screen = {mode_desc}\n"));
     text
 }
 

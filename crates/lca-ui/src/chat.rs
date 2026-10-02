@@ -562,23 +562,32 @@ impl Chat {
     /// composited over it.
     pub fn viewport(&self, width: u16, height: u16, scroll: u16) -> Vec<String> {
         let document = self.render(width);
-        let total = document.len();
-        let end = total.saturating_sub(scroll as usize);
-        let start = end.saturating_sub(height as usize);
-        let mut viewport: Vec<String> = document[start..end].to_vec();
-        if self.world.modal_active()
-            || self.theme_picker.is_some()
-            || self.thinking_picker.is_some()
-            || self.model_picker.is_some()
-            || self.tree_picker.is_some()
-            || self.trust_picker.is_some()
-            || self.resume_picker.is_some()
-            || self.grants_picker.is_some()
-        {
-            viewport.resize(height as usize, String::new());
+        // Fullscreen (alt-screen) mode slices to the viewport window.
+        if self.screen_mode {
+            let total = document.len();
+            let end = total.saturating_sub(scroll as usize);
+            let start = end.saturating_sub(height as usize);
+            let mut viewport: Vec<String> = document[start..end].to_vec();
+            if self.world.modal_active()
+                || self.theme_picker.is_some()
+                || self.thinking_picker.is_some()
+                || self.model_picker.is_some()
+                || self.tree_picker.is_some()
+                || self.trust_picker.is_some()
+                || self.resume_picker.is_some()
+                || self.grants_picker.is_some()
+            {
+                viewport.resize(height as usize, String::new());
+            }
+            self.compose_overlays(&mut viewport, width, height);
+            viewport
+        } else {
+            // Main-screen (scrollback) mode: document lines are retained in full
+            // so the differential renderer can append with newlines into scrollback.
+            let mut lines = document;
+            self.compose_overlays_bottom_anchored(&mut lines, width, height);
+            lines
         }
-        self.compose_overlays(&mut viewport, width, height);
-        viewport
     }
 
     /// Composite the modals and the side panel over the viewport.

@@ -502,7 +502,7 @@ FR-UI-19. The stats view SHALL show tokens and cost per model, including cache-r
 
 FR-UI-20. The status area SHALL show the working directory and its git branch, the active model and thinking level, the context use and the session cost, any extension-provided segments, and the queued-message count.
 
-FR-UI-21. The user SHALL be able to switch between the fullscreen renderer and the scrollback renderer at runtime, and the fullscreen renderer SHALL be the default (`ui.fullscreen = true`; ADR-0037's 2026-10-01 annotation).
+FR-UI-21. The user SHALL be able to switch between the fullscreen renderer and the scrollback renderer at runtime, and the scrollback (main-screen) renderer SHALL be the default (`ui.fullscreen = false`; S1, ADR-0037's third annotation).
 
 FR-UI-23. The overlay/dialog painter SHALL emit every dialog row with explicit, complete styles - the frame in a border role, a reset on either side - so no dialog cell renders with inherited style state from the transcript behind it, and the transcript beside a dialog does not render in the dialog's style.
 
