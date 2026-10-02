@@ -7,6 +7,21 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **The composer stops fighting its user (UI/UX Phase 1).** The caret is
+  now painted by the interface: the grapheme under the cursor in reverse
+  video, an end-of-line caret as a reverse-video space, `CURSOR_MARKER`
+  kept for IME - spaces are visible as you move over them, Home/End can
+  no longer desync the caret, and a ZWJ emoji is one step and one delete.
+  The hardware cursor is positioned but hidden while a caret is painted
+  (pi's default), and the plain theme - which renders no escapes at all -
+  keeps the real cursor. Up/Down now match pi's boundary: inside the
+  buffer first, into history only at the first/last line under pi's
+  conditions, and Down at the bottom jumps to the end of the line.
+  `/settings` during a running turn no longer freezes the interface (the
+  input thread used to queue behind the turn's `tools` lock - Ctrl+C went
+  with it). And `tool.max_iterations` defaults to **0 = unlimited**: the
+  runaway guard is opt-in, the notice still names the configured value,
+  and FR-CORE-9 carries the dated amendment.
 - **The unstable release line.** Every green commit on `main` now publishes
   six binaries, `artifacts.sha256`, and provenance attestations to a rolling
   prerelease tagged `unstable`, and `install.sh --unstable` /

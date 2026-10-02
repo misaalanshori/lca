@@ -284,6 +284,8 @@ FR-CORE-8. The agent SHALL record the token count and the cost of each turn, inc
 
 FR-CORE-9. IF a turn exceeds the configured maximum tool-call iteration count, THEN the agent SHALL end the turn with an iteration-limit error and return control to the user.
 
+**Amended 2026-10-02.** The default for `tool.max_iterations` is now `0`, meaning no limit; the requirement above is unchanged and any configured positive value still ends the turn as described. The old default (100, before that 50) capped long-horizon tasks that never asked for a cap (owner issue #19), and pi, cross-checked that day, caps tool rounds nowhere.
+
 FR-CORE-10. The pre-tool hook SHALL run before the permission check, and a hook denial SHALL end the call without a user prompt.
 
 FR-CORE-11. WHILE a turn is running, a submitted message SHALL queue as a steer or a follow-up: a steer joins the turn's input at the next model-call boundary, a follow-up is submitted when the turn ends, and queued messages keep submission order. See ADR-0038.

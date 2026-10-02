@@ -146,6 +146,12 @@ fn history_navigation() {
     e.insert_str("second");
     e.submit();
     e.insert_str("draft");
+    // V3 (pi's boundary): a top-line Up with the caret off column 0 goes
+    // to the start of the line first, and only the next Up crosses into
+    // history.
+    e.cursor_up();
+    assert_eq!(e.cursor_col, 0, "start of line first");
+    assert_eq!(e.text(), "draft");
     e.cursor_up();
     assert_eq!(e.text(), "second");
     e.cursor_up();
@@ -536,4 +542,47 @@ fn the_plain_theme_does_not_paint_the_caret() {
         crate::engine::text::strip_terminal_sequences(&clean[0]),
         "abc"
     );
+}
+
+// Verifies: V3 (issue #12) - pi's boundary matrix: Up/Down move inside the
+// buffer first and cross into history only at the first/last line under
+// pi's conditions (empty / already browsing / column 0 for Up; browsing
+// for Down; end-of-line otherwise). A two-line prompt, Up/Up/Up, then
+// Down x4, asserting buffer vs history state at every step.
+#[test]
+fn up_and_down_cross_into_history_only_at_the_boundaries() {
+    let mut e = Editor::new();
+    e.set_text("first");
+    e.submit();
+    e.set_text("second");
+    e.submit();
+
+    e.set_text("line1\nline2"); // cursor at the end of line1
+    e.cursor_up();
+    assert_eq!(e.cursor_line, 0, "buffer first: Up lands on line 0");
+    assert!(e.history_index.is_none(), "no history yet");
+
+    e.cursor_up();
+    assert_eq!(
+        e.cursor_col, 0,
+        "top line with the caret off the start: start of line, not history"
+    );
+    assert!(e.history_index.is_none());
+
+    e.cursor_up();
+    assert_eq!(e.history_index, Some(1), "column 0 crosses into history");
+    assert_eq!(e.text(), "second", "newest entry first");
+
+    e.cursor_down();
+    assert_eq!(e.text(), "line1\nline2", "down exits back to the draft");
+    assert!(e.history_index.is_none(), "browsing closed");
+
+    e.cursor_down();
+    assert_eq!(
+        (e.cursor_line, e.cursor_col),
+        (1, 5),
+        "last line, no history: end of line"
+    );
+    e.cursor_down();
+    assert_eq!((e.cursor_line, e.cursor_col), (1, 5), "and it stays there");
 }

@@ -143,9 +143,11 @@ impl Agent<'_> {
                 };
             }
 
-            // FR-CORE-9: bound the tool rounds.
+            // FR-CORE-9: bound the tool rounds. `0` (the default since
+            // 2026-10-02) means unlimited - the mechanism is unchanged and
+            // a configured value still stops the turn here.
             rounds += 1;
-            if rounds > self.config.max_iterations {
+            if self.config.max_iterations > 0 && rounds > self.config.max_iterations {
                 let message = format!(
                     "iteration limit of {} tool-call rounds reached; send another message to continue",
                     self.config.max_iterations

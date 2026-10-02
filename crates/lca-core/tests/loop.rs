@@ -5,7 +5,7 @@
 mod common;
 
 use common::*;
-use lca_core::{Agent, StopReason, TurnEvent};
+use lca_core::{Agent, AgentConfig, StopReason, TurnEvent};
 use lca_permissions::Decision;
 use lca_protocol::{Record, ToolResultStatus};
 use lca_session::ViewMode;
@@ -360,6 +360,63 @@ async fn ends_with_an_iteration_limit_error() {
     let workspace = &h.project;
     assert!(workspace.join("a.txt").is_file(), "first round ran");
     assert!(!workspace.join("b.txt").exists(), "second round never ran");
+}
+
+// Verifies: FR-CORE-9's 2026-10-02 annotation - with the default config
+// (max_iterations = 0 = unlimited) a turn runs past100 tool rounds to a
+// natural finish. The configured path is covered by
+// `ends_with_an_iteration_limit_error` above (explicit limit still stops).
+#[tokio::test]
+async fn the_default_config_runs_past_one_hundred_tool_rounds() {
+    let mut provider = FakeProvider::builder();
+    for round in 0..101 {
+        provider = provider.turn(move |t| {
+            t.tool_call(
+                "write",
+                &format!(r#"{{"path":"round.txt","content":"{round}"}}"#),
+            )
+            .usage(fake_usage(1, 1, 0, 1))
+        });
+    }
+    let provider = provider
+        .turn(|t| {
+            t.text("finished one hundred and one rounds")
+                .usage(fake_usage(1, 1, 0, 0))
+        })
+        .build();
+    // The default under test is `AgentConfig::default`'s: everything else
+    // the harness needs, nothing about the cap.
+    let mut h = harness(
+        "default-iterations",
+        provider,
+        AgentConfig {
+            provider: "fake".to_string(),
+            model: "faux-1".to_string(),
+            retry_limit: 3,
+            retry_base_delay: Duration::ZERO,
+            ..AgentConfig::default()
+        },
+    );
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: vec![],
+        asked: vec![],
+    };
+
+    let outcome = turn(&mut h, "keep going", &mut sink, &mut prompt).await;
+    assert_eq!(
+        outcome.status,
+        lca_core::TurnStatus::Ok,
+        "the default does not brake: {:?}",
+        outcome.error
+    );
+    assert_ne!(outcome.stop_reason, StopReason::IterationLimit);
+    assert!(sink.texts().contains("finished one hundred and one rounds"));
+    assert_eq!(
+        h.provider.call_count(),
+        102,
+        "101 tool rounds plus the final answer"
+    );
 }
 
 // Verifies: FR-CORE-5 and FR-CONC-3 (cancel stops the in-flight request;

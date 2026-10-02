@@ -438,30 +438,44 @@ impl Editor {
         self.clear_suggestions();
     }
 
-    /// Move the cursor up (or through history at the top), keeping the
-    /// preferred column across shorter lines (pi's sticky column, R7).
+    /// Move the cursor up: inside the buffer first, and into history only
+    /// at the boundary pi defines (`editor.ts` cursorUp) - on the first
+    /// line when the buffer is empty, when already browsing history, or
+    /// with the caret at column 0. Anywhere else on the first line it
+    /// jumps to the start of the line instead (issue #12).
     pub fn cursor_up(&mut self) {
         if self.cursor_line > 0 {
             let preferred = *self.preferred_col.get_or_insert(self.cursor_col);
             self.cursor_line -= 1;
             self.cursor_col = preferred.min(self.current().chars().count());
-        } else if !self.history.is_empty() {
-            if self.history_index.is_none() {
-                self.draft = self.text();
-                self.history_index = Some(self.history.len());
-            }
-            if let Some(idx) = self.history_index
-                && idx > 0
-            {
-                self.history_index = Some(idx - 1);
-                self.set_text(&self.history[idx - 1].clone());
+        } else {
+            let empty = self.lines.len() == 1 && self.lines[0].is_empty();
+            let at_start = self.cursor_col == 0;
+            if (empty || self.history_index.is_some() || at_start) && !self.history.is_empty() {
+                if self.history_index.is_none() {
+                    self.draft = self.text();
+                    self.history_index = Some(self.history.len());
+                }
+                if let Some(idx) = self.history_index
+                    && idx > 0
+                {
+                    self.history_index = Some(idx - 1);
+                    self.set_text(&self.history[idx - 1].clone());
+                }
+            } else {
+                // pi: top line, not browsing, caret off the start - move to
+                // the start of the line, do not jump into history.
+                self.cursor_col = 0;
+                self.preferred_col = None;
             }
         }
         self.clear_suggestions();
     }
 
-    /// Move the cursor down (or through history), keeping the preferred
-    /// column across shorter lines (pi's sticky column, R7).
+    /// Move the cursor down: inside the buffer first, then - only while
+    /// already browsing - through history (`editor.ts` cursorDown). At the
+    /// last line without a history open, pi jumps to the end of the line;
+    /// this used to do nothing (issue #12).
     pub fn cursor_down(&mut self) {
         if self.cursor_line + 1 < self.lines.len() {
             let preferred = *self.preferred_col.get_or_insert(self.cursor_col);
@@ -476,6 +490,10 @@ impl Editor {
                 let draft = self.draft.clone();
                 self.set_text(&draft);
             }
+        } else {
+            // pi: bottom line, no history open - end of the line.
+            self.cursor_col = self.current().chars().count();
+            self.preferred_col = None;
         }
         self.clear_suggestions();
     }

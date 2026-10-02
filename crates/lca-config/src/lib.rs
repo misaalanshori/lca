@@ -154,10 +154,14 @@ pub struct Config {
     sources: BTreeMap<String, MergeSource>,
 }
 
-/// The default `tool.max_iterations` (docs/configuration.md): a runaway
-/// guard, not a work cap. `lca-core::AgentConfig::default` must agree with
+/// The default `tool.max_iterations` (docs/configuration.md): **0 =
+/// unlimited**, because a fixed round cap is a work cap in disguise and
+/// long-horizon tasks need the room (owner issue #19; pi caps nothing).
+/// The machinery stays: any positive value re-enables the guard and the
+/// notice names it. History: 50, then 100 (the runaway-guard era), then
+/// 0 from 2026-10-02. `lca-core::AgentConfig::default` must agree with
 /// this value; the consistency test in `lca-cli` enforces it.
-pub const DEFAULT_TOOL_MAX_ITERATIONS: u64 = 100;
+pub const DEFAULT_TOOL_MAX_ITERATIONS: u64 = 0;
 
 impl Default for Config {
     fn default() -> Self {
@@ -168,9 +172,8 @@ impl Default for Config {
             provider_retry_limit: 3,
             tool_timeout_seconds: 120,
             tool_result_limit_bytes: 65536,
-            // 100, not 50: a multi-file build-and-test turn routinely
-            // exceeds 50 tool rounds; the limit is a runaway guard, not a
-            // work cap. Tunable via `tool.max_iterations`.
+            // 0 = unlimited (see `DEFAULT_TOOL_MAX_ITERATIONS`): the
+            // runaway guard is opt-in via `tool.max_iterations`.
             tool_max_iterations: DEFAULT_TOOL_MAX_ITERATIONS,
             cache_noise_floor_tokens: 1024,
             extensions_log_limit_bytes: 4096,

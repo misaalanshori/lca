@@ -138,13 +138,16 @@ impl Default for AgentConfig {
             reasoning_effort: None,
             retry_limit: 3,
             retry_base_delay: Duration::from_millis(250),
-            // 100, matching `lca-config`'s `DEFAULT_TOOL_MAX_ITERATIONS`
-            // (docs/configuration.md's `tool.max_iterations` row). The two
-            // crates must not drift: a consumer building `AgentConfig`
-            // directly (the embedding SDK path) would silently get a
-            // different cap otherwise. The consistency test lives in
-            // `lca-cli`'s unit tests.
-            max_iterations: 100,
+            // 0 = unlimited, matching `lca-config`'s
+            // `DEFAULT_TOOL_MAX_ITERATIONS` (docs/configuration.md's
+            // `tool.max_iterations` row; FR-CORE-9's 2026-10-02 annotation
+            // records the default change - the guard itself is unchanged
+            // and any positive value re-enables it). The two crates must
+            // not drift: a consumer building `AgentConfig` directly (the
+            // embedding SDK path) would silently get a different cap
+            // otherwise. The consistency test lives in `lca-cli`'s unit
+            // tests.
+            max_iterations: 0,
             system_prompt:
                 "You are LCA, a coding agent. Use the tools to read, write, edit, search, \
                  and run commands in the user's workspace."
