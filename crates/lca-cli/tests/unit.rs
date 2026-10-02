@@ -12,7 +12,13 @@ fn parse(args: &[&str]) -> Cli {
 // current working directory)
 #[test]
 fn no_arguments_route_to_the_interactive_interface() {
-    assert_eq!(route(&parse(&[])), Route::Interactive { resume: None });
+    assert_eq!(
+        route(&parse(&[])),
+        Route::Interactive {
+            resume: None,
+            model: None,
+        }
+    );
 }
 
 // Verifies: FR-CORE-3 (a prompt flag runs one turn headless)
@@ -33,7 +39,8 @@ fn resume_without_id_lists_sessions() {
     assert_eq!(
         route(&parse(&["resume", "01ABC"])),
         Route::Interactive {
-            resume: Some("01ABC".to_string())
+            resume: Some("01ABC".to_string()),
+            model: None,
         }
     );
 }

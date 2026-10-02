@@ -723,6 +723,8 @@ pub enum Route {
     Interactive {
         /// The session to resume, when the subcommand names one.
         resume: Option<String>,
+        /// Model override if provided.
+        model: Option<String>,
     },
     /// The merged-configuration printout (FR-CFG-2).
     Config,
@@ -773,7 +775,9 @@ pub async fn run(cli: Cli) -> i32 {
         Route::Headless { prompt } => {
             headless(&prompt, cli.json, &cwd, &cli.attach, cli.yolo).await
         }
-        Route::Interactive { resume } => interactive(&cwd, resume.as_deref(), cli.yolo),
+        Route::Interactive { resume, model } => {
+            interactive(&cwd, resume.as_deref(), cli.yolo, model.as_deref())
+        }
         Route::Config => config_command(&cwd),
         Route::ResumeList => resume_list(&cwd),
         Route::Fork { session, message } => fork_command(&cwd, &session, &message),
@@ -784,10 +788,10 @@ pub async fn run(cli: Cli) -> i32 {
     }
 }
 
-fn interactive(cwd: &Path, resume: Option<&str>, yolo: bool) -> i32 {
+fn interactive(cwd: &Path, resume: Option<&str>, yolo: bool, model: Option<&str>) -> i32 {
     // Wired to `lca-tui` in this phase; kept as one seam so the headless
     // contract stays independently testable.
-    match lca_tui_entry(cwd, resume, yolo) {
+    match lca_tui_entry(cwd, resume, yolo, model) {
         Ok(code) => code,
         Err(err) => {
             eprintln!("error: {err:#}");
@@ -797,12 +801,22 @@ fn interactive(cwd: &Path, resume: Option<&str>, yolo: bool) -> i32 {
 }
 
 #[cfg(feature = "bundled-openai-compat")]
-fn lca_tui_entry(cwd: &Path, resume: Option<&str>, yolo: bool) -> anyhow::Result<i32> {
-    crate::tui::run(cwd, resume, yolo)
+fn lca_tui_entry(
+    cwd: &Path,
+    resume: Option<&str>,
+    yolo: bool,
+    model: Option<&str>,
+) -> anyhow::Result<i32> {
+    crate::tui::run(cwd, resume, yolo, model)
 }
 
 #[cfg(not(feature = "bundled-openai-compat"))]
-fn lca_tui_entry(_cwd: &Path, _resume: Option<&str>, _yolo: bool) -> anyhow::Result<i32> {
+fn lca_tui_entry(
+    _cwd: &Path,
+    _resume: Option<&str>,
+    _yolo: bool,
+    _model: Option<&str>,
+) -> anyhow::Result<i32> {
     anyhow::bail!("interactive mode requires a bundled provider feature")
 }
 

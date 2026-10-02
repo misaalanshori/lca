@@ -41,6 +41,7 @@ pub fn route(cli: &Cli) -> Route {
     if let Some(id) = &cli.resume_id {
         return Route::Interactive {
             resume: Some(id.clone()),
+            model: cli.model.clone(),
         };
     }
     match &cli.command {
@@ -51,16 +52,22 @@ pub fn route(cli: &Cli) -> Route {
             None => {
                 if cli.r#continue {
                     let data = data_dir();
-                    let store = SessionStore::new(data.join("sessions"));
+                    let store = SessionStore::new(data.clone());
                     let cwd = std::env::current_dir().unwrap_or_default();
                     let latest = store
                         .list_sessions(&cwd)
                         .ok()
                         .and_then(|list| list.into_iter().next())
                         .map(|s| s.id);
-                    Route::Interactive { resume: latest }
+                    Route::Interactive {
+                        resume: latest,
+                        model: cli.model.clone(),
+                    }
                 } else {
-                    Route::Interactive { resume: None }
+                    Route::Interactive {
+                        resume: None,
+                        model: cli.model.clone(),
+                    }
                 }
             }
         },
@@ -69,6 +76,7 @@ pub fn route(cli: &Cli) -> Route {
             None => Route::ResumeList,
             Some(id) => Route::Interactive {
                 resume: Some(id.clone()),
+                model: cli.model.clone(),
             },
         },
         Some(Command::Fork { session, message }) => Route::Fork {

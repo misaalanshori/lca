@@ -144,7 +144,12 @@ pub(crate) struct Ui {
 }
 
 /// Enter the interactive interface for `cwd`, optionally resuming `resume`.
-pub fn run(cwd: &Path, resume: Option<&str>, yolo: bool) -> anyhow::Result<i32> {
+pub fn run(
+    cwd: &Path,
+    resume: Option<&str>,
+    yolo: bool,
+    model: Option<&str>,
+) -> anyhow::Result<i32> {
     // The interface needs a terminal for raw mode and key events; without
     // one the input read fails with an opaque error. Say what to do instead
     // (the headless path is the scripted one).
@@ -156,7 +161,7 @@ pub fn run(cwd: &Path, resume: Option<&str>, yolo: bool) -> anyhow::Result<i32> 
         return Ok(crate::exit::USAGE);
     }
     let _temp_guard = crate::SessionTempGuard;
-    let ui = Arc::new(Ui::new(cwd, resume, yolo)?);
+    let ui = Arc::new(Ui::new(cwd, resume, yolo, model)?);
     crate::init_session_temp(&ui.session_id());
     let options = ui.options();
     let runner = ui.turn_runner();
@@ -252,7 +257,12 @@ fn agent_config_for(
 impl Ui {
     /// Build the wiring state (S1): resolve the session, provider, and
     /// tools, then assemble the extension registry and the live cells.
-    fn new(cwd: &Path, resume: Option<&str>, yolo: bool) -> anyhow::Result<Ui> {
+    fn new(
+        cwd: &Path,
+        resume: Option<&str>,
+        yolo: bool,
+        model_override: Option<&str>,
+    ) -> anyhow::Result<Ui> {
         let Opened {
             data,
             store,
@@ -340,7 +350,9 @@ impl Ui {
         }
 
         let provider_is_ready = crate::provider_ready(&provider_name, &data);
-        let model_id = resolve_model_id(&config, provider_is_ready, provider.as_ref());
+        let model_id = model_override
+            .map(str::to_string)
+            .unwrap_or_else(|| resolve_model_id(&config, provider_is_ready, provider.as_ref()));
         let provider_backend = register_compaction(
             &mut registry,
             &provider,
