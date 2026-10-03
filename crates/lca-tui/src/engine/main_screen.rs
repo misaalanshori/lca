@@ -419,8 +419,19 @@ impl MainScreenRenderer {
     }
 
     /// Park the cursor below the content so the shell prompt lands cleanly.
+    ///
+    /// The hardware cursor rests wherever the last frame left it - usually
+    /// the caret, in the editor line - and the document's final rows (the
+    /// footer) sit below that, so the descent comes first and the newline
+    /// alone would park the prompt on the footer (gh #33).
     pub fn finish(&mut self, term: &mut dyn Terminal) {
-        term.write("\r\n\x1b[?25h");
+        let mut out = String::new();
+        let down = self.cursor_row.saturating_sub(self.hardware_cursor_row);
+        if down > 0 {
+            out.push_str(&format!("\x1b[{down}B"));
+        }
+        out.push_str("\r\n\x1b[?7h\x1b[?25h");
+        term.write(&out);
     }
 }
 

@@ -152,6 +152,10 @@ impl AltScreenRenderer {
                 }
                 out.push_str(&strip_terminal_sequences(line));
             }
+            // gh #33: `?1049l` restores the cursor to its pre-alt position
+            // (commonly row 1 col 1), so the dump needs a final newline of
+            // its own or the returning shell prompt lands on top of it.
+            out.push_str("\r\n");
         } else {
             out.push_str("\x1b[?1049l");
         }

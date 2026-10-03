@@ -134,3 +134,8 @@ mod verbatim_path_not_displayed;
 // primitive fixes it.
 #[path = "38-paste-into-modal-fields.rs"]
 mod paste_into_modal_fields;
+// Released 0.5.3 defect (GitHub issue #33): exit left the cursor at the
+// terminal's restored position instead of on a fresh line below the
+// transcript, so the returning shell prompt overwrote LCA's own content.
+#[path = "gh33-exit-cursor-parks-below-transcript.rs"]
+mod gh33_exit_cursor_parks_below_transcript;

@@ -166,6 +166,11 @@ pub struct ProcessTerminal {
     keyboard_protocol_pushed: bool,
     write_log: Option<PathBuf>,
     progress: Arc<AtomicBool>,
+    /// Whether the alternate screen is active, folded from the `?1049h` and
+    /// `?1049l` sequences that cross [`Terminal::write`]. The renderers
+    /// drive those through the trait, so this tracks what the terminal is
+    /// actually showing (gh #33).
+    in_alt_screen: bool,
 }
 
 impl Default for ProcessTerminal {
@@ -194,6 +199,7 @@ impl ProcessTerminal {
             keyboard_protocol_pushed: false,
             write_log: resolve_write_log(),
             progress: Arc::new(AtomicBool::new(false)),
+            in_alt_screen: false,
         }
     }
 
@@ -307,6 +313,15 @@ impl Terminal for ProcessTerminal {
     }
 
     fn write(&mut self, data: &str) {
+        // gh #33: fold the renderers' own screen switches into the flag the
+        // drop reads, so a completed teardown is distinguishable from a
+        // crash that skipped it.
+        if data.contains("\x1b[?1049h") {
+            self.in_alt_screen = true;
+        }
+        if data.contains("\x1b[?1049l") {
+            self.in_alt_screen = false;
+        }
         self.raw_write(data);
     }
 
@@ -371,10 +386,28 @@ impl Drop for ProcessTerminal {
     /// screen with mouse tracking on and raw mode set (pi's `uncaughtCrash`).
     /// Restore it defensively here; every write is harmless when the state
     /// is already restored, so the normal exit path only pays a few bytes.
+    ///
+    /// *"Harmless" stopped being true for `?1049l`* (gh #33): emitted when
+    /// the alternate screen is already gone, it restores the cursor the
+    /// switch *saved* - the top-left - and undoes the exit park, dropping
+    /// the shell prompt back onto LCA's transcript. So it is gated on the
+    /// flag `write` keeps; the mouse, wrap and cursor writes are neutral and
+    /// still go out for the crash path.
     fn drop(&mut self) {
         self.stop();
-        self.raw_write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?7h\x1b[?25h");
+        self.raw_write(&teardown_sequence(self.in_alt_screen));
     }
+}
+
+/// What the drop writes: mouse tracking off, the alternate screen left only
+/// while it is still active, then wrap and cursor restored.
+fn teardown_sequence(in_alt_screen: bool) -> String {
+    let mut out = String::from("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l");
+    if in_alt_screen {
+        out.push_str("\x1b[?1049l");
+    }
+    out.push_str("\x1b[?7h\x1b[?25h");
+    out
 }
 
 fn resolve_write_log() -> Option<PathBuf> {
@@ -983,6 +1016,48 @@ mod tests {
         assert!(
             !detect_hyperlinks_with(|| false, junk),
             "only 1|0 count as an override"
+        );
+    }
+
+    // Verifies: gh #33 - the drop leaves the alternate screen only while it
+    // is still active. A second `?1049l` restores the cursor the switch
+    // saved (the top-left) and undoes the exit park, which is what put the
+    // shell prompt back on the transcript in fullscreen mode.
+    #[test]
+    fn the_drop_leaves_the_alt_screen_only_while_it_is_active() {
+        let active = teardown_sequence(true);
+        assert!(active.contains("\x1b[?1049l"), "{active:?}");
+        assert!(active.ends_with("\x1b[?7h\x1b[?25h"), "{active:?}");
+
+        let gone = teardown_sequence(false);
+        assert!(
+            !gone.contains("1049"),
+            "no screen switch once the teardown has run: {gone:?}"
+        );
+        assert!(gone.ends_with("\x1b[?7h\x1b[?25h"), "{gone:?}");
+        for seq in ["\x1b[?1000l", "\x1b[?1002l", "\x1b[?1003l", "\x1b[?1006l"] {
+            assert!(gone.contains(seq), "mouse tracking is always off: {gone:?}");
+        }
+    }
+
+    // Verifies: gh #33 - the flag the drop reads is folded from the
+    // renderers' own sequences, so it tracks the screen rather than a
+    // separate bookkeeping call.
+    #[test]
+    fn the_screen_switch_sequences_fold_into_the_drop_flag() {
+        let mut term = ProcessTerminal::new();
+        assert!(
+            !term.in_alt_screen,
+            "a fresh terminal is on the main screen"
+        );
+
+        term.write("\x1b[?1049h\x1b[?7l\x1b[2J\x1b[H\x1b[?25l");
+        assert!(term.in_alt_screen, "enter switches the flag on");
+
+        term.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\r\n\x1b[?7h\x1b[?25h");
+        assert!(
+            !term.in_alt_screen,
+            "the renderer's leave switches it off, so the drop has nothing to undo"
         );
     }
 }

@@ -39,9 +39,16 @@ impl Screen {
         }
     }
 
+    /// The teardown contract. `preserve = false` is an exit: both
+    /// renderers park the cursor on a fresh line below what they rendered
+    /// so the returning shell prompt cannot overwrite it (gh #33).
+    /// `preserve = true` is a mid-run handoff - the external editor and the
+    /// fullscreen switch - and leaves the terminal exactly as it was.
     fn leave(&mut self, term: &mut dyn Terminal, preserve: bool) {
-        if let Screen::Alt(r) = self {
-            r.leave(term, preserve);
+        match self {
+            Screen::Alt(r) => r.leave(term, preserve),
+            Screen::Main(r) if !preserve => r.finish(term),
+            Screen::Main(_) => {}
         }
     }
 
@@ -579,6 +586,49 @@ mod tests {
             },
             Arc::new(KeybindingsManager::new()),
         )
+    }
+
+    // Verifies: gh #33 - the exit teardown (`preserve = false`) parks the
+    // cursor below the transcript in main-screen mode too; `Screen::leave`
+    // used to delegate only to `Screen::Alt`, so the main-screen path
+    // emitted nothing and the shell prompt landed on LCA's content.
+    #[test]
+    fn screen_leave_parks_the_cursor_in_main_screen_mode() {
+        let mut term = FakeTerminal::new(80, 24);
+        let mut screen = Screen::Main(MainScreenRenderer::new());
+        screen.render(
+            &mut term,
+            vec!["transcript".into(), "footer".into()],
+            80,
+            24,
+        );
+        let _ = term.take_output();
+
+        screen.leave(&mut term, false);
+        let out = term.take_output();
+
+        assert!(
+            out.ends_with("\r\n\x1b[?7h\x1b[?25h"),
+            "the exit write parks the cursor on a fresh line: {out:?}"
+        );
+    }
+
+    // Verifies: gh #33's call-site audit - `preserve = true` is the
+    // mid-run handoff (the external editor and the fullscreen switch), not
+    // an exit, so it must still write nothing in main-screen mode.
+    #[test]
+    fn a_preserving_leave_in_main_screen_mode_writes_nothing() {
+        let mut term = FakeTerminal::new(80, 24);
+        let mut screen = Screen::Main(MainScreenRenderer::new());
+        screen.render(&mut term, vec!["transcript".into()], 80, 24);
+        let _ = term.take_output();
+
+        screen.leave(&mut term, true);
+
+        assert!(
+            term.take_output().is_empty(),
+            "a handoff leaves the terminal exactly as it was"
+        );
     }
 
     // Verifies: S7 - a link click names the reason when the opener fails,
