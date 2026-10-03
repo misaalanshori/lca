@@ -198,7 +198,25 @@ pub(crate) fn store_provider_secret(
     provider: &str,
     key: &str,
     value: &str,
+    grants: &std::sync::Arc<std::sync::Mutex<GrantStore>>,
 ) -> Result<(), SecretError> {
+    secret_capabilities(data, cwd, provider, grants)
+        .credentials_set(key, value)
+        .map_err(|err| SecretError::Credentials(err.to_string()))
+}
+
+/// The capability engine a credential is written through: a credentials-
+/// only grant, the platform scope roots, and `grants` - the session's own
+/// handle, passed through untouched, so storing a secret cannot clobber a
+/// grant and a grant cannot clobber a secret (gh #29 review: exactly one
+/// `GrantStore` instance manages `grants.json` in a running process).
+/// Extracted so the guard can see which handle it carries.
+fn secret_capabilities(
+    data: &Path,
+    cwd: &Path,
+    provider: &str,
+    grants: &std::sync::Arc<std::sync::Mutex<GrantStore>>,
+) -> lca_tools::Capabilities {
     let roots = lca_permissions::ScopeRoots {
         workspace: cwd.to_path_buf(),
         private: data.join("private"),
@@ -206,7 +224,7 @@ pub(crate) fn store_provider_secret(
         temp: session_temp(),
         state_dir: data.to_path_buf(),
     };
-    let capabilities = lca_tools::Capabilities::new(
+    lca_tools::Capabilities::new(
         provider,
         lca_tools::CapabilityGrants {
             credentials: true,
@@ -216,13 +234,10 @@ pub(crate) fn store_provider_secret(
         Arc::new(std::sync::Mutex::new(
             lca_permissions::SharedPrompt::default(),
         )),
-        open_grants(data),
+        grants.clone(),
         cwd.to_path_buf(),
         None,
-    );
-    capabilities
-        .credentials_set(key, value)
-        .map_err(|err| SecretError::Credentials(err.to_string()))
+    )
 }
 
 /// The endpoint host an openai-compatible login would need an ad hoc `net`
@@ -327,20 +342,6 @@ pub(crate) fn apply_enablement(
 /// roots, the shared grant store, and the caller's prompt. Every engine and
 /// the turn loop share one `Arc<Mutex<GrantStore>>` so a grant written by
 /// one path is visible to (and never clobbered by) another.
-/// Open (or create) the process grant store, or start fail-closed (an empty
-/// store grants nothing) if the file is unreadable: a bad store must not
-/// abort a session with a panic.
-fn open_grants(data: &Path) -> std::sync::Arc<std::sync::Mutex<GrantStore>> {
-    let store = match GrantStore::open(&data.join("grants.json")) {
-        Ok(store) => store,
-        Err(err) => {
-            eprintln!("warning: grant store unreadable ({err}); starting with no grants");
-            GrantStore::empty()
-        }
-    };
-    std::sync::Arc::new(std::sync::Mutex::new(store))
-}
-
 pub(crate) fn extension_capabilities(
     cwd: &Path,
     name: &str,
@@ -852,8 +853,16 @@ mod tests {
         let root = lca_testkit::scratch_path("lca-login");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("mkdir");
-        store_provider_secret(&root, &root, "openai-compatible", "api_key", "sk-x")
-            .expect("store the secret");
+        let grants = std::sync::Arc::new(std::sync::Mutex::new(GrantStore::empty()));
+        store_provider_secret(
+            &root,
+            &root,
+            "openai-compatible",
+            "api_key",
+            "sk-x",
+            &grants,
+        )
+        .expect("store the secret");
         let path = root.join("credentials").join("openai-compatible.json");
         let text = std::fs::read_to_string(&path).expect("read the credential file");
         assert!(text.contains("sk-x"), "{text}");
@@ -1078,8 +1087,16 @@ mod tests {
     #[test]
     fn stored_provider_preset_reads_the_persisted_id() {
         let root = lca_testkit::scratch_path("lca-provider-preset");
-        store_provider_secret(&root, &root, "openai-compatible", "preset", "opencode-go")
-            .expect("store");
+        let grants = std::sync::Arc::new(std::sync::Mutex::new(GrantStore::empty()));
+        store_provider_secret(
+            &root,
+            &root,
+            "openai-compatible",
+            "preset",
+            "opencode-go",
+            &grants,
+        )
+        .expect("store");
         assert_eq!(
             stored_provider_preset(&root, "openai-compatible").as_deref(),
             Some("opencode-go")

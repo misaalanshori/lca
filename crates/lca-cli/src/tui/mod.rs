@@ -582,15 +582,17 @@ fn initial_view(
         }
     };
     let mut head: Vec<String> = Vec::new();
-    // The configured endpoint can be outside the provider's manifest hosts;
-    // without its ad hoc grant every turn fails with a permission denial. Say
-    // so up front and name the one command that fixes it (FR-PERM-16). This is
-    // the env-var path, which never runs `/login` on its own.
+    // The configured endpoint can be outside the provider's manifest hosts.
+    // Say so up front and name what actually happens next (gh #29): the
+    // first request raises the consent prompt naming that host, and a
+    // scripted run has `--allow-host`. This is the env-var path, which
+    // never runs `/login` on its own.
     if crate::provider_ready(provider_name, data)
         && let Some(host) = crate::ungranted_host(grants, cwd, crate::openai_ad_hoc_host(data))
     {
         head.push(format!(
-            "note: the endpoint {host} is not granted for this project - run /login to approve it"
+            "note: the endpoint {host} is not granted for this project - the first \
+             request will ask you to approve it; a script passes --allow-host {host}"
         ));
     }
     // A session that loaded with a truncation or a skipped line must say so:

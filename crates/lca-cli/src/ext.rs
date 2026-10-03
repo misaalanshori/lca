@@ -982,6 +982,83 @@ redirect_path = "/callback"
         );
     }
 
+    // Verifies: gh #29 review finding 1 - QA-007's acceptance criterion at
+    // the credentials-write path: exactly one `GrantStore` instance
+    // manages `grants.json` in a running process, so storing a secret runs
+    // on the session's own handle. A grant written around that write is
+    // never clobbered, and the credential survives a grant written after
+    // it. Red before the handle is threaded through: the engine opened the
+    // file itself, so neither the pointer nor the live view matches.
+    #[test]
+    fn the_credentials_write_shares_the_session_handle_and_clobbers_nothing() {
+        let root = lca_testkit::scratch_path("gh29fix-secret-grant");
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        // The session's handle: what the prompt writes goes through this Arc.
+        let grants = std::sync::Arc::new(std::sync::Mutex::new(
+            lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
+        ));
+        let cap = crate::secret_capabilities(&root, &project, "openai-compatible", &grants);
+
+        assert!(
+            std::sync::Arc::ptr_eq(&cap.grant_store(), &grants),
+            "the credentials write runs on the session's own handle, not a second one"
+        );
+        // A grant attached after the engine was built is visible through it
+        // without reloading the file.
+        grants
+            .lock()
+            .unwrap()
+            .approve_net_pattern(&project, "granted-first.example")
+            .expect("grant");
+        assert!(
+            cap.grant_store()
+                .lock()
+                .unwrap()
+                .net_patterns(&project)
+                .iter()
+                .any(|pattern| pattern == "granted-first.example"),
+            "the one store: a grant written around a secret store is visible, not clobbered"
+        );
+
+        // Grant first, secret second: the secret lands and the grant stays.
+        cap.credentials_set("api_key", "s3cret-one").expect("store");
+        assert_eq!(
+            cap.credentials_get("api_key").expect("read"),
+            Some("s3cret-one".to_string()),
+            "the credential was written"
+        );
+        let reread = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("reopen");
+        assert!(
+            reread
+                .net_patterns(&project)
+                .iter()
+                .any(|pattern| pattern == "granted-first.example"),
+            "storing a secret left the grant on disk"
+        );
+
+        // Secret first, grant second: the credential stays too.
+        cap.credentials_set("api_key", "s3cret-two").expect("store");
+        grants
+            .lock()
+            .unwrap()
+            .approve_net_pattern(&project, "granted-second.example")
+            .expect("grant");
+        assert_eq!(
+            cap.credentials_get("api_key").expect("read"),
+            Some("s3cret-two".to_string()),
+            "writing a grant left the credential alone"
+        );
+        let reread = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("reopen");
+        let patterns = reread.net_patterns(&project);
+        for pattern in ["granted-first.example", "granted-second.example"] {
+            assert!(
+                patterns.iter().any(|seen| seen == pattern),
+                "both grants survived: {patterns:?}"
+            );
+        }
+    }
+
     // Verifies: ADR-0030 (state is cleared per namespace and only that one).
     #[test]
     fn clearing_state_removes_only_that_namespace() {

@@ -169,15 +169,26 @@ impl Ui {
         *self.login_answer.lock().unwrap_or_else(|p| p.into_inner()) =
             Some((target.clone(), choice.clone(), values.clone()));
         if let Some(secret) = values.get("api-key")
-            && let Err(err) =
-                crate::store_provider_secret(&self.data, &self.cwd, &target, "api_key", secret)
+            && let Err(err) = crate::store_provider_secret(
+                &self.data,
+                &self.cwd,
+                &target,
+                "api_key",
+                secret,
+                &self.grants,
+            )
         {
             return LoginNext::Message(format!("could not store the key for {target}: {err}"));
         }
         for (key, value) in &settings {
-            if let Err(err) =
-                crate::store_provider_secret(&self.data, &self.cwd, &target, key, value)
-            {
+            if let Err(err) = crate::store_provider_secret(
+                &self.data,
+                &self.cwd,
+                &target,
+                key,
+                value,
+                &self.grants,
+            ) {
                 return LoginNext::Message(format!("could not store {key} for {target}: {err}"));
             }
         }
@@ -612,7 +623,14 @@ impl Ui {
             return;
         };
         for (key, value) in &settings {
-            let _ = crate::store_provider_secret(&self.data, &self.cwd, &target, key, value);
+            let _ = crate::store_provider_secret(
+                &self.data,
+                &self.cwd,
+                &target,
+                key,
+                value,
+                &self.grants,
+            );
         }
         let mut cell = self.settings_cell.lock().unwrap_or_else(|p| p.into_inner());
         cell.clear();
