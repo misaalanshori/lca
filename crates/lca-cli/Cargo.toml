@@ -47,6 +47,14 @@ serde.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+# gh #19: `signal(SIGPIPE, SIG_DFL)` - std installs Rust's ignore handler
+# and exposes no way to undo it, and hand-rolling the syscall would be more
+# unsafe code, not less. The same crate `lca-tools` (pty) and `lca-tui`
+# (console modes) already reach for. Unix only: Windows has no SIGPIPE to
+# restore, so the call site compiles away there.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 lca-testkit = { path = "../lca-testkit" }
 # sha2 - digest display in the install e2e (the registry's own dep; test-side use).

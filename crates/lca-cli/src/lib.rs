@@ -1,8 +1,13 @@
 //! The `lca` binary's logic: argument dispatch, headless mode with the
 //! `--json` envelope contract from `docs/headless.md`, and the session
 //! commands. Interactive mode lives in `lca-tui`.
-
-#![forbid(unsafe_code)]
+//!
+//! Unsafe code is `deny`ed rather than `forbid`ed so the one documented
+//! exemption below can exist: [`sigpipe`] restores `SIGPIPE`'s default
+//! disposition, which is a single `signal(2)` call std has no safe wrapper
+//! for (GitHub issue #19). Every `unsafe` block in this crate carries a
+//! `SAFETY` note, the discipline `lca-tools` and `lca-tui` already use.
+#![deny(unsafe_code)]
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -175,6 +180,8 @@ pub enum Command {
 pub mod ext;
 mod headless;
 mod session_cmds;
+/// Restoring `SIGPIPE`'s default disposition (GitHub issue #19).
+pub mod sigpipe;
 
 pub use headless::{HeadlessSink, exit_code, headless};
 use session_cmds::*;

@@ -1198,6 +1198,7 @@ dependencies = [
  "lca-testkit",
  "lca-tools",
  "lca-ui",
+ "libc",
  "openai-compatible",
  "serde",
  "serde_json",

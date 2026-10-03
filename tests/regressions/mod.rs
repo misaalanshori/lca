@@ -158,6 +158,10 @@ mod gh34_curated_context_windows_reach_the_footer;
 // it with its bag had failed since the flat-file layout landed.
 #[path = "39-shipped-bag-kinds-match-the-manifest.rs"]
 mod shipped_bag_kinds_match_the_manifest;
+// Open-line defect (GitHub issue #19): a stdout closed early
+// (`| head`) made every `println!` panic with a broken pipe.
+#[path = "gh19-sigpipe-does-not-panic.rs"]
+mod gh19_sigpipe_does_not_panic;
 // Released-line defects (GitHub issue #27): a multiline prompt stepped back
 // to column 0 on every line after the first, and spaces were dropped at wrap
 // boundaries.
