@@ -162,6 +162,10 @@ mod shipped_bag_kinds_match_the_manifest;
 // (`| head`) made every `println!` panic with a broken pipe.
 #[path = "gh19-sigpipe-does-not-panic.rs"]
 mod gh19_sigpipe_does_not_panic;
+// Open-line defect (GitHub issue #18): a modal close that shrank the frame
+// while the notice changed could leave the old notice row on the pane.
+#[path = "gh18-stale-notice-row.rs"]
+mod gh18_stale_notice_row;
 // Released-line defects (GitHub issue #27): a multiline prompt stepped back
 // to column 0 on every line after the first, and spaces were dropped at wrap
 // boundaries.
