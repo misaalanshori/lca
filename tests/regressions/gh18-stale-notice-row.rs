@@ -3,42 +3,64 @@
 //! changes in the same step, the pane briefly shows the old notice line
 //! above the new one."
 //!
-//! # Status: REPRO ATTEMPTED, NOT REPRODUCED
+//! # Status: all three leads worked - characterized negative, contract
+//! sharpened, mechanism still open
 //!
-//! The report said "not reproduced in isolation", which the cycle brief read
-//! as *the frame sequence was never driven*. This file drives it, at screen
-//! level rather than at the renderer's `previous()` model - the model is
-//! right by construction, which is exactly how an artifact can hide in the
-//! bytes actually written. [`Screen`] is the smallest interpreter of the
-//! sequences the two renderers emit (cursor moves, line erase, clear,
-//! CR/LF, SGR ignored), so "visible" here means visible on the pane.
+//! The first attempt asserted the **final screen state** after a state
+//! transition, which is why it stayed clean: "briefly shows" is a
+//! *transient*, and a transient lives in the write stream and in
+//! intermediate tokens, not in an end state. This file now carries the
+//! instrument for that (the steering note's three leads, in order):
 //!
-//! What was driven, and what came back:
+//! **Lead 1 - the raw write stream.** [`Screen::feed_with`] replays the
+//! bytes token by token and inspects the screen after each one;
+//! [`ChunkedTerminal`] keeps every renderer `write` as its own chunk so the
+//! two levels can be told apart. Result: a double-notice state *does* exist
+//! inside frame B's write - the new notice's row is painted before the old
+//! notice's continuation rows are - but that write is a single
+//! synchronized-output batch (`\x1b[?2026h` ... `\x1b[?2026l`), so a
+//! terminal that honors `?2026` never paints the intermediate. At a
+//! **write boundary** - what a sync-capable terminal actually shows - the
+//! state never exists, in any sequence, in either renderer.
 //!
-//! - **The live sequence, three times on a real pane** (`/help`'s 19-row
-//!   block as the old notice, a picker modal over it, then a close that
-//!   changes the notice in the same step - `/model`, `/login` + Esc, and a
-//!   seeded model list): 0 stale rows each time, exactly one notice row.
-//! - **31 synthetic frame pairs** through the real compose path
-//!   (`Chat::viewport`) into both renderers, read off the screen: padded
-//!   modal frame -> shrunk frame with a different notice, notice lengths
-//!   1/3/25, documents shorter and longer than the viewport, three
-//!   terminal sizes, and the grow-then-shrink variants. No stale row in
-//!   any of them.
+//! That shape is not a gap in the port: pi's own alt-screen diff loop
+//! emits exactly `ESC[{row};1H` + `ESC[2K` + line per changed row, inside
+//! its own synchronized block (`packages/tui/src/tui-alt-screen.ts`, the
+//! `else` branch of its redraw), so pi has the same intra-batch states.
+//! The real-pane receipt (`tmux pipe-pane`, testing-plan §14) agrees: over
+//! `/help` -> `/login` -> Esc, 14051 raw bytes, **14/14 batches
+//! sync-delimited**, and the old notice's text is never written again
+//! after the new notice's (offsets 4072 then 13755, no later hit).
 //!
-//! So the sequence the report describes does not, by itself, produce the
-//! artifact on the current build. What remains open is the *third* element
-//! the report could not have isolated: something that makes the screen and
-//! the renderer's `previous()` disagree (a scroll that moves the window
-//! under a stale offset, a frame the loop renders that this file does not
-//! compose, or a resize interleaved with the close). The mechanism is the
-//! owner's to dig into with the cycle brief's render-pipeline pointer.
+//! **Lead 2 - two renders instead of one.** Refuted at the handler:
+//! `Chat::handle_login_picker` does `self.world.picker.take()` and assigns
+//! `login cancelled` in the same match arm, so one keystroke commits both
+//! halves of the change into one state and one compose. The sequence is
+//! swept anyway as three composes (A = modal + old notice, A-prime =
+//! no modal + old notice, B = no modal + new notice) - the frame a
+//! two-pass loop would show - and it is clean at both levels.
 //!
-//! The row below is therefore a **characterization guard**, not a repro: it
-//! pins the reported sequence and the invariant the issue is about (no
-//! stale notice row, exactly one new one) so the artifact cannot return
-//! unnoticed once its real trigger is found. It is green today, and green
-//! here means "the invariant holds", never "the bug was fixed".
+//! **Lead 3 - a resize interleaved with the step.** Swept as frame A at
+//! 60x20 (modal + old notice) followed by the new notice at 60x12, both
+//! renderers: clean at both levels, and the final screen is stale-free.
+//!
+//! # What the rows below pin
+//!
+//! The contract, at the two levels that decide visibility: no double
+//! notice at a write boundary, and no double notice inside a write that
+//! is *not* synchronized. They are green today, and green here means "the
+//! invariant holds on this build", never "the bug was fixed".
+//!
+//! # What is left open (for the owner)
+//!
+//! The only remaining way to *see* the artifact is a terminal or capture
+//! path that ignores `\x1b[?2026`: there every multi-row repaint paints
+//! incrementally and any frame that rewrites several rows at once flickers
+//! through its intermediate states. Whether that is what the original
+//! report observed is not decidable from this repository, and fixing it
+//! would mean reordering or clearing the whole changed range before
+//! writing - a renderer change the steering note explicitly rules out
+//! without evidence. Recorded, not forced.
 //!
 //! Verifies: NFR-24, GitHub issue #18.
 use std::sync::{Arc, Mutex};
@@ -64,8 +86,11 @@ impl Screen {
         }
     }
 
-    /// Apply one renderer's output to the screen.
-    fn feed(&mut self, data: &str) {
+    /// Apply one renderer's output to the screen, calling `after` once per
+    /// parsed token. The callback is how a transient is caught: a state
+    /// that exists only between two escape sequences is still a state the
+    /// terminal passed through, and "briefly shows" is exactly that.
+    fn feed_with(&mut self, data: &str, mut after: impl FnMut(&Screen)) {
         let bytes: Vec<char> = data.chars().collect();
         let mut i = 0;
         while i < bytes.len() {
@@ -99,9 +124,16 @@ impl Screen {
                         let first = numbers.first().copied().unwrap_or(0);
                         match finalizer {
                             'H' | 'f' => {
+                                // Clamped: a model of a real screen, which
+                                // cannot park the cursor past its last row
+                                // (a resize replay feeds a taller frame's
+                                // rows through a shorter screen).
                                 let row = numbers.first().copied().unwrap_or(1).max(1) - 1;
                                 let col = numbers.get(1).copied().unwrap_or(1).max(1) - 1;
-                                self.cursor = (row, col);
+                                self.cursor = (
+                                    row.min(self.rows.len().saturating_sub(1)),
+                                    col.min(self.rows[0].len().saturating_sub(1)),
+                                );
                             }
                             'A' => self.cursor.0 = self.cursor.0.saturating_sub(first.max(1)),
                             'B' => {
@@ -118,8 +150,10 @@ impl Screen {
                                 // 0K/2K: erase to end of line (the form both
                                 // renderers use); 1K would erase to start.
                                 let (row, col) = self.cursor;
-                                for cell in self.rows[row].iter_mut().skip(col) {
-                                    *cell = ' ';
+                                if let Some(cells) = self.rows.get_mut(row) {
+                                    for cell in cells.iter_mut().skip(col) {
+                                        *cell = ' ';
+                                    }
                                 }
                             }
                             'J' => {
@@ -161,7 +195,14 @@ impl Screen {
                     i += 1;
                 }
             }
+            after(self);
         }
+    }
+
+    /// Apply one renderer's output without inspecting the intermediate
+    /// states.
+    fn feed(&mut self, data: &str) {
+        self.feed_with(data, |_| {});
     }
 
     /// The screen as lines, right-trimmed.
@@ -289,5 +330,277 @@ fn the_reported_sequence_shows_no_stale_notice_row() {
             "{name}: the old notice row survived: {stale:?}"
         );
         assert_eq!(fresh.len(), 1, "{name}: exactly one new notice row");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Transient-level harness: what the *write stream* does, not what the last
+// frame leaves behind. A transient is invisible to an end-state assertion by
+// definition - this is the instrument the steering note asks for.
+// ---------------------------------------------------------------------------
+
+use lca_tui::engine::terminal::{InputHandler, ResizeHandler, Terminal};
+
+/// A terminal that keeps every `write` as its own chunk, so a sequence can
+/// be replayed one write at a time (and one token at a time inside it).
+struct ChunkedTerminal {
+    chunks: Vec<String>,
+    cols: u16,
+    rows: u16,
+}
+
+impl ChunkedTerminal {
+    fn new(cols: u16, rows: u16) -> ChunkedTerminal {
+        ChunkedTerminal {
+            chunks: Vec::new(),
+            cols,
+            rows,
+        }
+    }
+}
+
+impl Terminal for ChunkedTerminal {
+    fn start(&mut self, _on_input: InputHandler, _on_resize: ResizeHandler) {}
+    fn stop(&mut self) {}
+    fn drain_input(&mut self, _max_ms: u64, _idle_ms: u64) {}
+    fn write(&mut self, data: &str) {
+        self.chunks.push(data.to_string());
+    }
+    fn columns(&self) -> u16 {
+        self.cols
+    }
+    fn rows(&self) -> u16 {
+        self.rows
+    }
+    fn kitty_protocol_active(&self) -> bool {
+        false
+    }
+    fn move_by(&mut self, _lines: i32) {}
+    fn hide_cursor(&mut self) {}
+    fn show_cursor(&mut self) {}
+    fn clear_line(&mut self) {}
+    fn clear_from_cursor(&mut self) {}
+    fn clear_screen(&mut self) {}
+    fn set_title(&mut self, _title: &str) {}
+    fn set_progress(&mut self, _active: bool) {}
+}
+
+/// One step of a sequence: a composed frame at a terminal size.
+struct Step {
+    lines: Vec<String>,
+    width: u16,
+    height: u16,
+}
+
+fn step(lines: Vec<String>, width: u16, height: u16) -> Step {
+    Step {
+        lines,
+        width,
+        height,
+    }
+}
+
+/// Run `steps` through one renderer, returning every `write` it made.
+fn drive_alt(steps: &[Step]) -> Vec<String> {
+    let mut term = ChunkedTerminal::new(steps[0].width, steps[0].height);
+    let mut renderer = AltScreenRenderer::new();
+    renderer.enter(&mut term);
+    for s in steps {
+        term.cols = s.width;
+        term.rows = s.height;
+        renderer.render_lines(&mut term, s.lines.clone(), s.width, s.height);
+    }
+    term.chunks
+}
+
+fn drive_main(steps: &[Step]) -> Vec<String> {
+    let mut term = ChunkedTerminal::new(steps[0].width, steps[0].height);
+    let mut renderer = MainScreenRenderer::new();
+    for s in steps {
+        term.cols = s.width;
+        term.rows = s.height;
+        renderer.render(&mut term, s.lines.clone(), s.width, s.height);
+    }
+    term.chunks
+}
+
+/// Replay the whole stream and report the two levels that decide whether a
+/// transient is *seen*:
+///
+/// - `visible`: a write **boundary** at which both notices are on screen -
+///   what any terminal shows once `?2026` releases the batch. This is the
+///   instrument the steering note asks for first.
+/// - `uncovered`: a double-notice state *inside* a write that is **not**
+///   wrapped in synchronized output - a batch a terminal would paint
+///   incrementally, so the flicker would be visible on any of them.
+///
+/// A double-notice state inside a sync-wrapped write is expected: it is
+/// what incremental row painting is, and pi's own diff loop emits the same
+/// `CUP` + `EL` + text per row inside its own sync block
+/// (`tui-alt-screen.ts`, the `else` branch of its redraw), so that shape is
+/// shared with the design source rather than a gap in the port.
+///
+/// Returns `(visible, uncovered, inspected_tokens)`.
+fn double_notice_states(
+    chunks: &[String],
+    width: u16,
+    height: u16,
+    old: &str,
+    new: &str,
+) -> (Vec<usize>, Vec<usize>, usize) {
+    let both = |state: &Screen| {
+        let lines = state.lines();
+        lines.iter().any(|l| l.contains(old)) && lines.iter().any(|l| l.contains(new))
+    };
+    let mut screen = Screen::new(width as usize, height as usize);
+    let mut visible = Vec::new();
+    let mut uncovered = Vec::new();
+    let mut checked = 0usize;
+    for (index, chunk) in chunks.iter().enumerate() {
+        let sync_wrapped = chunk.contains("\x1b[?2026h") && chunk.ends_with("\x1b[?2026l");
+        let mut inside = false;
+        screen.feed_with(chunk, |state| {
+            checked += 1;
+            if both(state) {
+                inside = true;
+            }
+        });
+        if both(&screen) {
+            visible.push(index);
+        }
+        if inside && !sync_wrapped {
+            uncovered.push(index);
+        }
+    }
+    (visible, uncovered, checked)
+}
+
+const OLD_NOTICE: &str = "NOTICE-X";
+const NEW_NOTICE: &str = "NOTICE-Y";
+
+/// The old notice as a block, the new one as a single line - the shape the
+/// report describes (a long notice replaced by a short one).
+fn notice_block() -> String {
+    "NOTICE-X first line\nNOTICE-X second line\nNOTICE-X third line".to_string()
+}
+
+/// The reported pair: a padded (modal-active) frame, then a shrunk one with
+/// a different notice.
+fn reported_pair(width: u16, height: u16) -> Vec<Step> {
+    let mut chat = chat();
+    chat.world.notice = Some(notice_block());
+    chat.world.picker = Some(PickerPrompt {
+        options: vec![PickerOption {
+            provider: "p".to_string(),
+            id: "id".to_string(),
+            label: "Label".to_string(),
+            hint: "hint".to_string(),
+        }],
+        selected: 0,
+    });
+    let a = chat.viewport(width, height, 0);
+    chat.world.picker = None;
+    chat.world.notice = Some(NEW_NOTICE.to_string());
+    let b = chat.viewport(width, height, 0);
+    vec![step(a, width, height), step(b, width, height)]
+}
+
+/// The split-step version: the handler may compose twice, so the pane can
+/// legitimately hold a frame where the modal is gone but the notice is
+/// still the old one (A-prime) before the notice changes (B).
+fn split_step_sequence(width: u16, height: u16) -> Vec<Step> {
+    let mut chat = chat();
+    chat.world.notice = Some(notice_block());
+    chat.world.picker = Some(PickerPrompt {
+        options: vec![PickerOption {
+            provider: "p".to_string(),
+            id: "id".to_string(),
+            label: "Label".to_string(),
+            hint: "hint".to_string(),
+        }],
+        selected: 0,
+    });
+    let a = chat.viewport(width, height, 0);
+    chat.world.picker = None;
+    let a_prime = chat.viewport(width, height, 0);
+    chat.world.notice = Some(NEW_NOTICE.to_string());
+    let b = chat.viewport(width, height, 0);
+    vec![
+        step(a, width, height),
+        step(a_prime, width, height),
+        step(b, width, height),
+    ]
+}
+
+// Verifies: gh #18, lead 1 - the transient never exists in the write
+// stream. Every token of every frame is applied to a screen and the screen
+// is inspected after each one, so a state that lives only between two
+// escape sequences still counts. Covers the reported two-frame pair and
+// the split-step triple, through both renderers.
+#[test]
+fn no_transient_double_notice_in_the_write_stream() {
+    for (label, steps) in [
+        ("reported pair", reported_pair(60, 20)),
+        ("split-step triple", split_step_sequence(60, 20)),
+        ("reported pair, tall pane", reported_pair(100, 30)),
+    ] {
+        for (mode, chunks) in [("alt", drive_alt(&steps)), ("main", drive_main(&steps))] {
+            let (visible, uncovered, checked) =
+                double_notice_states(&chunks, 60, 20, OLD_NOTICE, NEW_NOTICE);
+            assert!(
+                visible.is_empty(),
+                "{label} ({mode}): a write boundary showed both notices (writes {visible:?} \
+                 of {})",
+                chunks.len()
+            );
+            assert!(
+                uncovered.is_empty(),
+                "{label} ({mode}): an unsynchronized write painted both notices \
+                 (writes {uncovered:?})"
+            );
+            assert!(checked > 0, "{label} ({mode}): the stream was replayed");
+        }
+    }
+}
+
+// Verifies: gh #18, lead 3 - a terminal resize interleaved with the step.
+// The frame arrives at a different height in the same sequence, which is
+// the branch where the main renderer's height-change full clear runs.
+#[test]
+fn a_resize_interleaved_with_the_close_leaves_no_stale_row() {
+    let wide = reported_pair(60, 20);
+    let narrow = {
+        let mut chat = chat();
+        chat.world.notice = Some(NEW_NOTICE.to_string());
+        vec![step(chat.viewport(60, 12, 0), 60, 12)]
+    };
+    let steps: Vec<Step> = wide.into_iter().chain(narrow).collect();
+
+    for (mode, chunks) in [("alt", drive_alt(&steps)), ("main", drive_main(&steps))] {
+        // The screen is modelled at the larger size for the replay (a real
+        // resize keeps the buffer), then the final state is read at the
+        // size the pane ends on.
+        let (visible, uncovered, checked) =
+            double_notice_states(&chunks, 60, 20, OLD_NOTICE, NEW_NOTICE);
+        assert!(
+            visible.is_empty(),
+            "{mode}: resize interleaving left both notices at a write boundary ({visible:?})"
+        );
+        assert!(
+            uncovered.is_empty(),
+            "{mode}: resize interleaving painted both notices in an unsynchronized write \
+             ({uncovered:?}) after {checked} tokens"
+        );
+        let mut final_screen = Screen::new(60, 12);
+        final_screen.feed(&chunks.join(""));
+        let final_lines = final_screen.lines();
+        let stale: Vec<&String> = final_lines
+            .iter()
+            .filter(|l| l.contains(OLD_NOTICE))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "{mode}: stale row after the resize: {stale:?}"
+        );
     }
 }
