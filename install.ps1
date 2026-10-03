@@ -9,6 +9,8 @@
 # guarded so the file can be dot-sourced for its functions (the test suite
 # asserts on Join-UserPath / Get-AssetName directly).
 # Exit codes: 0 ok, 1 fetch/verify/write failure, 2 unsupported architecture.
+# A script file exits with the code; an in-memory run (`iex`,
+# scriptblock::Create) sets $LASTEXITCODE and returns to the caller (gh #26).
 
 [CmdletBinding()]
 param(
@@ -19,6 +21,11 @@ param(
   [switch]$Unstable,
   [string]$BaseUrl
 )
+
+# Does a script file back this run? `exit` is safe only then: in an
+# in-memory invocation there is no file, the "current script" is the
+# caller's session, and `exit` would end the host (gh #26).
+$LcaInMemory = [string]::IsNullOrEmpty($PSCommandPath)
 
 # --- functions (no side effects at definition) -------------------------------
 
@@ -203,157 +210,181 @@ function Write-Err([string]$Message) {
   Write-Output "error: $Message"
 }
 
+# Finish the run: publish the documented code, then leave - `exit` when this
+# is a script file (which is what hands `& .\install.ps1` and `pwsh -File`
+# their `$LASTEXITCODE`), and nothing when it is not, so the caller's
+# `iex` / scriptblock keeps its session. Every call site follows this with a
+# `return`, which ends the main body in the in-memory case and is unreachable
+# in the file case.
+function Complete-Install {
+  param([int]$Code)
+  $global:LASTEXITCODE = $Code
+  if (-not $LcaInMemory) { exit $Code }
+}
+
 # --- main --------------------------------------------------------------------
 
 if ($MyInvocation.InvocationName -eq '.') {
   return  # dot-sourced for the functions; nothing else runs
 }
 
-$ErrorActionPreference = 'Stop'
+# The install runs as one function, and that is load-bearing (gh #26).
+# `Invoke-Expression` evaluates its string in the CALLER's current scope
+# (Microsoft: "expressions are evaluated and run in the current scope"),
+# so a top-level `return` would return from the caller's own scope and
+# swallow the rest of the command the installer was pasted into. Inside a
+# function, `return` stops this body and nothing else; `Complete-Install`
+# still calls `exit` when a script file backs the run, which ends the whole
+# script and hands the caller its `$LASTEXITCODE`.
+function Invoke-LcaInstall {
+  $ErrorActionPreference = 'Stop'
 
-$install = $InstallDir
-if (-not $install) {
-  if ($env:LCA_INSTALL_DIR) { $install = $env:LCA_INSTALL_DIR }
-  else { $install = Join-Path $env:LOCALAPPDATA 'lca\bin' }
-}
-try { $install = [IO.Path]::GetFullPath($install) } catch { }
+  $install = $InstallDir
+  if (-not $install) {
+    if ($env:LCA_INSTALL_DIR) { $install = $env:LCA_INSTALL_DIR }
+    else { $install = Join-Path $env:LOCALAPPDATA 'lca\bin' }
+  }
+  try { $install = [IO.Path]::GetFullPath($install) } catch { }
 
-$bin = Join-Path $install 'lca.exe'
+  $bin = Join-Path $install 'lca.exe'
 
-try {
-  # Uninstall: no network, no platform detection (FR-INSTALL-5).
-  if ($Uninstall) {
-    $removed = $false
-    if (Test-Path -LiteralPath $bin) {
-      Remove-Item -LiteralPath $bin -Force
-      Write-Output "removed binary: $bin"
-      $removed = $true
-    }
-    if (-not $NoPath) {
-      $state = Get-UserPathState
-      if ($state.Raw) {
-        $trimmed = Remove-UserPathEntry -Current $state.Raw -Dir $install
-        if ($trimmed -ne $state.Raw) {
-          $state.Raw = $trimmed
-          Set-UserPathState $state
-          Send-PathChange
-          Write-Output "removed PATH entry: $install"
-          $removed = $true
+  try {
+    # Uninstall: no network, no platform detection (FR-INSTALL-5).
+    if ($Uninstall) {
+      $removed = $false
+      if (Test-Path -LiteralPath $bin) {
+        Remove-Item -LiteralPath $bin -Force
+        Write-Output "removed binary: $bin"
+        $removed = $true
+      }
+      if (-not $NoPath) {
+        $state = Get-UserPathState
+        if ($state.Raw) {
+          $trimmed = Remove-UserPathEntry -Current $state.Raw -Dir $install
+          if ($trimmed -ne $state.Raw) {
+            $state.Raw = $trimmed
+            Set-UserPathState $state
+            Send-PathChange
+            Write-Output "removed PATH entry: $install"
+            $removed = $true
+          }
         }
       }
+      if (-not $removed) {
+        Write-Output "nothing to remove: no lca.exe at $bin and no installer PATH entry"
+      }
+      Complete-Install 0; return
     }
-    if (-not $removed) {
-      Write-Output "nothing to remove: no lca.exe at $bin and no installer PATH entry"
-    }
-    exit 0
-  }
 
-  $arch = $env:PROCESSOR_ARCHITECTURE
-  try {
-    $asset = Get-AssetName -Arch $arch
-  } catch {
-    Write-Err $_.Exception.Message
-    Write-Output 'On Linux or macOS, use the POSIX installer instead:'
-    Write-Output '  curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh'
-    exit 2
-  }
-
-  $baseRaw = $BaseUrl
-  if (-not $baseRaw) {
-    if ($env:LCA_BASE_URL) { $baseRaw = $env:LCA_BASE_URL }
-    else { $baseRaw = 'https://github.com/misaalanshori/lca/releases' }
-  }
-  $resolved = Resolve-ReleaseBase -Raw $baseRaw
-  $script:LcaLocalBase = [bool]$resolved.Local
-  $script:LcaBaseRoot = [string]$resolved.Root
-  $script:LcaVersion = ''
-  if ($Version) { $script:LcaVersion = $Version.TrimStart('v') }
-  $script:LcaUnstable = [bool]$Unstable
-  if ($script:LcaUnstable -and $script:LcaVersion) {
-    Write-Output 'error: -Unstable and -Version cannot be combined: the unstable line is latest-only'
-    exit 2
-  }
-
-  $temp = Join-Path ([IO.Path]::GetTempPath()) ('lca-install-' + [Guid]::NewGuid().ToString('N'))
-  New-Item -ItemType Directory -Force -Path $temp | Out-Null
-
-  $sumFile = Join-Path $temp 'artifacts.sha256'
-  $assetFile = Join-Path $temp $asset
-
-  try {
-    Get-RemoteFile -Source (Get-ReleaseItem -Name 'artifacts.sha256') -Destination $sumFile
-    Get-RemoteFile -Source (Get-ReleaseItem -Name $asset) -Destination $assetFile
-  } catch {
-    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Err $_.Exception.Message
-    exit 1
-  }
-
-  # artifacts.sha256: "<hash><two spaces><name>", case-insensitive compare.
-  $expected = $null
-  foreach ($line in (Get-Content -LiteralPath $sumFile)) {
-    $parts = ($line.Trim() -split '\s+')
-    if ($parts.Count -ge 2 -and ($parts[1].TrimStart('*') -ieq $asset)) {
-      $expected = $parts[0].ToLowerInvariant()
-      break
-    }
-  }
-  if (-not $expected) {
-    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Err "artifacts.sha256 has no entry for $asset"
-    exit 1
-  }
-  $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $assetFile).Hash.ToLowerInvariant()
-  if ($expected -ne $actual) {
-    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Output 'error: checksum mismatch'
-    Write-Output "  expected: $expected"
-    Write-Output "  actual:   $actual"
-    exit 1
-  }
-
-  $old = Read-Version $bin
-
-  New-Item -ItemType Directory -Force -Path $install | Out-Null
-  try {
-    Move-Item -LiteralPath $assetFile -Destination $bin -Force
-  } catch {
+    $arch = $env:PROCESSOR_ARCHITECTURE
     try {
-      Copy-Item -LiteralPath $assetFile -Destination $bin -Force
-      Remove-Item -LiteralPath $assetFile -Force -ErrorAction SilentlyContinue
+      $asset = Get-AssetName -Arch $arch
+    } catch {
+      Write-Err $_.Exception.Message
+      Write-Output 'On Linux or macOS, use the POSIX installer instead:'
+      Write-Output '  curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh'
+      Complete-Install 2; return
+    }
+
+    $baseRaw = $BaseUrl
+    if (-not $baseRaw) {
+      if ($env:LCA_BASE_URL) { $baseRaw = $env:LCA_BASE_URL }
+      else { $baseRaw = 'https://github.com/misaalanshori/lca/releases' }
+    }
+    $resolved = Resolve-ReleaseBase -Raw $baseRaw
+    $script:LcaLocalBase = [bool]$resolved.Local
+    $script:LcaBaseRoot = [string]$resolved.Root
+    $script:LcaVersion = ''
+    if ($Version) { $script:LcaVersion = $Version.TrimStart('v') }
+    $script:LcaUnstable = [bool]$Unstable
+    if ($script:LcaUnstable -and $script:LcaVersion) {
+      Write-Output 'error: -Unstable and -Version cannot be combined: the unstable line is latest-only'
+      Complete-Install 2; return
+    }
+
+    $temp = Join-Path ([IO.Path]::GetTempPath()) ('lca-install-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $temp | Out-Null
+
+    $sumFile = Join-Path $temp 'artifacts.sha256'
+    $assetFile = Join-Path $temp $asset
+
+    try {
+      Get-RemoteFile -Source (Get-ReleaseItem -Name 'artifacts.sha256') -Destination $sumFile
+      Get-RemoteFile -Source (Get-ReleaseItem -Name $asset) -Destination $assetFile
     } catch {
       Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-      Write-Err "cannot place the binary at $bin"
-      exit 1
+      Write-Err $_.Exception.Message
+      Complete-Install 1; return
     }
-  }
-  Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 
-  $new = Read-Version $bin
-  if (-not $new) { $new = 'unknown' }
+    # artifacts.sha256: "<hash><two spaces><name>", case-insensitive compare.
+    $expected = $null
+    foreach ($line in (Get-Content -LiteralPath $sumFile)) {
+      $parts = ($line.Trim() -split '\s+')
+      if ($parts.Count -ge 2 -and ($parts[1].TrimStart('*') -ieq $asset)) {
+        $expected = $parts[0].ToLowerInvariant()
+        break
+      }
+    }
+    if (-not $expected) {
+      Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+      Write-Err "artifacts.sha256 has no entry for $asset"
+      Complete-Install 1; return
+    }
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $assetFile).Hash.ToLowerInvariant()
+    if ($expected -ne $actual) {
+      Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+      Write-Output 'error: checksum mismatch'
+      Write-Output "  expected: $expected"
+      Write-Output "  actual:   $actual"
+      Complete-Install 1; return
+    }
 
-  Write-Output "installed lca $new to $bin"
-  if ($old) { Write-Output "lca $old -> $new" }
+    $old = Read-Version $bin
 
-  if ($NoPath) {
-    Write-Output "PATH: left alone (-NoPath). Open a new terminal, or add $install to PATH."
-    exit 0
+    New-Item -ItemType Directory -Force -Path $install | Out-Null
+    try {
+      Move-Item -LiteralPath $assetFile -Destination $bin -Force
+    } catch {
+      try {
+        Copy-Item -LiteralPath $assetFile -Destination $bin -Force
+        Remove-Item -LiteralPath $assetFile -Force -ErrorAction SilentlyContinue
+      } catch {
+        Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Err "cannot place the binary at $bin"
+        Complete-Install 1; return
+      }
+    }
+    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+
+    $new = Read-Version $bin
+    if (-not $new) { $new = 'unknown' }
+
+    Write-Output "installed lca $new to $bin"
+    if ($old) { Write-Output "lca $old -> $new" }
+
+    if ($NoPath) {
+      Write-Output "PATH: left alone (-NoPath). Open a new terminal, or add $install to PATH."
+      Complete-Install 0; return
+    }
+    if (Test-PathHas -Dir $install) {
+      Write-Output "PATH: $install is already on PATH; no change."
+      Complete-Install 0; return
+    }
+    $state = Get-UserPathState
+    $joined = Join-UserPath -Current $state.Raw -Dir $install
+    $state.Raw = $joined
+    if ($null -eq $state.Kind) { $state.Kind = [Microsoft.Win32.RegistryValueKind]::String }
+    Set-UserPathState $state
+    Send-PathChange
+    Write-Output "PATH: added $install to the user Path"
+    Write-Output 'Restart your shell (open a new terminal) to use lca.'
+    Complete-Install 0; return
+  } catch {
+    if ($temp) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
+    Write-Err $_.Exception.Message
+    Complete-Install 1; return
   }
-  if (Test-PathHas -Dir $install) {
-    Write-Output "PATH: $install is already on PATH; no change."
-    exit 0
-  }
-  $state = Get-UserPathState
-  $joined = Join-UserPath -Current $state.Raw -Dir $install
-  $state.Raw = $joined
-  if ($null -eq $state.Kind) { $state.Kind = [Microsoft.Win32.RegistryValueKind]::String }
-  Set-UserPathState $state
-  Send-PathChange
-  Write-Output "PATH: added $install to the user Path"
-  Write-Output 'Restart your shell (open a new terminal) to use lca.'
-  exit 0
-} catch {
-  if ($temp) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
-  Write-Err $_.Exception.Message
-  exit 1
 }
+
+Invoke-LcaInstall

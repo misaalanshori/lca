@@ -74,6 +74,9 @@ curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh |
 irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1 | iex
 ```
 
+The Windows one-liners return to your prompt when they finish — the exit
+code lands in `$LASTEXITCODE` rather than closing the session.
+
 **The unstable line** — the latest green commit, as a rolling pre-release
 (`X.Y.Z.b<sha7>`, may break; [ADR-0043](docs/adr/0043-unstable-release-line.md)):
 

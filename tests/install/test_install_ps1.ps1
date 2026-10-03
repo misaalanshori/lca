@@ -3,6 +3,7 @@
 # Verifies: FR-INSTALL-2 FR-INSTALL-3 FR-INSTALL-5 FR-INSTALL-6 FR-INSTALL-7
 # Verifies: FR-INSTALL-8 FR-INSTALL-9
 # Verifies: FR-INSTALL-10
+# Verifies: gh #26
 #
 # Hermetic: fixtures in a temp directory, -BaseUrl pointed at them (the
 # fetch seam, FR-INSTALL-6), -InstallDir under the same temp root, and
@@ -105,6 +106,19 @@ function Teardown {
 function Invoke-Installer([hashtable]$Params) {
   $script:LastOutput = (& $Installer @Params 2>&1 | Out-String)
   $script:LastCode = $LASTEXITCODE
+}
+
+# Single-quote a value for a command string that a *child* shell will parse.
+function Quote([string]$Value) {
+  return "'" + ($Value -replace "'", "''") + "'"
+}
+
+# The shell the rows below run their child in: the one this suite is itself
+# running under, so CI's 5.1 job exercises 5.1 and its pwsh job pwsh.
+function Get-ChildShell {
+  if ($PSVersionTable.PSEdition -eq 'Desktop') { return 'powershell' }
+  if (Get-Command pwsh -ErrorAction SilentlyContinue) { return 'pwsh' }
+  return (Get-Process -Id $PID).Path
 }
 
 # Dot-source for the function-level assertions: the main body is guarded
@@ -368,6 +382,86 @@ try {
     Assert ($code -eq 0) "one-liner shape: exit $code`n$output"
     Assert (Test-Path -LiteralPath (Join-Path $script:InstallDir 'lca.exe')) 'one-liner shape: nothing installed'
     Pass 'the scriptblock one-liner shape with a named parameter works'
+  } finally { Teardown }
+
+  #############################################################################
+  # gh #26: an in-memory invocation must complete the install and return to
+  # the caller's session, never end it. Each row drives a *child* shell, so a
+  # script that exits its host shows up as a missing sentinel in captured
+  # output instead of as the suite's own process dying (testing plan 14).
+  #############################################################################
+
+  # Verifies: gh #26 - `irm ... | iex` completes the install and returns
+  # control to the caller's session. No arguments, so the fixture base and
+  # install dir come from the environment variables the installer already
+  # honours; the ok run reaches the PATH write, so the runner's original user
+  # Path is saved and restored exactly as the round-trip row does it.
+  Setup
+  $gh26Saved = $null
+  if ($script:HasRegistry) { $gh26Saved = Get-UserPathState }
+  if (-not $script:HasRegistry) {
+    Skip 'gh26_iex_installs_and_returns_to_the_caller' 'no user registry on this host'
+    Teardown
+  } else {
+  try {
+    $gh26Cmd = '$env:LCA_BASE_URL = ' + (Quote $script:BaseUrl) +
+      '; $env:LCA_INSTALL_DIR = ' + (Quote $script:InstallDir) +
+      '; iex (Get-Content -LiteralPath ' + (Quote $Installer) + ' -Raw)' +
+      '; Write-Output ''GH26-ALIVE''' +
+      '; Write-Output (''GH26-CODE='' + $global:LASTEXITCODE)'
+    $gh26Output = & (Get-ChildShell) -NoProfile -Command $gh26Cmd 2>&1 | Out-String
+    $script:LastOutput = $gh26Output
+    Assert ($gh26Output -match 'GH26-ALIVE') 'gh26 iex: the installer did not return to the caller'
+    Assert ($gh26Output -match 'GH26-CODE=0') 'gh26 iex: expected GH26-CODE=0'
+    Assert (Test-Path -LiteralPath (Join-Path $script:InstallDir 'lca.exe')) 'gh26 iex: nothing installed'
+    Pass 'gh26_iex_installs_and_returns_to_the_caller'
+  } finally {
+    if ($null -eq $gh26Saved.Raw) {
+      try { [Environment]::SetEnvironmentVariable('Path', $null, 'User') } catch { }
+    } else {
+      Set-UserPathState $gh26Saved
+    }
+    Teardown
+  }
+  }
+
+  # Verifies: gh #26 - the same shape with a base the fetch cannot satisfy:
+  # the documented code is 1, and the caller still gets control back.
+  Setup
+  try {
+    $gh26Empty = Join-Path $script:Root 'empty-release'
+    New-Item -ItemType Directory -Force -Path $gh26Empty | Out-Null
+    $gh26Cmd = '$env:LCA_BASE_URL = ' + (Quote $gh26Empty) +
+      '; $env:LCA_INSTALL_DIR = ' + (Quote $script:InstallDir) +
+      '; iex (Get-Content -LiteralPath ' + (Quote $Installer) + ' -Raw)' +
+      '; Write-Output ''GH26-ALIVE''' +
+      '; Write-Output (''GH26-CODE='' + $global:LASTEXITCODE)'
+    $gh26Output = & (Get-ChildShell) -NoProfile -Command $gh26Cmd 2>&1 | Out-String
+    $script:LastOutput = $gh26Output
+    Assert ($gh26Output -match 'GH26-ALIVE') 'gh26 iex (failure): the installer did not return to the caller'
+    Assert ($gh26Output -match 'GH26-CODE=1') 'gh26 iex (failure): expected GH26-CODE=1'
+    Assert (-not (Test-Path -LiteralPath (Join-Path $script:InstallDir 'lca.exe'))) 'gh26 iex (failure): something was installed'
+    Pass 'gh26_iex_reports_code_1_and_still_returns'
+  } finally { Teardown }
+
+  # Verifies: gh #26 - the documented pinned-version one-liner, with a
+  # sentinel behind it: the named parameter must still bind on 5.1 (the
+  # wrapper must not eat param), and the scriptblock must return to the
+  # caller rather than end the session.
+  Setup
+  try {
+    $gh26Cmd = '& ([scriptblock]::Create((Get-Content -LiteralPath ' + (Quote $Installer) + ' -Raw)))' +
+      ' -BaseUrl ' + (Quote $script:BaseUrl) +
+      ' -InstallDir ' + (Quote $script:InstallDir) +
+      ' -NoPath' +
+      '; Write-Output ''GH26-ALIVE''' +
+      '; Write-Output (''GH26-CODE='' + $global:LASTEXITCODE)'
+    $gh26Output = & (Get-ChildShell) -NoProfile -Command $gh26Cmd 2>&1 | Out-String
+    $script:LastOutput = $gh26Output
+    Assert ($gh26Output -match 'GH26-ALIVE') 'gh26 scriptblock: the installer did not return to the caller'
+    Assert ($gh26Output -match 'GH26-CODE=0') 'gh26 scriptblock: expected GH26-CODE=0'
+    Assert (Test-Path -LiteralPath (Join-Path $script:InstallDir 'lca.exe')) 'gh26 scriptblock: nothing installed'
+    Pass 'gh26_scriptblock_binds_parameters_and_returns'
   } finally { Teardown }
 
   #############################################################################

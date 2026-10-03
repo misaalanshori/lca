@@ -153,6 +153,8 @@ Nothing outside the markers, and no file the installer did not create, is modifi
 | 1 | Fetch, checksum, hash-tool, or write failure. The previous binary is untouched. |
 | 2 | Unsupported platform/architecture, an unknown flag, or `--unstable` combined with `--version` (the rolling line has no pinned form). |
 
+**File or in-memory.** A script file exits with the code in the table, so `& .\install.ps1` and `pwsh -File install.ps1` leave it in `$LASTEXITCODE` for the caller. The `iex` and `scriptblock::Create` one-liners have no script file behind them, and `exit` there would end the session they were typed into rather than the installer; those two forms publish the same code as `$global:LASTEXITCODE` and return to your prompt instead (GH-26).
+
 ## Manual installation
 
 For anyone who would rather not pipe a script into a shell (this is a legitimate preference, not a paranoia):
