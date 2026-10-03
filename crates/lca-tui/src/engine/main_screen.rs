@@ -329,13 +329,60 @@ impl MainScreenRenderer {
             out.push_str(&format!("\x1b[{}A", -line_diff));
         }
 
+        let render_end = last_changed_idx.min(new_lines.len().saturating_sub(1));
+        // gh #18 (LCA-PROMPT-GH18FIX2): clear every row this frame rewrites
+        // before painting any of them. The shared baseline - pi's own diff
+        // loop, the `else` branch of `tui-alt-screen.ts`' redraw - paints
+        // `2K` + text per row as it walks down, which is correct the moment
+        // `?2026` is honored; a terminal or capture path that ignores
+        // synchronized output walks it live and can show a row of the
+        // outgoing frame beside a row of the incoming one - the report's
+        // stale notice. Same rows, same clears, same text, only the order.
+        //
+        // The clear pass walks with `\x1b[nB`/`\x1b[nA` rather than the
+        // content walk's `\r\n`: cursor-movement sequences never scroll,
+        // so the append/scroll contract below (FR-UI-24, gh #33) sees the
+        // same newlines it saw before. One rewritten row and pure appends
+        // keep their existing order - nothing to interleave with, and the
+        // pinned `\r\n\x1b[2K`/`\r\x1b[2K` shapes of the append and
+        // caret rows depend on it.
+        // Only rows the pane can actually show: a clear pass may not walk
+        // past the viewport with `\x1b[nB`, because CUD clamps at the last
+        // screen row while the matching `\x1b[nA` does not - the cursor
+        // would come back above the range and the content walk would paint
+        // off its rows. Rows below the viewport are the trailing block's
+        // to clear, exactly as before.
+        let visible_last = viewport_top.saturating_add((height as usize).saturating_sub(1));
+        // Exactly the rows this frame touches: `first..=last_changed`
+        // covers both the rewritten rows and the vacated tail (when the
+        // frame shrinks, `last_changed` runs past the new end). Ending at
+        // `render_end.max(previous.len() - 1)` instead would clear rows
+        // beyond `last_changed` that the two frames agree on - unchanged
+        // content erased and never repainted, which is how this row's
+        // status line vanished in the first attempt.
+        let clear_end = last_changed_idx;
+        let clear_last = clear_end.min(visible_last);
+        let rewrite_rows = clear_last.saturating_sub(first_changed_idx) + 1;
+        let clear_first = !append_start && rewrite_rows >= 2;
+
         if append_start {
             out.push_str("\r\n");
         } else {
             out.push('\r');
         }
 
-        let render_end = last_changed_idx.min(new_lines.len().saturating_sub(1));
+        if clear_first {
+            for offset in 0..rewrite_rows {
+                if offset > 0 {
+                    out.push_str("\x1b[1B");
+                }
+                out.push_str("\x1b[2K");
+            }
+            if rewrite_rows > 1 {
+                out.push_str(&format!("\x1b[{}A", rewrite_rows - 1));
+            }
+        }
+
         for (i, line) in new_lines
             .iter()
             .enumerate()
@@ -345,7 +392,9 @@ impl MainScreenRenderer {
             if i > first_changed_idx {
                 out.push_str("\r\n");
             }
-            out.push_str("\x1b[2K"); // Clear current line
+            if !clear_first {
+                out.push_str("\x1b[2K"); // Clear current line
+            }
             out.push_str(line);
         }
         out.push_str(SEGMENT_RESET);
@@ -359,10 +408,20 @@ impl MainScreenRenderer {
                 final_cursor_row = new_lines.len() - 1;
             }
             let extra_lines = self.previous_lines.len() - new_lines.len();
-            for _ in 0..extra_lines {
+            // Rows the clear pass already emptied are not cleared twice;
+            // the ones below the viewport keep this walk, which is the only
+            // thing that can reach them. The cursor's net move is zero
+            // either way, so the bookkeeping below is unchanged.
+            let covered = if clear_first {
+                clear_last.saturating_sub(render_end)
+            } else {
+                0
+            };
+            let moves = extra_lines.saturating_sub(covered);
+            for _ in 0..moves {
                 out.push_str("\r\n\x1b[2K");
             }
-            out.push_str(&format!("\x1b[{}A", extra_lines));
+            out.push_str(&format!("\x1b[{}A", moves));
         }
 
         out.push_str("\x1b[?2026l"); // end synchronized output

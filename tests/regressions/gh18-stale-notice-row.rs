@@ -3,8 +3,7 @@
 //! changes in the same step, the pane briefly shows the old notice line
 //! above the new one."
 //!
-//! # Status: all three leads worked - characterized negative, contract
-//! sharpened, mechanism still open
+//! # Status: fixed - the batch is ordered, both renderers (gh #18 fix-up)
 //!
 //! The first attempt asserted the **final screen state** after a state
 //! transition, which is why it stayed clean: "briefly shows" is a
@@ -15,22 +14,26 @@
 //! **Lead 1 - the raw write stream.** [`Screen::feed_with`] replays the
 //! bytes token by token and inspects the screen after each one;
 //! [`ChunkedTerminal`] keeps every renderer `write` as its own chunk so the
-//! two levels can be told apart. Result: a double-notice state *does* exist
-//! inside frame B's write - the new notice's row is painted before the old
-//! notice's continuation rows are - but that write is a single
-//! synchronized-output batch (`\x1b[?2026h` ... `\x1b[?2026l`), so a
-//! terminal that honors `?2026` never paints the intermediate. At a
-//! **write boundary** - what a sync-capable terminal actually shows - the
-//! state never exists, in any sequence, in either renderer.
+//! two levels can be told apart. Before the fix it found the artifact:
+//! frame B painted the new notice's row before the old notice's
+//! continuation rows were cleared, so a double-notice state existed inside
+//! that one write. A terminal that honors `?2026` never painted it; one
+//! that ignores or flattens synchronized output did - which is what the
+//! original report saw.
 //!
-//! That shape is not a gap in the port: pi's own alt-screen diff loop
-//! emits exactly `ESC[{row};1H` + `ESC[2K` + line per changed row, inside
-//! its own synchronized block (`packages/tui/src/tui-alt-screen.ts`, the
-//! `else` branch of its redraw), so pi has the same intra-batch states.
-//! The real-pane receipt (`tmux pipe-pane`, testing-plan §14) agrees: over
-//! `/help` -> `/login` -> Esc, 14051 raw bytes, **14/14 batches
-//! sync-delimited**, and the old notice's text is never written again
-//! after the new notice's (offsets 4072 then 13755, no later hit).
+//! The order is now the fix, and it deliberately diverges from pi: pi's
+//! diff loop (`packages/tui/src/tui-alt-screen.ts`, the `else` branch of
+//! its redraw) emits `ESC[{row};1H` + `ESC[2K` + line per changed row in
+//! one downward pass and relies on `?2026` to hide the intermediate. Both
+//! LCA renderers now clear the rows a frame touches *before* painting any
+//! of them, with the same rows, clears and text and only the order
+//! changed - so no terminal, sync-honoring or not, shows the old notice
+//! beside the new one. The rows below cite that baseline and this brief.
+//!
+//! The real-pane receipt (`tmux pipe-pane`, testing-plan §14) still
+//! describes the shape: over `/help` -> `/login` -> Esc, 14051 raw bytes,
+//! 14/14 batches sync-delimited, and the old notice's text is never
+//! written again after the new notice's (offsets 4072 then 13755).
 //!
 //! **Lead 2 - two renders instead of one.** Refuted at the handler:
 //! `Chat::handle_login_picker` does `self.world.picker.take()` and assigns
@@ -51,16 +54,14 @@
 //! is *not* synchronized. They are green today, and green here means "the
 //! invariant holds on this build", never "the bug was fixed".
 //!
-//! # What is left open (for the owner)
+//! # The bar these rows now hold
 //!
-//! The only remaining way to *see* the artifact is a terminal or capture
-//! path that ignores `\x1b[?2026`: there every multi-row repaint paints
-//! incrementally and any frame that rewrites several rows at once flickers
-//! through its intermediate states. Whether that is what the original
-//! report observed is not decidable from this repository, and fixing it
-//! would mean reordering or clearing the whole changed range before
-//! writing - a renderer change the steering note explicitly rules out
-//! without evidence. Recorded, not forced.
+//! Replaying a batch byte by byte, the state "old notice text visible AND
+//! new notice text visible" never exists - not at a write boundary and not
+//! mid-batch - through both renderers, for the reported pair, the
+//! split-step triple, a tall pane, and a resize interleaved with the step.
+//! Before the fix the row fails with `a write painted both notices
+//! mid-batch (writes [2] of 3)`; after it, it passes.
 //!
 //! Verifies: NFR-24, GitHub issue #18.
 use std::sync::{Arc, Mutex};
@@ -430,15 +431,12 @@ fn drive_main(steps: &[Step]) -> Vec<String> {
 /// - `visible`: a write **boundary** at which both notices are on screen -
 ///   what any terminal shows once `?2026` releases the batch. This is the
 ///   instrument the steering note asks for first.
-/// - `uncovered`: a double-notice state *inside* a write that is **not**
-///   wrapped in synchronized output - a batch a terminal would paint
-///   incrementally, so the flicker would be visible on any of them.
-///
-/// A double-notice state inside a sync-wrapped write is expected: it is
-/// what incremental row painting is, and pi's own diff loop emits the same
-/// `CUP` + `EL` + text per row inside its own sync block
-/// (`tui-alt-screen.ts`, the `else` branch of its redraw), so that shape is
-/// shared with the design source rather than a gap in the port.
+/// - `uncovered`: a double-notice state *inside* a write - what a terminal
+///   that ignores or flattens `?2026` paints row by row, and what the
+///   original report saw. Both lists must be empty: that is the bar the
+///   gh #18 fix-up sets. (The baseline - pi's diff loop, the `else` branch
+///   of `tui-alt-screen.ts` - shares the intra-write states and relies on
+///   synchronized output to hide them; LCA now orders the batch instead.)
 ///
 /// Returns `(visible, uncovered, inspected_tokens)`.
 fn double_notice_states(
@@ -457,7 +455,6 @@ fn double_notice_states(
     let mut uncovered = Vec::new();
     let mut checked = 0usize;
     for (index, chunk) in chunks.iter().enumerate() {
-        let sync_wrapped = chunk.contains("\x1b[?2026h") && chunk.ends_with("\x1b[?2026l");
         let mut inside = false;
         screen.feed_with(chunk, |state| {
             checked += 1;
@@ -468,7 +465,7 @@ fn double_notice_states(
         if both(&screen) {
             visible.push(index);
         }
-        if inside && !sync_wrapped {
+        if inside {
             uncovered.push(index);
         }
     }
@@ -555,8 +552,9 @@ fn no_transient_double_notice_in_the_write_stream() {
             );
             assert!(
                 uncovered.is_empty(),
-                "{label} ({mode}): an unsynchronized write painted both notices \
-                 (writes {uncovered:?})"
+                "{label} ({mode}): a write painted both notices mid-batch \
+                 (writes {uncovered:?} of {})",
+                chunks.len()
             );
             assert!(checked > 0, "{label} ({mode}): the stream was replayed");
         }
@@ -588,7 +586,7 @@ fn a_resize_interleaved_with_the_close_leaves_no_stale_row() {
         );
         assert!(
             uncovered.is_empty(),
-            "{mode}: resize interleaving painted both notices in an unsynchronized write \
+            "{mode}: resize interleaving painted both notices mid-batch \
              ({uncovered:?}) after {checked} tokens"
         );
         let mut final_screen = Screen::new(60, 12);

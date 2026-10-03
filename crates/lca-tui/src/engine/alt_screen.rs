@@ -193,13 +193,40 @@ impl AltScreenRenderer {
         if resize {
             out.push_str("\x1b[2J\x1b[H");
         }
+        let mut touched: Vec<usize> = Vec::new();
         for (row, line) in lines.iter().enumerate() {
             let caret_row = cursor.is_some_and(|(r, _, _)| r as usize == row);
             if !resize && self.previous.get(row) == Some(line) && !(cursor_moved && caret_row) {
                 continue;
             }
-            out.push_str(&format!("\x1b[{};1H\x1b[2K", row + 1));
-            out.push_str(line);
+            touched.push(row);
+        }
+        // gh #18 (LCA-PROMPT-GH18FIX2): clear every row this frame rewrites
+        // before painting any of them. The shared baseline - pi's own diff
+        // loop, the `else` branch of `tui-alt-screen.ts`' redraw - emits
+        // `CUP` + `2K` + text per changed row, which is correct the moment
+        // `?2026` is honored; a terminal or capture path that ignores
+        // synchronized output paints it row by row instead and can show a
+        // row of the outgoing frame beside a row of the incoming one - the
+        // report's stale notice. Same rows, same clears, same text, only
+        // the order changes; no row outside `touched` is ever touched.
+        //
+        // Two rows or more, and not a resize (which cleared the screen
+        // above): with a single row there is nothing to interleave with,
+        // and the caret-only repaint rows pin that one-row shape.
+        if touched.len() >= 2 && !resize {
+            for &row in &touched {
+                out.push_str(&format!("\x1b[{};1H\x1b[2K", row + 1));
+            }
+            for &row in &touched {
+                out.push_str(&format!("\x1b[{};1H", row + 1));
+                out.push_str(&lines[row]);
+            }
+        } else {
+            for &row in &touched {
+                out.push_str(&format!("\x1b[{};1H\x1b[2K", row + 1));
+                out.push_str(&lines[row]);
+            }
         }
         if let Some((row, col, painted)) = cursor {
             // Position at the marker either way (IME candidate windows read
