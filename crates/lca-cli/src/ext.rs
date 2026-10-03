@@ -176,37 +176,86 @@ fn confirm(prompt: &str) -> bool {
 ///
 /// The platform's own line discipline does the echo and requires Enter, so
 /// a keystroke is only an answer once its line is finished: a line with no
-/// `\n` means end of input, not agreement. Trimmed, case-insensitive
-/// `y`/`yes` confirms; `n`/`no` and the empty line decline; end of input
-/// declines (an unattended run never writes without consent); anything
-/// else is asked again.
+/// terminator means end of input, not agreement. Both `\n` and `\r` end a
+/// line - a console a previous process left in raw mode has no line
+/// discipline and delivers Enter as `\r` alone, so waiting for `\n` would
+/// hang the one prompt that must never hang (in that mode Ctrl+C is a
+/// literal byte, which leaves no way out). `\r\n` is one terminator, not
+/// two. Trimmed, case-insensitive `y`/`yes` confirms; `n`/`no` and the
+/// empty line decline; end of input declines (an unattended run never
+/// writes without consent); anything else is asked again.
 pub fn confirm_with(
     prompt: &str,
     reader: &mut impl std::io::BufRead,
     writer: &mut impl std::io::Write,
 ) -> bool {
+    // The `\n` half of a `\r\n` pair, dropped when the next line starts.
+    // It is carried across lines instead of being checked at the end of
+    // the one before it: checking needs a peek, and a peek on an idle
+    // terminal is a blocking wait for a keystroke nobody is going to type
+    // - the hang this whole fix exists to prevent.
+    let mut drop_lf = false;
     loop {
         let _ = write!(writer, "{prompt}");
         let _ = writer.flush();
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            // End of input, or a read that failed: nothing was submitted,
-            // so nothing is granted. An unattended run never writes.
-            Ok(0) | Err(_) => return false,
-            // `read_line` also stops at end of input, so a line without its
-            // terminator is a half-answer nobody pressed Enter on. Consent
-            // is a whole line - this is the rule that makes `y` alone
-            // decline, in a terminal and in a pipe alike.
-            Ok(_) if !line.ends_with('\n') => return false,
-            Ok(_) => match line.trim().to_ascii_lowercase().as_str() {
-                "y" | "yes" => return true,
-                "n" | "no" | "" => return false,
-                // Anything else is not an answer: ask again, the way the
-                // old key loop ignored a key it did not know.
-                _ => {}
-            },
+        // No line came back: input ended - or failed - before any
+        // terminator, so half an answer was submitted and nothing is
+        // granted. An unattended run never writes without consent.
+        let Some(line) = read_answer_line(reader, &mut drop_lf) else {
+            return false;
+        };
+        match String::from_utf8_lossy(&line)
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "y" | "yes" => return true,
+            "n" | "no" | "" => return false,
+            // Anything else is not an answer: ask again, the way the old
+            // key loop ignored a key it did not know.
+            _ => {}
         }
     }
+}
+
+/// One answer line: the bytes before its terminator, consumed with it.
+/// `None` when the input ends without one - that is a half-line nobody
+/// submitted, not an answer.
+///
+/// Enter arrives as a bare `\r` on a console left in raw mode (no line
+/// discipline to translate it) and as `\r\n` from a canonical one, so both
+/// end a line, and the pair is one terminator. The `\n` half is consumed
+/// here - on the line *after* the `\r` that announced it, via `drop_lf` -
+/// because reading ahead for it at this end would block.
+fn read_answer_line(reader: &mut impl std::io::BufRead, drop_lf: &mut bool) -> Option<Vec<u8>> {
+    let mut line: Vec<u8> = Vec::new();
+    loop {
+        let byte = next_byte(reader)?;
+        if *drop_lf {
+            *drop_lf = false;
+            if byte == b'\n' {
+                continue;
+            }
+        }
+        match byte {
+            b'\n' => return Some(line),
+            b'\r' => {
+                *drop_lf = true;
+                return Some(line);
+            }
+            byte => line.push(byte),
+        }
+    }
+}
+
+/// The next byte, or `None` once the input is exhausted. A read that
+/// fails ends the line the same way: there is no answer to read, and the
+/// caller declines.
+fn next_byte(reader: &mut impl std::io::BufRead) -> Option<u8> {
+    let buffer = reader.fill_buf().ok()?;
+    let &byte = buffer.first()?;
+    reader.consume(1);
+    Some(byte)
 }
 
 fn short_digest(digest: &str) -> &str {

@@ -16,6 +16,10 @@
 //! and the empty line decline; end of input declines (the pre-existing
 //! "nothing on stdin declines" rule); anything else is asked again.
 //!
+//! A line is ended by `\n` or `\r`: a console a previous process left in
+//! raw mode has no line discipline, and its Enter arrives as `\r` alone -
+//! waiting for `\n` there would hang the one prompt that must not hang.
+//!
 //! Both callers (`ext install`'s grant consent and `ext update`'s
 //! capability widening) pass through the same `confirm`, so one seam
 //! covers them - asserted once, deliberately.
@@ -79,4 +83,80 @@ fn an_unrecognized_answer_is_asked_again_before_the_next_one_counts() {
         2,
         "the prompt repeats once per line read: {out:?}"
     );
+}
+
+// Verifies: gh #24 fix-up - a console a crashed program left in raw mode
+// has no line discipline, so Enter arrives as a bare `\r` and `read_line`
+// would wait for a `\n` that never comes, with Ctrl+C delivered as a
+// literal byte and no way out. `\r` ends a line too.
+#[test]
+fn a_raw_console_enter_confirms() {
+    let (answer, out) = ask("y\r");
+    assert!(answer, "{out:?}");
+}
+
+// Verifies: gh #24 fix-up - the answer is read without ever looking past
+// the terminator that ended it. A peek after `\r` calls `fill_buf` on an
+// empty buffer, which on a real console is a `read` blocking forever for
+// a keystroke that never comes - the prompt hangs, and raw mode has
+// already swallowed Ctrl+C, so there is no way out. Found by driving the
+// prompt in a pane under `stty raw`; no slice-backed reader can show it.
+#[test]
+fn a_cr_terminated_answer_is_never_read_past() {
+    let mut input = CrLine { data: b"y\r" };
+    let mut out: Vec<u8> = Vec::new();
+    assert!(
+        confirm_with(PROMPT, &mut input, &mut out),
+        "the raw console's Enter: {:?}",
+        String::from_utf8_lossy(&out)
+    );
+}
+
+/// A reader carrying one CR-terminated line that refuses to be probed past
+/// its last byte: `fill_buf` on an exhausted buffer is a read-ahead, and a
+/// slice-backed reader has no way to say so.
+struct CrLine {
+    data: &'static [u8],
+}
+
+impl std::io::Read for CrLine {
+    fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+        // `fill_buf` below is the only read this seam should ever reach;
+        // arriving here means the answer was not read line-wise.
+        Ok(0)
+    }
+}
+
+impl std::io::BufRead for CrLine {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        assert!(
+            !self.data.is_empty(),
+            "read past the line's terminator: on a terminal this blocks forever"
+        );
+        Ok(self.data)
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.data = &self.data[amount.min(self.data.len())..];
+    }
+}
+
+// Verifies: gh #24 fix-up - a Windows canonical console sends Enter as
+// `\r\n`, which is ONE terminator: the pair answers once and the prompt
+// is printed once.
+#[test]
+fn a_crlf_enter_is_one_terminator_and_answers_once() {
+    let (answer, out) = ask("y\r\n");
+    assert!(answer, "{out:?}");
+    assert_eq!(out.matches(PROMPT).count(), 1, "{out:?}");
+}
+
+// Verifies: gh #24 fix-up - the same pairing behind a line that re-prompts:
+// an unpaired `\n` would be read as a second, empty line and the exchange
+// would end in a decline instead of the answer that follows it.
+#[test]
+fn a_crlf_pair_never_reads_as_a_second_empty_line() {
+    let (answer, out) = ask("maybe\r\ny\n");
+    assert!(answer, "{out:?}");
+    assert_eq!(out.matches(PROMPT).count(), 2, "{out:?}");
 }
