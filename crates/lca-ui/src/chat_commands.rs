@@ -144,15 +144,15 @@ impl Chat {
             _ => {}
         }
 
-        if (name == "login" || name.ends_with(".login"))
+        // gh #25: only the bare `/login` belongs to the options seam. A
+        // namespaced `<provider>.login` is that provider's identity `login`
+        // export (FR-PROV-10), which the host's command dispatch below owns -
+        // intercepting it here sent every provider through the preset picker,
+        // including the ones that have no presets to show.
+        if name == "login"
             && let Some(login) = self.world.options.login.clone()
         {
-            let target = if name.ends_with(".login") {
-                name.trim_end_matches(".login")
-            } else {
-                argument.as_str()
-            };
-            let next = login(target);
+            let next = login(argument.as_str());
             self.apply_login_next(next);
             return Action::Continue;
         }

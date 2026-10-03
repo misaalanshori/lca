@@ -654,15 +654,21 @@ fn the_model_picker_shows_its_position_and_size() {
     assert!(viewport.contains("(1/2)"), "{viewport}");
 }
 
-// Verifies: issue #1 - the namespaced `<ext>.login` goes through the
-// host's login flow (the picker seam) and never reaches the raw command
-// dispatch whose "no API key is configured" answer the owner hit.
+// Verifies: issue #1, kept honest by gh #25 - the namespaced `<ext>.login`
+// reaches the host's command dispatch, which runs the provider's identity
+// `login` export (FR-PROV-10) instead of answering with the raw "no API key
+// is configured" text issue #1 hit. The preset-picker seam belongs to
+// `/login` alone: issue #1's fix intercepted every `*.login` here, and that
+// interception is what issue #25 moved back to the bare command.
 #[test]
-fn the_namespaced_login_routes_to_the_host_login_flow() {
+fn the_namespaced_login_reaches_the_host_command_dispatch() {
     let targets: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
     let invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let mut options = options();
+    // What the real host registers: the auto-namespaced identity export is
+    // one of the extension's own commands (FR-PROV-10).
+    options.slash_commands = vec!["/login".to_string(), "/antigravity.login".to_string()];
     let seen = targets.clone();
     options.login = Some(Arc::new(move |target: &str| {
         seen.lock()
@@ -673,7 +679,7 @@ fn the_namespaced_login_routes_to_the_host_login_flow() {
     let hit = invoked.clone();
     options.invoke_command = Arc::new(move |_, _| {
         hit.store(true, std::sync::atomic::Ordering::SeqCst);
-        CommandEffect::None
+        CommandEffect::ShowWidget("identity flow started".to_string())
     });
 
     let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
@@ -681,14 +687,14 @@ fn the_namespaced_login_routes_to_the_host_login_flow() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
-    assert_eq!(
-        targets.lock().unwrap_or_else(|p| p.into_inner()).clone(),
-        vec!["antigravity".to_string()],
-        "the hook receives the provider the name carries"
+    assert!(
+        invoked.load(std::sync::atomic::Ordering::SeqCst),
+        "the host's dispatch owns the identity export"
     );
     assert!(
-        !invoked.load(std::sync::atomic::Ordering::SeqCst),
-        "the raw command dispatch never runs"
+        targets.lock().unwrap_or_else(|p| p.into_inner()).is_empty(),
+        "the preset-picker seam never sees a namespaced login: {:?}",
+        targets.lock().unwrap_or_else(|p| p.into_inner())
     );
-    assert_eq!(chat.world.notice.as_deref(), Some("picker opened"));
+    assert_eq!(chat.world.notice.as_deref(), Some("identity flow started"));
 }

@@ -15,6 +15,20 @@ const WAIT_LABEL: &str = "waiting for browser sign-in… (esc cancels)";
 /// "paste the callback URL" fallback (R4(c)).
 const MANUAL_AFTER: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// Where `/login <target>` goes once its options are gathered (gh #25,
+/// ADR-0033): a provider whose login is its own flow offers no picker
+/// presets, so it gets its identity `login` export - the same handler
+/// `/<provider>.login` reaches - rather than a picker that would come up
+/// empty but for the host's universal `Custom endpoint…` row, which is
+/// attributed to `openai-compatible` and is not the target the user named.
+///
+/// `owned_by_target` counts the gathered options the named provider owns:
+/// [`Ui::gather`] also carries the user's `openai-compatible` preset
+/// overrides, and those are never that provider's.
+fn identity_instead_of_picker(argument: &str, names: &[String], owned_by_target: usize) -> bool {
+    !argument.is_empty() && names.iter().any(|name| name == argument) && owned_by_target == 0
+}
+
 impl Ui {
     /// Every picker choice: each enabled provider extension's own options,
     /// plus the user's named custom endpoints (D1's override layer). The
@@ -441,6 +455,23 @@ impl Ui {
                     names.join(", ")
                 ));
             }
+            // gh #25 / ADR-0033: the zero-options route, closed at the
+            // target-resolution site so no provider can reach an empty
+            // picker. `Message` is what `/<provider>.login` answers with,
+            // so both routes read the same line and `poll_login` opens the
+            // waiting modal from here.
+            if identity_instead_of_picker(
+                argument,
+                &names,
+                options
+                    .iter()
+                    .filter(|(owner, _)| owner.as_str() == argument)
+                    .count(),
+            ) && let Some(handle) = ui.registry.provider(argument).cloned()
+            {
+                ui.spawn_identity_login(handle);
+                return LoginNext::Message(WAIT_LABEL.to_string());
+            }
             let mut flow = ui.flow.lock().unwrap_or_else(|p| p.into_inner());
             flow.offer(options, &ui.provider_name)
         })
@@ -586,5 +617,75 @@ impl Ui {
         let mut cell = self.settings_cell.lock().unwrap_or_else(|p| p.into_inner());
         cell.clear();
         cell.extend(settings);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::identity_instead_of_picker;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    // Verifies: gh #25 (the fallback-leak row) - `/login` scoped to a
+    // provider with no picker options runs its identity `login` export.
+    // Offering the picker instead opens it empty but for the host's
+    // universal `Custom endpoint…`, attributed to openai-compatible.
+    #[test]
+    fn login_scoped_to_a_provider_with_no_options_asks_for_its_identity_flow() {
+        assert!(identity_instead_of_picker(
+            "antigravity",
+            &names(&["antigravity", "openai-compatible"]),
+            0
+        ));
+    }
+
+    // Verifies: gh #25 (unchanged row) - a provider that does offer presets
+    // keeps the scoped picker, `Custom endpoint…` row and all.
+    #[test]
+    fn login_scoped_to_a_provider_with_options_still_offers_the_picker() {
+        assert!(!identity_instead_of_picker(
+            "openai-compatible",
+            &names(&["antigravity", "openai-compatible"]),
+            19
+        ));
+    }
+
+    // Verifies: gh #25 (unchanged row) - the bare `/login` always offers
+    // the picker, so the interface always has a way into its settings
+    // surface (FR-PROV-9's zero-provider escape hatch).
+    #[test]
+    fn a_bare_login_always_offers_the_picker() {
+        assert!(!identity_instead_of_picker("", &names(&["antigravity"]), 0));
+    }
+
+    // Verifies: gh #25 (unchanged row) - a name that is not a provider is
+    // left to the caller's "no provider or login option named" message,
+    // never routed into an identity flow.
+    #[test]
+    fn a_name_that_is_not_a_provider_is_left_to_the_unknown_message() {
+        assert!(!identity_instead_of_picker(
+            "bogus",
+            &names(&["antigravity"]),
+            0
+        ));
+    }
+
+    // Verifies: gh #25 - the preset overrides `gather` appends belong to
+    // openai-compatible, so they never make another provider look like it
+    // has options of its own.
+    #[test]
+    fn another_providers_preset_overrides_do_not_count_as_the_targets_options() {
+        assert!(identity_instead_of_picker(
+            "antigravity",
+            &names(&["antigravity"]),
+            0
+        ));
+        assert!(!identity_instead_of_picker(
+            "openai-compatible",
+            &names(&["antigravity"]),
+            2
+        ));
     }
 }

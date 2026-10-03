@@ -134,6 +134,11 @@ mod verbatim_path_not_displayed;
 // primitive fixes it.
 #[path = "38-paste-into-modal-fields.rs"]
 mod paste_into_modal_fields;
+// Released 0.5.3 defect (GitHub issue #25): `/antigravity.login` opened the
+// preset picker instead of the provider's identity flow - the interface
+// intercepted every `*.login` before the host's handler could see it.
+#[path = "gh25-namespaced-login-routes-to-identity-flow.rs"]
+mod gh25_namespaced_login_routes_to_identity_flow;
 // Released 0.5.3 defect (GitHub issue #33): exit left the cursor at the
 // terminal's restored position instead of on a fresh line below the
 // transcript, so the returning shell prompt overwrote LCA's own content.
