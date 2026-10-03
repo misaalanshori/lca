@@ -615,6 +615,7 @@ fn load_registry(
         cwd,
         config.extensions_log_limit_bytes() as usize,
         shared_prompt.clone(),
+        grants,
     );
     let stats_store = store.clone();
     let stats_session = session_cell.clone();

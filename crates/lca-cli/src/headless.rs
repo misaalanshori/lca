@@ -336,6 +336,7 @@ fn wire(
         cwd,
         config.extensions_log_limit_bytes() as usize,
         shared_prompt.clone(),
+        grants,
     );
     for handle in lca_ext_native::default_native_extensions(Arc::new(move || {
         crate::tui::session_stats(&stats_store, &stats_session)

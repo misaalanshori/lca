@@ -93,6 +93,27 @@ fn host_roots(cwd: &std::path::Path) -> lca_permissions::ScopeRoots {
     }
 }
 
+/// The environment the extensions in [`install_tree`] run against.
+///
+/// One seam, one store: `grants` is the session's own
+/// `Arc<Mutex<GrantStore>>`, passed through untouched, so exactly one
+/// instance manages `grants.json` in a running process (ADR-0022, gh #29
+/// QA-007). This function used to re-open the file here, which made a
+/// second writer whose saves clobbered the prompt's.
+fn installed_environment(
+    cwd: &std::path::Path,
+    prompt: lca_permissions::SharedPrompt,
+    grants: &std::sync::Arc<std::sync::Mutex<lca_permissions::GrantStore>>,
+) -> std::sync::Arc<lca_ext_host::HostEnvironment> {
+    std::sync::Arc::new(lca_ext_host::HostEnvironment {
+        roots: host_roots(cwd),
+        prompt: std::sync::Arc::new(std::sync::Mutex::new(prompt)),
+        grant_store: grants.clone(),
+        project: cwd.to_path_buf(),
+        proposals: None,
+    })
+}
+
 /// Register every installed extension ahead of the bundled ones: a
 /// name present in both resolves to the installed copy, because the
 /// duplicate-identity rule disables the later registration
@@ -104,6 +125,7 @@ pub fn load_installed(
     cwd: &std::path::Path,
     log_limit_bytes: usize,
     prompt: lca_permissions::SharedPrompt,
+    grants: &std::sync::Arc<std::sync::Mutex<lca_permissions::GrantStore>>,
 ) {
     let tree = install_tree();
     let entries = match tree.list() {
@@ -116,20 +138,7 @@ pub fn load_installed(
     if entries.is_empty() {
         return;
     }
-    let store = match lca_permissions::GrantStore::open(&crate::data_dir().join("grants.json")) {
-        Ok(store) => store,
-        Err(err) => {
-            eprintln!("warning: grant store unreadable, skipping installed extensions: {err}");
-            return;
-        }
-    };
-    let env = std::sync::Arc::new(lca_ext_host::HostEnvironment {
-        roots: host_roots(cwd),
-        prompt: std::sync::Arc::new(std::sync::Mutex::new(prompt)),
-        grant_store: std::sync::Arc::new(std::sync::Mutex::new(store)),
-        project: cwd.to_path_buf(),
-        proposals: None,
-    });
+    let env = installed_environment(cwd, prompt, grants);
     let mut host = lca_ext_host::ExtHost::new(
         lca_ext_host::ExtensionLimits {
             memory_bytes: 64 * 1024 * 1024,
@@ -793,7 +802,7 @@ fn list(tree: &InstallTree) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::parse_manifest_strict;
-    use super::{clear_state_in, state_bytes};
+    use super::{clear_state_in, installed_environment, state_bytes};
 
     const VALID: &str = r#"name = "word-count"
 version = "1.0.0"
@@ -931,6 +940,46 @@ redirect_path = "/callback"
         .expect("read installed skill");
         assert!(installed.contains("v2"), "the update applied: {installed}");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: gh #29 (QA-007) - exactly one GrantStore instance manages
+    // `grants.json` in a running process (ADR-0022): the environment
+    // installed extensions run against carries the session's own handle, so
+    // a grant written through the prompt is visible to every loaded
+    // extension immediately, with no reload from disk. Red against the
+    // extracted-but-not-yet-fixed builder, which opened the file itself.
+    #[test]
+    fn a_grant_added_via_the_prompt_is_visible_to_loaded_extensions_without_a_reload() {
+        // No environment sandbox: this builder writes no file of its own,
+        // and a test that moves `TMPDIR` under a sibling's scratch path
+        // deletes that sibling when it drops.
+        let root = lca_testkit::scratch_path("gh29-grant-handle");
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        // The session's handle: what the prompt writes goes through this Arc.
+        let grants = std::sync::Arc::new(std::sync::Mutex::new(
+            lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
+        ));
+        let env =
+            installed_environment(&project, lca_permissions::SharedPrompt::default(), &grants);
+
+        // A grant attached mid-session, exactly as the prompt attaches it
+        // (persisted through the shared handle).
+        grants
+            .lock()
+            .unwrap()
+            .approve_net_pattern(&project, "env-only.example")
+            .expect("grant");
+        assert!(
+            std::sync::Arc::ptr_eq(&env.grant_store, &grants),
+            "the extensions' store is the session's own handle, not a second one"
+        );
+        let seen = env.grant_store.lock().unwrap().net_patterns(&project);
+        assert!(
+            seen.iter().any(|pattern| pattern == "env-only.example"),
+            "a grant added via the prompt is visible to loaded extensions without \
+             reloading from disk: {seen:?}"
+        );
     }
 
     // Verifies: ADR-0030 (state is cleared per namespace and only that one).
