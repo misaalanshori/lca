@@ -149,6 +149,7 @@ pub fn run(
     resume: Option<&str>,
     yolo: bool,
     model: Option<&str>,
+    allow_host: &[String],
 ) -> anyhow::Result<i32> {
     // The interface needs a terminal for raw mode and key events; without
     // one the input read fails with an opaque error. Say what to do instead
@@ -161,7 +162,7 @@ pub fn run(
         return Ok(crate::exit::USAGE);
     }
     let _temp_guard = crate::SessionTempGuard;
-    let ui = Arc::new(Ui::new(cwd, resume, yolo, model)?);
+    let ui = Arc::new(Ui::new(cwd, resume, yolo, model, allow_host)?);
     crate::init_session_temp(&ui.session_id());
     let options = ui.options();
     let runner = ui.turn_runner();
@@ -262,6 +263,7 @@ impl Ui {
         resume: Option<&str>,
         yolo: bool,
         model_override: Option<&str>,
+        allow_host: &[String],
     ) -> anyhow::Result<Ui> {
         let Opened {
             data,
@@ -276,7 +278,7 @@ impl Ui {
             initial_records,
             mut initial_tail,
             update_notice,
-        } = open(cwd, resume, yolo)?;
+        } = open(cwd, resume, yolo, allow_host)?;
 
         // ADR-0041: the interpreter is resolved once, here, so the tool
         // description, `/settings`, and every call agree - and a configured
@@ -491,7 +493,12 @@ struct Opened {
 
 /// Open the store, the grant store, the merged configuration, and the
 /// session to show (resumed or fresh).
-fn open(cwd: &Path, resume: Option<&str>, yolo: bool) -> anyhow::Result<Opened> {
+fn open(
+    cwd: &Path,
+    resume: Option<&str>,
+    yolo: bool,
+    allow_host: &[String],
+) -> anyhow::Result<Opened> {
     let data = crate::data_dir();
     let store = Arc::new(SessionStore::new(data.clone()));
     let grants = Arc::new(Mutex::new(
@@ -516,6 +523,10 @@ fn open(cwd: &Path, resume: Option<&str>, yolo: bool) -> anyhow::Result<Opened> 
     if let Some(banner) = crate::apply_permission_mode(&config, &mut lock(&grants)) {
         initial_head.insert(0, banner.to_string());
     }
+    // `--allow-host`: a one-run grant, attached to the session set before
+    // any turn runs and recorded once (gh #29, QA-004).
+    crate::net_consent::attach_allow_hosts(&grants, cwd, allow_host, &store, &session)
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
     Ok(Opened {
         data,
         store,

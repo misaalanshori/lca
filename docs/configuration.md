@@ -48,7 +48,7 @@ persisted. The bundled `openai-compatible` provider reads:
 
 | Variable | Meaning |
 |---|---|
-| `OPENAI_BASE_URL` | The endpoint's base URL. A non-default host needs the ad hoc `net` grant (FR-PERM-16). |
+| `OPENAI_BASE_URL` | The endpoint's base URL. A non-default host needs the ad hoc `net` grant (FR-PERM-16): interactively the first request offers it and `allow` persists it for the project (prompt once per host); headless exits 4 naming the host and the fix; `--allow-host <host>` allows it for that run only, never written to the grant store (`docs/headless.md`, gh #29). |
 | `OPENAI_API_KEY` | The API key. `OPENCODE_API_KEY` is accepted as a synonym. |
 | `OPENAI_MODEL` | The model id. `LCA_MODEL` is accepted as a synonym. |
 | `OPENAI_CONTEXT_WINDOW` | The context window, in tokens, for every model of this provider. It overrides the per-model window: a value set here beats a limit the endpoint reported *and* the extension's curated catalog (`docs/providers/openai-compatible.md`, "Context windows"). |

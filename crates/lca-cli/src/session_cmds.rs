@@ -225,6 +225,10 @@ pub(super) fn gc_command(cwd: &Path, id: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `Cli::parse_from` needs the derive's trait in scope; it used to
+    // arrive through the crate root, which the `cli_args` split took with it.
+    use clap::Parser;
+
     fn route_of(args: &[&str]) -> Route {
         let cli = Cli::parse_from(args);
         route(&cli)

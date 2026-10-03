@@ -175,3 +175,8 @@ mod gh27_editor_rows_keep_the_marker_pad_and_spaces;
 // behaved like Home/End instead of moving row by row.
 #[path = "gh28-visual-row-navigation.rs"]
 mod gh28_visual_row_navigation;
+// GitHub issue #29 (QA-004): an env-configured endpoint host dead-ended
+// without an interactive grant; QA-007: a second GrantStore handle opened
+// in `load_installed` clobbered the session's state.
+#[path = "gh29-env-host-grant-prompt.rs"]
+mod gh29_env_host_grant_prompt;

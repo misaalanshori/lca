@@ -170,6 +170,7 @@ pub async fn headless(
     cwd: &Path,
     attachments: &[std::path::PathBuf],
     yolo: bool,
+    allow_host: &[String],
 ) -> i32 {
     let data = data_dir();
     let store = SessionStore::new(data.clone());
@@ -229,10 +230,34 @@ pub async fn headless(
     let mut prompt_impl = HeadlessPrompt::default();
     // Extension-originated commands route through the same denying prompt, so a
     // headless approval need still surfaces as exit code 4.
-    let shared_prompt = lca_permissions::SharedPrompt::default();
+    let mut shared_prompt = lca_permissions::SharedPrompt::default();
     shared_prompt.set(std::sync::Arc::new(std::sync::Mutex::new(
         prompt_impl.clone(),
     )));
+    // gh #29 (QA-004): `--allow-host` attaches its one-run grant first,
+    // then the endpoint's host is consented to here instead of dead-ending
+    // at request time. Headless has no modal, so denial exits 4 with the
+    // host and the fix named.
+    if let Err(err) =
+        crate::net_consent::attach_allow_hosts(&grants, cwd, allow_host, &store, &session)
+    {
+        eprintln!("error: {err}");
+        return exit::USAGE;
+    }
+    if let Some(host) = crate::net_consent::env_configured_host(&data)
+        && crate::provider_ready(&provider_name, &data)
+        && crate::net_consent::endpoint_consent(
+            &host,
+            &grants,
+            cwd,
+            &mut shared_prompt,
+            &store,
+            &session,
+        ) == crate::net_consent::EndpointConsent::Denied
+    {
+        eprintln!("{}", crate::net_consent::denied_message(&host));
+        return exit::PERMISSION;
+    }
     let (agent_config, provider) = match wire(
         cwd,
         &config,

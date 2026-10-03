@@ -106,6 +106,28 @@ fn turn_worker(
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
+        // gh #29 (QA-004): an endpoint host outside the manifest's fixed
+        // hosts is consented to here, on the request path, through the
+        // same prompt the model's tool commands ask through - before the
+        // stream starts, so the modal lands while the turn is running.
+        if let Some(host) = crate::net_consent::env_configured_host(&ui.data)
+            && crate::provider_ready(&ui.provider_name, &ui.data)
+            && crate::net_consent::endpoint_consent(
+                &host,
+                &ui.grants,
+                &ui.cwd,
+                &mut prompt,
+                &ui.store,
+                &session,
+            ) == crate::net_consent::EndpointConsent::Denied
+        {
+            return lca_core::TurnOutcome {
+                status: TurnStatus::Error,
+                stop_reason: lca_core::StopReason::Error,
+                usage: Default::default(),
+                error: Some(crate::net_consent::denied_message(&host)),
+            };
+        }
         let mut agent = Agent::new(
             &ui.store,
             &session,

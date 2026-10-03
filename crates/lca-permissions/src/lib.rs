@@ -142,6 +142,10 @@ struct SessionGrants {
     trust: BTreeSet<String>,
     /// Rules attached for this session.
     rules: RuleSet,
+    /// Ad hoc `net` grants for this process only (`--allow-host`), keyed by
+    /// project like the persisted set. Never written to `path`, so the flag
+    /// dies with the run that set it (gh #29, QA-004).
+    net_patterns: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// The difference between the approved proposal set and the project's
@@ -632,10 +636,16 @@ impl GrantStore {
     /// order the store lists them (FR-PERM-16's persistence; ADR-0022).
     /// A pattern that no longer parses is skipped rather than failing
     /// every later request over one corrupt line.
+    /// The ad hoc `net` grants approved for this project: the persisted
+    /// set (FR-PERM-16) plus any granted for this process only, so every
+    /// reader - the live ad hoc check, the endpoint host check, the
+    /// provider's startup snapshot - sees one truth (`--allow-host`).
     pub fn net_patterns(&self, project_dir: &Path) -> Vec<String> {
-        self.data
+        let key = canonical_key(project_dir);
+        let mut patterns: Vec<String> = self
+            .data
             .projects
-            .get(&canonical_key(project_dir))
+            .get(&key)
             .map(|entry| {
                 entry
                     .net_patterns
@@ -644,7 +654,42 @@ impl GrantStore {
                     .cloned()
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if let Some(session) = self.session.net_patterns.get(&key) {
+            for pattern in session {
+                if parse_net_pattern(pattern).is_ok() && !patterns.contains(pattern) {
+                    patterns.push(pattern.clone());
+                }
+            }
+        }
+        patterns
+    }
+
+    /// Attach an ad hoc `net` grant for this process only: `--allow-host`
+    /// is a one-run grant, so it joins the session set and never reaches
+    /// `path` (gh #29, QA-004). The pattern is validated with the same
+    /// vocabulary the persisted grant uses.
+    pub fn attach_session_net_pattern(
+        &mut self,
+        project_dir: &Path,
+        pattern: &str,
+    ) -> Result<(), Error> {
+        parse_net_pattern(pattern).map_err(|err| Error::Pattern(err.to_string()))?;
+        self.session
+            .net_patterns
+            .entry(canonical_key(project_dir))
+            .or_default()
+            .insert(pattern.to_string());
+        Ok(())
+    }
+
+    /// Whether `pattern` is granted for this process only (`--allow-host`),
+    /// which is what the consent check records rather than re-persists.
+    pub fn session_net_pattern(&self, project_dir: &Path, pattern: &str) -> bool {
+        self.session
+            .net_patterns
+            .get(&canonical_key(project_dir))
+            .is_some_and(|patterns| patterns.contains(pattern))
     }
 
     /// Record one ad hoc `net` grant for this project (FR-PERM-16).
