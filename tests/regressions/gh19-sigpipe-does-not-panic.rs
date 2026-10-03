@@ -21,10 +21,17 @@
 //!
 //! Verifies: NFR-24 (a released defect's guard), GitHub issue #19.
 
+// The row is `cfg(unix)`: Windows has no SIGPIPE to restore, so a closed
+// pipe there is a recoverable error and the guard has nothing to assert.
+// The helpers are gated with it - an ungated `use` or fn is an unused
+// import/function in a Windows build, which clippy denies.
+#[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 
 /// The built `lca` binary, if this run also produced one.
+#[cfg(unix)]
 fn binary() -> Option<std::path::PathBuf> {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     ["target/debug/lca", "target/release/lca"]
@@ -34,6 +41,7 @@ fn binary() -> Option<std::path::PathBuf> {
 }
 
 /// `ext info` on a fresh data home: two lines of stdout, no setup needed.
+#[cfg(unix)]
 fn info_command(binary: &Path, home: &Path) -> Command {
     let mut command = Command::new(binary);
     command
