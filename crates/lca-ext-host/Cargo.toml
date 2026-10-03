@@ -23,6 +23,9 @@ thiserror.workspace = true
 [dev-dependencies]
 lca-provider = { path = "../lca-provider" }
 conformance = { path = "../../extensions/conformance" }
+# gh #34: the shipped provider in both delivery modes - the native
+# handle and the committed component, driven from one test.
+openai-compatible = { path = "../../extensions/openai-compatible" }
 lca-ext-native = { path = "../lca-ext-native" }
 lca-testkit = { path = "../lca-testkit" }
 tokio.workspace = true

@@ -161,7 +161,7 @@ An extension package may carry a `resources/` folder: its own read-only data (pr
 resources = ["provider-presets", "skills"]
 ```
 
-The installer refuses a kind the manifest does not declare and shows the counts at consent. The host reads `resources/skills/<name>/SKILL.md` (standard Claude format) into the prompt with attribution; other kinds are the extension's own business.
+The installer refuses a kind the manifest does not declare and shows the counts at consent. A kind is the first segment of the resource's path inside the bag: a folder's name (`skills` for `resources/skills/<name>/SKILL.md`), and for a file sitting directly in `resources/` its whole file name — `resources/provider-presets.toml` declares `"provider-presets.toml"`. The host reads `resources/skills/<name>/SKILL.md` (standard Claude format) into the prompt with attribution; other kinds are the extension's own business.
 
 For mutable, non-secret data, use `lca:host/state` - `read`/`write`/`delete`/`list-keys`, keyed by your own identity, size-capped, wiped on uninstall. Secrets go in `credentials`, never `state`.
 

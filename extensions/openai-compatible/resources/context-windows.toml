@@ -1,0 +1,79 @@
+# Per-model context windows (GitHub issue #34): the number the footer's
+# `ctx` percentage and the compaction threshold (FR-SESS-4) divide by.
+#
+# Ground rule: every number carries the source it was copied from, on its
+# own line, and nothing here is estimated. A model absent from this file
+# reports no window and keeps `ctx ?` - an honest unknown beats a wrong
+# denominator, which silently mis-triggers compaction.
+#
+# Sources, in the order the cycle brief gives them:
+#   `models.dev/<provider> <date>` - the models.dev catalog
+#   (https://models.dev/api.json), which is the table pi's own catalog is
+#   generated from (`~/gits/pi`, packages/ai/scripts/generate-models.ts).
+#   pi's footer rendering `1.0M` for mimo-v2.6-flash matches this table's
+#   1048576 exactly.
+#   The live endpoint is source 1 and reports nothing usable here:
+#   `GET https://opencode.ai/zen/go/v1/models` returns only
+#   id/object/created/owned_by - no limit field of any name. Verified
+#   2026-10-03 with the sanctioned testing key (file reference only).
+#   OpenRouter is the one endpoint that does report one -
+#   `context_length` - and it cross-checks: openai/gpt-4o reads 128000
+#   live and in the catalog below.
+#
+# Kept in its own resource rather than in provider-presets.toml because
+# `shipped_presets_contain_no_development_policy_ids` scans that file for
+# development-harness ids, and several of these are now live product
+# models on opencode-go (they are in the endpoint's own `GET /models`).
+
+
+# --- OpenCode Go: models.dev `opencode-go` ---
+"deepseek-flash" = 1000000   # models.dev/`deepseek` 2026-10-03
+"deepseek-v4-flash" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"deepseek-v4-flash-vision-exp" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"deepseek-v4-pro" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"deepseek-v4.1-flash" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"glm-5.2" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"glm-5.3" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"glm-5.3-flash" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"gpt-5.6-luna" = 1050000   # models.dev/`opencode-go` 2026-10-03
+"gpt-6-luna" = 1050000   # models.dev/`opencode-go` 2026-10-03
+"grok-4.5" = 500000   # models.dev/`opencode-go` 2026-10-03
+"grok-4.6" = 500000   # models.dev/`opencode-go` 2026-10-03
+"grok-4.7" = 500000   # models.dev/`opencode-go` 2026-10-03
+"hy3" = 256000   # models.dev/`opencode-go` 2026-10-03
+"hy4-preview" = 1024000   # models.dev/`opencode-go` 2026-10-03
+"kimi-k2.6" = 262144   # models.dev/`opencode-go` 2026-10-03
+"kimi-k2.7-code" = 262144   # models.dev/`opencode-go` 2026-10-03
+"kimi-k3" = 1048576   # models.dev/`opencode-go` 2026-10-03
+"longcat-2.0" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"longcat-2.5-preview-free" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"mimo-v2.5" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"mimo-v2.5-pro" = 1048576   # models.dev/`opencode-go` 2026-10-03
+"mimo-v2.6-flash" = 1048576   # models.dev/`opencode-go` 2026-10-03
+"mimo-v2.6-pro" = 1048576   # models.dev/`opencode-go` 2026-10-03
+"minimax-m2.7" = 204800   # models.dev/`opencode-go` 2026-10-03
+"minimax-m3" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"muse-spark-1.2-contributor" = 1048576   # models.dev/`opencode-go` 2026-10-03
+"muse-spark-1.3-contributor" = 1048576   # models.dev/`opencode-go` 2026-10-03
+"qwen3.6-plus" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"qwen3.7-max" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"qwen3.7-plus" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"qwen3.8-flash" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"qwen3.8-max" = 1000000   # models.dev/`opencode-go` 2026-10-03
+"space-bunny-free" = 1048576   # models.dev/`opencode-go` 2026-10-03
+
+# --- Vendor presets: the same provider's own catalog entry only. Ids the
+# --- catalog does not carry under that provider are deliberately absent ---
+"codestral-latest" = 256000   # models.dev/`mistral` 2026-10-03
+"gpt-4o" = 128000   # models.dev/`openai` 2026-10-03
+"gpt-4o-mini" = 128000   # models.dev/`openai` 2026-10-03
+"llama-3.1-8b-instant" = 131072   # models.dev/`groq` 2026-10-03
+"llama-3.3-70b-versatile" = 131072   # models.dev/`groq` 2026-10-03
+"meta-llama/Llama-3.3-70B-Instruct" = 131072   # models.dev/`huggingface` 2026-10-03
+"meta/llama-3.3-70b-instruct" = 128000   # models.dev/`nvidia` 2026-10-03
+"MiniMax-M2" = 204800   # models.dev/`minimax` 2026-10-03
+"mistral-large-latest" = 262144   # models.dev/`mistral` 2026-10-03
+"o3-mini" = 200000   # models.dev/`openai` 2026-10-03
+"openai/gpt-4o" = 128000   # models.dev/`openrouter` 2026-10-03
+"sonar" = 128000   # models.dev/`perplexity` 2026-10-03
+"sonar-pro" = 200000   # models.dev/`perplexity` 2026-10-03

@@ -122,15 +122,6 @@ impl ExtensionDispatch for OpenAiCompat {
         } else {
             self.settings.model.clone()
         };
-        let mut models: Vec<ModelInfo> = Vec::new();
-        if !configured.is_empty() {
-            models.push(ModelInfo {
-                id: configured.clone(),
-                name: configured,
-                context_window: self.settings.context_window,
-                max_tokens: 0,
-            });
-        }
         // ADR-0035: the passed settings are the source of truth -
         // the same pairs `complete` gets in its `extras`. The
         // credential read is the fallback for a caller that has not
@@ -146,14 +137,43 @@ impl ExtensionDispatch for OpenAiCompat {
                     .flatten()
                     .unwrap_or_default()
             });
-        for id in stored.split(',').filter(|id| !id.is_empty()) {
+        // gh #34: a window per model - the endpoint's own `context_length`
+        // when it sent one, the curated catalog otherwise - under the
+        // `OPENAI_CONTEXT_WINDOW` whole-provider override. `wasm_mode`
+        // makes this same call, so both delivery modes agree by sharing
+        // one resolver rather than by two copies of it.
+        let windows = load_context_windows(self.cap.as_ref());
+        let reported: BTreeMap<String, u32> = parse_models_setting(&stored)
+            .into_iter()
+            .filter_map(|(model, window)| Some((model, window?)))
+            .collect();
+        let window_for = |model: &str| {
+            context_window_for(
+                model,
+                self.settings.context_window,
+                reported.get(model).copied(),
+                &windows,
+            )
+        };
+        let mut models: Vec<ModelInfo> = Vec::new();
+        if !configured.is_empty() {
+            let window = window_for(&configured);
+            models.push(ModelInfo {
+                id: configured.clone(),
+                name: configured,
+                context_window: window,
+                max_tokens: 0,
+            });
+        }
+        for (id, _) in parse_models_setting(&stored) {
             if models.iter().any(|model| model.id == id) {
                 continue;
             }
+            let window = window_for(&id);
             models.push(ModelInfo {
-                id: id.to_string(),
-                name: id.to_string(),
-                context_window: self.settings.context_window,
+                id: id.clone(),
+                name: id,
+                context_window: window,
                 max_tokens: 0,
             });
         }

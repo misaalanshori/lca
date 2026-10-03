@@ -1264,6 +1264,7 @@ dependencies = [
  "lca-provider",
  "lca-testkit",
  "lca-tools",
+ "openai-compatible",
  "serde_json",
  "thiserror",
  "tokio",

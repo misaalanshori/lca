@@ -764,10 +764,16 @@ fn string_list(value: Option<&toml::Value>) -> Vec<String> {
 /// The extension's own `resources/` bag, compiled in (ADR-0032): the same
 /// bytes an installed package serves from its directory, so both delivery
 /// modes answer the picker query identically.
-pub const RESOURCES: &[(&str, &[u8])] = &[(
-    "provider-presets.toml",
-    include_bytes!("../resources/provider-presets.toml"),
-)];
+pub const RESOURCES: &[(&str, &[u8])] = &[
+    (
+        "provider-presets.toml",
+        include_bytes!("../resources/provider-presets.toml"),
+    ),
+    (
+        "context-windows.toml",
+        include_bytes!("../resources/context-windows.toml"),
+    ),
+];
 
 /// The native handle's resource source. The host sets this on the
 /// capability engine so `resource_read` resolves against the compiled-in
@@ -783,6 +789,84 @@ pub fn load_presets(cap: &dyn ProviderCap) -> Vec<Preset> {
         Ok(bytes) => parse_presets(&String::from_utf8_lossy(&bytes)),
         Err(_) => Vec::new(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Context windows (gh #34): the denominator `ctx` and the compaction
+// threshold divide by
+// ---------------------------------------------------------------------------
+
+/// Parse the curated per-model window table (`id = tokens`).
+pub fn parse_context_windows(text: &str) -> BTreeMap<String, u32> {
+    let Ok(value) = text.parse::<toml::Value>() else {
+        return BTreeMap::new();
+    };
+    value
+        .as_table()
+        .map(|table| {
+            table
+                .iter()
+                .filter_map(|(model, tokens)| {
+                    let tokens = tokens.as_integer().and_then(|n| u32::try_from(n).ok())?;
+                    Some((model.clone(), tokens))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The curated windows from the extension's own `resources/` bag (gh #34).
+/// A package installed before this resource existed, or a caller that
+/// injects only the presets, reads as an empty table: every model then
+/// reports no window and the footer keeps `ctx ?` - an honest unknown,
+/// never an invented number (FR-SESS-4 divides by this value, so a wrong
+/// one silently mis-triggers compaction).
+pub fn load_context_windows(cap: &dyn ProviderCap) -> BTreeMap<String, u32> {
+    match cap.resource_read("context-windows.toml") {
+        Ok(bytes) => parse_context_windows(&String::from_utf8_lossy(&bytes)),
+        Err(_) => BTreeMap::new(),
+    }
+}
+
+/// One model's context window, in precedence order (ADR-0035's settings
+/// chain): `OPENAI_CONTEXT_WINDOW` overrides the whole provider, then the
+/// endpoint's own `context_length` if it reported one, then the curated
+/// catalog, then 0 - which the footer renders `ctx ?` instead of a
+/// percentage over a denominator nobody verified.
+pub fn context_window_for(
+    model: &str,
+    env_override: u32,
+    endpoint_value: Option<u32>,
+    curated: &BTreeMap<String, u32>,
+) -> u32 {
+    if env_override > 0 {
+        return env_override;
+    }
+    endpoint_value
+        .filter(|tokens| *tokens > 0)
+        .or_else(|| curated.get(model).copied())
+        .unwrap_or(0)
+}
+
+/// Split a `models` setting into `(id, window)` pairs (gh #34). Every list
+/// written before gh #34 is bare ids, and each reads as "no window known",
+/// so the shape is backward-tolerant by construction. An id containing
+/// `=` is only split when the tail is a number, so an id that happens to
+/// carry one still arrives whole.
+pub fn parse_models_setting(value: &str) -> Vec<(String, Option<u32>)> {
+    value
+        .split(',')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            if let Some((model, tokens)) = entry.rsplit_once('=')
+                && !model.is_empty()
+                && let Ok(window) = tokens.parse::<u32>()
+            {
+                return (model.to_string(), Some(window));
+            }
+            (entry.to_string(), None)
+        })
+        .collect()
 }
 
 /// The host's picker options (ADR-0033), one per preset.
@@ -825,16 +909,17 @@ fn host_of(base_url: &str) -> String {
         .to_string()
 }
 
-/// D2: ask the endpoint for its model list. `None` on any failure - a wrong
-/// key, a down endpoint, or a host with no `net` grant yet (the ad hoc grant
-/// is offered *after* submit, so a first login often cannot reach the
-/// network here) - and the caller falls back to the preset's curated short
-/// list.
+/// D2: ask the endpoint for its model list, with each model's own context
+/// limit when the response carries one (gh #34). `None` on any failure - a
+/// wrong key, a down endpoint, or a host with no `net` grant yet (the ad
+/// hoc grant is offered *after* submit, so a first login often cannot
+/// reach the network here) - and the caller falls back to the preset's
+/// curated short list.
 fn discover_models(
     cap: &dyn ProviderCap,
     base_url: &str,
     key: Option<&str>,
-) -> Option<Vec<String>> {
+) -> Option<Vec<(String, Option<u32>)>> {
     let url = format!("{}/models", base_url.trim_end_matches('/'));
     let mut headers = vec![("accept", "application/json")];
     let auth = key.map(|key| format!("Bearer {key}"));
@@ -862,20 +947,31 @@ fn discover_models(
         return None;
     }
     let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
-    let mut ids: Vec<String> = json
+    let mut found: Vec<(String, Option<u32>)> = json
         .get("data")?
         .as_array()?
         .iter()
         .filter_map(|entry| {
-            entry
-                .get("id")
-                .and_then(|id| id.as_str())
-                .map(str::to_string)
+            let model = entry.get("id")?.as_str()?.to_string();
+            // The one limit field an OpenAI-shaped `GET /models` actually
+            // carries: OpenRouter's answer reads `context_length`
+            // (`openai/gpt-4o` -> 128000, checked live 2026-10-03, and
+            // matching the catalog below), which is the field pi's own
+            // catalog generator reads. The endpoint gh #34 reports
+            // against sends no limit at all - id/object/created/owned_by
+            // only - so absence is the normal case and reads as "no
+            // window", never as a guess (gh #34's ground-truth rule).
+            let window = entry
+                .get("context_length")
+                .and_then(|value| value.as_u64())
+                .and_then(|value| u32::try_from(value).ok())
+                .filter(|value| *value > 0);
+            Some((model, window))
         })
         .collect();
-    ids.sort();
-    ids.dedup();
-    (!ids.is_empty()).then_some(ids)
+    found.sort_by(|left, right| left.0.cmp(&right.0));
+    found.dedup_by(|left, right| left.0 == right.0);
+    (!found.is_empty()).then_some(found)
 }
 
 /// Consume one login answer (ADR-0033): store the secret in the extension's
@@ -900,14 +996,29 @@ pub fn login_submit(
     let mut settings = vec![("base_url".to_string(), base_url.clone())];
     // D2: the endpoint's own model list when it answers, the preset's
     // curated short list otherwise. The host persists whatever comes back
-    // and never interprets it.
+    // and never interprets it; an entry that carries a window is written
+    // `id=window` so gh #34's limit survives the round trip.
     let models = discover_models(cap, &base_url, answer.value("api-key")).unwrap_or_else(|| {
         preset
-            .map(|preset| preset.models.clone())
+            .map(|preset| {
+                preset
+                    .models
+                    .iter()
+                    .map(|model| (model.clone(), None))
+                    .collect()
+            })
             .unwrap_or_default()
     });
     if !models.is_empty() {
-        settings.push(("models".to_string(), models.join(",")));
+        let list = models
+            .iter()
+            .map(|(model, window)| match window {
+                Some(window) => format!("{model}={window}"),
+                None => model.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        settings.push(("models".to_string(), list));
     }
     if let Some(model) = answer.value("model") {
         settings.push(("model".to_string(), model.to_string()));

@@ -51,7 +51,7 @@ persisted. The bundled `openai-compatible` provider reads:
 | `OPENAI_BASE_URL` | The endpoint's base URL. A non-default host needs the ad hoc `net` grant (FR-PERM-16). |
 | `OPENAI_API_KEY` | The API key. `OPENCODE_API_KEY` is accepted as a synonym. |
 | `OPENAI_MODEL` | The model id. `LCA_MODEL` is accepted as a synonym. |
-| `OPENAI_CONTEXT_WINDOW` | The context window, in tokens, when the endpoint does not report one. |
+| `OPENAI_CONTEXT_WINDOW` | The context window, in tokens, for every model of this provider. It overrides the per-model window: a value set here beats a limit the endpoint reported *and* the extension's curated catalog (`docs/providers/openai-compatible.md`, "Context windows"). |
 | `OPENAI_PROMPT_CACHE_KEY` | Set to `0` to stop sending `prompt_cache_key`. **Default: on.** The key is the clamped session id, which is OpenAI's native cache-affinity parameter; some strict proxies reject unknown body fields, which is what the opt-out is for. |
 | `OPENAI_SUPPORTS_REASONING` | Set to `0` to stop sending `reasoning_effort` when the session's `thinking` level is set. **Default: on.** Same reason as the cache-key opt-out: a strict proxy that rejects unknown body fields. |
 

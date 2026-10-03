@@ -304,13 +304,28 @@ impl ModelsGuest for OpenAiCompatWasm {
             .find(|pair| pair.key == "models")
             .map(|pair| pair.value.clone())
             .unwrap_or_default();
-        let mut out: Vec<WasmModel> = stored
-            .split(',')
-            .filter(|id| !id.is_empty())
-            .map(|id| WasmModel {
-                id: id.to_string(),
-                name: id.to_string(),
-                context_window: settings.context_window,
+        // gh #34: the same resolver `native.rs` calls - the endpoint's own
+        // limit first, the curated catalog next, `OPENAI_CONTEXT_WINDOW`
+        // over both - so the two delivery modes cannot drift (NFR-25).
+        let windows = load_context_windows(&GUEST_CAP);
+        let reported: BTreeMap<String, u32> = parse_models_setting(&stored)
+            .into_iter()
+            .filter_map(|(model, window)| Some((model, window?)))
+            .collect();
+        let window_for = |model: &str| {
+            context_window_for(
+                model,
+                settings.context_window,
+                reported.get(model).copied(),
+                &windows,
+            )
+        };
+        let mut out: Vec<WasmModel> = parse_models_setting(&stored)
+            .into_iter()
+            .map(|(id, _)| WasmModel {
+                context_window: window_for(&id),
+                id: id.clone(),
+                name: id,
                 max_tokens: 0,
                 extras: Vec::new(),
             })
@@ -319,10 +334,11 @@ impl ModelsGuest for OpenAiCompatWasm {
             return out;
         }
         if !configured.is_empty() {
+            let window = window_for(&configured);
             out.push(WasmModel {
                 id: configured.clone(),
                 name: configured,
-                context_window: settings.context_window,
+                context_window: window,
                 max_tokens: 0,
                 extras: Vec::new(),
             });

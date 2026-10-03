@@ -8,10 +8,11 @@ Source: `extensions/openai-compatible/`. Delivery: native-linked, enabled by def
 
 Any HTTP endpoint that speaks the OpenAI chat completions request and response shape: the request has a model field, a messages array, and a tools array in the now-conventional layout; the response streams the same shape back. This covers OpenAI itself, and every one of the many services, self-hosted or commercial, that expose the same wire format deliberately for compatibility, OpenCode Go among them.
 
-The model's context window comes from `OPENAI_CONTEXT_WINDOW` when the
-endpoint publishes none of its own (the FR-SESS-4 compaction threshold
-needs a window to divide by; `0`, the default, means unknown and never
-compacts). Authentication is a bearer token in the request header, read from the `credentials` capability, with an environment variable fallback for a user who prefers not to store it through the agent. Every request also carries `x-opencode-session`, the conversation's session id (from `extras`), which OpenCode Go refuses requests without and every other OpenAI-shaped server ignores; see ADR-0023.
+The model's context window is resolved per model rather than once for the
+provider, in the order the [Context windows](#context-windows) section
+gives; `0`, the default when nothing is known, means unknown and never
+compacts (the FR-SESS-4 compaction threshold needs a window to divide
+by). Authentication is a bearer token in the request header, read from the `credentials` capability, with an environment variable fallback for a user who prefers not to store it through the agent. Every request also carries `x-opencode-session`, the conversation's session id (from `extras`), which OpenCode Go refuses requests without and every other OpenAI-shaped server ignores; see ADR-0023.
 
 ## Manifest
 
@@ -44,6 +45,16 @@ A base URL whose host is not covered by the manifest's fixed hosts needs an ad h
 ## Cache behavior
 
 Most OpenAI-shaped endpoints, including OpenAI's own, cache automatically with no explicit marker required, so this provider generally ignores the cache-boundary hint rather than acting on it. It still reports `cache_read` and `cache_write` from the response's usage fields whenever the configured endpoint provides them, since that costs nothing and is what makes the cache-waste measurement in `docs/testing-plan.md` work for whatever server a user pointed this provider at.
+
+## Context windows
+
+`list-models` carries one `context_window` per model. Two numbers divide by it: the footer's `ctx` share, and the compaction threshold (FR-SESS-4) — so a window that is wrong is worse than one that is missing, because a wrong denominator silently mis-triggers compaction. Three sources, in precedence order (gh #34):
+
+1. **`OPENAI_CONTEXT_WINDOW`**, as a whole-provider override. It beats everything below.
+2. **The endpoint's own answer.** `login` keeps each entry's `context_length` from `GET /models` when the response carries one, and it rides the persisted `models` setting as `id=window` so it survives the round trip. OpenRouter reports that field (`openai/gpt-4o` reads 128000 live and in the catalog below, checked 2026-10-03). OpenCode Go's `GET /models` carries no limit field at all — only `id`, `object`, `created` and `owned_by` — so nothing is read there, and its models fall through to the next source.
+3. **The curated catalog**, `extensions/openai-compatible/resources/context-windows.toml`: model id → tokens, with **the source named on every number's own line** (models.dev's provider entry and the fetch date — the same catalog pi's own tables are generated from; pi's footer showing `1.0M` for `mimo-v2.6-flash` matches the 1048576 in that file). It is a separate resource from `provider-presets.toml` because the shipped-data guard scans that file for development-harness ids, and several of these models are now live product models on OpenCode Go.
+
+A model that none of the three sources confirms reports `0`, and the footer keeps `ctx ?` — an honest unknown, never a fabricated share. The persisted shape stays backward-tolerant in both directions: a bare `models` entry carries no window (every list written before gh #34 reads that way), an `id=window` entry carries one, and an id containing `=` is only split when the tail is a number.
 
 ## Why native-linked by default
 

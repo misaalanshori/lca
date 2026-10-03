@@ -148,3 +148,8 @@ mod gh33_exit_cursor_parks_below_transcript;
 // confirmed on a bare `y` keystroke - no Enter, on a security surface.
 #[path = "gh24-consent-confirm-requires-enter.rs"]
 mod gh24_consent_confirm_requires_enter;
+// Released 0.5.3 defect (GitHub issue #34): every preset model reported no
+// context window, so the footer read `ctx ?` and compaction had no real
+// denominator.
+#[path = "gh34-curated-context-windows-reach-the-footer.rs"]
+mod gh34_curated_context_windows_reach_the_footer;

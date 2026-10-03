@@ -230,4 +230,29 @@ mod discovery {
             );
         }
     }
+
+    // Verifies: gh #34 - a `GET /models` that carries a limit writes it
+    // into the setting the host persists as `id=window`, and an entry
+    // that carries none stays a bare id: the shape every list written
+    // before gh #34 already has, so the change is readable both ways.
+    // (`context_length` is the field an OpenAI-shaped endpoint actually
+    // reports - OpenRouter's live answer, checked 2026-10-03.)
+    #[test]
+    fn login_submit_keeps_a_reported_context_limit_in_the_models_setting() {
+        let body = br#"{
+            "data": [
+                {"id": "mimo-v2.6-flash", "context_length": 262144},
+                {"id": "no-limit-model"},
+                {"id": "mimo-v2.6-flash", "context_length": 262144}
+            ]
+        }"#
+        .to_vec();
+        let cap = cap_with(Some((200, body)));
+        let settings = login_submit(&cap, &answer()).expect("submit");
+        assert_eq!(
+            setting(&settings, "models"),
+            Some("mimo-v2.6-flash=262144,no-limit-model"),
+            "sorted, deduplicated, and the endpoint's own limit rides along"
+        );
+    }
 }

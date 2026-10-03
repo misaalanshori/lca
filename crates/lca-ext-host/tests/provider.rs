@@ -650,3 +650,96 @@ fn every_first_party_component_exports_the_worlds_its_manifest_declares() {
         );
     }
 }
+
+// The shipped provider's committed component - the conformance script
+// above proves the mapping, this proves the real product's own data path.
+const OAC_FIXTURE: &[u8] =
+    include_bytes!("../../../extensions/openai-compatible/fixtures/component.wasm");
+const OAC_MANIFEST: &str = include_str!("../../../extensions/openai-compatible/extension.toml");
+
+// Verifies: gh #34 (NFR-25's model-listing half) - a per-model context
+// window reaches `ModelInfo` in BOTH delivery modes, from the same table.
+// The native handle resolves it through the shared resolver over its
+// embedded bag; the installed component reads those very bytes back
+// through the host's resource seam (ADR-0030/0032). A window only one
+// mode knew would show `ctx ?` on one delivery path and a number on the
+// other - the same defect, twice.
+#[test]
+fn context_windows_are_identical_across_modes() {
+    let fixture = Fixture::new("gh34-windows");
+    // `ExtHost::load` serves a component's bag from the installed package
+    // directory, so lay the bytes out where the host looks: the same two
+    // files the native side embeds.
+    let bag = fixture
+        .root
+        .join("data/extensions/openai-compatible/resources");
+    std::fs::create_dir_all(&bag).expect("bag dir");
+    for (name, text) in [
+        (
+            "provider-presets.toml",
+            include_str!("../../../extensions/openai-compatible/resources/provider-presets.toml"),
+        ),
+        (
+            "context-windows.toml",
+            include_str!("../../../extensions/openai-compatible/resources/context-windows.toml"),
+        ),
+    ] {
+        std::fs::write(bag.join(name), text).expect("write bag");
+    }
+
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            memory_bytes: 64 * 1024 * 1024,
+            fuel_per_call: 100_000_000,
+            log_limit_bytes: 4096,
+        },
+        fixture.env(),
+    );
+    let wasm = host
+        .load(OAC_FIXTURE, OAC_MANIFEST)
+        .expect("the shipped component links");
+
+    let mut native_cap = lca_tools::Capabilities::new(
+        "openai-compatible",
+        openai_compatible::manifest_grants(),
+        fixture.roots.clone(),
+        fixture.prompt.clone(),
+        fixture.store.clone(),
+        fixture.root.join("project"),
+        None,
+    );
+    native_cap.set_resources(openai_compatible::resources());
+    let native = openai_compatible::OpenAiCompat::with_settings(
+        Arc::new(native_cap),
+        openai_compatible::Settings {
+            model: String::new(),
+            context_window: 0,
+            ..Default::default()
+        },
+    );
+
+    let passed = [(
+        "models".to_string(),
+        "mimo-v2.6-flash,no-such-model".to_string(),
+    )];
+    let native_models = native.provider_models(&passed).expect("native models");
+    let wasm_models = wasm.provider_models(&passed).expect("wasm models");
+    assert_eq!(wasm_models, native_models, "the two modes agree");
+    let window = |models: &[lca_protocol::ModelInfo], id: &str| {
+        models
+            .iter()
+            .find(|model| model.id == id)
+            .unwrap_or_else(|| panic!("`{id}` in the list: {models:?}"))
+            .context_window
+    };
+    assert_eq!(
+        window(&native_models, "mimo-v2.6-flash"),
+        1_048_576,
+        "the curated window, both modes: {native_models:?}"
+    );
+    assert_eq!(
+        window(&native_models, "no-such-model"),
+        0,
+        "an unknown id reports no window in either mode: {native_models:?}"
+    );
+}
