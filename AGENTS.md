@@ -55,6 +55,17 @@ lines" exit ramp).
 
 ## Testing culture (read `docs/testing-plan.md`)
 
+- **Tests pin behavior, never implementation.** A test locks the observable
+  contract, not the code shape. When building something new — a new
+  requirement, a new specification, a whole new behavior — failing tests
+  are *expected*: the new guard is red before the implementation lands,
+  and tests that pinned the deliberately replaced behavior change with
+  it, sanctioned and named by the brief. The only red worth stopping for
+  is an **unexpected** one: if a change in one component breaks a test in
+  another, that is an architectural mistake or an implementation defect —
+  root-cause it before moving on, and never loosen an assertion just to
+  get green. Tests exist to prove a change broke nothing it wasn't meant
+  to; they must never become friction on new work.
 - **Test names are full sentences** describing behavior:
   `a_paste_into_the_masked_secret_field_lands_and_masks`.
 - Every shipped defect gets a named guard in `tests/regressions/NN-*.rs`.

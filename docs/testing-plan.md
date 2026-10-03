@@ -12,6 +12,30 @@ An AI agent implementing a feature in a fresh session has no memory of the desig
 
 This has a direct consequence for how tests get written: a test should be traceable to a requirement identifier, an ADR, or a defect identifier, not written free-form against the author's own understanding of what the code should do. Section 11 specifies the mechanism that keeps this traceable rather than aspirational.
 
+## What a failing test means
+
+Failing tests come in two kinds, and confusing them is how a test suite
+becomes friction instead of a safety net.
+
+**Expected failures** are part of building something new. A new
+requirement, a new specification, a whole new behavior legitimately
+leaves red behind for a while: the new guard is written first and stays
+red until the implementation lands (the red-green discipline above), and
+an existing test that pinned the behavior being deliberately replaced
+must change with it — updated or retired in the same change, named by
+the brief or the decision that sanctioned the change. A test that pins
+an implementation detail rather than an observable contract is a test
+waiting to become this kind of failure; write tests against behavior so
+that redesigning the code underneath does not break them.
+
+**Unexpected failures** are the real signal. If a change to one
+component breaks a test in another, something is wrong — an
+architectural boundary is leaking, or the change did something its
+author did not intend. That is a stop-and-investigate moment, not a
+loosened assertion. The rule of thumb: a red is acceptable exactly when
+the change was *meant* to make it red. Everything else gets root-caused
+before work continues.
+
 ## 2. Test taxonomy
 
 Ten categories. Each has a home in the crate layout, a tool, and a place in the CI pipeline described in section 13.
