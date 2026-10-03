@@ -153,3 +153,11 @@ the fresh default and the persisted override.
 **One defect fixed on the way.** The transcript's per-entry render cache was keyed by width only, so a theme change served rows painted in the old palette. It is now dropped on `/theme`, its live preview, and a detected-scheme swap.
 
 **What to watch.** The hand-written grammars are the deliberate ceiling: a fence naming a language they do not know gets pi's *unknown-language* fallback (whole block in `mdCodeBlock`) rather than a wrong parse, and the fallback is tested. If a real miss costs more than the size budget, `syntect` is the upgrade path - it would be a new dependency, so it needs this record's argument, not just a crate addition.
+
+## Annotation — 2026-10-03 (gh #24): crossterm leaves the graph
+
+**What changed the answer.** The Decision's ratatui paragraph ends "crossterm remains only where non-interactive code needs terminal input". That had exactly one consumer left: the capability-consent prompt's raw-mode single-key read in `crates/lca-cli/src/ext.rs`. Issue #24 reported that prompt answering itself on the first `y`, with no Enter — the grant happened on the keystroke, on the surface where "did the user really say yes" has to be unambiguous. The prompt now reads a line from standard input, so the platform's own line discipline echoes it and requires Enter; the raw-mode read left with `RawModeGuard`.
+
+**crossterm is unused workspace-wide and is gone** from the workspace manifest, `crates/lca-cli/Cargo.toml`, and the lock file. The SRDD dependency table's crossterm row went with it: the table is a closed list, and a crate nothing links is not a dependency of the product. This also retires ADR-0036's "crossterm/ratatui remain in `Cargo.toml` only until Group II retires the legacy renderer" — the renderer retired here, the consent prompt retired there, and nothing holds the dependency.
+
+**What did not change.** The interactive path still parses raw bytes itself, and Windows Virtual Terminal Processing is still enabled by `engine/sys.rs`; the platform-notes warning about bypassing crossterm's setup now names that module alone, which its paragraph had already said.

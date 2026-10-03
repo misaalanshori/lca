@@ -144,3 +144,7 @@ mod gh25_namespaced_login_routes_to_identity_flow;
 // transcript, so the returning shell prompt overwrote LCA's own content.
 #[path = "gh33-exit-cursor-parks-below-transcript.rs"]
 mod gh33_exit_cursor_parks_below_transcript;
+// Released 0.5.3 defect (GitHub issue #24): the capability consent prompt
+// confirmed on a bare `y` keystroke - no Enter, on a security surface.
+#[path = "gh24-consent-confirm-requires-enter.rs"]
+mod gh24_consent_confirm_requires_enter;

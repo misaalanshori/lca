@@ -159,52 +159,53 @@ pub fn load_installed(
     }
 }
 
+/// The consent answer, read from standard input: one line, then Enter.
+///
+/// This is the seam [`confirm_with`] is tested through - both callers share
+/// this one function, so the line rule below covers the install grant and
+/// `ext update`'s capability widening alike.
 fn confirm(prompt: &str) -> bool {
-    use std::io::{IsTerminal, Write as _};
-    print!("{prompt}");
-    let _ = std::io::stdout().flush();
-    if !std::io::stdin().is_terminal() {
-        // Piped input (tests, scripts): read a line. Nothing on stdin is a
-        // decline, so an unattended install never writes without consent.
-        let mut line = String::new();
-        return match std::io::stdin().read_line(&mut line) {
-            Ok(0) | Err(_) => false,
-            Ok(_) => matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
-        };
-    }
-    // Interactive: one key, no Enter needed. Raw mode also works when a
-    // previous process left the console raw, where `read_line` would wait
-    // forever for a newline that never completes.
-    let _ = crossterm::terminal::enable_raw_mode();
-    let raw = RawModeGuard;
-    let answer = loop {
-        match crossterm::event::read() {
-            Ok(crossterm::event::Event::Key(key))
-                if key.kind == crossterm::event::KeyEventKind::Press =>
-            {
-                match key.code {
-                    crossterm::event::KeyCode::Char('y' | 'Y') => break true,
-                    crossterm::event::KeyCode::Char('n' | 'N')
-                    | crossterm::event::KeyCode::Esc
-                    | crossterm::event::KeyCode::Enter => break false,
-                    _ => {}
-                }
-            }
-            Ok(_) => {}
-            Err(_) => break false,
-        }
-    };
-    drop(raw);
-    println!("{}", if answer { "y" } else { "n" });
-    answer
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout();
+    confirm_with(prompt, &mut stdin, &mut stdout)
 }
 
-/// Turns raw mode back off when dropped, including on the error paths.
-struct RawModeGuard;
-
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        let _ = crossterm::terminal::disable_raw_mode();
+/// Reads a consent answer from `reader`, writing `prompt` to `writer` once
+/// per line asked (the gh #24 seam; the reader is injectable so the rule
+/// can be pinned without a terminal).
+///
+/// The platform's own line discipline does the echo and requires Enter, so
+/// a keystroke is only an answer once its line is finished: a line with no
+/// `\n` means end of input, not agreement. Trimmed, case-insensitive
+/// `y`/`yes` confirms; `n`/`no` and the empty line decline; end of input
+/// declines (an unattended run never writes without consent); anything
+/// else is asked again.
+pub fn confirm_with(
+    prompt: &str,
+    reader: &mut impl std::io::BufRead,
+    writer: &mut impl std::io::Write,
+) -> bool {
+    loop {
+        let _ = write!(writer, "{prompt}");
+        let _ = writer.flush();
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            // End of input, or a read that failed: nothing was submitted,
+            // so nothing is granted. An unattended run never writes.
+            Ok(0) | Err(_) => return false,
+            // `read_line` also stops at end of input, so a line without its
+            // terminator is a half-answer nobody pressed Enter on. Consent
+            // is a whole line - this is the rule that makes `y` alone
+            // decline, in a terminal and in a pipe alike.
+            Ok(_) if !line.ends_with('\n') => return false,
+            Ok(_) => match line.trim().to_ascii_lowercase().as_str() {
+                "y" | "yes" => return true,
+                "n" | "no" | "" => return false,
+                // Anything else is not an answer: ask again, the way the
+                // old key loop ignored a key it did not know.
+                _ => {}
+            },
+        }
     }
 }
 

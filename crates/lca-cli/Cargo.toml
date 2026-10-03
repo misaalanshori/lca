@@ -37,9 +37,6 @@ lca-tools = { path = "../lca-tools" }
 lca-core = { path = "../lca-core" }
 lca-ext-native = { path = "../lca-ext-native" }
 lca-ui = { path = "../lca-ui" }
-# Direct edge to crossterm for the install consent prompt (already in the
-# graph through lca-tui; no new crate).
-crossterm.workspace = true
 openai-compatible = { path = "../../extensions/openai-compatible", optional = true }
 tokio.workspace = true
 thiserror.workspace = true

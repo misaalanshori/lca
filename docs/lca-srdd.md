@@ -676,7 +676,6 @@ The dependency list stays short on purpose. Each entry below states what it does
 | tokio | Async runtime | None. This is a structural commitment. |
 | hyper with rustls | HTTPS transport | reqwest as a thicker alternative |
 | tower-service | The `Service` trait the hyper-util `HttpConnector` accepts as a custom DNS resolver; used to pin the `net` rebinding check's resolved address (ADR-0025) | Hand-written resolver behind a different connector, or accept the TOCTOU race ADR-0025 closes |
-| crossterm | Terminal input for the non-interactive consent prompt only | The interactive TUI is the project's own engine and terminal layer (ADR-0037); ratatui was retired in the TUI renovation |
 | serde and serde_json | Serialization | None |
 | clap | Argument parsing | Hand-written parser |
 | tracing | Structured logging and diagnostics | log with env_logger |

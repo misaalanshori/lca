@@ -24,6 +24,10 @@ publish = false
 
 [dev-dependencies]
 compaction-default = { path = "extensions/compaction-default" }
+# The gh #24 consent guard drives `lca_cli::ext::confirm_with` directly: the
+# prompt lives in the binary's own crate, behind a `confirm` nothing else
+# exports.
+lca-cli = { path = "crates/lca-cli" }
 lca-core = { path = "crates/lca-core" }
 lca-ext-host = { path = "crates/lca-ext-host" }
 lca-permissions = { path = "crates/lca-permissions" }
@@ -54,9 +58,9 @@ repository = "https://github.com/misaalanshori/lca"
 # thiserror - library error types; anyhow - binary only.
 # tokio - async runtime (structural commitment, ADR-0014).
 # hyper + rustls - HTTPS transport (reqwest is the documented heavier alternative).
-# crossterm - the state machine's key-event type and the non-TUI install
-# consent prompt. The pi-port engine parses raw input itself; ratatui is
-# gone (the TUI port replaced it).
+# The pi-port engine parses raw input itself; ratatui is gone (the TUI port
+# replaced it), and crossterm went with the consent prompt it last served
+# (gh #24 made that prompt read a line instead of a raw keypress).
 # clap - argument parsing.
 # tracing - structured logging.
 # sha2 - digest verification.
@@ -78,7 +82,6 @@ hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", 
 tower-service = "0.3"
 http-body-util = "0.1"
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "ring", "webpki-roots", "logging", "tls12"] }
-crossterm = "0.28"
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
