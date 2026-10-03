@@ -153,3 +153,8 @@ mod gh24_consent_confirm_requires_enter;
 // denominator.
 #[path = "gh34-curated-context-windows-reach-the-footer.rs"]
 mod gh34_curated_context_windows_reach_the_footer;
+// Review finding on gh #34 (no issue id): the shipped openai-compatible
+// manifest named a resource kind its own bag did not carry, so installing
+// it with its bag had failed since the flat-file layout landed.
+#[path = "39-shipped-bag-kinds-match-the-manifest.rs"]
+mod shipped_bag_kinds_match_the_manifest;
