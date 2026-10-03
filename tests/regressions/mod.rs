@@ -180,3 +180,8 @@ mod gh28_visual_row_navigation;
 // in `load_installed` clobbered the session's state.
 #[path = "gh29-env-host-grant-prompt.rs"]
 mod gh29_env_host_grant_prompt;
+// GitHub issue #20: `meta.json` never carried the model and provider it
+// is specified to hold, so a resumed session could not say what the last
+// turn ran on.
+#[path = "gh20-session-meta-model.rs"]
+mod gh20_session_meta_model;

@@ -217,8 +217,8 @@ fn the_model_picker_label_never_reaches_the_provider_call() {
         !log.contains("second-model (openai-compatible)"),
         "the label never enters the session log"
     );
-    // Session metadata's model lives on the session's records (meta.json
-    // carries no model field today); either way the label never enters it.
+    // Session metadata's model is the raw id (gh #20 populates it at turn
+    // start); either way the label never enters it.
     let meta = std::fs::read_to_string(
         find_session_log(&sandbox.state_dir())
             .expect("a session log")

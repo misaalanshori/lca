@@ -330,14 +330,27 @@ impl Ui {
             self.provider_backend.as_ref(),
         );
         // Keep the footer's window in step with the choice.
-        *self
-            .context_window_cell
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = self
+        let chosen = self
             .model_cell
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .window as u64;
+            .clone();
+        *self
+            .context_window_cell
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = chosen.window as u64;
+        // ADR-0024: a switch moves the model everywhere it is read, and
+        // `meta.json` is one of those readers' source (gh #20) - written
+        // the moment the model is chosen, so a session that switches and
+        // then closes says what it ran on.
+        if !argument.trim().is_empty()
+            && !chosen.id.is_empty()
+            && let Err(err) =
+                self.store
+                    .record_model_used(&self.session(), &self.provider_name, &chosen.id)
+        {
+            return CommandEffect::ShowWidget(format!("cannot update the session metadata: {err}"));
+        }
         effect
     }
 

@@ -284,6 +284,22 @@ impl<'a> Agent<'a> {
         sink: &mut dyn TurnSink,
         cancel: &CancelFlag,
     ) -> TurnOutcome {
+        // The doc's promise (session-log-format §meta.json): meta carries
+        // the model and provider last used. Written at turn start from
+        // `AgentConfig`, so a turn that ends before any reply still says
+        // what it ran on (gh #20); the post-response write below stays as
+        // the cheap no-op it becomes when nothing changed.
+        if let Err(err) =
+            self.store
+                .record_model_used(self.session, &self.config.provider, &self.config.model)
+        {
+            return TurnOutcome {
+                status: TurnStatus::Error,
+                stop_reason: StopReason::Error,
+                usage: Default::default(),
+                error: Some(format!("cannot update the session metadata: {err}")),
+            };
+        }
         let handles: Vec<Arc<dyn lca_ext_abi::ExtensionDispatch>> =
             self.config.extensions.enabled().cloned().collect();
         // The turn boundary for host-side cancellation: whatever the
