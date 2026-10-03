@@ -158,3 +158,12 @@ mod gh34_curated_context_windows_reach_the_footer;
 // it with its bag had failed since the flat-file layout landed.
 #[path = "39-shipped-bag-kinds-match-the-manifest.rs"]
 mod shipped_bag_kinds_match_the_manifest;
+// Released-line defects (GitHub issue #27): a multiline prompt stepped back
+// to column 0 on every line after the first, and spaces were dropped at wrap
+// boundaries.
+#[path = "gh27-editor-rows-keep-the-marker-pad-and-spaces.rs"]
+mod gh27_editor_rows_keep_the_marker_pad_and_spaces;
+// GitHub issue #28: Arrow Up/Down walked logical lines, so a wrapped prompt
+// behaved like Home/End instead of moving row by row.
+#[path = "gh28-visual-row-navigation.rs"]
+mod gh28_visual_row_navigation;

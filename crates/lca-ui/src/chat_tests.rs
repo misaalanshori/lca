@@ -865,3 +865,82 @@ fn a_turn_without_streaming_keeps_the_previous_rate() {
     });
     assert_eq!(chat.footer.tok_s, Some(rate), "no stream, no new reading");
 }
+
+// =============================================================================
+// gh #27 (a): the prompt marker is two columns, so every editor row starts
+// at the same visual column - the pad on the continuation rows, and the
+// cursor marker's column following it.
+// =============================================================================
+
+/// Type `text` into the prompt, one key at a time.
+fn type_prompt(chat: &mut Chat, text: &str) {
+    for c in text.chars() {
+        chat.handle_key(&c.to_string());
+    }
+}
+
+/// The prompt's caret row and column, and that row's plain text.
+fn caret_row(chat: &Chat, width: u16) -> (u16, String) {
+    let (clean, pos) = lca_tui::engine::core::extract_cursor_position(&chat.render(width));
+    let (row, col, _) = pos.expect("the prompt always carries the caret marker");
+    (col, strip(&clean)[row as usize].clone())
+}
+
+// Verifies: gh #27 (a) - line 1 opens with `> ` and line 2 carries the same
+// two columns as a plain pad, so no row steps back to column 0.
+#[test]
+fn every_editor_row_starts_at_the_marker_column() {
+    let mut chat = chat();
+    type_prompt(&mut chat, "alpha");
+    chat.handle_key("\x1b[13;2u"); // shift+enter: a second prompt line
+    type_prompt(&mut chat, "beta");
+
+    chat.editor.cursor_up();
+    chat.editor.cursor_line_start();
+    let (column, row) = caret_row(&chat, 40);
+    assert_eq!(column, 2, "the marker is two columns: {row:?}");
+    assert_eq!(row, "> alpha", "line 1 carries the prompt marker");
+
+    chat.editor.cursor_down();
+    chat.editor.cursor_line_start();
+    let (column, row) = caret_row(&chat, 40);
+    assert_eq!(
+        column, 2,
+        "a continuation line starts at the marker column, not column 0: {row:?}"
+    );
+    assert_eq!(row, "  beta", "line 2 carries the marker-width pad");
+}
+
+// Verifies: gh #27 (a) - the cursor marker's column is uniform across every
+// line of a multiline prompt: the same logical column reports the same raw
+// cursor column on lines 1..n.
+#[test]
+fn the_cursor_column_is_uniform_across_every_editor_line() {
+    let mut chat = chat();
+    for (index, text) in ["alpha", "beta", "gamma"].iter().enumerate() {
+        if index > 0 {
+            chat.handle_key("\x1b[13;2u");
+        }
+        type_prompt(&mut chat, text);
+    }
+
+    // Start on the first line, so each `cursor_down` walks to the next one.
+    chat.editor.cursor_line_start();
+    chat.editor.cursor_up();
+    chat.editor.cursor_up();
+
+    let mut columns = Vec::new();
+    for _ in 0..3 {
+        chat.editor.cursor_line_start();
+        for _ in 0..3 {
+            chat.editor.cursor_right();
+        }
+        columns.push(caret_row(&chat, 40).0);
+        chat.editor.cursor_down();
+    }
+    assert_eq!(
+        columns,
+        vec![5, 5, 5],
+        "column 3 of the buffer, plus the two-column marker, on every line: {columns:?}"
+    );
+}

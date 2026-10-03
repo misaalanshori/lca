@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::engine::core::extract_cursor_position;
+use proptest::prelude::*;
 
 #[test]
 fn typing_and_newline() {
@@ -585,4 +586,228 @@ fn up_and_down_cross_into_history_only_at_the_boundaries() {
     );
     e.cursor_down();
     assert_eq!((e.cursor_line, e.cursor_col), (1, 5), "and it stays there");
+}
+
+// =============================================================================
+// gh #27 / #28: the editor's visual rows - spaces that hold their cells, and
+// arrows that walk the rows the renderer actually drew. Both issues live in
+// the same geometry, which is why they share a cycle: navigation must agree
+// with the rows `render` produces at the current width.
+// =============================================================================
+
+/// The buffer's rows as the terminal shows them: no caret marker, no SGR.
+fn plain_rows(rows: &[String]) -> Vec<String> {
+    rows.iter()
+        .map(|row| crate::engine::text::strip_terminal_sequences(&row.replace(CURSOR_MARKER, "")))
+        .collect()
+}
+
+/// The caret's row and column in `render(width)`'s output.
+fn caret(e: &Editor, width: u16) -> (usize, u16) {
+    let (_, pos) = extract_cursor_position(&e.render(width));
+    let (row, col, _) = pos.expect("every frame carries the caret marker");
+    (row as usize, col)
+}
+
+// Verifies: gh #27 (b) - a space is a cell. The word wrap used to trim the
+// row it broke on, so the spaces at a wrap boundary vanished from the screen
+// (and the caret's char offsets drifted with them). pi's editor keeps them:
+// the break sits after the whitespace, and the continuation starts at the
+// next word (`wordWrapLine`, `editor.md` §3).
+#[test]
+fn spaces_hold_their_cells_at_a_wrap_boundary() {
+    let mut e = Editor::new();
+    let text = "aaaa bbbb cccc dddd eeee ffff";
+    e.set_text(text);
+    // Off the end of the line, so the caret paints an existing character
+    // rather than adding its own end-of-line cell to the count.
+    e.cursor_line_start();
+    let rows = plain_rows(&e.render(10));
+    assert!(rows.len() >= 3, "the line wraps at width 10: {rows:?}");
+
+    // Nothing the user typed is dropped: every space in the buffer is on
+    // screen in some row.
+    let on_screen: usize = rows
+        .iter()
+        .map(|row| row.chars().filter(|c| *c == ' ').count())
+        .sum();
+    let typed = text.chars().filter(|c| *c == ' ').count();
+    assert_eq!(on_screen, typed, "no space was swallowed: {rows:?}");
+
+    // The row the wrap broke on carries the break's space and still fills
+    // the width it was given - the space occupies its cell.
+    assert!(
+        rows[0].ends_with(' '),
+        "the wrap keeps the break's space at the row's end: {rows:?}"
+    );
+    assert_eq!(
+        crate::engine::text::visible_width(&rows[0]),
+        10,
+        "the row's width includes that space: {rows:?}"
+    );
+}
+
+// Verifies: gh #28 (the primary row) - Up/Down move between VISUAL rows of
+// one wrapped logical line. The assertion is made against the rows `render`
+// draws, so it fails if navigation and rendering ever disagree about the
+// geometry (the cycle's interaction constraint).
+#[test]
+fn up_and_down_walk_the_visual_rows_the_renderer_drew() {
+    let mut e = Editor::new();
+    e.set_text("aaaa bbbb cccc dddd eeee ffff gggg");
+    let total = e.render(10).len();
+    assert!(total >= 3, "the line wraps into several rows: {total}");
+
+    let (row, _) = caret(&e, 10);
+    assert_eq!(row, total - 1, "the caret starts on the last rendered row");
+
+    for want in (0..total - 1).rev() {
+        e.cursor_up();
+        assert_eq!(caret(&e, 10).0, want, "Up walks up the rendered rows");
+    }
+    for want in 1..total {
+        e.cursor_down();
+        assert_eq!(caret(&e, 10).0, want, "Down walks down the rendered rows");
+    }
+}
+
+// Verifies: gh #28 - a vertical move keeps the VISUAL column, across several
+// hops in each direction (pi's sticky column, `editor.md` §4).
+#[test]
+fn vertical_moves_keep_the_visual_column() {
+    let mut e = Editor::new();
+    e.set_text("aaaa bbbb cccc dddd eeee ffff gggg");
+    e.render(10);
+    e.cursor_line_start();
+    e.cursor_right();
+    e.cursor_right();
+    let (_, column) = caret(&e, 10);
+    assert_eq!(column, 2, "two cells in from the row's start");
+
+    for hop in 1..=3 {
+        e.cursor_down();
+        assert_eq!(
+            caret(&e, 10),
+            (hop, column),
+            "the visual column sticks going down"
+        );
+    }
+    for hop in (0..=2).rev() {
+        e.cursor_up();
+        assert_eq!(
+            caret(&e, 10),
+            (hop, column),
+            "the visual column sticks going up"
+        );
+    }
+}
+
+// Verifies: gh #28 - crossing a wrap's end moves to the NEIGHBOURING
+// logical line's last/first visual row, not to Home or End.
+#[test]
+fn crossing_the_wrap_enters_the_neighbouring_logical_line() {
+    let mut e = Editor::new();
+    e.set_text("aaaa bbbb cccc dddd\ntail");
+    let total = e.render(10).len();
+    let line_one = total - 1; // `tail` is short: one visual row
+    assert!(line_one >= 2, "line 0 wraps: {total}");
+
+    // The caret starts at the end of the buffer (line 1).
+    assert_eq!(caret(&e, 10).0, line_one);
+
+    // Up from line 1's only row lands on line 0's LAST visual row.
+    e.cursor_up();
+    assert_eq!(e.cursor_line, 0, "the move crossed into line 0");
+    assert_eq!(caret(&e, 10).0, line_one - 1, "on line 0's last row");
+
+    // And back down to line 1.
+    e.cursor_down();
+    assert_eq!(e.cursor_line, 1, "back into line 1");
+    assert_eq!(caret(&e, 10).0, line_one);
+
+    // Up again: line 0's FIRST visual row, keeping the sticky column the
+    // move started from (it began on line 1, column 4).
+    e.cursor_up();
+    e.cursor_up();
+    assert_eq!(e.cursor_line, 0, "the first row of line 0");
+    assert_eq!(caret(&e, 10).0, 0, "and the caret is drawn on row 0");
+    assert_eq!(e.cursor_col, 4, "the visual column carried up with it");
+
+    // And once there, Up keeps pi's edge behaviour: start of the line, no
+    // history jump.
+    e.cursor_up();
+    assert_eq!(
+        (e.cursor_line, e.cursor_col),
+        (0, 0),
+        "Up past the top row: start of the line"
+    );
+    assert!(
+        e.history_index.is_none(),
+        "Up past the top row does not jump into history"
+    );
+
+    // Down from line 0's LAST visual row enters line 1 (already asserted
+    // above); Down past the buffer's last row ends the line, pi's rule.
+    e.cursor_line_end();
+    e.cursor_down();
+    assert_eq!(
+        e.cursor_col,
+        e.current().chars().count(),
+        "Down past the last row: end of the line"
+    );
+}
+
+// Verifies: gh #27 (a) - `Home` and `End` are logical-line operations and
+// are unchanged by visual-row navigation.
+#[test]
+fn home_and_end_still_move_within_the_logical_line() {
+    let mut e = Editor::new();
+    e.set_text("aaaa bbbb cccc dddd eeee ffff");
+    e.render(10);
+    e.cursor_line_end();
+    assert_eq!(caret(&e, 10).0, e.render(10).len() - 1, "End: last row");
+    e.cursor_line_start();
+    assert_eq!(caret(&e, 10).0, 0, "Home: first row");
+    assert_eq!(e.cursor_col, 0, "Home is still column 0 of the line");
+}
+
+// Verifies: gh #27/#28's interaction constraint - the row navigation
+// resolves a position to is the row the renderer paints the caret on, for
+// arbitrary text and width. Either half passing alone is not enough: a
+// geometry that drifts between them is the bug both issues report.
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(50))]
+
+    #[test]
+    fn navigation_walks_exactly_the_rows_the_renderer_drew(
+        text in "[a-z ]{0,80}",
+        width in 8u16..60,
+        col in 0usize..120,
+    ) {
+        let mut e = Editor::new();
+        e.set_text(&text);
+        e.cursor_line_start();
+        for _ in 0..col {
+            e.cursor_right();
+        }
+        let rendered = e.render(width);
+        let drawn = rendered
+            .iter()
+            .position(|row| row.contains(CURSOR_MARKER))
+            .expect("the caret is always painted");
+        let walked = crate::widgets::editor_rows::find_visual_row(
+            &crate::widgets::editor_rows::visual_rows(e.lines(), width as usize),
+            0,
+            e.cursor_col,
+        );
+        prop_assert_eq!(
+            drawn,
+            walked,
+            "render drew row {}, navigation walked row {} (width {}, col {})",
+            drawn,
+            walked,
+            width,
+            e.cursor_col
+        );
+    }
 }

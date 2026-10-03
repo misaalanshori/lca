@@ -8,15 +8,19 @@
 //!
 //! Not ported (documented skips): the full 7-case sticky-column decision
 //! table (the simple preferred-column version below covers the felt
-//! behavior, R7) and the async/debounced autocomplete machinery. Sticky
-//! columns and jump mode are ported (R7).
+//! behavior, R7) and the async/debounced autocomplete machinery. Jump mode
+//! is ported (R7), and the sticky column is a *visual* column since gh #28:
+//! vertical movement crosses the rows [`editor_rows`] draws rather than the
+//! buffer's logical lines.
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use crate::engine::core::CURSOR_MARKER;
 use crate::engine::keybindings::KeybindingsManager;
-use crate::engine::text::{truncate_to_width, visible_width, wrap_text_with_ansi};
+use crate::engine::text::{truncate_to_width, visible_width};
 use crate::widgets::autocomplete::{AutocompleteProvider, Suggestions};
+use crate::widgets::editor_rows;
 
 /// What a key did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,12 +98,20 @@ pub struct Editor {
     /// One-shot input to the kill helpers: whether this key continues a
     /// kill run (captured before `last_kill` is cleared for the next key).
     kill_run: bool,
-    /// lines (pi's sticky column, `editor.md` §4; R7). Cleared by any
-    /// horizontal move or edit.
+    /// lines (pi's sticky column, `editor.md` §4; R7). It is the column
+    /// *within a rendered row*, so a move across a wrap or into a
+    /// neighbouring logical line lands on the same screen column (gh #28).
+    /// Cleared by any horizontal move or edit.
     preferred_col: Option<usize>,
     /// Jump mode (R7): `Some(forward)` awaits the next printable character
     /// as the jump target (`ctrl+]` / `ctrl+alt+]`).
     jump_pending: Option<bool>,
+    /// The width the buffer was last rendered at - the width its visual
+    /// rows, and therefore Up/Down, are computed at. `0` until the first
+    /// render means "one row per logical line". Interior mutability because
+    /// `render(&self)` is what records it, the way pi's editor remembers
+    /// `lastWidth` (`editor.md` §4).
+    last_width: Cell<u16>,
 }
 
 impl Default for Editor {
@@ -131,6 +143,7 @@ impl Editor {
             kill_run: false,
             preferred_col: None,
             jump_pending: None,
+            last_width: Cell::new(0),
         }
     }
 
@@ -438,16 +451,21 @@ impl Editor {
         self.clear_suggestions();
     }
 
-    /// Move the cursor up: inside the buffer first, and into history only
-    /// at the boundary pi defines (`editor.ts` cursorUp) - on the first
-    /// line when the buffer is empty, when already browsing history, or
-    /// with the caret at column 0. Anywhere else on the first line it
-    /// jumps to the start of the line instead (issue #12).
+    /// Move the cursor up a VISUAL row (gh #28), keeping the sticky visual
+    /// column - pi's vertical movement over `buildVisualLineMap`'s rows.
+    /// Inside the buffer first, and into history only at the boundary pi
+    /// defines (`editor.ts` cursorUp): on the first row when the buffer is
+    /// empty, when already browsing history, or with the caret at column 0.
+    /// Anywhere else on the first row it jumps to the start of the line
+    /// instead (issue #12).
     pub fn cursor_up(&mut self) {
-        if self.cursor_line > 0 {
-            let preferred = *self.preferred_col.get_or_insert(self.cursor_col);
-            self.cursor_line -= 1;
-            self.cursor_col = preferred.min(self.current().chars().count());
+        let rows = self.visual_rows();
+        let current = editor_rows::find_visual_row(&rows, self.cursor_line, self.cursor_col);
+        if current > 0 {
+            let preferred = *self
+                .preferred_col
+                .get_or_insert(self.cursor_col.saturating_sub(rows[current].start));
+            self.move_to_visual_row(&rows, current - 1, preferred);
         } else {
             let empty = self.lines.len() == 1 && self.lines[0].is_empty();
             let at_start = self.cursor_col == 0;
@@ -472,15 +490,18 @@ impl Editor {
         self.clear_suggestions();
     }
 
-    /// Move the cursor down: inside the buffer first, then - only while
-    /// already browsing - through history (`editor.ts` cursorDown). At the
-    /// last line without a history open, pi jumps to the end of the line;
-    /// this used to do nothing (issue #12).
+    /// Move the cursor down a VISUAL row (gh #28), keeping the sticky
+    /// visual column. Inside the buffer first, then - only while already
+    /// browsing - through history (`editor.ts` cursorDown). At the buffer's
+    /// last row without a history open, pi jumps to the end of the line.
     pub fn cursor_down(&mut self) {
-        if self.cursor_line + 1 < self.lines.len() {
-            let preferred = *self.preferred_col.get_or_insert(self.cursor_col);
-            self.cursor_line += 1;
-            self.cursor_col = preferred.min(self.current().chars().count());
+        let rows = self.visual_rows();
+        let current = editor_rows::find_visual_row(&rows, self.cursor_line, self.cursor_col);
+        if current + 1 < rows.len() {
+            let preferred = *self
+                .preferred_col
+                .get_or_insert(self.cursor_col.saturating_sub(rows[current].start));
+            self.move_to_visual_row(&rows, current + 1, preferred);
         } else if let Some(idx) = self.history_index {
             if idx + 1 < self.history.len() {
                 self.history_index = Some(idx + 1);
@@ -855,65 +876,81 @@ impl Editor {
     /// inside it (a boundary lands at the start of the next row), and only
     /// the line's last row owns the end-of-line position.
     pub fn render(&self, width: u16) -> Vec<String> {
-        let width = width as usize;
-        let mut out: Vec<String> = Vec::new();
+        // gh #28: the rows drawn here are the rows Up/Down walk, so the
+        // geometry is recorded once, here, for both.
+        self.last_width.set(width);
+        let rows = editor_rows::visual_rows(&self.lines, width as usize);
+        let mut out: Vec<String> = Vec::with_capacity(rows.len());
         let mut cursor_placed = false;
-        for (li, line) in self.lines.iter().enumerate() {
-            let wrapped = if line.is_empty() {
-                vec![String::new()]
-            } else {
-                wrap_text_with_ansi(line, width.max(1))
-            };
-            let last_row = wrapped.len().saturating_sub(1);
-            let mut col_tracker = 0usize;
-            for (ri, visual) in wrapped.iter().enumerate() {
-                let mut rendered = visual.clone();
-                if li == self.cursor_line && !cursor_placed {
-                    let target = self.cursor_col;
-                    let row_chars = visual.chars().count();
-                    let on_row = if ri == last_row {
-                        target >= col_tracker && target <= col_tracker + row_chars
-                    } else {
-                        target >= col_tracker && target < col_tracker + row_chars
-                    };
-                    if on_row {
-                        let offset = target - col_tracker;
-                        let (before, cluster, after) = Self::caret_split(visual, offset);
-                        rendered = if self.paint_caret {
-                            match cluster {
-                                Some(g) => {
-                                    format!("{before}{CURSOR_MARKER}\x1b[7m{g}\x1b[0m{after}")
-                                }
-                                None => format!("{before}{CURSOR_MARKER}\x1b[7m \x1b[0m"),
-                            }
-                        } else {
-                            // The cluster is still text: keep it, and put
-                            // the marker where the caret is.
-                            match cluster {
-                                Some(g) => format!("{before}{CURSOR_MARKER}{g}{after}"),
-                                None => format!("{before}{CURSOR_MARKER}{after}"),
-                            }
-                        };
-                        cursor_placed = true;
-                    }
-                    col_tracker += row_chars;
-                }
-                out.push(rendered);
-            }
-            if li == self.cursor_line
+        for (position, row) in rows.iter().enumerate() {
+            let line = &self.lines[row.line];
+            let text = row.text(line);
+            let mut rendered = text.to_string();
+            if row.line == self.cursor_line
                 && !cursor_placed
-                && let Some(last) = out.last_mut()
+                && self.cursor_col >= row.start
+                && (self.cursor_col < row.end
+                    || (editor_rows::is_last_row_of_line(&rows, position)
+                        && self.cursor_col == row.end))
             {
-                // The cursor landed past every wrapped row (a trimmed
-                // tail): park the painted caret at the line's end anyway.
-                last.push_str(CURSOR_MARKER);
-                if self.paint_caret {
-                    last.push_str("\x1b[7m \x1b[0m");
-                }
+                let offset = self.cursor_col - row.start;
+                let (before, cluster, after) = Self::caret_split(text, offset);
+                rendered = if self.paint_caret {
+                    match cluster {
+                        Some(g) => format!("{before}{CURSOR_MARKER}\x1b[7m{g}\x1b[0m{after}"),
+                        None => format!("{before}{CURSOR_MARKER}\x1b[7m \x1b[0m"),
+                    }
+                } else {
+                    // The cluster is still text: keep it, and put the
+                    // marker where the caret is.
+                    match cluster {
+                        Some(g) => format!("{before}{CURSOR_MARKER}{g}{after}"),
+                        None => format!("{before}{CURSOR_MARKER}{after}"),
+                    }
+                };
                 cursor_placed = true;
+            }
+            out.push(rendered);
+        }
+        if !cursor_placed
+            && let Some(index) = rows.iter().rposition(|row| row.line == self.cursor_line)
+            && let Some(last) = out.get_mut(index)
+        {
+            // Safety net: the caret has no row of its own (a position the
+            // map could not resolve). Park it at its line's end anyway.
+            last.push_str(CURSOR_MARKER);
+            if self.paint_caret {
+                last.push_str("\x1b[7m \x1b[0m");
             }
         }
         out
+    }
+
+    /// The buffer's visual rows at the width it was last rendered at (gh
+    /// #28's navigation geometry). `0` before the first render: no wrap, so
+    /// one row per logical line and movement behaves as it always did.
+    fn visual_rows(&self) -> Vec<editor_rows::VisualRow> {
+        editor_rows::visual_rows(&self.lines, self.last_width.get() as usize)
+    }
+
+    /// Land on a visual row keeping the sticky *visual* column, clamped to
+    /// the row's own end (pi's "target too short: target end") - except on
+    /// a line's last row, which runs to the line's end.
+    fn move_to_visual_row(
+        &mut self,
+        rows: &[editor_rows::VisualRow],
+        target: usize,
+        preferred: usize,
+    ) {
+        let row = rows[target];
+        let line_chars = self.lines[row.line].chars().count();
+        let limit = if editor_rows::is_last_row_of_line(rows, target) {
+            line_chars
+        } else {
+            row.end
+        };
+        self.cursor_line = row.line;
+        self.cursor_col = (row.start + preferred).min(limit);
     }
 
     /// The char index of the previous grapheme-cluster boundary strictly

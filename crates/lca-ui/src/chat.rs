@@ -513,12 +513,18 @@ impl Chat {
         // The autocomplete popup, when open.
         out.extend(self.editor.render_popup(width));
 
-        // The editor, with its prompt marker on the first line.
-        let mut editor_lines = self.editor.render(width.saturating_sub(2));
-        if let Some(first) = editor_lines.first_mut() {
-            *first = format!("{} {first}", (self.theme.accent)(">"));
+        // The editor: the prompt marker on the first row, and its two
+        // columns (`>` + space) as a plain pad on every continuation row,
+        // so every row's text starts at the same visual column and the
+        // cursor marker's column reads the same on lines 1..n (gh #27a).
+        let editor_rows = self.editor.render(width.saturating_sub(2));
+        for (index, row) in editor_rows.into_iter().enumerate() {
+            out.push(if index == 0 {
+                format!("{} {row}", (self.theme.accent)(">"))
+            } else {
+                format!("  {row}")
+            });
         }
-        out.extend(editor_lines);
 
         // The footer.
         out.extend(self.footer_lines(width));

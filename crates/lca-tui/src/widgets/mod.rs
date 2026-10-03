@@ -4,6 +4,7 @@
 
 pub mod autocomplete;
 pub mod editor;
+pub mod editor_rows;
 pub mod image;
 pub mod latex;
 pub mod markdown;
