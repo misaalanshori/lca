@@ -176,6 +176,32 @@ pub enum Record {
         /// Record id in the parent the fork was taken at.
         record_id: String,
     },
+    /// A model switch during the session (gh #8, EFG-013): which model
+    /// left, which arrived, and the provider/profile that will answer for
+    /// it - the log's witness of a switch, including one that spans
+    /// profiles (gh #31: routing follows the model). Additive: a reader
+    /// that predates it skips the line by type (`docs/session-log-format.md`).
+    ModelChange {
+        /// Schema version.
+        v: u32,
+        /// Epoch milliseconds.
+        ts: u64,
+        /// Record identifier.
+        id: String,
+        /// The model the session ran on before this change, when it had
+        /// one. Absent when the session's first model was just picked.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
+        /// The model now in use.
+        to: String,
+        /// Provider extension name that serves `to`.
+        provider: String,
+        /// The owning profile, when the model belongs to a named one
+        /// (absent for the default profile - the same rule the picker's
+        /// `profile` extra uses, gh #31).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+    },
     /// Written on a clean exit; absence is normal after a crash.
     SessionEnd {
         /// Schema version.
@@ -222,6 +248,7 @@ impl Record {
             | Record::ExtensionEvent { v, .. }
             | Record::Compaction { v, .. }
             | Record::ForkPoint { v, .. }
+            | Record::ModelChange { v, .. }
             | Record::SessionEnd { v, .. } => *v,
         }
     }
@@ -237,6 +264,7 @@ impl Record {
             | Record::ExtensionEvent { id, .. }
             | Record::Compaction { id, .. }
             | Record::ForkPoint { id, .. }
+            | Record::ModelChange { id, .. }
             | Record::SessionEnd { id, .. } => Some(id),
             Record::SessionStart { .. } => None,
         }
@@ -254,6 +282,7 @@ impl Record {
             Record::ExtensionEvent { .. } => "extension-event",
             Record::Compaction { .. } => "compaction",
             Record::ForkPoint { .. } => "fork-point",
+            Record::ModelChange { .. } => "model-change",
             Record::SessionEnd { .. } => "session-end",
         }
     }

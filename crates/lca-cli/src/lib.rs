@@ -85,11 +85,12 @@ pub fn split_product_version(product: &str) -> (&str, Option<&str>) {
 /// Split out for the file ceiling (gate 11); everything is re-exported
 /// below, so `lca_cli::Cli` and `crate::Cli` are unchanged.
 mod cli_args;
-pub use cli_args::{Cli, Command, SessionCmd};
+pub use cli_args::{Cli, CliFlags, Command, SessionCmd};
 
 /// `lca ext ...`: resolve, consent, store (FR-DIST-*).
 pub mod ext;
 mod headless;
+mod models;
 mod session_cmds;
 /// Restoring `SIGPIPE`'s default disposition (GitHub issue #19).
 pub mod sigpipe;
@@ -561,9 +562,22 @@ pub fn load_config(
     headless: bool,
     yolo: bool,
 ) -> anyhow::Result<Config> {
+    load_config_flags(cwd, grants, headless, yolo, &CliFlags::default())
+}
+
+/// [`load_config`] with the command line's flag-layer values (`--models`
+/// and friends, gh #8): the flags join the same precedence the `--yolo`
+/// flag already rides, so `lca config` and `/settings` name the source.
+pub fn load_config_flags(
+    cwd: &Path,
+    grants: &GrantStore,
+    headless: bool,
+    yolo: bool,
+    cli: &CliFlags,
+) -> anyhow::Result<Config> {
     let project_file = cwd.join(".lca").join("config.toml");
     let user_file = config_file().exists().then(config_file);
-    let mut flags: BTreeMap<String, String> = BTreeMap::new();
+    let mut flags: BTreeMap<String, String> = cli.layer();
     if yolo {
         // The flag is the loudest layer (FR-CFG-1's precedence): it beats
         // a config file that says `ask`.
@@ -683,6 +697,7 @@ pub async fn run(cli: Cli) -> i32 {
             return exit::INTERNAL;
         }
     };
+    let flags = CliFlags::from_cli(&cli);
     match route(&cli) {
         Route::Headless { prompt } => {
             headless(
@@ -692,6 +707,7 @@ pub async fn run(cli: Cli) -> i32 {
                 &cli.attach,
                 cli.yolo,
                 &cli.allow_host,
+                &flags,
             )
             .await
         }
@@ -701,6 +717,7 @@ pub async fn run(cli: Cli) -> i32 {
             cli.yolo,
             model.as_deref(),
             &cli.allow_host,
+            &flags,
         ),
         Route::Config => config_command(&cwd),
         Route::ResumeList => resume_list(&cwd),
@@ -718,10 +735,11 @@ fn interactive(
     yolo: bool,
     model: Option<&str>,
     allow_host: &[String],
+    flags: &CliFlags,
 ) -> i32 {
     // Wired to `lca-tui` in this phase; kept as one seam so the headless
     // contract stays independently testable.
-    match lca_tui_entry(cwd, resume, yolo, model, allow_host) {
+    match lca_tui_entry(cwd, resume, yolo, model, allow_host, flags) {
         Ok(code) => code,
         Err(err) => {
             eprintln!("error: {err:#}");
@@ -737,8 +755,9 @@ fn lca_tui_entry(
     yolo: bool,
     model: Option<&str>,
     allow_host: &[String],
+    flags: &CliFlags,
 ) -> anyhow::Result<i32> {
-    crate::tui::run(cwd, resume, yolo, model, allow_host)
+    crate::tui::run(cwd, resume, yolo, model, allow_host, flags)
 }
 
 #[cfg(not(feature = "bundled-openai-compat"))]
@@ -748,6 +767,7 @@ fn lca_tui_entry(
     _yolo: bool,
     _model: Option<&str>,
     _allow_host: &[String],
+    _flags: &CliFlags,
 ) -> anyhow::Result<i32> {
     anyhow::bail!("interactive mode requires a bundled provider feature")
 }

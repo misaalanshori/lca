@@ -22,6 +22,7 @@ Environment variables use the `LCA_` prefix with the key uppercased and dots rep
 |---|---|---|---|
 | `provider` | string | `openai-compatible` | The active provider extension's name. |
 | `model` | string | the provider's own default | The active model identifier. `/model` overrides it for a session. |
+| `models.enabled` | list of strings | empty (every offered model) | The model scope: the `/model` listing, the startup pick, and the `Ctrl+P`/`Shift+Ctrl+P` cycle are all cut to it (gh #8, pi's `enabledModels`). A pattern is an exact id, a case-insensitive substring, or a `*` glob, matched against the id, `profile/id`, and the row's label - so `["zen/*"]` and `["zen"]` both scope to the zen profile (gh #31). A file holds a TOML array; `LCA_MODELS_ENABLED` and `--models` take a comma list. Empty means no restriction. |
 | `compaction.threshold` | float 0.0–1.0 | `0.8` | Context-window fraction that triggers compaction (FR-SESS-4). |
 | `provider.retry_limit` | integer | `3` | Retry attempts for retryable transport errors, exponential backoff (FR-CORE-6). |
 | `tool.timeout_seconds` | integer | `120` | Shell command timeout; the command's process tree is killed on expiry (FR-TOOL-5). |

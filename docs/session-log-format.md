@@ -59,6 +59,8 @@ The `v` field is per record, not per file. A file written across a format upgrad
 
 `permission` records a grant decision made during the session. Fields: `action`, `decision` of once, always, or denied, and `pattern` when the decision was always. This is a record of what happened, not the grant store itself.
 
+`model-change` records a model switch (gh #8). Fields: `to` (the model now in use), `provider` (the provider extension that serves it), optional `from` (the model it left; absent when the session had no model yet), and optional `profile` when the model belongs to a named profile (gh #31: routing follows the model, so this record says which endpoint the next request bills). Every switch appends one - a `/model` pick, the picker, or a `Ctrl+P` cycle - and it rides alongside the `meta.model` write rather than replacing it. The type is additive: a reader that does not know `model-change` skips the line (see reading and error handling below), which is exactly why a new record type needs no version bump.
+
 `extension-event` records a load, a disable, a trap, or a capability denial. Fields: `extension`, `event`, and `detail`.
 
 `compaction` marks a compaction. Fields: `replaced_from` and `replaced_to` as record identifiers, `summary` as the replacement content, `strategy` naming the extension that ran, and optional `usage` with the input, output, and cost of the summarization call when the strategy asked the model for one.

@@ -284,6 +284,66 @@ fn environment_names_follow_the_documented_mapping() {
     assert_eq!(config.ui_color(), ColorMode::Never);
 }
 
+// Verifies: gh #8 / EFG-003 (the enabled model set, pi's `enabledModels`)
+// - `models.enabled` is an ordinary layered key: a TOML array in a file,
+// a comma list through the environment and the flag layer, and an unset
+// key means *everything the provider offers* (empty scope = all).
+#[test]
+fn the_enabled_model_scope_merges_from_every_layer() {
+    let dir = scratch("models-enabled");
+    write(
+        &dir.join("user.toml"),
+        "models.enabled = [\"zen/*\", \"*bunny*\"]\n",
+    );
+
+    // 1. A file's array is the scope.
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.models_enabled(), vec!["zen/*", "*bunny*"]);
+
+    // 2. Unset means no restriction: every offered model is in scope.
+    let unset = Config::load(&lca_config::LoadInput::default()).expect("load");
+    assert!(unset.models_enabled().is_empty(), "empty scope = all");
+
+    // 3. The environment reads as a comma list and outranks the file.
+    let env = || {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(
+            "LCA_MODELS_ENABLED".to_string(),
+            "mimo-a, mimo-b".to_string(),
+        );
+        map
+    };
+    let config = Config::load(&lca_config::LoadInput {
+        env: env(),
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.models_enabled(), vec!["mimo-a", "mimo-b"]);
+
+    // 4. `--models a,b` outranks the environment (FR-CFG-1's flag layer).
+    let mut flags = std::collections::BTreeMap::new();
+    flags.insert("models.enabled".to_string(), "only-this".to_string());
+    let config = Config::load(&lca_config::LoadInput {
+        flags,
+        env: env(),
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.models_enabled(), vec!["only-this"]);
+    assert!(
+        config
+            .resolved()
+            .any(|(key, _, source)| key == "models.enabled" && source == MergeSource::Flag),
+        "`/settings` names the flag as the winning source"
+    );
+}
+
 // Verifies: FR-CFG-6 (update check defaults to on interactively, off headless)
 #[test]
 fn update_check_default_depends_on_mode() {

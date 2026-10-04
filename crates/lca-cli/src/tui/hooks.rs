@@ -102,11 +102,14 @@ impl Ui {
             external_editor: Some(Arc::new(external_editor)),
             persist_screen_mode: Some(Arc::new(persist_screen_mode)),
             persist_setting: Some(persist_setting),
+            cycle_model: {
+                let ui = self.clone();
+                Some(Arc::new(move |forward: bool| ui.cycle_model(forward)))
+            },
             models: {
-                let provider = self.provider.clone();
-                let provider_name = self.provider_name.clone();
+                let ui = self.clone();
                 Some(Arc::new(move || {
-                    super::display::model_rows(&provider.list_models(), &provider_name)
+                    super::display::model_rows(&ui.offered_models(), &ui.provider_name)
                 }))
             },
             trust_needed: {

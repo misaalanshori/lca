@@ -73,6 +73,7 @@ fn opencode_go_completes_one_turn() {
         &[],
         false,
         &[],
+        &lca_cli::CliFlags::default(),
     ));
     assert_eq!(
         code, 0,

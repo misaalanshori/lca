@@ -650,6 +650,22 @@ impl Chat {
             self.world.notice = Some("search: ".to_string());
             return Action::Continue;
         }
+        // gh #8 (EFG-003): pi's model cycle - Ctrl+P forward, Ctrl+Shift+P
+        // (Alt+P where a terminal drops the shift) backward. The host does
+        // the switch, so a cycle lands everywhere a `/model` pick does.
+        if self.keybindings.matches(data, "app.model.cycleForward")
+            || self.keybindings.matches(data, "app.model.cycleBackward")
+        {
+            let forward = self.keybindings.matches(data, "app.model.cycleForward");
+            self.world.notice =
+                Some(crate::state::sanitize_block(
+                    &match &self.world.options.hooks.cycle_model {
+                        Some(cycle) => cycle(forward),
+                        None => "model cycling is not available in this host".to_string(),
+                    },
+                ));
+            return Action::Continue;
+        }
         // Ctrl+X Ctrl+E opens the external editor (FR-UI-15).
         if self.pending_ctrl_x {
             self.pending_ctrl_x = false;

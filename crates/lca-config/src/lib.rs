@@ -151,6 +151,9 @@ pub struct Config {
     permissions_mode: Option<String>,
     thinking_visibility: Option<String>,
     permissions_proposals: BTreeMap<String, String>,
+    // gh #8 (EFG-003): the enabled-model scope (pi's `enabledModels`).
+    // Empty = no restriction: every model the provider offers.
+    models_enabled: Vec<String>,
     sources: BTreeMap<String, MergeSource>,
 }
 
@@ -186,6 +189,7 @@ impl Default for Config {
             permissions_mode: None,
             thinking_visibility: None,
             permissions_proposals: BTreeMap::new(),
+            models_enabled: Vec::new(),
             sources: BTreeMap::new(),
         }
     }
@@ -209,6 +213,7 @@ fn dotted_to_env_key(dotted: &str) -> String {
 pub const KNOWN_KEYS: &[&str] = &[
     "provider",
     "model",
+    "models.enabled",
     "compaction.threshold",
     "provider.retry_limit",
     "tool.timeout_seconds",
@@ -245,6 +250,16 @@ fn table_value<'a>(table: &'a toml::Table, dotted: &str) -> Option<&'a toml::Val
     None
 }
 
+/// Split a flag/environment comma list into patterns: trimmed, empties
+/// dropped, so `a, b` and `a,b` are one scope.
+fn csv(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn type_name(value: &toml::Value) -> &'static str {
     match value {
         toml::Value::String(..) => "a string",
@@ -279,6 +294,8 @@ fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigEr
     };
     match key {
         "provider" | "model" => Ok(TypedValue::Text(raw.to_string())),
+        // The flag/environment form of a list key is a comma list.
+        "models.enabled" => Ok(TypedValue::List(csv(raw))),
         "update.check" => raw
             .parse::<bool>()
             .map(TypedValue::Bool)
@@ -354,6 +371,9 @@ fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigEr
 
 enum TypedValue {
     Text(String),
+    /// A list of strings (`models.enabled`), whose flag/environment form
+    /// is a comma list.
+    List(Vec<String>),
     Count(u64),
     Number(f64),
     Bool(bool),
@@ -372,6 +392,7 @@ impl Config {
         for key in [
             "provider",
             "model",
+            "models.enabled",
             "compaction.threshold",
             "provider.retry_limit",
             "tool.timeout_seconds",
@@ -452,6 +473,34 @@ impl Config {
                         invalid(format!("expected a string, got {}", type_name(&value)))
                     })?;
                     this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
+                "models.enabled" => {
+                    let list = match &value {
+                        toml::Value::Array(items) => {
+                            let mut list = Vec::new();
+                            for item in items {
+                                let text = item.as_str().ok_or_else(|| {
+                                    invalid(format!(
+                                        "expected an array of strings, found {}",
+                                        type_name(item)
+                                    ))
+                                })?;
+                                list.push(text.to_string());
+                            }
+                            list
+                        }
+                        // A single string reads as one pattern, so a
+                        // hand-written `models.enabled = "zen/*"` is not
+                        // an error either.
+                        toml::Value::String(text) => csv(text),
+                        other => {
+                            return Err(invalid(format!(
+                                "expected an array of strings, got {}",
+                                type_name(other)
+                            )));
+                        }
+                    };
+                    this.apply(key.to_string(), TypedValue::List(list), source)?;
                 }
                 "update.check" => {
                     let flag = value.as_bool().ok_or_else(|| {
@@ -564,6 +613,7 @@ impl Config {
         for key in [
             "provider",
             "model",
+            "models.enabled",
             "compaction.threshold",
             "provider.retry_limit",
             "tool.timeout_seconds",
@@ -607,6 +657,7 @@ impl Config {
         match (key.as_str(), value) {
             ("provider", TypedValue::Text(v)) => self.provider = v,
             ("model", TypedValue::Text(v)) => self.model = Some(v),
+            ("models.enabled", TypedValue::List(v)) => self.models_enabled = v,
             ("compaction.threshold", TypedValue::Number(v)) => self.compaction_threshold = v,
             ("provider.retry_limit", TypedValue::Count(v)) => self.provider_retry_limit = v,
             ("tool.timeout_seconds", TypedValue::Count(v)) => self.tool_timeout_seconds = v,
@@ -644,6 +695,14 @@ impl Config {
     /// The active model identifier, or `None` for the provider's default.
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    /// The enabled-model scope (`models.enabled`): id patterns the
+    /// picker's listing and the model cycle are cut to (gh #8, pi's
+    /// `enabledModels`). Empty means no restriction - everything the
+    /// provider offers is in scope.
+    pub fn models_enabled(&self) -> &[String] {
+        &self.models_enabled
     }
 
     /// Context-window fraction that triggers compaction (FR-SESS-4).
@@ -741,6 +800,14 @@ impl Config {
                 self.model
                     .clone()
                     .unwrap_or_else(|| "<provider default>".to_string()),
+            ),
+            (
+                "models.enabled",
+                if self.models_enabled.is_empty() {
+                    "<all>".to_string()
+                } else {
+                    self.models_enabled.join(", ")
+                },
             ),
             (
                 "compaction.threshold",

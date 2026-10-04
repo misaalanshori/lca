@@ -162,6 +162,7 @@ pub fn run(
     yolo: bool,
     model: Option<&str>,
     allow_host: &[String],
+    flags: &crate::CliFlags,
 ) -> anyhow::Result<i32> {
     // The interface needs a terminal for raw mode and key events; without
     // one the input read fails with an opaque error. Say what to do instead
@@ -174,7 +175,7 @@ pub fn run(
         return Ok(crate::exit::USAGE);
     }
     let _temp_guard = crate::SessionTempGuard;
-    let ui = Arc::new(Ui::new(cwd, resume, yolo, model, allow_host)?);
+    let ui = Arc::new(Ui::new(cwd, resume, yolo, model, allow_host, flags)?);
     crate::init_session_temp(&ui.session_id());
     let options = ui.options();
     let runner = ui.turn_runner();
@@ -315,6 +316,7 @@ impl Ui {
         yolo: bool,
         model_override: Option<&str>,
         allow_host: &[String],
+        flags: &crate::CliFlags,
     ) -> anyhow::Result<Ui> {
         let Opened {
             data,
@@ -329,7 +331,7 @@ impl Ui {
             initial_records,
             mut initial_tail,
             update_notice,
-        } = open(cwd, resume, yolo, allow_host)?;
+        } = open(cwd, resume, yolo, allow_host, flags)?;
 
         // ADR-0041: the interpreter is resolved once, here, so the tool
         // description, `/settings`, and every call agree - and a configured
@@ -562,6 +564,7 @@ fn open(
     resume: Option<&str>,
     yolo: bool,
     allow_host: &[String],
+    flags: &crate::CliFlags,
 ) -> anyhow::Result<Opened> {
     let data = crate::data_dir();
     let store = Arc::new(SessionStore::new(data.clone()));
@@ -570,7 +573,7 @@ fn open(
             .map_err(|err| anyhow::anyhow!("cannot open the grant store: {err}"))?,
     ));
     let trusted = lock(&grants).is_trusted(cwd);
-    let config = crate::load_config(cwd, &lock(&grants), false, yolo)?;
+    let config = crate::load_config_flags(cwd, &lock(&grants), false, yolo, flags)?;
     // Today's update check, if enabled and due: stamped, then spawned - the
     // startup path never waits on it (FR-CFG-6), and the status line picks
     // the finding up from the shared cell once it lands.
@@ -759,8 +762,10 @@ fn register_compaction(
     None
 }
 
-/// The configured model, or the provider's first when it is ready and the
-/// configuration names none (the honest "no model" state otherwise).
+/// The configured model, or the first model *in the enabled scope* when
+/// the provider is ready and the configuration names none (the honest
+/// "no model" state otherwise): a scope narrower than the provider's list
+/// must not start the session on a model its own cycle cannot reach (gh #8).
 fn resolve_model_id(config: &Config, provider_is_ready: bool, provider: &dyn Provider) -> String {
     let configured = config.model().unwrap_or_default();
     if !configured.is_empty() {
@@ -769,8 +774,7 @@ fn resolve_model_id(config: &Config, provider_is_ready: bool, provider: &dyn Pro
         // An empty id counts as no model: a provider that answered a model
         // probe with something unparseable must not leave the session with
         // a blank model label and a `complete` call the extension refuses.
-        provider
-            .list_models()
+        crate::models::filter_enabled(provider.list_models(), config.models_enabled())
             .into_iter()
             .map(|model| model.id)
             .find(|id| !id.is_empty())

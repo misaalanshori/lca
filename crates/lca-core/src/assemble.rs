@@ -123,7 +123,11 @@ pub fn assemble_with(
             | Record::SessionEnd { .. }
             | Record::ForkPoint { .. }
             | Record::Permission { .. }
-            | Record::ExtensionEvent { .. } => {}
+            | Record::ExtensionEvent { .. }
+            // A model switch is history for a reader, not content for the
+            // model (gh #8): the next request runs on the new model
+            // anyway, which the request itself names.
+            | Record::ModelChange { .. } => {}
             Record::User {
                 content,
                 attachments,

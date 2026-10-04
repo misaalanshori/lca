@@ -144,9 +144,25 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
             def!(&["ctrl+t"], "Expand the thinking run"),
         ),
         ("app.search", def!(&["ctrl+r"], "Search the transcript")),
+        // gh #8 (EFG-003): pi's model-cycle keys take `ctrl+p`, the
+        // muscle memory the issue is about. The extension panel moves to
+        // `alt+x` - a key pi does not claim, so a later pi-parity binding
+        // never has to move it again.
         (
             "app.panel.toggle",
-            def!(&["ctrl+p"], "Toggle the extension panel"),
+            def!(&["alt+x"], "Toggle the extension panel"),
+        ),
+        (
+            "app.model.cycleForward",
+            def!(&["ctrl+p"], "Cycle to the next model"),
+        ),
+        (
+            "app.model.cycleBackward",
+            // pi's map: `shift+ctrl+p`, with `alt+p` where a terminal
+            // cannot report the shift (pi's Windows/WSL key). The registry
+            // takes no platform forks, so both are defaults: a terminal
+            // that sends one sends that one.
+            def!(&["shift+ctrl+p", "alt+p"], "Cycle to the previous model"),
         ),
         (
             "app.editor.external",
@@ -402,6 +418,45 @@ mod tests {
         assert!(kb.matches("\x13", "tui.input.submit"));
         assert!(!kb.matches("\r", "tui.input.submit"));
         assert!(kb.keys("tui.input.tab").is_empty());
+    }
+
+    // Verifies: gh #8 (EFG-003) - pi's model-cycle keys are the defaults
+    // the issue asks for, exactly one action claims `ctrl+p`, and the
+    // extension panel kept a key of its own after moving (`alt+x`).
+    #[test]
+    fn the_model_cycle_keys_are_pis_and_ctrl_p_is_claimed_once() {
+        let kb = KeybindingsManager::new();
+        assert!(
+            kb.matches("\x10", "app.model.cycleForward"),
+            "Ctrl+P cycles"
+        );
+        assert!(
+            kb.matches("\x1bp", "app.model.cycleBackward"),
+            "Alt+P is the backward key pi keeps for terminals that drop the shift"
+        );
+        assert_eq!(
+            kb.keys("app.model.cycleBackward"),
+            vec!["shift+ctrl+p", "alt+p"],
+            "both of pi's backward keys are defaults"
+        );
+        assert!(
+            !kb.matches("\x10", "app.panel.toggle"),
+            "Ctrl+P is the cycle, not the panel"
+        );
+        assert!(
+            kb.matches("\x1bx", "app.panel.toggle"),
+            "alt+x is the panel"
+        );
+        let claimants: Vec<&str> = tui_keybindings()
+            .iter()
+            .filter(|(_, def)| def.default_keys.contains(&"ctrl+p"))
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(
+            claimants,
+            vec!["app.model.cycleForward"],
+            "one action claims Ctrl+P"
+        );
     }
 
     #[test]

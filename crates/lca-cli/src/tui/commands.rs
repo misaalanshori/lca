@@ -13,6 +13,15 @@ use super::Ui;
 use super::display::model_effect_on;
 
 impl Ui {
+    /// Every model this session offers: the provider's list across its
+    /// profiles (gh #31), cut to the enabled scope (`models.enabled` /
+    /// `--models`, gh #8). The picker's listing, the model cycle, and
+    /// `/model <name>` all read this one list, so what a user can see is
+    /// what the keys can reach; an empty scope is no restriction.
+    pub(super) fn offered_models(&self) -> Vec<lca_protocol::ModelInfo> {
+        crate::models::filter_enabled(self.provider.list_models(), self.config.models_enabled())
+    }
+
     /// The interface's options (S1): the static inputs plus the closure the
     /// interface calls for every slash command.
     pub(super) fn options(self: &Arc<Self>) -> UiOptions {
@@ -30,7 +39,7 @@ impl Ui {
             initial_lines: self.initial_head.clone(),
             initial_records: self.initial_records.clone(),
             initial_tail_lines: self.initial_tail.clone(),
-            models: super::display::model_rows(&self.provider.list_models(), &self.provider_name),
+            models: super::display::model_rows(&self.offered_models(), &self.provider_name),
             // The session's prompt channel (run publishes its sender here)
             // and the consent flow's rows for the picker (gh #31 review).
             prompt_slot: self.prompt_slot.clone(),
@@ -321,7 +330,7 @@ impl Ui {
     /// `/model`: the picker, or a named switch that moves the live cell, the
     /// footer window, and the compaction backend together.
     fn command_model(self: &Arc<Self>, argument: &str) -> CommandEffect {
-        let models = self.provider.list_models();
+        let models = self.offered_models();
         // An empty list with an env-configured endpoint means live
         // discovery is about to happen (gh #31 review): consent first,
         // off this thread so the modal can render. The list arrives
@@ -339,6 +348,14 @@ impl Ui {
             .identity_cell
             .lock()
             .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        // The model the session ran on before this command: gh #8's
+        // `model-change` record names it, and only a *change* appends one.
+        let previous = self
+            .model_cell
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .id
             .clone();
         let effect = model_effect_on(
             &models,
@@ -361,16 +378,68 @@ impl Ui {
         // ADR-0024: a switch moves the model everywhere it is read, and
         // `meta.json` is one of those readers' source (gh #20) - written
         // the moment the model is chosen, so a session that switches and
-        // then closes says what it ran on.
-        if !argument.trim().is_empty()
-            && !chosen.id.is_empty()
-            && let Err(err) =
+        // then closes says what it ran on. gh #8: the same moment appends
+        // a `model-change` record, but only when the model actually
+        // changed - reopening the picker or re-picking the active model is
+        // no change.
+        if !argument.trim().is_empty() && !chosen.id.is_empty() {
+            let session = self.session();
+            if chosen.id != previous {
+                let profile = models
+                    .iter()
+                    .find(|model| model.id == chosen.id)
+                    .and_then(|model| model.extras.get("profile").cloned());
+                let record = crate::models::model_change_record(
+                    Some(&previous),
+                    &chosen.id,
+                    &self.provider_name,
+                    profile.as_deref(),
+                );
+                if let Err(err) = self.store.append(&session, record) {
+                    return CommandEffect::ShowWidget(format!(
+                        "cannot record the model change: {err}"
+                    ));
+                }
+            }
+            if let Err(err) =
                 self.store
-                    .record_model_used(&self.session(), &self.provider_name, &chosen.id)
-        {
-            return CommandEffect::ShowWidget(format!("cannot update the session metadata: {err}"));
+                    .record_model_used(&session, &self.provider_name, &chosen.id)
+            {
+                return CommandEffect::ShowWidget(format!(
+                    "cannot update the session metadata: {err}"
+                ));
+            }
         }
         effect
+    }
+
+    /// One step of the model cycle (gh #8, pi's `cycleForward` /
+    /// `cycleBackward`): the next or previous model of the enabled scope,
+    /// wrapping, applied through `command_model` - so a cycle is a
+    /// `/model` switch in every respect (same cells, same footer, same
+    /// `model-change` record, same `meta.model` write). Returns the
+    /// notice to show; pi's two singleton messages included.
+    pub(super) fn cycle_model(self: &Arc<Self>, forward: bool) -> String {
+        let models = self.offered_models();
+        let current = self
+            .model_cell
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .id
+            .clone();
+        let index = models.iter().position(|model| model.id == current);
+        let Some(next) = crate::models::cycle_index(index, models.len(), forward) else {
+            return if self.config.models_enabled().is_empty() {
+                "only one model available".to_string()
+            } else {
+                "only one model in scope".to_string()
+            };
+        };
+        let target = models[next].id.clone();
+        match self.command_model(&target) {
+            CommandEffect::ShowWidget(text) => text,
+            _ => format!("model for this session: {}", self.provider_name),
+        }
     }
 
     /// Take the rows the endpoint consent discovered for the picker (one

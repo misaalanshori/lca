@@ -171,6 +171,7 @@ pub async fn headless(
     attachments: &[std::path::PathBuf],
     yolo: bool,
     allow_host: &[String],
+    flags: &crate::CliFlags,
 ) -> i32 {
     let data = data_dir();
     let store = SessionStore::new(data.clone());
@@ -181,7 +182,7 @@ pub async fn headless(
             return exit::INTERNAL;
         }
     };
-    let config = match load_config(cwd, &lock(&grants), true, yolo) {
+    let config = match load_config_flags(cwd, &lock(&grants), true, yolo, flags) {
         Ok(config) => config,
         Err(err) => {
             eprintln!("error: {err}");
@@ -396,8 +397,10 @@ fn wire(
     let model_id = {
         let configured = config.model().unwrap_or_default();
         if configured.is_empty() {
-            provider
-                .list_models()
+            // The enabled scope picks here too (gh #8): headless has no
+            // cycle, but it agrees with the interface about which models
+            // this configuration offers.
+            crate::models::filter_enabled(provider.list_models(), config.models_enabled())
                 .into_iter()
                 .map(|model| model.id)
                 .find(|id| !id.is_empty())

@@ -400,6 +400,12 @@ pub enum TrustChoice {
     Session(bool),
 }
 
+/// Cycles the session's model one step (`"forward"` / `"backward"`),
+/// returning the notice to show (gh #8, pi's `cycleForward`/`cycleBackward`).
+/// The host owns the switch, so a cycle is a `/model` switch in every
+/// respect: same cells, same footer, same `model-change` record.
+pub type ModelCycle = Arc<dyn Fn(bool) -> String + Send + Sync>;
+
 /// Applies a trust choice, returning the notice to show.
 pub type TrustApply = Arc<dyn Fn(TrustChoice) -> String + Send + Sync>;
 /// Whether the project still needs a trust decision (opens the modal at
@@ -440,6 +446,8 @@ pub struct UiHooks {
     /// The live model list for `/model` (falls back to the startup
     /// `UiOptions::models` when absent).
     pub models: Option<ModelList>,
+    /// One step of the model cycle for the cycle keys (`true` = forward).
+    pub cycle_model: Option<ModelCycle>,
     /// Applies a `/trust` choice.
     pub trust_apply: Option<TrustApply>,
     /// Whether the project needs a trust decision at startup.

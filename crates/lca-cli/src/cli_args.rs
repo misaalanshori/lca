@@ -44,6 +44,13 @@ pub struct Cli {
     /// Model identifier.
     #[arg(long = "model", value_name = "MODEL")]
     pub model: Option<String>,
+    // gh #8 (EFG-003): pi's `--models` - the enabled-model scope that the
+    // picker's listing and the model cycle are both cut to.
+    /// Restrict the model list and the model cycle to a comma-separated
+    /// list of id patterns (a pattern may be an id, a substring, or a
+    /// `*` glob; unset = every offered model).
+    #[arg(long = "models", value_name = "PATTERNS")]
+    pub models: Option<String>,
     // gh #29 (QA-004): the friction path for a scripted run.
     /// Allow an endpoint host for this run only, never persisted (repeatable).
     #[arg(long = "allow-host", value_name = "HOST", value_parser = crate::net_consent::parse_allow_host)]
@@ -113,4 +120,32 @@ pub enum SessionCmd {
         /// The session whose fork tree to sweep.
         session: String,
     },
+}
+
+/// The command line's configuration-backed values: the flags that ride
+/// the flag layer of the configuration merge (FR-CFG-1) instead of being
+/// read straight off the parsed command line, so `/settings` reports the
+/// winning source for them like it does for every other key.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CliFlags {
+    /// `--models`: the enabled-model scope (`models.enabled`).
+    pub models: Option<String>,
+}
+
+impl CliFlags {
+    /// The values this command line carries into the flag layer.
+    pub fn from_cli(cli: &Cli) -> CliFlags {
+        CliFlags {
+            models: cli.models.clone(),
+        }
+    }
+
+    /// The flag layer as `lca_config::LoadInput` wants it.
+    pub fn layer(&self) -> std::collections::BTreeMap<String, String> {
+        let mut flags = std::collections::BTreeMap::new();
+        if let Some(models) = &self.models {
+            flags.insert("models.enabled".to_string(), models.clone());
+        }
+        flags
+    }
 }
