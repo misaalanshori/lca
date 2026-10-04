@@ -307,6 +307,15 @@ impl ModelsGuest for OpenAiCompatWasm {
             .find(|pair| pair.key == "models")
             .map(|pair| pair.value.clone())
             .unwrap_or_else(|| GUEST_CAP.credentials_get("models").unwrap_or_default());
+        // No live discovery here (gh #31 review): a sandboxed guest sees
+        // no environment, so it cannot tell "the host configured an
+        // endpoint and no list yet" from "nothing is configured" - and
+        // guessing turns every picker call into a refused request (the
+        // denials an installed provider journals are the receipt that
+        // shows it). Its endpoint comes from credentials, which a login
+        // writes, and that login's discovery - consented, and re-run after
+        // the grant - fills this list. The env-only session the receipt is
+        // about runs the bundled form, which does discover.
         // gh #34's window resolution and gh #31's per-model profile both
         // come from `profiles`: one resolver, no drift (NFR-25).
         let windows = load_context_windows(&GUEST_CAP);

@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 pub(super) fn options() -> UiOptions {
     UiOptions {
+        prompt_slot: Default::default(),
+        pending_models: None,
         model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
         context_window: Arc::new(std::sync::Mutex::new(0)),
         thinking: Arc::new(std::sync::Mutex::new(None)),

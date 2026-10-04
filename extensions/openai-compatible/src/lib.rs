@@ -903,7 +903,7 @@ pub(crate) fn host_of(base_url: &str) -> String {
 /// hoc grant is offered *after* submit, so a first login often cannot
 /// reach the network here) - and the caller falls back to the preset's
 /// curated short list.
-fn discover_models(
+pub(crate) fn discover_models(
     cap: &dyn ProviderCap,
     base_url: &str,
     key: Option<&str>,

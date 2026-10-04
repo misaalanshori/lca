@@ -520,6 +520,16 @@ pub struct UiOptions {
     /// Model rows (`(id, label)`) offered by `/model <Tab>` argument
     /// completion: the menu shows the label, the insert is the id.
     pub models: Vec<crate::state::ModelRow>,
+    /// The session's permission-prompt sender, published by `run` so the
+    /// host's own consent can ask *outside* a turn too (gh #31 review: the
+    /// picker's endpoint consent). The interface owns the channel for the
+    /// whole session; `None` before `run` starts.
+    pub prompt_slot:
+        std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::SyncSender<PromptRequest>>>>,
+    /// Rows the host has ready for the `/model` picker after its consent
+    /// finished (that flow's second step): a non-empty list opens the
+    /// picker once; the host clears its cell as it hands them over.
+    pub pending_models: Option<ModelList>,
     /// Workspace root for path completion.
     pub workspace: PathBuf,
     /// Extension trees per region (`None`: no ui-capable extension is
@@ -758,6 +768,8 @@ mod tests {
 
     fn options() -> UiOptions {
         UiOptions {
+            prompt_slot: Default::default(),
+            pending_models: None,
             model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
             context_window: Arc::new(std::sync::Mutex::new(0)),
             thinking: Arc::new(std::sync::Mutex::new(None)),

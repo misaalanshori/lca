@@ -115,6 +115,25 @@ pub async fn start_mock(replies: Vec<Reply>) -> Mock {
                             .lock()
                             .expect("lock")
                             .push(String::from_utf8_lossy(&bytes).into_owned());
+                        // `GET /models` is the provider's model discovery
+                        // (gh #31 review): answer it with a list, JSON like
+                        // an OpenAI-shaped endpoint, and leave the reply
+                        // queue alone so a turn's scripted answers stay in
+                        // step.
+                        if parts.method == hyper::Method::GET
+                            && parts.uri.path().ends_with("/models")
+                        {
+                            let body = serde_json::to_vec(&serde_json::json!({
+                                "data": [{"id": "zen-free"}, {"id": "zen-lite"}]
+                            }))
+                            .expect("serialize");
+                            let response = Response::builder()
+                                .status(200)
+                                .header("content-type", "application/json")
+                                .body(Full::new(Bytes::from(body)))
+                                .expect("response");
+                            return Ok::<_, std::convert::Infallible>(response);
+                        }
                         let reply = replies
                             .lock()
                             .expect("lock")

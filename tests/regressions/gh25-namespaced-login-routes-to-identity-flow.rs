@@ -71,6 +71,8 @@ fn chat(seams: &Seams) -> Chat {
     let options_seams = seams.clone();
     let invoke_seams = seams.clone();
     let options = UiOptions {
+        prompt_slot: Default::default(),
+        pending_models: None,
         model_label: Arc::new(Mutex::new("p/m".into())),
         context_window: Arc::new(Mutex::new(0)),
         thinking: Arc::new(Mutex::new(None)),

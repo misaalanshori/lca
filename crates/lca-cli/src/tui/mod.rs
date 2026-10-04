@@ -18,7 +18,9 @@ use std::sync::{Arc, Mutex};
 
 use lca_config::Config;
 use lca_core::{AgentConfig, ExtensionRegistry};
-use lca_permissions::{GrantStore, Proposals, SharedPrompt};
+use lca_permissions::{
+    Decision, GrantStore, PermissionPrompt, ProposalDiff, Proposals, SharedPrompt,
+};
 use lca_provider::Provider;
 use lca_session::{Session, SessionStore};
 use lca_tools::ToolExecutor;
@@ -110,6 +112,16 @@ pub(crate) struct Ui {
     proposals: Option<Proposals>,
     /// The swappable prompt slot capability engines share.
     shared_prompt: SharedPrompt,
+    /// The interface's session-lifetime prompt sender: published into
+    /// `UiOptions` for `run` to fill, read by [`SessionPrompt`] so the
+    /// host's own consent can ask outside a turn (gh #31 review).
+    prompt_slot: Arc<Mutex<Option<std::sync::mpsc::SyncSender<lca_ui::PromptRequest>>>>,
+    /// Rows discovered after the endpoint consent landed, for the picker
+    /// to open with (`None`: nothing pending).
+    pending_models: Arc<Mutex<Option<Vec<lca_ui::ModelRow>>>>,
+    /// Whether the picker's endpoint consent is already asking, so a
+    /// second `/model` while it waits does not ask again.
+    consent_in_flight: Arc<std::sync::atomic::AtomicBool>,
     /// Extension render regions (FR-UI-1).
     render_regions: Option<RegionRenderer>,
     /// Extension ui events (FR-UI-6).
@@ -169,6 +181,45 @@ pub fn run(
     let result = lca_ui::run(options, runner);
     ui.close();
     result
+}
+
+/// The prompt the host's own consent asks through when no turn is running:
+/// it sends the request into the interface's session channel and waits for
+/// the answer, exactly as a turn's prompt does, so the *same*
+/// [`crate::net_consent::endpoint_consent`] seam works before `/model`'s
+/// live discovery (gh #31 review; gh #29's rule that every live request
+/// to a profile endpoint is consented first). With no channel yet - before
+/// `run` starts - it denies, which is the honest answer with nobody to ask.
+pub(super) struct SessionPrompt {
+    slot: Arc<Mutex<Option<std::sync::mpsc::SyncSender<lca_ui::PromptRequest>>>>,
+}
+
+impl PermissionPrompt for SessionPrompt {
+    fn ask(&mut self, action: &lca_permissions::Action) -> Decision {
+        let Some(sender) = self
+            .slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        else {
+            return Decision::Denied;
+        };
+        let (respond, response) = std::sync::mpsc::sync_channel(1);
+        if sender
+            .send(lca_ui::PromptRequest {
+                action: action.display(),
+                respond,
+            })
+            .is_err()
+        {
+            return Decision::Denied;
+        }
+        response.recv().unwrap_or(Decision::Denied)
+    }
+
+    fn review_proposals(&mut self, _diff: &ProposalDiff) -> bool {
+        false
+    }
 }
 
 /// A stashed `/login` answer: the provider, the chosen option id, and the
@@ -313,6 +364,16 @@ impl Ui {
         // extension's own process/pty command asks the user exactly like a
         // model command does.
         let shared_prompt = SharedPrompt::default();
+        // The host's own consent (the picker's endpoint consent, gh #31
+        // review) asks through the same seam a turn's prompt uses, and it
+        // must work before any turn has run - so a session-lifetime prompt
+        // goes in here; `turn_worker` replaces it with the turn's own,
+        // which now rides the same session channel anyway.
+        let prompt_slot: Arc<Mutex<Option<std::sync::mpsc::SyncSender<lca_ui::PromptRequest>>>> =
+            Arc::new(Mutex::new(None));
+        shared_prompt.set(Arc::new(Mutex::new(SessionPrompt {
+            slot: prompt_slot.clone(),
+        })));
 
         let mut registry = load_registry(
             cwd,
@@ -436,6 +497,9 @@ impl Ui {
             resolved_shell_error,
             proposals,
             shared_prompt,
+            prompt_slot,
+            pending_models: Arc::new(Mutex::new(None)),
+            consent_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_regions,
             ui_events,
             initial_head,

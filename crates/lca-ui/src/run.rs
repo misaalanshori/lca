@@ -17,6 +17,7 @@ use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::main_screen::MainScreenRenderer;
 use lca_tui::engine::terminal::{InputHandler, ProcessTerminal, ResizeHandler, Terminal};
 
+use crate::ModelPicker;
 use crate::chat::Chat;
 use crate::state::{Action, PermissionModal, PromptRequest, TurnChannels, TurnRunner, UiOptions};
 
@@ -258,6 +259,15 @@ fn handle_input(
 /// returning `Ok(0)`.
 pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     let keybindings = Arc::new(KeybindingsManager::new());
+    // One permission-prompt channel for the session, not one per turn
+    // (gh #31 review): the host's endpoint consent asks outside a turn
+    // too - when `/model` discovers an ungranted endpoint - and the
+    // modal can only appear if this receiver is still being drained.
+    let (prompt_tx, prompt_rx) = std::sync::mpsc::sync_channel(4);
+    *options
+        .prompt_slot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(prompt_tx.clone());
     let mut chat = Chat::new(options, keybindings);
     let mut terminal = ProcessTerminal::new();
     let (input_tx, input_rx) = std::sync::mpsc::channel::<String>();
@@ -288,7 +298,7 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     // preference; the replies set the auto theme when they arrive.
     terminal.write("\x1b]11;?\x07\x1b[?996n");
 
-    let mut turns = TurnState::default();
+    let mut turns = TurnState::new(prompt_tx, prompt_rx);
     let mut dirty = true;
 
     let result = 'main: loop {
@@ -308,6 +318,11 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         // R4: a background login/identity step reports back here, so a slow
         // OAuth callback never blocks the loop.
         if poll_login(&mut chat) {
+            dirty = true;
+        }
+        // ...and the endpoint consent's second step: rows the host
+        // discovered once the grant landed open the picker here (gh #31).
+        if poll_pending_models(&mut chat) {
             dirty = true;
         }
         // ...and so does a background `/compact`: the summarization call
@@ -381,16 +396,34 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
 }
 
 /// The running turn's mutable state (R16), so the loop body stays a loop.
-#[derive(Default)]
 struct TurnState {
     active: Option<std::thread::JoinHandle<TurnOutcome>>,
     turn_rx: Option<Receiver<lca_protocol::TurnEvent>>,
-    prompt_rx: Option<Receiver<PromptRequest>>,
+    /// The session's prompt receiver: kept for the whole session, so a
+    /// consent asked outside a turn still reaches the modal.
+    prompt_rx: Receiver<PromptRequest>,
+    /// The session's prompt sender; each turn gets a clone.
+    prompt_tx: std::sync::mpsc::SyncSender<PromptRequest>,
     cancel: Option<lca_tools::CancelFlag>,
     aborted: bool,
 }
 
 impl TurnState {
+    /// The session's prompt channel (created once in `run`).
+    fn new(
+        prompt_tx: std::sync::mpsc::SyncSender<PromptRequest>,
+        prompt_rx: Receiver<PromptRequest>,
+    ) -> TurnState {
+        TurnState {
+            active: None,
+            turn_rx: None,
+            prompt_rx,
+            prompt_tx,
+            cancel: None,
+            aborted: false,
+        }
+    }
+
     /// Reap a finished turn (returns whether one finished).
     fn reap(&mut self, chat: &mut Chat, terminal: &mut dyn Terminal) -> bool {
         let Some(handle) = self.active.take_if(|h| h.is_finished()) else {
@@ -408,7 +441,8 @@ impl TurnState {
             }
         }
         self.turn_rx = None;
-        self.prompt_rx = None;
+        // The prompt receiver stays: a host-side consent asked between
+        // turns (the picker's endpoint consent) must still find it.
         self.cancel = None;
         if let Some(error) = &outcome.error {
             chat.world.notice = Some(crate::state::sanitize_text(error));
@@ -441,7 +475,7 @@ impl TurnState {
         };
         let queue = chat.take_submitted_queue();
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
-        let (prompt_tx, prompt_rx_inner) = std::sync::mpsc::sync_channel(4);
+        let prompt_tx = self.prompt_tx.clone();
         let cancel = lca_tools::CancelFlag::new();
         self.cancel = Some(cancel.clone());
         let steer = lca_protocol::steer_queue();
@@ -454,7 +488,6 @@ impl TurnState {
         chat.begin_turn(steer);
         terminal.set_progress(true);
         self.turn_rx = Some(event_rx);
-        self.prompt_rx = Some(prompt_rx_inner);
         self.active = Some(runner(text, channels, cancel));
         true
     }
@@ -474,8 +507,7 @@ impl TurnState {
             changed = true;
         }
         if chat.world.permission.is_none()
-            && let Some(rx) = &self.prompt_rx
-            && let Ok(request) = rx.try_recv()
+            && let Ok(request) = self.prompt_rx.try_recv()
         {
             chat.world.permission = Some(PermissionModal {
                 action: request.action,
@@ -513,6 +545,22 @@ fn poll_login(chat: &mut Chat) -> bool {
         }
         None => false,
     }
+}
+
+/// Open the `/model` picker when the host has rows ready for it - the
+/// consent flow's second step (gh #31 review): the ask ran off-thread, so
+/// the modal could render, and the list it produced arrives here. One-shot:
+/// the host clears its cell as it hands the rows over.
+fn poll_pending_models(chat: &mut Chat) -> bool {
+    let Some(pending) = chat.world.options.pending_models.clone() else {
+        return false;
+    };
+    let rows = pending();
+    if rows.is_empty() || chat.model_picker.is_some() {
+        return false;
+    }
+    chat.model_picker = Some(ModelPicker::new(rows));
+    true
 }
 
 /// Fire the auto-approve countdown when it expires (returns whether
@@ -558,6 +606,8 @@ mod tests {
     fn chat() -> Chat {
         Chat::new(
             UiOptions {
+                prompt_slot: Default::default(),
+                pending_models: None,
                 model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
                 context_window: Arc::new(std::sync::Mutex::new(0)),
                 thinking: Arc::new(std::sync::Mutex::new(None)),

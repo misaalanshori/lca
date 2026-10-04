@@ -31,6 +31,13 @@ impl Ui {
             initial_records: self.initial_records.clone(),
             initial_tail_lines: self.initial_tail.clone(),
             models: super::display::model_rows(&self.provider.list_models(), &self.provider_name),
+            // The session's prompt channel (run publishes its sender here)
+            // and the consent flow's rows for the picker (gh #31 review).
+            prompt_slot: self.prompt_slot.clone(),
+            pending_models: Some({
+                let ui = self.clone();
+                Arc::new(move || ui.take_pending_models())
+            }),
             plain: self.config.ui_color() == ColorMode::Never,
             yolo: crate::lock(&self.grants).permission_mode()
                 == lca_permissions::PermissionMode::Yolo,
@@ -313,8 +320,20 @@ impl Ui {
 
     /// `/model`: the picker, or a named switch that moves the live cell, the
     /// footer window, and the compaction backend together.
-    fn command_model(&self, argument: &str) -> CommandEffect {
+    fn command_model(self: &Arc<Self>, argument: &str) -> CommandEffect {
         let models = self.provider.list_models();
+        // An empty list with an env-configured endpoint means live
+        // discovery is about to happen (gh #31 review): consent first,
+        // off this thread so the modal can render. The list arrives
+        // through `pending_models` once the answer lands, so the picker
+        // opens then; until then this says what is happening instead of
+        // the misleading "no models".
+        if models.is_empty() && argument.trim().is_empty() && self.start_model_consent() {
+            let host = crate::net_consent::env_configured_host(&self.data).unwrap_or_default();
+            return CommandEffect::ShowWidget(format!(
+                "approving {host}: allow the prompt and the model list opens"
+            ));
+        }
         // E5: the label keeps the preset identity across a model switch.
         let identity = self
             .identity_cell
@@ -352,6 +371,76 @@ impl Ui {
             return CommandEffect::ShowWidget(format!("cannot update the session metadata: {err}"));
         }
         effect
+    }
+
+    /// Take the rows the endpoint consent discovered for the picker (one
+    /// shot: the cell clears as the rows leave it).
+    fn take_pending_models(&self) -> Vec<lca_ui::ModelRow> {
+        self.pending_models
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .unwrap_or_default()
+    }
+
+    /// The picker's endpoint consent (gh #31 review): every live request
+    /// to a profile endpoint runs through `endpoint_consent` first, and
+    /// `/model`'s `GET /models` discovery is one. Returns whether the ask
+    /// is now in flight.
+    ///
+    /// The ask runs on its own thread because the interface must keep
+    /// painting for the modal to appear - the same reason a turn's consent
+    /// is not answered on the loop's thread. A granted host never gets
+    /// here: `endpoint_consent` itself costs one grant-store read.
+    fn start_model_consent(self: &Arc<Self>) -> bool {
+        let Some(host) = crate::net_consent::env_configured_host(&self.data) else {
+            return false;
+        };
+        if crate::ungranted_host(&self.grants, &self.cwd, Some(host.clone())).is_none() {
+            return false; // already granted: discovery is free to run
+        }
+        let in_flight = self.consent_in_flight.clone();
+        if in_flight.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return true; // already asking
+        }
+        let ui = self.clone();
+        std::thread::spawn(move || {
+            let session = ui.session();
+            let mut prompt = super::SessionPrompt {
+                slot: ui.prompt_slot.clone(),
+            };
+            let outcome = crate::net_consent::endpoint_consent(
+                &host,
+                &ui.grants,
+                &ui.cwd,
+                &mut prompt,
+                &ui.store,
+                &session,
+            );
+            match outcome {
+                crate::net_consent::EndpointConsent::Denied => {
+                    *ui.login_pending.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(lca_ui::LoginNext::Message(format!(
+                            "the endpoint {host} is not granted for this project - approve it \
+                             or run /login"
+                        )));
+                }
+                _ => {
+                    // The grant landed: discovery (the extension's live
+                    // `GET /models`) now runs inside `list_models`, and
+                    // the rows go to the picker through its one-shot cell.
+                    let identity = ui
+                        .identity_cell
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .clone();
+                    let rows = super::display::model_rows(&ui.provider.list_models(), &identity);
+                    *ui.pending_models.lock().unwrap_or_else(|p| p.into_inner()) = Some(rows);
+                }
+            }
+            in_flight.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+        true
     }
 
     /// The session the interface is showing, cloned out of the cell.

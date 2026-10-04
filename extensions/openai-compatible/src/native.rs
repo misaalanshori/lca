@@ -139,6 +139,46 @@ impl ExtensionDispatch for OpenAiCompat {
         // gh #34's window resolution and gh #31's per-model profile both
         // come from `profiles`, so this list and the WASM form's are built
         // by the same code (NFR-25).
+        // gh #31 review: an env-configured session has no stored list, so
+        // the picker's `GET /models` discovery happens here - the one live
+        // request `/model` makes. It fails closed (the net path refuses an
+        // ungranted host before it resolves), and the host runs its
+        // endpoint consent before `/model` asks for a list, so the picker
+        // prompts instead of reporting nothing. The answer is stored under
+        // this namespace, which is where the list already lives, so the
+        // next call reads instead of asking again.
+        // Two guards keep this from firing where it must not: a model is
+        // already configured (so the list is not what the caller is
+        // missing), and the endpoint is not the built-in default (a fresh
+        // install must never open a socket to api.openai.com on its own).
+        // The picker's consent runs before the host asks, so a custom
+        // endpoint that is not granted fails closed here and then prompts.
+        let base = profiles::base_url_for(self.cap.as_ref(), &self.settings, &None);
+        let custom_endpoint = base.trim_end_matches('/') != "https://api.openai.com/v1";
+        let stored = if stored.is_empty() && configured.is_empty() && custom_endpoint {
+            let discovered = discover_models(
+                self.cap.as_ref(),
+                &base,
+                profiles::api_key_for(self.cap.as_ref(), &self.settings, &None).as_deref(),
+            );
+            match discovered {
+                Some(found) if !found.is_empty() => {
+                    let line = found
+                        .iter()
+                        .map(|(model, window)| match window {
+                            Some(window) => format!("{model}={window}"),
+                            None => model.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let _ = self.cap.credentials_set("models", &line);
+                    line
+                }
+                _ => stored,
+            }
+        } else {
+            stored
+        };
         let windows = load_context_windows(self.cap.as_ref());
         Ok(
             profiles::picker_models(self.cap.as_ref(), &self.settings, &stored, &configured)
