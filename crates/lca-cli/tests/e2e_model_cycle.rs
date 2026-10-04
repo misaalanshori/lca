@@ -14,6 +14,10 @@ use common::*;
 
 /// Two models in scope: the env one and the one the credentials add, in
 /// the provider's own order (the picker showed them in this order before).
+/// Gated like the import above: `Sandbox` only exists where `common::*`
+/// does, and the rows that call this are Unix-only anyway (cross-target
+/// clippy, Windows).
+#[cfg(unix)]
 fn two_models(sandbox: &Sandbox) {
     sandbox.write_credentials(
         "openai-compatible",
@@ -22,6 +26,8 @@ fn two_models(sandbox: &Sandbox) {
 }
 
 /// Every `model-change` record in a log's text, as `(from, to)` pairs.
+/// Only the Unix rows read logs, so it is gated with them.
+#[cfg(unix)]
 fn model_changes(log: &str) -> Vec<(Option<String>, String)> {
     log.lines()
         .filter(|line| line.contains(r#""t":"model-change""#))
@@ -363,5 +369,90 @@ fn ctrl_s_saves_the_default_and_a_fresh_session_resolves_it() {
         std::time::Duration::from_secs(20),
     );
     again.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}
+
+// Verifies: gh #8 / EFG-041 - `--model <pattern>` fuzzy-resolves against
+// the provider's list (a prefix is a pattern, not a miss) and the
+// `:thinking` suffix becomes this session's level: the footer says both.
+#[cfg(unix)]
+#[test]
+fn the_model_flag_fuzzy_resolves_and_its_suffix_sets_the_level() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
+    let sandbox = sandbox("gh8-flag-pattern");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+    two_models(&sandbox);
+
+    let session = Tmux::new("gh8-flag-pattern");
+    session.spawn(
+        &sandbox,
+        Some(&mock),
+        true,
+        &[("OPENAI_MODEL", "first-model")],
+        &["--model", "second:high"],
+    );
+    let pane = session.wait_for(
+        "openai-compatible/second-model",
+        std::time::Duration::from_secs(20),
+    );
+    let footer = pane
+        .lines()
+        .find(|line| line.contains("second-model"))
+        .unwrap_or(&pane);
+    assert!(
+        !footer.contains("first-model"),
+        "the pattern resolved to the model it named:\n{footer}"
+    );
+    assert!(
+        footer.contains("high"),
+        "the `:high` suffix is the session's level:\n{footer}"
+    );
+
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}
+
+// Verifies: gh #8 acceptance (3) - `--thinking <level>` is the session
+// default: the footer wears it from the first frame, and the flag
+// accepts pi's vocabulary.
+#[cfg(unix)]
+#[test]
+fn the_thinking_flag_is_the_session_default() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
+    let sandbox = sandbox("gh8-thinking-flag");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    let session = Tmux::new("gh8-thinking-flag");
+    session.spawn(
+        &sandbox,
+        Some(&mock),
+        true,
+        &[("OPENAI_MODEL", "test-model")],
+        &["--thinking", "low"],
+    );
+    let pane = session.wait_for(
+        "openai-compatible/test-model",
+        std::time::Duration::from_secs(20),
+    );
+    let footer = pane
+        .lines()
+        .find(|line| line.contains("test-model"))
+        .unwrap_or(&pane);
+    assert!(
+        footer.contains("low"),
+        "the flag's level is on the footer from the first frame:\n{footer}"
+    );
+
+    session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
 }

@@ -331,6 +331,22 @@ impl Ui {
     /// footer window, and the compaction backend together.
     fn command_model(self: &Arc<Self>, argument: &str) -> CommandEffect {
         let models = self.offered_models();
+        // EFG-041: `/model sonnet:high` names the level with the model.
+        // The suffix splits before resolution (an id that matches as a
+        // whole keeps its colons), and the level is applied only when the
+        // pattern actually resolves to an offered model - a typo is a
+        // refusal, not a way to change thinking without a model. The
+        // clamp to what the new model allows joins this cell's write.
+        let (argument, suffix_level) = {
+            let (base, level) = crate::models::split_thinking(argument.trim());
+            (base.to_string(), level.map(str::to_string))
+        };
+        let argument = argument.as_str();
+        let resolves = crate::models::resolve_pattern(argument, &models)
+            .is_ok_and(|resolved| models.iter().any(|model| model.id == resolved.id));
+        if resolves && let Some(level) = suffix_level {
+            *self.thinking_cell.lock().unwrap_or_else(|p| p.into_inner()) = Some(level);
+        }
         // An empty list with an env-configured endpoint means live
         // discovery is about to happen (gh #31 review): consent first,
         // off this thread so the modal can render. The list arrives

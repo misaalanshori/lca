@@ -109,7 +109,15 @@ pub(super) fn model_effect_on(
             .unwrap_or_default();
         return CommandEffect::ShowWidget(model_picker_text(models, &current));
     }
-    match models.iter().find(|model| model.id == argument) {
+    // EFG-041: `/model <arg>` resolves like `--model` does - exact id,
+    // `profile/id`, then a fuzzy substring (gh #8's `resolve_pattern`,
+    // one resolver for both surfaces). The id that lands in the cell is
+    // the resolved one; a pattern nothing matches stays the id the user
+    // typed, and the refusal below is what says it is not offered here.
+    let target = crate::models::resolve_pattern(argument, models)
+        .map(|resolved| resolved.id)
+        .unwrap_or_else(|_| argument.to_string());
+    match models.iter().find(|model| model.id == target) {
         Some(model) => {
             if let Some(cell) = model_cell {
                 let mut current = cell.lock().unwrap_or_else(|err| err.into_inner());

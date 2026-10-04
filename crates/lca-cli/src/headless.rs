@@ -350,29 +350,17 @@ fn wire(
     session: &lca_session::Session,
     provider_name: &str,
 ) -> Result<(AgentConfig, std::sync::Arc<dyn lca_provider::Provider>), i32> {
-    // Hooks apply headless too: register the first-party native set with
-    // a stats source over this session (ADR-0013).
+    // The one registry assembly, shared with the interface and with
+    // `--list-models` (gh #8); the stats source is this session's (ADR-0013).
     let stats_store = store.clone();
     let stats_session = session.clone();
-    let mut registry = lca_core::ExtensionRegistry::new();
-    // Installed extensions first (FR-DIST-8's digest load; an installed
-    // copy shadows the bundled one of the same name).
-    crate::ext::load_installed(
-        &mut registry,
+    let mut registry = crate::registry::assemble(
         cwd,
-        config.extensions_log_limit_bytes() as usize,
+        config,
         shared_prompt.clone(),
         grants,
+        Arc::new(move || crate::tui::session_stats(&stats_store, &stats_session)),
     );
-    for handle in lca_ext_native::default_native_extensions(Arc::new(move || {
-        crate::tui::session_stats(&stats_store, &stats_session)
-    })) {
-        registry.register(handle);
-    }
-    #[cfg(feature = "bundled-openai-compat")]
-    registry.register(Arc::new(openai_compatible::OpenAiCompat::new(
-        openai_capabilities(cwd, shared_prompt.clone(), grants.clone()),
-    )));
     // The grant store's disable wins before the provider resolves
     // (FR-PROV-9/FR-PERM-19); applied again after the two
     // completion-dependent handles register below.
@@ -383,7 +371,6 @@ fn wire(
             .extension_enabled(cwd, name)
             == Some(false)
     };
-    apply_enablement(&mut registry, disabled);
     // FR-PROV-6: the configured provider must resolve to an enabled
     // handle; zero providers is an ordinary, reportable state. Resolved
     // before the completion-dependent handles register (they need it).
@@ -449,6 +436,9 @@ fn wire(
         completion_backend,
         system_prompt: lca_core::identity_prompt(&model_id, std::env::consts::OS),
         skills_roots: skills_roots(cwd),
+        // `--thinking` and the `thinking` key reach headless mode too: a
+        // flag that works in one front end only is a flag that lies.
+        reasoning_effort: config.thinking().map(str::to_string),
         ..AgentConfig::default()
     };
     Ok((agent_config, provider))

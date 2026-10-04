@@ -91,6 +91,7 @@ pub use cli_args::{Cli, CliFlags, Command, SessionCmd};
 pub mod ext;
 mod headless;
 mod models;
+mod registry;
 mod session_cmds;
 /// Restoring `SIGPIPE`'s default disposition (GitHub issue #19).
 pub mod sigpipe;
@@ -697,7 +698,19 @@ pub async fn run(cli: Cli) -> i32 {
             return exit::INTERNAL;
         }
     };
+    // pi 1.0.0 parity: `--provider` exists to scope the `--model`
+    // lookup, so it refuses to run without one instead of quietly doing
+    // nothing - exit 2 (a usage error), naming the rule.
+    if cli.provider.is_some() && cli.model.is_none() {
+        eprintln!("error: --provider scopes the --model lookup; pass --model <pattern> with it");
+        return exit::USAGE;
+    }
     let flags = CliFlags::from_cli(&cli);
+    // `--list-models` lists and exits: it outranks the session routes,
+    // pi's "lists, then exits".
+    if let Some(search) = cli.list_models.as_deref() {
+        return list_models_command(&cwd, search, &flags, &cli.allow_host);
+    }
     match route(&cli) {
         Route::Headless { prompt } => {
             headless(

@@ -40,10 +40,35 @@ pub struct Cli {
     /// Resume session by ID.
     #[arg(short = 'r', long = "resume", value_name = "ID")]
     pub resume_id: Option<String>,
-    // RC-G (issue #6): override model.
-    /// Model identifier.
-    #[arg(long = "model", value_name = "MODEL")]
+    // RC-G (issue #6) + gh #8 (EFG-041): pi's `--model <pattern>[:thinking]`.
+    /// Model id or fuzzy pattern (`profile/id` also works), with an
+    /// optional `:thinking` suffix such as `sonnet:high`.
+    #[arg(long = "model", value_name = "PATTERN")]
     pub model: Option<String>,
+    // gh #8 (EFG-003): pi's `--thinking`, a session default.
+    /// The session's reasoning level; clamped to what the model offers
+    /// (the `models.thinking_levels` map, phase 4).
+    #[arg(
+        long = "thinking",
+        value_name = "LEVEL",
+        value_parser = clap::builder::PossibleValuesParser::new(lca_config::THINKING_LEVELS)
+    )]
+    pub thinking: Option<String>,
+    // gh #8 (EFG-041, pi 1.0.0): `--provider` exists to scope `--model`.
+    /// Restrict `--model` resolution to one profile (or the provider
+    /// itself). Requires `--model`.
+    #[arg(long = "provider", value_name = "NAME")]
+    pub provider: Option<String>,
+    // gh #8 (EFG-003): pi's `--list-models [search]`, the CI building block.
+    /// Print the offered models as `id  provider  context` lines and exit
+    /// (an optional pattern filters the list).
+    #[arg(
+        long = "list-models",
+        value_name = "SEARCH",
+        num_args = 0..=1,
+        default_missing_value = ""
+    )]
+    pub list_models: Option<String>,
     // gh #8 (EFG-003): pi's `--models` - the enabled-model scope that the
     // picker's listing and the model cycle are both cut to.
     /// Restrict the model list and the model cycle to a comma-separated
@@ -130,6 +155,12 @@ pub enum SessionCmd {
 pub struct CliFlags {
     /// `--models`: the enabled-model scope (`models.enabled`).
     pub models: Option<String>,
+    /// `--thinking`: the session's reasoning level (`thinking`).
+    pub thinking: Option<String>,
+    /// `--provider`: the resolution scope for `--model`. Not a config
+    /// key: `provider` names the provider *extension*, while this names
+    /// a profile inside one - two different questions.
+    pub provider: Option<String>,
 }
 
 impl CliFlags {
@@ -137,6 +168,8 @@ impl CliFlags {
     pub fn from_cli(cli: &Cli) -> CliFlags {
         CliFlags {
             models: cli.models.clone(),
+            thinking: cli.thinking.clone(),
+            provider: cli.provider.clone(),
         }
     }
 
@@ -145,6 +178,9 @@ impl CliFlags {
         let mut flags = std::collections::BTreeMap::new();
         if let Some(models) = &self.models {
             flags.insert("models.enabled".to_string(), models.clone());
+        }
+        if let Some(thinking) = &self.thinking {
+            flags.insert("thinking".to_string(), thinking.clone());
         }
         flags
     }

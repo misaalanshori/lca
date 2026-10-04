@@ -415,9 +415,34 @@ impl Ui {
         }
 
         let provider_is_ready = crate::provider_ready(&provider_name, &data);
-        let model_id = model_override
-            .map(str::to_string)
-            .unwrap_or_else(|| resolve_model_id(&config, provider_is_ready, provider.as_ref()));
+        // `--model <pattern>[:thinking]` resolves against the provider's
+        // list the way pi's resolver does (EFG-041), inside `--provider`'s
+        // scope when a profile is named; the `:thinking` suffix becomes
+        // this session's level. A pattern nothing matches is the id
+        // itself - the endpoint may know a model the list does not.
+        let mut override_thinking: Option<String> = None;
+        let model_id = match model_override {
+            Some(pattern) => {
+                let mut candidates = provider.list_models();
+                if let Some(profile) = flags.provider.as_deref() {
+                    candidates
+                        .retain(|model| crate::models::in_provider(model, profile, &provider_name));
+                    if candidates.is_empty() {
+                        anyhow::bail!(
+                            "unknown provider \"{profile}\". Use --list-models to see available models."
+                        );
+                    }
+                }
+                match crate::models::resolve_pattern(pattern, &candidates) {
+                    Ok(resolved) => {
+                        override_thinking = resolved.thinking;
+                        resolved.id
+                    }
+                    Err(err) => anyhow::bail!(err),
+                }
+            }
+            None => resolve_model_id(&config, provider_is_ready, provider.as_ref()),
+        };
         let provider_backend = register_compaction(
             &mut registry,
             &provider,
@@ -459,7 +484,9 @@ impl Ui {
             &identity,
             &model_id,
             context_window,
-            config.thinking().map(str::to_string),
+            // `--model sonnet:high` beats the configured default for this
+            // session (it is not persisted: a flag is a run, not a file).
+            override_thinking.or_else(|| config.thinking().map(str::to_string)),
         );
 
         // Every picker choice: each enabled provider extension's own options,
@@ -689,33 +716,24 @@ fn load_registry(
     store: &Arc<SessionStore>,
     session_cell: &Arc<Mutex<Session>>,
 ) -> ExtensionRegistry {
-    let mut registry = ExtensionRegistry::new();
-    crate::ext::load_installed(
-        &mut registry,
-        cwd,
-        config.extensions_log_limit_bytes() as usize,
-        shared_prompt.clone(),
-        grants,
-    );
+    // The one assembly, shared with headless mode and `--list-models`
+    // (gh #8): only the stats source differs, and a session's own reads
+    // the session this interface is showing.
     let stats_store = store.clone();
     let stats_session = session_cell.clone();
-    for handle in lca_ext_native::default_native_extensions(Arc::new(move || {
-        let session = stats_session
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
-        session_stats(&stats_store, &session)
-    })) {
-        registry.register(handle);
-    }
-    #[cfg(feature = "bundled-openai-compat")]
-    registry.register(Arc::new(openai_compatible::OpenAiCompat::new(
-        crate::openai_capabilities(cwd, shared_prompt, grants.clone()),
-    )));
-    crate::apply_enablement(&mut registry, |name| {
-        lock(grants).extension_enabled(cwd, name) == Some(false)
-    });
-    registry
+    crate::registry::assemble(
+        cwd,
+        config,
+        shared_prompt,
+        grants,
+        Arc::new(move || {
+            let session = stats_session
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            session_stats(&stats_store, &session)
+        }),
+    )
 }
 
 /// Register the bundled compaction strategy and return its backend.

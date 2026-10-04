@@ -147,6 +147,9 @@ lca -p "fix the failing test"   # one turn, reply on stdout
 lca -p "..." --json       # one JSON object per line (docs/headless.md)
 lca resume                # list this project's sessions, reopen one
 lca ext list              # installed extensions and what they can reach
+lca --list-models         # id  provider  context, one line per model (optional search)
+lca --model sonnet:high   # fuzzy pattern, with this run's thinking level
+lca --thinking low --models "zen/*"   # the session default, the cycle's scope
 ```
 
 ### First session
