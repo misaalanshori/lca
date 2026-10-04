@@ -412,6 +412,12 @@ pub type ModelCycle = Arc<dyn Fn(bool) -> String + Send + Sync>;
 /// whether the write landed.
 pub type ModelSave = Arc<dyn Fn(&str) -> String + Send + Sync>;
 
+/// Sets the session's thinking level (gh #8 phase 4), returning the
+/// notice to show. The host owns it: only it knows the current model's
+/// allowed levels, so it clamps, writes the cell, persists the effective
+/// value, and says what actually landed.
+pub type ThinkingSetter = Arc<dyn Fn(Option<&str>) -> String + Send + Sync>;
+
 /// Applies a trust choice, returning the notice to show.
 pub type TrustApply = Arc<dyn Fn(TrustChoice) -> String + Send + Sync>;
 /// Whether the project still needs a trust decision (opens the modal at
@@ -457,6 +463,9 @@ pub struct UiHooks {
     /// `Ctrl+S` in the model picker: persist the highlighted model as the
     /// default (`model` in the user config), returning the notice.
     pub save_default_model: Option<ModelSave>,
+    /// `/thinking`'s Enter: clamp the chosen level to the current model's
+    /// set, store it, and return the notice.
+    pub set_thinking: Option<ThinkingSetter>,
     /// Applies a `/trust` choice.
     pub trust_apply: Option<TrustApply>,
     /// Whether the project needs a trust decision at startup.

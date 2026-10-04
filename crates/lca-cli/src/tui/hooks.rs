@@ -106,6 +106,34 @@ impl Ui {
                 let ui = self.clone();
                 Some(Arc::new(move |forward: bool| ui.cycle_model(forward)))
             },
+            set_thinking: {
+                let ui = self.clone();
+                Some(Arc::new(move |level: Option<&str>| {
+                    let model = ui
+                        .model_cell
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .id
+                        .clone();
+                    // The clamp is the model's: a level outside its
+                    // `models.thinking_levels` set becomes its default,
+                    // and unset stays unset (the provider's choice).
+                    let effective = ui.config.clamp_thinking(level, &model);
+                    *ui.thinking_cell.lock().unwrap_or_else(|p| p.into_inner()) = effective.clone();
+                    let saved = crate::persist_setting("thinking", effective.as_deref());
+                    let notice = match (level, effective.as_deref()) {
+                        (Some(asked), Some(effort)) if asked != effort => {
+                            format!("thinking: {effort} ({asked} is not offered by {model})")
+                        }
+                        (_, Some(effort)) => format!("thinking: {effort}"),
+                        (_, None) => "thinking: provider default".to_string(),
+                    };
+                    match saved {
+                        Ok(()) => notice,
+                        Err(err) => format!("{notice} - not saved: {err}"),
+                    }
+                }))
+            },
             save_default_model: Some(Arc::new(|id: &str| {
                 // One key: `model` is the startup default
                 // (`resolve_model_id`), the provider extension is the

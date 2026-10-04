@@ -437,8 +437,11 @@ fn wire(
         system_prompt: lca_core::identity_prompt(&model_id, std::env::consts::OS),
         skills_roots: skills_roots(cwd),
         // `--thinking` and the `thinking` key reach headless mode too: a
-        // flag that works in one front end only is a flag that lies.
-        reasoning_effort: config.thinking().map(str::to_string),
+        // flag that works in one front end only is a flag that lies. The
+        // model's configured default wins over it (gh #8 phase 4), and
+        // the pair is clamped into what this model accepts.
+        reasoning_effort: config
+            .switch_thinking(config.thinking().map(str::to_string).as_deref(), &model_id),
         ..AgentConfig::default()
     };
     Ok((agent_config, provider))

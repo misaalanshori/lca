@@ -333,10 +333,9 @@ impl Ui {
         let models = self.offered_models();
         // EFG-041: `/model sonnet:high` names the level with the model.
         // The suffix splits before resolution (an id that matches as a
-        // whole keeps its colons), and the level is applied only when the
-        // pattern actually resolves to an offered model - a typo is a
-        // refusal, not a way to change thinking without a model. The
-        // clamp to what the new model allows joins this cell's write.
+        // whole keeps its colons); what it - and a model switch - does to
+        // the session's level is decided below, once the target model is
+        // known, because the clamp is against *that* model's set.
         let (argument, suffix_level) = {
             let (base, level) = crate::models::split_thinking(argument.trim());
             (base.to_string(), level.map(str::to_string))
@@ -344,9 +343,6 @@ impl Ui {
         let argument = argument.as_str();
         let resolves = crate::models::resolve_pattern(argument, &models)
             .is_ok_and(|resolved| models.iter().any(|model| model.id == resolved.id));
-        if resolves && let Some(level) = suffix_level {
-            *self.thinking_cell.lock().unwrap_or_else(|p| p.into_inner()) = Some(level);
-        }
         // An empty list with an env-configured endpoint means live
         // discovery is about to happen (gh #31 review): consent first,
         // off this thread so the modal can render. The list arrives
@@ -391,6 +387,27 @@ impl Ui {
             .context_window_cell
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = chosen.window as u64;
+        // gh #8 phase 4: the session's thinking follows the model it runs
+        // on. An explicit `:level` is the user's choice, clamped into what
+        // the model accepts; a model *switch* applies the new model's
+        // configured default (pi's per-model precedence), else keeps the
+        // session's level, clamped. A pattern that resolved to nothing
+        // changes neither model nor level.
+        if resolves {
+            let current = self
+                .thinking_cell
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            let effective = match suffix_level.as_deref() {
+                Some(level) => self.config.clamp_thinking(Some(level), &chosen.id),
+                None if chosen.id != previous => {
+                    self.config.switch_thinking(current.as_deref(), &chosen.id)
+                }
+                None => current,
+            };
+            *self.thinking_cell.lock().unwrap_or_else(|p| p.into_inner()) = effective;
+        }
         // ADR-0024: a switch moves the model everywhere it is read, and
         // `meta.json` is one of those readers' source (gh #20) - written
         // the moment the model is chosen, so a session that switches and

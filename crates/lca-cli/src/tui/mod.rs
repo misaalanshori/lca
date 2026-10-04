@@ -480,14 +480,18 @@ impl Ui {
         // E5: name the login preset when one was stored, else the extension.
         let identity = crate::stored_provider_preset(&data, &provider_name)
             .unwrap_or_else(|| provider_name.clone());
-        let cells = live_cells(
-            &identity,
-            &model_id,
-            context_window,
-            // `--model sonnet:high` beats the configured default for this
-            // session (it is not persisted: a flag is a run, not a file).
-            override_thinking.or_else(|| config.thinking().map(str::to_string)),
-        );
+        // gh #8 phase 4: the session's level follows the model it starts
+        // on. `--model sonnet:high` is explicit (clamped into what the
+        // model accepts, never persisted); otherwise the model's own
+        // configured default wins over the configured `thinking` - pi's
+        // per-model precedence - which is clamped into the model's set.
+        let thinking = match override_thinking {
+            Some(level) => config.clamp_thinking(Some(&level), &model_id),
+            None => {
+                config.switch_thinking(config.thinking().map(str::to_string).as_deref(), &model_id)
+            }
+        };
+        let cells = live_cells(&identity, &model_id, context_window, thinking);
 
         // Every picker choice: each enabled provider extension's own options,
         // plus the user's named custom endpoints (D1's override layer). The

@@ -93,11 +93,20 @@ fn turn_worker(
         let mut turn_config = ui.agent_config.clone();
         turn_config.model = choice.id;
         turn_config.model_context_window = choice.window;
-        turn_config.reasoning_effort = ui
-            .thinking_cell
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
+        // gh #8 phase 4, read-time: the cell is the session's intent,
+        // the model's `models.thinking_levels` set is what it may ask
+        // for - clamped here as well because either can move after the
+        // last write (the config gains a set, a queued turn follows a
+        // switch).
+        turn_config.reasoning_effort = {
+            let level = ui
+                .thinking_cell
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            ui.config
+                .clamp_thinking(level.as_deref(), &turn_config.model)
+        };
         turn_config.steer = steer;
         // R3: read the session the interface is showing *now*, so a `/tree`
         // or `/resume` switch takes effect on the next turn.

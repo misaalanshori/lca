@@ -154,6 +154,9 @@ pub struct Config {
     // gh #8 (EFG-003): the enabled-model scope (pi's `enabledModels`).
     // Empty = no restriction: every model the provider offers.
     models_enabled: Vec<String>,
+    // gh #8 phase 4 (pi's `modelThinkingLevels`): per-model sets of the
+    // thinking levels that model accepts; the first entry is its default.
+    models_thinking_levels: BTreeMap<String, Vec<String>>,
     sources: BTreeMap<String, MergeSource>,
 }
 
@@ -190,6 +193,7 @@ impl Default for Config {
             thinking_visibility: None,
             permissions_proposals: BTreeMap::new(),
             models_enabled: Vec::new(),
+            models_thinking_levels: BTreeMap::new(),
             sources: BTreeMap::new(),
         }
     }
@@ -209,7 +213,10 @@ fn dotted_to_env_key(dotted: &str) -> String {
     format!("LCA_{}", dotted.to_ascii_uppercase().replace('.', "_"))
 }
 
-/// Every configuration key, as documented in `docs/configuration.md`.
+/// Every configuration key an `LCA_` environment variable can set.
+/// `docs/configuration.md` documents two more that have no environment
+/// form because they are tables, not single values: `models.thinking_levels`
+/// (per-model lists) and `permissions.proposals`.
 pub const KNOWN_KEYS: &[&str] = &[
     "provider",
     "model",
@@ -374,6 +381,8 @@ enum TypedValue {
     /// A list of strings (`models.enabled`), whose flag/environment form
     /// is a comma list.
     List(Vec<String>),
+    /// Per-model allowed thinking levels (`models.thinking_levels`).
+    ThinkingLevels(BTreeMap<String, Vec<String>>),
     Count(u64),
     Number(f64),
     Bool(bool),
@@ -393,6 +402,7 @@ impl Config {
             "provider",
             "model",
             "models.enabled",
+            "models.thinking_levels",
             "compaction.threshold",
             "provider.retry_limit",
             "tool.timeout_seconds",
@@ -473,6 +483,41 @@ impl Config {
                         invalid(format!("expected a string, got {}", type_name(&value)))
                     })?;
                     this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
+                "models.thinking_levels" => {
+                    let table = value.as_table().ok_or_else(|| {
+                        invalid(format!(
+                            "expected a table of model = [levels], got {}",
+                            type_name(&value)
+                        ))
+                    })?;
+                    let mut map = BTreeMap::new();
+                    for (model, levels) in table {
+                        let list = levels.as_array().ok_or_else(|| {
+                            invalid(format!(
+                                "`{model}` must be a list of levels, got {}",
+                                type_name(levels)
+                            ))
+                        })?;
+                        let mut parsed = Vec::new();
+                        for level in list {
+                            let text = level.as_str().ok_or_else(|| {
+                                invalid(format!(
+                                    "`{model}` must be a list of levels, found {}",
+                                    type_name(level)
+                                ))
+                            })?;
+                            if !THINKING_LEVELS.contains(&text) {
+                                return Err(invalid(format!(
+                                    "expected one of {}, got `{text}` for `{model}`",
+                                    THINKING_LEVELS.join(", ")
+                                )));
+                            }
+                            parsed.push(text.to_string());
+                        }
+                        map.insert(model.clone(), parsed);
+                    }
+                    this.apply(key.to_string(), TypedValue::ThinkingLevels(map), source)?;
                 }
                 "models.enabled" => {
                     let list = match &value {
@@ -614,6 +659,7 @@ impl Config {
             "provider",
             "model",
             "models.enabled",
+            "models.thinking_levels",
             "compaction.threshold",
             "provider.retry_limit",
             "tool.timeout_seconds",
@@ -658,6 +704,9 @@ impl Config {
             ("provider", TypedValue::Text(v)) => self.provider = v,
             ("model", TypedValue::Text(v)) => self.model = Some(v),
             ("models.enabled", TypedValue::List(v)) => self.models_enabled = v,
+            ("models.thinking_levels", TypedValue::ThinkingLevels(v)) => {
+                self.models_thinking_levels = v
+            }
             ("compaction.threshold", TypedValue::Number(v)) => self.compaction_threshold = v,
             ("provider.retry_limit", TypedValue::Count(v)) => self.provider_retry_limit = v,
             ("tool.timeout_seconds", TypedValue::Count(v)) => self.tool_timeout_seconds = v,
@@ -703,6 +752,49 @@ impl Config {
     /// provider offers is in scope.
     pub fn models_enabled(&self) -> &[String] {
         &self.models_enabled
+    }
+
+    /// The levels `model` accepts (`models.thinking_levels`), or `None`
+    /// when the map does not name it - which means no restriction.
+    pub fn allowed_thinking_levels(&self, model: &str) -> Option<&[String]> {
+        self.models_thinking_levels.get(model).map(Vec::as_slice)
+    }
+
+    /// The first allowed level of `model`: its default, the entry a
+    /// switch to it applies (gh #8 phase 4; pi's per-model default
+    /// beating the global one).
+    pub fn default_thinking_for(&self, model: &str) -> Option<&str> {
+        self.allowed_thinking_levels(model)
+            .and_then(|levels| levels.first())
+            .map(String::as_str)
+    }
+
+    /// The level `model` may run on: `requested` clamped into its set -
+    /// outside it becomes the model's default (the first allowed level) -
+    /// with no set meaning no restriction. `None` is not a level: unset
+    /// is the provider's choice, and it stays unset.
+    pub fn clamp_thinking(&self, requested: Option<&str>, model: &str) -> Option<String> {
+        let requested = requested?;
+        let Some(allowed) = self.allowed_thinking_levels(model) else {
+            return Some(requested.to_string());
+        };
+        if allowed.is_empty() {
+            return Some(requested.to_string());
+        }
+        if allowed.iter().any(|level| level == requested) {
+            return Some(requested.to_string());
+        }
+        allowed.first().cloned()
+    }
+
+    /// What a switch to `model` runs on: the model's configured default
+    /// when it has one (pi's precedence), else the current level clamped
+    /// into what the new model accepts.
+    pub fn switch_thinking(&self, current: Option<&str>, model: &str) -> Option<String> {
+        if let Some(default) = self.default_thinking_for(model) {
+            return Some(default.to_string());
+        }
+        self.clamp_thinking(current, model)
     }
 
     /// Context-window fraction that triggers compaction (FR-SESS-4).
@@ -807,6 +899,14 @@ impl Config {
                     "<all>".to_string()
                 } else {
                     self.models_enabled.join(", ")
+                },
+            ),
+            (
+                "models.thinking_levels",
+                if self.models_thinking_levels.is_empty() {
+                    "<unset>".to_string()
+                } else {
+                    format!("{} model(s)", self.models_thinking_levels.len())
                 },
             ),
             (

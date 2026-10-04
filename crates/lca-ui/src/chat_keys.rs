@@ -138,21 +138,35 @@ impl Chat {
                     } else {
                         Some(THINKING_LEVELS[picker.selected - 1].0.to_string())
                     };
-                    *self
-                        .world
-                        .options
-                        .thinking
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = level.clone();
-                    // E2: persist the pick to the config file (`unset` removes
-                    // the key), so `/settings` and the next process agree.
-                    if let Some(persist) = &self.world.options.hooks.persist_setting {
-                        persist("thinking", level.clone());
+                    match &self.world.options.hooks.set_thinking {
+                        // gh #8 phase 4: the host clamps the pick to the
+                        // current model's allowed set, stores what landed,
+                        // and says so - a level this model refuses becomes
+                        // its default, never a request that ignores it.
+                        Some(set) => {
+                            self.world.notice =
+                                Some(crate::state::sanitize_block(&set(level.as_deref())));
+                        }
+                        // A host without the seam behaves as it always did.
+                        None => {
+                            *self
+                                .world
+                                .options
+                                .thinking
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) = level.clone();
+                            // E2: persist the pick to the config file (`unset`
+                            // removes the key), so `/settings` and the next
+                            // process agree.
+                            if let Some(persist) = &self.world.options.hooks.persist_setting {
+                                persist("thinking", level.clone());
+                            }
+                            self.world.notice = Some(match level {
+                                Some(level) => format!("thinking: {level}"),
+                                None => "thinking: provider default".to_string(),
+                            });
+                        }
                     }
-                    self.world.notice = Some(match level {
-                        Some(level) => format!("thinking: {level}"),
-                        None => "thinking: provider default".to_string(),
-                    });
                 }
                 Some("up") | Some("k") => {
                     picker.selected = picker.selected.saturating_sub(1);

@@ -402,7 +402,7 @@ fn the_model_flag_fuzzy_resolves_and_its_suffix_sets_the_level() {
     );
     let footer = pane
         .lines()
-        .find(|line| line.contains("second-model"))
+        .find(|line| line.contains("ctx"))
         .unwrap_or(&pane);
     assert!(
         !footer.contains("first-model"),
@@ -446,11 +446,146 @@ fn the_thinking_flag_is_the_session_default() {
     );
     let footer = pane
         .lines()
-        .find(|line| line.contains("test-model"))
+        .find(|line| line.contains("ctx"))
         .unwrap_or(&pane);
     assert!(
         footer.contains("low"),
         "the flag's level is on the footer from the first frame:\n{footer}"
+    );
+
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}
+
+// Verifies: gh #8 phase 4 (pi's `modelThinkingLevels`) - a level the
+// model does not offer is clamped into its set: `--model second:high`
+// starts on the model's own default instead of `high`, and `/thinking`
+// saying so rather than storing a level the model refuses.
+#[cfg(unix)]
+#[test]
+fn a_thinking_suffix_outside_the_models_set_is_clamped_to_it() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
+    let sandbox = sandbox("gh8-thinking-clamp");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+    two_models(&sandbox);
+    std::fs::create_dir_all(sandbox.state_dir()).expect("mkdir .lca");
+    std::fs::write(
+        sandbox.state_dir().join("config.toml"),
+        "[models.thinking_levels]\n\"second-model\" = [\"low\"]\n",
+    )
+    .expect("write config");
+
+    let session = Tmux::new("gh8-thinking-clamp");
+    session.spawn(
+        &sandbox,
+        Some(&mock),
+        true,
+        &[("OPENAI_MODEL", "first-model")],
+        &["--model", "second:high"],
+    );
+    let pane = session.wait_for(
+        "openai-compatible/second-model",
+        std::time::Duration::from_secs(20),
+    );
+    let footer = pane
+        .lines()
+        .find(|line| line.contains("ctx"))
+        .unwrap_or(&pane);
+    assert!(footer.contains("second-model"), "{footer}");
+    assert!(
+        footer.contains("low") && !footer.contains("high"),
+        "`:high` is clamped into this model's set (low is its default):\n{footer}"
+    );
+
+    // The picker's own answer is clamped too, and the notice says what
+    // landed: two rows down from `low` is `high` (unset, off, minimal,
+    // low ...), and this model refuses it.
+    session.send(&["/thinking", "Enter"]);
+    session.wait_for("No reasoning", std::time::Duration::from_secs(10));
+    session.send(&["Down"]);
+    session.send(&["Down"]);
+    session.send(&["Enter"]);
+    session.wait_for(
+        "thinking: low (high is not offered by second-model)",
+        std::time::Duration::from_secs(10),
+    );
+
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}
+
+// Verifies: gh #8 phase 4 - a switch applies the new model's configured
+// default (the first allowed level, pi's per-model precedence), and a
+// `:thinking` suffix the model *does* offer passes through untouched -
+// in the flag and in `/model` alike.
+#[cfg(unix)]
+#[test]
+fn a_switch_applies_the_models_thinking_default_and_an_allowed_suffix_lands() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
+    let sandbox = sandbox("gh8-thinking-default");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+    two_models(&sandbox);
+    std::fs::create_dir_all(sandbox.state_dir()).expect("mkdir .lca");
+    std::fs::write(
+        sandbox.state_dir().join("config.toml"),
+        "[models.thinking_levels]\n\"second-model\" = [\"medium\", \"high\"]\n",
+    )
+    .expect("write config");
+
+    let session = Tmux::new("gh8-thinking-default");
+    session.spawn(
+        &sandbox,
+        Some(&mock),
+        true,
+        &[("OPENAI_MODEL", "first-model")],
+        &[],
+    );
+    session.wait_for(
+        "openai-compatible/first-model",
+        std::time::Duration::from_secs(20),
+    );
+
+    // The cycle to a model with a configured default applies it.
+    session.send(&["C-p"]);
+    let pane = session.wait_for(
+        "openai-compatible/second-model",
+        std::time::Duration::from_secs(10),
+    );
+    let footer = pane
+        .lines()
+        .find(|line| line.contains("ctx"))
+        .unwrap_or(&pane);
+    assert!(footer.contains("second-model"), "{footer}");
+    assert!(
+        footer.contains("medium"),
+        "the switch applied the model's configured default:\n{footer}"
+    );
+
+    // A suffix the model offers lands as asked, through `/model` too.
+    for c in "/model second:high".chars() {
+        session.send(&[&c.to_string()]);
+    }
+    session.send(&["Enter"]);
+    session.wait_for("model for this session", std::time::Duration::from_secs(10));
+    let pane = session.capture();
+    let footer = pane
+        .lines()
+        .find(|line| line.contains("ctx"))
+        .unwrap_or(&pane);
+    assert!(footer.contains("second-model"), "{footer}");
+    assert!(
+        footer.contains("high"),
+        "`:high` is in this model's set, so it lands:\n{footer}"
     );
 
     session.send(&["/exit", "Enter"]);

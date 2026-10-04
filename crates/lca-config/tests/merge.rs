@@ -344,6 +344,147 @@ fn the_enabled_model_scope_merges_from_every_layer() {
     );
 }
 
+// Verifies: gh #8 phase 4 (pi's `modelThinkingLevels`) - a per-model map
+// of the levels that model accepts, in the file (it is a table, so it has
+// no single-value environment form); a level outside the vocabulary or a
+// value that is not a list of strings is refused at load.
+#[test]
+fn per_model_thinking_levels_parse_and_refuse_junk() {
+    let dir = scratch("thinking-levels");
+    write(
+        &dir.join("user.toml"),
+        // A model id carries dots, so its key is quoted - the same TOML
+        // rule any dotted key follows (`tool.timeout_seconds`).
+        "[models.thinking_levels]\n\"mimo-v2.6-flash-free\" = [\"low\", \"high\"]\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(
+        config.allowed_thinking_levels("mimo-v2.6-flash-free"),
+        Some(&["low".to_string(), "high".to_string()][..]),
+        "the map reads back as the model's allowed set"
+    );
+    assert_eq!(
+        config.allowed_thinking_levels("something-else"),
+        None,
+        "a model the map does not name has no set"
+    );
+    assert_eq!(
+        config.default_thinking_for("mimo-v2.6-flash-free"),
+        Some("low"),
+        "the first allowed level is the model's default"
+    );
+
+    write(
+        &dir.join("user.toml"),
+        "[models.thinking_levels]\nbroken = [\"lightning\"]\n",
+    );
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("a level outside the vocabulary is refused");
+    assert!(err.to_string().contains("lightning"), "{err}");
+
+    write(
+        &dir.join("user.toml"),
+        "[models.thinking_levels]\nbroken = \"high\"\n",
+    );
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("a single level is not a list");
+    assert!(err.to_string().contains("models.thinking_levels"), "{err}");
+}
+
+// Verifies: gh #8 - the clamp: a level the model does not offer becomes
+// the model's default (its first allowed level); a level inside the set
+// passes through untouched; an unconfigured model keeps what it was
+// asked for; and "unset" is not a level, so it stays unset.
+#[test]
+fn a_level_outside_the_models_set_clamps_to_its_default() {
+    let dir = scratch("thinking-clamp");
+    write(
+        &dir.join("user.toml"),
+        "[models.thinking_levels]\nstrict = [\"low\", \"medium\"]\nloose = [\"off\", \"high\"]\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+
+    assert_eq!(
+        config.clamp_thinking(Some("high"), "strict"),
+        Some("low".to_string()),
+        "high is not offered here, so the model's default is"
+    );
+    assert_eq!(
+        config.clamp_thinking(Some("medium"), "strict"),
+        Some("medium".to_string()),
+        "an offered level passes through"
+    );
+    assert_eq!(
+        config.clamp_thinking(Some("xhigh"), "loose"),
+        Some("off".to_string()),
+        "the clamp lands on the model's own default, not the nearest level"
+    );
+    assert_eq!(
+        config.clamp_thinking(Some("high"), "unconfigured"),
+        Some("high".to_string()),
+        "no map entry means no restriction"
+    );
+    assert_eq!(
+        config.clamp_thinking(None, "strict"),
+        None,
+        "unset is the provider's choice, not a level to clamp"
+    );
+}
+
+// Verifies: gh #8 - a model switch applies the new model's configured
+// default (pi's per-model default beating the global one); with no
+// configured default the session's current level survives, clamped to
+// what the new model accepts.
+#[test]
+fn switching_applies_the_models_configured_default() {
+    let dir = scratch("thinking-switch");
+    write(
+        &dir.join("user.toml"),
+        "[models.thinking_levels]\ndeep = [\"medium\", \"high\"]\nshallow = [\"off\"]\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+
+    assert_eq!(
+        config.switch_thinking(Some("off"), "deep"),
+        Some("medium".to_string()),
+        "the model's default wins over the session's level"
+    );
+    assert_eq!(
+        config.switch_thinking(Some("high"), "shallow"),
+        Some("off".to_string()),
+        "and a level the new model refuses is clamped into its set"
+    );
+    assert_eq!(
+        config.switch_thinking(Some("high"), "unconfigured"),
+        Some("high".to_string()),
+        "no default configured: the level keeps going"
+    );
+    assert_eq!(
+        config.switch_thinking(None, "deep"),
+        Some("medium".to_string()),
+        "a model with a default still gets it, from unset too"
+    );
+    assert_eq!(config.switch_thinking(None, "unconfigured"), None);
+}
+
 // Verifies: FR-CFG-6 (update check defaults to on interactively, off headless)
 #[test]
 fn update_check_default_depends_on_mode() {
