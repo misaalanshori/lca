@@ -118,6 +118,119 @@ fn headings_and_quotes_carry_their_roles() {
     );
 }
 
+// Verifies: gh #9 / EFG-016 (the diff card) - an `edit` result's
+// structured diff renders inside the tool card: `-` rows in
+// `toolDiffRemoved`, `+` rows in `toolDiffAdded`, context and the
+// `@@`/`---`/`+++` headers in `toolDiffContext`, all inside the state
+// band every card already wears (raw SGR, cycle-9 style).
+#[test]
+fn an_edit_result_renders_as_a_diff_card_in_the_two_diff_roles() {
+    let theme = Theme::colored();
+    let mut t = Transcript::new();
+    t.start_tool("edit", r#"{"path":"src/main.rs"}"#);
+    t.finish_tool_with_diff(
+        ToolStatus::Ok,
+        Some("Successfully replaced 1 block(s) in src/main.rs.".into()),
+        Some(
+            "--- src/main.rs\n+++ src/main.rs\n@@ -1,3 +1,3 @@\n fn a() {}\n-fn b() {}\n+fn bb() {}\n fn c() {}\n"
+                .to_string(),
+        ),
+    );
+    let rows = t.render(80, &theme);
+
+    let removed = rows
+        .iter()
+        .find(|row| row.contains("-fn b() {}"))
+        .expect("the removed line is rendered");
+    assert!(
+        removed.contains("38;2;204;102;102"),
+        "removed lines carry toolDiffRemoved (#cc6666): {removed:?}"
+    );
+    let added = rows
+        .iter()
+        .find(|row| row.contains("+fn bb() {}"))
+        .expect("the added line is rendered");
+    assert!(
+        added.contains("38;2;181;189;104"),
+        "added lines carry toolDiffAdded (#b5bd68): {added:?}"
+    );
+    let context = rows
+        .iter()
+        .find(|row| row.contains(" fn a() {}"))
+        .expect("the context line is rendered");
+    assert!(
+        context.contains("38;2;128;128;128"),
+        "context carries toolDiffContext (#808080): {context:?}"
+    );
+    let hunk = rows
+        .iter()
+        .find(|row| row.contains("@@ -1,3 +1,3 @@"))
+        .expect("the hunk header is rendered");
+    assert!(
+        hunk.contains("38;2;128;128;128"),
+        "the hunk header is context too: {hunk:?}"
+    );
+    // The card is still a tool card: the state band frames it.
+    let strip = |row: &str| lca_tui::engine::text::strip_terminal_sequences(row);
+    assert!(
+        strip(&rows[0]).trim().is_empty(),
+        "blank band above: {rows:?}"
+    );
+    assert!(
+        strip(rows.last().expect("rows")).trim().is_empty(),
+        "blank band below: {rows:?}"
+    );
+    let header = rows
+        .iter()
+        .find(|row| strip(row).trim_start().starts_with("> "))
+        .expect("the title row");
+    assert!(
+        header.contains("edit"),
+        "the title row names the tool: {header:?}"
+    );
+}
+
+// Verifies: gh #9 / EFG-016 (the diff card) - a long diff collapses to
+// the usual preview with the expand hint, and expanding shows the rest.
+#[test]
+fn a_long_diff_truncates_with_the_usual_more_lines_hint() {
+    let theme = Theme::colored();
+    let diff = format!(
+        "--- big.txt\n+++ big.txt\n@@ -1,40 +1,40 @@\n{}",
+        (0..20)
+            .map(|i| format!("-old {i}\n+new {i}\n"))
+            .collect::<String>()
+    );
+    let mut t = Transcript::new();
+    t.start_tool("edit", r#"{"path":"big.txt"}"#);
+    t.finish_tool_with_diff(
+        ToolStatus::Ok,
+        Some("Successfully replaced 20 block(s) in big.txt.".into()),
+        Some(diff.clone()),
+    );
+    let rows = t.render(80, &theme);
+    let joined = rows.join("\n");
+    assert!(
+        joined.contains("more lines") && joined.contains("to expand"),
+        "the collapse names what is hidden: {joined}"
+    );
+    assert!(
+        joined.contains(&lca_tui::engine::keybindings::key_text("app.tools.expand")),
+        "and the key that shows it: {joined}"
+    );
+    let collapsed = rows.iter().filter(|row| row.contains("+new")).count();
+    assert!(
+        collapsed > 0 && collapsed < 20,
+        "a bounded preview, not the whole diff: {collapsed} rows"
+    );
+
+    // Ctrl+O expands to every line.
+    t.toggle_tools_expanded();
+    let expanded = t.render(80, &theme).join("\n");
+    let shown = expanded.matches("+new 19").count();
+    assert!(shown == 1, "expanded shows the last line: {expanded}");
+}
+
 // Verifies: R1 - "Tool name/args lines get the roles pi gives them",
 // read off pi's own renderers: the name is `toolTitle` **plus bold**
 // (`renderers/read.ts`, `tool-execution.ts`), a path argument is

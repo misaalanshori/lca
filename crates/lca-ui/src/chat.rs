@@ -272,8 +272,14 @@ impl Chat {
                     lca_protocol::ToolResultStatus::Denied => ToolStatus::Denied,
                     lca_protocol::ToolResultStatus::Timeout => ToolStatus::Timeout,
                 };
-                self.transcript
-                    .finish_tool(status, Some(result.content.clone()));
+                // gh #9: the tool's structured diff rides into the card
+                // (`extras` is the carrier; display text is never
+                // re-parsed to recover a change).
+                self.transcript.finish_tool_with_diff(
+                    status,
+                    Some(result.content.clone()),
+                    result.extras.get("diff").cloned(),
+                );
                 // R5: a tool that read an image shows it through the ladder.
                 for image in &result.images {
                     let info =

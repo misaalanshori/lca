@@ -311,6 +311,7 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
         args,
         status,
         result,
+        diff,
         manual,
     } = entry
     else {
@@ -355,6 +356,36 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
     };
     let header = format!("{} {title}{args_span} {status_text}", (theme.tool)(">"));
     let mut rows = vec![truncate_to_width(&header, inner, "…", false)];
+    // gh #9 / EFG-016: a structured diff renders as pi's diff card -
+    // the diff's own line kinds in the two diff roles, bounded like
+    // every other preview, inside the same state band. The diff came
+    // from the tool's own before/after (EFG-014); nothing here parses
+    // display text back into a change.
+    if let Some(diff) = diff {
+        if let Some(summary) = result {
+            rows.push(format!("  {}", (theme.role(Role::ToolOutput))(summary)));
+        }
+        let lines: Vec<&str> = diff.lines().collect();
+        let preview = if expanded {
+            lines.len()
+        } else {
+            DIFF_PREVIEW_LINES
+        };
+        for line in lines.iter().take(preview) {
+            let clipped = truncate_to_width(line, inner.saturating_sub(2), "…", false);
+            rows.push(format!("  {}", (theme.role(diff_role(line)))(&clipped)));
+        }
+        if lines.len() > preview {
+            rows.push(format!(
+                "  {}",
+                (theme.role(Role::Muted))(&format!(
+                    "… ({} more lines, {} to expand)",
+                    lines.len() - preview,
+                    lca_tui::engine::keybindings::key_text("app.tools.expand")
+                ))
+            ));
+        }
+    }
     // pi shows a bounded preview of command output (`bash.ts`
     // `BASH_PREVIEW_LINES` = 5, `ls.ts` 20, `grep.ts` 15) and a one-line
     // card for the rest; Ctrl+O expands to the full result.
@@ -405,6 +436,24 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
         out.push(band_row(&format!(" {row}"), width, &bg));
     }
     out.push(band_row("", width, &bg));
+}
+
+/// The collapsed preview length for a structured diff (gh #9): enough
+/// rows to show the change, bounded like every other tool preview.
+const DIFF_PREVIEW_LINES: usize = 10;
+
+/// One diff line's role, decided by its unified-diff marker - pi's
+/// `renderDiff` parses the same shape: `+` is added, `-` is removed, and
+/// everything else (context lines, the `@@`/`---`/`+++` headers) is
+/// context.
+fn diff_role(line: &str) -> Role {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        Role::ToolDiffAdded
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        Role::ToolDiffRemoved
+    } else {
+        Role::ToolDiffContext
+    }
 }
 
 /// The collapsed preview line count for a tool, from pi's per-tool

@@ -65,6 +65,12 @@ pub enum Entry {
         status: ToolStatus,
         /// Result preview, once finished.
         result: Option<String>,
+        /// The structured diff the tool returned in `extras["diff"]`
+        /// (gh #9): `Some` renders the card as pi's diff card - its own
+        /// line kinds in `toolDiffAdded`/`toolDiffRemoved` - instead of
+        /// an ordinary result preview. Carried, never re-parsed out of
+        /// display text (the DNA box for this cycle).
+        diff: Option<String>,
         /// The call came from the editor's `!`/`!!` line rather than from
         /// the model. pi splits these into two components
         /// (`BashExecutionComponent` in `bashMode`, the tool card in
@@ -289,6 +295,7 @@ impl Transcript {
             args: args.into(),
             status: ToolStatus::Running,
             result: None,
+            diff: None,
             manual: false,
         });
     }
@@ -301,23 +308,39 @@ impl Transcript {
             args: args.into(),
             status: ToolStatus::Running,
             result: None,
+            diff: None,
             manual: true,
         });
     }
 
     /// Finish the most recent running tool call.
     pub fn finish_tool(&mut self, status: ToolStatus, result: Option<String>) {
+        self.finish_tool_with_diff(status, result, None);
+    }
+
+    /// Finish the most recent running tool call, carrying the structured
+    /// diff the tool returned in `extras["diff"]` (gh #9, EFG-014): the
+    /// card then renders it as pi's diff card. A result with no diff
+    /// takes the ordinary path - `finish_tool` is this with `None`.
+    pub fn finish_tool_with_diff(
+        &mut self,
+        status: ToolStatus,
+        result: Option<String>,
+        diff: Option<String>,
+    ) {
         self.invalidate_cache();
         for entry in self.entries.iter_mut().rev() {
             if let Entry::Tool {
                 status: s,
                 result: r,
+                diff: d,
                 ..
             } = entry
                 && *s == ToolStatus::Running
             {
                 *s = status;
                 *r = result;
+                *d = diff;
                 return;
             }
         }
@@ -518,6 +541,7 @@ impl Transcript {
             args: String::new(),
             status: ToolStatus::Running,
             result: Some(chunk.to_string()),
+            diff: None,
             manual: false,
         });
     }

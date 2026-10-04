@@ -190,3 +190,8 @@ mod gh20_session_meta_model;
 // of the service that would bill the call.
 #[path = "gh31-provider-profiles.rs"]
 mod gh31_provider_profiles;
+// GitHub issue #9 (EFG-016/EFG-014): an `edit` result's structured diff
+// never reached the transcript, so every edit rendered as a plain tool
+// card with the change hidden behind Ctrl+O.
+#[path = "gh9-diff-card.rs"]
+mod gh9_diff_card;
