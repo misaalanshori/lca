@@ -741,6 +741,7 @@ pub fn list_models(cap: &dyn ProviderCap) -> Vec<lca_protocol::ModelInfo> {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0)
                     .min(u32::MAX as u64) as u32,
+                extras: Default::default(),
             }
         })
         .collect();
@@ -759,6 +760,7 @@ fn fallback_models() -> Vec<lca_protocol::ModelInfo> {
             name: name.to_string(),
             context_window: *ctx,
             max_tokens: *max,
+            extras: Default::default(),
         })
         .collect()
 }

@@ -108,6 +108,10 @@ impl Default for Settings {
     }
 }
 
+/// Provider profiles: per-profile credentials, routing, and the labels
+/// the picker rows show (gh #31).
+pub mod profiles;
+
 /// OpenAI's `prompt_cache_key` is capped at 64 characters (V1, ADR-0031).
 fn clamp_cache_key(key: &str) -> String {
     key.chars().take(64).collect()
@@ -439,22 +443,6 @@ pub fn parse_sse(body: &[u8], emit: &mut dyn FnMut(StreamEvent)) {
     decoder.finish(emit);
 }
 
-/// The effective base URL: a stored one (saved by `login`) wins over the
-/// environment default, so the WASM form and the native form share one
-/// configured endpoint through `credentials`.
-fn effective_base_url<C: ProviderCap + ?Sized>(cap: &C, settings: &Settings) -> String {
-    cap.credentials_get("base_url")
-        .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| settings.base_url.clone())
-}
-
-/// The effective bearer token: stored key first, environment second.
-fn effective_key<C: ProviderCap + ?Sized>(cap: &C, settings: &Settings) -> Option<String> {
-    cap.credentials_get("api_key")
-        .filter(|key| !key.is_empty())
-        .or_else(|| settings.api_key.clone())
-}
-
 /// A pull-based driver over one streaming completion: [`next_event`] returns
 /// one typed event at a time, reading more of the response body only when its
 /// buffer is empty. The native form drains it in a loop; the WASM form drives
@@ -479,13 +467,19 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
         settings: &Settings,
         request: &CompletionRequest,
     ) -> Result<StreamDriver<'a, C>, StreamFailure> {
-        let base = effective_base_url(cap, settings);
-        let url = format!("{}/chat/completions", base.trim_end_matches('/'));
         let model = if request.model.is_empty() {
             settings.model.clone()
         } else {
             request.model.clone()
         };
+        // Routing follows the model (gh #31): the entry the `models`
+        // setting carries for this id names the profile whose credentials
+        // the request is built from; an id the list does not know is a
+        // default-profile request.
+        let entries = profiles::model_entries(&cap.credentials_get("models").unwrap_or_default());
+        let profile = profiles::profile_of_model(&entries, &model);
+        let base = profiles::base_url_for(cap, settings, &profile);
+        let url = format!("{}/chat/completions", base.trim_end_matches('/'));
         // Issue #3: no implicit default model. A call with nothing selected is
         // a legible error pointing at /model, never a silent "gpt-4o-mini".
         if model.is_empty() {
@@ -535,7 +529,7 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
         if let Some(session) = request.extras.get("session-id") {
             headers.push(("x-opencode-session", session.as_str()));
         }
-        let key = effective_key(cap, settings);
+        let key = profiles::api_key_for(cap, settings, &profile);
         let bearer;
         if let Some(key) = key.as_deref() {
             bearer = format!("Bearer {key}");
@@ -854,18 +848,12 @@ pub fn context_window_for(
 /// `=` is only split when the tail is a number, so an id that happens to
 /// carry one still arrives whole.
 pub fn parse_models_setting(value: &str) -> Vec<(String, Option<u32>)> {
-    value
-        .split(',')
-        .filter(|entry| !entry.is_empty())
-        .map(|entry| {
-            if let Some((model, tokens)) = entry.rsplit_once('=')
-                && !model.is_empty()
-                && let Ok(window) = tokens.parse::<u32>()
-            {
-                return (model.to_string(), Some(window));
-            }
-            (entry.to_string(), None)
-        })
+    // One parser for the setting (gh #34's `id=window`, gh #31's profile
+    // tag): `profiles::model_entries` owns the grammar, this stays as the
+    // id/window view callers outside the picker read.
+    profiles::model_entries(value)
+        .into_iter()
+        .map(|entry| (entry.id, entry.window))
         .collect()
 }
 
@@ -897,7 +885,7 @@ pub fn login_options(cap: &dyn ProviderCap) -> Vec<lca_protocol::LoginOption> {
 }
 
 /// The host portion of a base URL (for the ad hoc `net` consent).
-fn host_of(base_url: &str) -> String {
+pub(crate) fn host_of(base_url: &str) -> String {
     let without_scheme = base_url.split("://").nth(1).unwrap_or(base_url);
     without_scheme
         .split('/')
@@ -987,38 +975,58 @@ pub fn login_submit(
         .map(str::to_string)
         .or_else(|| preset.map(|preset| preset.base_url.clone()))
         .ok_or_else(|| format!("unknown preset `{}`", answer.choice))?;
+    // The choice's id is this login's profile (gh #31): a second login
+    // adds its own keys instead of overwriting the first, and a login for
+    // a profile that exists updates that one profile only. The keys live
+    // in this extension's own namespace, under `profile.<id>.`.
+    let profile = answer.choice.clone();
     if let Some(key) = answer.value("api-key")
         && !key.is_empty()
     {
-        cap.credentials_set("api_key", key)
-            .map_err(|err| format!("cannot store the key: {err}"))?;
+        cap.credentials_set(
+            &profiles::credential_key(&Some(profile.clone()), "api_key"),
+            key,
+        )
+        .map_err(|err| format!("cannot store the key: {err}"))?;
     }
-    let mut settings = vec![("base_url".to_string(), base_url.clone())];
+    // The base URL rides back as an opaque pair the host persists under
+    // the same profile key - the host never parses it (ADR-0031).
+    let mut settings = vec![(
+        profiles::credential_key(&Some(profile.clone()), "base_url"),
+        base_url.clone(),
+    )];
     // D2: the endpoint's own model list when it answers, the preset's
     // curated short list otherwise. The host persists whatever comes back
-    // and never interprets it; an entry that carries a window is written
-    // `id=window` so gh #34's limit survives the round trip.
-    let models = discover_models(cap, &base_url, answer.value("api-key")).unwrap_or_else(|| {
-        preset
-            .map(|preset| {
-                preset
-                    .models
-                    .iter()
-                    .map(|model| (model.clone(), None))
-                    .collect()
-            })
-            .unwrap_or_default()
-    });
-    if !models.is_empty() {
-        let list = models
-            .iter()
-            .map(|(model, window)| match window {
-                Some(window) => format!("{model}={window}"),
-                None => model.clone(),
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        settings.push(("models".to_string(), list));
+    // and never interprets it; each entry carries its profile id and, when
+    // the endpoint reported one, its window (`id@profile=window`, which
+    // parses exactly as `id=window` did - gh #34, gh #31).
+    let discovered =
+        discover_models(cap, &base_url, answer.value("api-key")).unwrap_or_else(|| {
+            preset
+                .map(|preset| {
+                    preset
+                        .models
+                        .iter()
+                        .map(|model| (model.clone(), None))
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+    // Merge into the list already stored, so logging into a second
+    // service keeps the first one's models instead of replacing them.
+    let mut entries = profiles::model_entries(&cap.credentials_get("models").unwrap_or_default());
+    for (model, window) in discovered {
+        entries.retain(|entry| {
+            !(entry.id == model && entry.profile.as_deref() == Some(profile.as_str()))
+        });
+        entries.push(profiles::ModelEntry {
+            id: model,
+            profile: Some(profile.clone()),
+            window,
+        });
+    }
+    if !entries.is_empty() {
+        settings.push(("models".to_string(), profiles::serialize_entries(&entries)));
     }
     if let Some(model) = answer.value("model") {
         settings.push(("model".to_string(), model.to_string()));

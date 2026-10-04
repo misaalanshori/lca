@@ -325,6 +325,7 @@ impl Provider for FakeProvider {
             name: "Faux Model".to_string(),
             context_window: 128_000,
             max_tokens: 16_384,
+            extras: Default::default(),
         }]
     }
 

@@ -42,6 +42,33 @@ None. The OpenAI chat completions shape is what the typed provider stream cases 
 
 A base URL whose host is not covered by the manifest's fixed hosts needs an ad hoc `net` grant (FR-PERM-16). A base URL stored through `login` is offered that grant at login, as before. An endpoint configured **only through the environment** has no such moment, so the first request now raises that same consent, naming the exact host: `allow` persists it for the project (FR-PERM-18/19, in force without a restart, so neither the next turn nor the next process asks again) and `deny` refuses the request and records the answer. Headless mode cannot prompt, so it exits **4** with a message naming the host and the fix; `--allow-host <host>` grants it for that one run without touching the grant store. This is deferred work B1, landed on the request path (gh #29).
 
+## Profiles
+
+One credentials namespace can hold several services at once (gh #31).
+Each login's choice is a **profile**: its key and endpoint live under
+`profile.<name>.api_key` and `profile.<name>.base_url`, so a second
+login adds beside the first instead of overwriting it, and a login for
+a profile that already exists updates that profile alone. The bare
+`api_key`/`base_url` pair - what every install written before profiles
+holds - reads as the unnamed **default** profile, unchanged.
+
+The `models` setting carries each model's profile: `id[@profile][=window]`.
+An entry without `@` is a default-profile model, and `=window` parses as
+it always did, so both directions stay backward tolerant (the same
+discipline as gh #34's window growth).
+
+**Routing follows the model.** A request for a model of profile P is
+built from P's endpoint and P's key; a model the list does not tag is a
+default-profile request. That is what makes the picker's label honest:
+every row shows `model (service)` from the model's own `extras`, never
+the extension's crate name, so the row says which service and key will
+be billed.
+
+**The environment acts on the default profile.** `OPENAI_BASE_URL` and
+`OPENAI_API_KEY` keep their precedence (environment over what login
+persisted) and apply to default-profile models only; a named profile is
+its own, environment notwithstanding.
+
 ## Cache behavior
 
 Most OpenAI-shaped endpoints, including OpenAI's own, cache automatically with no explicit marker required, so this provider generally ignores the cache-boundary hint rather than acting on it. It still reports `cache_read` and `cache_write` from the response's usage fields whenever the configured endpoint provides them, since that costs nothing and is what makes the cache-waste measurement in `docs/testing-plan.md` work for whatever server a user pointed this provider at.

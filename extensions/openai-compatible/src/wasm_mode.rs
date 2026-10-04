@@ -29,7 +29,7 @@ use exports::lca::ext::provider_models::{Guest as ModelsGuest, ModelInfo as Wasm
 use lca::ext::types::{ExtraPair, Usage as WasmUsage};
 use lca::host::{credentials, net, resources};
 
-use crate::{Settings, login_options, login_submit, run_login, run_logout};
+use crate::{Settings, login_options, login_submit, profiles, run_login, run_logout};
 
 fn map_resources(err: resources::Error) -> lca_protocol::CapabilityError {
     use lca_protocol::CapabilityError as E;
@@ -298,52 +298,40 @@ impl ModelsGuest for OpenAiCompatWasm {
                 .or_else(|| GUEST_CAP.credentials_get("model").filter(|v| !v.is_empty()))
                 .unwrap_or_default()
         };
-        // The list `login-submit` discovered (or the preset's short list).
+        // The list `login-submit` discovered (or the preset's short list):
+        // the pairs the host passes first, the extension's own namespace
+        // the fallback - the same read `native.rs` makes, so both delivery
+        // modes answer from one shape (NFR-25).
         let stored = pairs
             .iter()
             .find(|pair| pair.key == "models")
             .map(|pair| pair.value.clone())
-            .unwrap_or_default();
-        // gh #34: the same resolver `native.rs` calls - the endpoint's own
-        // limit first, the curated catalog next, `OPENAI_CONTEXT_WINDOW`
-        // over both - so the two delivery modes cannot drift (NFR-25).
+            .unwrap_or_else(|| GUEST_CAP.credentials_get("models").unwrap_or_default());
+        // gh #34's window resolution and gh #31's per-model profile both
+        // come from `profiles`: one resolver, no drift (NFR-25).
         let windows = load_context_windows(&GUEST_CAP);
-        let reported: BTreeMap<String, u32> = parse_models_setting(&stored)
+        profiles::picker_models(&GUEST_CAP, &settings, &stored, &configured)
             .into_iter()
-            .filter_map(|(model, window)| Some((model, window?)))
-            .collect();
-        let window_for = |model: &str| {
-            context_window_for(
-                model,
-                settings.context_window,
-                reported.get(model).copied(),
-                &windows,
-            )
-        };
-        let mut out: Vec<WasmModel> = parse_models_setting(&stored)
-            .into_iter()
-            .map(|(id, _)| WasmModel {
-                context_window: window_for(&id),
-                id: id.clone(),
-                name: id,
-                max_tokens: 0,
-                extras: Vec::new(),
+            .map(|picked| {
+                let context_window = context_window_for(
+                    &picked.id,
+                    settings.context_window,
+                    picked.window,
+                    &windows,
+                );
+                let extras = profiles::row_extras(&picked)
+                    .into_iter()
+                    .map(|(key, value)| ExtraPair { key, value })
+                    .collect();
+                WasmModel {
+                    context_window,
+                    id: picked.id.clone(),
+                    name: picked.id,
+                    max_tokens: 0,
+                    extras,
+                }
             })
-            .collect();
-        if !out.is_empty() {
-            return out;
-        }
-        if !configured.is_empty() {
-            let window = window_for(&configured);
-            out.push(WasmModel {
-                id: configured.clone(),
-                name: configured,
-                context_window: window,
-                max_tokens: 0,
-                extras: Vec::new(),
-            });
-        }
-        out
+            .collect()
     }
 }
 

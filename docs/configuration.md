@@ -44,12 +44,15 @@ Environment variables use the `LCA_` prefix with the key uppercased and dots rep
 
 Environment variables are read by the provider extension that speaks the
 shape, not by the host, and they take precedence over what the login flow
-persisted. The bundled `openai-compatible` provider reads:
+persisted. With provider profiles (gh #31), they act on the **default**
+profile only: a model owned by a named profile is that profile's endpoint
+and key, environment notwithstanding. The bundled `openai-compatible`
+provider reads:
 
 | Variable | Meaning |
 |---|---|
-| `OPENAI_BASE_URL` | The endpoint's base URL. A non-default host needs the ad hoc `net` grant (FR-PERM-16): interactively the first request offers it and `allow` persists it for the project (prompt once per host); headless exits 4 naming the host and the fix; `--allow-host <host>` allows it for that run only, never written to the grant store (`docs/headless.md`, gh #29). |
-| `OPENAI_API_KEY` | The API key. `OPENCODE_API_KEY` is accepted as a synonym. |
+| `OPENAI_BASE_URL` | The endpoint's base URL - the default profile's (gh #31; a named profile keeps its own). A non-default host needs the ad hoc `net` grant (FR-PERM-16): interactively the first request offers it and `allow` persists it for the project (prompt once per host); headless exits 4 naming the host and the fix; `--allow-host <host>` allows it for that run only, never written to the grant store (`docs/headless.md`, gh #29). |
+| `OPENAI_API_KEY` | The API key for the default profile (gh #31; a named profile keeps its own). `OPENCODE_API_KEY` is accepted as a synonym. |
 | `OPENAI_MODEL` | The model id. `LCA_MODEL` is accepted as a synonym. |
 | `OPENAI_CONTEXT_WINDOW` | The context window, in tokens, for every model of this provider. It overrides the per-model window: a value set here beats a limit the endpoint reported *and* the extension's curated catalog (`docs/providers/openai-compatible.md`, "Context windows"). |
 | `OPENAI_PROMPT_CACHE_KEY` | Set to `0` to stop sending `prompt_cache_key`. **Default: on.** The key is the clamped session id, which is OpenAI's native cache-affinity parameter; some strict proxies reject unknown body fields, which is what the opt-out is for. |

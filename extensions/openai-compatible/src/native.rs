@@ -122,10 +122,9 @@ impl ExtensionDispatch for OpenAiCompat {
         } else {
             self.settings.model.clone()
         };
-        // ADR-0035: the passed settings are the source of truth -
-        // the same pairs `complete` gets in its `extras`. The
-        // credential read is the fallback for a caller that has not
-        // been told the settings yet.
+        // ADR-0035: the passed settings are the source of truth - the same
+        // pairs `complete` gets in its `extras`. The credential read is the
+        // fallback for a caller that has not been told the settings yet.
         let stored = settings
             .iter()
             .find(|(key, _)| key == "models")
@@ -137,47 +136,31 @@ impl ExtensionDispatch for OpenAiCompat {
                     .flatten()
                     .unwrap_or_default()
             });
-        // gh #34: a window per model - the endpoint's own `context_length`
-        // when it sent one, the curated catalog otherwise - under the
-        // `OPENAI_CONTEXT_WINDOW` whole-provider override. `wasm_mode`
-        // makes this same call, so both delivery modes agree by sharing
-        // one resolver rather than by two copies of it.
+        // gh #34's window resolution and gh #31's per-model profile both
+        // come from `profiles`, so this list and the WASM form's are built
+        // by the same code (NFR-25).
         let windows = load_context_windows(self.cap.as_ref());
-        let reported: BTreeMap<String, u32> = parse_models_setting(&stored)
-            .into_iter()
-            .filter_map(|(model, window)| Some((model, window?)))
-            .collect();
-        let window_for = |model: &str| {
-            context_window_for(
-                model,
-                self.settings.context_window,
-                reported.get(model).copied(),
-                &windows,
-            )
-        };
-        let mut models: Vec<ModelInfo> = Vec::new();
-        if !configured.is_empty() {
-            let window = window_for(&configured);
-            models.push(ModelInfo {
-                id: configured.clone(),
-                name: configured,
-                context_window: window,
-                max_tokens: 0,
-            });
-        }
-        for (id, _) in parse_models_setting(&stored) {
-            if models.iter().any(|model| model.id == id) {
-                continue;
-            }
-            let window = window_for(&id);
-            models.push(ModelInfo {
-                id: id.clone(),
-                name: id,
-                context_window: window,
-                max_tokens: 0,
-            });
-        }
-        Ok(models)
+        Ok(
+            profiles::picker_models(self.cap.as_ref(), &self.settings, &stored, &configured)
+                .into_iter()
+                .map(|picked| {
+                    let context_window = context_window_for(
+                        &picked.id,
+                        self.settings.context_window,
+                        picked.window,
+                        &windows,
+                    );
+                    let extras = profiles::row_extras(&picked).into_iter().collect();
+                    ModelInfo {
+                        id: picked.id.clone(),
+                        name: picked.id,
+                        context_window,
+                        max_tokens: 0,
+                        extras,
+                    }
+                })
+                .collect(),
+        )
     }
 
     fn stream_completion<'a>(

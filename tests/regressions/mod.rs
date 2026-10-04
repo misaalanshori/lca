@@ -185,3 +185,8 @@ mod gh29_env_host_grant_prompt;
 // turn ran on.
 #[path = "gh20-session-meta-model.rs"]
 mod gh20_session_meta_model;
+// GitHub issue #31: one `api_key`/`base_url` meant a second login
+// overwrote the first, and every picker row wore the crate name instead
+// of the service that would bill the call.
+#[path = "gh31-provider-profiles.rs"]
+mod gh31_provider_profiles;

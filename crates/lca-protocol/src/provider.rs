@@ -10,7 +10,7 @@ use crate::stream::StreamEvent;
 use crate::tool::ToolSpec;
 
 /// One model a provider offers (FR-PROV-2).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelInfo {
     /// Provider-specific model identifier.
     pub id: String,
@@ -20,6 +20,11 @@ pub struct ModelInfo {
     pub context_window: u32,
     /// Maximum output tokens; `0` when the provider does not publish one.
     pub max_tokens: u32,
+    /// Non-structural per-model data: the ABI record carries
+    /// `extras: list<extra-pair>` already (`wit/world-provider.wit`), so
+    /// this is the host-side half of that field, not a new one (gh #31 -
+    /// the picker's per-model provenance rides here).
+    pub extras: std::collections::BTreeMap<String, String>,
 }
 
 /// One completion request as the core assembles it. Moved here from

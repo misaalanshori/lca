@@ -168,7 +168,14 @@ impl Ui {
         // existed and could not reach the endpoint.
         *self.login_answer.lock().unwrap_or_else(|p| p.into_inner()) =
             Some((target.clone(), choice.clone(), values.clone()));
-        if let Some(secret) = values.get("api-key")
+        // The key's home depends on who is writing it (gh #31): a custom
+        // endpoint has no extension behind it, so the host stores it under
+        // the bare name - the default profile. A preset's login runs the
+        // extension's `login-submit`, which stores it under that profile;
+        // writing it bare here would hand every later default-profile
+        // request whichever service logged in last.
+        if choice == lca_ui::CUSTOM_OPTION
+            && let Some(secret) = values.get("api-key")
             && let Err(err) = crate::store_provider_secret(
                 &self.data,
                 &self.cwd,

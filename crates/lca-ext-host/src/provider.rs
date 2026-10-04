@@ -45,6 +45,13 @@ pub(super) fn provider_models_work(
             name: model.name,
             context_window: model.context_window,
             max_tokens: model.max_tokens,
+            // The ABI record has always carried these; the host dropped
+            // them, which is why no caller could see per-model data.
+            extras: model
+                .extras
+                .into_iter()
+                .map(|pair| (pair.key, pair.value))
+                .collect(),
         })
         .collect())
 }

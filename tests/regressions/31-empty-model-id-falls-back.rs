@@ -24,6 +24,7 @@ fn model(id: &str) -> ModelInfo {
         name: "n".to_string(),
         context_window: 1,
         max_tokens: 1,
+        extras: Default::default(),
     }
 }
 

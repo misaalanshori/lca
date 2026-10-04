@@ -517,6 +517,7 @@ pub fn provider_models(settings: &[(String, String)]) -> Vec<lca_protocol::Model
                 name: id.to_string(),
                 context_window: 4096,
                 max_tokens: 0,
+                extras: Default::default(),
             })
             .collect();
     }
@@ -531,12 +532,14 @@ pub fn provider_models_default() -> Vec<lca_protocol::ModelInfo> {
             name: "Conformance A".to_string(),
             context_window: 4096,
             max_tokens: 512,
+            extras: Default::default(),
         },
         lca_protocol::ModelInfo {
             id: "conformance-b".to_string(),
             name: "Conformance B".to_string(),
             context_window: 8192,
             max_tokens: 1024,
+            extras: Default::default(),
         },
     ]
 }

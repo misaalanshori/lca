@@ -68,7 +68,17 @@ pub(super) fn model_rows(
                 // Already provider-qualified: printing it twice helps nobody.
                 (id.to_string(), id.to_string())
             } else {
-                (id.to_string(), format!("{id} ({provider})"))
+                // gh #31: the row names the service that will bill the
+                // call. The provider says so per model - in `extras`, the
+                // carrier the WIT record already had - and the caller's
+                // provider name is only the fallback for a provider that
+                // carries no per-model identity (a bundled or fake one).
+                let label = model
+                    .extras
+                    .get("label")
+                    .map(String::as_str)
+                    .unwrap_or(provider);
+                (id.to_string(), format!("{id} ({label})"))
             })
         })
         .collect()
@@ -107,8 +117,17 @@ pub(super) fn model_effect_on(
                 current.window = model.context_window;
             }
             if let Some(label) = label_cell {
+                // gh #31: after a switch the footer names the service
+                // that will answer for *this* model - its own label out
+                // of `extras`, with the caller's provider name only for
+                // a model that carries no per-model identity.
+                let service = model
+                    .extras
+                    .get("label")
+                    .map(String::as_str)
+                    .unwrap_or(provider_name);
                 *label.lock().unwrap_or_else(|err| err.into_inner()) =
-                    format!("{provider_name}/{}", model.id);
+                    format!("{service}/{}", model.id);
             }
             if let Some(backend) = backend {
                 backend.set_model(model.id.clone());
@@ -224,8 +243,55 @@ mod tests {
                 name: format!("Model {id}"),
                 context_window: 100_000,
                 max_tokens: 8_192,
+                extras: Default::default(),
             })
             .collect()
+    }
+
+    // Verifies: gh #31 - the row names the service that will bill the
+    // call: the model's own label out of `extras` (the carrier the WIT
+    // record already had) beats the caller's provider name, and a
+    // provider that carries no per-model identity keeps the old label.
+    #[test]
+    fn a_models_own_label_replaces_the_crate_name_in_the_row() {
+        let offered = vec![
+            ModelInfo {
+                id: "mimo-v2.6-flash".to_string(),
+                name: "mimo-v2.6-flash".to_string(),
+                context_window: 100_000,
+                max_tokens: 0,
+                extras: [("label".to_string(), "opencode-go".to_string())].into(),
+            },
+            ModelInfo {
+                id: "plain-model".to_string(),
+                name: "plain-model".to_string(),
+                context_window: 100_000,
+                max_tokens: 0,
+                extras: Default::default(),
+            },
+        ];
+        let rows = model_rows(&offered, "openai-compatible");
+        assert_eq!(
+            rows[0],
+            (
+                "mimo-v2.6-flash".to_string(),
+                "mimo-v2.6-flash (opencode-go)".to_string()
+            ),
+            "the service that will bill the call names the row"
+        );
+        assert_eq!(
+            rows[1],
+            (
+                "plain-model".to_string(),
+                "plain-model (openai-compatible)".to_string()
+            ),
+            "a model with no per-model identity falls back to the provider"
+        );
+        // Selection is untouched by any of it: the id stays raw.
+        for row in &rows {
+            let picker = lca_ui::ModelPicker::new(vec![row.clone()]);
+            assert_eq!(picker.selected_model(), Some(row.0.as_str()));
+        }
     }
 
     // Verifies: G2 (issue #3's safety half) - the `model (provider)` label

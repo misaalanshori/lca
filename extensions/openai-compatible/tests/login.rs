@@ -127,15 +127,15 @@ fn login_submit_stores_the_key_and_returns_opaque_settings() {
     };
     let settings = login_submit(&cap, &answer).expect("submit");
     assert_eq!(
-        cap.credentials_get("api_key").as_deref(),
+        cap.credentials_get("profile.openrouter.api_key").as_deref(),
         Some("sk-secret"),
-        "the key went to the extension's own credentials namespace"
+        "the key went to this login's profile in the extension's own namespace (gh #31)"
     );
     assert!(
-        settings
-            .iter()
-            .any(|(key, value)| key == "base_url" && value == "https://openrouter.ai/api/v1"),
-        "the host is handed the base URL to persist: {settings:?}"
+        settings.iter().any(|(key, value)| {
+            key == "profile.openrouter.base_url" && value == "https://openrouter.ai/api/v1"
+        }),
+        "the host is handed this profile's base URL to persist: {settings:?}"
     );
 
     let unknown = LoginAnswer {
@@ -190,8 +190,8 @@ mod discovery {
         let settings = login_submit(&cap, &answer()).expect("submit");
         assert_eq!(
             setting(&settings, "models"),
-            Some("alpha,zeta"),
-            "sorted and deduplicated"
+            Some("alpha@openrouter,zeta@openrouter"),
+            "sorted and deduplicated, each entry tagged with the profile it belongs to (gh #31)"
         );
         assert!(
             cap.seen.lock().expect("seen")[0].ends_with("/models"),
@@ -225,7 +225,10 @@ mod discovery {
             let settings = login_submit(&cap, &answer()).expect("submit");
             assert_eq!(
                 setting(&settings, "models"),
-                Some("openai/gpt-4o,anthropic/claude-3.5-sonnet,google/gemini-2.0-flash"),
+                Some(
+                    "openai/gpt-4o@openrouter,anthropic/claude-3.5-sonnet@openrouter,\
+                 google/gemini-2.0-flash@openrouter",
+                ),
                 "the curated list is the fallback"
             );
         }
@@ -251,7 +254,7 @@ mod discovery {
         let settings = login_submit(&cap, &answer()).expect("submit");
         assert_eq!(
             setting(&settings, "models"),
-            Some("mimo-v2.6-flash=262144,no-limit-model"),
+            Some("mimo-v2.6-flash@openrouter=262144,no-limit-model@openrouter"),
             "sorted, deduplicated, and the endpoint's own limit rides along"
         );
     }

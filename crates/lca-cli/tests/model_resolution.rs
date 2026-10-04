@@ -173,13 +173,14 @@ fn the_model_picker_label_never_reaches_the_provider_call() {
 
     // 1. The picker shows the decorated label (issue #3's display half).
     session.send(&["/model", "Enter"]);
-    let pane = session.wait_for(
-        "second-model (openai-compatible)",
-        std::time::Duration::from_secs(15),
+    let pane = session.wait_for("second-model (", std::time::Duration::from_secs(15));
+    assert!(
+        pane.contains("first-model ("),
+        "every row carries its service label:\n{pane}"
     );
     assert!(
-        pane.contains("first-model (openai-compatible)"),
-        "every row carries its provider label:\n{pane}"
+        !pane.contains("(openai-compatible)"),
+        "the crate name is nowhere in the rows (gh #31):\n{pane}"
     );
 
     // 2. Selecting the second row announces the switch with the raw id.
@@ -200,7 +201,7 @@ fn the_model_picker_label_never_reaches_the_provider_call() {
         "the provider call sends the raw id: {bodies}"
     );
     assert!(
-        !bodies.contains("second-model (openai-compatible)"),
+        !bodies.contains("second-model ("),
         "the label never reaches the wire: {bodies}"
     );
 
@@ -214,7 +215,7 @@ fn the_model_picker_label_never_reaches_the_provider_call() {
         "the assistant record stores the raw id"
     );
     assert!(
-        !log.contains("second-model (openai-compatible)"),
+        !log.contains("second-model ("),
         "the label never enters the session log"
     );
     // Session metadata's model is the raw id (gh #20 populates it at turn
@@ -228,7 +229,7 @@ fn the_model_picker_label_never_reaches_the_provider_call() {
     )
     .expect("meta.json");
     assert!(
-        !meta.contains("second-model (openai-compatible)"),
+        !meta.contains("second-model ("),
         "the label never enters session metadata: {meta}"
     );
 }
@@ -302,10 +303,7 @@ fn a_login_right_after_startup_shows_the_providers_models() {
 
     // 4. And `/model` lists it, marked active - no restart.
     session.send(&["/model", "Enter"]);
-    let pane = session.wait_for(
-        "fixture-model (openai-compatible)",
-        std::time::Duration::from_secs(15),
-    );
+    let pane = session.wait_for("fixture-model (", std::time::Duration::from_secs(15));
     assert!(
         pane.contains("✓"),
         "the model is offered and active:\n{pane}"
