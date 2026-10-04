@@ -32,6 +32,23 @@ impl Chat {
         self.keybindings.matches(data, "app.message.copy")
     }
 
+    /// Whether this key is pi's jump-to-bottom with the fullscreen
+    /// viewport owning the keyboard (gh #35): `tui.altScreen.bottom`
+    /// (End) acts only in fullscreen - main-screen mode keeps End on the
+    /// editor, whose scrollback has nothing to jump to - and only when
+    /// no modal, picker, or the transcript search has the keyboard,
+    /// mirroring pi's `shouldDeferViewportInputToOverlay`.
+    pub fn alt_screen_bottom(&self, data: &str) -> bool {
+        if !self.screen_mode
+            || self.world.modal_active()
+            || self.picker_open()
+            || self.search.is_some()
+        {
+            return false;
+        }
+        self.keybindings.matches(data, "tui.altScreen.bottom")
+    }
+
     /// The text a copy request names when nothing is selected (gh #9,
     /// pi 1.0.0): the sign-in URL on a waiting login screen - what the
     /// person is actually waiting on - else the last assistant message

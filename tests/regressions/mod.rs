@@ -199,3 +199,7 @@ mod gh9_diff_card;
 // terminal selection of copied code always dragged the side pipes along.
 #[path = "gh32-codeblock-borders.rs"]
 mod gh32_codeblock_borders;
+// GitHub issue #35: fullscreen scrolling took the dock with it, there
+// was no scrollbar, and no way back to the live bottom but the wheel.
+#[path = "gh35-fullscreen-dock.rs"]
+mod gh35_fullscreen_dock;

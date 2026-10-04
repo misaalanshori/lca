@@ -23,7 +23,7 @@ use crate::chat_pickers::{
 use crate::footer::Footer;
 
 use crate::separator::Separator;
-use crate::state::{Action, LoginNext, TurnStatusLine, UiOptions, UiState, widget_lines};
+use crate::state::{Action, LoginNext, TurnStatusLine, UiOptions, UiState};
 use crate::theme::Theme;
 use crate::transcript::{ToolStatus, Transcript};
 
@@ -83,6 +83,12 @@ pub struct Chat {
     pending_ctrl_x: bool,
     /// A pending prompt-jump target (a document line index).
     pub(crate) jump_target: Option<usize>,
+    /// The transcript's line count at the last frame (gh #35): scroll is
+    /// measured from the live bottom, so growth is what tells a new line
+    /// from a re-wrap when holding the reader's place.
+    pub(super) last_transcript_len: Option<usize>,
+    /// The width that count was measured at (gh #35).
+    pub(super) last_render_width: u16,
     /// The open transcript search query (FR-UI-12), when any.
     pub search: Option<String>,
     /// Document lines matching the search query.
@@ -202,6 +208,8 @@ impl Chat {
             screen_mode,
             pending_ctrl_x: false,
             jump_target: None,
+            last_transcript_len: None,
+            last_render_width: 0,
             search: None,
             search_matches: Vec::new(),
             search_index: 0,
@@ -467,148 +475,6 @@ impl Chat {
     /// moved, so the loop repaints; idle never wakes the renderer.
     pub fn tick(&mut self) -> bool {
         self.separator.tick()
-    }
-
-    /// Render the whole document (transcript + dock) at a width.
-    pub fn render(&self, width: u16) -> Vec<String> {
-        let mut out = self.transcript.render(width, &self.theme);
-
-        // Extension footer regions (FR-UI-1).
-        if let Some(render) = &self.world.options.render_regions {
-            for (_name, tree) in render("footer") {
-                for line in widget_lines(&tree.nodes).into_iter().take(3) {
-                    out.push((self.theme.dim)(&line));
-                }
-            }
-        }
-
-        // A separator above the dock: border dashes, with pi's spinner set
-        // into them while work runs (R2). The dashes carry the thinking
-        // level, the way pi colors its editor border.
-        out.push(String::new());
-        let border =
-            crate::separator::separator_border(&self.theme, self.thinking_level().as_deref());
-        out.push(self.separator.render(width, &self.theme, &border));
-
-        if let Some(notice) = &self.world.notice {
-            // A notice can be multi-line (`/help`, `/hotkeys`, a command's
-            // block output); render each line rather than embedding a
-            // newline in one line string (which corrupts the screen).
-            for (i, line) in notice.split('\n').enumerate() {
-                let prefix = if i == 0 { "• " } else { "  " };
-                for wrapped in lca_tui::engine::text::wrap_text_with_ansi(
-                    &format!("{prefix}{line}"),
-                    width as usize,
-                ) {
-                    out.push((self.theme.warn)(&wrapped));
-                }
-            }
-        }
-
-        // The pending-messages band (ADR-0038).
-        for pending in &self.pending {
-            let mark = match pending.mode {
-                lca_protocol::SubmitMode::Steer => "steer",
-                lca_protocol::SubmitMode::FollowUp => "next",
-            };
-            out.push((self.theme.dim)(&format!("  ⏳ [{mark}] {}", pending.text)));
-        }
-        if !self.pending.is_empty() {
-            out.push((self.theme.dim)(&format!(
-                "  {} queued · Alt+E restores them to the editor",
-                self.pending.len()
-            )));
-        }
-
-        // The autocomplete popup, when open.
-        out.extend(self.editor.render_popup(width));
-
-        // The editor: the prompt marker on the first row, and its two
-        // columns (`>` + space) as a plain pad on every continuation row,
-        // so every row's text starts at the same visual column and the
-        // cursor marker's column reads the same on lines 1..n (gh #27a).
-        let editor_rows = self.editor.render(width.saturating_sub(2));
-        for (index, row) in editor_rows.into_iter().enumerate() {
-            out.push(if index == 0 {
-                format!("{} {row}", (self.theme.accent)(">"))
-            } else {
-                format!("  {row}")
-            });
-        }
-
-        // The footer.
-        out.extend(self.footer_lines(width));
-        out
-    }
-
-    /// The footer lines, refreshed from the live model label and usage.
-    fn footer_lines(&self, width: u16) -> Vec<String> {
-        let mut footer = self.footer.clone();
-        footer.usage = self.usage.clone();
-        // FR-UI-20: the window follows the live model choice (a cell), and
-        // the used side is the last call's prompt size.
-        footer.context_window = *self
-            .world
-            .options
-            .context_window
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let model = self.model_label();
-        footer.model = if model.trim().is_empty() {
-            "no model".to_string()
-        } else {
-            model
-        };
-        footer.thinking = self.thinking_level();
-        if let Some(cue) = &self.turn_status {
-            footer.statuses.push(cue.text.clone());
-        }
-        if let Some(notice) = self
-            .world
-            .options
-            .update_notice
-            .as_ref()
-            .and_then(|cell| cell.get())
-        {
-            footer.statuses.push(notice.clone());
-        }
-        if !self.pending.is_empty() {
-            footer
-                .statuses
-                .push(format!("{} queued", self.pending.len()));
-        }
-        if let Some(render) = &self.world.options.render_regions {
-            for (_name, tree) in render("status-line") {
-                for line in widget_lines(&tree.nodes).into_iter().take(1) {
-                    footer.statuses.push(line);
-                }
-            }
-        }
-        footer.render(width, &self.theme)
-    }
-
-    /// The viewport the renderer paints: the document's tail, with overlays
-    /// composited over it.
-    pub fn viewport(&self, width: u16, height: u16, scroll: u16) -> Vec<String> {
-        let document = self.render(width);
-        // Fullscreen (alt-screen) mode slices to the viewport window.
-        if self.screen_mode {
-            let total = document.len();
-            let end = total.saturating_sub(scroll as usize);
-            let start = end.saturating_sub(height as usize);
-            let mut viewport: Vec<String> = document[start..end].to_vec();
-            if self.world.modal_active() || self.picker_open() {
-                viewport.resize(height as usize, String::new());
-            }
-            self.compose_overlays(&mut viewport, width, height);
-            viewport
-        } else {
-            // Main-screen (scrollback) mode: document lines are retained in full
-            // so the differential renderer can append with newlines into scrollback.
-            let mut lines = document;
-            self.compose_overlays_bottom_anchored(&mut lines, width, height);
-            lines
-        }
     }
 
     /// Handle one keypress: the modal first, then the pickers, the
@@ -1097,8 +963,11 @@ impl Chat {
     /// (FR-UI-11). Cleared once taken.
     pub fn take_jump_scroll(&mut self, width: u16, height: u16) -> Option<u16> {
         let target = self.jump_target.take()?;
-        let total = self.render(width).len();
-        let scroll = total.saturating_sub(target + height as usize / 2);
+        // gh #35: scroll is a transcript coordinate now - the dock below
+        // it is not part of either count.
+        let total = self.transcript_len(width);
+        let window = self.window_height(width, height);
+        let scroll = total.saturating_sub(target + window / 2);
         Some(scroll.min(u16::MAX as usize) as u16)
     }
 
@@ -1166,3 +1035,7 @@ mod tests;
 #[cfg(test)]
 #[path = "chat_overlay_tests.rs"]
 mod overlay_tests;
+
+#[cfg(test)]
+#[path = "chat_viewport_tests.rs"]
+mod viewport_tests;

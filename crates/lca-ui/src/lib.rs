@@ -11,6 +11,7 @@ mod chat_commands;
 mod chat_keys;
 mod chat_overlays;
 mod chat_pickers;
+mod chat_render;
 mod chat_search;
 mod chat_shell;
 pub mod footer;

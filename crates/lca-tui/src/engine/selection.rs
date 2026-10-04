@@ -56,6 +56,10 @@ pub struct Selection {
     pub dragging: bool,
     /// The click count that started it.
     pub click_count: u8,
+    /// The painted scrollbar's `(column, rows)` when one is on the frame
+    /// (gh #35): the selection's right edge stops before that column, so
+    /// the adornment never reaches the copied text or the highlight.
+    scrollbar: Option<(u16, u16)>,
 }
 
 /// Whether a character is part of a selectable word. Joiners `/`, `-`, `.`
@@ -98,6 +102,15 @@ impl Selection {
     /// A new, empty selection.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Tell the selection where a painted virtual scrollbar sits (gh #35):
+    /// `(column, rows)` of the frame it was drawn on, `None` when the
+    /// frame carries no scrollbar. The selection's right edge stops
+    /// before that column on those rows - the hard rule that a copy of
+    /// transcript text is exactly the transcript's text.
+    pub fn set_scrollbar(&mut self, scrollbar: Option<(u16, u16)>) {
+        self.scrollbar = scrollbar;
     }
 
     /// Begin a selection at a point with the given granularity.
@@ -206,6 +219,14 @@ impl Selection {
         } else {
             (0, width)
         };
+        // gh #35: on the rows that carry the scrollbar, the range stops
+        // where the content stops - the copied text and the highlight
+        // read this same range, so the adornment can never leak into
+        // either.
+        let to = match self.scrollbar {
+            Some((column, rows)) if row < rows => to.min(column),
+            _ => to,
+        };
         Some((from, to))
     }
 
@@ -292,6 +313,45 @@ mod tests {
             "second line here".to_string(),
             "third /path/to-file.txt".to_string(),
         ]
+    }
+
+    // Verifies: gh #35 (the hard rule) - the virtual scrollbar column is
+    // an adornment outside the selected width: a selection dragged across
+    // it copies exactly the transcript's text, and the inverse highlight
+    // stops before its cell instead of inverting it.
+    #[test]
+    fn the_scrollbar_column_never_reaches_the_copied_text() {
+        let mut sel = Selection::new();
+        // `hello world` then the scrollbar cell at column 12.
+        let rows = vec!["hello world \u{2502}".to_string()];
+        sel.start(
+            SelectionPoint { row: 0, col: 0 },
+            Granularity::Char,
+            1,
+            &rows[0],
+        );
+        // Dragged past the end of the row: the range wants column 13.
+        sel.update(SelectionPoint { row: 0, col: 13 }, &rows[0]);
+        sel.end();
+        sel.set_scrollbar(Some((12, 1)));
+        assert_eq!(
+            sel.active_text(&rows),
+            "hello world",
+            "the scrollbar cell is not part of the text"
+        );
+
+        let mut painted = rows.clone();
+        sel.highlight(&mut painted);
+        assert!(
+            painted[0].ends_with('\u{2502}'),
+            "the highlight stops before the scrollbar cell: {:?}",
+            painted[0]
+        );
+        assert!(
+            !painted[0].contains("\u{1b}[7m\u{2502}"),
+            "the cell itself is never inverted: {:?}",
+            painted[0]
+        );
     }
 
     #[test]

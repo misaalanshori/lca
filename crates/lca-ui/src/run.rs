@@ -104,6 +104,12 @@ impl Screen {
         }
     }
 
+    fn set_scrollbar(&mut self, scrollbar: Option<(u16, u16)>) {
+        if let Screen::Alt(r) = self {
+            r.set_scrollbar(scrollbar);
+        }
+    }
+
     fn set_scroll(&mut self, scroll: u16) {
         if let Screen::Alt(r) = self {
             r.scroll = scroll;
@@ -253,6 +259,14 @@ fn handle_input(
             chat.world.notice = Some(notice);
         }
     }
+    // gh #35: pi's `tui.altScreen.bottom` - End returns the fullscreen
+    // viewport to the live bottom. Fullscreen only: in main-screen mode
+    // End belongs to the editor (its scrollback is the terminal's), and
+    // the gates live in the key's own check.
+    if chat.alt_screen_bottom(data) {
+        screen.set_scroll(0);
+        return InputResult::Continue;
+    }
     match chat.handle_key(data) {
         Action::Continue => {}
         Action::Submit => {}
@@ -393,6 +407,18 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             if let Some(scroll) = chat.take_jump_scroll(width, height) {
                 screen.set_scroll(scroll);
             }
+            // gh #35: hold the reader's place across new output (pi's
+            // follow-end rule in bottom coordinates), clamp to what the
+            // transcript can show, and tell the renderer where the
+            // scrollbar was painted - the render side and the copy side
+            // read the same geometry, so the adornment can never leak
+            // into a selection.
+            let scroll = chat.clamp_scroll(screen.scroll(), width, height);
+            screen.set_scroll(scroll);
+            screen.set_scrollbar(
+                chat.scrollbar_for_frame(width, height, scroll)
+                    .map(|geometry| (geometry.column, geometry.rows)),
+            );
             let viewport = chat.viewport(width, height, screen.scroll());
             screen.render(&mut terminal, viewport, width, height);
             dirty = false;
@@ -805,6 +831,48 @@ mod tests {
         );
         // The key path did not also fire: one press, one copy.
         assert!(!out.contains("Y29weSBtZQ=="), "nothing else was copied");
+    }
+
+    // Verifies: gh #35 - End (pi's `tui.altScreen.bottom`) returns the
+    // fullscreen viewport to the live bottom, and only fullscreen: in
+    // main-screen mode - and while a modal owns the keyboard - the key
+    // is not a viewport key at all, so the editor keeps it.
+    #[test]
+    fn end_returns_the_fullscreen_viewport_to_the_live_bottom() {
+        let mut term = FakeTerminal::new(80, 24);
+        let mut screen = Screen::Main(MainScreenRenderer::new());
+        switch_screen(&mut screen, true, &mut term);
+        let mut chat = chat();
+        chat.screen_mode = true;
+        screen.set_scroll(12);
+        let (input_tx, _input_rx) = std::sync::mpsc::channel();
+        let (resize_tx, _resize_rx) = std::sync::mpsc::channel();
+        let outcome = handle_input(
+            "\x1b[F",
+            &mut chat,
+            &mut screen,
+            &mut term,
+            &input_tx,
+            &resize_tx,
+            &None,
+            &mut false,
+        );
+        assert!(matches!(outcome, InputResult::Continue));
+        assert_eq!(screen.scroll(), 0, "End jumped to the live bottom");
+
+        // The gate's own half: main-screen mode and an open modal never
+        // claim the key.
+        chat.screen_mode = false;
+        assert!(
+            !chat.alt_screen_bottom("\x1b[F"),
+            "main screen: End stays with the editor"
+        );
+        chat.screen_mode = true;
+        chat.world.show_permission("rm -rf /tmp/x".into());
+        assert!(
+            !chat.alt_screen_bottom("\x1b[F"),
+            "a modal owns the keyboard, not the viewport"
+        );
     }
 
     // Verifies: gh #33 - the exit teardown (`preserve = false`) parks the

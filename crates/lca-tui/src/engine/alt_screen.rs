@@ -362,6 +362,14 @@ impl AltScreenRenderer {
         true
     }
 
+    /// Tell the renderer where this frame's virtual scrollbar was
+    /// painted (gh #35): `(column, rows)`, or `None` when the frame has
+    /// none. The selection reads it to keep the adornment out of both
+    /// the copied text and the highlight.
+    pub fn set_scrollbar(&mut self, scrollbar: Option<(u16, u16)>) {
+        self.selection.set_scrollbar(scrollbar);
+    }
+
     /// The selected text, if any.
     pub fn selected_text(&self) -> String {
         self.selection.active_text(&self.previous)
