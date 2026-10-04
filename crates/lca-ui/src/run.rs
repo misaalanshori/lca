@@ -151,6 +151,27 @@ fn link_notice(url: &str, outcome: Option<Result<(), String>>) -> String {
     }
 }
 
+/// The copy ladder (R6, kept ours for gh #9): the host's verified native
+/// clipboard first, then OSC 52 when this screen can send it - and the
+/// notice says exactly which step ran, never claiming a step that did
+/// not. Returns the notice; the caller puts it on screen.
+fn copy_through_ladder(
+    text: &str,
+    native: Option<&crate::state::ClipboardWriter>,
+    osc52: Option<&mut dyn FnMut(&str)>,
+) -> String {
+    if native.is_some_and(|write| write(text)) {
+        return "copied to clipboard".to_string();
+    }
+    match osc52 {
+        Some(send) => {
+            send(text);
+            "copied (if your terminal blocked the clipboard, nothing was copied)".to_string()
+        }
+        None => "could not copy: no clipboard tool found (try /fullscreen)".to_string(),
+    }
+}
+
 /// Handle one raw input event (R16): capability replies, mouse, and keys.
 #[allow(clippy::too_many_arguments)]
 fn handle_input(
@@ -195,25 +216,42 @@ fn handle_input(
         if data.ends_with('m') && screen.copy_on_select() {
             let text = screen.selected_text();
             if !text.is_empty() {
-                let verified = chat
-                    .world
-                    .options
-                    .hooks
-                    .copy_to_clipboard
-                    .as_ref()
-                    .is_some_and(|write| write(&text));
-                if !verified {
-                    screen.copy_osc52(terminal, &text);
-                }
-                chat.world.notice = Some(if verified {
-                    "copied to clipboard".to_string()
-                } else {
-                    "copied (if your terminal blocked the clipboard, nothing was copied)"
-                        .to_string()
-                });
+                let notice = {
+                    let mut send = |chunk: &str| screen.copy_osc52(terminal, chunk);
+                    copy_through_ladder(
+                        &text,
+                        chat.world.options.hooks.copy_to_clipboard.as_ref(),
+                        Some(&mut send),
+                    )
+                };
+                chat.world.notice = Some(notice);
             }
         }
         return InputResult::Continue;
+    }
+    // gh #9 / pi 1.0.0's `app.message.copy` (Ctrl+X): a selection
+    // copies itself, else Chat names the target - the sign-in URL on a
+    // waiting login screen, the last assistant message otherwise. The
+    // key still reaches `handle_key` below, so the Ctrl+X Ctrl+E chord
+    // keeps arming on the same press (FR-UI-15).
+    if chat.message_copy_key(data) {
+        let selection = screen.selected_text();
+        let target = if selection.trim().is_empty() {
+            chat.message_copy_text()
+        } else {
+            Some(selection)
+        };
+        if let Some(text) = target {
+            let notice = {
+                let mut send = |chunk: &str| screen.copy_osc52(terminal, chunk);
+                copy_through_ladder(
+                    &text,
+                    chat.world.options.hooks.copy_to_clipboard.as_ref(),
+                    matches!(screen, Screen::Alt(_)).then(|| &mut send as &mut dyn FnMut(&str)),
+                )
+            };
+            chat.world.notice = Some(notice);
+        }
     }
     match chat.handle_key(data) {
         Action::Continue => {}
@@ -636,6 +674,136 @@ mod tests {
             },
             Arc::new(KeybindingsManager::new()),
         )
+    }
+
+    // Verifies: gh #9 / R6 - the copy ladder writes the text through the
+    // host's verified native clipboard when it has one, falls back to
+    // OSC 52 when the screen can send it, and says which step ran; with
+    // neither available it says the copy did not happen instead of
+    // pretending.
+    #[test]
+    fn the_copy_ladder_writes_the_text_and_says_which_step_ran() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let hook: crate::state::ClipboardWriter = {
+            let seen = seen.clone();
+            Arc::new(move |text: &str| {
+                seen.lock().unwrap().push(text.to_string());
+                true
+            })
+        };
+        let notice = copy_through_ladder("hello world", Some(&hook), None);
+        assert_eq!(notice, "copied to clipboard");
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["hello world".to_string()],
+            "the text reaches the clipboard verbatim"
+        );
+
+        let mut sent = Vec::new();
+        let notice = copy_through_ladder(
+            "osc",
+            None,
+            Some(&mut |text: &str| sent.push(text.to_string())),
+        );
+        assert_eq!(sent, vec!["osc"], "OSC 52 carries the same text");
+        assert!(
+            notice.contains("nothing was copied"),
+            "the unverified notice is honest: {notice}"
+        );
+
+        let notice = copy_through_ladder("nowhere", None, None);
+        assert!(
+            notice.starts_with("could not copy"),
+            "no step ran, so no claim: {notice}"
+        );
+    }
+
+    // Verifies: gh #9 (pi 1.0.0's `app.message.copy`) - with nothing
+    // selected, Ctrl+X copies the last assistant message through that
+    // ladder: this host has no native clipboard tool, so OSC 52 reaches
+    // the terminal with the message's base64, the notice says the copy
+    // is unverified, and the same press still arms the Ctrl+X Ctrl+E
+    // chord (FR-UI-15's row is unchanged).
+    #[test]
+    fn ctrl_x_copies_the_last_assistant_message_through_the_ladder() {
+        let mut term = FakeTerminal::new(80, 24);
+        let mut screen = Screen::Main(MainScreenRenderer::new());
+        switch_screen(&mut screen, true, &mut term);
+        let mut chat = chat();
+        chat.on_turn_event(lca_protocol::TurnEvent::TextDelta("copy me".into()));
+        let (input_tx, _input_rx) = std::sync::mpsc::channel();
+        let (resize_tx, _resize_rx) = std::sync::mpsc::channel();
+        let outcome = handle_input(
+            "\x18",
+            &mut chat,
+            &mut screen,
+            &mut term,
+            &input_tx,
+            &resize_tx,
+            &None,
+            &mut false,
+        );
+        assert!(matches!(outcome, InputResult::Continue));
+        let out = term.output();
+        assert!(
+            out.contains("\x1b]52;c;"),
+            "OSC 52 reached the terminal: {out:?}"
+        );
+        assert!(
+            out.contains("Y29weSBtZQ=="),
+            "the message, base64 (`copy me`): {out:?}"
+        );
+        assert_eq!(
+            chat.world.notice.as_deref(),
+            Some("copied (if your terminal blocked the clipboard, nothing was copied)"),
+            "the honest unverified notice"
+        );
+        // The same press armed the external-editor chord.
+        assert_eq!(chat.handle_key("\x05"), Action::ExternalEditor);
+    }
+
+    // Verifies: gh #9 (the selection half of `app.message.copy`) - a
+    // mouse selection still copies on release through the same ladder
+    // and the same honest notice the refactor kept: this row exists
+    // because the key path now shares that ladder with it.
+    #[test]
+    fn a_mouse_selection_still_copies_on_release_through_the_ladder() {
+        let mut term = FakeTerminal::new(80, 24);
+        let mut screen = Screen::Main(MainScreenRenderer::new());
+        switch_screen(&mut screen, true, &mut term);
+        let mut chat = chat();
+        let (input_tx, _input_rx) = std::sync::mpsc::channel();
+        let (resize_tx, _resize_rx) = std::sync::mpsc::channel();
+        // A frame with text first, so the selection has rows to read.
+        screen.render(&mut term, vec!["hello world".to_string()], 80, 24);
+        let mut drive = |data: &str| {
+            handle_input(
+                data,
+                &mut chat,
+                &mut screen,
+                &mut term,
+                &input_tx,
+                &resize_tx,
+                &None,
+                &mut false,
+            )
+        };
+        drive("\x1b[<0;1;1M");
+        drive("\x1b[<32;6;1M");
+        let outcome = drive("\x1b[<0;6;1m");
+        assert!(matches!(outcome, InputResult::Continue));
+        let out = term.output();
+        assert!(
+            out.contains("\x1b]52;c;") && out.contains("aGVsbG8="),
+            "the selection (`hello`, base64) went out over OSC 52: {out:?}"
+        );
+        assert_eq!(
+            chat.world.notice.as_deref(),
+            Some("copied (if your terminal blocked the clipboard, nothing was copied)"),
+            "the same notice the mouse path always gave"
+        );
+        // The key path did not also fire: one press, one copy.
+        assert!(!out.contains("Y29weSBtZQ=="), "nothing else was copied");
     }
 
     // Verifies: gh #33 - the exit teardown (`preserve = false`) parks the

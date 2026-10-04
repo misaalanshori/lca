@@ -593,15 +593,7 @@ impl Chat {
             let end = total.saturating_sub(scroll as usize);
             let start = end.saturating_sub(height as usize);
             let mut viewport: Vec<String> = document[start..end].to_vec();
-            if self.world.modal_active()
-                || self.theme_picker.is_some()
-                || self.thinking_picker.is_some()
-                || self.model_picker.is_some()
-                || self.tree_picker.is_some()
-                || self.trust_picker.is_some()
-                || self.resume_picker.is_some()
-                || self.grants_picker.is_some()
-            {
+            if self.world.modal_active() || self.picker_open() {
                 viewport.resize(height as usize, String::new());
             }
             self.compose_overlays(&mut viewport, width, height);
@@ -615,7 +607,8 @@ impl Chat {
         }
     }
 
-    /// Composite the modals and the side panel over the viewport.
+    /// Handle one keypress: the modal first, then the pickers, the
+    /// bindings, and the editor.
     pub fn handle_key(&mut self, data: &str) -> Action {
         if let Some(action) = self.handle_modal_key(data) {
             return action;

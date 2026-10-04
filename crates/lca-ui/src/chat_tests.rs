@@ -525,6 +525,56 @@ fn an_aborted_turn_returns_the_queue_to_the_editor() {
     assert_eq!(chat.editor.text(), "follow me");
 }
 
+// Verifies: gh #9 (pi 1.0.0's `app.message.copy`) - Ctrl+X names a copy
+// target only when the editor owns the keyboard, and the target is the
+// sign-in URL on a waiting login screen, else the last assistant message
+// as plain text. What actually reaches the clipboard is the loop's
+// ladder (run.rs), tested there; this pins the target choice.
+#[test]
+fn ctrl_x_names_the_sign_in_url_or_the_last_assistant_message() {
+    let mut chat = chat();
+    assert!(
+        chat.message_copy_key("\x18"),
+        "Ctrl+X is pi's message-copy key"
+    );
+    assert!(
+        !chat.message_copy_key("\x01"),
+        "another key is not the copy key"
+    );
+    assert_eq!(chat.message_copy_text(), None, "nothing has been said yet");
+
+    // The last assistant message, as plain text (the stored source, not
+    // the rendered rows).
+    chat.on_turn_event(lca_protocol::TurnEvent::TextDelta("the answer".into()));
+    assert_eq!(
+        chat.message_copy_text().as_deref(),
+        Some("the answer"),
+        "no selection involved: the last reply is the target"
+    );
+
+    // While a picker owns the keyboard, Ctrl+X is the picker's key.
+    chat.model_picker = Some(crate::chat_pickers::ModelPicker::new(vec![(
+        "m".to_string(),
+        "m".to_string(),
+    )]));
+    assert!(
+        !chat.message_copy_key("\x18"),
+        "a picker owns the keyboard, so the key is not a copy"
+    );
+    chat.model_picker = None;
+
+    // On a waiting login screen the sign-in URL wins over the reply:
+    // that is what the person is waiting on.
+    chat.apply_login_next(LoginNext::Waiting {
+        label: "Waiting for the browser...\n\nhttps://example.test/device?code=42".to_string(),
+    });
+    assert_eq!(
+        chat.message_copy_text().as_deref(),
+        Some("https://example.test/device?code=42"),
+        "the waiting screen's URL is the copy target"
+    );
+}
+
 // Verifies: FR-UI-15 - Ctrl+X Ctrl+E asks the loop for the external editor.
 #[test]
 fn ctrl_x_ctrl_e_opens_the_external_editor() {

@@ -7,6 +7,61 @@ use super::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
 use super::state::{Action, TrustChoice};
 
 impl Chat {
+    /// Whether a picker owns the keyboard (the modal is `modal_active`'s
+    /// own question): the overlay test the viewport draws with, and the
+    /// gate every contextual key asks first - gh #9's copy key among
+    /// them.
+    pub(super) fn picker_open(&self) -> bool {
+        self.theme_picker.is_some()
+            || self.thinking_picker.is_some()
+            || self.model_picker.is_some()
+            || self.tree_picker.is_some()
+            || self.trust_picker.is_some()
+            || self.resume_picker.is_some()
+            || self.grants_picker.is_some()
+    }
+
+    /// Whether this key is pi's message-copy key with the editor owning
+    /// the keyboard (gh #9, pi 1.0.0's `app.message.copy`): while a
+    /// modal, a picker, or the transcript search has the keyboard, the
+    /// key is theirs, not a copy request.
+    pub fn message_copy_key(&self, data: &str) -> bool {
+        if self.world.modal_active() || self.picker_open() || self.search.is_some() {
+            return false;
+        }
+        self.keybindings.matches(data, "app.message.copy")
+    }
+
+    /// The text a copy request names when nothing is selected (gh #9,
+    /// pi 1.0.0): the sign-in URL on a waiting login screen - what the
+    /// person is actually waiting on - else the last assistant message
+    /// as plain text (its stored source, escape sequences stripped).
+    /// What reaches the clipboard, and with what honesty, is the loop's
+    /// ladder in `run`.
+    pub fn message_copy_text(&self) -> Option<String> {
+        if let Some(label) = self.world.login_waiting.as_deref()
+            && let Some(url) = Self::http_url(label)
+        {
+            return Some(url);
+        }
+        self.transcript
+            .last_assistant_text()
+            .map(lca_tui::engine::text::strip_terminal_sequences)
+    }
+
+    /// The first `http(s)://` URL in a block of text: the waiting login
+    /// screen carries the sign-in URL inside a sentence, and that URL is
+    /// what the copy key copies there (gh #9).
+    fn http_url(text: &str) -> Option<String> {
+        let start = text.find("https://").or_else(|| text.find("http://"))?;
+        let rest = &text[start..];
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '`')
+            .unwrap_or(rest.len());
+        let url = rest[..end].trim_end_matches(|c: char| ",.;)]}\"".contains(c));
+        (!url.is_empty()).then(|| url.to_string())
+    }
+
     /// The open picker's key handling, if any (returns `None` when no
     /// picker is open, so the editor path runs).
     pub(super) fn handle_picker_key(&mut self, data: &str, key: Option<&str>) -> Option<Action> {

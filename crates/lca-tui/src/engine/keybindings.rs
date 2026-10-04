@@ -171,6 +171,16 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
             // that sends one sends that one.
             def!(&["shift+ctrl+p", "alt+p"], "Cycle to the previous model"),
         ),
+        // gh #9 (pi 1.0.0): `ctrl+x` is pi's message-copy key, and it
+        // is also the first key of the Ctrl+X Ctrl+E chord - the copy
+        // fires on the press, the chord on what follows it.
+        (
+            "app.message.copy",
+            def!(
+                &["ctrl+x"],
+                "Copy the selection, the last reply, or the sign-in URL"
+            ),
+        ),
         (
             "app.editor.external",
             def!(&["ctrl+x"], "Open the external editor"),
@@ -481,6 +491,19 @@ mod tests {
             claimants,
             vec!["app.models.save"],
             "one action claims Ctrl+S"
+        );
+    }
+
+    // Verifies: gh #9 (pi 1.0.0's `app.message.copy`) - Ctrl+X answers
+    // to the copy key, and the external-editor chord still starts there
+    // too (FR-UI-15's suite row keeps passing).
+    #[test]
+    fn ctrl_x_is_pis_message_copy_and_still_arms_the_editor_chord() {
+        let kb = KeybindingsManager::new();
+        assert!(kb.matches("\x18", "app.message.copy"));
+        assert!(
+            kb.matches("\x18", "app.editor.external"),
+            "the Ctrl+X Ctrl+E chord's first key is unchanged"
         );
     }
 

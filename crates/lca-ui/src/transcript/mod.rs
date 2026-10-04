@@ -227,6 +227,17 @@ impl Transcript {
         &self.entries
     }
 
+    /// The last assistant message's source text, when it has any: what
+    /// `app.message.copy` copies with nothing selected (gh #9). The
+    /// stored source, never the rendered rows - plain text by
+    /// construction, then stripped of any escape the model wrote.
+    pub fn last_assistant_text(&self) -> Option<&str> {
+        self.entries.iter().rev().find_map(|entry| match entry {
+            Entry::Assistant { text, .. } if !text.trim().is_empty() => Some(text.as_str()),
+            _ => None,
+        })
+    }
+
     /// Append a user prompt.
     pub fn push_user(&mut self, text: impl Into<String>) {
         // A user message ends any assistant message before it - the
