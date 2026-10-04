@@ -232,6 +232,22 @@ impl Chat {
         // where up/down navigate and printable keys edit the query.
         if let Some(mut picker) = self.model_picker.take() {
             match key {
+                // pi's `app.models.save`: the highlighted row becomes the
+                // default every new session resolves (gh #8). The host
+                // writes it - the config file is its file - and answers
+                // with what to show; the picker stays open, pi's shape.
+                Some("ctrl+s") => {
+                    if let Some(id) = picker.selected_model().map(str::to_string) {
+                        let notice = match &self.world.options.hooks.save_default_model {
+                            Some(save) => save(&id),
+                            None => {
+                                "saving a default model is not available in this host".to_string()
+                            }
+                        };
+                        self.world.notice = Some(crate::state::sanitize_block(&notice));
+                    }
+                    self.model_picker = Some(picker);
+                }
                 Some("escape") => {}
                 Some("enter") => {
                     if let Some(id) = picker.selected_model().map(str::to_string) {

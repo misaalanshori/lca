@@ -406,6 +406,12 @@ pub enum TrustChoice {
 /// respect: same cells, same footer, same `model-change` record.
 pub type ModelCycle = Arc<dyn Fn(bool) -> String + Send + Sync>;
 
+/// Saves the picker's highlighted model as the default for new sessions
+/// (gh #8, pi's `app.models.save`), returning the notice to show. The
+/// host owns the write: the config file is its file, and only it can say
+/// whether the write landed.
+pub type ModelSave = Arc<dyn Fn(&str) -> String + Send + Sync>;
+
 /// Applies a trust choice, returning the notice to show.
 pub type TrustApply = Arc<dyn Fn(TrustChoice) -> String + Send + Sync>;
 /// Whether the project still needs a trust decision (opens the modal at
@@ -448,6 +454,9 @@ pub struct UiHooks {
     pub models: Option<ModelList>,
     /// One step of the model cycle for the cycle keys (`true` = forward).
     pub cycle_model: Option<ModelCycle>,
+    /// `Ctrl+S` in the model picker: persist the highlighted model as the
+    /// default (`model` in the user config), returning the notice.
+    pub save_default_model: Option<ModelSave>,
     /// Applies a `/trust` choice.
     pub trust_apply: Option<TrustApply>,
     /// Whether the project needs a trust decision at startup.

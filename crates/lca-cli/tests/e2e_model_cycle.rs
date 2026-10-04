@@ -280,3 +280,88 @@ fn the_models_flag_sets_the_scope_for_the_run() {
     session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
 }
+
+// Verifies: gh #8 acceptance (2) - Ctrl+S in the picker persists the
+// highlighted model through the comment-preserving writer `/thinking`
+// and `/theme` use (the file's comments and its other keys survive), and
+// a fresh process with no `--model` and no `OPENAI_MODEL` resolves that
+// saved default - the two halves of "save default" in one journey.
+#[cfg(unix)]
+#[test]
+fn ctrl_s_saves_the_default_and_a_fresh_session_resolves_it() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("unused"))]));
+    let sandbox = sandbox("gh8-save-default");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+    two_models(&sandbox);
+    std::fs::create_dir_all(sandbox.state_dir()).expect("mkdir .lca");
+    // A config with comments and a key Ctrl+S does not own.
+    std::fs::write(
+        sandbox.state_dir().join("config.toml"),
+        "# my setup\n\nprovider = \"openai-compatible\"\n# keep me\ncompaction.threshold = 0.7\n",
+    )
+    .expect("write config");
+
+    let session = Tmux::new("gh8-save-default");
+    session.spawn(
+        &sandbox,
+        Some(&mock),
+        true,
+        &[("OPENAI_MODEL", "first-model")],
+        &[],
+    );
+    session.wait_for(
+        "openai-compatible/first-model",
+        std::time::Duration::from_secs(20),
+    );
+
+    // Pick the second row, save it with Ctrl+S.
+    session.send(&["/model", "Enter"]);
+    session.wait_for("second-model (", std::time::Duration::from_secs(15));
+    session.send(&["Down"]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    session.send(&["C-s"]);
+    session.wait_for(
+        "default model saved: second-model",
+        std::time::Duration::from_secs(10),
+    );
+    session.send(&["Escape"]);
+    std::thread::sleep(std::time::Duration::from_millis(400));
+
+    // The writer kept the file intact around the one key it wrote.
+    let text = std::fs::read_to_string(sandbox.state_dir().join("config.toml")).expect("config");
+    assert!(
+        text.contains("# my setup"),
+        "comments survive Ctrl+S:\n{text}"
+    );
+    assert!(
+        text.contains("# keep me"),
+        "the second comment too:\n{text}"
+    );
+    assert!(
+        text.contains("compaction.threshold = 0.7"),
+        "the other key survives:\n{text}"
+    );
+    assert!(
+        text.contains("model = \"second-model\""),
+        "the default is persisted:\n{text}"
+    );
+
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+
+    // A fresh process, no `--model`, no `OPENAI_MODEL`: the file's value
+    // is the one that resolves.
+    let again = Tmux::new("gh8-save-default-fresh");
+    again.spawn(&sandbox, Some(&mock), true, &[], &[]);
+    again.wait_for(
+        "openai-compatible/second-model",
+        std::time::Duration::from_secs(20),
+    );
+    again.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}

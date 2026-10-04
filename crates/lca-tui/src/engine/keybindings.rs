@@ -157,6 +157,13 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
             def!(&["ctrl+p"], "Cycle to the next model"),
         ),
         (
+            "app.models.save",
+            def!(
+                &["ctrl+s"],
+                "Save the selected model as the default for new sessions"
+            ),
+        ),
+        (
             "app.model.cycleBackward",
             // pi's map: `shift+ctrl+p`, with `alt+p` where a terminal
             // cannot report the shift (pi's Windows/WSL key). The registry
@@ -456,6 +463,24 @@ mod tests {
             claimants,
             vec!["app.model.cycleForward"],
             "one action claims Ctrl+P"
+        );
+    }
+
+    // Verifies: gh #8 phase 2 (pi's `app.models.save`) - Ctrl+S is the
+    // picker's save-default key, and no other default action claims it.
+    #[test]
+    fn ctrl_s_is_pis_save_default_and_is_claimed_once() {
+        let kb = KeybindingsManager::new();
+        assert!(kb.matches("\x13", "app.models.save"));
+        let claimants: Vec<&str> = tui_keybindings()
+            .iter()
+            .filter(|(_, def)| def.default_keys.contains(&"ctrl+s"))
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(
+            claimants,
+            vec!["app.models.save"],
+            "one action claims Ctrl+S"
         );
     }
 

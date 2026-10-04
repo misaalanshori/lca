@@ -106,6 +106,20 @@ impl Ui {
                 let ui = self.clone();
                 Some(Arc::new(move |forward: bool| ui.cycle_model(forward)))
             },
+            save_default_model: Some(Arc::new(|id: &str| {
+                // One key: `model` is the startup default
+                // (`resolve_model_id`), the provider extension is the
+                // configured one, and a model's *profile* rides its entry
+                // in the models list (gh #31) - so the saved default is
+                // complete without a second key. `provider` is left alone
+                // deliberately: a config that holds `[provider]` as a
+                // section owns its own children, and rewriting the leaf
+                // would drop them.
+                match crate::persist_setting("model", Some(id)) {
+                    Ok(()) => format!("default model saved: {id} - new sessions start here"),
+                    Err(err) => format!("could not save the default model: {err}"),
+                }
+            })),
             models: {
                 let ui = self.clone();
                 Some(Arc::new(move || {

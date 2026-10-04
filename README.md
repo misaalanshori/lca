@@ -168,6 +168,9 @@ lca ext list              # installed extensions and what they can reach
    ╰───────────────────────────────────────────────────────────────────────╯
    ```
 4. `/model` filters the live model list from that endpoint; pick one.
+   `Ctrl+P` cycles through the enabled models (`Ctrl+Shift+P` or
+   `Alt+P` cycles back) and `Ctrl+S` saves the highlighted one as the
+   default every new session starts on.
 5. Type a prompt. Answers stream as they arrive; `ctrl+c` cancels the turn
    and keeps everything already written.
 
