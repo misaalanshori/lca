@@ -16,11 +16,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 mod common;
 
+// The rows are Unix-only (tmux), so their imports and helpers are too: an
+// ungated glob import or `fn` is an unused import/function on Windows,
+// which clippy denies (the same rule `e2e_terminal_consent.rs` carries).
+#[cfg(unix)]
 use common::*;
+#[cfg(unix)]
 use std::time::Duration;
 
 /// The receipt's environment: an endpoint, a key, and no model chosen -
 /// which is what makes `list_models` reach for live discovery.
+#[cfg(unix)]
 fn discovery_env() -> &'static [(&'static str, &'static str)] {
     &[("OPENAI_MODEL", "")]
 }
