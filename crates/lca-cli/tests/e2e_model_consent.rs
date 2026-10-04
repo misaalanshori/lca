@@ -129,6 +129,87 @@ fn an_ungranted_endpoint_prompts_before_the_model_list_and_lists_after() {
     wait_for_session_end(&sandbox.state_dir(), Duration::from_secs(15));
 }
 
+// Verifies: gh #31 review (the `once` half of the one answer mapping) -
+// `o` lists the models now, covers the turn for the rest of this run, and
+// says what it granted; a fresh process's first *request* asks again,
+// because `once` is never persisted. (The picker may still list from the
+// stored list in that fresh process - a cache is not a request, so there
+// is nothing to consent to - which is why the proof is on the turn.)
+#[cfg(unix)]
+#[test]
+fn the_once_answer_lists_now_and_asks_again_in_a_fresh_process() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("once-turn-ok"))]));
+    let sandbox = sandbox("model-consent-once");
+    sandbox.write_grants(false);
+
+    let session = Tmux::new("model-consent-once");
+    session.spawn(&sandbox, Some(&mock), true, discovery_env(), &[]);
+    session.wait_for("[session in", Duration::from_secs(25));
+
+    // 1. `once` at the picker consent: the discovery request that follows
+    //    is covered, so the list opens - it used to stall with nothing,
+    //    because `once` had granted nothing and the request was denied
+    //    silently.
+    session.send(&["/model", "Enter"]);
+    session.wait_for("permission required", Duration::from_secs(20));
+    session.send(&["o"]);
+    let pane = session.wait_for("zen-free (", Duration::from_secs(25));
+    assert!(
+        pane.contains("zen-free (127.0.0.1)"),
+        "the picker lists after `once`:\n{pane}"
+    );
+    assert!(
+        pane.contains("allowed for this session"),
+        "the flow says what `once` granted:\n{pane}"
+    );
+    // Pick the highlighted row, so the turn below has a model to ask for.
+    session.send(&["Enter"]);
+    std::thread::sleep(Duration::from_millis(400));
+
+    // 2. The rest of this run: the turn needs no consent (the session set
+    //    covers it) and the reply lands.
+    session.send(&["hello", "Enter"]);
+    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    let pane = loop {
+        let pane = session.capture();
+        if pane.contains("once-turn-ok") || std::time::Instant::now() > deadline {
+            break pane;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    };
+    assert!(
+        pane.contains("once-turn-ok"),
+        "the turn ran without a second ask:\n{pane}"
+    );
+    assert!(
+        !pane.contains("permission required"),
+        "the session grant covered the turn:\n{pane}"
+    );
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), Duration::from_secs(15));
+
+    // 3. The distinguishing step: a fresh process's first request asks
+    //    again, so `once` never became `always`.
+    let again = Tmux::new("model-consent-once-fresh");
+    again.spawn(&sandbox, Some(&mock), true, discovery_env(), &[]);
+    again.wait_for("[session in", Duration::from_secs(25));
+    again.send(&["hello", "Enter"]);
+    let pane = again.wait_for("permission required", Duration::from_secs(20));
+    assert!(
+        pane.contains("connect to 127.0.0.1"),
+        "a fresh process asks again - `once` was not persisted:\n{pane}"
+    );
+    again.send(&["d"]);
+    std::thread::sleep(Duration::from_millis(400));
+    again.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), Duration::from_secs(15));
+}
+
 // Verifies: gh #31 review (deny half) - refusing the endpoint says what
 // is wrong ("not granted - approve it or run /login"), not "no models":
 // the empty list is a consequence, not the diagnosis.

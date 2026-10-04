@@ -348,6 +348,67 @@ fn allow_host_grants_this_run_only_and_records_a_once_answer() {
     );
 }
 
+// Verifies: gh #31 review (one answer mapping for every host consent) -
+// `once` on a host grant is a *session* allowance: it covers the work
+// that asked and the rest of this run, it joins the same session set
+// `--allow-host` uses, and it is never persisted - a fresh process asks
+// again. That is what separates it from `always`; the pre-mapping
+// behavior allowed the asking call and granted nothing, so the request
+// that followed was denied (the picker's silent stall).
+#[test]
+fn once_allows_the_host_for_this_session_and_is_not_persisted() {
+    let world = World::new("gh29-once");
+    let mut prompt = ScriptedPrompt::answering(Decision::Once);
+
+    let consent = world.consent("once.example", &mut prompt);
+    assert_eq!(
+        consent,
+        EndpointConsent::Allowed,
+        "`once` still allows the work it was given"
+    );
+    assert_eq!(prompt.asked.len(), 1, "asked exactly once");
+    assert!(
+        world
+            .grants
+            .lock()
+            .unwrap()
+            .session_net_pattern(&world.project, "once.example"),
+        "`once` attached the session-scoped grant - the set `--allow-host` joins"
+    );
+
+    // The distinguishing row: nothing reached the file, so a fresh
+    // process over the same store asks again.
+    let reopened = GrantStore::open(&world.root.join("grants.json")).expect("reopen");
+    assert!(
+        !reopened
+            .net_patterns(&world.project)
+            .iter()
+            .any(|pattern| pattern == "once.example"),
+        "a fresh process must ask again: `once` is never persisted"
+    );
+
+    // And inside this run it is covered: no second prompt.
+    let again = world.consent("once.example", &mut prompt);
+    assert_eq!(
+        again,
+        EndpointConsent::Granted,
+        "covered for the rest of this run"
+    );
+    assert_eq!(prompt.asked.len(), 1, "no re-ask inside the session");
+    assert!(
+        world
+            .permissions()
+            .iter()
+            .any(|(action, decision, pattern)| {
+                action == "connect to once.example"
+                    && matches!(decision, PermissionDecision::Once)
+                    && pattern.is_none()
+            }),
+        "the answer is recorded in the `once` shape: {:?}",
+        world.permissions()
+    );
+}
+
 // Verifies: gh #29's headless row - with no modal to show, the denial
 // names the host and the fix rather than the subsystem that refused.
 #[test]

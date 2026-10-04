@@ -331,7 +331,7 @@ impl Ui {
         if models.is_empty() && argument.trim().is_empty() && self.start_model_consent() {
             let host = crate::net_consent::env_configured_host(&self.data).unwrap_or_default();
             return CommandEffect::ShowWidget(format!(
-                "approving {host}: allow the prompt and the model list opens"
+                "{host} is not granted yet - approve the prompt to list its models"
             ));
         }
         // E5: the label keeps the preset identity across a model switch.
@@ -417,13 +417,20 @@ impl Ui {
                 &ui.store,
                 &session,
             );
-            match outcome {
-                crate::net_consent::EndpointConsent::Denied => {
-                    *ui.login_pending.lock().unwrap_or_else(|p| p.into_inner()) =
-                        Some(lca_ui::LoginNext::Message(format!(
-                            "the endpoint {host} is not granted for this project - approve it \
-                             or run /login"
-                        )));
+            // At most one message: the flow explains every answer
+            // instead of leaving the picker closed behind a stale notice
+            // (gh #31 review). An answer that grants nothing says so; the
+            // one that granted this session says what it granted.
+            let ungranted = format!(
+                "the endpoint {host} is not granted for this project - approve it or run /login"
+            );
+            let message = match outcome {
+                crate::net_consent::EndpointConsent::Denied => Some(ungranted),
+                // `trust folder` answers "allowed" but attaches no host
+                // - it is not a host's grant to give - so the discovery
+                // request that follows would be refused anyway.
+                _ if crate::ungranted_host(&ui.grants, &ui.cwd, Some(host.clone())).is_some() => {
+                    Some(ungranted)
                 }
                 _ => {
                     // The grant landed: discovery (the extension's live
@@ -435,8 +442,23 @@ impl Ui {
                         .unwrap_or_else(|p| p.into_inner())
                         .clone();
                     let rows = super::display::model_rows(&ui.provider.list_models(), &identity);
-                    *ui.pending_models.lock().unwrap_or_else(|p| p.into_inner()) = Some(rows);
+                    if rows.is_empty() {
+                        Some(format!("no models were offered by {host}"))
+                    } else {
+                        // `once` joined the session set (the same one
+                        // `--allow-host` uses): say what that granted.
+                        let session_only =
+                            crate::lock(&ui.grants).session_net_pattern(&ui.cwd, &host);
+                        *ui.pending_models.lock().unwrap_or_else(|p| p.into_inner()) = Some(rows);
+                        session_only.then(|| {
+                            format!("{host} allowed for this session - a new run asks again")
+                        })
+                    }
                 }
+            };
+            if let Some(message) = message {
+                *ui.login_pending.lock().unwrap_or_else(|p| p.into_inner()) =
+                    Some(lca_ui::LoginNext::Message(message));
             }
             in_flight.store(false, std::sync::atomic::Ordering::SeqCst);
         });

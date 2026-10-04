@@ -930,14 +930,27 @@ pub fn authorize(
             denied_by_rule: false,
             yolo: false,
         }),
-        Decision::Once => Ok(Outcome {
-            allowed: true,
-            prompted: true,
-            reviewed,
-            stored_pattern: None,
-            denied_by_rule: false,
-            yolo: false,
-        }),
+        Decision::Once => {
+            // A host consent's `once` is a *session* allowance (gh #31
+            // review): host requests are per call, so a one-call answer
+            // would re-prompt on every turn and leave the work it was
+            // given for denied - and persisting would make `once`
+            // identical to `always`. It joins the same session set
+            // `--allow-host` uses: this run only, a fresh process asks
+            // again. Every other action's `once` stays what it was -
+            // this call only.
+            if let Action::Net { host } = action {
+                store.attach_session_net_pattern(project_dir, host)?;
+            }
+            Ok(Outcome {
+                allowed: true,
+                prompted: true,
+                reviewed,
+                stored_pattern: None,
+                denied_by_rule: false,
+                yolo: false,
+            })
+        }
         Decision::TrustFolder => {
             store.trust_for_session(project_dir);
             Ok(Outcome {
