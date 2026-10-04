@@ -54,6 +54,11 @@ pub struct Cli {
         value_parser = clap::builder::PossibleValuesParser::new(lca_config::THINKING_LEVELS)
     )]
     pub thinking: Option<String>,
+    // Deliberate divergence from pi (gh #8's DNA box): pi also has
+    // `--api-key <key>`, and LCA will not add one. argv is world-readable
+    // in the process list (`ps`), and the standing rule is that secrets
+    // never touch argv, scrollback, or history - `OPENAI_API_KEY` is the
+    // documented path for a key a script needs to supply.
     // gh #8 (EFG-041, pi 1.0.0): `--provider` exists to scope `--model`.
     /// Restrict `--model` resolution to one profile (or the provider
     /// itself). Requires `--model`.
