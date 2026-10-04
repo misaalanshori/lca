@@ -33,8 +33,9 @@ pub use separator::{Separator, SeparatorState};
 pub use state::{
     Action, CUSTOM_OPTION, CommandInvoker, LoginCancel, LoginComplete, LoginConfirm, LoginNext,
     LoginPick, LoginPoll, LoginRequest, ModelRow, PickerOption, PromptRequest, RegionInteractor,
-    RegionRenderer, ShellEvent, ShellHandle, ShellRunner, TurnChannels, TurnRunner, UiHooks,
-    UiOptions, UiState, display_path, sanitize_block, sanitize_text, widget_lines,
+    RegionRenderer, SettingRow, SettingsRows, ShellEvent, ShellHandle, ShellRunner, TurnChannels,
+    TurnRunner, UiHooks, UiOptions, UiState, display_path, sanitize_block, sanitize_text,
+    widget_lines,
 };
 pub use state::{CompactPoll, CompactState};
 pub use theme::Theme;

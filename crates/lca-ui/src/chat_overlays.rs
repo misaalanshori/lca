@@ -15,6 +15,7 @@ const HINT_FILTER: &str = "↑↓ move · enter apply · esc close · type to fi
 const HINT_TREE: &str = "↑↓ move · enter show · esc close";
 const HINT_GRANTS: &str = "↑↓ move · enter revoke · esc close";
 const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
+const HINT_SETTINGS: &str = "↑↓ move · enter/←→ change · q/esc close";
 const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
 
 /// Compose one picker overlay: the body plus its hint row (E3).
@@ -237,6 +238,28 @@ impl Chat {
                 "thinking",
                 &body,
                 HINT_MOVE,
+                &self.theme,
+                Some(2 + picker.selected),
+            );
+            return true;
+        }
+        if let Some(picker) = &self.settings_picker {
+            let mut body = vec!["key = value [source]; /grants for permissions".to_string()];
+            body.push(String::new());
+            for (index, row) in picker.rows.iter().enumerate() {
+                let cur = if index == picker.selected { '>' } else { ' ' };
+                body.push(format!(
+                    " {cur} {} = {} [{}]",
+                    row.key, row.value, row.source
+                ));
+            }
+            picker_overlay(
+                viewport,
+                width,
+                height,
+                "settings",
+                &body,
+                HINT_SETTINGS,
                 &self.theme,
                 Some(2 + picker.selected),
             );

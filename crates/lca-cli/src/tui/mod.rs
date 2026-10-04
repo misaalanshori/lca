@@ -8,6 +8,7 @@
 //! so `run` is orchestration and its helpers stay under the line budget.
 
 mod commands;
+pub(crate) use commands::settings_text;
 mod display;
 mod hooks;
 mod login;
@@ -55,6 +56,10 @@ pub(crate) struct Ui {
     cwd: PathBuf,
     /// The data directory (grant store, credentials, sessions).
     data: PathBuf,
+    /// The command line's flag layer (gh #30): re-read with the config
+    /// whenever the `/settings` selector asks for rows, so a flag-set
+    /// value keeps its `flag` source after a write.
+    flags: crate::CliFlags,
     /// The session store.
     store: Arc<SessionStore>,
     /// The merged configuration.
@@ -505,6 +510,7 @@ impl Ui {
         Ok(Ui {
             cwd: cwd.to_path_buf(),
             data,
+            flags: flags.clone(),
             store,
             config,
             grants,

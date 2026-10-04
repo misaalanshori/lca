@@ -418,6 +418,27 @@ pub type ModelSave = Arc<dyn Fn(&str) -> String + Send + Sync>;
 /// value, and says what actually landed.
 pub type ThinkingSetter = Arc<dyn Fn(Option<&str>) -> String + Send + Sync>;
 
+/// One row of the `/settings` selector (gh #30): the key, its current
+/// value, the layer that value won on (FR-CFG-2's column, kept from the
+/// dump), and the values Enter cycles through - empty when the key opens
+/// a sub-picker instead.
+#[derive(Debug, Clone)]
+pub struct SettingRow {
+    /// The dotted configuration key.
+    pub key: String,
+    /// The current value: the live one where the session overrides the file.
+    pub value: String,
+    /// Where it won: `flag`, `environment`, `project file`, `user file`,
+    /// `default`, or `ui.json` for the one setting that lives there.
+    pub source: String,
+    /// The values left/right and Enter cycle through.
+    pub values: Vec<String>,
+}
+
+/// The rows `/settings` offers, re-read after every edit so value and
+/// source move with it. `None` keeps the host's read-only dump.
+pub type SettingsRows = Arc<dyn Fn() -> Vec<SettingRow> + Send + Sync>;
+
 /// Applies a trust choice, returning the notice to show.
 pub type TrustApply = Arc<dyn Fn(TrustChoice) -> String + Send + Sync>;
 /// Whether the project still needs a trust decision (opens the modal at
@@ -466,6 +487,9 @@ pub struct UiHooks {
     /// `/thinking`'s Enter: clamp the chosen level to the current model's
     /// set, store it, and return the notice.
     pub set_thinking: Option<ThinkingSetter>,
+    /// The `/settings` selector's rows (gh #30); absent keeps the
+    /// read-only `settings` command dump.
+    pub settings_rows: Option<SettingsRows>,
     /// Applies a `/trust` choice.
     pub trust_apply: Option<TrustApply>,
     /// Whether the project needs a trust decision at startup.

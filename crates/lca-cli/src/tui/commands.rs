@@ -587,7 +587,11 @@ impl Ui {
 /// session's live thinking value overriding the file's. The live value is
 /// labeled `session`; with neither a session pick nor a file value the row
 /// reads `unset (provider default) [default]`.
-fn settings_text(
+/// The read-only dump (FR-CFG-2, gh #30): every key with its winning
+/// source, the session's live overrides labelled, `shell.resolved`, and
+/// the screen renderer. `lca config` prints it; the `/settings`
+/// selector's fallback prints it for a host that ships no rows.
+pub(crate) fn settings_text(
     config: &lca_config::Config,
     live_thinking: Option<&str>,
     live_theme: Option<&str>,

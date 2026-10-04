@@ -203,3 +203,7 @@ mod gh32_codeblock_borders;
 // was no scrollbar, and no way back to the live bottom but the wheel.
 #[path = "gh35-fullscreen-dock.rs"]
 mod gh35_fullscreen_dock;
+// GitHub issue #30 (EFG-030 + PG-032): `/settings` was a read-only text
+// dump; it edits and persists now, on the picker chrome we already had.
+#[path = "gh30-settings-selector.rs"]
+mod gh30_settings_selector;

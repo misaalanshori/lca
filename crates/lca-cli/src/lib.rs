@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use std::collections::BTreeMap;
 
-use lca_config::{ColorMode, Config, LoadInput, MergeSource};
+use lca_config::{Config, LoadInput};
 use lca_core::{Agent, AgentConfig, StopReason, TurnEvent, TurnOutcome, TurnSink, TurnStatus};
 use lca_permissions::{GrantStore, PermissionPrompt, ProposalDiff};
 use lca_session::{ExportOptions, SessionStore};

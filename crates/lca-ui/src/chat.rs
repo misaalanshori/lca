@@ -108,6 +108,9 @@ pub struct Chat {
     theme_auto: bool,
     /// The open `/theme` picker with live preview, when any.
     pub theme_picker: Option<ThemePicker>,
+    /// The `/settings` selector (gh #30): open while it owns the
+    /// keyboard; a row's sub-picker replaces it (one picker at a time).
+    pub settings_picker: Option<crate::chat_pickers::SettingsPicker>,
     /// The open `/thinking` level picker, when any (R1).
     pub thinking_picker: Option<ThinkingPicker>,
     /// The open `/model` picker, when any (R9).
@@ -220,6 +223,7 @@ impl Chat {
             theme_names,
             theme_auto,
             theme_picker: None,
+            settings_picker: None,
             thinking_picker: None,
             model_picker: None,
             grants_picker: None,
@@ -485,6 +489,14 @@ impl Chat {
         }
 
         let key = keys::parse_key(data);
+
+        // gh #30: a running turn's Ctrl+C reaches the agent even while a
+        // picker owns the keyboard - the owner's own words in the row
+        // that guards this ("not even ctrl-c is able to close it"). The
+        // modal dispatch above keeps its own keys: this is pickers only.
+        if self.turn_running && self.keybindings.matches(data, "app.clear") {
+            return Action::CancelTurn;
+        }
 
         if let Some(action) = self.handle_picker_key(data, key.as_deref()) {
             return action;

@@ -19,15 +19,22 @@ pub(super) fn config_command(cwd: &Path) -> i32 {
             return exit::USAGE;
         }
     };
-    let mut lines: Vec<(String, String, MergeSource)> = config
-        .resolved()
-        .map(|(key, value, source)| (key.to_string(), value, source))
-        .collect();
-    lines.sort();
-    for (key, value, source) in lines {
-        println!("{key} = {value}  [{source}]");
-    }
-    let _ = ColorMode::Auto; // documented in the table above; nothing extra to print
+    // gh #30 (PG-032): print-only by design - the interactive editor is
+    // the `/settings` selector, and this is the same dump `/settings`
+    // used to print: every key with its winning source, the live
+    // overrides labelled, `shell.resolved`, and the screen renderer.
+    let shell = crate::resolve_shell(&config).ok();
+    let shell_error = crate::resolve_shell(&config).err();
+    print!(
+        "{}",
+        crate::tui::settings_text(
+            &config,
+            config.thinking(),
+            config.ui_theme(),
+            shell.as_ref(),
+            shell_error.as_deref(),
+        )
+    );
     0
 }
 

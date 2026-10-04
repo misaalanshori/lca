@@ -89,11 +89,27 @@ impl Ui {
         // E2: keep the live theme cell in step with the persisted pick so
         // `/settings` shows the session value, like it does for thinking.
         let theme_cell = self.theme_cell.clone();
+        let grants = self.grants.clone();
         let persist_setting: lca_ui::state::SettingPersist =
             Arc::new(move |key: &str, value: Option<String>| {
                 if key == "ui.theme" {
                     *theme_cell.lock().unwrap_or_else(|p| p.into_inner()) =
                         value.clone().unwrap_or_else(|| "auto".to_string());
+                }
+                // gh #30 / ADR-0042: `permissions.mode` is grant-store
+                // state as much as config state - the selector's edit
+                // reaches the store through this one seam, the same way
+                // `--yolo` applies it at startup. Without this the
+                // footer would wear YOLO while every prompt still asked.
+                if key == "permissions.mode"
+                    && let Some(mode) = value
+                        .as_deref()
+                        .and_then(lca_permissions::PermissionMode::parse)
+                {
+                    grants
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .set_permission_mode(mode);
                 }
                 persist_ui_setting(key, value);
             });
@@ -102,6 +118,67 @@ impl Ui {
             external_editor: Some(Arc::new(external_editor)),
             persist_screen_mode: Some(Arc::new(persist_screen_mode)),
             persist_setting: Some(persist_setting),
+            settings_rows: {
+                let ui = self.clone();
+                let data = self.data.clone();
+                Some(Arc::new(move || {
+                    use lca_config::{PERMISSION_MODES, SHELL_TOOLS, THINKING_VISIBILITIES};
+                    use lca_ui::SettingRow;
+                    // The winning layer per key (FR-CFG-2's column) -
+                    // re-read now, not from the startup snapshot: the
+                    // selector's own last write has to show up as the
+                    // layer that won. `Chat::settings_rows` mirrors the
+                    // three keys whose session value can outrun the file.
+                    let config = crate::load_config_flags(
+                        &ui.cwd,
+                        &crate::lock(&ui.grants),
+                        false,
+                        false,
+                        &ui.flags,
+                    )
+                    .unwrap_or_else(|_| ui.config.clone());
+                    let resolved: std::collections::BTreeMap<
+                        String,
+                        (String, lca_config::MergeSource),
+                    > = config
+                        .resolved()
+                        .map(|(key, value, source)| (key.to_string(), (value, source)))
+                        .collect();
+                    let row = |key: &str, values: &[&str]| {
+                        let (value, source) = match key {
+                            // The one setting that lives outside the
+                            // config file: `ui.json` (FR-UI-21) says so
+                            // in the source column rather than lying
+                            // about a layer that never wrote it.
+                            "ui.fullscreen" => (
+                                initial_screen_mode(&data).to_string(),
+                                "ui.json".to_string(),
+                            ),
+                            _ => resolved
+                                .get(key)
+                                .map(|(value, source)| (value.clone(), source.to_string()))
+                                .unwrap_or_else(|| ("<unset>".to_string(), "default".to_string())),
+                        };
+                        SettingRow {
+                            key: key.to_string(),
+                            value,
+                            source,
+                            values: values.iter().map(|value| value.to_string()).collect(),
+                        }
+                    };
+                    // The curated user-facing set (gh #30): raw numeric
+                    // keys stay out - they are `lca config`'s business.
+                    vec![
+                        row("ui.theme", &[]),
+                        row("ui.thinking", THINKING_VISIBILITIES),
+                        row("thinking", &[]),
+                        row("ui.fullscreen", &["false", "true"]),
+                        row("ui.color", &["auto", "never"]),
+                        row("permissions.mode", PERMISSION_MODES),
+                        row("shell.tool", SHELL_TOOLS),
+                    ]
+                }))
+            },
             cycle_model: {
                 let ui = self.clone();
                 Some(Arc::new(move |forward: bool| ui.cycle_model(forward)))

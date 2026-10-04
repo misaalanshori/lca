@@ -113,6 +113,16 @@ impl ModelPicker {
     }
 }
 
+/// The `/settings` selector (gh #30, EFG-030): pi's interactive list of
+/// configurable keys, each row showing key, value, and the winning
+/// source (our FR-CFG-2 column, which pi's list does not carry).
+pub struct SettingsPicker {
+    /// The rows: key, current value, winning source, cycle values.
+    pub rows: Vec<crate::state::SettingRow>,
+    /// The highlighted row.
+    pub selected: usize,
+}
+
 /// The thinking levels and their descriptions, from pi's
 /// `thinking-selector.ts` (`LEVEL_DESCRIPTIONS`).
 pub const THINKING_LEVELS: &[(&str, &str)] = &[

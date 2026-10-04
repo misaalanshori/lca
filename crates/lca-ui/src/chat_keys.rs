@@ -153,6 +153,9 @@ impl Chat {
                         if let Some(persist) = &self.world.options.hooks.persist_setting {
                             persist("ui.theme", Some(name));
                         }
+                        // The `/settings` selector that stepped aside for
+                        // this picker answers with what just landed (gh #30).
+                        self.refresh_settings_rows();
                     }
                 }
                 Some("up") | Some("k") => {
@@ -239,6 +242,9 @@ impl Chat {
                             });
                         }
                     }
+                    // The `/settings` selector underneath answers with
+                    // what just landed (gh #30).
+                    self.refresh_settings_rows();
                 }
                 Some("up") | Some("k") => {
                     picker.selected = picker.selected.saturating_sub(1);
@@ -249,6 +255,50 @@ impl Chat {
                     self.thinking_picker = Some(picker);
                 }
                 _ => self.thinking_picker = Some(picker),
+            }
+            return Some(Action::Continue);
+        }
+
+        // The `/settings` selector owns the keyboard while open (gh #30):
+        // up/down move, Enter/→/← act (a sub-picker row opens its picker -
+        // the selector steps aside and comes back when it closes - and
+        // anything else cycles the value through the one persist seam),
+        // q/Escape close.
+        if let Some(mut picker) = self.settings_picker.take() {
+            match key {
+                Some("escape") | Some("q") => {}
+                Some("up") => {
+                    picker.selected = picker.selected.saturating_sub(1);
+                    self.settings_picker = Some(picker);
+                }
+                Some("down") => {
+                    picker.selected =
+                        (picker.selected + 1).min(picker.rows.len().saturating_sub(1));
+                    self.settings_picker = Some(picker);
+                }
+                Some("enter") | Some("right") | Some("left") => {
+                    let forward = key != Some("left");
+                    // The key is cloned out before the match so the row
+                    // borrow ends: one arm re-borrows the picker mutably.
+                    let row = picker.rows.get(picker.selected).map(|row| row.key.clone());
+                    match row.as_deref() {
+                        // A sub-picker row steps aside: the sub-picker's
+                        // own key arm sits above this one, so the selector
+                        // stays open underneath and is back on screen the
+                        // moment it closes (pi's submenu shape - the list
+                        // is never lost).
+                        Some("ui.theme") => self.open_theme_picker(),
+                        Some("thinking") => self.open_thinking_picker(),
+                        _ => {
+                            let notice = self.cycle_setting(&mut picker, forward);
+                            self.world.notice = Some(crate::state::sanitize_block(&notice));
+                        }
+                    }
+                    self.settings_picker = Some(picker);
+                }
+                _ => {
+                    self.settings_picker = Some(picker);
+                }
             }
             return Some(Action::Continue);
         }

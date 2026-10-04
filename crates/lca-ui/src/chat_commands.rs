@@ -12,11 +12,33 @@ use lca_tui::widgets::autocomplete::{
 
 use super::chat::Chat;
 use crate::chat_pickers::{
-    ModelPicker, ThemePicker, ThinkingPicker, TreePicker, TrustPicker, thinking_row,
+    ModelPicker, SettingsPicker, ThemePicker, ThinkingPicker, TreePicker, TrustPicker, thinking_row,
 };
 use crate::state::{Action, UiOptions};
 
 impl Chat {
+    /// Open the theme picker on the current theme (the `/theme` command
+    /// and the `/settings` selector's `ui.theme` row both land here).
+    pub(super) fn open_theme_picker(&mut self) {
+        self.theme_picker = Some(ThemePicker {
+            selected: self
+                .theme_names
+                .iter()
+                .position(|name| *name == self.theme_name)
+                .unwrap_or(0),
+            original: self.theme_name.clone(),
+        });
+    }
+
+    /// Open the thinking picker on the current level (`/thinking` and
+    /// the `/settings` selector's `thinking` row).
+    pub(super) fn open_thinking_picker(&mut self) {
+        let current = self.thinking_level();
+        self.thinking_picker = Some(ThinkingPicker {
+            selected: thinking_row(current.as_deref()),
+        });
+    }
+
     /// Dispatch a slash command line.
     pub(crate) fn dispatch_command(&mut self, line: &str) -> Action {
         let command_line = line.strip_prefix('/').unwrap_or(line);
@@ -53,25 +75,24 @@ impl Chat {
                 return Action::Continue;
             }
             "theme" => {
-                self.theme_picker = Some(ThemePicker {
-                    selected: self
-                        .theme_names
-                        .iter()
-                        .position(|name| *name == self.theme_name)
-                        .unwrap_or(0),
-                    original: self.theme_name.clone(),
-                });
+                self.open_theme_picker();
                 return Action::Continue;
             }
             "thinking" => {
-                let current = self.thinking_level();
-                self.thinking_picker = Some(ThinkingPicker {
-                    selected: thinking_row(current.as_deref()),
-                });
+                self.open_thinking_picker();
                 return Action::Continue;
             }
             "trust" => {
                 self.trust_picker = Some(TrustPicker { selected: 0 });
+                return Action::Continue;
+            }
+            // gh #30 (EFG-030): the interactive selector, pi's shape on
+            // our picker chrome. The guard keeps the host's read-only
+            // dump reachable for a host that ships no rows (FR-CFG-2's
+            // command half).
+            "settings" if self.world.options.hooks.settings_rows.is_some() => {
+                let rows = self.settings_rows();
+                self.settings_picker = Some(SettingsPicker { rows, selected: 0 });
                 return Action::Continue;
             }
             "model" if argument.trim().is_empty() && !live_models.is_empty() => {
@@ -370,4 +391,162 @@ fn help_notice(commands: &[String]) -> String {
     }
     out.push_str("Enter sends, Shift+Enter adds a line, Tab completes, Ctrl+C cancels");
     out
+}
+
+impl Chat {
+    /// The `/settings` rows (gh #30): the host's hook - key, value,
+    /// winning source, cycle values - with the three session-owned
+    /// values mirrored from where they actually live (the theme, the
+    /// thinking level, the transcript's thinking visibility), the same
+    /// live-over-file rule `settings_text` had.
+    pub(super) fn settings_rows(&self) -> Vec<crate::state::SettingRow> {
+        let rows = self
+            .world
+            .options
+            .hooks
+            .settings_rows
+            .as_ref()
+            .map(|rows| rows())
+            .unwrap_or_default();
+        rows.into_iter()
+            .map(|mut row| {
+                match row.key.as_str() {
+                    "ui.theme" => row.value = self.theme_name.clone(),
+                    "thinking" => {
+                        row.value = self
+                            .thinking_level()
+                            .unwrap_or_else(|| "provider default".to_string());
+                    }
+                    "ui.thinking" => {
+                        row.value = match self.transcript.thinking_visibility() {
+                            crate::transcript::ThinkingVisibility::Snippet => "snippet",
+                            crate::transcript::ThinkingVisibility::Full => "full",
+                            crate::transcript::ThinkingVisibility::Hidden => "hidden",
+                        }
+                        .to_string();
+                    }
+                    _ => {}
+                }
+                row
+            })
+            .collect()
+    }
+
+    /// Re-read the `/settings` rows (gh #30): a sub-picker's write
+    /// (theme, thinking) lands outside the cycle path, so the selector
+    /// restored underneath would otherwise show the value it had before
+    /// it stepped aside. Value and source both come from the fresh read.
+    pub(super) fn refresh_settings_rows(&mut self) {
+        let rows = self.settings_rows();
+        if let Some(picker) = self.settings_picker.as_mut() {
+            picker.rows = rows;
+            picker.selected = picker.selected.min(picker.rows.len().saturating_sub(1));
+        }
+    }
+
+    /// One `/settings` edit (gh #30): apply it to the running session
+    /// where a seam exists, persist it through the one seam
+    /// (`persist_setting_at`, QA-015), and return the notice - honest
+    /// about what did not happen: `ui.color` and `shell.tool` resolve at
+    /// startup, and `ui.fullscreen` lives in `ui.json`, not the config
+    /// file (which is also where this writes it).
+    pub(super) fn apply_setting(&mut self, key: &str, value: &str) -> String {
+        let persisted = Some(value.to_string());
+        match key {
+            "ui.thinking" => {
+                if let Some(visibility) = crate::transcript::ThinkingVisibility::parse(value) {
+                    self.transcript.set_thinking_visibility(visibility);
+                }
+                if let Some(persist) = &self.world.options.hooks.persist_setting {
+                    persist(key, persisted);
+                }
+                format!("ui.thinking = {value}")
+            }
+            "thinking" => {
+                *self
+                    .world
+                    .options
+                    .thinking
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(value.to_string());
+                if let Some(persist) = &self.world.options.hooks.persist_setting {
+                    persist(key, persisted);
+                }
+                format!("thinking: {value}")
+            }
+            "ui.fullscreen" => {
+                let on = value.parse::<bool>().unwrap_or(false);
+                self.screen_mode = on;
+                // The runtime choice's own file (FR-UI-21): `ui.json`,
+                // written by the same seam `/fullscreen` uses.
+                if let Some(persist) = &self.world.options.hooks.persist_screen_mode {
+                    persist(on);
+                }
+                format!(
+                    "fullscreen {} (stored in ui.json)",
+                    if on { "on" } else { "off" }
+                )
+            }
+            "permissions.mode" => {
+                // ADR-0042: the mode is grant-store state as much as
+                // config state - the host's persist hook applies it to
+                // the store, the footer marker follows here.
+                let yolo = value == "yolo";
+                self.world.options.yolo = yolo;
+                self.footer.yolo = yolo;
+                if let Some(persist) = &self.world.options.hooks.persist_setting {
+                    persist(key, persisted);
+                }
+                if yolo {
+                    "permissions.mode = yolo - every prompt is auto-approved and \
+                     recorded, explicit deny rules still deny"
+                        .to_string()
+                } else {
+                    "permissions.mode = ask - prompts are asked again".to_string()
+                }
+            }
+            "ui.color" | "shell.tool" => {
+                if let Some(persist) = &self.world.options.hooks.persist_setting {
+                    persist(key, persisted);
+                }
+                format!("{key} = {value} (applies to the next session)")
+            }
+            other => {
+                if let Some(persist) = &self.world.options.hooks.persist_setting {
+                    persist(other, Some(value.to_string()));
+                }
+                format!("{other} = {value}")
+            }
+        }
+    }
+
+    /// One step on a `/settings` row (gh #30): the next value in the
+    /// row's list (wrapping), applied and persisted, then the rows are
+    /// re-read so value and source show what actually won.
+    pub(super) fn cycle_setting(
+        &mut self,
+        picker: &mut crate::chat_pickers::SettingsPicker,
+        forward: bool,
+    ) -> String {
+        let Some(row) = picker.rows.get(picker.selected) else {
+            return String::new();
+        };
+        if row.values.is_empty() {
+            return format!("{} is edited through its picker", row.key);
+        }
+        let (key, values, current) = (row.key.clone(), row.values.clone(), row.value.clone());
+        let position = values
+            .iter()
+            .position(|value| *value == current)
+            .unwrap_or(0);
+        let next = if forward {
+            (position + 1) % values.len()
+        } else {
+            (position + values.len() - 1) % values.len()
+        };
+        let notice = self.apply_setting(&key, &values[next]);
+        picker.rows = self.settings_rows();
+        picker.selected = picker.selected.min(picker.rows.len().saturating_sub(1));
+        notice
+    }
 }
