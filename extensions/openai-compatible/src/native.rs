@@ -156,11 +156,31 @@ impl ExtensionDispatch for OpenAiCompat {
         let base = profiles::base_url_for(self.cap.as_ref(), &self.settings, &None);
         let custom_endpoint = base.trim_end_matches('/') != "https://api.openai.com/v1";
         let stored = if stored.is_empty() && configured.is_empty() && custom_endpoint {
-            let discovered = discover_models(
-                self.cap.as_ref(),
-                &base,
-                profiles::api_key_for(self.cap.as_ref(), &self.settings, &None).as_deref(),
-            );
+            // On its own thread, which is this crate's blocking region:
+            // a capability call drives its future through `drive`, and
+            // the ambient-runtime path panics when the caller is already
+            // inside one - which every call on the interface's thread is
+            // (`main` runs the whole interface under `block_on`), and
+            // which is why extension calls arrive through the blocking
+            // pool. Discovery is the one host-side call, so it makes its
+            // own region: a fresh thread has no runtime, so `drive` takes
+            // the shared one (Windows CI caught this at startup: the
+            // no-model state never rendered).
+            let cap = self.cap.clone();
+            let settings = self.settings.clone();
+            let discovered = std::thread::scope(|scope| {
+                scope
+                    .spawn(move || {
+                        discover_models(
+                            cap.as_ref(),
+                            &base,
+                            profiles::api_key_for(cap.as_ref(), &settings, &None).as_deref(),
+                        )
+                    })
+                    .join()
+                    .ok()
+                    .flatten()
+            });
             match discovered {
                 Some(found) if !found.is_empty() => {
                     let line = found
