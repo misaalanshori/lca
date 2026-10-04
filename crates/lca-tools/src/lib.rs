@@ -10,6 +10,7 @@
 
 mod bridge;
 mod capabilities;
+mod diff;
 mod open;
 mod ops;
 mod process;
@@ -503,18 +504,28 @@ impl ToolExecutor {
         let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
             return ToolResult::error(call.call_id.clone(), "path is required");
         };
-        let Some(edits) = args.get("edits").and_then(|v| v.as_array()) else {
-            return ToolResult::error(
-                call.call_id.clone(),
-                "edits must contain at least one replacement",
-            );
+        // EFG-014: pi's legacy input - a single top-level
+        // `{oldText,newText}` applies like a one-element `edits` array
+        // (models trained on pi emit it), normalized here at parse time.
+        // An `edits` array that has entries wins; the validation below
+        // and every edit/replace rule are untouched.
+        let edits: Vec<serde_json::Value> = match args.get("edits").and_then(|v| v.as_array()) {
+            Some(array) if !array.is_empty() => array.clone(),
+            _ => match (
+                args.get("oldText").and_then(|v| v.as_str()),
+                args.get("newText").and_then(|v| v.as_str()),
+            ) {
+                (Some(old), Some(new)) => {
+                    vec![serde_json::json!({ "oldText": old, "newText": new })]
+                }
+                _ => {
+                    return ToolResult::error(
+                        call.call_id.clone(),
+                        "edits must contain at least one replacement",
+                    );
+                }
+            },
         };
-        if edits.is_empty() {
-            return ToolResult::error(
-                call.call_id.clone(),
-                "edits must contain at least one replacement",
-            );
-        }
         let target = resolve_target(&self.cwd, Path::new(path));
         let original = match self.ops.read(&target) {
             Ok(bytes) => bytes,
@@ -588,10 +599,19 @@ impl ToolExecutor {
         match self.ops.write(&target, out.as_bytes()) {
             Ok(()) => {
                 self.tracker.record(&target, out.as_bytes());
-                ToolResult::ok(
+                let mut result = ToolResult::ok(
                     call.call_id.clone(),
                     format!("Successfully replaced {} block(s) in {path}.", spans.len()),
-                )
+                );
+                // EFG-014: the diff rides as structured data, computed
+                // from the before/after this call already holds - display
+                // only, never a claim: a change that did not happen
+                // produces no diff and no `diff` entry.
+                let diff = diff::unified_diff(&original, &out, path);
+                if !diff.is_empty() {
+                    result.extras.insert("diff".to_string(), diff);
+                }
+                result
             }
             Err(err) => {
                 ToolResult::error(call.call_id.clone(), format!("cannot write {path}: {err}"))
