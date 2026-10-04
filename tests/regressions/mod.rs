@@ -207,3 +207,8 @@ mod gh35_fullscreen_dock;
 // dump; it edits and persists now, on the picker chrome we already had.
 #[path = "gh30-settings-selector.rs"]
 mod gh30_settings_selector;
+// GitHub issue #169: `/compact` on a long session - the summarization
+// went out with no generation budget and an open-ended prompt, and a
+// failed answer degraded in silence.
+#[path = "gh169-compaction-summarization-budget.rs"]
+mod gh169_compaction_summarization_budget;

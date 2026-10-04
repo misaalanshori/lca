@@ -29,11 +29,39 @@ pub fn manifest_grants() -> lca_tools::CapabilityGrants {
     }
 }
 
-/// The instruction the summarization call carries.
-const SUMMARY_PROMPT: &str = "Summarize this conversation excerpt for \
-someone who will continue it later. Keep the user's requests, the \
-decisions made, and anything left unfinished. Under200 words. Reply with \
-the summary only.";
+/// The instruction the summarization call carries: pi's structured
+/// context checkpoint (compaction.ts' exact sections, which self-limit)
+/// plus an explicit word bound, so the answer stays well inside the
+/// request's generation budget (`SUMMARIZATION_MAX_TOKENS`, gh #169)
+/// instead of rambling into whatever cap exists.
+const SUMMARY_PROMPT: &str = r#"Summarize the conversation excerpt below as a structured checkpoint that another LLM will use to continue the work. Use this exact format:
+
+## Goal
+[What the user is trying to accomplish.]
+
+## Constraints & Preferences
+- [What the user asked for, or "(none)"]
+
+## Progress
+### Done
+- [x] [completed work]
+
+### In Progress
+- [ ] [current work]
+
+### Blocked
+- [Blockers, or none]
+
+## Key Decisions
+- **[decision]**: [rationale]
+
+## Next Steps
+1. [Ordered next actions]
+
+## Critical Context
+- [Exact file paths, function names, and error messages to preserve]
+
+Keep each section concise and the whole summary under 300 words. Reply with the summary only."#;
 
 /// One candidate record reduced to what a summary needs: its kind and
 /// its raw JSON body (both modes hand over the same shape).
@@ -92,7 +120,10 @@ pub fn record_text(kind: &str, body: &str) -> String {
 }
 
 /// The model-facing prompt: every excerpt's text, each capped so one
-/// enormous tool result cannot crowd out the rest.
+/// enormous tool result cannot crowd out the rest. One call over the
+/// whole range: the range is the resolved view, bounded by the window
+/// itself, so a single call carries it (gh #169 lead 3 - chunk into
+/// bounded passes only if an endpoint ever proves one call cannot).
 fn build_prompt(excerpts: &[Excerpt]) -> String {
     let mut prompt = String::from(SUMMARY_PROMPT);
     prompt.push_str("\n\n");
@@ -163,19 +194,31 @@ pub fn mechanical_summary(excerpts: &[Excerpt]) -> String {
 /// The completion path: ask for a summary of the built prompt.
 pub type CompleteFn<'a> = &'a dyn Fn(&str) -> Result<String, String>;
 
-/// One compaction run: the model's answer when the path works, the
-/// mechanical summary otherwise (an empty or failed answer degrades
-/// instead of refusing - the strategy never fails a turn).
+/// One compaction run: the model's answer when the path works; a failed
+/// or empty answer degrades to the mechanical summary behind one honest
+/// line that names the failure and the recovery (gh #169) - the strategy
+/// never refuses a turn (ADR-0015), but it no longer passes an excerpt
+/// off as the model's answer. No capability at all is not a failure:
+/// that path stays the plain mechanical summary (ADR-0015's
+/// separability of strategy from capability).
 pub fn run_compact(excerpts: &[Excerpt], complete: Option<CompleteFn<'_>>) -> String {
-    if let Some(complete) = complete
-        && let Ok(summary) = complete(&build_prompt(excerpts))
-    {
-        let summary = summary.trim().to_string();
-        if !summary.is_empty() {
-            return summary;
-        }
+    let Some(complete) = complete else {
+        return mechanical_summary(excerpts);
+    };
+    match complete(&build_prompt(excerpts)) {
+        Ok(summary) if !summary.trim().is_empty() => summary.trim().to_string(),
+        Ok(_) => degraded(excerpts, "the model returned an empty summary"),
+        Err(err) => degraded(excerpts, &err),
     }
-    mechanical_summary(excerpts)
+}
+
+/// The honest degradation (gh #169): the excerpt summary still carries
+/// the compaction, prefixed by why it was needed and how to retry.
+fn degraded(excerpts: &[Excerpt], why: &str) -> String {
+    format!(
+        "[summarization failed: {why}; excerpt summary follows - run /compact to retry]\n{}",
+        mechanical_summary(excerpts)
+    )
 }
 
 // ---------------------------------------------------------------------------

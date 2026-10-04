@@ -17,6 +17,8 @@ struct ChunkedCap {
     chunks: Mutex<VecDeque<Option<Vec<u8>>>>,
     reads: AtomicUsize,
     fail_after: Option<usize>,
+    /// The body the driver built, kept for assertions (gh #169).
+    body: Mutex<Option<Vec<u8>>>,
 }
 
 impl ProviderCap for ChunkedCap {
@@ -25,8 +27,9 @@ impl ProviderCap for ChunkedCap {
         _method: &str,
         _url: &str,
         _headers: &[(&str, &str)],
-        _body: Option<&[u8]>,
+        body: Option<&[u8]>,
     ) -> Result<u32, CapabilityError> {
+        *self.body.lock().unwrap() = body.map(<[u8]>::to_vec);
         Ok(1)
     }
 
@@ -64,6 +67,7 @@ fn cap(chunks: Vec<Option<Vec<u8>>>) -> ChunkedCap {
         chunks: Mutex::new(VecDeque::from(chunks)),
         reads: AtomicUsize::new(0),
         fail_after: None,
+        body: Mutex::new(None),
     }
 }
 
@@ -133,4 +137,33 @@ fn a_mid_stream_read_error_becomes_a_typed_failure() {
         failure.message
     );
     assert!(driver.next_event().is_none(), "the stream ends after it");
+}
+
+// Verifies gh #169's wire half: the generation budget the completion
+// seam set rides the request extras all the way into the body the
+// endpoint reads, instead of the endpoint guessing when to cut.
+#[test]
+fn the_generation_budget_reaches_the_request_body() {
+    let cap = cap(vec![None]);
+    let settings = Settings {
+        model: "test-model".into(),
+        ..Settings::default()
+    };
+    let mut request = CompletionRequest::default();
+    request
+        .extras
+        .insert("max-tokens".to_string(), "4096".to_string());
+    let _driver = StreamDriver::open(&cap, &settings, &request).expect("open");
+    let body = cap
+        .body
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the request body was sent");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+    assert_eq!(
+        json.get("max_tokens").and_then(|v| v.as_u64()),
+        Some(4096),
+        "the budget is on the wire: {json}"
+    );
 }

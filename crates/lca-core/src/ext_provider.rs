@@ -178,6 +178,16 @@ pub struct ProviderBackend {
     usage: std::sync::Mutex<Option<lca_protocol::Usage>>,
 }
 
+/// The generation budget every request through the `completion`
+/// capability carries (gh #169): the bounded, structured summary asks
+/// for a few hundred tokens, so 4096 is generous headroom that still
+/// fits after a threshold-sized input - and a number the failure can
+/// name when a model still runs past it. It rides
+/// `CompletionRequest.extras["max-tokens"]`, the same non-structural
+/// channel `session-id` rides (ADR-0023); the openai-compatible
+/// provider maps it to the body's `max_tokens`.
+pub const SUMMARIZATION_MAX_TOKENS: u32 = 4096;
+
 impl ProviderBackend {
     /// Adapt the provider the agent itself talks to. `model` follows
     /// the session's configured model; `session_id` rides as the
@@ -211,6 +221,12 @@ impl lca_tools::CompletionBackend for ProviderBackend {
     ) -> Result<(String, lca_protocol::Usage), lca_tools::CompletionError> {
         let mut extras = std::collections::BTreeMap::new();
         extras.insert("session-id".to_string(), self.session_id.clone());
+        // gh #169: an explicit generation budget, so the endpoint's
+        // default never decides when a summarization is cut.
+        extras.insert(
+            "max-tokens".to_string(),
+            SUMMARIZATION_MAX_TOKENS.to_string(),
+        );
         let model = self
             .model
             .lock()

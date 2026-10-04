@@ -2,7 +2,7 @@
 //! only (testing plan section 4).
 
 use lca_protocol::StreamEvent;
-use openai_compatible::{classify_status, parse_sse};
+use openai_compatible::{SseDecoder, classify_status, parse_sse};
 
 fn events_of(body: &str) -> Vec<StreamEvent> {
     let mut sink = Vec::new();
@@ -103,4 +103,61 @@ fn server_errors_are_retryable_but_client_errors_are_not() {
     assert!(!classify_status(401));
     assert!(!classify_status(400));
     assert!(!classify_status(404));
+}
+
+/// A `length` finish with no budget of ours on the request: chat turns
+/// send no `max_tokens`, so there is no number of ours to name and the
+/// stream stays as quiet as it was before gh #169.
+fn length_body() -> &'static str {
+    concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+        "data: [DONE]\n\n",
+    )
+}
+
+// Verifies gh #169 acceptance 3: a budgeted request (the completion
+// capability's summarization) that ends on `finish_reason: length` was
+// cut mid-generation - the failure says so, names the budget that cut
+// it, and is not retryable (the same request would cap again).
+#[test]
+fn a_capped_generation_names_the_budget_that_cut_it() {
+    let mut events = Vec::new();
+    let mut decoder = SseDecoder::default().with_max_tokens(Some(4096));
+    decoder.feed(length_body().as_bytes(), &mut |event| events.push(event));
+    decoder.finish(&mut |event| events.push(event));
+    let (message, retryable) = events
+        .iter()
+        .find_map(|event| match event {
+            StreamEvent::Error { message, retryable } => Some((message.clone(), *retryable)),
+            _ => None,
+        })
+        .expect("gh #169: the cap is surfaced, not swallowed");
+    assert!(
+        message.contains("token cap") && message.contains("4096"),
+        "the cap with its number: {message}"
+    );
+    assert!(!retryable, "a cap does not clear itself on retry");
+}
+
+// Verifies the scope half of gh #169: without a budget on the request
+// (an ordinary chat turn), a `length` finish stays exactly what it was -
+// no error of ours is invented where no number of ours exists.
+#[test]
+fn a_length_finish_stays_quiet_when_no_budget_was_set() {
+    let events = events_of(length_body());
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Error { .. })),
+        "unbudgeted turns keep the old behavior: {events:?}"
+    );
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::TextDelta { delta } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "partial");
 }

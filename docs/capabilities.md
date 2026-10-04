@@ -241,7 +241,7 @@ Grants the right to ask the host for a response from whichever provider is curre
 reason = "Summarizes older parts of the conversation when compacting."
 ```
 
-Import interface: `lca:host/completion`. A request function taking a message list and returning a response, using the same typed shape the `provider` world's own streaming events resolve into. The host records the usage and cost of each request on the session record that caused it, a `compaction` record for a summarization call, so the spend shows up in session cost.
+Import interface: `lca:host/completion`. A request function taking a message list and returning a response, using the same typed shape the `provider` world's own streaming events resolve into. The host records the usage and cost of each request on the session record that caused it, a `compaction` record for a summarization call, so the spend shows up in session cost. Every request the host makes through this capability carries an explicit generation budget (`4096` tokens, riding the request's non-structural extras as `max-tokens`), so an endpoint's own default never decides when a summarization is cut; the strategy pairs it with a bounded, structured summary prompt, and a generation that still ends on the cap surfaces as a failure naming the number (gh #169).
 
 This keeps the extension graph a star with the host at the center: an extension holding `completion` never calls another extension directly, it asks the host, and the host routes to the active provider. This is the reasoning already established in ADR-0008 for why extension-to-extension calls are not supported.
 
