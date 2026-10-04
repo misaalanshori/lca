@@ -33,6 +33,7 @@ fn chat() -> Chat {
             initial_tail_lines: Vec::new(),
             yolo: false,
             thinking_visibility: Default::default(),
+            codeblock_border: Default::default(),
             plain: true,
             invoke_command: Arc::new(|_, _| CommandEffect::None),
             slash_commands: Vec::new(),

@@ -536,6 +536,10 @@ pub struct UiOptions {
     pub yolo: bool,
     /// How much of a thinking run the transcript shows by default (R6).
     pub thinking_visibility: crate::transcript::ThinkingVisibility,
+    /// How fenced code blocks are framed (gh #32): `full` keeps the
+    /// shipped frame, `horizontal` drops the side pipes so a terminal
+    /// copy is clean, `none` draws nothing.
+    pub codeblock_border: lca_tui::widgets::markdown::CodeBlockBorder,
     /// Invoke a registered slash command (the registry supplies the
     /// table; `/stats` fills its built-in slot through an extension,
     /// ADR-0019). Arguments are the bare typed name and its argument
@@ -807,6 +811,7 @@ mod tests {
             initial_tail_lines: Vec::new(),
             yolo: false,
             thinking_visibility: Default::default(),
+            codeblock_border: Default::default(),
             plain: true,
             invoke_command: Arc::new(|_, _| CommandEffect::None),
             slash_commands: Vec::new(),

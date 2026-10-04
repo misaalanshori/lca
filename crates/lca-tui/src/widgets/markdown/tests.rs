@@ -143,6 +143,55 @@ fn code_blocks_are_framed() {
     assert!(out.last().unwrap().starts_with('╰'));
 }
 
+// Verifies: gh #32 - `markdown.codeblock_border = "horizontal"` draws
+// top and bottom bars only: the code lines carry no side pipes, so a
+// terminal selection pastes them clean, and the language keeps its
+// title on the top bar (the exact shape the issue asked for).
+#[test]
+fn horizontal_bars_replace_the_frame_and_leave_the_lines_clean() {
+    let options = MarkdownOptions {
+        codeblock_border: CodeBlockBorder::Horizontal,
+        ..Default::default()
+    };
+    let out = strip(&render_markdown(
+        "```python\nprint(1)\nprint(2)\n```",
+        30,
+        &plain(),
+        &options,
+    ));
+    assert_eq!(
+        out,
+        vec![
+            "── python ──".to_string(),
+            "print(1)".to_string(),
+            "print(2)".to_string(),
+            "────────────".to_string(),
+        ],
+        "bars top and bottom, code lines bare: {out:?}"
+    );
+    assert!(
+        !out.iter().any(|line| line.contains('│')),
+        "no side pipes anywhere"
+    );
+}
+
+// Verifies: gh #32 - `none` is the bare block: no bars, no pipes, no
+// padding - exactly what the fence wrote.
+#[test]
+fn none_renders_the_bare_lines() {
+    let options = MarkdownOptions {
+        codeblock_border: CodeBlockBorder::None,
+        ..Default::default()
+    };
+    let out = strip(&render_markdown(
+        "```rust\nfn main() {}\n```",
+        30,
+        &plain(),
+        &options,
+    ));
+    assert_eq!(out, vec!["fn main() {}".to_string()], "{out:?}");
+}
+
 // Verifies: R3 - a fence that names a language goes through the
 // theme's `highlight` hook (pi's `theme.highlightCode`); a fence with
 // no language keeps `code_block`, which is also what pi does when

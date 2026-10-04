@@ -55,6 +55,13 @@ impl Ui {
                 .thinking_visibility()
                 .and_then(lca_ui::transcript::ThinkingVisibility::parse)
                 .unwrap_or_default(),
+            // gh #32: the configured shape, with the shipped frame as
+            // the answer to anything the config layer already refused.
+            codeblock_border: self
+                .config
+                .markdown_codeblock_border()
+                .parse()
+                .unwrap_or_default(),
             invoke_command,
             render_regions: self.render_regions.clone(),
             ui_events: self.ui_events.clone(),

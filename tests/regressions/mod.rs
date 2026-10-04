@@ -195,3 +195,7 @@ mod gh31_provider_profiles;
 // card with the change hidden behind Ctrl+O.
 #[path = "gh9-diff-card.rs"]
 mod gh9_diff_card;
+// GitHub issue #32: a code block could only be drawn four-sided, so a
+// terminal selection of copied code always dragged the side pipes along.
+#[path = "gh32-codeblock-borders.rs"]
+mod gh32_codeblock_borders;

@@ -143,6 +143,8 @@ pub struct Transcript {
     tools_expanded: bool,
     /// How a thinking run renders unless its entry overrides it (R6).
     thinking: ThinkingVisibility,
+    /// How fenced code blocks are framed (gh #32), read by every render.
+    codeblock_border: lca_tui::widgets::markdown::CodeBlockBorder,
     /// Per-entry render cache (R15): `None` means the entry must be
     /// rendered; a streaming append invalidates only the last entry, so a
     /// long transcript is not re-rendered from scratch on every delta.
@@ -169,6 +171,12 @@ impl Transcript {
     /// The configured default for thinking runs (R6).
     pub fn thinking_visibility(&self) -> ThinkingVisibility {
         self.thinking
+    }
+
+    /// How fenced code blocks are framed (gh #32): set once from the
+    /// options when the chat is built, like the thinking visibility.
+    pub fn set_codeblock_border(&mut self, border: lca_tui::widgets::markdown::CodeBlockBorder) {
+        self.codeblock_border = border;
     }
 
     /// Set the default for thinking runs (R6's `ui.thinking`).
@@ -581,6 +589,7 @@ impl Transcript {
                 theme,
                 self.tools_expanded,
                 self.thinking,
+                self.codeblock_border,
                 &mut lines,
             );
             out.extend(lines.iter().cloned());
@@ -608,6 +617,7 @@ impl Transcript {
                 theme,
                 self.tools_expanded,
                 self.thinking,
+                self.codeblock_border,
                 &mut tmp,
             );
             line += tmp.len();

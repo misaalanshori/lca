@@ -133,6 +133,35 @@ pub enum LinkMode {
     Inline,
 }
 
+/// How a fenced code block is framed (gh #32): the shipped four-sided
+/// frame, bars only so a terminal selection copies the code clean, or
+/// nothing at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CodeBlockBorder {
+    /// The four-sided frame with side pipes - the shipped look.
+    #[default]
+    Full,
+    /// Top and bottom bars only: no side pipes to clean up after a
+    /// copy-paste (the reason issue #32 exists).
+    Horizontal,
+    /// No bars, no pipes: the code exactly as the fence wrote it.
+    None,
+}
+
+impl std::str::FromStr for CodeBlockBorder {
+    type Err = String;
+
+    /// Parse a configured shape (`markdown.codeblock_border`).
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "full" => Ok(Self::Full),
+            "horizontal" => Ok(Self::Horizontal),
+            "none" => Ok(Self::None),
+            other => Err(format!("expected full, horizontal, or none, got `{other}`")),
+        }
+    }
+}
+
 /// Options for rendering.
 #[derive(Clone)]
 pub struct MarkdownOptions {
@@ -154,6 +183,9 @@ pub struct MarkdownOptions {
     /// The message is still streaming: pi suppresses mermaid warnings
     /// mid-stream and shows them once the message settles.
     pub streaming: bool,
+    /// How fenced code blocks are framed (gh #32); `full` is the
+    /// shipped look and the default.
+    pub codeblock_border: CodeBlockBorder,
 }
 
 impl Default for MarkdownOptions {
@@ -166,6 +198,7 @@ impl Default for MarkdownOptions {
             preserve_backslash_escapes: false,
             render_latex: true,
             streaming: false,
+            codeblock_border: CodeBlockBorder::Full,
         }
     }
 }
@@ -276,7 +309,14 @@ fn render_blocks(
                 if !art.warnings.is_empty() && !options.streaming {
                     // pi keeps the raw source and appends a styled warning
                     // note (only outside streaming).
-                    render_code_block(&body, &lang, inner_width, theme, out);
+                    render_code_block(
+                        &body,
+                        &lang,
+                        inner_width,
+                        theme,
+                        options.codeblock_border,
+                        out,
+                    );
                     out.push((theme.warning)(&format!(
                         "Mermaid diagram not rendered: {}",
                         art.warnings[0]
@@ -297,7 +337,14 @@ fn render_blocks(
                 }
                 continue;
             }
-            render_code_block(&body, &lang, inner_width, theme, out);
+            render_code_block(
+                &body,
+                &lang,
+                inner_width,
+                theme,
+                options.codeblock_border,
+                out,
+            );
             continue;
         }
 
@@ -598,6 +645,7 @@ fn render_code_block(
     lang: &str,
     width: usize,
     theme: &MarkdownTheme,
+    border: CodeBlockBorder,
     out: &mut Vec<String>,
 ) {
     // D10: the border caps at the content width, not the terminal width.
@@ -611,24 +659,28 @@ fn render_code_block(
     } else {
         format!(" {lang} ")
     };
+    if border == CodeBlockBorder::None {
+        out.extend(rendered(body, lang, theme));
+        return;
+    }
+    if border == CodeBlockBorder::Horizontal {
+        // gh #32: bars top and bottom, code lines bare - a terminal
+        // selection copies exactly what the fence wrote.
+        let top_fill = frame.saturating_sub(visible_width(&title) + 2);
+        out.push((theme.code_block_border)(&format!(
+            "──{title}{}",
+            "─".repeat(top_fill)
+        )));
+        out.extend(rendered(body, lang, theme));
+        out.push((theme.code_block_border)(&"─".repeat(frame)));
+        return;
+    }
     let top_fill = frame.saturating_sub(visible_width(&title) + 3);
     out.push((theme.code_block_border)(&format!(
         "╭─{title}{}╮",
         "─".repeat(top_fill)
     )));
-    // pi's order: highlight when the theme can (and the fence named a
-    // language it knows), otherwise paint the whole block `mdCodeBlock`.
-    let fallback = || {
-        body.iter()
-            .map(|line| (theme.code_block)(line))
-            .collect::<Vec<String>>()
-    };
-    let rendered = theme
-        .highlight
-        .as_ref()
-        .and_then(|highlight| highlight(&body.join("\n"), lang))
-        .unwrap_or_else(fallback);
-    for line in rendered {
+    for line in rendered(body, lang, theme) {
         let pad = inner.saturating_sub(visible_width(&line));
         out.push(format!("│ {line}{} │", " ".repeat(pad)));
     }
@@ -636,6 +688,23 @@ fn render_code_block(
         "╰{}╯",
         "─".repeat(frame.saturating_sub(2))
     )));
+}
+
+/// The code block's lines, styled: pi's order - highlight when the theme
+/// can (and the fence named a language it knows), otherwise paint every
+/// line `mdCodeBlock`. Shared by the three frame shapes so they can only
+/// ever differ in what surrounds the code.
+fn rendered(body: &[String], lang: &str, theme: &MarkdownTheme) -> Vec<String> {
+    let fallback = || {
+        body.iter()
+            .map(|line| (theme.code_block)(line))
+            .collect::<Vec<String>>()
+    };
+    theme
+        .highlight
+        .as_ref()
+        .and_then(|highlight| highlight(&body.join("\n"), lang))
+        .unwrap_or_else(fallback)
 }
 
 fn render_table(

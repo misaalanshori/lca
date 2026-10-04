@@ -34,6 +34,7 @@ fn chat() -> Chat {
             initial_tail_lines: Vec::new(),
             yolo: false,
             thinking_visibility: Default::default(),
+            codeblock_border: Default::default(),
             // Colored on purpose: the rows below assert the diff roles
             // through their raw SGR (the plain theme emits none).
             plain: false,

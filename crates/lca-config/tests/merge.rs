@@ -485,6 +485,64 @@ fn switching_applies_the_models_configured_default() {
     assert_eq!(config.switch_thinking(None, "unconfigured"), None);
 }
 
+// Verifies: gh #32 - `markdown.codeblock_border` takes the three shapes
+// the issue defines (`full` is the default and the shipped look),
+// through every layer, and refuses anything else at load.
+#[test]
+fn codeblock_border_takes_the_three_shapes_and_refuses_the_rest() {
+    let config = Config::load(&lca_config::LoadInput::default()).expect("load");
+    assert_eq!(
+        config.markdown_codeblock_border(),
+        "full",
+        "today's framed look stays the default"
+    );
+
+    let dir = scratch("codeblock-border");
+    write(
+        &dir.join("user.toml"),
+        "markdown.codeblock_border = \"horizontal\"\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.markdown_codeblock_border(), "horizontal");
+
+    // A file value is validated at load, with the source named.
+    write(
+        &dir.join("user.toml"),
+        "markdown.codeblock_border = \"boxed\"\n",
+    );
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("a shape outside the vocabulary is refused");
+    assert!(err.to_string().contains("boxed"), "{err}");
+
+    // The environment reads the same key (LCA_MARKDOWN_CODEBLOCK_BORDER).
+    let mut env = std::collections::BTreeMap::new();
+    env.insert(
+        "LCA_MARKDOWN_CODEBLOCK_BORDER".to_string(),
+        "none".to_string(),
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        env,
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.markdown_codeblock_border(), "none");
+    assert!(
+        config
+            .resolved()
+            .any(|(key, value, source)| key == "markdown.codeblock_border"
+                && value == "none"
+                && source == MergeSource::Env),
+        "`lca config` names where it came from"
+    );
+}
+
 // Verifies: FR-CFG-6 (update check defaults to on interactively, off headless)
 #[test]
 fn update_check_default_depends_on_mode() {

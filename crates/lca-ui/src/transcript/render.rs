@@ -7,7 +7,7 @@
 
 use lca_tui::engine::text::{truncate_to_width, visible_width, wrap_text_with_ansi};
 use lca_tui::widgets::image::render_image;
-use lca_tui::widgets::markdown::{LinkMode, MarkdownOptions, render_markdown};
+use lca_tui::widgets::markdown::{CodeBlockBorder, LinkMode, MarkdownOptions, render_markdown};
 
 use crate::theme::{Role, StyleFn, Theme};
 
@@ -16,7 +16,7 @@ use super::{Entry, ThinkingVisibility, ToolStatus};
 /// Markdown options for the terminal: the link mode follows the terminal's
 /// OSC 8 capability, so a URL never vanishes on a terminal that swallows
 /// the hyperlink (pi's `markdown.md` §6).
-fn markdown_options(streaming: bool) -> MarkdownOptions {
+fn markdown_options(streaming: bool, codeblock_border: CodeBlockBorder) -> MarkdownOptions {
     MarkdownOptions {
         // pi renders assistant markdown with `outputPad = 1`
         // (`assistant-message.ts`), so every line carries a one-space left
@@ -30,6 +30,7 @@ fn markdown_options(streaming: bool) -> MarkdownOptions {
         // While the answer streams, pi suppresses mermaid's warning note
         // and shows it once the message settles.
         streaming,
+        codeblock_border,
         ..Default::default()
     }
 }
@@ -40,10 +41,11 @@ pub(super) fn render_entry(
     theme: &Theme,
     tools_expanded: bool,
     thinking: ThinkingVisibility,
+    codeblock_border: CodeBlockBorder,
     out: &mut Vec<String>,
 ) {
     match entry {
-        Entry::User(text) => render_user(text, width, theme, out),
+        Entry::User(text) => render_user(text, width, theme, codeblock_border, out),
         Entry::Assistant {
             text,
             reasoning,
@@ -61,6 +63,7 @@ pub(super) fn render_entry(
             },
             width,
             theme,
+            codeblock_border,
             out,
         ),
         Entry::Tool { .. } => render_tool(entry, tools_expanded, width, theme, out),
@@ -126,7 +129,13 @@ fn render_custom(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
     out.push(band_row("", width, &bg));
 }
 
-fn render_user(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
+fn render_user(
+    text: &str,
+    width: u16,
+    theme: &Theme,
+    codeblock_border: CodeBlockBorder,
+    out: &mut Vec<String>,
+) {
     // pi's user bubble: `Box(outputPad = 1, 1, theme.bg("userMessageBg"))`
     // around the user's own *markdown* in `userMessageText` - a full-width
     // band, content padded one column inside it, one blank band row above
@@ -149,6 +158,7 @@ fn render_user(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
         preserve_backslash_escapes: true,
         render_latex: true,
         streaming: false,
+        codeblock_border,
     };
     let wrapped = render_markdown(text, content, &theme.markdown(), &options);
     out.push(band_row("", width, &bg));
@@ -163,6 +173,10 @@ fn render_user(text: &str, width: u16, theme: &Theme, out: &mut Vec<String>) {
     out.push(band_row("", width, &bg));
 }
 
+// Seven rendering inputs plus the sink already; the frame shape (gh #32)
+// is the eighth. Bundling them into a context struct is the upgrade if a
+// ninth arrives.
+#[allow(clippy::too_many_arguments)]
 fn render_assistant(
     text: &str,
     reasoning: &str,
@@ -170,6 +184,7 @@ fn render_assistant(
     thinking: ThinkingVisibility,
     width: u16,
     theme: &Theme,
+    codeblock_border: CodeBlockBorder,
     out: &mut Vec<String>,
 ) {
     if !reasoning.is_empty() {
@@ -248,7 +263,7 @@ fn render_assistant(
             text,
             width as usize,
             &theme.markdown(),
-            &markdown_options(streaming),
+            &markdown_options(streaming, codeblock_border),
         );
         out.extend(md);
     }

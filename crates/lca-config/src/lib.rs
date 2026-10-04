@@ -59,6 +59,9 @@ pub const SHELL_TOOLS: &[&str] = &["auto", "bash", "pwsh", "powershell", "cmd"];
 /// The `permissions.mode` vocabulary (ADR-0042).
 pub const PERMISSION_MODES: &[&str] = &["ask", "yolo"];
 
+/// The shapes `markdown.codeblock_border` accepts (gh #32).
+pub const CODEBLOCK_BORDERS: &[&str] = &["full", "horizontal", "none"];
+
 /// The `ui.thinking` vocabulary (R6): how much of a reasoning run
 /// the transcript shows, separate from `thinking`'s effort level.
 pub const THINKING_VISIBILITIES: &[&str] = &["snippet", "full", "hidden"];
@@ -150,6 +153,9 @@ pub struct Config {
     shell_path: Option<String>,
     permissions_mode: Option<String>,
     thinking_visibility: Option<String>,
+    // gh #32: how fenced code blocks are framed; `full` is the shipped
+    // look, `horizontal` exists so a copy-paste has no side pipes.
+    markdown_codeblock_border: String,
     permissions_proposals: BTreeMap<String, String>,
     // gh #8 (EFG-003): the enabled-model scope (pi's `enabledModels`).
     // Empty = no restriction: every model the provider offers.
@@ -191,6 +197,7 @@ impl Default for Config {
             shell_path: None,
             permissions_mode: None,
             thinking_visibility: None,
+            markdown_codeblock_border: "full".to_string(),
             permissions_proposals: BTreeMap::new(),
             models_enabled: Vec::new(),
             models_thinking_levels: BTreeMap::new(),
@@ -236,6 +243,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "shell.path",
     "permissions.mode",
     "ui.thinking",
+    "markdown.codeblock_border",
 ];
 
 /// Look a dotted key up in a TOML table: literal keys (`"tool.timeout_seconds"`)
@@ -323,6 +331,16 @@ fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigEr
         )),
         "ui.theme" => Ok(TypedValue::Text(raw.to_string())),
         "shell.path" => Ok(TypedValue::Text(raw.to_string())),
+        "markdown.codeblock_border" => {
+            if CODEBLOCK_BORDERS.contains(&raw) {
+                Ok(TypedValue::Text(raw.to_string()))
+            } else {
+                Err(invalid(format!(
+                    "expected one of {}, got `{raw}`",
+                    CODEBLOCK_BORDERS.join(", ")
+                )))
+            }
+        }
         "ui.thinking" => {
             if THINKING_VISIBILITIES.contains(&raw) {
                 Ok(TypedValue::Text(raw.to_string()))
@@ -418,6 +436,7 @@ impl Config {
             "shell.path",
             "permissions.mode",
             "ui.thinking",
+            "markdown.codeblock_border",
         ] {
             config.sources.insert(key.to_string(), MergeSource::Default);
         }
@@ -604,6 +623,18 @@ impl Config {
                     }
                     this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
                 }
+                "markdown.codeblock_border" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    if !CODEBLOCK_BORDERS.contains(&text) {
+                        return Err(invalid(format!(
+                            "expected one of {}, got `{text}`",
+                            CODEBLOCK_BORDERS.join(", ")
+                        )));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
                 "permissions.mode" => {
                     let text = value.as_str().ok_or_else(|| {
                         invalid(format!("expected a string, got {}", type_name(&value)))
@@ -675,6 +706,7 @@ impl Config {
             "shell.path",
             "permissions.mode",
             "ui.thinking",
+            "markdown.codeblock_border",
         ] {
             if let Some(value) = table_value(table, key) {
                 // `provider` doubles as a section: `[provider] retry_limit = N`
@@ -724,6 +756,9 @@ impl Config {
             ("permissions.mode", TypedValue::Text(v)) => self.permissions_mode = Some(v),
             ("ui.thinking", TypedValue::Text(v)) => self.thinking_visibility = Some(v),
             ("thinking", TypedValue::Text(v)) => self.thinking = Some(v),
+            ("markdown.codeblock_border", TypedValue::Text(v)) => {
+                self.markdown_codeblock_border = v
+            }
             (other, _) => {
                 return Err(ConfigError::InvalidValue {
                     key: other.to_string(),
@@ -865,6 +900,15 @@ impl Config {
         self.shell_path.as_deref()
     }
 
+    /// `markdown.codeblock_border` (gh #32): `full` (the shipped
+    /// four-sided frame), `horizontal` (bars only, so a terminal copy
+    /// has no side pipes), or `none` (bare lines). Validated at load;
+    /// the renderer owns the shapes themselves (`lca-tui`'s
+    /// `CodeBlockBorder`).
+    pub fn markdown_codeblock_border(&self) -> &str {
+        &self.markdown_codeblock_border
+    }
+
     /// `permissions.mode`: `ask` (default) or `yolo` (ADR-0042).
     pub fn permissions_mode(&self) -> Option<&str> {
         self.permissions_mode.as_deref()
@@ -975,6 +1019,10 @@ impl Config {
                 self.permissions_mode
                     .clone()
                     .unwrap_or_else(|| "ask".to_string()),
+            ),
+            (
+                "markdown.codeblock_border",
+                self.markdown_codeblock_border.clone(),
             ),
             (
                 "ui.thinking",

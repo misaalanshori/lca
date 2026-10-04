@@ -129,6 +129,7 @@ impl Chat {
         let initial_tail = std::mem::take(&mut world.options.initial_tail_lines);
         let attachment_loader = world.options.hooks.load_attachment.clone();
         let thinking_visibility = world.options.thinking_visibility;
+        let codeblock_border = world.options.codeblock_border;
         // S5: the configured theme resolves through the auto-pair grammar
         // (a built-in, a custom file, or `auto` following the detected
         // scheme); an invalid custom file keeps the last-good palette and
@@ -220,6 +221,9 @@ impl Chat {
             resume_picker: None,
         };
         chat.transcript.set_thinking_visibility(thinking_visibility);
+        // gh #32: the code-block frame is config, set once like the
+        // visibility - the render cache keys on it only through this.
+        chat.transcript.set_codeblock_border(codeblock_border);
         // FR-UI-7: a resumed transcript renders like the live one - user
         // band, markdown, tool cards - instead of `user:`/`assistant:` lines.
         chat.load_records(&initial_records, attachment_loader.as_ref());
