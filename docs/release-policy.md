@@ -104,9 +104,9 @@ Eleven gates run on the pipeline; a change that turns any of them red does not l
 
 | # | Gate | What runs | Where |
 |---|---|---|---|
-| 1 | Format and lint | `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo doc` with `-D warnings` | `ci.yml` (ubuntu gates, and clippy/doc in each test job) |
+| 1 | Format and lint | `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo doc` with `-D warnings` | `ci.yml` (fmt in ubuntu gates; clippy/doc in the windows job and the core group per OS) |
 | 2 | Test suite | `cargo nextest run --workspace` on Linux, macOS, and Windows, including the real-terminal suites and the regression tests | `ci.yml` test jobs |
-| 3 | NFR timing | The five timing tests (NFR-4, NFR-5, NFR-29) on a release build, serial, on the machine to itself | `ci.yml` ubuntu gates |
+| 3 | NFR timing | The five tests the serial release filter selects on a release build, on the machine to itself: the NFR-4, NFR-5, and NFR-29 timing rows, the epoch functional row, and the conformance row the `hook` name-filter catches | `ci.yml` ubuntu gates |
 | 4 | Dependency audit and license check | `cargo-deny` against `deny.toml`, on every merge and on the weekly schedule | `ci.yml` ubuntu gates; `deny.yml` schedule |
 | 5 | Requirements traceability | `scripts/traceability.sh`: every FR/NFR carries at least one verifying test (NFR-30) | `ci.yml` ubuntu gates |
 | 6 | Fuzz targets build | `scripts/fuzz-check.sh`: every fuzz target still compiles (testing plan section 13) | `ci.yml` |

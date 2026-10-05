@@ -36,7 +36,7 @@ root requirements document and indexes everything else.
 
 The gate table lives in exactly one place — [`docs/release-policy.md#gate-list`](docs/release-policy.md#gate-list) — and `scripts/docs-consistency.sh` fails CI if it drifts or is copied elsewhere (#106).
 
-Tests: `cargo nextest run` (the suite is ~860). Requirements are numbered
+Tests: `cargo nextest run`. Requirements are numbered
 `FR-*`/`NFR-*` in `docs/lca-srdd.md`; `scripts/deferred-requirements.txt`
 is the sanctioned deferral list (with a "bring back X and delete these
 lines" exit ramp).
