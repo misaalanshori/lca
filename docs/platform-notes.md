@@ -129,3 +129,11 @@ then Windows, then macOS) the likely shape is a macOS-specific ioctl
 on the allocation path, which needs a machine with a terminal attached
 to diagnose; until then the ignore is visible at each test site rather
 than the tests being deleted, and this entry is their tracking record.
+
+*Attempt (2026-10-06, #88):* the ignores are lifted and the allocation
+order changes - `TIOCSWINSZ` now runs after the slave is opened, not
+before. No reference implementation sizes a master with no open slave,
+and a not-yet-attached master is the one shape macOS may refuse with
+`ENOTTY`; the reorder is harmless on Linux and Windows either way.
+macOS CI judges: green closes this entry, red reverts the un-ignore
+(never a red main) and the failure log lands here as new evidence.

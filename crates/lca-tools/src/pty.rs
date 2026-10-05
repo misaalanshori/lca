@@ -212,13 +212,16 @@ fn spawn_impl(
 
     let master = unsafe_ptmx::open_master()?;
     let fd = unsafe_ptmx::raw_fd(&master);
-    unsafe_ptmx::set_winsize(fd, rows, cols)?;
     let slave_path = unsafe_ptmx::slave_path(fd)?;
     let slave = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .custom_flags(libc::O_NOCTTY)
         .open(&slave_path)?;
+    // Size the pair once the slave exists: every reference implementation
+    // sizes an attached pair, and a master with no open slave is the one
+    // shape macOS may refuse with ENOTTY (#88). Harmless everywhere else.
+    unsafe_ptmx::set_winsize(fd, rows, cols)?;
 
     let cwd = crate::process::without_verbatim(cwd);
     let mut cmd = std::process::Command::new(program);
