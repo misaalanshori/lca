@@ -837,13 +837,13 @@ fn the_interface_opens_in_the_zero_provider_state_and_recovers_through_login() {
         .unwrap_or_else(|_| sandbox.project())
         .to_string_lossy()
         .to_string();
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     let grants: serde_json::Value = loop {
-        let grants: serde_json::Value = std::fs::read_to_string(sandbox.state_dir().join("grants.json"))
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or(serde_json::Value::Null);
+        let grants: serde_json::Value =
+            std::fs::read_to_string(sandbox.state_dir().join("grants.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or(serde_json::Value::Null);
         if grants["projects"][&project_key]["extensions"]["openai-compatible"]
             == serde_json::json!(true)
             || std::time::Instant::now() >= deadline
