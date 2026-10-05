@@ -663,19 +663,13 @@ async fn a_trapping_extension_is_reported_and_the_session_survives() {
 // Verifies: FR-CONC-1 (cancelling a turn interrupts a running extension
 // call rather than waiting for its fuel or natural end).
 //
-// Quarantined on Windows under testing-plan section 13 (2026-10-02): the
-// SECOND turn of this test tripped its 30-second hang guard twice on the
-// hosted runner (CI 36881146884, 36943299928) while turn one's
-// cancellation assertions passed both times and Linux/macOS stayed green
-// in every run. The mechanism is not yet named - the ledger entry in
-// docs/platform-notes.md carries what is known, and the guard prints the
-// elapsed time when it fires so the next observation has its number.
-// Remove the cfg_attr to un-quarantine; the assertions below are intact.
+// Turn-one half: always on, every platform. Turn one's cancellation
+// assertions passed on Windows both times the second turn hung, so this
+// half carries the FR-CONC-1 contract where the full test cannot run.
+// The second-turn half lives in
+// `a_fresh_turn_starts_clean_after_cancellation` below, quarantined on
+// Windows with its own breakdown diagnostics.
 #[tokio::test]
-#[cfg_attr(
-    windows,
-    ignore = "second-turn hang under load - tracked in docs/platform-notes.md"
-)]
 async fn cancelling_a_turn_interrupts_a_running_extension_call() {
     let root = scratch("cancel-ext");
     let env = Arc::new(HostEnvironment {
@@ -775,24 +769,112 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
             .any(|r| matches!(r, Record::User { .. })),
         "completed records are kept (FR-CONC-3)"
     );
+}
 
-    // The other half of the same defect: a fresh turn must start clean.
-    // Without the turn boundary, the cancel above would pre-cancel this
-    // turn's extension call and its tool would come back cancelled.
-    // (This is the turn that hangs on Windows under load - see the
-    // quarantine note at the top of the test; the assertion is unchanged.)
-    let fresh = lca_tools::CancelFlag::new();
-    let turn_started = std::time::Instant::now();
-    let second = tokio::time::timeout(
+// Verifies: FR-CONC-1's boundary half (a fresh turn starts clean after a
+// cancellation: the cancel does not stick).
+//
+// Quarantined on Windows under testing-plan section 13 (2026-10-02): this
+// turn tripped its 30-second hang guard twice on the hosted runner (CI
+// 36881146884, 36943299928) while turn one's assertions passed both times
+// and Linux/macOS stayed green in every run. The mechanism is not yet
+// named - the ledger entry in docs/platform-notes.md carries what is
+// known. The guard prints an elapsed breakdown when it fires (and a
+// one-line summary when it passes) so the next observation names the
+// phase - provider silence, tool-call stall, or record write - instead
+// of just the total. Remove the cfg_attr to un-quarantine.
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "second-turn hang under load - tracked in docs/platform-notes.md"
+)]
+async fn a_fresh_turn_starts_clean_after_cancellation() {
+    let root = scratch("cancel-ext-boundary");
+    let env = Arc::new(HostEnvironment {
+        roots: ScopeRoots {
+            workspace: root.join("project"),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        },
+        prompt: Arc::new(Mutex::new(PromptSpy::answering(Decision::Always))),
+        grant_store: Arc::new(Mutex::new(
+            GrantStore::open(&root.join("grants.json")).expect("store"),
+        )),
+        project: root.join("project"),
+        proposals: None,
+    });
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            memory_bytes: 64 * 1024 * 1024,
+            fuel_per_call: u64::MAX,
+            log_limit_bytes: 4096,
+        },
+        env,
+    );
+    let wasm = host
+        .load(CONFORMANCE_WASM, CONFORMANCE_MANIFEST)
+        .expect("load");
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(wasm));
+
+    let provider = FakeProvider::builder()
+        .turn(|t| {
+            t.tool_call("conformance", r#"{"mode":"loop"}"#)
+                .usage(fake_usage(10, 10, 0, 10))
+        })
+        .turn(|t| {
+            t.tool_call("conformance", r#"{"mode":"ok"}"#)
+                .usage(fake_usage(10, 5, 0, 0))
+        })
+        .turn(|t| t.text("done").usage(fake_usage(10, 5, 0, 0)))
+        .build();
+    let mut h = harness("cancel-ext-boundary", provider, registry);
+
+    // Turn one establishes the cancelled state.
+    let cancel = lca_tools::CancelFlag::new();
+    let canceller = {
+        let flag = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            flag.cancel();
+        })
+    };
+    let mut sink = CollectingSink::default();
+    let mut prompt = PromptSpy::answering(Decision::Always);
+    let mut agent = Agent::new(
+        &h.store,
+        &h.session,
+        h.provider.as_ref(),
+        &mut h.tools,
+        h.grants.clone(),
+        &mut prompt,
+        None,
+        h.config.clone(),
+    );
+    let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        agent.run_turn("again", &mut sink, &fresh),
+        agent.run_turn("spin", &mut sink, &cancel),
     )
     .await
-    .unwrap_or_else(|_| {
-        panic!(
-            "the second turn hung for {:?} (load-guard fired)",
-            turn_started.elapsed()
-        )
+    .expect("the turn returns");
+    canceller.join().expect("canceller");
+    assert_eq!(outcome.stop_reason, StopReason::Cancelled);
+
+    // Turn two, with the breakdown: which phase never answered.
+    let fresh = lca_tools::CancelFlag::new();
+    let turn_started = std::time::Instant::now();
+    let mut sink2 = CollectingSink::default();
+    let second = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        agent.run_turn("again", &mut sink2, &fresh),
+    )
+    .await;
+    let breakdown = cancel_breakdown(&h, &sink2, turn_started.elapsed());
+    eprintln!("cancel-hang-breakdown: {breakdown}");
+    let second = second.unwrap_or_else(|_| {
+        panic!("the second turn hung ({breakdown})");
     });
     assert_eq!(second.status, TurnStatus::Ok, "a fresh turn completes");
     assert_ne!(second.stop_reason, StopReason::Cancelled);
@@ -807,6 +889,35 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
         )),
         "the next turn's extension call ran (the cancel did not stick)"
     );
+}
+
+/// The elapsed breakdown the quarantine guard prints: event counts by
+/// shape, provider calls served, and records durable. On a hang it names
+/// the phase that never answered (provider silence, tool-call stall, or
+/// record write); on green it is the one-line baseline the next red is
+/// read against. Shapes and orderings only - no timing thresholds.
+fn cancel_breakdown(h: &Harness, sink: &CollectingSink, elapsed: std::time::Duration) -> String {
+    let (mut text, mut scheduled, mut started, mut finished, mut errors, mut other) =
+        (0, 0, 0, 0, 0, 0);
+    for event in &sink.events {
+        match event {
+            TurnEvent::TextDelta(_) => text += 1,
+            TurnEvent::RetryScheduled { .. } => scheduled += 1,
+            TurnEvent::ToolStarted(_) => started += 1,
+            TurnEvent::ToolFinished(_) => finished += 1,
+            TurnEvent::Error { .. } => errors += 1,
+            _ => other += 1,
+        }
+    }
+    let records = h
+        .store
+        .read(&h.session)
+        .map(|read| read.records.len())
+        .unwrap_or(0);
+    format!(
+        "turn2_elapsed={elapsed:?} provider_calls={} sink_text={text} sink_tool_started={started} sink_tool_finished={finished} sink_errors={errors} sink_other={other} store_records={records}",
+        h.provider.call_count(),
+    )
 }
 
 // Verifies: the SRDD hook points - `pre-turn` fires once per turn before any
