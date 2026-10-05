@@ -46,6 +46,10 @@ lca-core = { path = "../lca-core" }
 lca-ext-abi = { path = "../lca-ext-abi" }
 lca-ext-native = { path = "../lca-ext-native" }
 lca-ui = { path = "../lca-ui" }
+# #96: the panic-hook restore lives in the terminal engine; the binary
+# installs it on every entry path (already in the graph via lca-ui, so
+# this edge adds no new packages).
+lca-tui = { path = "../lca-tui" }
 openai-compatible = { path = "../../extensions/openai-compatible", optional = true }
 tokio.workspace = true
 thiserror.workspace = true

@@ -1263,6 +1263,7 @@ dependencies = [
  "lca-session",
  "lca-testkit",
  "lca-tools",
+ "lca-tui",
  "lca-ui",
  "libc",
  "openai-compatible",

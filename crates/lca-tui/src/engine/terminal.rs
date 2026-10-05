@@ -410,6 +410,66 @@ fn teardown_sequence(in_alt_screen: bool) -> String {
     out
 }
 
+/// A panic-hook restore writer: stdout in production, a recorder in
+/// tests. A plain function pointer so it lives in a `static`.
+type PanicWriter = fn(&[u8]);
+
+fn stdout_panic_writer(bytes: &[u8]) {
+    use std::io::Write as _;
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(bytes);
+    let _ = out.flush();
+}
+
+static PANIC_WRITER: Mutex<PanicWriter> = Mutex::new(stdout_panic_writer);
+static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
+static INSTALL_HOOK_ONCE: std::sync::Once = std::sync::Once::new();
+
+/// The restore bytes the panic hook emits: leave the alternate screen,
+/// mouse tracking off, wrap and cursor restored — the same sequence the
+/// normal exit path writes, always assuming the worst case (#96). stdin
+/// is deliberately not drained here: there is no event loop left to
+/// protect from key-release, and a bounded-or-not read inside a crashing
+/// process is where a fast abort goes to hang.
+pub fn panic_restore_bytes() -> Vec<u8> {
+    teardown_sequence(true).into_bytes()
+}
+
+/// Whether [`install_panic_hook`] has run in this process.
+pub fn panic_hook_installed() -> bool {
+    HOOK_INSTALLED.load(Ordering::SeqCst)
+}
+
+/// Install the crash restore: the hook writes [`panic_restore_bytes`]
+/// and then runs the previously installed hook, so the default panic
+/// report still prints. The runtime calls the hook before unwinding or
+/// aborting, which is what makes this hold under release
+/// `panic = "abort"` where `Drop` guards never run. Safe to call on
+/// every entry path: the hook installs once, the flag records every
+/// call.
+pub fn install_panic_hook() {
+    install_panic_hook_with(stdout_panic_writer);
+}
+
+/// [`install_panic_hook`] with an explicit writer — the seam the guard
+/// drives with a recorder.
+pub fn install_panic_hook_with(writer: PanicWriter) {
+    *PANIC_WRITER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = writer;
+    INSTALL_HOOK_ONCE.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let writer = *PANIC_WRITER
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            writer(&panic_restore_bytes());
+            previous(info);
+        }));
+    });
+    HOOK_INSTALLED.store(true, Ordering::SeqCst);
+}
+
 fn resolve_write_log() -> Option<PathBuf> {
     let env = std::env::var_os("PI_TUI_WRITE_LOG")?;
     if env.is_empty() {

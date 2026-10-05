@@ -797,6 +797,11 @@ Known deviations left in place, named rather than implied:
   default ACL. `docs/platform-notes.md` records this.
 - **`panic = "abort"`.** The release profile aborts, so the host-glue panic
   guards are a test/debug safety net only; the comments and this note say so.
+  *Annotation (2026-10-05, #96):* the abort stays, and the terminal restore
+  no longer depends on unwinding — `lca_tui::install_panic_hook`, installed
+  on every entry path, writes the exit-path restore bytes from the panic
+  hook itself, which the runtime runs before aborting. `Drop` guards still
+  cover unwind only; the hook covers everything.
 
 ## Cycle 2 — the stable base (ADR-0028 window)
 

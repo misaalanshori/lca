@@ -206,6 +206,9 @@ pub fn run(
     allow_host: &[String],
     flags: &crate::CliFlags,
 ) -> anyhow::Result<i32> {
+    // #96: installed here too, so the TUI entry restores the terminal
+    // even when reached without `main` (embedding, tests). Idempotent.
+    lca_tui::install_panic_hook();
     // The interface needs a terminal for raw mode and key events; without
     // one the input read fails with an opaque error. Say what to do instead
     // (the headless path is the scripted one).

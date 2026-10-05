@@ -208,6 +208,9 @@ pub async fn headless(
     // (the config default is off); when it was, there is no status
     // line to report through, so stderr carries the notice.
     crate::update::spawn(config.update_check(true), None);
+    // #96: installed here too, so headless restores the terminal even
+    // when reached without `main`. Idempotent.
+    lca_tui::install_panic_hook();
     // Print mode with nothing to run is a usage error, said out loud
     // (a bare `-p` with no message). Interactive mode would open the
     // TUI; headless has nothing to turn into.
