@@ -175,6 +175,12 @@ lca::host::state::write("last-model", b"gpt-4o")?;
 
 A data-only extension declares `worlds = []` and ships only a manifest and a `resources/` bag; it installs through the same pipeline (a skill pack needs no component).
 
+## Markdown transforms
+
+The markdown pipeline takes an ordered list of pre-parse transforms (gh #12): pi's `registerMarkdownTransformer`. Each transform sees the raw source and a small context (whose markdown it is, whether the message is streaming, the available width) and returns the source the parser sees next. Transforms run in registration order; a transform that panics behaves as identity, so a hostile transform cannot break the render.
+
+What it is not: this is not a WIT world and there is no WASM-facing export yet. A native (Rust) extension provides one by implementing the optional `ExtensionDispatch::markdown_transformer` method (the default is absent); the host collects native transforms into the transcript's pipeline in registration order. The WASM export ships with the first third-party-shaped consumer. Reasoning runs render as plain wrapped lines rather than parsed markdown, so transforms see user and assistant sources only.
+
 ## Writing a provider
 
 A provider extension lists models, streams completions, and handles authentication.

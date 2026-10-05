@@ -88,6 +88,39 @@ pub mod dispatch {
     /// Boxed future bound for dispatch calls, tied to the handle's life.
     pub type DispatchFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+    /// Whose markdown a pre-parse transform sees (gh #12): pi's
+    /// `MarkdownTransformContext["messageType"]`, Rust-side only.
+    /// Reasoning runs render as plain wrapped lines rather than parsed
+    /// markdown, so there is no thinking variant.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MarkdownMessageType {
+        /// A user prompt's markdown.
+        User,
+        /// An assistant answer's markdown.
+        Assistant,
+    }
+
+    /// What a pre-parse markdown transform sees alongside the source
+    /// (gh #12): pi's `MarkdownTransformContext`, Rust-side only. The
+    /// host converts it from the render pipeline's own context; a WIT
+    /// export ships with the first third-party-shaped consumer, not here.
+    #[derive(Debug, Clone)]
+    pub struct MarkdownTransformContext {
+        /// Whose markdown this is.
+        pub message_type: MarkdownMessageType,
+        /// The message is still streaming.
+        pub is_streaming: bool,
+        /// The width the render was asked for, in columns.
+        pub available_width: usize,
+    }
+
+    /// A pre-parse markdown transform (gh #12): pi's
+    /// `registerMarkdownTransformer` as a Rust closure. Runs in
+    /// registration order over the raw source before parsing; a
+    /// transform that panics behaves as identity (pi's try/catch).
+    pub type MarkdownTransformFn =
+        std::sync::Arc<dyn Fn(&str, &MarkdownTransformContext) -> String + Send + Sync>;
+
     /// A loaded extension, whichever way it is delivered.
     pub trait ExtensionDispatch: Send + Sync {
         /// The extension's identity (its manifest name).
@@ -128,6 +161,16 @@ pub mod dispatch {
         /// while the user-facing name stays put (ADR-0019).
         fn builtin_command_slots(&self) -> Vec<String> {
             Vec::new()
+        }
+
+        /// A pre-parse markdown transform (gh #12): pi's
+        /// `registerMarkdownTransformer`, Rust-side only. The host runs
+        /// it in registration order over the raw markdown source before
+        /// parsing; `None` (the default) contributes nothing. Native
+        /// handles only for now - the WIT export ships with the first
+        /// third-party-shaped consumer, so the world stays as-is.
+        fn markdown_transformer(&self) -> Option<MarkdownTransformFn> {
+            None
         }
 
         /// `pre-turn`: observe.
@@ -326,7 +369,10 @@ pub mod dispatch {
     }
 }
 
-pub use dispatch::{DispatchFuture, ExtensionDispatch};
+pub use dispatch::{
+    DispatchFuture, ExtensionDispatch, MarkdownMessageType, MarkdownTransformContext,
+    MarkdownTransformFn,
+};
 
 #[cfg(feature = "host")]
 #[allow(missing_docs)] // generated bindings: the WIT files carry the docs

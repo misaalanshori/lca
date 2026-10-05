@@ -524,6 +524,10 @@ pub struct UiHooks {
     /// Cancel the background login/identity step (R4), called on Escape
     /// while the waiting modal is open.
     pub cancel_login: Option<LoginCancel>,
+    /// Pre-parse markdown transforms in registration order (gh #12),
+    /// collected by the host from native extensions. Empty by default -
+    /// no consumer, no rewriting.
+    pub markdown_transformers: Vec<lca_tui::widgets::markdown::MarkdownTransformer>,
 }
 
 /// Static inputs for the interface.

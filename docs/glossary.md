@@ -58,6 +58,8 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Manifest.** The TOML file, `extension.toml`, declaring an extension's identity, ABI target, implemented worlds, and requested capabilities. The install-time consent surface; see `schemas/extension-manifest.schema.json`.
 
+**Markdown transform.** A pre-parse rewrite of markdown source, in registration order, before the parser sees it (pi's `registerMarkdownTransformer`, gh #12). A native extension provides one through the `ExtensionDispatch::markdown_transformer` Rust method; the host collects them into the transcript's pipeline. A transform that panics behaves as identity. Not a WIT world: there is no WASM-facing export yet, so a WASM extension cannot register one.
+
 **Mermaid.** A ```` ```mermaid ```` fenced diagram rendered as Unicode art by the `mermaid` widget: the flowchart and sequence subset, painted through the theme with grok-mermaid's span classes (border, text, edge, edgeLabel, title). A diagram too wide for the pane, or outside the subset (`pie`, `classDiagram`, and the rest), falls back to the framed source; a parse warning appears under the raw block only after streaming settles. It is that subset, not the full mermaid language - the fence is what makes the difference visible.
 
 **OCI artifact.** A component and its manifest, published to any registry implementing the OCI Distribution Specification, resolved by reference and pinned by digest. One of the source kinds `lca-registry` understands; see ADR-0010 for the others.

@@ -29,7 +29,11 @@ compaction-default = { path = "extensions/compaction-default" }
 # exports.
 lca-cli = { path = "crates/lca-cli" }
 lca-core = { path = "crates/lca-core" }
+# The gh #12 seam guard drives a stub `ExtensionDispatch` (for the
+# optional Rust-side markdown transform) through the host collection.
+lca-ext-abi = { path = "crates/lca-ext-abi" }
 lca-ext-host = { path = "crates/lca-ext-host" }
+lca-ext-native = { path = "crates/lca-ext-native" }
 lca-permissions = { path = "crates/lca-permissions" }
 lca-provider = { path = "crates/lca-provider" }
 lca-protocol = { path = "crates/lca-protocol" }

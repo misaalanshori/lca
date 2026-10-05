@@ -29,6 +29,40 @@ use lca_ui::{RegionInteractor, RegionRenderer};
 
 use crate::lock;
 
+/// Collect pre-parse markdown transforms from extension handles (gh
+/// #12): each native handle's optional Rust-side transform becomes one
+/// pipeline entry in registration order; absent transforms contribute
+/// nothing. WASM handles carry none (no WIT surface yet), so this only
+/// ever fires for native handles.
+pub fn collect_markdown_transformers(
+    handles: &[lca_ext_native::NativeHandle],
+) -> Vec<lca_ui::MarkdownTransformer> {
+    handles
+        .iter()
+        .filter_map(|handle| {
+            let transform = handle.markdown_transformer()?;
+            let adapted: lca_ui::MarkdownTransformer = Arc::new(move |text, context| {
+                transform(
+                    text,
+                    &lca_ext_abi::MarkdownTransformContext {
+                        message_type: match context.message_type {
+                            lca_ui::MarkdownMessageType::User => {
+                                lca_ext_abi::MarkdownMessageType::User
+                            }
+                            lca_ui::MarkdownMessageType::Assistant => {
+                                lca_ext_abi::MarkdownMessageType::Assistant
+                            }
+                        },
+                        is_streaming: context.is_streaming,
+                        available_width: context.available_width,
+                    },
+                )
+            });
+            Some(adapted)
+        })
+        .collect()
+}
+
 pub(crate) use display::session_stats;
 
 /// The built-in slash slots the interface itself claims; the spec's

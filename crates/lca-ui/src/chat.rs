@@ -211,6 +211,9 @@ impl Chat {
             .trust_needed
             .as_ref()
             .is_some_and(|needed| needed());
+        // gh #12: the host's collected pre-parse transforms, cloned out
+        // before `world` moves into the chat.
+        let markdown_transformers = world.options.hooks.markdown_transformers.clone();
         let mut chat = Chat {
             keybindings,
             transcript,
@@ -252,6 +255,11 @@ impl Chat {
             resume_picker: None,
         };
         chat.transcript.set_thinking_visibility(thinking_visibility);
+        // gh #12: the host's collected pre-parse transforms ride the
+        // transcript's pipeline from the first render.
+        for transformer in markdown_transformers {
+            chat.transcript.register_markdown_transformer(transformer);
+        }
         // gh #32: the code-block frame is config, set once like the
         // visibility - the render cache keys on it only through this.
         chat.transcript.set_codeblock_border(codeblock_border);

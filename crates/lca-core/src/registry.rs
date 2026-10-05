@@ -296,6 +296,18 @@ impl ExtensionRegistry {
             .collect()
     }
 
+    /// Every enabled extension handle, in registration order (gh #12:
+    /// the host collects optional per-handle surfaces, like the
+    /// Rust-side markdown transform, from these). Disabled entries
+    /// (collision losers, FR-EXT-11) contribute nothing.
+    pub fn handles(&self) -> Vec<Arc<dyn ExtensionDispatch>> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.enabled)
+            .map(|entry| entry.handle.clone())
+            .collect()
+    }
+
     /// The enabled provider registered under `name` (the configured
     /// active provider resolves through this; `None` is FR-PROV-6's
     /// data and a valid zero-provider state, FR-PROV-9).

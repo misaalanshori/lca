@@ -7,7 +7,10 @@
 
 use lca_tui::engine::text::{truncate_to_width, visible_width, wrap_text_with_ansi};
 use lca_tui::widgets::image::render_image;
-use lca_tui::widgets::markdown::{CodeBlockBorder, LinkMode, MarkdownOptions, render_markdown};
+use lca_tui::widgets::markdown::{
+    CodeBlockBorder, LinkMode, MarkdownMessageType, MarkdownOptions, MarkdownTransformer,
+    render_markdown,
+};
 
 use crate::theme::{Role, StyleFn, Theme};
 
@@ -16,7 +19,12 @@ use super::{Entry, ThinkingVisibility, ToolStatus};
 /// Markdown options for the terminal: the link mode follows the terminal's
 /// OSC 8 capability, so a URL never vanishes on a terminal that swallows
 /// the hyperlink (pi's `markdown.md` §6).
-fn markdown_options(streaming: bool, codeblock_border: CodeBlockBorder) -> MarkdownOptions {
+fn markdown_options(
+    streaming: bool,
+    codeblock_border: CodeBlockBorder,
+    message_type: MarkdownMessageType,
+    transformers: Vec<MarkdownTransformer>,
+) -> MarkdownOptions {
     MarkdownOptions {
         // pi renders assistant markdown with `outputPad = 1`
         // (`assistant-message.ts`), so every line carries a one-space left
@@ -31,10 +39,15 @@ fn markdown_options(streaming: bool, codeblock_border: CodeBlockBorder) -> Markd
         // and shows it once the message settles.
         streaming,
         codeblock_border,
+        message_type,
+        transformers,
         ..Default::default()
     }
 }
 
+// Eight rendering inputs plus the sink; like `render_assistant` below,
+// a context struct is the upgrade if a ninth arrives.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_entry(
     entry: &Entry,
     width: u16,
@@ -42,10 +55,14 @@ pub(super) fn render_entry(
     tools_expanded: bool,
     thinking: ThinkingVisibility,
     codeblock_border: CodeBlockBorder,
+    transformers: &[MarkdownTransformer],
     out: &mut Vec<String>,
-) {
+) -> usize {
     match entry {
-        Entry::User(text) => render_user(text, width, theme, codeblock_border, out),
+        Entry::User(text) => {
+            render_user(text, width, theme, codeblock_border, transformers, out);
+            0
+        }
         Entry::Assistant {
             text,
             reasoning,
@@ -64,12 +81,20 @@ pub(super) fn render_entry(
             width,
             theme,
             codeblock_border,
+            transformers,
             out,
         ),
-        Entry::Tool { .. } => render_tool(entry, tools_expanded, width, theme, out),
-        Entry::Notice(text) => render_custom(text, width, theme, out),
+        Entry::Tool { .. } => {
+            render_tool(entry, tools_expanded, width, theme, out);
+            0
+        }
+        Entry::Notice(text) => {
+            render_custom(text, width, theme, out);
+            0
+        }
         Entry::Error(text) => {
             out.extend(wrap_text_with_ansi(&(theme.error)(text), width as usize));
+            0
         }
         Entry::Raw(text) => {
             // A bracketed header (`[compaction] …`, `[session in …]`) is
@@ -80,6 +105,7 @@ pub(super) fn render_entry(
             } else {
                 out.extend(wrap_text_with_ansi(text, width as usize));
             }
+            0
         }
         Entry::Image { info, bytes } => {
             out.extend(render_image(
@@ -88,6 +114,7 @@ pub(super) fn render_entry(
                 lca_tui::widgets::image::detect_image_protocol(),
                 width as usize,
             ));
+            0
         }
     }
 }
@@ -134,6 +161,7 @@ fn render_user(
     width: u16,
     theme: &Theme,
     codeblock_border: CodeBlockBorder,
+    transformers: &[MarkdownTransformer],
     out: &mut Vec<String>,
 ) {
     // pi's user bubble: `Box(outputPad = 1, 1, theme.bg("userMessageBg"))`
@@ -159,6 +187,8 @@ fn render_user(
         render_latex: true,
         streaming: false,
         codeblock_border,
+        message_type: MarkdownMessageType::User,
+        transformers: transformers.to_vec(),
     };
     let wrapped = render_markdown(text, content, &theme.markdown(), &options);
     out.push(band_row("", width, &bg));
@@ -174,8 +204,8 @@ fn render_user(
 }
 
 // Seven rendering inputs plus the sink already; the frame shape (gh #32)
-// is the eighth. Bundling them into a context struct is the upgrade if a
-// ninth arrives.
+// is the eighth, the transform pipeline (gh #12) the ninth. Bundling them
+// into a context struct is the upgrade if a tenth arrives.
 #[allow(clippy::too_many_arguments)]
 fn render_assistant(
     text: &str,
@@ -185,8 +215,10 @@ fn render_assistant(
     width: u16,
     theme: &Theme,
     codeblock_border: CodeBlockBorder,
+    transformers: &[MarkdownTransformer],
     out: &mut Vec<String>,
-) {
+) -> usize {
+    let start = out.len();
     if !reasoning.is_empty() {
         match thinking {
             ThinkingVisibility::Full => {
@@ -258,18 +290,28 @@ fn render_assistant(
             }
         }
     }
+    // gh #11's hit map: how many leading rows belong to the reasoning
+    // run (measured before the answer renders, so answer rows never
+    // count as run rows).
+    let thinking_rows = out.len() - start;
     if !text.is_empty() {
         let md = render_markdown(
             text,
             width as usize,
             &theme.markdown(),
-            &markdown_options(streaming, codeblock_border),
+            &markdown_options(
+                streaming,
+                codeblock_border,
+                MarkdownMessageType::Assistant,
+                transformers.to_vec(),
+            ),
         );
         out.extend(md);
     }
     if streaming {
         out.push((theme.dim)("▍"));
     }
+    thinking_rows
 }
 
 /// A one-line argument summary for a tool card (pi's per-tool formats,

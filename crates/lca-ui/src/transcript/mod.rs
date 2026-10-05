@@ -94,9 +94,10 @@ pub enum Entry {
     },
 }
 
-/// One entry's cached render: the width it was rendered at and its styled
-/// lines. `None` means the entry must be re-rendered.
-type CachedRender = Option<(u16, Vec<String>)>;
+/// One entry's cached render: the width it was rendered at, its styled
+/// lines, and how many leading lines belong to its reasoning run (gh
+/// #11's hit map - `None` means the entry must be re-rendered).
+type CachedRender = Option<(u16, Vec<String>, usize)>;
 
 /// How a thinking run renders (R6, pi's `thinkingVisibility`): a per-run
 /// override on top of this default.
@@ -145,6 +146,10 @@ pub struct Transcript {
     thinking: ThinkingVisibility,
     /// How fenced code blocks are framed (gh #32), read by every render.
     codeblock_border: lca_tui::widgets::markdown::CodeBlockBorder,
+    /// Pre-parse markdown transforms in registration order (gh #12):
+    /// pi's `registerMarkdownTransformer`. Empty by default - no
+    /// consumer, no rewriting.
+    markdown_transformers: Vec<lca_tui::widgets::markdown::MarkdownTransformer>,
     /// Per-entry render cache (R15): `None` means the entry must be
     /// rendered; a streaming append invalidates only the last entry, so a
     /// long transcript is not re-rendered from scratch on every delta.
@@ -190,7 +195,6 @@ impl Transcript {
     /// already rendered keep the configured default, so expanding the one
     /// being read does not rewrite the transcript behind it.
     pub fn toggle_thinking_expanded(&mut self) {
-        let default_expanded = matches!(self.thinking, ThinkingVisibility::Full);
         // FR-UI-22: the key overrides *the run it is pressed on*. With no
         // pointer, that is the newest run that actually has reasoning - the
         // newest assistant message is often a tool report with none, and a
@@ -201,14 +205,41 @@ impl Transcript {
         }) else {
             return;
         };
-        let Entry::Assistant {
-            thinking_override, ..
-        } = &mut self.entries[index]
+        self.toggle_entry_thinking(index);
+    }
+
+    /// Toggle one thinking run by entry index (gh #11's click path; the
+    /// keybinding above is `toggle_thinking_expanded`). Only an assistant
+    /// entry carrying reasoning toggles; anything else reports `false`
+    /// and moves nothing.
+    pub fn toggle_entry_thinking(&mut self, index: usize) -> bool {
+        let default_expanded = matches!(self.thinking, ThinkingVisibility::Full);
+        let Some(Entry::Assistant {
+            reasoning,
+            thinking_override,
+            ..
+        }) = self.entries.get_mut(index)
         else {
-            return;
+            return false;
         };
+        if reasoning.trim().is_empty() {
+            return false;
+        }
         let visible = thinking_override.unwrap_or(default_expanded);
         *thinking_override = Some(!visible);
+        self.invalidate_cache();
+        true
+    }
+
+    /// Register a pre-parse markdown transform (gh #12): pi's
+    /// `registerMarkdownTransformer`. Transforms run in registration
+    /// order over the raw source before parsing; registering drops the
+    /// render cache, so the new transform reaches every entry.
+    pub fn register_markdown_transformer(
+        &mut self,
+        transformer: lca_tui::widgets::markdown::MarkdownTransformer,
+    ) {
+        self.markdown_transformers.push(transformer);
         self.invalidate_cache();
     }
 
@@ -576,26 +607,53 @@ impl Transcript {
             if i > 0 {
                 out.push(String::new());
             }
-            if let Some((cached_width, lines)) = &cache[i]
+            if let Some((cached_width, lines, _)) = &cache[i]
                 && *cached_width == width
             {
                 out.extend(lines.iter().cloned());
                 continue;
             }
             let mut lines = Vec::new();
-            render_entry(
+            let thinking_rows = render_entry(
                 entry,
                 width,
                 theme,
                 self.tools_expanded,
                 self.thinking,
                 self.codeblock_border,
+                &self.markdown_transformers,
                 &mut lines,
             );
             out.extend(lines.iter().cloned());
-            cache[i] = Some((width, lines));
+            cache[i] = Some((width, lines, thinking_rows));
         }
         out
+    }
+
+    /// The entry owning a document row, if any, and whether the row
+    /// belongs to its reasoning run (gh #11's hit map): blank separator
+    /// rows belong to no entry. The render cache carries each entry's
+    /// line count, so this walks lengths, never re-renders.
+    pub fn entry_at_row(&self, width: u16, theme: &Theme, row: usize) -> Option<(usize, bool)> {
+        let _ = self.render(width, theme);
+        let cache = self.cache.borrow();
+        let mut line = 0usize;
+        for (i, slot) in cache.iter().enumerate() {
+            if i > 0 {
+                if line == row {
+                    return None;
+                }
+                line += 1;
+            }
+            let Some((_, lines, thinking_rows)) = slot.as_ref() else {
+                continue;
+            };
+            if row >= line && row < line + lines.len() {
+                return Some((i, row - line < *thinking_rows));
+            }
+            line += lines.len();
+        }
+        None
     }
 
     /// The document line index where each user message starts, at `width`
@@ -611,13 +669,14 @@ impl Transcript {
                 offsets.push(line);
             }
             let mut tmp = Vec::new();
-            render_entry(
+            let _ = render_entry(
                 entry,
                 width,
                 theme,
                 self.tools_expanded,
                 self.thinking,
                 self.codeblock_border,
+                &self.markdown_transformers,
                 &mut tmp,
             );
             line += tmp.len();

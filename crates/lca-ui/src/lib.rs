@@ -28,6 +28,12 @@ pub use chat::{Chat, PendingMessage};
 pub use chat_pickers::ModelPicker;
 pub use footer::Footer;
 pub use lca_protocol::{QueuedMessage, SubmitMode, steer_queue};
+/// The markdown pre-parse transform seam (gh #12): the pipeline's own
+/// types, re-exported so hosts collect native transforms without naming
+/// the widget path.
+pub use lca_tui::widgets::markdown::{
+    MarkdownMessageType, MarkdownTransformContext, MarkdownTransformer,
+};
 pub use run::run;
 pub use separator::{Separator, SeparatorState};
 pub use state::{

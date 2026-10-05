@@ -42,6 +42,14 @@ pub type StyleFn = Arc<dyn Fn(&str) -> String + Send + Sync>;
 /// The syntax-highlighting hook (pi's `theme.highlightCode`).
 pub type HighlightFn = Arc<dyn Fn(&str, &str) -> Option<Vec<String>> + Send + Sync>;
 
+mod options;
+mod transform;
+
+pub use options::MarkdownOptions;
+pub use transform::{
+    MarkdownMessageType, MarkdownTransformContext, MarkdownTransformer, apply_transformers,
+};
+
 fn identity(s: &str) -> String {
     s.to_string()
 }
@@ -162,47 +170,6 @@ impl std::str::FromStr for CodeBlockBorder {
     }
 }
 
-/// Options for rendering.
-#[derive(Clone)]
-pub struct MarkdownOptions {
-    /// Left/right padding.
-    pub padding_x: usize,
-    /// Blank lines above and below.
-    pub padding_y: usize,
-    /// Link rendering.
-    pub link_mode: LinkMode,
-    /// Keep the authored ordered marker (`1.` vs `1)`) instead of
-    /// renumbering the run (pi's `preserveOrderedListMarkers`).
-    pub preserve_ordered_list_markers: bool,
-    /// Keep backslash escapes as written instead of normalizing them to
-    /// the escaped character (pi's `preserveBackslashEscapes`).
-    pub preserve_backslash_escapes: bool,
-    /// Render supported math to Unicode instead of always showing the
-    /// source (pi's `renderLatex`, default true).
-    pub render_latex: bool,
-    /// The message is still streaming: pi suppresses mermaid warnings
-    /// mid-stream and shows them once the message settles.
-    pub streaming: bool,
-    /// How fenced code blocks are framed (gh #32); `full` is the
-    /// shipped look and the default.
-    pub codeblock_border: CodeBlockBorder,
-}
-
-impl Default for MarkdownOptions {
-    fn default() -> Self {
-        Self {
-            padding_x: 0,
-            padding_y: 0,
-            link_mode: LinkMode::Hyperlink,
-            preserve_ordered_list_markers: false,
-            preserve_backslash_escapes: false,
-            render_latex: true,
-            streaming: false,
-            codeblock_border: CodeBlockBorder::Full,
-        }
-    }
-}
-
 /// Render markdown to styled lines.
 pub fn render_markdown(
     text: &str,
@@ -210,8 +177,17 @@ pub fn render_markdown(
     theme: &MarkdownTheme,
     options: &MarkdownOptions,
 ) -> Vec<String> {
+    // gh #12: the registered transforms run first, over the raw source
+    // in registration order; each sees the previous one's output, and a
+    // transform that panics behaves as identity (pi's try/catch).
+    let context = MarkdownTransformContext {
+        message_type: options.message_type,
+        is_streaming: options.streaming,
+        available_width: width,
+    };
+    let transformed = apply_transformers(text, &context, &options.transformers);
     let inner_width = width.saturating_sub(options.padding_x * 2).max(1);
-    let expanded = text.replace('\t', "   ");
+    let expanded = transformed.replace('\t', "   ");
     let normalized = expanded.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = normalized.split('\n').collect();
 

@@ -35,6 +35,10 @@ lca-permissions = { path = "../lca-permissions" }
 lca-provider = { path = "../lca-provider" }
 lca-tools = { path = "../lca-tools" }
 lca-core = { path = "../lca-core" }
+# gh #12: the host collects native extensions' optional Rust-side markdown
+# transforms (no WIT surface); the crate without features is the light
+# contract half (protocol only), not the Wasmtime host bindings.
+lca-ext-abi = { path = "../lca-ext-abi" }
 lca-ext-native = { path = "../lca-ext-native" }
 lca-ui = { path = "../lca-ui" }
 openai-compatible = { path = "../../extensions/openai-compatible", optional = true }

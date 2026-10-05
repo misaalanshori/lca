@@ -225,3 +225,7 @@ mod gh16_picker_anchors_at_composer;
 // leaked to the model as text; commands dispatch as commands now.
 #[path = "mid-turn-slash-dispatches-as-command.rs"]
 mod mid_turn_slash_dispatches_as_command;
+// GitHub issue #12: the markdown pre-parse transform seam (pi's
+// registerMarkdownTransformer), no WIT growth.
+#[path = "gh12-markdown-transform-seam.rs"]
+mod gh12_markdown_transform_seam;

@@ -10,6 +10,7 @@ use lca_session::ViewMode;
 use lca_ui::{ShellEvent, ShellHandle, UiHooks};
 
 use super::Ui;
+use super::collect_markdown_transformers;
 use super::display::age_label;
 
 /// Write text to the system clipboard through a native command, returning
@@ -312,6 +313,9 @@ impl Ui {
                     }
                 }) as lca_ui::CompactPoll)
             },
+            // gh #12: the transcript's pre-parse markdown pipeline rides
+            // whatever native extensions provide, in registration order.
+            markdown_transformers: collect_markdown_transformers(&self.registry.handles()),
         }
     }
 
