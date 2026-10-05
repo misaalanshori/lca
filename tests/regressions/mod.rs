@@ -233,3 +233,7 @@ mod gh11_click_toggle_thinking;
 // registerMarkdownTransformer), no WIT growth.
 #[path = "gh12-markdown-transform-seam.rs"]
 mod gh12_markdown_transform_seam;
+// GitHub issue #23 (decision: print it): one dim key-hint line on the
+// first frame; headless never prints it.
+#[path = "gh23-startup-key-hint.rs"]
+mod gh23_startup_key_hint;

@@ -70,6 +70,19 @@ pub enum ClickOutcome {
     JumpBottom,
 }
 
+/// The startup key-hint line (gh #23): pi prints
+/// `escape interrupt · ctrl+c/ctrl+d clear/exit · / commands …` at
+/// startup; this is our wording on pi's shape. One dim line on the
+/// first frame, never a modal. Headless mode never builds a `Chat`, so
+/// it never prints this (the scripting contract).
+fn startup_hint() -> String {
+    format!(
+        "{} interrupt · {} clear/exit · / commands",
+        lca_tui::engine::keybindings::key_text("app.interrupt"),
+        lca_tui::engine::keybindings::key_text("app.clear"),
+    )
+}
+
 /// The interactive chat.
 pub struct Chat {
     /// The transcript.
@@ -203,6 +216,10 @@ impl Chat {
         // hardware cursor keeps the job it already had.
         editor.set_paint_caret(theme.colored);
         let mut transcript = Transcript::new();
+        // gh #23: one dim key-hint line on the first frame (pi's
+        // startup shape, our wording). Key names come from the default
+        // table, so the line cannot name a key that does nothing.
+        transcript.push_raw((theme.dim)(&startup_hint()));
         for line in &world.options.initial_lines {
             transcript.push_raw(line.clone());
         }
