@@ -217,3 +217,7 @@ mod gh169_compaction_summarization_budget;
 // and stays silent before that.
 #[path = "gh17-cost-shown-when-measured.rs"]
 mod gh17_cost_shown_when_measured;
+// GitHub issue #16: pickers stacked above a tall notice instead of
+// anchoring directly above the composer (pi's bottom-anchored shape).
+#[path = "gh16-picker-anchors-at-composer.rs"]
+mod gh16_picker_anchors_at_composer;

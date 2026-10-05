@@ -2,14 +2,14 @@
 //! ceiling). The modals and pickers composite over the visible viewport.
 
 use super::chat::{Chat, highlight_matches};
-use super::render::{overlay_box, overlay_box_selected, side_panel};
+use super::render::{overlay_box, overlay_box_picker, side_panel};
 use super::state::widget_lines;
 use crate::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
 
 // E3: a picker owns the keyboard while open, so a slash command typed into
 // one lands in its search box. The shared hint row says what the keys do,
 // per picker, instead of leaving that surprising. Every picker overlay is
-// composed through [`picker_overlay`], so a new picker gets the row too.
+// composed through [`Chat::picker_overlay`], so a new picker gets the row too.
 const HINT_MOVE: &str = "↑↓ move · enter apply · esc close";
 const HINT_FILTER: &str = "↑↓ move · enter apply · esc close · type to filter";
 const HINT_TREE: &str = "↑↓ move · enter show · esc close";
@@ -18,26 +18,34 @@ const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
 const HINT_SETTINGS: &str = "↑↓ move · enter/←→ change · q/esc close";
 const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
 
-/// Compose one picker overlay: the body plus its hint row (E3).
-// Geometry, title, body, hint, theme, selection: seven inputs is the
-// picker contract; a parameter struct would only rename them.
-#[allow(clippy::too_many_arguments)]
-fn picker_overlay(
-    viewport: &mut [String],
-    width: u16,
-    height: u16,
-    title: &str,
-    body: &[String],
-    hint: &str,
-    theme: &crate::theme::Theme,
-    selected: Option<usize>,
-) {
-    let mut body = body.to_vec();
-    body.push(String::new());
-    body.push(hint.to_string());
-    // The hint rows sit past the caller's body, so its index still lands
-    // on the selected row.
-    overlay_box_selected(viewport, width, height, title, &body, theme, selected);
+impl Chat {
+    /// Compose one picker overlay: the body plus its hint row (E3),
+    /// bottom-anchored above the composer (gh #16 - pi's shape), so a
+    /// tall notice is overlaid, never stacked under.
+    // Geometry, title, body, hint, theme, selection: seven inputs is the
+    // picker contract; a parameter struct would only rename them.
+    #[allow(clippy::too_many_arguments)]
+    fn picker_overlay(
+        &self,
+        viewport: &mut [String],
+        width: u16,
+        height: u16,
+        title: &str,
+        body: &[String],
+        hint: &str,
+        theme: &crate::theme::Theme,
+        selected: Option<usize>,
+    ) {
+        let mut body = body.to_vec();
+        body.push(String::new());
+        body.push(hint.to_string());
+        // The hint rows sit past the caller's body, so its index still lands
+        // on the selected row.
+        let above = self.composer_height(width);
+        overlay_box_picker(
+            viewport, width, height, title, &body, theme, selected, above,
+        );
+    }
 }
 
 impl Chat {
@@ -98,7 +106,7 @@ impl Chat {
                 let cur = if index == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {label}"));
             }
-            picker_overlay(
+            self.picker_overlay(
                 viewport,
                 width,
                 height,
@@ -123,7 +131,7 @@ impl Chat {
                     entry.title, entry.messages, entry.age
                 ));
             }
-            picker_overlay(
+            self.picker_overlay(
                 viewport,
                 width,
                 height,
@@ -157,7 +165,7 @@ impl Chat {
                     selected_row = Some(body.len() - 1);
                 }
             }
-            picker_overlay(
+            self.picker_overlay(
                 viewport,
                 width,
                 height,
@@ -180,7 +188,7 @@ impl Chat {
                 };
                 body.push(format!(" {cur} {name}{current}"));
             }
-            picker_overlay(
+            self.picker_overlay(
                 viewport,
                 width,
                 height,
@@ -203,7 +211,7 @@ impl Chat {
                 let cur = if index == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {label}"));
             }
-            picker_overlay(
+            self.picker_overlay(
                 viewport,
                 width,
                 height,
@@ -231,7 +239,7 @@ impl Chat {
                 };
                 body.push(format!(" {mark} {name:<8} {description}{current_mark}"));
             }
-            picker_overlay(
+            self.picker_overlay(
                 viewport,
                 width,
                 height,
@@ -253,7 +261,7 @@ impl Chat {
                     row.key, row.value, row.source
                 ));
             }
-            picker_overlay(
+            self.picker_overlay(
                 viewport,
                 width,
                 height,
@@ -293,7 +301,7 @@ impl Chat {
                     picker.matches.len()
                 ));
             }
-            picker_overlay(
+            self.picker_overlay(
                 viewport,
                 width,
                 height,
@@ -335,7 +343,7 @@ impl Chat {
             if start > 0 || end < total {
                 body.push(format!("   [{}/{}]", picker.selected + 1, total));
             }
-            picker_overlay(
+            self.picker_overlay(
                 viewport,
                 width,
                 height,

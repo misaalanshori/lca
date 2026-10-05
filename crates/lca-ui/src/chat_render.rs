@@ -109,8 +109,16 @@ impl Chat {
             }
         }
 
-        // The pending-messages band (ADR-0038).
+        // The pending-messages band (ADR-0038): queued commands show as
+        // commands, never as messages (composer-polish fold-in).
         for pending in &self.pending {
+            if pending.is_command {
+                dock.push((self.theme.dim)(&format!(
+                    "  ⏳ [command] {}",
+                    pending.text
+                )));
+                continue;
+            }
             let mark = match pending.mode {
                 lca_protocol::SubmitMode::Steer => "steer",
                 lca_protocol::SubmitMode::FollowUp => "next",
@@ -157,6 +165,15 @@ impl Chat {
     /// dock under it.
     pub(super) fn transcript_len(&self, width: u16) -> usize {
         self.transcript.render(width, &self.theme).len()
+    }
+
+    /// Rows the picker keeps clear at the viewport bottom (gh #16): the
+    /// editor plus the footer - the composer the picker anchors above,
+    /// overlaying the notice area when present.
+    pub(super) fn composer_height(&self, width: u16) -> usize {
+        let editor = self.editor.render(width.saturating_sub(2)).len().max(1);
+        let footer = self.footer_lines(width).len().max(1);
+        editor + footer
     }
 
     /// The transcript window's height for this frame (gh #35): the

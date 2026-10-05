@@ -43,9 +43,6 @@ pub fn overlay_box_selected(
     theme: &Theme,
     selected: Option<usize>,
 ) {
-    let content_height = u16::try_from(body.len())
-        .unwrap_or(u16::MAX)
-        .saturating_add(2);
     let options = lca_tui::engine::core::OverlayOptions {
         width: Some(lca_tui::engine::core::SizeValue::Percent(80)),
         min_width: Some(24),
@@ -53,7 +50,55 @@ pub fn overlay_box_selected(
         margin: 2,
         ..Default::default()
     };
-    let rect = resolve_overlay_layout(&options, width, height, content_height);
+    overlay_box_placed(base, width, height, title, body, theme, selected, &options);
+}
+
+/// [`overlay_box_selected`] anchored above the composer (gh #16): the
+/// box's bottom sits `above_rows` rows above the viewport bottom - pi's
+/// bottom-anchored picker shape - so a tall notice is overlaid, never
+/// stacked under.
+// The eight inputs are the picker's contract plus its anchor offset; a
+// parameter struct would only rename them.
+#[allow(clippy::too_many_arguments)]
+pub fn overlay_box_picker(
+    base: &mut [String],
+    width: u16,
+    height: u16,
+    title: &str,
+    body: &[String],
+    theme: &Theme,
+    selected: Option<usize>,
+    above_rows: usize,
+) {
+    let options = lca_tui::engine::core::OverlayOptions {
+        width: Some(lca_tui::engine::core::SizeValue::Percent(80)),
+        min_width: Some(24),
+        max_height: Some(lca_tui::engine::core::SizeValue::Abs(height)),
+        margin: 2,
+        anchor: Some(lca_tui::engine::core::Anchor::BottomCenter),
+        offset_y: -(i32::try_from(above_rows).unwrap_or(i32::MAX)),
+        ..Default::default()
+    };
+    overlay_box_placed(base, width, height, title, body, theme, selected, &options);
+}
+
+/// The shared box painter behind [`overlay_box_selected`] and
+/// [`overlay_box_picker`]: one layout rule per caller, one painter.
+#[allow(clippy::too_many_arguments)]
+fn overlay_box_placed(
+    base: &mut [String],
+    width: u16,
+    height: u16,
+    title: &str,
+    body: &[String],
+    theme: &Theme,
+    selected: Option<usize>,
+    options: &lca_tui::engine::core::OverlayOptions,
+) {
+    let content_height = u16::try_from(body.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let rect = resolve_overlay_layout(options, width, height, content_height);
     let w = rect.width as usize;
     let inner = w.saturating_sub(4);
 
