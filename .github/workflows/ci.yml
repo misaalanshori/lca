@@ -145,6 +145,13 @@ jobs:
           rustup component add clippy
           cargo clippy --workspace --all-targets --all-features -- -D warnings
           RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+      - name: Install tmux (macOS real-terminal suite)
+        # #104: the macOS leg installs tmux so the real-terminal suite
+        # actually runs there; without it the leg would pass while
+        # exercising none of the terminal contract.
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: command -v tmux >/dev/null || brew install tmux
       - name: Build the test binaries (its own phase)
         shell: bash
         run: |
@@ -166,6 +173,10 @@ jobs:
           else
             WRAP=()
           fi
+          # #104: a missing tmux is a named failure on CI, never a
+          # silent skip (local runs leave the var unset and keep the
+          # soft skip).
+          export LCA_REQUIRE_TMUX=1
           "${WRAP[@]}" cargo nextest run ${{ matrix.packages }} --no-fail-fast \
             --test-threads=2 --failure-output immediate \
             -E 'not test(/nfr|instantiation|hook|epoch/)' \
@@ -179,6 +190,16 @@ jobs:
             ps -eo pid,ppid,cmd | grep -E 'pty|/bin/sh|bin/sleep|nextest' | grep -v grep | head -40 || true
           fi
           exit $status
+      - name: Assert the real-terminal suite ran (macOS)
+        # #104: the receipt — a leg that silently skips the terminal
+        # contract is the bug. Counts executed real-terminal rows in
+        # the group log; zero is a failure even when nextest is green.
+        if: matrix.os == 'macos-latest' && matrix.group == 'shell'
+        shell: bash
+        run: |
+          count=$(grep -cE "PASS.*e2e_terminal" "nextest-${{ matrix.group }}.log" || true)
+          echo "macOS real-terminal rows executed: $count"
+          [ "$count" -ge 1 ]
       - name: Keep this group's log
         if: always()
         uses: actions/upload-artifact@v4

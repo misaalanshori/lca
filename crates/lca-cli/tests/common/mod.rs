@@ -420,13 +420,21 @@ impl Sandbox {
 // remove (FR-DIST-1/2/5/9).
 #[cfg(unix)]
 pub fn tmux_available() -> bool {
-    Command::new("tmux")
+    let present = Command::new("tmux")
         .arg("-V")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .map(|status| status.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+    // #104: CI sets `LCA_REQUIRE_TMUX`, which turns a silent skip into
+    // a named failure — a leg that exercises none of the terminal
+    // contract must go red, never green-by-absence. Local runs leave
+    // it unset and keep the soft skip.
+    if !present && std::env::var("LCA_REQUIRE_TMUX").is_ok() {
+        panic!("LCA_REQUIRE_TMUX is set but tmux is not installed");
+    }
+    present
 }
 
 #[cfg(unix)]
