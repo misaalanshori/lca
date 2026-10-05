@@ -157,11 +157,13 @@ missing_docs = "warn"
 # S3: production paths stay panic-free workspace-wide (clippy.toml scopes the
 # allowlist away from tests). A deliberate panic site carries
 # `#[allow(clippy::expect_used)]` (or the specific lint) with a one-line
-# justification; the allowlist is the audit trail.
+# justification; the allowlist is the audit trail. These are `deny`, not
+# `warn` (#107): a bare local `cargo clippy` binds them, not just CI's
+# `-D warnings`.
 [workspace.lints.clippy]
-unwrap_used = "warn"
-expect_used = "warn"
-panic = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
 
 [profile.release]
 opt-level = 3
