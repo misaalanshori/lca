@@ -291,7 +291,7 @@ impl ToolExecutor {
             ),
             spec(
                 "edit",
-                "Make precise file edits with exact text replacement. Every edits[].oldText must be unique in the original file and must not overlap another edit. Each edit matches the original file, not the result of earlier edits.",
+                "Make precise file edits with exact text replacement. Every edits[].oldText must be unique in the original file and must not overlap another edit. Each edit matches the original file, not the result of earlier edits. Files that are not valid UTF-8 are refused, never rewritten.",
                 serde_json::json!({
                     "path": {"type": "string"},
                     "edits": {
@@ -597,7 +597,21 @@ impl ToolExecutor {
                 ),
             );
         }
-        let original = String::from_utf8_lossy(&original).into_owned();
+        // #116: strict decode at the entry. Lossy decoding here would
+        // write U+FFFD over bytes outside the edited region — silent
+        // corruption of Latin-1/Shift-JIS files. Refuse instead; the
+        // file's bytes stay exactly as they were.
+        let original = match String::from_utf8(original) {
+            Ok(text) => text,
+            Err(_) => {
+                return ToolResult::error(
+                    call.call_id.clone(),
+                    format!(
+                        "cannot edit {path}: the file is not valid UTF-8; editing it would corrupt the undecodable bytes, so the file was left unchanged"
+                    ),
+                );
+            }
+        };
 
         // Match every edit against the ORIGINAL, require uniqueness, reject
         // overlap: the contract stated in the tool description.

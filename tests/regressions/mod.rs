@@ -260,3 +260,6 @@ mod gh152_tracing_subscriber;
 // semantics (resize per profile, no-vision note, unknown unchanged).
 #[path = "gh39-read-truncation-images.rs"]
 mod gh39_read_truncation_images;
+// GitHub #116: `edit` refuses non-UTF-8 files instead of corrupting them.
+#[path = "gh116-edit-refuses-non-utf8.rs"]
+mod gh116_edit_refuses_non_utf8;
