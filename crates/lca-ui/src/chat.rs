@@ -56,6 +56,20 @@ fn is_turn_boundary_command(line: &str) -> bool {
     matches!(name, "compact")
 }
 
+/// What a viewport click did (gh #11): clicking a reasoning-run row
+/// toggles that run, like Ctrl+T; the jump indicator's row asks for the
+/// live bottom. Alt-screen only - the main screen never captures the
+/// mouse (gh35/gh33 contract), so it refuses every click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickOutcome {
+    /// No clickable region under the cursor.
+    Ignored,
+    /// A reasoning run toggled its visibility.
+    ThinkingToggled,
+    /// The jump-to-bottom indicator was hit: return to the live bottom.
+    JumpBottom,
+}
+
 /// The interactive chat.
 pub struct Chat {
     /// The transcript.

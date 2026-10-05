@@ -40,6 +40,8 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Harness.** The shared test infrastructure in `lca-testkit`, including the fake provider and the sandboxed test environment, that integration and end-to-end tests are written against. See `docs/testing-plan.md`.
 
+**Hit-test map.** The transcript's record of which rendered rows belong to a collapsible reasoning run, so a mouse click in the alt-screen renderer toggles the run it lands on (pi's `MouseRegion`, gh #11). Alt-screen only: the main screen never captures the mouse, so there is nothing to hit-test there.
+
 **Hook.** A registered callback at a defined point in the agent loop: before a turn, before a tool call, after a tool call, after a turn, when attention is required, or when a session closes. Only the pre-tool hook can alter behavior, returning allow, deny, or replace; every other hook point observes. Not the mechanism `context-transform` uses, even though both run on every turn in similar places in the loop; see ADR-0015 for why they're kept separate.
 
 **Host.** The `lca` process itself, from the perspective of an extension running inside it: the thing that instantiates a component, builds its import table, and implements every host import the extension calls. Not "host operating system," though the two senses are related; where ambiguity is possible, "host process" or "host OS" is used instead.

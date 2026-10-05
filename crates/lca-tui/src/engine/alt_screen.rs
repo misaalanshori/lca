@@ -101,6 +101,10 @@ pub struct AltScreenRenderer {
     drag_edge: Option<i8>,
     /// The cell a press landed on, for click-vs-drag (R6's link open).
     press_cell: Option<(u16, u16)>,
+    /// The cell a completed single click landed on (gh #11's thinking
+    /// toggle): press and release on the same cell with no movement and
+    /// no multi-click. The loop takes it and hit-tests the transcript.
+    clicked_cell: Option<(u16, u16)>,
     /// The OSC-8 URL a completed click landed on, for the loop to open.
     clicked_link: Option<String>,
 }
@@ -127,6 +131,7 @@ impl AltScreenRenderer {
             click_count: 0,
             drag_edge: None,
             press_cell: None,
+            clicked_cell: None,
             clicked_link: None,
         }
     }
@@ -323,6 +328,12 @@ impl AltScreenRenderer {
                 let line = self.previous.get(row as usize).cloned().unwrap_or_default();
                 self.clicked_link =
                     crate::engine::text::get_osc8_link_at_column(&line, col as usize);
+                // gh #11: a single left-click also completes a click cell
+                // for the transcript hit map. Multi-clicks belong to word
+                // and line selection, not to toggling.
+                if button == 0 && self.click_count <= 1 {
+                    self.clicked_cell = Some((col, row));
+                }
             }
             self.press_cell = None;
             self.selection.end();
@@ -334,6 +345,13 @@ impl AltScreenRenderer {
     /// Take the OSC-8 URL a completed click landed on, if any (R6).
     pub fn take_clicked_link(&mut self) -> Option<String> {
         self.clicked_link.take()
+    }
+
+    /// Take the cell a completed single click landed on, if any (gh
+    /// #11). The loop hit-tests it against the transcript; a toggle
+    /// consumes it, anything else falls through to selection as before.
+    pub fn take_clicked_cell(&mut self) -> Option<(u16, u16)> {
+        self.clicked_cell.take()
     }
 
     /// Advance an edge drag by one line (R6): scroll and extend the

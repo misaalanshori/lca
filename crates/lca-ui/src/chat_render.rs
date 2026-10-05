@@ -10,7 +10,7 @@
 
 use lca_tui::engine::text::{slice_by_column, truncate_to_width, visible_width};
 
-use super::chat::Chat;
+use super::chat::{Chat, ClickOutcome};
 use crate::theme::Role;
 use crate::widget_lines;
 
@@ -158,6 +158,57 @@ impl Chat {
         let (mut out, dock) = self.sections(width);
         out.extend(dock);
         out
+    }
+
+    /// Handle a click at viewport cell `(col, row)` (gh #11): the
+    /// viewport row maps to a transcript content row through the same
+    /// window math [`Self::viewport`] slices by. A reasoning-run row
+    /// toggles that run (FR-UI-22's per-run rule, by entry index rather
+    /// than newest); the jump indicator's row asks for the live bottom.
+    /// The scrollbar adornment is not content and never toggles.
+    pub fn click_at(
+        &mut self,
+        col: u16,
+        row: u16,
+        scroll: u16,
+        width: u16,
+        height: u16,
+    ) -> ClickOutcome {
+        if !self.screen_mode {
+            return ClickOutcome::Ignored;
+        }
+        let (transcript, dock) = self.sections(width);
+        let window = height.saturating_sub(dock.len() as u16) as usize;
+        if window == 0 || row as usize >= window {
+            return ClickOutcome::Ignored;
+        }
+        let content = transcript.len();
+        let from_bottom = (scroll as usize).min(content.saturating_sub(window));
+        // The bonus half of gh #11 on the same map: the jump indicator
+        // sits on the window's last row while scrolled away from live.
+        if from_bottom > 0 && row as usize + 1 == window {
+            return ClickOutcome::JumpBottom;
+        }
+        // The scrollbar adornment is not content.
+        if self
+            .scrollbar_for_frame(width, height, scroll)
+            .is_some_and(|geometry| col == geometry.column)
+        {
+            return ClickOutcome::Ignored;
+        }
+        let end = content.saturating_sub(from_bottom);
+        let start = end.saturating_sub(window);
+        let Some((index, thinking)) =
+            self.transcript
+                .entry_at_row(width, &self.theme, start + row as usize)
+        else {
+            return ClickOutcome::Ignored;
+        };
+        if thinking && self.transcript.toggle_entry_thinking(index) {
+            ClickOutcome::ThinkingToggled
+        } else {
+            ClickOutcome::Ignored
+        }
     }
 
     /// The transcript's line count at this width (gh #35): scroll and

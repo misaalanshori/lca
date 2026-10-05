@@ -18,7 +18,7 @@ use lca_tui::engine::main_screen::MainScreenRenderer;
 use lca_tui::engine::terminal::{InputHandler, ProcessTerminal, ResizeHandler, Terminal};
 
 use crate::ModelPicker;
-use crate::chat::Chat;
+use crate::chat::{Chat, ClickOutcome};
 use crate::state::{Action, PermissionModal, PromptRequest, TurnChannels, TurnRunner, UiOptions};
 
 /// The active screen renderer.
@@ -100,6 +100,15 @@ impl Screen {
     fn take_clicked_link(&mut self) -> Option<String> {
         match self {
             Screen::Alt(r) => r.take_clicked_link(),
+            Screen::Main(_) => None,
+        }
+    }
+
+    /// The cell a completed single click landed on, if any (gh #11).
+    /// Alt-screen only: the main screen never captures the mouse.
+    fn take_clicked_cell(&mut self) -> Option<(u16, u16)> {
+        match self {
+            Screen::Alt(r) => r.take_clicked_cell(),
             Screen::Main(_) => None,
         }
     }
@@ -205,6 +214,20 @@ fn handle_input(
     // Mouse (selection, wheel) is the renderer's.
     if data.starts_with("\x1b[<") {
         screen.handle_mouse(data);
+        // gh #11: a completed single click hit-tests the transcript
+        // before selection claims it. A toggled run drops the row's link
+        // with it (the click chose the run, not the link); anything
+        // else falls through to the link and copy paths below.
+        if let Some((col, row)) = screen.take_clicked_cell() {
+            let (width, height) = chat.world.size;
+            match chat.click_at(col, row, screen.scroll(), width, height) {
+                ClickOutcome::ThinkingToggled => {
+                    let _ = screen.take_clicked_link();
+                }
+                ClickOutcome::JumpBottom => screen.set_scroll(0),
+                ClickOutcome::Ignored => {}
+            }
+        }
         // A click on an OSC-8 link opens it (R6).
         if let Some(url) = screen.take_clicked_link() {
             let outcome = chat
@@ -957,5 +980,108 @@ mod tests {
         assert_eq!(rx.try_recv().ok(), Some(lca_permissions::Decision::Once));
         // Nothing open: nothing to do.
         assert!(!tick_permission(&mut chat));
+    }
+
+    // Verifies: gh #11 - a click's bytes travel the loop's input path:
+    // SGR press+release through the alt-screen renderer hit-tests the
+    // transcript and toggles the reasoning run, end to end (the same
+    // bytes in main-screen mode stay with the terminal: no toggle).
+    #[test]
+    fn a_click_on_a_reasoning_row_toggles_the_run_through_the_loop() {
+        use lca_tui::engine::text::strip_terminal_sequences;
+        let strip = |lines: &[String]| -> Vec<String> {
+            lines.iter().map(|l| strip_terminal_sequences(l)).collect()
+        };
+        let mut term = FakeTerminal::new(80, 24);
+        let mut screen = Screen::Main(MainScreenRenderer::new());
+        switch_screen(&mut screen, true, &mut term);
+        let mut chat = chat();
+        chat.screen_mode = true;
+        chat.world.resize(80, 24);
+        chat.transcript.push_user("quux question");
+        chat.on_turn_event(lca_protocol::TurnEvent::ReasoningDelta(
+            "alpha\nbeta\ngamma\ndelta\nepsilon".into(),
+        ));
+        chat.on_turn_event(lca_protocol::TurnEvent::TextDelta("the answer".into()));
+        chat.on_turn_event(lca_protocol::TurnEvent::TurnEnded {
+            status: lca_protocol::TurnStatus::Ok,
+            stop_reason: lca_protocol::StopReason::Stop,
+        });
+        let frame = strip(&chat.viewport(80, 24, 0));
+        assert!(!frame.iter().any(|l| l.contains("delta")));
+        let row = frame
+            .iter()
+            .position(|l| l.contains("alpha"))
+            .expect("a visible reasoning row") as u16;
+        let (input_tx, _input_rx) = std::sync::mpsc::channel();
+        let (resize_tx, _resize_rx) = std::sync::mpsc::channel();
+        let press = format!("\x1b[<0;5;{}M", row + 1);
+        let release = format!("\x1b[<0;5;{}m", row + 1);
+        // Direct calls (no closure): each call's borrows end on return,
+        // so the frame reads between them compile.
+        let outcome = handle_input(
+            &press,
+            &mut chat,
+            &mut screen,
+            &mut term,
+            &input_tx,
+            &resize_tx,
+            &None,
+            &mut false,
+        );
+        assert!(matches!(outcome, InputResult::Continue));
+        let outcome = handle_input(
+            &release,
+            &mut chat,
+            &mut screen,
+            &mut term,
+            &input_tx,
+            &resize_tx,
+            &None,
+            &mut false,
+        );
+        assert!(matches!(outcome, InputResult::Continue));
+        let frame = strip(&chat.viewport(80, 24, 0));
+        assert!(
+            frame.iter().any(|l| l.contains("delta")),
+            "the click toggled the run through the loop:\n{}",
+            frame.join("\n")
+        );
+
+        // Main-screen: the same bytes never reach the transcript.
+        chat.screen_mode = false;
+        switch_screen(&mut screen, false, &mut term);
+        // Collapse the run again first (Ctrl+T), so a toggle would show.
+        chat.transcript.toggle_thinking_expanded();
+        let frame = strip(&chat.viewport(80, 24, 0));
+        assert!(!frame.iter().any(|l| l.contains("delta")));
+        let outcome = handle_input(
+            &press,
+            &mut chat,
+            &mut screen,
+            &mut term,
+            &input_tx,
+            &resize_tx,
+            &None,
+            &mut false,
+        );
+        assert!(matches!(outcome, InputResult::Continue));
+        let outcome = handle_input(
+            &release,
+            &mut chat,
+            &mut screen,
+            &mut term,
+            &input_tx,
+            &resize_tx,
+            &None,
+            &mut false,
+        );
+        assert!(matches!(outcome, InputResult::Continue));
+        let frame = strip(&chat.viewport(80, 24, 0));
+        assert!(
+            !frame.iter().any(|l| l.contains("delta")),
+            "main-screen clicks stay with the terminal:\n{}",
+            frame.join("\n")
+        );
     }
 }
