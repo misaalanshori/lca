@@ -4,7 +4,9 @@
 //!
 //! Owner issue #9: the footer shows the working directory, `~`-shortened,
 //! with the git branch. Below it, the session stats (tokens, cache, cost)
-//! and the active model with its context use.
+//! and the active model with its context use. Cost policy (issue #17): the
+//! cost segment appears once usage has been measured (a measured $0.0000
+//! is a free model, informative); before that it stays hidden as noise.
 
 use std::path::Path;
 
@@ -166,7 +168,11 @@ impl Footer {
             stats.push_str(&muted(" • "));
             stats.push_str(&muted(&format!("{rate} tok/s")));
         }
-        if u.cost > 0.0 {
+        // gh #17: the cost segment appears once usage has been measured -
+        // a measured `$0.0000` (a free model) is informative; silence
+        // before any usage is noise and stays.
+        let measured = u.input + u.output + u.cache_read + u.cache_write + u.cache_write_1h > 0;
+        if u.cost > 0.0 || measured {
             stats.push_str(&muted(&format!(" • ${:.4}", u.cost)));
         }
         // The right-hand segments (model, thinking, context) build over a
@@ -341,7 +347,8 @@ mod tests {
     // "graceful degradation") with NFR-26's 80 columns - the stats line
     // drops the provider prefix before it truncates, so the model and the
     // context share still reach the eye on a narrow pane, and a wide pane
-    // keeps the full label.
+    // keeps the full label. gh #17: the measured cost rides the protected
+    // stats half, so it survives narrowing that truncates the tail.
     #[test]
     fn the_stats_line_drops_the_provider_prefix_before_truncating() {
         let footer = Footer {
@@ -362,11 +369,14 @@ mod tests {
         let at80 = strip(&footer.render(80, &Theme::plain()));
         let stats80 = at80[1].clone();
         assert!(stats80.contains("mimo-v2.6-flash"), "{stats80}");
-        assert!(stats80.contains("ctx 6%"), "{stats80}");
         assert!(stats80.contains("142 tok/s"), "{stats80}");
         assert!(
             !stats80.contains("openai-compatible/"),
             "the prefix is what goes first: {stats80}"
+        );
+        assert!(
+            stats80.contains("$0.0000"),
+            "the measured cost is stats, not tail, so narrowing keeps it: {stats80}"
         );
 
         let at140 = strip(&footer.render(140, &Theme::plain()));
@@ -375,6 +385,7 @@ mod tests {
             "a wide pane keeps the full label: {}",
             at140[1]
         );
+        assert!(at140[1].contains("ctx 6%"), "{}", at140[1]);
     }
 
     // Verifies: FR-UI-20 (E4) - an unknown context window reads `ctx ?`,

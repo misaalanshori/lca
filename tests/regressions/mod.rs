@@ -212,3 +212,8 @@ mod gh30_settings_selector;
 // failed answer degraded in silence.
 #[path = "gh169-compaction-summarization-budget.rs"]
 mod gh169_compaction_summarization_budget;
+// GitHub issue #17: pi shows `$0.000` unconditionally; the footer shows
+// the cost once usage has been measured (a measured zero is informative)
+// and stays silent before that.
+#[path = "gh17-cost-shown-when-measured.rs"]
+mod gh17_cost_shown_when_measured;
