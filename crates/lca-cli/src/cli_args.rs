@@ -51,6 +51,11 @@ pub struct Cli {
     /// Print one JSON object per line, for scripts.
     #[arg(long)]
     pub json: bool,
+    // #152: pi's `--verbose` debug shape. Diagnostics always land in
+    // `~/.lca/logs/lca.log`; this flag also routes them to stderr.
+    /// Print diagnostic logs to stderr as well as the log file.
+    #[arg(long)]
+    pub verbose: bool,
     // ADR-0029: attach an image to the one-shot turn.
     /// Attach an image file to the turn (repeat for several).
     #[arg(long = "attach", value_name = "PATH")]

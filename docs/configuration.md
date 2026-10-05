@@ -16,6 +16,17 @@ Environment variables use the `LCA_` prefix with the key uppercased and dots rep
 
 `LCA_HYPERLINKS` is the one host variable outside that scheme: `1` forces OSC 8 terminal hyperlinks on, `0` forces the `text (url)` fallback, and unset leaves it to the capability ladder (the tmux client's own features, `screen` off, known-capable terminals on, unknown off), which is pi's `PI_HYPERLINKS` shape.
 
+## Diagnostics
+
+Internal warnings and errors (`tracing` events from the agent loop,
+the permission store, and the extension host) are written to
+`~/.lca/logs/lca.log` (#152 — before that change they evaporated).
+The log is bounded by startup rotation: an `lca.log` over 1 MiB moves
+to a single `lca.log.1` spare. `--verbose` also routes the same events
+to stderr. The level follows the `tracing-subscriber` `EnvFilter`
+convention: `LCA_LOG`, then `RUST_LOG`, then `warn` by default
+(`debug` under `--verbose`).
+
 ## Keys
 
 | Key | Type | Default | Notes |

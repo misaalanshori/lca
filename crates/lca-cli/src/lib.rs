@@ -88,6 +88,8 @@ mod cli_args;
 pub use cli_args::{Cli, CliFlags, Command, SessionCmd};
 
 /// `lca ext ...`: resolve, consent, store (FR-DIST-*).
+pub mod diagnostics;
+pub use diagnostics::{init_diagnostics, init_diagnostics_with_dir, rotate_log_if_oversized};
 pub mod ext;
 mod headless;
 mod models;

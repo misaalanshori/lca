@@ -52,6 +52,7 @@ lca-ui = { path = "crates/lca-ui" }
 openai-compatible = { path = "extensions/openai-compatible" }
 serde_json.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 
 [[test]]
 name = "regressions"

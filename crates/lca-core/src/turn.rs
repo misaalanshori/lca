@@ -732,6 +732,11 @@ impl Agent<'_> {
         ) {
             Ok(outcome) => outcome,
             Err(err) => {
+                // #152: a grant-store write failure warns instead of
+                // evaporating; the `~/.lca/logs/lca.log` line is what a
+                // later reader has when the turn itself only says it
+                // failed.
+                tracing::warn!(%err, "permission store error; failing the turn");
                 return Err(self.fail(StopReason::Error, format!("permission store error: {err}")));
             }
         };

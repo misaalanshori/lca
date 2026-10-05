@@ -10,6 +10,11 @@ fn main() {
     // instead of panicking on the next `println!`.
     lca_cli::sigpipe::restore_default();
     let cli = lca_cli::Cli::parse();
+    // #152: before anything that can warn, so no diagnostic evaporates.
+    // A diagnostics failure is reported, never fatal.
+    if let Err(err) = lca_cli::init_diagnostics(cli.verbose) {
+        eprintln!("warning: diagnostics disabled: {err}");
+    }
     let code = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

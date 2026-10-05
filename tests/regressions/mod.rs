@@ -252,3 +252,7 @@ mod gh109_cli_invocation;
 // GitHub #111: headless honors `--model`, `-c`, `-r`.
 #[path = "gh111-headless-threading.rs"]
 mod gh111_headless_threading;
+// GitHub #152: the tracing subscriber installs, rotates bounded, and
+// records grant-store failures.
+#[path = "gh152-tracing-subscriber.rs"]
+mod gh152_tracing_subscriber;

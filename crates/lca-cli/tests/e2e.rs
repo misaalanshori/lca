@@ -371,3 +371,46 @@ fn version_prints_all_four_facts() {
 // `cargo build -p <crate> --target wasm32-wasip2 --release` and copied
 // into place (same convention as conformance's).
 // ---------------------------------------------------------------------------
+
+// Verifies: #152 (a grant-store write failure warns into the log file in
+// every run, and stderr only under `--verbose`). `--yolo` auto-approves
+// the shell call, so the `always` persist hits the read-only store.
+#[test]
+fn verbose_routes_store_warnings_to_stderr() {
+    for verbose in [false, true] {
+        let runtime = rt();
+        let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_tool_call(
+            "shell",
+            r#"{"command":"echo hi"}"#,
+        ))]));
+        let box_ = sandbox(&format!("verbose-{verbose}"));
+        // Untrusted: folder trust would auto-approve the workspace shell
+        // call with no store write to fail. The sabotage is a directory
+        // at the atomic-save temp path, so opens and session writes work
+        // while every grant persist fails.
+        box_.approve_loopback_net(serde_json::json!({"trusted": false}));
+        std::fs::create_dir(box_.state_dir().join("grants.json.tmp")).expect("sabotage");
+        let mut args = vec!["--yolo", "-p", "run it"];
+        if verbose {
+            args.push("--verbose");
+        }
+        let output = box_.run(Some(&mock), &args);
+        let err = stderr(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "the turn fails loudly (verbose={verbose}): {err}"
+        );
+        let log = std::fs::read_to_string(box_.state_dir().join("logs/lca.log"))
+            .expect("the file log exists in both modes");
+        assert!(
+            log.contains("permission store"),
+            "the file log records the warning (verbose={verbose}): {err}"
+        );
+        assert_eq!(
+            err.contains("permission store"),
+            verbose,
+            "--verbose routes the warning to stderr, quiet stays quiet (verbose={verbose}): {err}"
+        );
+    }
+}
