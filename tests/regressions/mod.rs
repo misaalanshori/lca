@@ -237,3 +237,7 @@ mod gh12_markdown_transform_seam;
 // first frame; headless never prints it.
 #[path = "gh23-startup-key-hint.rs"]
 mod gh23_startup_key_hint;
+// GitHub issue #14: the SDK host-facing approval surface
+// (`Session::with_permission_prompt`; default declines and records).
+#[path = "gh14-sdk-permission-prompt.rs"]
+mod gh14_sdk_permission_prompt;

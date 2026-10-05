@@ -37,7 +37,16 @@ const EVENT_CAPACITY: usize = 256;
 const TOOL_RESULT_LIMIT: usize = 65_536;
 const TOOL_TIMEOUT_SECS: u64 = 120;
 
+/// The host's approval callback (gh #14): the action verbatim as the
+/// TUI modal would show it in, the host's verdict out - once, always,
+/// or deny, the same vocabulary the grant store persists.
+pub type PermissionCallback = Arc<dyn Fn(String) -> Decision + Send + Sync>;
+
 /// One embedding session: handle, stream, and input in one value.
+///
+/// Without [`Session::with_permission_prompt`], an action that would
+/// need a human's approval is declined and recorded (deny-by-default,
+/// NFR-13) - the headless rule, `docs/headless.md`.
 pub struct Session {
     /// The project the session belongs to (the tools' workspace).
     cwd: PathBuf,
@@ -52,6 +61,9 @@ pub struct Session {
     /// Standing grants, shared with every capability engine; the store is
     /// locked per authorize call, never for a whole turn.
     grants: Arc<std::sync::Mutex<GrantStore>>,
+    /// The host's approval callback, when one is registered
+    /// ([`Session::with_permission_prompt`]).
+    approval: Option<PermissionCallback>,
     /// Serializes turns: one session, one conversation, in order.
     turn: tokio::sync::Mutex<()>,
     /// The event stream's fan-out point.
@@ -66,9 +78,29 @@ pub enum Error {
     Start(String),
 }
 
-/// The prompt policy until a host-facing approval surface exists:
-/// deny what would ask a human, exactly like headless mode.
+/// The prompt policy when no host callback is registered: deny what
+/// would ask a human, exactly like headless mode (deny-by-default).
 struct DenyAll;
+
+/// The host's approval callback as a [`PermissionPrompt`] (gh #14):
+/// the action's display text - verbatim what the TUI modal would show -
+/// goes in, the host's verdict comes out, and the grant store and the
+/// session log treat the answer exactly like a human's (an `always`
+/// persists its pattern; a prompted answer writes its `permission`
+/// record either way).
+struct CallbackPrompt {
+    callback: PermissionCallback,
+}
+
+impl PermissionPrompt for CallbackPrompt {
+    fn ask(&mut self, action: &lca_permissions::Action) -> Decision {
+        (self.callback)(action.display())
+    }
+
+    fn review_proposals(&mut self, _diff: &lca_permissions::ProposalDiff) -> bool {
+        false
+    }
+}
 
 impl PermissionPrompt for DenyAll {
     fn ask(&mut self, _action: &lca_permissions::Action) -> Decision {
@@ -126,9 +158,33 @@ impl Session {
             provider,
             model,
             grants: Arc::new(std::sync::Mutex::new(grants)),
+            approval: None,
             turn: tokio::sync::Mutex::new(()),
             events,
         })
+    }
+
+    /// Register the host's approval callback (gh #14): wherever the
+    /// interactive UI would open the permission modal, the host's
+    /// `authorize` path calls this instead - the action verbatim as the
+    /// modal would show it in, once/always/deny out, persisted and
+    /// recorded exactly like a human's answer.
+    ///
+    /// # Default
+    ///
+    /// With no callback registered, an action that would need approval
+    /// is declined and the denial is recorded (deny-by-default is
+    /// load-bearing product law, NFR-13) - the headless rule. Registering
+    /// a callback replaces the decline, never the record.
+    ///
+    /// Yolo-mode equivalence is out of scope: yolo is an agent-level
+    /// mode, not an SDK switch.
+    pub fn with_permission_prompt(
+        mut self,
+        callback: impl Fn(String) -> Decision + Send + Sync + 'static,
+    ) -> Self {
+        self.approval = Some(Arc::new(callback));
+        self
     }
 
     /// The session identifier (its handle: resume tools take it).
@@ -155,7 +211,15 @@ impl Session {
             TOOL_RESULT_LIMIT,
             Duration::from_secs(TOOL_TIMEOUT_SECS),
         );
-        let mut prompt = DenyAll;
+        let mut deny_all = DenyAll;
+        let mut callback = self
+            .approval
+            .clone()
+            .map(|callback| CallbackPrompt { callback });
+        let prompt: &mut dyn PermissionPrompt = match callback.as_mut() {
+            Some(prompt) => prompt,
+            None => &mut deny_all,
+        };
         let mut sink = Fanout(self.events.clone());
         let cancel = CancelFlag::new();
         let config = AgentConfig {
@@ -169,7 +233,7 @@ impl Session {
             self.provider.as_ref(),
             &mut tools,
             self.grants.clone(),
-            &mut prompt,
+            prompt,
             None,
             config,
         );

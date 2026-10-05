@@ -38,6 +38,8 @@ lca-permissions = { path = "crates/lca-permissions" }
 lca-provider = { path = "crates/lca-provider" }
 lca-protocol = { path = "crates/lca-protocol" }
 lca-registry = { path = "crates/lca-registry" }
+# The gh #14 guard drives `Session::with_permission_prompt` end to end.
+lca-sdk = { path = "crates/lca-sdk" }
 lca-session = { path = "crates/lca-session" }
 lca-testkit = { path = "crates/lca-testkit" }
 lca-tools = { path = "crates/lca-tools" }

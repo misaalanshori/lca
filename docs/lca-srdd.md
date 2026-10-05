@@ -248,7 +248,7 @@ The project file is trusted only after the user marks the project as trusted. An
 
 ### Embedding SDK
 
-`lca-sdk` exposes a session handle, an event stream, and an input channel. A host application creates a session, subscribes to events, and sends input. The same API compiles for native hosts and for the WASM target.
+`lca-sdk` exposes a session handle, an event stream, and an input channel. A host application creates a session, subscribes to events, and sends input. The same API compiles for native hosts and for the WASM target. `Session::with_permission_prompt` registers the host's approval callback (the action verbatim in, once/always/deny out); without it, an action that would need approval is declined and recorded (deny-by-default).
 
 For JavaScript hosts, the build produces an ES module through jco transpilation. The module exposes the same session and event API in JavaScript, plus a registration function so the JS layer can supply transpiled extension modules.
 
