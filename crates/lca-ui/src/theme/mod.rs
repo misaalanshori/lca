@@ -280,6 +280,28 @@ impl Theme {
         Self::from_palette("light", Palette::light(), true)
     }
 
+    /// The `system` theme (gh #10): pi's shape with our TOML divergence.
+    /// Foreground and background roles derive from the detected terminal
+    /// palette ([`Palette::system`]); a terminal that answers nothing
+    /// falls back to the scheme's hues, exactly like `auto` plus the
+    /// terminal-default foreground. Rebuilt (and repainted) on every
+    /// scheme/background answer while the theme follows detection.
+    ///
+    /// Not this cycle (mapped for pi-parity): `oklch()`/`okhsl()` color
+    /// math, which full hue derivation would need, and pi's
+    /// `theme.style()`/`colors`/`appearance` extension accessors - our
+    /// role-based `role()`/`bg()` accessors already answer the theming
+    /// need in our model (documented divergence, not a gap).
+    pub fn system_theme(
+        background: Option<lca_tui::engine::colors::RgbColor>,
+        scheme: Option<lca_tui::engine::colors::ColorScheme>,
+    ) -> Self {
+        let scheme = scheme
+            .or_else(|| background.map(|background| background.scheme()))
+            .unwrap_or(lca_tui::engine::colors::ColorScheme::Dark);
+        Self::from_palette("system", Palette::system(background, scheme), true)
+    }
+
     /// The plain theme (FR-UI-5).
     pub fn plain() -> Self {
         let mut plain = Self::from_palette("plain", Palette::dark(), false);
@@ -453,6 +475,9 @@ pub fn load(
         "auto" | "" => return (Theme::for_scheme(scheme), None),
         "default" | "dark" => return (Theme::colored(), None),
         "light" => return (Theme::light(), None),
+        // gh #10: `system` is a reserved name (pi's rule) - it always
+        // derives from detection, never from a theme file.
+        "system" => return (Theme::system_theme(None, scheme), None),
         _ => {
             let scheme_theme = Theme::for_scheme(scheme);
             let default_name = scheme_theme.name.clone();
@@ -507,7 +532,7 @@ impl Theme {
 }
 
 /// The built-in theme names (`/theme`'s picker).
-pub const THEMES: &[&str] = &["dark", "light", "plain"];
+pub const THEMES: &[&str] = &["dark", "light", "plain", "system"];
 
 /// The built-in theme names plus every custom `<name>.toml` in `dir`,
 /// sorted (S5: a custom theme joins the picker).

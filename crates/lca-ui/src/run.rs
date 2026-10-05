@@ -203,7 +203,9 @@ fn handle_input(
     // and the DSR color-scheme report drive the auto theme.
     if lca_tui::engine::colors::is_osc11_background_color_response(data) {
         if let Some(rgb) = lca_tui::engine::colors::parse_osc11_background_color(data) {
-            chat.apply_detected_scheme(rgb.scheme());
+            // gh #10: the reply carries the background itself, not just
+            // its scheme - a `system` theme rebuilds from it.
+            chat.apply_terminal_background(rgb);
         }
         return InputResult::Continue;
     }

@@ -241,3 +241,7 @@ mod gh23_startup_key_hint;
 // (`Session::with_permission_prompt`; default declines and records).
 #[path = "gh14-sdk-permission-prompt.rs"]
 mod gh14_sdk_permission_prompt;
+// GitHub issue #10 (criterion 1, plus `#rgb`): the `system` theme
+// derives from the detected terminal palette; oklch/style() deferred.
+#[path = "gh10-system-theme.rs"]
+mod gh10_system_theme;

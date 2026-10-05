@@ -159,6 +159,34 @@ impl Palette {
             .unwrap_or(Color::Default)
     }
 
+    /// Set one role's color (gh #10: the `system` theme tracks the
+    /// terminal's own foreground and background over a scheme base).
+    pub fn set(&mut self, role: Role, color: Color) {
+        self.colors.insert(role, color);
+    }
+
+    /// The `system` palette (gh #10): pi's shape with our TOML
+    /// divergence. Hues come from the scheme's built-in palette - full
+    /// derivation needs contrast math (deferred oklch work, not this
+    /// cycle) - while the foreground is the terminal's own and the
+    /// message bands take the reported background when one is known.
+    pub fn system(
+        background: Option<lca_tui::engine::colors::RgbColor>,
+        scheme: lca_tui::engine::colors::ColorScheme,
+    ) -> Palette {
+        let mut palette = match scheme {
+            lca_tui::engine::colors::ColorScheme::Light => Palette::light(),
+            lca_tui::engine::colors::ColorScheme::Dark => Palette::dark(),
+        };
+        palette.set(Role::Text, Color::Default);
+        if let Some(background) = background {
+            let background = Color::Rgb(background.r, background.g, background.b);
+            palette.set(Role::UserMessageBg, background);
+            palette.set(Role::CustomMessageBg, background);
+        }
+        palette
+    }
+
     /// Whether every role is present.
     pub fn is_complete(&self) -> bool {
         Role::ALL.iter().all(|role| self.colors.contains_key(role))
@@ -205,9 +233,23 @@ impl Palette {
     }
 }
 
-/// Parse `#rrggbb`, `rrggbb`, or a 256-color index (`0`–`255`). `""` means
-/// the terminal default, pi's own convention.
+/// Parse `#rrggbb`, `#rgb`, `rrggbb`, or a 256-color index (`0`–`255`).
+/// `""` means the terminal default, pi's own convention.
 pub(super) fn parse_color(value: &str) -> Option<Color> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Some(Color::Default);
+    }
+    let hex = value.strip_prefix('#').unwrap_or(value);
+    // gh #10: pi's three-digit form expands digit by digit
+    // (`#abc` is `#aabbcc`, and `0xa * 0x11 == 0xaa`).
+    if hex.len() == 3 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let mut rgb = [0u8; 3];
+        for (i, slot) in rgb.iter_mut().enumerate() {
+            *slot = u8::from_str_radix(&hex[i..i + 1], 16).ok()? * 0x11;
+        }
+        return Some(Color::Rgb(rgb[0], rgb[1], rgb[2]));
+    }
     let value = value.trim();
     if value.is_empty() {
         return Some(Color::Default);

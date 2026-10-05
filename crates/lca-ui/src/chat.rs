@@ -150,8 +150,13 @@ pub struct Chat {
     /// The picker's theme names (built-ins plus custom files).
     pub theme_names: Vec<String>,
     /// Whether the theme still follows the detected terminal scheme (R10);
-    /// an explicit pick clears it.
+    /// an explicit pick clears it. `auto` and `system` both follow (gh
+    /// #10); anything else is fixed.
     theme_auto: bool,
+    /// The terminal's reported background color, when it has answered
+    /// (gh #10): the `system` theme rebuilds from this on every scheme
+    /// or background answer.
+    terminal_bg: Option<lca_tui::engine::colors::RgbColor>,
     /// The open `/theme` picker with live preview, when any.
     pub theme_picker: Option<ThemePicker>,
     /// The `/settings` selector (gh #30): open while it owns the
@@ -206,7 +211,8 @@ impl Chat {
         let (theme, theme_notice) =
             crate::theme::load(&theme_setting, crate::theme::detect_scheme(), &theme_dir);
         let theme_name = theme.name.clone();
-        let theme_auto = !world.options.plain && matches!(theme_setting.as_str(), "" | "auto");
+        let theme_auto =
+            !world.options.plain && matches!(theme_setting.as_str(), "" | "auto" | "system");
         world.notice = theme_notice;
         let mut editor = Editor::new();
         editor.set_keybindings(keybindings.clone());
@@ -275,6 +281,7 @@ impl Chat {
             theme_dir,
             theme_names,
             theme_auto,
+            terminal_bg: None,
             theme_picker: None,
             settings_picker: None,
             thinking_picker: None,
@@ -647,6 +654,8 @@ impl Chat {
     }
 
     /// Apply a theme by name and remember it (S5: built-in or custom file).
+    /// Picking `system` re-arms detection-following (gh #10); any other
+    /// explicit pick clears it.
     pub(super) fn set_theme(&mut self, name: &str) {
         let (theme, notice) =
             crate::theme::load(name, crate::theme::detect_scheme(), &self.theme_dir);
@@ -655,20 +664,48 @@ impl Chat {
         // invalidates every one of them, or the bands keep the old colors.
         self.transcript.invalidate();
         self.theme_name = name.to_string();
-        self.theme_auto = false;
+        // gh #10: a `system` pick follows detection from here on, so a
+        // later OSC 11 / DSR answer rebuilds it; the setting travels
+        // with the name for the same reason.
+        self.theme_setting = name.to_string();
+        self.theme_auto = name == "system";
         self.world.notice = notice;
     }
 
     /// Apply a terminal color-scheme detection (R10): only while the theme
-    /// still follows detection, so an explicit pick wins.
+    /// still follows detection, so an explicit pick wins. A `system`
+    /// theme rebuilds from the last reported background (gh #10), so a
+    /// scheme-only answer never drops a known background.
     pub fn apply_detected_scheme(&mut self, scheme: lca_tui::engine::colors::ColorScheme) {
         if !self.theme_auto {
             return;
         }
-        let (theme, _) = crate::theme::load(&self.theme_setting, Some(scheme), &self.theme_dir);
+        let (theme, _) = if self.theme_setting == "system" {
+            (
+                crate::theme::Theme::system_theme(self.terminal_bg, Some(scheme)),
+                None,
+            )
+        } else {
+            crate::theme::load(&self.theme_setting, Some(scheme), &self.theme_dir)
+        };
         self.theme_name = theme.name.clone();
         self.theme = theme;
         self.transcript.invalidate();
+    }
+
+    /// Apply a terminal background answer (gh #10): the OSC 11 reply's
+    /// own color. A `system` theme rebuilds from it and repaints;
+    /// anything else takes the reply's scheme through the existing
+    /// detection path.
+    pub fn apply_terminal_background(&mut self, background: lca_tui::engine::colors::RgbColor) {
+        self.terminal_bg = Some(background);
+        if self.theme_setting == "system" && self.theme_auto {
+            self.theme = crate::theme::Theme::system_theme(Some(background), None);
+            self.theme_name = self.theme.name.clone();
+            self.transcript.invalidate();
+        } else {
+            self.apply_detected_scheme(background.scheme());
+        }
     }
 
     /// Preview a theme without committing it (FR-UI-17).
