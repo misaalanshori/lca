@@ -221,3 +221,7 @@ mod gh17_cost_shown_when_measured;
 // anchoring directly above the composer (pi's bottom-anchored shape).
 #[path = "gh16-picker-anchors-at-composer.rs"]
 mod gh16_picker_anchors_at_composer;
+// Composer-polish fold-in (no issue): a slash command typed mid-turn
+// leaked to the model as text; commands dispatch as commands now.
+#[path = "mid-turn-slash-dispatches-as-command.rs"]
+mod mid_turn_slash_dispatches_as_command;

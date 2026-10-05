@@ -28,13 +28,32 @@ use crate::theme::Theme;
 use crate::transcript::{ToolStatus, Transcript};
 
 /// One queued message (steering, ADR-0038). Carried by `Chat`; the agent
-/// semantics live in `lca-core`.
+/// semantics live in `lca-core`. A queued *command* (a slash command
+/// typed mid-turn) rides the same queue in order but dispatches as a
+/// command at turn end, never as model text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingMessage {
-    /// The message text.
+    /// The message text (or the command line, when `is_command`).
     pub text: String,
     /// How it was submitted while the turn ran.
     pub mode: lca_protocol::SubmitMode,
+    /// A slash command queued mid-turn: it dispatches as a command at
+    /// turn end (the composer-polish fold-in), never as model text.
+    pub is_command: bool,
+}
+
+/// Commands that must wait for the turn boundary (composer-polish
+/// fold-in): they touch the session while a running turn may be appending
+/// to it, so they queue as pending commands and run when the turn ends
+/// instead of racing it. Everything else dispatches at once, even mid-turn.
+fn is_turn_boundary_command(line: &str) -> bool {
+    let name = line
+        .strip_prefix('/')
+        .unwrap_or(line)
+        .split([' ', '\t'])
+        .next()
+        .unwrap_or("");
+    matches!(name, "compact")
 }
 
 /// The interactive chat.
@@ -660,11 +679,21 @@ impl Chat {
             return Action::Continue;
         }
         if self.turn_running && self.keybindings.matches(data, "app.message.followUp") {
-            // Queue a follow-up for turn end (ADR-0038).
+            // Queue a follow-up for turn end (ADR-0038) - unless it is a
+            // slash command, which dispatches as a command, never as
+            // model text (composer-polish fold-in).
             let text = self.editor.submit();
-            if !text.trim().is_empty() {
-                self.queue_submit(text, lca_protocol::SubmitMode::FollowUp);
+            if text.trim().is_empty() {
+                return Action::Continue;
             }
+            if text.trim().starts_with('/') {
+                if is_turn_boundary_command(text.trim()) {
+                    self.queue_command(text, lca_protocol::SubmitMode::FollowUp);
+                    return Action::Continue;
+                }
+                return self.dispatch_command(text.trim());
+            }
+            self.queue_submit(text, lca_protocol::SubmitMode::FollowUp);
             return Action::Continue;
         }
         Action::Continue
@@ -903,6 +932,13 @@ impl Chat {
             return self.run_shell_mode(trimmed);
         }
         if trimmed.starts_with('/') {
+            // A slash command typed mid-turn never reaches the model as
+            // text: turn-boundary commands queue as commands for turn
+            // end, the rest dispatch at once (composer-polish fold-in).
+            if self.turn_running && is_turn_boundary_command(trimmed) {
+                self.queue_command(trimmed.to_string(), lca_protocol::SubmitMode::Steer);
+                return Action::Continue;
+            }
             return self.dispatch_command(trimmed);
         }
         // A turn needs a model; say so rather than failing deep in the
@@ -940,11 +976,40 @@ impl Chat {
                     mode,
                 });
         }
-        self.pending.push(PendingMessage { text, mode });
+        self.pending.push(PendingMessage {
+            text,
+            mode,
+            is_command: false,
+        });
+    }
+
+    /// Queue a slash command submitted while a turn runs: it rides the
+    /// pending queue in order but stays out of the running turn's steer
+    /// queue (command text is never model input), and [`Self::take_next_pending`]
+    /// dispatches it when the turn ends.
+    pub fn queue_command(&mut self, text: String, mode: lca_protocol::SubmitMode) {
+        self.pending.push(PendingMessage {
+            text,
+            mode,
+            is_command: true,
+        });
     }
 
     /// Pop the next queued message to auto-submit at turn end, in order.
+    /// Leading queued commands dispatch first (they never become model
+    /// text and never join the transcript as user messages); the first
+    /// queued message behind them flushes as the next turn, if any.
     pub fn take_next_pending(&mut self) -> Option<String> {
+        // Queued commands run first, as commands: dispatch each one in
+        // order and stop flushing if one of them submitted a prompt of
+        // its own (the rest wait behind that turn).
+        while self.pending.first().is_some_and(|next| next.is_command) {
+            let command = self.pending.remove(0);
+            let _ = self.dispatch_command(&command.text);
+            if self.submitted.is_some() {
+                return None;
+            }
+        }
         if self.pending.is_empty() {
             return None;
         }
