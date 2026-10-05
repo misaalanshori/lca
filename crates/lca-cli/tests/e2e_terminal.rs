@@ -1094,3 +1094,39 @@ fn gh109_positional_message_submits_on_open() {
     session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
 }
+
+// Verifies: #121 (the `$EDITOR` round trip through a real terminal: the
+// composer text goes out to the editor process and comes back edited).
+// Spaced paths ride the unit rows (they run on Windows CI too); this row
+// proves the env-var path and the keybinding end to end.
+#[cfg(any(unix, windows))]
+#[cfg(unix)]
+#[test]
+fn gh121_external_editor_round_trips_in_a_real_terminal() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("tui-editor");
+    let script = sandbox.root.join("mock-editor.py");
+    std::fs::write(
+        &script,
+        "import sys\npath = sys.argv[1]\ntext = open(path, encoding=\"utf-8\").read()\nopen(path, \"w\", encoding=\"utf-8\").write(text + \"[edited]\")\n",
+    )
+    .expect("write mock editor");
+    // Quoted inside the value: the spawn line interpolates env raw.
+    let editor = format!("\"python3 {}\"", script.display());
+
+    let session = Tmux::new("editor");
+    session.spawn(&sandbox, None, false, &[("EDITOR", &editor)], &[]);
+    session.wait_for("no model", std::time::Duration::from_secs(20));
+    session.send(&["hello", "C-x", "C-e"]);
+    session.wait_for("[edited]", std::time::Duration::from_secs(25));
+
+    // The composer holds the edited text; submitting clears it (no model
+    // here, so the turn refuses and the composer frees up for commands).
+    session.send(&["Enter"]);
+    session.wait_for("No model is active", std::time::Duration::from_secs(10));
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}

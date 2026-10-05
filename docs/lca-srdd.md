@@ -686,6 +686,9 @@ The dependency list stays short on purpose. Each entry below states what it does
 | sha2 | Digest verification | ring |
 | ipnet | CIDR parsing and range membership for `net-local` validation and `net` rebinding checks | Hand-written IPv4/IPv6 range comparison over std's `IpAddr` |
 | toml | Configuration and manifest parsing | None |
+| image | Image decode, resize, and JPEG encode for the read tool's per-model profiles (#39) | Hand-written format parsers for PNG, JPEG, GIF, BMP, and WebP |
+| shell-words | POSIX shell-word splitting for the `$EDITOR` command line (#121) | Hand-rolled quote handling (which is the quoting bug being fixed) |
+| tempfile | The external editor's uniquely-named buffer file (#121) | Predictable `temp_dir` names plus manual cleanup (which races and litters) |
 | jco | Transpiles components to ES modules for the web build | Hand-written JS glue over core modules |
 | cargo-zigbuild | Cross-compilation linking for macOS and Linux targets | Native runners per platform |
 | cargo-xwin | Cross-compilation for Windows MSVC targets | The `pc-windows-gnu` target, or native Windows runners |

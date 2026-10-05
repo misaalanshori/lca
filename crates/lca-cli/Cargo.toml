@@ -32,6 +32,10 @@ lca-ext-host = { path = "../lca-ext-host" }
 toml.workspace = true
 # E2: comment-preserving edits to the user config file (theme, thinking).
 toml_edit.workspace = true
+# #121: the external editor's buffer file (already in Cargo.lock) and
+# POSIX splitting for its command line (zero-dependency).
+shell-words.workspace = true
+tempfile.workspace = true
 lca-permissions = { path = "../lca-permissions" }
 lca-provider = { path = "../lca-provider" }
 lca-tools = { path = "../lca-tools" }

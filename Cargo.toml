@@ -113,6 +113,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # encoder. Hand-rolling five format parsers would be more code, not less
 # (SRDD dependency rule).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+# shell-words - POSIX shell-word splitting for the `$EDITOR` command
+# (#121). Zero dependencies; hand-rolling quote handling is exactly the
+# quoting bug being fixed (SRDD dependency rule).
+shell-words = "1"
+# tempfile - the external editor's buffer file (#121). Already resolved
+# in Cargo.lock (via proptest); promoting the edge adds no new packages.
+tempfile = "3"
 sha2 = "0.10"
 # zip - the ADR-0010 HTTPS archive format; DEFLATE gets a maintained
 # implementation instead of a hand-written one (SRDD dependency rule).
