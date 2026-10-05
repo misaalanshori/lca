@@ -68,6 +68,72 @@ fn arb_record(n: u32) -> impl Strategy<Value = Record> {
             event: "load".into(),
             detail,
         }),
+        (arb_text(), arb_text()).prop_map(move |(to, provider)| Record::ModelChange {
+            v: FORMAT_VERSION,
+            ts,
+            id: arb_id(n),
+            from: None,
+            to,
+            provider,
+            profile: None,
+        }),
+        arb_text().prop_map(move |level| Record::ThinkingLevelChange {
+            v: FORMAT_VERSION,
+            ts,
+            id: arb_id(n),
+            level,
+        }),
+        arb_text().prop_map(move |kind| Record::Usage {
+            v: FORMAT_VERSION,
+            ts,
+            id: arb_id(n),
+            kind,
+            provider: None,
+            model: None,
+            usage: lca_protocol::Usage::default(),
+        }),
+        (arb_text(), proptest::option::of(arb_text())).prop_map(move |(target_id, label)| {
+            Record::Label {
+                v: FORMAT_VERSION,
+                ts,
+                id: arb_id(n),
+                target_id,
+                label,
+            }
+        },),
+        arb_text().prop_map(move |name| Record::SessionInfo {
+            v: FORMAT_VERSION,
+            ts,
+            id: arb_id(n),
+            name,
+        }),
+        (arb_text(), arb_text()).prop_map(move |(custom_type, count)| Record::Custom {
+            v: FORMAT_VERSION,
+            ts,
+            id: arb_id(n),
+            custom_type,
+            data: serde_json::json!({"count": count}),
+        }),
+        (arb_text(), arb_text(), any::<bool>()).prop_map(move |(custom_type, content, display)| {
+            Record::CustomMessage {
+                v: FORMAT_VERSION,
+                ts,
+                id: arb_id(n),
+                custom_type,
+                content,
+                display,
+                details: None,
+            }
+        },),
+        (arb_text(), proptest::option::of(arb_text())).prop_map(move |(target_id, replacement)| {
+            Record::ContextEdit {
+                v: FORMAT_VERSION,
+                ts,
+                id: arb_id(n),
+                target_id,
+                replacement,
+            }
+        },),
     ]
 }
 

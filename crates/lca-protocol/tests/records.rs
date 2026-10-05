@@ -183,6 +183,90 @@ fn sample_records() -> Vec<(Record, &'static str)> {
             "fork-point",
         ),
         (
+            Record::ModelChange {
+                v: 1,
+                ts,
+                id: "a".into(),
+                from: None,
+                to: "m".into(),
+                provider: "p".into(),
+                profile: None,
+            },
+            "model-change",
+        ),
+        (
+            Record::ThinkingLevelChange {
+                v: 1,
+                ts,
+                id: "a".into(),
+                level: "high".into(),
+            },
+            "thinking-level-change",
+        ),
+        (
+            Record::Usage {
+                v: 1,
+                ts,
+                id: "a".into(),
+                kind: "cache_warm".into(),
+                provider: Some("p".into()),
+                model: Some("m".into()),
+                usage: Usage::default(),
+            },
+            "usage",
+        ),
+        (
+            Record::Label {
+                v: 1,
+                ts,
+                id: "a".into(),
+                target_id: "r".into(),
+                label: Some("checkpoint-1".into()),
+            },
+            "label",
+        ),
+        (
+            Record::SessionInfo {
+                v: 1,
+                ts,
+                id: "a".into(),
+                name: "Refactor auth module".into(),
+            },
+            "session-info",
+        ),
+        (
+            Record::Custom {
+                v: 1,
+                ts,
+                id: "a".into(),
+                custom_type: "my-extension".into(),
+                data: serde_json::json!({"count": 42}),
+            },
+            "custom",
+        ),
+        (
+            Record::CustomMessage {
+                v: 1,
+                ts,
+                id: "a".into(),
+                custom_type: "my-extension".into(),
+                content: "Injected context...".into(),
+                display: true,
+                details: None,
+            },
+            "custom-message",
+        ),
+        (
+            Record::ContextEdit {
+                v: 1,
+                ts,
+                id: "a".into(),
+                target_id: "r".into(),
+                replacement: None,
+            },
+            "context-edit",
+        ),
+        (
             Record::SessionEnd {
                 v: 1,
                 ts,

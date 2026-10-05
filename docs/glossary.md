@@ -86,7 +86,15 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Scope.** In the `fs` capability specifically, one of the named vocabulary entries, `workspace`, `private`, `home-config`, or `temp`, that a manifest grants read or write access to. See `workspace` below for a term collision worth knowing about.
 
+**Context edit.** A `context-edit` session record: an append-only omission or replacement of one earlier context-producing entry, applied latest-wins per target at assembly time. The target record itself is never rewritten. See `docs/session-log-format.md`.
+
+**Custom message.** A `custom-message` session record: extension-injected context the host appends on the extension's behalf. Unlike `custom` (extension state, never model-visible), a custom message enters model context as a user message. See `docs/session-log-format.md`.
+
+**Label (record).** A `label` session record: a user bookmark on one entry, cleared by writing it absent. Read by the resume and title surfaces, never by the model. See `docs/session-log-format.md`.
+
 **Separator.** The one-row divider between the transcript and the composer. Plain dashes at rest, in the thinking-level border color (`thinkingOff`, the same darkGray as `borderMuted`, when no level is set - pi's editor-border rule); while work runs it carries pi's spinner-in-the-border - `── ⠴ Working ─────…` painted end to end in `separator_border` - spinner, label and dashes one color, pi's rendered look - or `Retrying (n/m) in Ns…` on a warning spinner with a muted label - animated by `Chat::tick`, one frame per 80 ms, and never while idle, so an idle interface does not repaint. LCA's composer has no border of its own, so this row plays both parts pi composes (its editor's top border and the status embedded in it).
+
+**Session info.** A `session-info` session record: the user-defined display name the session selector shows instead of the first message. See `docs/session-log-format.md`.
 
 **Session.** One durable, append-only conversation record on disk, with its own log, its own metadata, and its own identity, forkable and resumable. See `docs/session-log-format.md`.
 
@@ -98,11 +106,15 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Theme role.** One named entry in the palette (`Role`, `crates/lca-ui/src/theme/mod.rs`): pi's `ThemeColor`/`ThemeBg` tokens - including the background roles and the nine `syntax*` classes - fifty-six in all, each a color in every built-in palette and overridable from a custom theme file. Two accessors: `theme.role(r)` paints the foreground and `theme.bg(r)` the background, and both reset only the channel they opened (`ESC[39m` / `ESC[49m`). A role is data, never a literal in a renderer; the cycle-9 audit (role to where it is used to pi's own usage) is in the cycle report.
 
+**Usage (record).** A `usage` session record: model-attributed usage outside any assistant message (cache warms, compaction calls, reported nested work). Accounting, never model content. See `docs/session-log-format.md`.
+
 **Turn.** One round of the agent loop: a user or system input, a model's response, any tool calls that response triggers and their results, repeated until the model stops without requesting a tool. Not the same as a single model API call; a turn with three sequential tool calls involves four calls to the provider.
 
 **Vendor-event.** The reserved, open-ended case in the provider stream's typed event variant, carrying a vendor-specific kind string and a JSON payload, for anything the other typed cases don't cover. Exists specifically so a new vendor concept doesn't force an ABI break; see ADR-0004.
 
 **Shell selection (the ladder).** The resolution order that picks the `shell` tool's interpreter (ADR-0041, R1): `shell.path`, then `shell.tool`, then the platform ladder - Git Bash by known install location, `pwsh`, `powershell`, `cmd` on Windows; `sh` on Unix. Not "the user's login shell": the tool always has an explicit interpreter, and the model is told which one in the tool description.
+
+**Thinking-level change.** A `thinking-level-change` session record: the thinking level the next request runs at. Read by the request, never by the model as content. Distinct from `thinking visibility`, which is how much reasoning the transcript shows. See `docs/session-log-format.md`.
 
 **Thinking visibility.** The `ui.thinking` setting (`snippet`, `full`, `hidden`, R6): how much of a reasoning run the transcript shows by default, with the expand/collapse key overriding the *latest* run. Distinct from `thinking`, which is the effort level the model is asked for.
 

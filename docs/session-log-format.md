@@ -69,6 +69,20 @@ The `v` field is per record, not per file. A file written across a format upgrad
 
 `session-end` is written on a clean exit. Its absence means the session ended without one, which is normal after a crash and is not an error.
 
+`thinking-level-change` records a thinking-level switch (gh #47: pi's `thinking_level_change` semantics under this log's framing). Fields: `id`, `level` (the level the next request runs at). Writer: the `/thinking` picker and any other surface that changes the level. Readers: assembly ignores it - the request itself carries the level.
+
+`usage` records model-attributed usage that is not an assistant message and does not enter model context (gh #47: pi's `usage` semantics - cache warms, compaction calls, nested model work an extension reports). Fields: `id`, `kind` (an arbitrary string naming the operation, e.g. `cache_warm`), optional `provider` and `model` naming what did the work, and `usage` with the same input/output/cache/cost shape an `assistant` record carries. Unknown `kind` values are normal usage, never rejected. Writer: the host, on behalf of whatever did the work. Readers: assembly ignores it content-wise; turn totals stay live-measured (a future tree/compaction epic may sum them from the log - the records are there for it). Audit-only on export (see below).
+
+`label` records a user bookmark on an entry (gh #47: pi's `label` semantics). Fields: `id`, `target_id` (the labeled record), `label` (absent clears the bookmark). Writer: the interface, when a labeling surface exists; nothing writes it yet. Readers: assembly ignores it; the `/resume` and session-title surfaces will read it later.
+
+`session-info` records the session display name (gh #47: pi's `session_info` semantics): the name the session selector shows instead of the first message. Fields: `id`, `name`. Writer: the interface (`/name` equivalent), the `--name` flag, or an extension through the host; nothing writes it yet. Readers: assembly ignores it. Kept minimal (name + set) on purpose.
+
+`custom` persists extension state (gh #47: pi's `custom` semantics). Fields: `id`, `custom_type` (which extension owns the entry - readers use it to find their own entries on reload), `data` (the extension's JSON). Writer: the host, appending on the extension's behalf under the capability model - an extension never touches the log file (guest-side imports for this are a minor-version decision for the tree/compaction epics; no `wit/` change in this cycle). Readers: assembly ignores it - it never enters model context. Audit-only on export (see below).
+
+`custom-message` is extension context injection (gh #47: pi's `custom_message` semantics). Fields: `id`, `custom_type`, `content` (the injected text - a string; content blocks ride a later record version if an extension needs them), `display` (whether the interface shows it with distinct styling), optional `details` (extension metadata, never sent to the model). Writer: the host, like `custom`. Readers: assembly injects it as a user message carrying `custom-type` and `display` in its extras; `display = false` hides it from the transcript, never from the model.
+
+`context-edit` appends an omission or replacement of one earlier context-producing entry (gh #47: pi's `context_edit` semantics). Fields: `id`, `target_id` (a `user`, `assistant`, `tool-result`, or `custom-message` record), `replacement` (absent omits the target from future model context; present swaps its text, keeping role and tool linkage - an assistant replacement keeps its tool calls, a tool-result keeps its `call_id`). Writer: the interface's context-surgery surfaces; nothing writes it yet. Readers: assembly applies the latest edit per target; the target record itself stays unchanged in raw history, display, exports, and accounting. Omitting an assistant message whose tool calls have results leaves orphan `tool` messages a provider may reject - the surgery is explicit, so the log keeps what was asked.
+
 ## Ordering and identity
 
 Records are append-only. Nothing is rewritten in place. Nothing is deleted.
@@ -129,7 +143,7 @@ The content of a file read outside the workspace, unless the user's action put i
 
 A session export produces a single file containing the metadata, the resolved record list with forks followed, and the attachments inline as base64 or as a sidecar directory.
 
-Export applies the same redaction as the log, and additionally strips `permission` and `extension-event` records unless an audit flag is passed, because an export is usually shared.
+Export applies the same redaction as the log, and additionally strips audit-only records unless an audit flag is passed, because an export is usually shared. Audit-only: `permission`, `extension-event` (who was allowed to do what), and the v2 vocabulary's `usage` (operational accounting) and `custom` (extension internals). Everything else survives a default export: the conversation (`user`, `assistant`, `tool-call`, `tool-result`, `custom-message`), its shaping (`compaction`, `context-edit`, `label`, `model-change`, `thinking-level-change`, `fork-point`, `session-info`, `session-start`, `session-end`). An export carries `context-edit` records as written - a consumer replays them latest-wins per target exactly like assembly, rather than receiving pre-edited text.
 
 ## Migration
 

@@ -202,6 +202,132 @@ pub enum Record {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<String>,
     },
+    /// A thinking-level switch during the session (pi's
+    /// `thinking_level_change` semantics under this log's framing): the
+    /// level the next request runs at. Assembly ignores it - the request
+    /// itself carries the level.
+    ThinkingLevelChange {
+        /// Schema version.
+        v: u32,
+        /// Epoch milliseconds.
+        ts: u64,
+        /// Record identifier.
+        id: String,
+        /// The level now in use (`off`, `minimal`, `low`, `medium`,
+        /// `high`, `max`, or a provider extension's own level).
+        level: String,
+    },
+    /// Model-attributed usage that is not an assistant message and does
+    /// not participate in model context (pi's `usage` semantics): cache
+    /// warms, compaction calls, nested model work an extension reports.
+    /// Unknown `kind` values are normal usage, never rejected. Assembly
+    /// ignores it content-wise; turn totals stay live-measured.
+    Usage {
+        /// Schema version.
+        v: u32,
+        /// Epoch milliseconds.
+        ts: u64,
+        /// Record identifier.
+        id: String,
+        /// What produced the usage (`cache_warm`, ...).
+        kind: String,
+        /// Provider extension that did the work, when one did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        /// Model that did the work, when one did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        /// The counted usage.
+        usage: Usage,
+    },
+    /// A user bookmark on an entry (pi's `label` semantics). `None`
+    /// clears the label. Assembly ignores it; the resume and title
+    /// surfaces read it later.
+    Label {
+        /// Schema version.
+        v: u32,
+        /// Epoch milliseconds.
+        ts: u64,
+        /// Record identifier.
+        id: String,
+        /// The labeled record's identifier.
+        target_id: String,
+        /// The bookmark text; `None` clears it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+    /// Session display name (pi's `session_info` semantics): the name
+    /// the session selector shows instead of the first message. Kept
+    /// minimal (name + set); no interface reads it yet.
+    SessionInfo {
+        /// Schema version.
+        v: u32,
+        /// Epoch milliseconds.
+        ts: u64,
+        /// Record identifier.
+        id: String,
+        /// The display name.
+        name: String,
+    },
+    /// Extension state persistence (pi's `custom` semantics): an
+    /// extension's own data, written through the host under the
+    /// capability model, never by touching the log file. Does not
+    /// participate in model context.
+    Custom {
+        /// Schema version.
+        v: u32,
+        /// Epoch milliseconds.
+        ts: u64,
+        /// Record identifier.
+        id: String,
+        /// Which extension owns the entry; readers use it to find
+        /// their own entries on reload.
+        custom_type: String,
+        /// The extension's data.
+        data: serde_json::Value,
+    },
+    /// An extension-injected context message (pi's `custom_message`
+    /// semantics): written through the host like `custom`, but this one
+    /// DOES participate in model context - assembly injects it as a user
+    /// message. `display` controls terminal rendering only, never
+    /// whether the model sees it.
+    CustomMessage {
+        /// Schema version.
+        v: u32,
+        /// Epoch milliseconds.
+        ts: u64,
+        /// Record identifier.
+        id: String,
+        /// Which extension injected the message.
+        custom_type: String,
+        /// The injected text (a string; content blocks ride a later
+        /// record version if an extension needs them).
+        content: String,
+        /// Whether the interface shows it with distinct styling.
+        display: bool,
+        /// Extension metadata, never sent to the model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        details: Option<String>,
+    },
+    /// An append-only edit of one earlier context-producing entry (pi's
+    /// `context_edit` semantics): the target and its metadata stay
+    /// unchanged in raw history, display, exports, and accounting - only
+    /// future model context changes. `None` omits the target; a string
+    /// replaces its text, keeping role and tool linkage.
+    ContextEdit {
+        /// Schema version.
+        v: u32,
+        /// Epoch milliseconds.
+        ts: u64,
+        /// Record identifier.
+        id: String,
+        /// The edited record's identifier (a `user`, `assistant`,
+        /// `tool-result`, or `custom-message` record).
+        target_id: String,
+        /// The replacement text, or `None` to omit the target.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replacement: Option<String>,
+    },
     /// Written on a clean exit; absence is normal after a crash.
     SessionEnd {
         /// Schema version.
@@ -249,6 +375,13 @@ impl Record {
             | Record::Compaction { v, .. }
             | Record::ForkPoint { v, .. }
             | Record::ModelChange { v, .. }
+            | Record::ThinkingLevelChange { v, .. }
+            | Record::Usage { v, .. }
+            | Record::Label { v, .. }
+            | Record::SessionInfo { v, .. }
+            | Record::Custom { v, .. }
+            | Record::CustomMessage { v, .. }
+            | Record::ContextEdit { v, .. }
             | Record::SessionEnd { v, .. } => *v,
         }
     }
@@ -265,6 +398,13 @@ impl Record {
             | Record::Compaction { id, .. }
             | Record::ForkPoint { id, .. }
             | Record::ModelChange { id, .. }
+            | Record::ThinkingLevelChange { id, .. }
+            | Record::Usage { id, .. }
+            | Record::Label { id, .. }
+            | Record::SessionInfo { id, .. }
+            | Record::Custom { id, .. }
+            | Record::CustomMessage { id, .. }
+            | Record::ContextEdit { id, .. }
             | Record::SessionEnd { id, .. } => Some(id),
             Record::SessionStart { .. } => None,
         }
@@ -283,8 +423,127 @@ impl Record {
             Record::Compaction { .. } => "compaction",
             Record::ForkPoint { .. } => "fork-point",
             Record::ModelChange { .. } => "model-change",
+            Record::ThinkingLevelChange { .. } => "thinking-level-change",
+            Record::Usage { .. } => "usage",
+            Record::Label { .. } => "label",
+            Record::SessionInfo { .. } => "session-info",
+            Record::Custom { .. } => "custom",
+            Record::CustomMessage { .. } => "custom-message",
+            Record::ContextEdit { .. } => "context-edit",
             Record::SessionEnd { .. } => "session-end",
         }
+    }
+}
+
+/// Convenience constructor for a `thinking-level-change` record.
+pub fn thinking_level_change_record(ts: u64, id: impl Into<String>, level: &str) -> Record {
+    Record::ThinkingLevelChange {
+        v: FORMAT_VERSION,
+        ts,
+        id: id.into(),
+        level: level.to_string(),
+    }
+}
+
+/// Convenience constructor for a `usage` record: model-attributed usage
+/// outside any assistant message.
+pub fn usage_record(
+    ts: u64,
+    id: impl Into<String>,
+    kind: &str,
+    provider: Option<&str>,
+    model: Option<&str>,
+    usage: crate::usage::Usage,
+) -> Record {
+    Record::Usage {
+        v: FORMAT_VERSION,
+        ts,
+        id: id.into(),
+        kind: kind.to_string(),
+        provider: provider.map(str::to_string),
+        model: model.map(str::to_string),
+        usage,
+    }
+}
+
+/// Convenience constructor for a `label` record (`None` clears).
+pub fn label_record(
+    ts: u64,
+    id: impl Into<String>,
+    target_id: &str,
+    label: Option<&str>,
+) -> Record {
+    Record::Label {
+        v: FORMAT_VERSION,
+        ts,
+        id: id.into(),
+        target_id: target_id.to_string(),
+        label: label.map(str::to_string),
+    }
+}
+
+/// Convenience constructor for a `session-info` record.
+pub fn session_info_record(ts: u64, id: impl Into<String>, name: &str) -> Record {
+    Record::SessionInfo {
+        v: FORMAT_VERSION,
+        ts,
+        id: id.into(),
+        name: name.to_string(),
+    }
+}
+
+/// Convenience constructor for a `custom` record: extension state the
+/// host appends on the extension's behalf. Extensions never touch the
+/// log file; the host calls this under the capability model.
+pub fn custom_record(
+    ts: u64,
+    id: impl Into<String>,
+    custom_type: &str,
+    data: serde_json::Value,
+) -> Record {
+    Record::Custom {
+        v: FORMAT_VERSION,
+        ts,
+        id: id.into(),
+        custom_type: custom_type.to_string(),
+        data,
+    }
+}
+
+/// Convenience constructor for a `custom-message` record: extension
+/// context injection, host-appended like `custom`.
+pub fn custom_message_record(
+    ts: u64,
+    id: impl Into<String>,
+    custom_type: &str,
+    content: &str,
+    display: bool,
+) -> Record {
+    Record::CustomMessage {
+        v: FORMAT_VERSION,
+        ts,
+        id: id.into(),
+        custom_type: custom_type.to_string(),
+        content: content.to_string(),
+        display,
+        details: None,
+    }
+}
+
+/// Convenience constructor for a `context-edit` record (`None` omits
+/// the target from future model context).
+pub fn context_edit_record(
+    ts: u64,
+    id: impl Into<String>,
+    target_id: &str,
+    replacement: Option<&str>,
+) -> Record {
+    Record::ContextEdit {
+        v: FORMAT_VERSION,
+        ts,
+        id: id.into(),
+        target_id: target_id.to_string(),
+        replacement: replacement.map(str::to_string),
     }
 }
 

@@ -733,8 +733,9 @@ impl SessionStore {
     }
 
     /// Export the resolved record list with metadata
-    /// (`docs/session-log-format.md`); `permission` and `extension-event`
-    /// records are stripped unless `audit` is set (FR-SESS-7).
+    /// (`docs/session-log-format.md`); `permission`, `extension-event`,
+    /// `usage`, and `custom` records are stripped unless `audit` is set
+    /// (FR-SESS-7).
     pub fn export(&self, session: &Session, options: ExportOptions) -> Result<PathBuf> {
         let resolved = self.read_with(session, ViewMode::Audit)?;
         let records: Vec<_> = if options.audit {
@@ -748,6 +749,8 @@ impl SessionStore {
                         r,
                         lca_protocol::Record::Permission { .. }
                             | lca_protocol::Record::ExtensionEvent { .. }
+                            | lca_protocol::Record::Usage { .. }
+                            | lca_protocol::Record::Custom { .. }
                     )
                 })
                 .collect()
@@ -864,6 +867,14 @@ const KNOWN_TYPES: &[&str] = &[
     "extension-event",
     "compaction",
     "fork-point",
+    "model-change",
+    "thinking-level-change",
+    "usage",
+    "label",
+    "session-info",
+    "custom",
+    "custom-message",
+    "context-edit",
     "session-end",
 ];
 
