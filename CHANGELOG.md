@@ -4,6 +4,117 @@ Notable changes to LCA. Versions follow semantic versioning for the product;
 the `lca:ext` ABI version is independent and is printed by `lca --version`.
 Dates are UTC.
 
+## [0.5.4] - 2026-10-05
+
+### Added
+- **Model switching that follows the provider (gh #8, gh #31).**
+  `Ctrl+P` cycles models forward (`Ctrl+Shift+P` / `Alt+P` back) and
+  `Ctrl+S` saves the picker choice as the session default; `--model`,
+  `--provider` (which scopes the lookup), and `--thinking <level>` work
+  from the command line with per-model thinking clamps, and every
+  switch lands everywhere at once - runner, status line, compaction
+  backend, `meta.json`, and a `model-change` record. Deliberate
+  divergence, recorded where the flags are declared: pi's `--api-key
+  <key>` will not be added - argv is world-readable, and secrets never
+  touch argv, scrollback, or history (`OPENAI_API_KEY` is the
+  documented path); model scoping stays in `models.enabled` patterns
+  and `--provider`, not a new surface.
+- **Provider profiles with honest labels (gh #31).** One
+  `openai-compatible` login per service preset, each with its own
+  endpoint, key, and models, so a second login stops overwriting the
+  first; picker rows name the service that will bill the call
+  (`model (provider)`) while selection, logs, and requests keep the raw
+  id. Model discovery runs through host consent on the request path
+  (with `--allow-host` for scripts), per-model context windows ship in
+  the catalog (gh #34), and a preset login now offers its endpoint's ad
+  hoc grant at sign-in - previously a local preset signed in and then
+  failed every turn with no recourse (gh #21).
+- **The interactive `/settings` selector (gh #30).** `/settings` edits
+  live values (theme, thinking, fullscreen, permissions mode) through
+  the picker chrome with the winning source on every row; `lca config`
+  stays the print-only, script-readable dump.
+- **Fullscreen stops scrolling away (gh #35).** The alt-screen viewport
+  is a pinned dock (separator, notice, queue, editor, footer) over a
+  transcript window with pi's scrollbar geometry and a `↓ Jump to
+  latest message` indicator (`End` returns); main-screen scrollback is
+  untouched.
+- **The edit result renders as pi's diff card (gh #9).** The tool's
+  structured diff rides `extras` into the card, and `Ctrl+X` copies
+  with pi 1.0.0's context-aware target (selection, sign-in URL, last
+  reply); `markdown.codeblock_border` (`full`/`horizontal`/`none`, gh
+  #32) controls the fence frame.
+- **Composer polish: cost, pickers, mid-turn commands.** The footer
+  shows the cost once usage is measured - a measured `$0.0000` is a
+  free model, silence before that is noise (gh #17). Pickers anchor
+  directly above the composer, overlaying tall notices (gh #16). A
+  slash command typed mid-turn dispatches as a command: safe UI
+  commands run at once, `/compact` queues as a command and runs at
+  turn end, never as model text.
+- **Click-to-toggle thinking runs (gh #11).** The transcript maps
+  reasoning rows, and a single alt-screen click toggles that run like
+  `Ctrl+T` (multi-click stays with selection, the scrollbar is not
+  content, the jump indicator is clickable too); main-screen never
+  captures the mouse, by design. The markdown pipeline takes ordered
+  pre-parse transforms (gh #12, pi's `registerMarkdownTransformer`)
+  with panic-is-identity, exposed to native extensions through an
+  optional Rust dispatch method - no WIT growth.
+- **A startup key-hint line (gh #23).** One dim line on the first frame
+  (`escape interrupt · ctrl+c clear/exit · / commands`), key names from
+  the default table; headless never prints it.
+- **The SDK approval surface (gh #14).**
+  `Session::with_permission_prompt` takes the host's callback (the
+  action verbatim in, once/always/deny out) wherever the UI would open
+  the modal; without it the session declines and records
+  (deny-by-default). Yolo equivalence is out of scope.
+- **`ui.theme = "system"` (gh #10).** Foreground and background roles
+  derive from the detected terminal palette (OSC 11 / DSR / COLORFGBG
+  parsers the engine already carried) and repaint on scheme change;
+  unanswered terminals fall back to dark/light, `plain` still emits
+  zero SGR, and `#rgb` expands in theme files. `oklch()`/`okhsl()`
+  and `theme.style()`/`colors()`/`appearance` are mapped for
+  pi-parity, not this cycle; the default stays `auto`.
+- **Compaction asks the model with a budget (gh #169).** The
+  summarization round-trip carries an explicit generation cap over a
+  bounded prompt and degrades loudly, not silently. This is the
+  stopgap, said plainly: the architecture (budgets, keep-recent,
+  overflow recovery) is gh #36's work.
+- **Local presets are the supported local-model route (gh #21).**
+  Codex, LM Studio, and Ollama stay spec-only by explicit policy
+  (dedicated extensions are pi-parity-phase work); the
+  `ollama`/`lmstudio` presets (`auth = "none"`) sign in on selection
+  through `openai-compatible`, and Codex - which needs its OAuth
+  extension - waits for the phase.
+
+### Changed
+- **One GrantStore everywhere (gh #29).** A second handle opened
+  beside the session's clobbered state; approval, consent, and
+  `--allow-host` now write through the shared handle, `once` covers
+  the session, and the startup note is honest about what happens
+  next. The capability consent requires Enter (gh #24) and survives a
+  console left in raw mode.
+- **Shutdown and resumption details.** Exiting parks the cursor below
+  the transcript on every renderer (gh #33); `meta.json` carries the
+  last model and provider (gh #20); a closing stdout (`| head`) ends
+  by signal instead of panicking (gh #19).
+- **Prompt rows keep their marker pad** and spaces survive wraps;
+  Up/Down move by visual row (gh #27, gh #28). A modal close that
+  shrinks the frame clears vacated rows first, so no stale notice
+  survives it (gh #18).
+- **`lca config` is print-only by design** (gh #30); `/settings` is the
+  editor.
+
+### Fixed
+- **`install.ps1` no longer exits the caller's host under `iex`**
+  (gh #26); the exit code lands in `$LASTEXITCODE`.
+- **A namespaced `<provider>.login` reaches the identity flow**
+  instead of opening an empty preset picker (gh #25).
+- **Model discovery runs in its own blocking region** (Windows CI)
+  and per-model windows reach the footer (gh #34, gh #31 review).
+- **The live-provider smoke tolerates quota answers** and writes its
+  grant where the store reads it.
+- **Dependency bump:** Wasmtime 49.0.2 (RUSTSEC-2026-0321..0324).
+- HTML export stays with gh #57 (pi-parity backlog), not this release.
+
 ## [0.5.3] - 2026-10-02
 
 ### Added
