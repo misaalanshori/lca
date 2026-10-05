@@ -210,12 +210,24 @@ impl Ui {
         // seam for both login paths, see `adopt_login_success`).
         self.adopt_login_success(&target, &identity);
         // A non-default endpoint needs its ad hoc `net` grant, offered now
-        // that the user is signed in (FR-PERM-16).
-        if let Some(host) = crate::ungranted_host(
-            &self.grants,
-            &self.cwd,
-            crate::openai_ad_hoc_host(&self.data),
-        ) {
+        // that the user is signed in (FR-PERM-16). gh #21: this login's
+        // own endpoint comes first - a preset login stores its base URL
+        // under its profile, which the default-profile store read below
+        // never sees, so a local preset never got its offer and every
+        // later turn failed with no recourse.
+        if let Some(host) = login_endpoint_hosts(&settings)
+            .into_iter()
+            .find(|host| {
+                crate::ungranted_host(&self.grants, &self.cwd, Some(host.clone())).is_some()
+            })
+            .or_else(|| {
+                crate::ungranted_host(
+                    &self.grants,
+                    &self.cwd,
+                    crate::openai_ad_hoc_host(&self.data),
+                )
+            })
+        {
             return LoginNext::Grant {
                 provider: target.clone(),
                 host: host.clone(),
@@ -645,6 +657,25 @@ impl Ui {
     }
 }
 
+/// Endpoint hosts this login configured (gh #21): the submit's own
+/// `*.base_url` pairs in order, deduplicated. The default host
+/// (`api.openai.com`) never needs a grant, so it never appears here.
+fn login_endpoint_hosts(settings: &[(String, String)]) -> Vec<String> {
+    let mut hosts = Vec::new();
+    for (key, value) in settings {
+        if !key.ends_with("base_url") {
+            continue;
+        }
+        let authority = value.split("://").nth(1).unwrap_or(value);
+        if let Some(host) = crate::ad_hoc_host_from_authority(authority)
+            && !hosts.contains(&host)
+        {
+            hosts.push(host);
+        }
+    }
+    hosts
+}
+
 #[cfg(test)]
 mod tests {
     use super::identity_instead_of_picker;
@@ -712,5 +743,43 @@ mod tests {
             &names(&["antigravity"]),
             2
         ));
+    }
+
+    // Verifies: gh #21 - a preset login's endpoint comes from the
+    // submit's own pairs (`profile.<id>.base_url`), which the
+    // default-profile store read misses, so the FR-PERM-16 grant offer
+    // names this login's host.
+    #[test]
+    fn a_preset_login_names_its_own_endpoint_host() {
+        assert_eq!(
+            super::login_endpoint_hosts(&[(
+                "profile.ollama.base_url".to_string(),
+                "http://localhost:11434/v1".to_string()
+            )]),
+            vec!["localhost".to_string()]
+        );
+    }
+
+    // Verifies: gh #21 - a bare `base_url` pair (a custom endpoint)
+    // names its host the same way, and the default host needs no grant.
+    #[test]
+    fn a_bare_base_url_names_its_host_and_the_default_needs_none() {
+        assert_eq!(
+            super::login_endpoint_hosts(&[(
+                "base_url".to_string(),
+                "https://llm.example.com/v1".to_string()
+            )]),
+            vec!["llm.example.com".to_string()]
+        );
+        assert!(
+            super::login_endpoint_hosts(&[(
+                "base_url".to_string(),
+                "https://api.openai.com/v1".to_string()
+            )])
+            .is_empty()
+        );
+        assert!(
+            super::login_endpoint_hosts(&[("api_key".to_string(), "sk-x".to_string())]).is_empty()
+        );
     }
 }
