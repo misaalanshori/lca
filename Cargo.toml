@@ -27,7 +27,11 @@ compaction-default = { path = "extensions/compaction-default" }
 # The gh #24 consent guard drives `lca_cli::ext::confirm_with` directly: the
 # prompt lives in the binary's own crate, behind a `confirm` nothing else
 # exports.
+# RM-001: the pi-parity harness drives `Cli::try_parse_from` for the
+# rpc-mode witness, so clap rides as a dev-dependency (workspace pin).
+clap.workspace = true
 lca-cli = { path = "crates/lca-cli" }
+lca-config = { path = "crates/lca-config" }
 lca-core = { path = "crates/lca-core" }
 # The gh #12 seam guard drives a stub `ExtensionDispatch` (for the
 # optional Rust-side markdown transform) through the host collection.
@@ -46,11 +50,21 @@ lca-tools = { path = "crates/lca-tools" }
 lca-tui = { path = "crates/lca-tui" }
 lca-ui = { path = "crates/lca-ui" }
 openai-compatible = { path = "extensions/openai-compatible" }
+serde_json.workspace = true
 tokio.workspace = true
 
 [[test]]
 name = "regressions"
 path = "tests/regressions/mod.rs"
+
+# RM-001 (#93): the pi-conformance harness. Test functions carry the
+# `pi_parity_` prefix so `cargo nextest run -E 'test(pi_parity)'` selects
+# exactly this target; red witnesses for future milestones are
+# `#[ignore]`-gated so main stays green and are listed in
+# `docs/pi-parity.md`.
+[[test]]
+name = "pi-parity"
+path = "tests/pi-parity/mod.rs"
 
 [workspace.package]
 version = "0.5.4"

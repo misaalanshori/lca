@@ -1339,8 +1339,10 @@ dependencies = [
 name = "lca-regressions"
 version = "0.0.0"
 dependencies = [
+ "clap",
  "compaction-default",
  "lca-cli",
+ "lca-config",
  "lca-core",
  "lca-ext-abi",
  "lca-ext-host",
@@ -1356,6 +1358,7 @@ dependencies = [
  "lca-tui",
  "lca-ui",
  "openai-compatible",
+ "serde_json",
  "tokio",
 ]
 

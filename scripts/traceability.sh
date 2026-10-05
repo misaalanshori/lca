@@ -13,7 +13,8 @@ cd "$(dirname "$0")/.."
 requirements=$(mktemp)
 markers=$(mktemp)
 deferred_ids=$(mktemp)
-trap 'rm -f "$requirements" "$markers" "$deferred_ids"' EXIT
+pi_anchors=$(mktemp)
+trap 'rm -f "$requirements" "$markers" "$deferred_ids" "$pi_anchors"' EXIT
 
 # Deferred by the sanctioned cut (see the file: the web target, under
 # the SRDD risk table's lever). Printed as deferred, never silently
@@ -49,11 +50,16 @@ if [ -z "$PYTHON" ]; then
   echo "traceability: no python interpreter found (tried python3, python, py)" >&2
   exit 2
 fi
-"$PYTHON" - "$markers" <<'PY'
+"$PYTHON" - "$markers" "$pi_anchors" <<'PY'
 import pathlib, re, sys
 
 ids = set()
+pi = set()
 pattern = re.compile(r'\b(?:FR|NFR)-[A-Z]*-?\d+\b')
+# RM-001 (#93): pi-parity anchors ride alongside FR/NFR markers. They name
+# a pi source file and section, never an LCA requirement, so they are
+# collected separately: accepted and listed, never fatal.
+pi_pattern = re.compile(r'\bpi:[^\s,;)"\']+')
 
 for root in ("crates", "extensions", "tests"):
     base = pathlib.Path(root)
@@ -70,7 +76,9 @@ for root in ("crates", "extensions", "tests"):
                 end = i
                 while end + 1 < len(lines) and lines[end + 1].lstrip().startswith("//"):
                     end += 1
-                ids.update(pattern.findall("\n".join(lines[start:end + 1])))
+                block = "\n".join(lines[start:end + 1])
+                ids.update(pattern.findall(block))
+                pi.update(pi_pattern.findall(block))
                 i = end
             i += 1
 
@@ -95,6 +103,10 @@ for path in pipeline:
 
 with open(sys.argv[1], "w", newline="\n") as out:
     for value in sorted(ids):
+        out.write(value + "\n")
+
+with open(sys.argv[2], "w", newline="\n") as out:
+    for value in sorted(pi):
         out.write(value + "\n")
 PY
 
@@ -124,6 +136,11 @@ if [ -n "$untagged" ]; then
   echo "UNTAGGED ($count_missing of $count_total requirements):"
   echo "$untagged" | sed 's/^/  /'
   exit 1
+fi
+
+pi_count=$(grep -c . "$pi_anchors" || true)
+if [ "$pi_count" -gt 0 ]; then
+  echo "pi-parity anchors: $pi_count (informational, never fatal)"
 fi
 
 echo "traceability: all $count_total requirements have at least one verifying test"
