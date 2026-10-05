@@ -9,7 +9,9 @@
 //! own CI legs are Linux/macOS, the same reason the release-targets
 //! gate test (`25-release-targets-gate.rs`) gives.
 
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
