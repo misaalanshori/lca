@@ -827,15 +827,33 @@ fn the_interface_opens_in_the_zero_provider_state_and_recovers_through_login() {
     session.wait_for("ad hoc grant", std::time::Duration::from_secs(15));
     session.send(&["y"]);
     // The confirmation is a transient notice by design, so assert the
-    // durable state it left behind rather than a flash of text.
-    std::thread::sleep(std::time::Duration::from_millis(800));
-    // And the project's enablement actually moved.
-    let grants: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(sandbox.state_dir().join("grants.json")).expect("grants"),
-    )
-    .expect("grants json");
+    // durable state it left behind rather than a flash of text. Poll it
+    // boundedly: a fixed sleep races a slow runner, while the file
+    // either carries the key or it does not. The key is canonicalized
+    // exactly like the store's own `canonical_key`: on macOS the scratch
+    // dir hangs under symlinked `/var`, while the running binary records
+    // `/private/var` - a raw join misses every time there.
+    let project_key = std::fs::canonicalize(sandbox.project())
+        .unwrap_or_else(|_| sandbox.project())
+        .to_string_lossy()
+        .to_string();
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let grants: serde_json::Value = loop {
+        let grants: serde_json::Value = std::fs::read_to_string(sandbox.state_dir().join("grants.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or(serde_json::Value::Null);
+        if grants["projects"][&project_key]["extensions"]["openai-compatible"]
+            == serde_json::json!(true)
+            || std::time::Instant::now() >= deadline
+        {
+            break grants;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    };
     assert_eq!(
-        grants["projects"][sandbox.project().to_string_lossy().to_string()]["extensions"]["openai-compatible"],
+        grants["projects"][&project_key]["extensions"]["openai-compatible"],
         serde_json::json!(true),
         "the provider is enabled again"
     );
