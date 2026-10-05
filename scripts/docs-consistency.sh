@@ -11,7 +11,9 @@
 # then explicit data-vs-docs counts and name lookups.
 # Exit 0 = consistent, 1 = drift.
 set -u
-cd "$(dirname "$0")/.." || exit 2
+# A test seam and nothing else: the self-test points the net at a
+# fixture tree, every other caller resolves the working copy.
+cd "${DOCS_CONSISTENCY_ROOT:-$(dirname "$0")/..}" || exit 2
 
 fail=0
 canonical="docs/release-policy.md"

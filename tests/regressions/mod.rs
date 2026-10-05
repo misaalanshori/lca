@@ -266,3 +266,7 @@ mod gh116_edit_refuses_non_utf8;
 // GitHub #96: the panic hook restores the terminal on every build profile.
 #[path = "gh96-panic-hook-restores-terminal.rs"]
 mod gh96_panic_hook_restores_terminal;
+// GitHub #95: the data-vs-docs drift net fires on every drift shape it
+// claims to catch, and passes clean.
+#[path = "gh95-drift-net-selftest.rs"]
+mod gh95_drift_net_selftest;
