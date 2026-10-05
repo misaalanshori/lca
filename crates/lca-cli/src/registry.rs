@@ -46,3 +46,34 @@ pub(crate) fn assemble(
     });
     registry
 }
+
+#[cfg(test)]
+mod tests {
+    // Verifies: FR-PROV-9 (#92, QA-017) — without the bundled provider
+    // the registry assembles with no `openai-compatible` handle, so the
+    // TUI takes the existing `NoProvider` path instead of refusing at
+    // compile time. Runs only in the no-default-features build; the
+    // default-features build is covered by the zero-provider regression.
+    #[cfg(not(feature = "bundled-openai-compat"))]
+    #[test]
+    fn the_registry_assembles_without_the_bundled_provider() {
+        let root = lca_testkit::scratch_path("lca-no-bundled-provider");
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let config = lca_config::Config::defaults();
+        let grants = std::sync::Arc::new(std::sync::Mutex::new(
+            lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
+        ));
+        let registry = super::assemble(
+            &project,
+            &config,
+            lca_permissions::SharedPrompt::default(),
+            &grants,
+            std::sync::Arc::new(|| String::new()),
+        );
+        assert!(
+            registry.provider("openai-compatible").is_none(),
+            "no bundled provider, so the TUI opens in the zero-provider state"
+        );
+    }
+}

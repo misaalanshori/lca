@@ -34,19 +34,7 @@ root requirements document and indexes everything else.
 
 ## The gates (all eleven, before any tag)
 
-| # | Gate | Command |
-|---|---|---|
-| 1 | format | `cargo fmt --check` |
-| 2 | clippy | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
-| 3 | docs | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` |
-| 4 | deps | `cargo-deny` (CI) |
-| 5 | traceability | `scripts/traceability.sh` (every FR/NFR has a verifying test) |
-| 6 | fuzz | `scripts/fuzz-check.sh` |
-| 7 | wasm | `scripts/wasm-check.sh` (every extension builds for wasm32-wasip2) |
-| 8 | release targets | `scripts/release-targets-check.sh` (4 targets; needs llvm on PATH) |
-| 9 | perf | `scripts/perf-gate.sh` (size/startup/memory/cache + NFR-2/15 via `scripts/nfr2-host/`) |
-| 10 | installers | `scripts/install-check.sh` (shellcheck + the sh/ps1 suites) |
-| 11 | ceiling | `scripts/ceiling-check.sh` |
+The gate table lives in exactly one place — [`docs/release-policy.md#gate-list`](docs/release-policy.md#gate-list) — and `scripts/docs-consistency.sh` fails CI if it drifts or is copied elsewhere (#106).
 
 Tests: `cargo nextest run` (the suite is ~860). Requirements are numbered
 `FR-*`/`NFR-*` in `docs/lca-srdd.md`; `scripts/deferred-requirements.txt`

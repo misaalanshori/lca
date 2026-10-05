@@ -11,18 +11,19 @@ repository.workspace = true
 default = [
     "bundled-openai-compat",
     "bundled-compaction-default",
-    "bundled-skills",
 ]
-# ADR-0013: the default provider, compaction strategy, and skills
-# handling ship enabled; users can disable any of them (FR-SESS-5's
-# default compaction, SRDD's bundled-skills/bundled-compaction-default).
+# ADR-0013: the default provider and compaction strategy ship enabled;
+# users can disable either of them (FR-SESS-5's default compaction).
+# There is deliberately no `bundled-skills` feature (#92): ADR-0034 moved
+# the skills merge host-side, so the flag compiled an extension nothing
+# registered. `extensions/skills` stays in the tree as the
+# `context-transform` worked example and still builds for `wasm32-wasip2`
+# under `scripts/wasm-check.sh`.
 bundled-openai-compat = ["dep:openai-compatible"]
 bundled-compaction-default = ["dep:compaction-default"]
-bundled-skills = ["dep:skills"]
 
 [dependencies]
 compaction-default = { path = "../../extensions/compaction-default", optional = true }
-skills = { path = "../../extensions/skills", optional = true }
 lca-protocol = { path = "../lca-protocol" }
 lca-config = { path = "../lca-config" }
 lca-session = { path = "../lca-session" }

@@ -238,6 +238,20 @@ jobs:
       - name: file-size ceiling (gate 11)
         shell: bash
         run: bash scripts/ceiling-check.sh
+      # Verifies: docs-consistency (gate list honesty, #106) - the
+      # canonical eleven-gate table is complete and neither AGENTS.md nor
+      # README.md carries a hand copy of it.
+      - name: gate-list consistency (#106)
+        shell: bash
+        run: bash scripts/docs-consistency.sh
+      # Verifies: FR-PROV-9 (#92, QA-017) - the binary builds and its unit
+      # tests pass with no bundled provider compiled in, so the TUI opens
+      # into the zero-provider state instead of refusing at compile time.
+      - name: no-bundled-provider build (#92)
+        shell: bash
+        run: |
+          cargo check -p lca-cli --no-default-features
+          cargo test -p lca-cli --no-default-features --lib
       - name: Keep gate output
         if: always()
         uses: actions/upload-artifact@v4

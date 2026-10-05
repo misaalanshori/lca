@@ -344,6 +344,12 @@ pub(crate) fn apply_enablement(
 /// roots, the shared grant store, and the caller's prompt. Every engine and
 /// the turn loop share one `Arc<Mutex<GrantStore>>` so a grant written by
 /// one path is visible to (and never clobbered by) another.
+// #92: only bundled extensions call this; without either feature it would
+// be dead code, and dead code with a warning is a gate failure.
+#[cfg(any(
+    feature = "bundled-openai-compat",
+    feature = "bundled-compaction-default"
+))]
 pub(crate) fn extension_capabilities(
     cwd: &Path,
     name: &str,
@@ -761,7 +767,11 @@ fn interactive(
     }
 }
 
-#[cfg(feature = "bundled-openai-compat")]
+// #92 (QA-017): the interactive entry is provider-agnostic. Whichever
+// provider the registry resolves wins; none resolves and the session opens
+// in the zero-provider state (FR-PROV-9) with the `/login` recovery path,
+// never a compile-time refusal. A provider-specific feature flag must not
+// decide whether the interface exists.
 fn lca_tui_entry(
     cwd: &Path,
     resume: Option<&str>,
@@ -771,18 +781,6 @@ fn lca_tui_entry(
     flags: &CliFlags,
 ) -> anyhow::Result<i32> {
     crate::tui::run(cwd, resume, yolo, model, allow_host, flags)
-}
-
-#[cfg(not(feature = "bundled-openai-compat"))]
-fn lca_tui_entry(
-    _cwd: &Path,
-    _resume: Option<&str>,
-    _yolo: bool,
-    _model: Option<&str>,
-    _allow_host: &[String],
-    _flags: &CliFlags,
-) -> anyhow::Result<i32> {
-    anyhow::bail!("interactive mode requires a bundled provider feature")
 }
 
 #[cfg(test)]

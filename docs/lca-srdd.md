@@ -598,6 +598,8 @@ NFR-3. Cold start to an interactive prompt SHALL NOT exceed 150 ms on a 2020-cla
 
 NFR-4. Instantiation of one precompiled WASM extension SHALL NOT exceed 20 ms.
 
+**Amended 2026-10-05 (#90).** The 20 ms bound holds on Linux and macOS, where the suite enforces it continuously. On Windows it cannot be met: recorded CI medians are 44.7 ms on a first run and 101.4 ms after warmups (endpoint scanning of freshly-mapped executable pages, not instantiation work), so the suite enforces 150 ms on Windows (`crates/lca-ext-host/tests/nfr.rs`). The 20 ms figure stays the goal; the per-platform numbers move only with a recorded measurement. See `docs/platform-notes.md`.
+
 NFR-5. A hook call into a WASM extension SHALL NOT exceed 1 ms of overhead above the extension's own work.
 
 NFR-6. Idle memory use SHALL NOT exceed 80 MB with no extensions enabled.
@@ -663,6 +665,8 @@ NFR-28. Color SHALL NOT be the only signal for state. Every colored state also c
 ### Concurrency
 
 NFR-29. Cancellation of a running WASM extension call, once the user triggers it, SHALL take effect within 50 ms under normal load, measured from epoch increment to instance trap.
+
+**Amended 2026-10-05 (#90).** The 50 ms bound holds on Linux and Windows (Windows is allowed three fresh-engine attempts; a first observation of 56–60 ms on a loaded runner is scheduling, not enforcement). On macOS hosted runners it does not hold — three consecutive readings of 74–84 ms after earlier ones of 56–60 ms, the shape of a timesharing quantum — so the suite enforces 120 ms on macOS (`crates/lca-ext-host/tests/nfr.rs`). The 50 ms figure stays the goal; the per-platform numbers move only with a recorded measurement. See `docs/platform-notes.md`.
 
 ## Dependencies
 
@@ -767,9 +771,11 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 └── .github/workflows/
 ```
 
-Extensions in `extensions/` build two ways. The workspace builds them as normal crates for the native-linked path. The `xtask` build target compiles them to `wasm32-wasip2` components for the sandboxed path. Both come from the same source. `lca-cli` gates each one behind its own Cargo feature; `bundled-openai-compat`, `bundled-skills`, and `bundled-compaction-default` are on by default, the rest are off by default and installed like any third-party extension. See ADR-0013.
+Extensions in `extensions/` build two ways. The workspace builds them as normal crates for the native-linked path. The `xtask` build target compiles them to `wasm32-wasip2` components for the sandboxed path. Both come from the same source. `lca-cli` gates each one behind its own Cargo feature; `bundled-openai-compat` and `bundled-compaction-default` are on by default, the rest are off by default and installed like any third-party extension. See ADR-0013.
 
 *Annotation (2026-09-26, ADR-0034):* `bundled-skills` still exists as a Cargo feature and still compiles the crate, but nothing registers the handle it builds — the skills merge is host-side now. The feature is kept so the example stays buildable; it is not a switch that changes what runs.
+
+*Annotation (2026-10-05, #92):* the paragraph above is superseded — `bundled-skills` is removed. A feature that changes compilation but not behavior is a trap; `extensions/skills` stays as the unregistered `context-transform` example and still builds for `wasm32-wasip2` under `scripts/wasm-check.sh`, which needs no feature flag.
 
 ## Coding standards
 

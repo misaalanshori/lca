@@ -41,6 +41,12 @@ system message into `turn_body`, after the transform chain.
 example and is **not registered**. The `bundled-skills` Cargo feature still
 builds it; it is no longer a switch that changes what runs.
 
+*Addendum (2026-10-05, #92):* the feature is removed — `lca-cli` no
+longer carries `bundled-skills` or the optional `skills` dependency, and
+`cargo tree -e features` no longer shows the example behind a
+behavior-claiming flag. The example still builds for `wasm32-wasip2`
+under `scripts/wasm-check.sh`. Nothing about the merge changes.
+
 This is a category change under ADR-0013 (fixed core, build-time backend,
 runtime extension): skills handling moved from *runtime extension* to the
 host side of the divide. It is recorded here rather than silently edited
