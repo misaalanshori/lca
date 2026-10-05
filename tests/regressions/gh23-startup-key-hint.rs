@@ -77,12 +77,18 @@ fn the_first_frame_carries_the_key_hint() {
 }
 
 /// The debug binary under test, sibling of this test executable
-/// (`target/<profile>/deps` → `target/<profile>/lca`).
+/// (`target/<profile>/deps` → `target/<profile>/lca`, with the Windows
+/// `.exe` tried first).
 fn test_binary() -> PathBuf {
     let exe = std::env::current_exe().expect("this test's path");
     let deps = exe.parent().expect("deps dir");
     let profile = deps.parent().expect("profile dir");
-    let binary = profile.join("lca");
+    let exe = profile.join("lca.exe");
+    let binary = if exe.is_file() {
+        exe
+    } else {
+        profile.join("lca")
+    };
     assert!(
         binary.is_file(),
         "expected the built binary at {} (run `cargo build -p lca-cli` or the full suite first)",
