@@ -319,6 +319,7 @@ impl ModelsGuest for OpenAiCompatWasm {
         // gh #34's window resolution and gh #31's per-model profile both
         // come from `profiles`: one resolver, no drift (NFR-25).
         let windows = load_context_windows(&GUEST_CAP);
+        let image_limits = load_image_limits(&GUEST_CAP);
         profiles::picker_models(&GUEST_CAP, &settings, &stored, &configured)
             .into_iter()
             .map(|picked| {
@@ -328,8 +329,11 @@ impl ModelsGuest for OpenAiCompatWasm {
                     picked.window,
                     &windows,
                 );
+                // #39: image behavior rides the non-structural extras,
+                // so unknown models simply carry nothing.
                 let extras = profiles::row_extras(&picked)
                     .into_iter()
+                    .chain(image_extras(&picked.id, &image_limits))
                     .map(|(key, value)| ExtraPair { key, value })
                     .collect();
                 WasmModel {

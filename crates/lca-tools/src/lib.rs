@@ -11,6 +11,7 @@
 mod bridge;
 mod capabilities;
 mod diff;
+mod image;
 mod open;
 mod ops;
 mod process;
@@ -38,6 +39,10 @@ use std::time::Duration;
 
 use lca_permissions::Action;
 use lca_protocol::{ToolCall, ToolResult, ToolResultStatus, ToolSpec};
+
+pub use image::{
+    IMAGE_RESIZE_EXTRA, IMAGE_VISION_EXTRA, ImagePolicy, ImageResize, ImageVision, NO_VISION_NOTE,
+};
 
 /// Cooperative cancellation for one turn's work (FR-CONC-3).
 #[derive(Clone)]
@@ -94,6 +99,11 @@ impl CancelFlag {
     }
 }
 
+/// Pi's line budget for `read` (`DEFAULT_MAX_LINES` in pi's
+/// `tools/truncate.ts`): at most this many lines reach the model from one
+/// read, alongside the byte budget, whichever hits first (#39).
+pub const READ_MAX_LINES: usize = 2000;
+
 /// Fingerprint of a file the session has read, for FR-TOOL-2 staleness.
 #[derive(Debug, Default)]
 struct ReadTracker {
@@ -127,6 +137,7 @@ pub struct ToolExecutor {
     cwd: PathBuf,
     result_limit_bytes: usize,
     default_timeout: Duration,
+    image_policy: ImagePolicy,
     tracker: ReadTracker,
     /// Where over-limit output is spilled, content-addressed, when a
     /// session is attached (`<session>/attachments`); `None` keeps
@@ -160,9 +171,17 @@ impl ToolExecutor {
             cwd,
             result_limit_bytes,
             default_timeout,
+            image_policy: ImagePolicy::unknown(),
             tracker: ReadTracker::default(),
             spill_dir: None,
         }
+    }
+
+    /// What the active model can do with images (#39). Unknown by
+    /// default: images pass through at original size. Set per turn from
+    /// the resolved model's metadata.
+    pub fn set_image_policy(&mut self, policy: ImagePolicy) {
+        self.image_policy = policy;
     }
 
     /// Point the executor at the session's attachment directory. Set by the
@@ -253,7 +272,7 @@ impl ToolExecutor {
         vec![
             spec(
                 "read",
-                "Read a file. Returns content with line numbers. Use offset (1-indexed) and limit to page through large files.",
+                "Read a file. Returns content with line numbers. Output is truncated to 2000 lines or the result size limit (whichever is hit first). Use offset (1-indexed) and limit to page through large files; when you need the full file, continue with offset until complete.",
                 serde_json::json!({
                     "path": {"type": "string", "description": "File to read, relative to the workspace or absolute"},
                     "offset": {"type": "integer", "description": "1-indexed line to start at"},
@@ -412,16 +431,15 @@ impl ToolExecutor {
         self.tracker.record(&target, &bytes);
         // R5: an image file comes back as image content, not lossy UTF-8; the
         // interface renders it through the terminal's graphics ladder.
+        // (#39: per-model vision and resize ride the executor's image
+        // policy; unknown models behave exactly as before.)
         if let Some(media_type) = lca_protocol::sniff_image_media_type(&bytes) {
-            let mut result = ToolResult::ok(
-                call.call_id.clone(),
-                format!("[image {media_type}, {} bytes]", bytes.len()),
-            );
-            result.images.push(lca_protocol::ImageContent {
-                media_type: media_type.to_string(),
+            return crate::image::read_image_result(
+                &self.image_policy,
+                &call.call_id,
+                media_type,
                 bytes,
-            });
-            return result;
+            );
         }
         let text = String::from_utf8_lossy(&bytes);
         let mut lines: Vec<&str> = text.split('\n').collect();
@@ -448,13 +466,45 @@ impl ToolExecutor {
             Some(limit) => (offset.saturating_sub(1)).saturating_add(limit).min(total),
             None => total,
         };
-        let mut numbered = String::new();
-        for (index, line) in lines[offset - 1..end].iter().enumerate() {
-            numbered.push_str(&format!("{:6}\t{line}\n", offset + index));
+        // #39: pi's line budget rides on top of the byte budget,
+        // whichever hits first. A user `limit` smaller than both keeps
+        // its own continuation note below, unchanged.
+        let line_capped_end = (offset.saturating_sub(1))
+            .saturating_add(READ_MAX_LINES)
+            .min(total);
+        let line_capped = line_capped_end < end;
+        // The spill holds the whole requested window: the line budget
+        // cuts the display, never the recoverable record.
+        let wanted_end = end;
+        let end = end.min(line_capped_end);
+        // #39: pi's first-line advice. One line over the whole budget is
+        // not content to truncate; point at the shell instead.
+        if lines[offset - 1].len() > self.result_limit_bytes {
+            let size = format_bytes(lines[offset - 1].len());
+            let limit = format_bytes(self.result_limit_bytes);
+            let out = format!(
+                "[Line {offset} is {size}, exceeds {limit} limit. Use shell: sed -n '{offset}p' {path} | head -c {limit}]"
+            );
+            return self.spilled(
+                &call.call_id,
+                &numbered_window(&lines, offset, wanted_end),
+                out,
+                true,
+                ToolResultStatus::Ok,
+            );
         }
-        let (content, truncated) = truncate_head(&numbered, self.result_limit_bytes);
+        let numbered = numbered_window(&lines, offset, end);
+        let (content, byte_truncated) = truncate_head(&numbered, self.result_limit_bytes);
         let mut out = content;
-        if truncated {
+        let truncated = line_capped || byte_truncated;
+        if line_capped {
+            let shown_lines = out.lines().count();
+            let last = (offset.saturating_sub(1)).saturating_add(shown_lines);
+            out.push_str(&format!(
+                "\n[Showing lines {offset}-{last} of {total} ({READ_MAX_LINES}-line limit). Use offset={} to continue.]",
+                last + 1
+            ));
+        } else if byte_truncated {
             let shown_lines = out.lines().count();
             let last = (offset.saturating_sub(1)).saturating_add(shown_lines);
             out.push_str(&format!(
@@ -471,7 +521,7 @@ impl ToolExecutor {
         }
         self.spilled(
             &call.call_id,
-            &numbered,
+            &numbered_window(&lines, offset, wanted_end),
             out,
             truncated,
             ToolResultStatus::Ok,
@@ -954,6 +1004,15 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Truncate at a line boundary, keeping the head (FR-TOOL-7).
+/// The offset window with line numbers, as the model sees it.
+fn numbered_window(lines: &[&str], offset: usize, end: usize) -> String {
+    let mut numbered = String::new();
+    for (index, line) in lines[offset - 1..end].iter().enumerate() {
+        numbered.push_str(&format!("{:6}\t{line}\n", offset + index));
+    }
+    numbered
+}
+
 fn truncate_head(content: &str, limit: usize) -> (String, bool) {
     if content.len() <= limit {
         return (content.to_string(), false);

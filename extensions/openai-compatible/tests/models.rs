@@ -240,3 +240,42 @@ fn the_curated_window_table_parses_and_covers_the_reported_models() {
         );
     }
 }
+
+// Verifies: #39 - the image-limits table parses: vision flags for a
+// vision and a text-only model, and a resize profile parses from inline
+// TOML (no vendor publishes one yet, so the shipped table carries none).
+#[test]
+fn the_image_limits_table_parses_with_sourced_vision_flags() {
+    let limits =
+        openai_compatible::parse_image_limits(include_str!("../resources/image-limits.toml"));
+    assert!(!limits.is_empty(), "the table shipped with entries");
+    assert!(
+        limits
+            .get("deepseek-v4-flash-vision-exp")
+            .is_some_and(|entry| entry.vision),
+        "a vision model reads vision"
+    );
+    assert!(
+        limits
+            .get("deepseek-v4-flash")
+            .is_some_and(|entry| !entry.vision),
+        "a text-only model reads no-vision"
+    );
+    let inline = openai_compatible::parse_image_limits(
+        "[demo]\nvision = true\nmax_width = 1568\nmax_height = 1568\nmax_bytes = 524288\n",
+    );
+    assert_eq!(
+        inline.get("demo").and_then(|entry| entry.resize),
+        Some(lca_protocol::ImageResize {
+            max_width: 1568,
+            max_height: 1568,
+            max_bytes: 524288,
+        }),
+        "a future vendor profile parses"
+    );
+    assert!(
+        !openai_compatible::parse_image_limits("[broken]\nvision = \"yes\"\n")
+            .contains_key("broken"),
+        "a non-boolean vision is ignored, never guessed"
+    );
+}

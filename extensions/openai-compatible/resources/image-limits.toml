@@ -1,0 +1,118 @@
+# Per-model image behavior (#39): vision flags from the same
+# models.dev catalog gh #34's context windows come from.
+#
+# Ground rule (shared with context-windows.toml): every entry
+# carries the source it was copied from, on its own line, and
+# nothing here is estimated. A model absent from this file has
+# unknown vision: images pass through at original size, exactly
+# as before. `vision = true` with no resize profile keeps pi's
+# conservative defaults (2000x2000, 4.5 MiB, JPEG 80); a
+# resize profile lands here only with vendor numbers behind it,
+# which no vendor publishes today.
+#
+# Sources: `models.dev/<provider> <date>` - the `modalities.input`
+# array of each model entry (fetched 2026-10-05). `vision = true`
+# means `image` is in that array; `false` means input is
+# text-only there. The table is read by `parse_image_limits`;
+# unknown keys inside an entry are ignored, so resize fields
+# (`max_width`, `max_height`, `max_bytes`) can join later
+# without disturbing vision reads.
+
+["deepseek-v4-flash"]
+vision = false   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text"])
+
+["deepseek-v4-flash-vision-exp"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image"])
+
+["deepseek-v4-pro"]
+vision = false   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text"])
+
+["deepseek-v4.1-flash"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image"])
+
+["glm-5.2"]
+vision = false   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text"])
+
+["glm-5.3"]
+vision = false   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text"])
+
+["glm-5.3-flash"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video", "pdf"])
+
+["gpt-5.6-luna"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "pdf"])
+
+["gpt-6-luna"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "pdf"])
+
+["grok-4.5"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image"])
+
+["grok-4.6"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image"])
+
+["grok-4.7"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "pdf"])
+
+["hy3"]
+vision = false   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text"])
+
+["hy4-preview"]
+vision = false   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text"])
+
+["kimi-k2.6"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video"])
+
+["kimi-k2.7-code"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video"])
+
+["kimi-k3"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video"])
+
+["longcat-2.0"]
+vision = false   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text"])
+
+["longcat-2.5-preview-free"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image"])
+
+["mimo-v2.5"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "audio", "video"])
+
+["mimo-v2.5-pro"]
+vision = false   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text"])
+
+["mimo-v2.6-flash"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "audio", "video"])
+
+["mimo-v2.6-pro"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "audio", "video"])
+
+["minimax-m2.7"]
+vision = false   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text"])
+
+["minimax-m3"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video"])
+
+["muse-spark-1.2-contributor"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video", "pdf", "audio"])
+
+["muse-spark-1.3-contributor"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video", "pdf", "audio"])
+
+["qwen3.6-plus"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video"])
+
+["qwen3.7-max"]
+vision = false   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text"])
+
+["qwen3.7-plus"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video"])
+
+["qwen3.8-flash"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video"])
+
+["qwen3.8-max"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video"])
+
+["space-bunny-free"]
+vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video"])

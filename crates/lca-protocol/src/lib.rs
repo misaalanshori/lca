@@ -23,7 +23,8 @@ pub use dispatch::{CommandEffect, CommandSpec, DispatchError, HookAction, PostTo
 pub use login::{LoginAnswer, LoginOption};
 pub use message::{ChatMessage, ContentBlock, MessageRole, base64_encode, sniff_image_media_type};
 pub use provider::{
-    CompletionRequest, EventSink, IdentityOutcome, ModelInfo, OauthCap, ProviderCap,
+    CompletionRequest, EventSink, IMAGE_RESIZE_EXTRA, IMAGE_VISION_EXTRA, IdentityOutcome,
+    ImageResize, ModelInfo, OauthCap, ProviderCap,
 };
 pub use record::{FORMAT_VERSION, PermissionDecision, Record, ToolSource};
 pub use stream::StreamEvent;

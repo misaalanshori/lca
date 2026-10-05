@@ -327,11 +327,13 @@ fn model_context_window(provider: &dyn Provider, model_id: &str) -> u32 {
 }
 
 /// The agent config for the resolved model and registry.
+#[allow(clippy::too_many_arguments)]
 fn agent_config_for(
     config: &Config,
     provider_name: &str,
     model_id: &str,
     context_window: u32,
+    image_policy: lca_tools::ImagePolicy,
     registry: &Arc<ExtensionRegistry>,
     completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>>,
     cwd: &Path,
@@ -339,6 +341,7 @@ fn agent_config_for(
     AgentConfig {
         provider: provider_name.to_string(),
         model: model_id.to_string(),
+        image_policy,
         retry_limit: config.provider_retry_limit() as u32,
         max_iterations: config.tool_max_iterations() as u32,
         extensions: registry.clone(),
@@ -506,11 +509,14 @@ impl Ui {
         let registry = Arc::new(registry);
 
         let context_window = model_context_window(provider.as_ref(), &model_id);
+        // #39: the resolved model's image behavior reaches the tools.
+        let image_policy = crate::models::image_policy_for(&provider.list_models(), &model_id);
         let agent_config = agent_config_for(
             &config,
             &provider_name,
             &model_id,
             context_window,
+            image_policy,
             &registry,
             completion_backend,
             cwd,

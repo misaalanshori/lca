@@ -668,8 +668,8 @@ const OAC_MANIFEST: &str = include_str!("../../../extensions/openai-compatible/e
 fn context_windows_are_identical_across_modes() {
     let fixture = Fixture::new("gh34-windows");
     // `ExtHost::load` serves a component's bag from the installed package
-    // directory, so lay the bytes out where the host looks: the same two
-    // files the native side embeds.
+    // directory, so lay the bytes out where the host looks: the same
+    // three files the native side embeds.
     let bag = fixture
         .root
         .join("data/extensions/openai-compatible/resources");
@@ -682,6 +682,10 @@ fn context_windows_are_identical_across_modes() {
         (
             "context-windows.toml",
             include_str!("../../../extensions/openai-compatible/resources/context-windows.toml"),
+        ),
+        (
+            "image-limits.toml",
+            include_str!("../../../extensions/openai-compatible/resources/image-limits.toml"),
         ),
     ] {
         std::fs::write(bag.join(name), text).expect("write bag");

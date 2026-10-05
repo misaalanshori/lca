@@ -77,6 +77,10 @@ pub struct AgentConfig {
     /// (`turn::FALLBACK_CONTEXT_WINDOW`) so the session still compacts; the
     /// footer keeps showing `ctx ?` rather than a fabricated percentage.
     pub model_context_window: u32,
+    /// What the active model can do with images (#39): the front end
+    /// resolves it from the provider's model list and the agent hands it
+    /// to the tool executor, so `read` resizes and gates per model.
+    pub image_policy: lca_tools::ImagePolicy,
     /// The backend behind the default strategy's `completion` call,
     /// held so the compaction record can carry the summarization's
     /// usage (capability catalog: spend shows in session cost). The
@@ -155,6 +159,9 @@ impl Default for AgentConfig {
             extensions: Arc::new(ExtensionRegistry::new()),
             compaction_threshold: 0.8,
             model_context_window: 0,
+            // #39: unknown vision until the front end resolves the model
+            // against the provider's list; images pass through as today.
+            image_policy: lca_tools::ImagePolicy::unknown(),
             completion_backend: None,
             sent_stable: Arc::new(std::sync::Mutex::new(None)),
             skills_roots: SkillsRoots::default(),
@@ -231,6 +238,8 @@ impl<'a> Agent<'a> {
         // only drop references, so an on-demand reachability sweep
         // (`lca session gc`) is the upgrade path when disk use matters.
         tools.set_spill_dir(Some(session.dir().join("attachments")));
+        // #39: the resolved model's image behavior reaches the tools.
+        tools.set_image_policy(config.image_policy);
         Agent {
             store,
             session,

@@ -8,6 +8,17 @@
 
 use lca_protocol::ModelInfo;
 
+/// The read tool's image behavior for the resolved model (#39): the
+/// provider's per-model extras decide, and a model the list does not
+/// name behaves exactly as today.
+pub fn image_policy_for(models: &[ModelInfo], model_id: &str) -> lca_tools::ImagePolicy {
+    models
+        .iter()
+        .find(|model| model.id == model_id)
+        .map(|model| lca_tools::ImagePolicy::for_extras(&model.extras))
+        .unwrap_or_default()
+}
+
 /// Whether one model is inside the enabled scope - the same matcher
 /// `--list-models` filters its search with.
 ///

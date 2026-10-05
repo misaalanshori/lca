@@ -588,6 +588,10 @@ pub const RESOURCES: &[(&str, &[u8])] = &[
         "context-windows.toml",
         include_bytes!("../resources/context-windows.toml"),
     ),
+    (
+        "image-limits.toml",
+        include_bytes!("../resources/image-limits.toml"),
+    ),
 ];
 
 /// The native handle's resource source. The host sets this on the
@@ -610,6 +614,87 @@ pub fn load_presets(cap: &dyn ProviderCap) -> Vec<Preset> {
 // Context windows (gh #34): the denominator `ctx` and the compaction
 // threshold divide by
 // ---------------------------------------------------------------------------
+
+/// One model's image behavior from `image-limits.toml` (#39): the vision
+/// flag pi's `input` modalities carry, plus an optional resize profile.
+/// No vendor publishes resize numbers today, so profiles are `None`
+/// until one does — vision models without a profile keep pi's
+/// conservative defaults downstream.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageLimitEntry {
+    /// Whether the model takes image input.
+    pub vision: bool,
+    /// A vendor-sourced resize profile, when one exists.
+    pub resize: Option<lca_protocol::ImageResize>,
+}
+
+/// Parse the curated image-limits table (`[id]` tables with `vision` and
+/// optional `max_width`/`max_height`/`max_bytes`). Entries without a
+/// boolean `vision` are ignored; unknown keys are ignored, so resize
+/// fields can join later without disturbing vision reads.
+pub fn parse_image_limits(text: &str) -> BTreeMap<String, ImageLimitEntry> {
+    let Ok(value) = text.parse::<toml::Value>() else {
+        return BTreeMap::new();
+    };
+    let Some(table) = value.as_table() else {
+        return BTreeMap::new();
+    };
+    table
+        .iter()
+        .filter_map(|(model, entry)| {
+            let entry = entry.as_table()?;
+            let vision = entry.get("vision")?.as_bool()?;
+            let resize = (|| {
+                let width = entry.get("max_width")?.as_integer()?;
+                let height = entry.get("max_height")?.as_integer()?;
+                let bytes = entry.get("max_bytes")?.as_integer()?;
+                Some(lca_protocol::ImageResize {
+                    max_width: u32::try_from(width).ok()?,
+                    max_height: u32::try_from(height).ok()?,
+                    max_bytes: usize::try_from(bytes).ok()?,
+                })
+            })();
+            Some((model.clone(), ImageLimitEntry { vision, resize }))
+        })
+        .collect()
+}
+
+/// Load the image limits from the extension's own `resources/` bag (#39).
+/// Missing bag reads as empty: every model is unknown vision and images
+/// pass through as before.
+pub fn load_image_limits(cap: &dyn ProviderCap) -> BTreeMap<String, ImageLimitEntry> {
+    match cap.resource_read("image-limits.toml") {
+        Ok(bytes) => parse_image_limits(&String::from_utf8_lossy(&bytes)),
+        Err(_) => BTreeMap::new(),
+    }
+}
+
+/// The `ModelInfo` extras carrying one model's image behavior (#39):
+/// `image.vision` is `"true"`/`"false"`, and `image.resize` rides only
+/// when a vendor-sourced profile exists. The host reads both through
+/// `ImagePolicy::for_extras` — no ABI change for non-structural data.
+pub fn image_extras(
+    model: &str,
+    limits: &BTreeMap<String, ImageLimitEntry>,
+) -> Vec<(String, String)> {
+    let Some(entry) = limits.get(model) else {
+        return Vec::new();
+    };
+    let mut extras = vec![(
+        lca_protocol::IMAGE_VISION_EXTRA.to_string(),
+        entry.vision.to_string(),
+    )];
+    if let Some(resize) = &entry.resize {
+        extras.push((
+            lca_protocol::IMAGE_RESIZE_EXTRA.to_string(),
+            format!(
+                "{}x{}:{}",
+                resize.max_width, resize.max_height, resize.max_bytes
+            ),
+        ));
+    }
+    extras
+}
 
 /// Parse the curated per-model window table (`id = tokens`).
 pub fn parse_context_windows(text: &str) -> BTreeMap<String, u32> {

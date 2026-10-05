@@ -537,6 +537,8 @@ fn wire(
     let agent_config = AgentConfig {
         provider: provider_name.to_string(),
         model: model_id.clone(),
+        // #39: the resolved model's image behavior reaches the tools.
+        image_policy: crate::models::image_policy_for(&provider.list_models(), &model_id),
         retry_limit: config.provider_retry_limit() as u32,
         max_iterations: config.tool_max_iterations() as u32,
         extensions: Arc::new(registry),

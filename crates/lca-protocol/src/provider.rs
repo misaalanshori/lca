@@ -9,6 +9,41 @@ use crate::message::ChatMessage;
 use crate::stream::StreamEvent;
 use crate::tool::ToolSpec;
 
+/// `ModelInfo` extras keys carrying image behavior (#39). Provider
+/// extensions write them from their limits table; the host reads them
+/// through the tool executor's image policy — the non-structural
+/// channel, so no ABI change. They live here (not in `lca-tools`, which
+/// does not build for the guest target) so both delivery modes share
+/// them.
+pub const IMAGE_VISION_EXTRA: &str = "image.vision";
+/// `WIDTHxHEIGHT:BYTES`, present only with a vendor-sourced profile.
+pub const IMAGE_RESIZE_EXTRA: &str = "image.resize";
+
+/// A per-model image profile: pi's `ModelImageResizeOptions` shape.
+/// `max_bytes` bounds the encoded payload. Vendor-sourced when present;
+/// pi's conservative defaults fill the gaps downstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageResize {
+    /// Long-edge cap in pixels.
+    pub max_width: u32,
+    /// Short-edge cap in pixels.
+    pub max_height: u32,
+    /// Encoded-payload cap in bytes.
+    pub max_bytes: usize,
+}
+
+impl Default for ImageResize {
+    /// Pi's conservative defaults for omitted fields (2000 by 2000
+    /// pixels, 4.5 MiB encoded; JPEG quality 80 is applied at encode).
+    fn default() -> Self {
+        ImageResize {
+            max_width: 2000,
+            max_height: 2000,
+            max_bytes: 4_500_000,
+        }
+    }
+}
+
 /// One model a provider offers (FR-PROV-2).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelInfo {

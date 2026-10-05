@@ -200,6 +200,7 @@ impl ExtensionDispatch for OpenAiCompat {
             stored
         };
         let windows = load_context_windows(self.cap.as_ref());
+        let image_limits = load_image_limits(self.cap.as_ref());
         Ok(
             profiles::picker_models(self.cap.as_ref(), &self.settings, &stored, &configured)
                 .into_iter()
@@ -210,7 +211,13 @@ impl ExtensionDispatch for OpenAiCompat {
                         picked.window,
                         &windows,
                     );
-                    let extras = profiles::row_extras(&picked).into_iter().collect();
+                    let mut extras: std::collections::BTreeMap<String, String> =
+                        profiles::row_extras(&picked).into_iter().collect();
+                    // #39: image behavior rides the non-structural extras,
+                    // so unknown models simply carry nothing.
+                    for (key, value) in image_extras(&picked.id, &image_limits) {
+                        extras.insert(key, value);
+                    }
                     ModelInfo {
                         id: picked.id.clone(),
                         name: picked.id,

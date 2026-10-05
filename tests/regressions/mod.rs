@@ -256,3 +256,7 @@ mod gh111_headless_threading;
 // records grant-store failures.
 #[path = "gh152-tracing-subscriber.rs"]
 mod gh152_tracing_subscriber;
+// GitHub #39: read truncation (line budget + offset guidance) and image
+// semantics (resize per profile, no-vision note, unknown unchanged).
+#[path = "gh39-read-truncation-images.rs"]
+mod gh39_read_truncation_images;
