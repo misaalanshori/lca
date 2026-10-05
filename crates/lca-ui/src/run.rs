@@ -334,7 +334,7 @@ fn handle_input(
 /// Returns an error when the terminal cannot be driven (the terminal
 /// layer surfaces the I/O failure); the loop itself handles user exit by
 /// returning `Ok(0)`.
-pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
+pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     let keybindings = Arc::new(KeybindingsManager::new());
     // One permission-prompt channel for the session, not one per turn
     // (gh #31 review): the host's endpoint consent asks outside a turn
@@ -345,7 +345,20 @@ pub fn run(options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         .prompt_slot
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(prompt_tx.clone());
+    // #109: positional CLI messages arrive exactly as if typed — the
+    // first paints its user band and runs when the loop reaches
+    // `TurnState::start`, the rest queue as follow-ups (their bands
+    // appear at flush, with the marker, like any queued message).
+    let mut initial_messages = std::mem::take(&mut options.initial_messages);
     let mut chat = Chat::new(options, keybindings);
+    if !initial_messages.is_empty() {
+        let first = initial_messages.remove(0);
+        chat.transcript.push_user(first.clone());
+        chat.submitted = Some(first);
+        for message in initial_messages {
+            chat.queue_submit(message, lca_protocol::SubmitMode::FollowUp);
+        }
+    }
     let mut terminal = ProcessTerminal::new();
     let (input_tx, input_rx) = std::sync::mpsc::channel::<String>();
     let (resize_tx, resize_rx) = std::sync::mpsc::channel::<()>();
@@ -706,6 +719,7 @@ mod tests {
                 initial_lines: Vec::new(),
                 initial_records: Vec::new(),
                 initial_tail_lines: Vec::new(),
+                initial_messages: Vec::new(),
                 yolo: false,
                 thinking_visibility: Default::default(),
                 codeblock_border: Default::default(),

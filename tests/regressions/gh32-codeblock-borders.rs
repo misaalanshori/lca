@@ -34,6 +34,7 @@ fn chat(border: CodeBlockBorder) -> Chat {
             initial_lines: Vec::new(),
             initial_records: Vec::new(),
             initial_tail_lines: Vec::new(),
+            initial_messages: Vec::new(),
             yolo: false,
             thinking_visibility: Default::default(),
             codeblock_border: border,

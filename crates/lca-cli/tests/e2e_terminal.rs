@@ -1064,3 +1064,33 @@ fn a_cancelled_turn_does_not_poison_the_next_one() {
     session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
 }
+
+// Verifies: #109 (`lca hello` opens the TUI and submits "hello") — the
+// live receipt: the positional arrives submitted on open and its turn
+// runs to the mocked reply with no keypress typed.
+#[cfg(any(unix, windows))]
+#[cfg(unix)]
+#[test]
+fn gh109_positional_message_submits_on_open() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal tests are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("turn done"))]));
+    let sandbox = sandbox("tui-initial");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    // One unwrappable word: the pane wraps long user bands across rows,
+    // so a multi-word needle never matches contiguously.
+    let session = Tmux::new("initial");
+    session.spawn(&sandbox, Some(&mock), true, &[], &["zebracake"]);
+    let pane = session.wait_for("turn done", std::time::Duration::from_secs(25));
+    assert!(
+        pane.contains("zebracake"),
+        "the positional arrived submitted on open, no keypress typed"
+    );
+
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}

@@ -3,6 +3,95 @@
 
 use super::*;
 
+/// Which session a headless run appends to (#111: `-c` continues the
+/// project's most recent session, `-r <id>` resumes that session).
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum SessionSelector {
+    /// A fresh session.
+    New,
+    /// The project's most recent session.
+    Continue,
+    /// A named session.
+    Resume(String),
+}
+
+/// What a parsed command line asks for. Split out so the dispatch rule
+/// itself is testable without a terminal.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Route {
+    /// Headless turns, in order, in one session (FR-CORE-3).
+    Headless {
+        /// The prompts to run, in order (#109: `-p` value, `--prompt`,
+        /// then positionals, concatenated in that order).
+        messages: Vec<String>,
+        /// Model override if provided (#111).
+        model: Option<String>,
+        /// Which session the turns append to (#111).
+        session: SessionSelector,
+    },
+    /// The interactive interface in the working directory (FR-CORE-2).
+    Interactive {
+        /// The session to resume, when the subcommand names one.
+        resume: Option<String>,
+        /// Model override if provided.
+        model: Option<String>,
+        /// Positional messages: the first is submitted on open (#109).
+        initial: Vec<String>,
+    },
+    /// The merged-configuration printout (FR-CFG-2).
+    Config,
+    /// An extension-management subcommand (FR-DIST-*).
+    Ext(ext::ExtCmd),
+    /// The session listing (FR-SESS-2).
+    ResumeList,
+    /// Fork at a message (FR-SESS-3).
+    Fork {
+        /// Parent session id.
+        session: String,
+        /// Record id to fork at.
+        message: String,
+    },
+    /// Rename a session.
+    Rename {
+        /// Session id.
+        session: String,
+        /// New title.
+        title: String,
+    },
+    /// Export a session (FR-SESS-7).
+    Export {
+        /// Session id.
+        session: String,
+        /// Keep audit records.
+        audit: bool,
+    },
+    /// Delete a session's unreferenced attachments (D5).
+    Gc {
+        /// Session id.
+        session: String,
+    },
+}
+
+/// Flag combinations that contradict each other (#109, #111). `Some`
+/// carries the usage error; `run` prints it and exits 2. Kept beside
+/// `route` so the rule is unit-testable without a terminal.
+pub fn check_flag_contradictions(cli: &Cli) -> Option<String> {
+    if cli.r#continue && cli.resume_id.is_some() {
+        return Some(
+            "-c/--continue and -r/--resume select different sessions; pass exactly one".to_string(),
+        );
+    }
+    if cli.command.is_some()
+        && (cli.print.is_some() || cli.prompt.is_some() || !cli.messages.is_empty())
+    {
+        return Some(
+            "a subcommand takes its own arguments; pass -p/--prompt and messages without one"
+                .to_string(),
+        );
+    }
+    None
+}
+
 pub(super) fn config_command(cwd: &Path) -> i32 {
     let data = data_dir();
     let grants = match GrantStore::open(&data.join("grants.json")) {
@@ -45,45 +134,77 @@ pub(super) fn open_store() -> Result<(SessionStore, PathBuf), i32> {
 
 /// Resolve a parsed command line to a route.
 pub fn route(cli: &Cli) -> Route {
+    // #109: every typed message becomes a positional, in one stable
+    // order: the legacy `--prompt` value, then the `-p` value (a bare
+    // `-p` contributes none — see the `default_missing_value` edge in
+    // `Cli`), then the positionals.
+    let mut messages = Vec::new();
+    if let Some(legacy) = &cli.prompt {
+        messages.push(legacy.clone());
+    }
+    if let Some(first) = cli.print.as_deref()
+        && !first.is_empty()
+    {
+        messages.push(first.to_string());
+    }
+    messages.extend(cli.messages.iter().cloned());
+    let print_mode = cli.print.is_some() || cli.prompt.is_some();
+
+    // #111: the headless session selector. A `-c`/`-r` contradiction is
+    // rejected in `run` before routing (route owns no exit code).
+    let headless_session = if cli.r#continue {
+        SessionSelector::Continue
+    } else if let Some(id) = &cli.resume_id {
+        SessionSelector::Resume(id.clone())
+    } else {
+        SessionSelector::New
+    };
+
+    if print_mode && cli.command.is_none() {
+        return Route::Headless {
+            messages,
+            model: cli.model.clone(),
+            session: headless_session,
+        };
+    }
     if let Some(id) = &cli.resume_id {
         return Route::Interactive {
             resume: Some(id.clone()),
             model: cli.model.clone(),
+            initial: messages,
         };
     }
     match &cli.command {
-        None => match &cli.prompt {
-            Some(prompt) => Route::Headless {
-                prompt: prompt.clone(),
-            },
-            None => {
-                if cli.r#continue {
-                    let data = data_dir();
-                    let store = SessionStore::new(data.clone());
-                    let cwd = std::env::current_dir().unwrap_or_default();
-                    let latest = store
-                        .list_sessions(&cwd)
-                        .ok()
-                        .and_then(|list| list.into_iter().next())
-                        .map(|s| s.id);
-                    Route::Interactive {
-                        resume: latest,
-                        model: cli.model.clone(),
-                    }
-                } else {
-                    Route::Interactive {
-                        resume: None,
-                        model: cli.model.clone(),
-                    }
+        None => {
+            if cli.r#continue {
+                let data = data_dir();
+                let store = SessionStore::new(data.clone());
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let latest = store
+                    .list_sessions(&cwd)
+                    .ok()
+                    .and_then(|list| list.into_iter().next())
+                    .map(|s| s.id);
+                Route::Interactive {
+                    resume: latest,
+                    model: cli.model.clone(),
+                    initial: messages,
+                }
+            } else {
+                Route::Interactive {
+                    resume: None,
+                    model: cli.model.clone(),
+                    initial: messages,
                 }
             }
-        },
+        }
         Some(Command::Config) => Route::Config,
         Some(Command::Resume { id }) => match id {
             None => Route::ResumeList,
             Some(id) => Route::Interactive {
                 resume: Some(id.clone()),
                 model: cli.model.clone(),
+                initial: messages,
             },
         },
         Some(Command::Fork { session, message }) => Route::Fork {
@@ -341,6 +462,8 @@ mod tests {
     // Verifies: issue #6 (pi's CLI surface) - `-r <id>` opens that session,
     // `resume <id>` is its long form, a bare `lca` opens fresh, `--model`
     // rides every one of them into the interface, and `-p` stays headless.
+    // (#109: positionals ride `initial`; #111: headless carries the model
+    // and the session selector.)
     #[test]
     fn resume_and_continue_flags_route_to_the_interface() {
         assert_eq!(
@@ -348,6 +471,7 @@ mod tests {
             Route::Interactive {
                 resume: Some("abc".to_string()),
                 model: Some("m".to_string()),
+                initial: Vec::new(),
             }
         );
         assert_eq!(
@@ -355,6 +479,7 @@ mod tests {
             Route::Interactive {
                 resume: Some("abc".to_string()),
                 model: None,
+                initial: Vec::new(),
             }
         );
         assert_eq!(
@@ -362,12 +487,15 @@ mod tests {
             Route::Interactive {
                 resume: None,
                 model: None,
+                initial: Vec::new(),
             }
         );
         assert_eq!(
             route_of(&["lca", "-p", "hi"]),
             Route::Headless {
-                prompt: "hi".to_string(),
+                messages: vec!["hi".to_string()],
+                model: None,
+                session: SessionSelector::New,
             }
         );
     }

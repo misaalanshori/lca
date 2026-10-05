@@ -170,6 +170,8 @@ pub(crate) struct Ui {
     initial_head: Vec<String>,
     initial_records: Vec<lca_protocol::Record>,
     initial_tail: Vec<String>,
+    /// Positional CLI messages (#109), submitted on open in order.
+    initial_messages: Vec<String>,
     /// The background update check's finding (FR-CFG-6).
     update_notice: Arc<std::sync::OnceLock<String>>,
     /// R4: a background login/identity step's result, taken by the
@@ -200,6 +202,7 @@ pub fn run(
     resume: Option<&str>,
     yolo: bool,
     model: Option<&str>,
+    initial: &[String],
     allow_host: &[String],
     flags: &crate::CliFlags,
 ) -> anyhow::Result<i32> {
@@ -214,7 +217,9 @@ pub fn run(
         return Ok(crate::exit::USAGE);
     }
     let _temp_guard = crate::SessionTempGuard;
-    let ui = Arc::new(Ui::new(cwd, resume, yolo, model, allow_host, flags)?);
+    let ui = Arc::new(Ui::new(
+        cwd, resume, yolo, model, initial, allow_host, flags,
+    )?);
     crate::init_session_temp(&ui.session_id());
     let options = ui.options();
     let runner = ui.turn_runner();
@@ -354,6 +359,7 @@ impl Ui {
         resume: Option<&str>,
         yolo: bool,
         model_override: Option<&str>,
+        initial: &[String],
         allow_host: &[String],
         flags: &crate::CliFlags,
     ) -> anyhow::Result<Ui> {
@@ -578,6 +584,7 @@ impl Ui {
             initial_head,
             initial_records,
             initial_tail,
+            initial_messages: initial.to_vec(),
             update_notice,
             login_pending: Arc::new(Mutex::new(None)),
             compact_state: Arc::new(Mutex::new(lca_ui::CompactState::Idle)),

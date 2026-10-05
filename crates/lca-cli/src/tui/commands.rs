@@ -39,6 +39,7 @@ impl Ui {
             initial_lines: self.initial_head.clone(),
             initial_records: self.initial_records.clone(),
             initial_tail_lines: self.initial_tail.clone(),
+            initial_messages: self.initial_messages.clone(),
             models: super::display::model_rows(&self.offered_models(), &self.provider_name),
             // The session's prompt channel (run publishes its sender here)
             // and the consent flow's rows for the picker (gh #31 review).

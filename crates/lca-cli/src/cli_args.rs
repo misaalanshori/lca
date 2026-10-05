@@ -15,10 +15,33 @@ use crate::version_static;
     about = "A lightweight, cross-platform, extensible coding agent for the terminal"
 )]
 pub struct Cli {
-    // FR-CORE-3: one turn, no interface.
-    /// Run a single prompt and print the reply, without the interface.
-    #[arg(short = 'p', long = "prompt", value_name = "PROMPT")]
+    // #109 (pi's `-p`/`--print`): a bare `-p` is print mode; `-p <text>`
+    // carries the first message. The empty missing-value is the
+    // documented edge: it contributes no message, so plain English
+    // never collides with a sentinel (`-p ""` behaves like bare `-p`).
+    /// Run the supplied prompts and print the replies, without the
+    /// interface. Bare `-p` is print mode; `-p <text>` prepends a message.
+    #[arg(
+        short = 'p',
+        long = "print",
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_name = "MESSAGE"
+    )]
+    pub print: Option<String>,
+    // #109: the legacy spelling stays. Long-only now: `-p` belongs to
+    // `--print`, and removing `--prompt` would break scripts for zero gain.
+    /// Run a single prompt and print the reply, without the interface
+    /// (legacy spelling; prefer `-p <text>` or positional messages).
+    #[arg(long = "prompt", value_name = "PROMPT")]
     pub prompt: Option<String>,
+    // #109 (pi's `messages` positional): with `-p`/`--print` these run
+    // as headless turns in order; without it the TUI opens with the
+    // first submitted. `@file` expansion is out of scope (it is #71's).
+    /// Messages: headless turns in order with `-p`, else the TUI's first
+    /// submission.
+    #[arg(value_name = "MESSAGE")]
+    pub messages: Vec<String>,
     // ADR-0042: `permissions.mode = "yolo"`, said out loud.
     /// Approve every permission prompt automatically, recording each one
     /// like a human "always" answer. Explicit deny rules still deny.

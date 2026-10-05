@@ -643,57 +643,7 @@ impl PermissionPrompt for HeadlessPrompt {
     }
 }
 
-/// What a parsed command line asks for. Split out so the dispatch rule
-/// itself is testable without a terminal.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Route {
-    /// One headless turn (FR-CORE-3).
-    Headless {
-        /// The prompt.
-        prompt: String,
-    },
-    /// The interactive interface in the working directory (FR-CORE-2).
-    Interactive {
-        /// The session to resume, when the subcommand names one.
-        resume: Option<String>,
-        /// Model override if provided.
-        model: Option<String>,
-    },
-    /// The merged-configuration printout (FR-CFG-2).
-    Config,
-    /// An extension-management subcommand (FR-DIST-*).
-    Ext(ext::ExtCmd),
-    /// The session listing (FR-SESS-2).
-    ResumeList,
-    /// Fork at a message (FR-SESS-3).
-    Fork {
-        /// Parent session id.
-        session: String,
-        /// Record id to fork at.
-        message: String,
-    },
-    /// Rename a session.
-    Rename {
-        /// Session id.
-        session: String,
-        /// New title.
-        title: String,
-    },
-    /// Export a session (FR-SESS-7).
-    Export {
-        /// Session id.
-        session: String,
-        /// Keep audit records.
-        audit: bool,
-    },
-    /// Delete a session's unreferenced attachments (D5).
-    Gc {
-        /// Session id.
-        session: String,
-    },
-}
-
-pub use session_cmds::route;
+pub use session_cmds::{Route, SessionSelector, check_flag_contradictions, route};
 
 /// Dispatch a parsed command line; returns the process exit code.
 pub async fn run(cli: Cli) -> i32 {
@@ -711,6 +661,12 @@ pub async fn run(cli: Cli) -> i32 {
         eprintln!("error: --provider scopes the --model lookup; pass --model <pattern> with it");
         return exit::USAGE;
     }
+    // #109/#111: contradictory flags are usage errors, said out loud
+    // before routing (route owns no exit code).
+    if let Some(err) = check_flag_contradictions(&cli) {
+        eprintln!("error: {err}");
+        return exit::USAGE;
+    }
     let flags = CliFlags::from_cli(&cli);
     // `--list-models` lists and exits: it outranks the session routes,
     // pi's "lists, then exits".
@@ -718,9 +674,15 @@ pub async fn run(cli: Cli) -> i32 {
         return list_models_command(&cwd, search, &flags, &cli.allow_host);
     }
     match route(&cli) {
-        Route::Headless { prompt } => {
+        Route::Headless {
+            messages,
+            model,
+            session,
+        } => {
             headless(
-                &prompt,
+                &messages,
+                model.as_deref(),
+                &session,
                 cli.json,
                 &cwd,
                 &cli.attach,
@@ -730,11 +692,16 @@ pub async fn run(cli: Cli) -> i32 {
             )
             .await
         }
-        Route::Interactive { resume, model } => interactive(
+        Route::Interactive {
+            resume,
+            model,
+            initial,
+        } => interactive(
             &cwd,
             resume.as_deref(),
             cli.yolo,
             model.as_deref(),
+            &initial,
             &cli.allow_host,
             &flags,
         ),
@@ -753,12 +720,13 @@ fn interactive(
     resume: Option<&str>,
     yolo: bool,
     model: Option<&str>,
+    initial: &[String],
     allow_host: &[String],
     flags: &CliFlags,
 ) -> i32 {
     // Wired to `lca-tui` in this phase; kept as one seam so the headless
     // contract stays independently testable.
-    match lca_tui_entry(cwd, resume, yolo, model, allow_host, flags) {
+    match lca_tui_entry(cwd, resume, yolo, model, initial, allow_host, flags) {
         Ok(code) => code,
         Err(err) => {
             eprintln!("error: {err:#}");
@@ -777,10 +745,11 @@ fn lca_tui_entry(
     resume: Option<&str>,
     yolo: bool,
     model: Option<&str>,
+    initial: &[String],
     allow_host: &[String],
     flags: &CliFlags,
 ) -> anyhow::Result<i32> {
-    crate::tui::run(cwd, resume, yolo, model, allow_host, flags)
+    crate::tui::run(cwd, resume, yolo, model, initial, allow_host, flags)
 }
 
 #[cfg(test)]

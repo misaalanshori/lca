@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use clap::Parser;
-use lca_cli::{Cli, Route, exit, exit_code, route};
+use lca_cli::{Cli, Route, SessionSelector, exit, exit_code, route};
 
 fn parse(args: &[&str]) -> Cli {
     Cli::try_parse_from(std::iter::once("lca").chain(args.iter().copied())).expect("parses")
@@ -17,17 +17,21 @@ fn no_arguments_route_to_the_interactive_interface() {
         Route::Interactive {
             resume: None,
             model: None,
+            initial: Vec::new(),
         }
     );
 }
 
-// Verifies: FR-CORE-3 (a prompt flag runs one turn headless)
+// Verifies: FR-CORE-3 (a prompt flag runs one turn headless; #109 keeps
+// `--prompt` working and #111 threads the model and session selector)
 #[test]
 fn prompt_flag_routes_headless() {
     assert_eq!(
         route(&parse(&["-p", "hello", "--json"])),
         Route::Headless {
-            prompt: "hello".to_string()
+            messages: vec!["hello".to_string()],
+            model: None,
+            session: SessionSelector::New,
         }
     );
 }
@@ -41,6 +45,7 @@ fn resume_without_id_lists_sessions() {
         Route::Interactive {
             resume: Some("01ABC".to_string()),
             model: None,
+            initial: Vec::new(),
         }
     );
 }

@@ -163,9 +163,24 @@ fn stop_reason_name(reason: StopReason) -> &'static str {
     }
 }
 
-/// Run one headless turn (FR-CORE-3) and return the exit code.
+/// The project's most recent session id, newest first from the store.
+fn latest_session(store: &SessionStore, cwd: &Path) -> Option<String> {
+    store
+        .list_sessions(cwd)
+        .ok()
+        .and_then(|list| list.into_iter().next())
+        .map(|summary| summary.id)
+}
+
+/// Run headless turns, in order, in one session (FR-CORE-3) and return
+/// the exit code. The first failure stops the run; its outcome maps the
+/// code, exactly as a single turn did before (#109 keeps one message the
+/// common case and every old call site passes exactly one).
+#[allow(clippy::too_many_arguments)]
 pub async fn headless(
-    prompt: &str,
+    messages: &[String],
+    model_override: Option<&str>,
+    session: &crate::SessionSelector,
     json: bool,
     cwd: &Path,
     attachments: &[std::path::PathBuf],
@@ -193,16 +208,49 @@ pub async fn headless(
     // (the config default is off); when it was, there is no status
     // line to report through, so stderr carries the notice.
     crate::update::spawn(config.update_check(true), None);
+    // Print mode with nothing to run is a usage error, said out loud
+    // (a bare `-p` with no message). Interactive mode would open the
+    // TUI; headless has nothing to turn into.
+    if messages.is_empty() {
+        eprintln!(
+            "error: no prompt given; pass `-p <text>`, `--prompt <text>`, or a positional message"
+        );
+        return exit::USAGE;
+    }
     let provider_name = config.provider().to_string();
-    let title: String = prompt.chars().take(60).collect();
-    let session =
-        match store.create_session(cwd, if title.is_empty() { "headless" } else { &title }) {
+    // #111: the run appends to the selected session. A continued run
+    // shares the session's `log.jsonl`; only a fresh run starts one.
+    let title: String = messages[0].chars().take(60).collect();
+    let title = if title.is_empty() { "headless" } else { &title };
+    let session = match session {
+        crate::SessionSelector::New => match store.create_session(cwd, title) {
             Ok(session) => session,
             Err(err) => {
                 eprintln!("error: cannot start a session: {err}");
                 return exit::INTERNAL;
             }
-        };
+        },
+        crate::SessionSelector::Continue => match latest_session(&store, cwd) {
+            Some(id) => match store.session(cwd, &id) {
+                Ok(session) => session,
+                Err(err) => {
+                    eprintln!("error: cannot open the last session: {err}");
+                    return exit::SESSION;
+                }
+            },
+            None => {
+                eprintln!("error: -c continues the last session, but this project has none yet");
+                return exit::SESSION;
+            }
+        },
+        crate::SessionSelector::Resume(id) => match store.session(cwd, id) {
+            Ok(session) => session,
+            Err(err) => {
+                eprintln!("error: cannot resume session `{id}`: {err}");
+                return exit::SESSION;
+            }
+        },
+    };
     let session_truncated = store
         .read(&session)
         .map(|read| read.truncated)
@@ -262,6 +310,8 @@ pub async fn headless(
     let (agent_config, provider) = match wire(
         cwd,
         &config,
+        model_override,
+        flags.provider.as_deref(),
         &grants,
         &shared_prompt,
         &store,
@@ -278,27 +328,54 @@ pub async fn headless(
     };
     let mut sink = HeadlessSink::new(json, session_truncated);
     let close_registry = agent_config.extensions.clone();
-    // Stage `--attach` images before the turn: content-addressed, owner-only,
-    // magic-byte sniffed (ADR-0029). The stub text rides in the user message
-    // so a provider without vision still sees that the image exists.
-    let (turn_text, attach_hashes) = match stage_attachments(&session, attachments, prompt) {
-        Ok(staged) => staged,
-        Err(code) => return code,
-    };
-    let outcome = {
-        let mut agent = Agent::new(
-            &store,
-            &session,
-            provider.as_ref(),
-            &mut tools,
-            grants.clone(),
-            &mut prompt_impl,
-            proposals.as_ref(),
-            agent_config,
+    // #109: one turn per message, in order, in the same session (pi's
+    // print loop). The first failure stops the run; `--attach` images
+    // stage onto the first message only.
+    let mut outcome = None;
+    for (index, message) in messages.iter().enumerate() {
+        // Stage `--attach` images before the turn: content-addressed,
+        // owner-only, magic-byte sniffed (ADR-0029). The stub text rides
+        // in the user message so a provider without vision still sees
+        // that the image exists.
+        let (turn_text, attach_hashes) = if index == 0 {
+            match stage_attachments(&session, attachments, message) {
+                Ok(staged) => staged,
+                Err(code) => return code,
+            }
+        } else {
+            (message.clone(), Vec::new())
+        };
+        let turn = {
+            let mut agent = Agent::new(
+                &store,
+                &session,
+                provider.as_ref(),
+                &mut tools,
+                grants.clone(),
+                &mut prompt_impl,
+                proposals.as_ref(),
+                agent_config.clone(),
+            );
+            agent
+                .run_turn_with_attachments(
+                    &turn_text,
+                    &attach_hashes,
+                    &mut sink,
+                    &CancelFlag::new(),
+                )
+                .await
+        };
+        let failed = turn.status != TurnStatus::Ok;
+        outcome = Some(turn);
+        if failed {
+            break;
+        }
+    }
+    let Some(outcome) = outcome else {
+        eprintln!(
+            "error: no prompt given; pass `-p <text>`, `--prompt <text>`, or a positional message"
         );
-        agent
-            .run_turn_with_attachments(&turn_text, &attach_hashes, &mut sink, &CancelFlag::new())
-            .await
+        return exit::USAGE;
     };
     // `session-close`: the session is about to end (SRDD hook points).
     lca_core::drive_blocking(async move {
@@ -344,6 +421,8 @@ fn stage_attachments(
 fn wire(
     cwd: &Path,
     config: &Config,
+    model_override: Option<&str>,
+    provider_scope: Option<&str>,
     grants: &std::sync::Arc<std::sync::Mutex<GrantStore>>,
     shared_prompt: &lca_permissions::SharedPrompt,
     store: &SessionStore,
@@ -381,19 +460,49 @@ fn wire(
             return Err(exit::USAGE);
         }
     };
-    let model_id = {
-        let configured = config.model().unwrap_or_default();
-        if configured.is_empty() {
-            // The enabled scope picks here too (gh #8): headless has no
-            // cycle, but it agrees with the interface about which models
-            // this configuration offers.
-            crate::models::filter_enabled(provider.list_models(), config.models_enabled())
-                .into_iter()
-                .map(|model| model.id)
-                .find(|id| !id.is_empty())
-                .unwrap_or_else(|| provider_name.to_string())
-        } else {
-            configured.to_string()
+    // #111: `--model <pattern>[:thinking]` resolves against the
+    // provider's list exactly the way the interface resolves it (a
+    // pattern nothing matches is the id itself); otherwise the
+    // configured model wins, else the first enabled one.
+    let mut override_thinking: Option<String> = None;
+    let model_id = match model_override {
+        Some(pattern) => {
+            let mut candidates = provider.list_models();
+            if let Some(profile) = provider_scope {
+                candidates
+                    .retain(|model| crate::models::in_provider(model, profile, provider_name));
+                if candidates.is_empty() {
+                    eprintln!(
+                        "error: unknown provider \"{profile}\". Use --list-models to see available models."
+                    );
+                    return Err(exit::USAGE);
+                }
+            }
+            match crate::models::resolve_pattern(pattern, &candidates) {
+                Ok(resolved) => {
+                    override_thinking = resolved.thinking;
+                    resolved.id
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return Err(exit::USAGE);
+                }
+            }
+        }
+        None => {
+            let configured = config.model().unwrap_or_default();
+            if configured.is_empty() {
+                // The enabled scope picks here too (gh #8): headless has no
+                // cycle, but it agrees with the interface about which models
+                // this configuration offers.
+                crate::models::filter_enabled(provider.list_models(), config.models_enabled())
+                    .into_iter()
+                    .map(|model| model.id)
+                    .find(|id| !id.is_empty())
+                    .unwrap_or_else(|| provider_name.to_string())
+            } else {
+                configured.to_string()
+            }
         }
     };
     #[cfg(feature = "bundled-compaction-default")]
@@ -437,11 +546,16 @@ fn wire(
         system_prompt: lca_core::identity_prompt(&model_id, std::env::consts::OS),
         skills_roots: skills_roots(cwd),
         // `--thinking` and the `thinking` key reach headless mode too: a
-        // flag that works in one front end only is a flag that lies. The
-        // model's configured default wins over it (gh #8 phase 4), and
-        // the pair is clamped into what this model accepts.
-        reasoning_effort: config
-            .switch_thinking(config.thinking().map(str::to_string).as_deref(), &model_id),
+        // flag that works in one front end only is a flag that lies. A
+        // `--model` suffix is explicit (gh #8 phase 4); otherwise the
+        // model's configured default wins over the configured `thinking`,
+        // clamped into what this model accepts.
+        reasoning_effort: match override_thinking {
+            Some(level) => config.clamp_thinking(Some(&level), &model_id),
+            None => {
+                config.switch_thinking(config.thinking().map(str::to_string).as_deref(), &model_id)
+            }
+        },
         ..AgentConfig::default()
     };
     Ok((agent_config, provider))

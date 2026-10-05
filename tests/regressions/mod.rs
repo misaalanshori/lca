@@ -245,3 +245,10 @@ mod gh14_sdk_permission_prompt;
 // derives from the detected terminal palette; oklch/style() deferred.
 #[path = "gh10-system-theme.rs"]
 mod gh10_system_theme;
+// GitHub #109: `-p` is a boolean print flag, messages are positional
+// (pi's invocation shape); `--prompt` stays as the legacy spelling.
+#[path = "gh109-cli-invocation.rs"]
+mod gh109_cli_invocation;
+// GitHub #111: headless honors `--model`, `-c`, `-r`.
+#[path = "gh111-headless-threading.rs"]
+mod gh111_headless_threading;

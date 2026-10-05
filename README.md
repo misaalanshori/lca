@@ -143,8 +143,11 @@ Run it:
 
 ```sh
 lca                       # interactive interface in the current directory
-lca -p "fix the failing test"   # one turn, reply on stdout
+lca "fix it"              # interface opens with the message submitted (#109)
+lca -p "fix the failing test"   # one headless turn, reply on stdout
+lca -p one two            # headless turns, in order, in one session
 lca -p "..." --json       # one JSON object per line (docs/headless.md)
+lca -c -p "continue"        # headless, appending to the last session (#111)
 lca resume                # list this project's sessions, reopen one
 lca ext list              # installed extensions and what they can reach
 lca --list-models         # id  provider  context, one line per model (optional search)

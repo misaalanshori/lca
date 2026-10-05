@@ -1,0 +1,191 @@
+//! GitHub #111, live: headless honors `--model`, `-c`, `-r` against the
+//! loopback mock (no real network, no real credentials).
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
+mod common;
+
+use common::{Reply, rt, sandbox, sse_text, start_mock};
+use std::collections::HashMap;
+
+/// Every `log.jsonl` under the sandbox state dir, with its parsed lines.
+fn session_logs(box_: &common::Sandbox) -> HashMap<String, Vec<serde_json::Value>> {
+    let mut out = HashMap::new();
+    let sessions = box_.state_dir().join("sessions");
+    let mut stack = vec![sessions];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_name().and_then(|n| n.to_str()) == Some("log.jsonl") {
+                let text = std::fs::read_to_string(&path).expect("read log");
+                let lines = text
+                    .lines()
+                    .map(|line| serde_json::from_str(line).expect("log line parses"))
+                    .collect();
+                out.insert(path.to_string_lossy().into_owned(), lines);
+            }
+        }
+    }
+    out
+}
+
+fn user_texts(lines: &[serde_json::Value]) -> Vec<String> {
+    lines
+        .iter()
+        .filter(|l| l["t"] == "user")
+        .map(|l| l["content"].as_str().unwrap_or("").to_string())
+        .collect()
+}
+
+// Verifies: #111 (`lca -c -p x` appends to the last session's `log.jsonl`).
+#[test]
+fn gh111_continue_appends_to_the_last_session_log() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_text("first answer")),
+        Reply::Sse(sse_text("second answer")),
+        Reply::Sse(sse_text("spare")),
+    ]));
+    let box_ = sandbox("headless-continue");
+    let first = box_.run(
+        Some(&mock),
+        &["--model", "zen-free", "-p", "first", "--json"],
+    );
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(session_logs(&box_).len(), 1, "one session after run one");
+
+    let second = box_.run(Some(&mock), &["-c", "-p", "second", "--json"]);
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let logs = session_logs(&box_);
+    assert_eq!(
+        logs.len(),
+        1,
+        "continue reuses the session, it does not fork one"
+    );
+    let lines = logs.values().next().expect("the session log");
+    assert_eq!(
+        user_texts(lines),
+        vec!["first".to_string(), "second".to_string()],
+        "both turns append to the same log.jsonl"
+    );
+}
+
+// Verifies: #111 (`lca --model m -p x` records `m`).
+#[test]
+fn gh111_model_override_is_recorded() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("answer"))]));
+    let box_ = sandbox("headless-model");
+    let output = box_.run(Some(&mock), &["--model", "zen-free", "-p", "hi", "--json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let logs = session_logs(&box_);
+    assert_eq!(logs.len(), 1);
+    let (path, lines) = logs.into_iter().next().expect("the session log");
+    let assistants: Vec<_> = lines.iter().filter(|l| l["t"] == "assistant").collect();
+    assert!(!assistants.is_empty(), "a turn ran");
+    for record in &assistants {
+        assert_eq!(
+            record["model"], "zen-free",
+            "the requested model lands on the record"
+        );
+    }
+    let meta_path = std::path::Path::new(&path)
+        .parent()
+        .expect("session dir")
+        .join("meta.json");
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&meta_path).expect("read meta"))
+            .expect("meta parses");
+    assert_eq!(
+        meta["model"], "zen-free",
+        "meta.json names the model last used"
+    );
+}
+
+// Verifies: #111 (continuing with no session is a loud session error,
+// not a silent fresh start a script would mistake for a continuation).
+#[test]
+fn gh111_continue_with_no_session_exits_six() {
+    let box_ = sandbox("headless-continue-empty");
+    let output = box_.run(None, &["-c", "-p", "x"]);
+    assert_eq!(
+        output.status.code(),
+        Some(6),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// Verifies: #111 (`-c` with `-r` is a usage error).
+#[test]
+fn gh111_continue_with_resume_is_a_usage_error() {
+    let box_ = sandbox("headless-contradiction");
+    let output = box_.run(None, &["-c", "-r", "abc", "-p", "x"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// Verifies: #111 (`-r <id> -p x` resumes that session headlessly).
+#[test]
+fn gh111_resume_reruns_in_the_named_session() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_text("first answer")),
+        Reply::Sse(sse_text("second answer")),
+    ]));
+    let box_ = sandbox("headless-resume");
+    let first = box_.run(
+        Some(&mock),
+        &["--model", "zen-free", "-p", "first", "--json"],
+    );
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let logs = session_logs(&box_);
+    assert_eq!(logs.len(), 1);
+    let id = std::path::Path::new(logs.keys().next().expect("log path"))
+        .parent()
+        .expect("session dir")
+        .file_name()
+        .expect("session id")
+        .to_string_lossy()
+        .into_owned();
+
+    let second = box_.run(Some(&mock), &["-r", &id, "-p", "second", "--json"]);
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let logs = session_logs(&box_);
+    assert_eq!(logs.len(), 1, "resume reuses the named session");
+    let lines = logs.values().next().expect("the session log");
+    assert_eq!(user_texts(lines).len(), 2, "the second turn appended");
+}

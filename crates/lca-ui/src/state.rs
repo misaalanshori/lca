@@ -557,6 +557,9 @@ pub struct UiOptions {
     pub initial_records: Vec<lca_protocol::Record>,
     /// Lines drawn after the transcript (the missing-provider report).
     pub initial_tail_lines: Vec<String>,
+    /// Positional CLI messages (#109): the first is submitted when the
+    /// interface opens, the rest queue as follow-ups in order.
+    pub initial_messages: Vec<String>,
     /// Plain-text rendering (FR-UI-5).
     pub plain: bool,
     /// Permission prompts are auto-approved this session (ADR-0042); the
@@ -837,6 +840,7 @@ mod tests {
             initial_lines: Vec::new(),
             initial_records: Vec::new(),
             initial_tail_lines: Vec::new(),
+            initial_messages: Vec::new(),
             yolo: false,
             thinking_visibility: Default::default(),
             codeblock_border: Default::default(),
