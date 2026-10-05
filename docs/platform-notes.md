@@ -137,3 +137,9 @@ and a not-yet-attached master is the one shape macOS may refuse with
 `ENOTTY`; the reorder is harmless on Linux and Windows either way.
 macOS CI judges: green closes this entry, red reverts the un-ignore
 (never a red main) and the failure log lands here as new evidence.
+
+*Closed (2026-10-06, #88):* all five tests green on the macOS leg
+with the ignores lifted, four consecutive CI runs (`37350432151`
+through `37360085042`). The differing order is the only change on
+that path, so it stands as the mechanism: size an attached pair.
+The stale-quarantine clock that started on 2026-09-25 stops here.
