@@ -2,7 +2,7 @@
 
 Version 0.1, 2026-09-20.
 
-Source: not in the tree yet - this profile specifies the extension; nothing under `extensions/` builds it today. Delivery: WASM, would be installed separately rather than bundled. Same shape as Antigravity; documented separately mainly because a second, independent implementation of the OAuth pattern is what actually proves it generalizes rather than being specific to one vendor's flow.
+Source: spec-only by policy (gh #21) - this profile specifies the extension; nothing under `extensions/` builds it today and no artifact is published. Dedicated extensions are pi-parity-phase work; a ChatGPT subscription login needs its OAuth extension, so there is no local-preset route for Codex the way there is for LM Studio and Ollama. Delivery when built: WASM, installed separately rather than bundled. Same shape as Antigravity; documented separately mainly because a second, independent implementation of the OAuth pattern is what actually proves it generalizes rather than being specific to one vendor's flow.
 
 ## What it authenticates against
 

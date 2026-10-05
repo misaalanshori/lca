@@ -18,6 +18,8 @@ A full ADR is not written for each provider, because there is usually no real al
 
 The last three rows are specifications, not shippable artifacts: the profiles are complete, nothing under `extensions/` builds them, and the release publishes only `openai-compatible`, `antigravity`, `skills`, and `compaction-default` to the registry (`.github/workflows/publish.yml`). Install the first two providers today; read the others as the design they are.
 
+Policy (gh #21): Codex, LM Studio, and Ollama stay spec-only deliberately. Their dedicated extensions are pi-parity-phase work, not deferred by accident: each file says what the extension would be, so the design is settled when the phase arrives. Until then the supported route for local models is the `ollama` and `lmstudio` presets (`auth = "none"`) through the `openai-compatible` provider, whose wire shape both servers' `/v1` endpoints speak - choose the preset in `/login` and it signs in on selection with no key. Codex has no such route: a ChatGPT subscription login needs its OAuth extension, so Codex waits for the phase.
+
 OpenCode Go is deliberately absent from this list. It exposes an OpenAI-compatible endpoint with its own base URL and key, so it needs no dedicated extension; a user points the OpenAI-compatible provider at it directly.
 
 ## Template

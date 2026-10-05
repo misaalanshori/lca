@@ -2,7 +2,7 @@
 
 Version 0.1, 2026-09-20.
 
-Source: not in the tree yet - this profile specifies the extension; nothing under `extensions/` builds it today. Delivery: WASM, would be installed separately rather than bundled. Same access shape as LM Studio; documented separately because the wire format is not the same.
+Source: spec-only by policy (gh #21) - this profile specifies the extension; nothing under `extensions/` builds it today and no artifact is published. Dedicated extensions are pi-parity-phase work. Until then the supported route is the `ollama` preset (`auth = "none"`) through the `openai-compatible` provider, whose wire shape the local `/v1` endpoint speaks. Delivery when built: WASM, installed separately rather than bundled. Same access shape as LM Studio; documented separately because the wire format is not the same.
 
 ## What it authenticates against
 

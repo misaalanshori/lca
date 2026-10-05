@@ -2,7 +2,7 @@
 
 Version 0.1, 2026-09-20.
 
-Source: not in the tree yet - this profile specifies the extension; nothing under `extensions/` builds it today. Delivery: WASM, would be installed separately rather than bundled. The first-party proof that `net-local`, added by ADR-0011, actually serves a real provider rather than a hypothetical one.
+Source: spec-only by policy (gh #21) - this profile specifies the extension; nothing under `extensions/` builds it today and no artifact is published. Dedicated extensions are pi-parity-phase work. Until then the supported route is the `lmstudio` preset (`auth = "none"`) through the `openai-compatible` provider, whose wire shape the local endpoint speaks. Delivery when built: WASM, installed separately rather than bundled. The first-party proof that `net-local`, added by ADR-0011, actually serves a real provider rather than a hypothetical one.
 
 ## What it authenticates against
 
