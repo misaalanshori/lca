@@ -915,7 +915,7 @@ fn cancel_breakdown(h: &Harness, sink: &CollectingSink, elapsed: std::time::Dura
         .map(|read| read.records.len())
         .unwrap_or(0);
     format!(
-        "turn2_elapsed={elapsed:?} provider_calls={} sink_text={text} sink_tool_started={started} sink_tool_finished={finished} sink_errors={errors} sink_other={other} store_records={records}",
+        "turn2_elapsed={elapsed:?} provider_calls={} sink_text={text} sink_retries={scheduled} sink_tool_started={started} sink_tool_finished={finished} sink_errors={errors} sink_other={other} store_records={records}",
         h.provider.call_count(),
     )
 }
