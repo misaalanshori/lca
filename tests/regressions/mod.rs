@@ -270,3 +270,7 @@ mod gh96_panic_hook_restores_terminal;
 // claims to catch, and passes clean.
 #[path = "gh95-drift-net-selftest.rs"]
 mod gh95_drift_net_selftest;
+// GitHub #179: the antigravity 0.9.0 wire alignment (re-auth,
+// last_execution_id, schema normalization, fallback routing).
+#[path = "gh179-antigravity-realigns.rs"]
+mod gh179_antigravity_realigns;

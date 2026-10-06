@@ -12,15 +12,58 @@ A full ADR is not written for each provider, because there is usually no real al
 |---|---|---|---|
 | [OpenAI-compatible](openai-compatible.md) | API key | Native-linked, enabled | Ships in the binary. Any base URL speaking the OpenAI chat completions shape. |
 | [Antigravity](antigravity.md) | OAuth | WASM, install separately | Reference implementation for the OAuth pattern; see ADR-0004, ADR-0009. |
-| [Codex](codex.md) | OAuth | WASM (specified, not in the tree) | Same shape as Antigravity, second proof the pattern generalizes. |
+| [Codex](codex.md) | OAuth | WASM, install separately | ChatGPT subscription via the Codex responses gateway; shares the subscription kit with Grok. |
+| [Grok](grok.md) | OAuth | WASM, install separately | SuperGrok / X subscription via the Grok responses proxy; shares the subscription kit with Codex. |
 | [LM Studio](lmstudio.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 | [Ollama](ollama.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 
-The last three rows are specifications, not shippable artifacts: the profiles are complete, nothing under `extensions/` builds them, and the release publishes only `openai-compatible`, `antigravity`, `skills`, and `compaction-default` to the registry (`.github/workflows/publish.yml`). Install the first two providers today; read the others as the design they are.
+The last two rows are specifications, not shippable artifacts: the profiles are complete, nothing under `extensions/` builds them, and the release publishes only `openai-compatible`, `antigravity`, `codex`, `grok`, `skills`, and `compaction-default` to the registry (`.github/workflows/publish.yml`).
 
-Policy (gh #21): Codex, LM Studio, and Ollama stay spec-only deliberately. Their dedicated extensions are pi-parity-phase work, not deferred by accident: each file says what the extension would be, so the design is settled when the phase arrives. Until then the supported route for local models is the `ollama` and `lmstudio` presets (`auth = "none"`) through the `openai-compatible` provider, whose wire shape both servers' `/v1` endpoints speak - choose the preset in `/login` and it signs in on selection with no key. Codex has no such route: a ChatGPT subscription login needs its OAuth extension, so Codex waits for the phase.
+Policy (gh #21): LM Studio and Ollama stay spec-only deliberately — the supported route for local models is the `ollama` and `lmstudio` presets (`auth = "none"`) through the `openai-compatible` provider, whose wire shape both servers' `/v1` endpoints speak. Codex graduated from the spec-only list in the provider-breadth cycle (gh #63): a ChatGPT subscription login needs its OAuth extension, and now it has one.
 
 OpenCode Go is deliberately absent from this list. It exposes an OpenAI-compatible endpoint with its own base URL and key, so it needs no dedicated extension; a user points the OpenAI-compatible provider at it directly.
+
+## Pi parity table (gh #63)
+
+Every pi provider (`packages/ai/src/providers/`) against LCA status.
+`preset` rows ride the `openai-compatible` picker above; `absent`
+means no demand has been voted yet, not a verdict — the next demand
+votes get counted against this table.
+
+| pi provider | LCA status | Notes |
+|---|---|---|
+| pi `openai` | preset | `openai` row, `OPENAI_API_KEY`. |
+| pi `openrouter` | preset | `openrouter` row, `OPENROUTER_API_KEY`. |
+| pi `deepseek` | preset | `deepseek` row, `DEEPSEEK_API_KEY`. |
+| pi `groq` | preset | `groq` row, `GROQ_API_KEY`. |
+| pi `cerebras` | preset | `cerebras` row. |
+| pi `fireworks` | preset | `fireworks` row. |
+| pi `together` | preset | `together` row. |
+| pi `mistral` | preset | `mistral` row. |
+| pi `moonshotai` | preset | `moonshot` row. |
+| pi `minimax` | preset | `minimax` row. |
+| pi `nvidia` | preset | `nvidia` row. |
+| pi `baseten` | preset | `baseten` row. |
+| pi `huggingface` | preset | `huggingface` row. |
+| pi `opencode-go` | preset | `opencode-go` row (the Go endpoint only). |
+| pi `vercel-ai-gateway` | preset | `vercel` row, `AI_GATEWAY_API_KEY` (gh #182: preset, not an extension). |
+| pi `openai-codex` | extension | `codex`: ChatGPT subscription OAuth + responses gateway. |
+| `xai` (API key) | preset + extension | `xai` row for the key; `grok` for the SuperGrok subscription OAuth + responses proxy. |
+| pi `github-copilot` | absent | Device flow; the `github-models` preset covers only the Models endpoint. |
+| pi `google` (Gemini API) | absent | Gemini's own API shape; no preset yet. |
+| pi `anthropic` | absent | No preset yet; a Custom endpoint covers OpenAI-shaped URLs only. |
+| pi `azure` | absent | Entra + endpoint shape; no demand yet. |
+| pi `amazon-bedrock` | absent | Ambient AWS credentials; no demand yet. |
+| pi `google-vertex` | absent | Ambient GCP credentials; no demand yet. |
+| pi `kimi-coding` | absent | No demand yet. |
+| pi `meta` | absent | No demand yet. |
+| pi `minimax-cn` + `moonshotai-cn` | absent | CN endpoints; the global rows do not cover them. |
+| pi `ant-ling` | absent | No demand yet. |
+| pi `cloudflare-ai-gateway` | absent | A gateway like Vercel; no preset yet. |
+| pi cloudflare set (`workers-ai`, `auth`, `stream`) | absent | Infrastructure pieces, not model providers. |
+| pi token-plan/regional set (`qwen`, `xiaomi`, `zai`, `typesafe`, `radius`) | absent | No demand yet. |
+| pi `opencode` | absent | The harness protocol, not an endpoint (covered via `opencode-go`). |
+| — | LCA-only: `antigravity` | Google subscription OAuth; pi has no counterpart (it lives in pi-antigravity). |
 
 ## Template
 
@@ -35,7 +78,7 @@ Every capability line in a provider's manifest should be traceable to something 
 the extension takes the list with it; a user's own entries live at
 `<config>/provider-presets.toml` and are merged into the same picker.
 
-19 presets ship today:
+20 presets ship today:
 
 | id | Name | Base URL | Auth |
 |---|---|---|---|
@@ -56,6 +99,7 @@ the extension takes the list with it; a user's own entries live at
 | `github-models` | GitHub Models | `https://models.inference.ai.azure.com` | `bearer` |
 | `opencode-go` | OpenCode Go | `https://opencode.ai/zen/go/v1` | `bearer` |
 | `perplexity` | Perplexity | `https://api.perplexity.ai` | `bearer` |
+| `vercel` | Vercel AI Gateway | `https://ai-gateway.vercel.sh/v1` | `bearer` |
 | `ollama` | Ollama (local) | `http://localhost:11434/v1` | `none` |
 | `lmstudio` | LM Studio (local) | `http://localhost:1234/v1` | `none` |
 

@@ -1,24 +1,22 @@
 # Codex provider
 
-Version 0.1, 2026-09-20.
-
-Source: spec-only by policy (gh #21) - this profile specifies the extension; nothing under `extensions/` builds it today and no artifact is published. Dedicated extensions are pi-parity-phase work; a ChatGPT subscription login needs its OAuth extension, so there is no local-preset route for Codex the way there is for LM Studio and Ollama. Delivery when built: WASM, installed separately rather than bundled. Same shape as Antigravity; documented separately mainly because a second, independent implementation of the OAuth pattern is what actually proves it generalizes rather than being specific to one vendor's flow.
+Source: `extensions/codex/`. Delivery: WASM, installed separately, not bundled by default. The second subscription-gateway proof after Antigravity — and the first built on the shared subscription kit (`crates/lca-subscription`), so the OAuth flow and the Responses protocol are spec tables here, not a second implementation.
 
 ## What it authenticates against
 
-The ChatGPT subscription login, through the same loopback OAuth mechanism Antigravity uses: the extension builds the authorization request and PKCE challenge, the host runs the actual loopback listener behind `oauth.begin` and `oauth.await`, and the token exchange goes over `net`.
+A ChatGPT Plus/Pro/Business/Enterprise/Edu subscription, through the loopback OAuth PKCE flow: the extension builds the authorization request (client `app_EMoamEEZ73f0CkXaXp7hrann`, the `codex_cli_simplified_flow` flag, `originator` spelled `lca`), the host runs the loopback listener behind `oauth.begin`/`oauth.await`, the code exchanges at `auth.openai.com/oauth/token`, and the ChatGPT account id is decoded from the access token's JWT claim. Headless machines use the paste shape (`lca auth login --provider codex`). A login always re-runs the flow; a 401 purges the tokens.
 
 ## Manifest
 
 ```toml
 name = "codex"
-version = "1.0.0"
+version = "0.1.0"
 abi = "0.5"
-worlds = ["provider", "command"]
+worlds = ["provider"]
 description = "OpenAI Codex models via ChatGPT subscription login."
 
 [capabilities.net]
-hosts = ["api.openai.com", "auth.openai.com"]
+hosts = ["chatgpt.com", "auth.openai.com"]
 
 [capabilities.oauth]
 redirect_path = "/callback"
@@ -27,20 +25,16 @@ redirect_path = "/callback"
 namespace = "codex"
 ```
 
-The two-host `net` grant, an API host and a separate auth host, is worth calling out as a small but real variation from Antigravity's single-host-plus-wildcard shape: not every OAuth provider's token exchange and API traffic land on the same domain, and the manifest schema's array-of-patterns design already accommodates this without any special casing.
+Two notes against the September spec this replaces: `worlds` is `provider` only — identity commands arrive host-namespaced through the provider world (FR-PROV-10), the way the other providers work; and the API host is `chatgpt.com` (the `/backend-api/codex/responses` gateway), not `api.openai.com`, which serves a different API. `net` needs both hosts because the token exchange and the inference traffic land on different domains.
 
-## vendor-event usage
+## Requests
 
-Carries reasoning-effort and response-format fields specific to OpenAI's API shape where they don't map onto the typed reasoning-delta case cleanly, following the same principle as Antigravity's use of the same escape hatch for a different vendor's specifics.
+Responses-protocol bodies over `POST {api_base}/codex/responses` (`store: false` always): the bearer, the `chatgpt-account-id` header decoded from the JWT, `originator: lca`, and `OpenAI-Beta: responses=experimental`. The reasoning effort rides when the caller names one (`minimal` maps to the wire's `low`).
 
 ## login, logout, usage
 
-Same three-function shape as every provider under ADR-0012. `usage` here reports against whatever quota or rate-limit information the API surfaces for the authenticated subscription.
+`login` runs the kit OAuth flow and stores access, refresh, expiry, and account id. `logout` clears the namespace (the gateway exposes no subscription-token revoke). `usage` is the credential-validity probe these gateways get — no quota endpoint exists, so an unexpired (or refreshable) token is `Ok` with empty counts, which is what makes `auth check` answer `ready` for a live login.
 
-## Cache behavior
+## Limits
 
-OpenAI's API caches automatically with no explicit marker, the same as the OpenAI-compatible provider's usual case, so this provider ignores the cache-boundary hint for marker placement but still reports `cache_read` and `cache_write` from the response's usage fields, which is real, vendor-reported signal for the cache-waste measurement in `docs/testing-plan.md` even though nothing on this provider's side had to act on the hint to produce it.
-
-## Why WASM by default
-
-Same reasoning as Antigravity: nothing about this provider needs first-party trust, and the sandbox costs it nothing it needs to do its job.
+The static table names one model (`gpt-5.4-mini`, window 272000 from fx's catalog fixture); it grows with livedata, never guesses. Subscription turns never run in CI — the suite drives the mock gateway, and the live smoke skips without an operator-provided token (NFR-23).

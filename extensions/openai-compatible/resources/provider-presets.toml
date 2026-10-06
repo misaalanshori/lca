@@ -145,6 +145,18 @@ env = ["PERPLEXITY_API_KEY"]
 auth = "bearer"
 models = ["sonar-pro", "sonar"]
 
+# Vercel AI Gateway (gh #182): a preset, not an extension. The gateway
+# speaks the OpenAI shape with an `AI_GATEWAY_API_KEY` bearer, so no
+# dedicated component is needed; the curated list stays empty because
+# the gateway routes whatever its account enables (live discovery wins).
+[[preset]]
+id = "vercel"
+name = "Vercel AI Gateway"
+base_url = "https://ai-gateway.vercel.sh/v1"
+env = ["AI_GATEWAY_API_KEY"]
+auth = "bearer"
+models = []
+
 # Local endpoints: no key step, model discovery over `GET /models` or the
 # curated list. The "provider you can try in thirty seconds" path (D3).
 

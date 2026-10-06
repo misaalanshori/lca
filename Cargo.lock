@@ -1480,6 +1480,7 @@ dependencies = [
 name = "lca-regressions"
 version = "0.0.0"
 dependencies = [
+ "antigravity",
  "clap",
  "compaction-default",
  "image",
@@ -1495,6 +1496,7 @@ dependencies = [
  "lca-registry",
  "lca-sdk",
  "lca-session",
+ "lca-subscription",
  "lca-testkit",
  "lca-tools",
  "lca-tui",

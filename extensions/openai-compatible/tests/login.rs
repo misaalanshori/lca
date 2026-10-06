@@ -106,6 +106,17 @@ fn the_preset_resource_parses_into_the_picker_options() {
         Some("https://openrouter.ai/api/v1")
     );
 
+    // Verifies: gh #182 - Vercel AI Gateway resolves as a preset, not
+    // an extension: a bearer key step against the gateway's OpenAI
+    // shape, with no curated models (live discovery wins).
+    let vercel = options
+        .iter()
+        .find(|option| option.id == "vercel")
+        .expect("vercel present");
+    assert_eq!(vercel.host, "ai-gateway.vercel.sh");
+    assert_eq!(vercel.kind, "api-key");
+    assert!(vercel.fields.contains(&"api-key".to_string()));
+
     let ollama = options
         .iter()
         .find(|option| option.id == "ollama")

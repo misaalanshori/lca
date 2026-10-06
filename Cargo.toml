@@ -50,6 +50,8 @@ lca-tools = { path = "crates/lca-tools" }
 lca-tui = { path = "crates/lca-tui" }
 lca-ui = { path = "crates/lca-ui" }
 image.workspace = true
+antigravity = { path = "extensions/antigravity" }
+lca-subscription = { path = "crates/lca-subscription" }
 openai-compatible = { path = "extensions/openai-compatible" }
 serde_json.workspace = true
 tokio.workspace = true

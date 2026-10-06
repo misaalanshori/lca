@@ -6,6 +6,17 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+- **Two subscription providers + the parity table (gh #63, #180, #181, #182).**
+  `extensions/codex` (ChatGPT subscription OAuth + Codex responses
+  gateway) and `extensions/grok` (SuperGrok OAuth + Grok responses
+  proxy), both thin spec tables over the new `lca-subscription` kit
+  (one PKCE login/refresh flow, one Responses-protocol core) with mock
+  conformance journeys and credential-gated live smokes. Vercel AI
+  Gateway lands as an `openai-compatible` preset, not an extension.
+  `docs/providers/README.md` gains the pi-provider parity table the
+  next demand votes get counted against.
+
 ### Fixed
 - **Antigravity 0.9.0 wire alignment (gh #179).** A login with stored
   tokens re-runs the OAuth flow instead of short-circuiting to `Ok`, so

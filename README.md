@@ -373,11 +373,11 @@ Implemented, gated, and released — currently **0.5.3**, extension ABI **0.5**
 | Sessions: resume, fork, export, attach, compaction | shipped |
 | Permissions: pattern store, folder trust, read-only tools, `--yolo` | shipped |
 | Extensions: WIT ABI `0.5`, installed from OCI/HTTPS/local or linked in natively | shipped |
-| Providers: 19 presets + any OpenAI-compatible endpoint, login/usage | shipped |
+| Providers: 20 presets + any OpenAI-compatible endpoint, login/usage, Codex + Grok subscription extensions | shipped |
 | Built-in tools: `read` `write` `edit` `list` `glob` `grep` `shell` | shipped |
 | Windows: first-class, real CI runners and dedicated tests | shipped |
 | Web/browser target | designed, deferred (`FR-WEB-1/2/3`, `NFR-11`) |
-| Codex, LM Studio, Ollama profiles | specification only — nothing under `extensions/` builds them |
+| LM Studio, Ollama profiles | specification only — nothing under `extensions/` builds them |
 | Telemetry, hosted service, package-manager channel | none (`FR-CFG-3`) |
 
 What ships and publishes today is `openai-compatible` (bundled, enabled by

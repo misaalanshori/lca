@@ -69,11 +69,14 @@ jobs:
       - name: Build the first-party components
         run: |
           cargo build --release --target wasm32-wasip2 \
-            -p openai-compatible -p skills -p compaction-default -p antigravity
+            -p openai-compatible -p skills -p compaction-default -p antigravity \
+            -p codex -p grok
       - name: Refresh the committed fixtures
         run: |
           cp target/wasm32-wasip2/release/openai_compatible.wasm extensions/openai-compatible/fixtures/component.wasm
           cp target/wasm32-wasip2/release/antigravity.wasm extensions/antigravity/fixtures/component.wasm
+          cp target/wasm32-wasip2/release/codex.wasm extensions/codex/fixtures/component.wasm
+          cp target/wasm32-wasip2/release/grok.wasm extensions/grok/fixtures/component.wasm
           cp target/wasm32-wasip2/release/skills.wasm extensions/skills/fixtures/component.wasm
       - name: Pack the HTTPS-archive asset (ADR-0010's zip)
         run: |
@@ -111,6 +114,8 @@ jobs:
           publish skills extensions/skills/fixtures/component.wasm extensions/skills/extension.toml
           publish compaction-default target/wasm32-wasip2/release/compaction_default.wasm extensions/compaction-default/extension.toml
           publish antigravity target/wasm32-wasip2/release/antigravity.wasm extensions/antigravity/extension.toml
+          publish codex target/wasm32-wasip2/release/codex.wasm extensions/codex/extension.toml
+          publish grok target/wasm32-wasip2/release/grok.wasm extensions/grok/extension.toml
       # Best effort: repo-scoped packages follow the public repo's
       # visibility, this just makes it explicit when the API allows.
       - name: Ensure the packages are public
@@ -118,7 +123,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for image in openai-compatible skills compaction-default antigravity; do
+          for image in openai-compatible skills compaction-default antigravity codex grok; do
             gh api --method PATCH "/user/packages/container/lca%2F${image}" -f visibility=public || true
           done
 
