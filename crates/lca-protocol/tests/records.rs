@@ -134,6 +134,8 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 content: None,
                 attachment: None,
                 truncated: false,
+                exit_code: None,
+                full_output_path: None,
             },
             "tool-result",
         ),
@@ -370,6 +372,35 @@ fn tool_result_carries_truncated_flag() {
     let back: ToolResult = serde_json::from_str(&json).expect("parse");
     assert!(back.truncated);
     assert_eq!(back.status, ToolResultStatus::Ok);
+}
+
+// Verifies: gh #40 (structured shell results): `exit_code` and
+// `full_output_path` serialize when set and vanish when absent, so old
+// consumers ignore the additions (headless contract).
+#[test]
+fn tool_result_structured_fields_round_trip_and_skip_when_absent() {
+    let mut result = ToolResult::ok("call-1", "output");
+    result.exit_code = Some(3);
+    result.full_output_path = Some("/tmp/attachments/abc".into());
+    let json = serde_json::to_string(&result).expect("serialize");
+    assert!(json.contains(r#""exit_code":3"#), "{json}");
+    assert!(
+        json.contains(r#""full_output_path":"/tmp/attachments/abc""#),
+        "{json}"
+    );
+    let back: ToolResult = serde_json::from_str(&json).expect("parse");
+    assert_eq!(back.exit_code, Some(3));
+    assert_eq!(
+        back.full_output_path.as_deref(),
+        Some("/tmp/attachments/abc")
+    );
+
+    let plain = serde_json::to_string(&ToolResult::ok("c", "")).expect("serialize");
+    assert!(!plain.contains("exit_code"), "absent fields skip: {plain}");
+    assert!(
+        !plain.contains("full_output_path"),
+        "absent fields skip: {plain}"
+    );
 }
 
 #[test]

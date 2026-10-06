@@ -66,6 +66,15 @@ pub struct ToolResult {
     /// (FR-TOOL-7).
     #[serde(default)]
     pub truncated: bool,
+    /// Process exit code, when the tool ran a command (gh #40: the
+    /// `shell` tool sets it; other tools leave it absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Full-output spill path, when the output was truncated and a
+    /// session was attached to spill into (gh #40: names the attachment
+    /// file the session record references by hash).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_output_path: Option<String>,
     /// Images the tool returned (R5): a tool that read an image file, for
     /// example. Empty for text-only results.
     ///
@@ -96,6 +105,8 @@ impl ToolResult {
             truncated: false,
             images: Vec::new(),
             extras: BTreeMap::new(),
+            exit_code: None,
+            full_output_path: None,
         }
     }
 
@@ -108,6 +119,8 @@ impl ToolResult {
             truncated: false,
             images: Vec::new(),
             extras: BTreeMap::new(),
+            exit_code: None,
+            full_output_path: None,
         }
     }
 
@@ -120,6 +133,8 @@ impl ToolResult {
             truncated: false,
             images: Vec::new(),
             extras: BTreeMap::new(),
+            exit_code: None,
+            full_output_path: None,
         }
     }
 
@@ -132,6 +147,8 @@ impl ToolResult {
             truncated: false,
             images: Vec::new(),
             extras: BTreeMap::new(),
+            exit_code: None,
+            full_output_path: None,
         }
     }
 }

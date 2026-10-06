@@ -58,7 +58,7 @@ fn harness(name: &str, provider: FakeProvider) -> Harness {
         project.clone(),
         project,
         65536,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
     );
     Harness {
         store,

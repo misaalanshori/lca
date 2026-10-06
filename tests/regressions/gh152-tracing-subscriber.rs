@@ -54,7 +54,7 @@ fn gh152_diagnostics_install_rotate_and_record() {
         project.clone(),
         project.clone(),
         65536,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
     );
     let provider = lca_testkit::FakeProvider::builder()
         .turn(|t| {

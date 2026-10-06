@@ -111,6 +111,12 @@ pub enum Record {
         /// Whether the content was truncated (FR-TOOL-7).
         #[serde(default)]
         truncated: bool,
+        /// Process exit code, when the tool ran a command (gh #40).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        /// Full-output spill path, when the output spilled (gh #40).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        full_output_path: Option<String>,
     },
     /// A grant decision made during the session.
     Permission {

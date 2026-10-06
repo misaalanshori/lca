@@ -66,11 +66,12 @@ pub trait ToolOps: Send + Sync {
     fn walk(&self, root: &Path) -> std::io::Result<Vec<Entry>>;
     /// Run a command, streaming output chunks to `on_output` as they arrive
     /// (FR-TOOL-4), stopping on timeout or cancellation (FR-TOOL-5).
+    /// `None` runs until the command exits or the turn is cancelled.
     fn exec<'a>(
         &'a self,
         command: &'a str,
         cwd: &'a Path,
-        timeout: Duration,
+        timeout: Option<Duration>,
         on_output: &'a mut (dyn FnMut(&[u8]) + Send),
         cancel: CancelFlag,
     ) -> ExecFuture<'a>;
@@ -220,7 +221,7 @@ impl ToolOps for NativeOps {
         &'a self,
         command: &'a str,
         cwd: &'a Path,
-        timeout: Duration,
+        timeout: Option<Duration>,
         on_output: &'a mut (dyn FnMut(&[u8]) + Send),
         cancel: CancelFlag,
     ) -> ExecFuture<'a> {
@@ -261,7 +262,7 @@ async fn platform_exec(
     shell: &crate::shell::Shell,
     command: &str,
     cwd: &Path,
-    timeout: Duration,
+    timeout: Option<Duration>,
     on_output: &mut (dyn FnMut(&[u8]) + Send),
     cancel: CancelFlag,
 ) -> std::io::Result<(ExecOutcome, Vec<u8>)> {
@@ -301,7 +302,7 @@ async fn platform_exec(
     let mut collected: Vec<u8> = Vec::new();
     let mut outcome: Option<ExecOutcome> = None;
     let exec_start = tokio::time::Instant::now();
-    let deadline = tokio::time::Instant::now() + timeout;
+    let deadline = timeout.map(|limit| tokio::time::Instant::now() + limit);
     let mut out_buf = [0u8; 8192];
     let mut err_buf = [0u8; 8192];
     // Read both pipes to EOF before waiting on the child: exiting early on
@@ -320,7 +321,7 @@ async fn platform_exec(
                 if n == 0 { stderr_open = false; }
                 else { on_output(&err_buf[..n]); push_capped(&mut collected, &err_buf[..n]); }
             }
-            _ = tokio::time::sleep_until(deadline) => {
+            _ = async { match deadline { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending().await } } => {
                 kill_group(pgid);
                 wait_after_kill(&mut child, pgid, exec_start).await;
                 outcome = Some(ExecOutcome::Timeout);
@@ -573,7 +574,7 @@ async fn platform_exec(
     shell: &crate::shell::Shell,
     command: &str,
     cwd: &Path,
-    timeout: Duration,
+    timeout: Option<Duration>,
     on_output: &mut (dyn FnMut(&[u8]) + Send),
     cancel: CancelFlag,
 ) -> std::io::Result<(ExecOutcome, Vec<u8>)> {
@@ -620,7 +621,7 @@ async fn platform_exec(
 
     let mut collected: Vec<u8> = Vec::new();
     let mut outcome: Option<ExecOutcome> = None;
-    let deadline = tokio::time::Instant::now() + timeout;
+    let deadline = timeout.map(|limit| tokio::time::Instant::now() + limit);
     let mut out_buf = [0u8; 8192];
     let mut err_buf = [0u8; 8192];
     // Both pipes to EOF before waiting on the child (same race as unix).
@@ -638,7 +639,7 @@ async fn platform_exec(
                 if n == 0 { stderr_open = false; }
                 else { on_output(&err_buf[..n]); push_capped(&mut collected, &err_buf[..n]); }
             }
-            _ = tokio::time::sleep_until(deadline) => {
+            _ = async { match deadline { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending().await } } => {
                 if let Some(job) = job.as_ref() { job.kill(); } else { let _ = child.start_kill(); }
                 let _ = child.wait().await;
                 outcome = Some(ExecOutcome::Timeout);

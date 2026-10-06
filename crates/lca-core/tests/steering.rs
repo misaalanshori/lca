@@ -81,7 +81,7 @@ fn harness(name: &str, provider: FakeProvider) -> Harness {
         project.clone(),
         project.clone(),
         65536,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
     );
     let steer = lca_protocol::steer_queue();
     let config = AgentConfig {

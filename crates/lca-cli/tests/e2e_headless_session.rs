@@ -4,7 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 mod common;
 
-use common::{Reply, rt, sandbox, sse_text, start_mock};
+use common::{Reply, rt, sandbox, sse_text, sse_tool_call, start_mock};
 use std::collections::HashMap;
 
 /// Every `log.jsonl` under the sandbox state dir, with its parsed lines.
@@ -188,4 +188,50 @@ fn gh111_resume_reruns_in_the_named_session() {
     assert_eq!(logs.len(), 1, "resume reuses the named session");
     let lines = logs.values().next().expect("the session log");
     assert_eq!(user_texts(lines).len(), 2, "the second turn appended");
+}
+
+// Verifies: gh #40 (structured shell results ride the `--json` envelope
+// and the session record): a failing shell call surfaces `exit_code`
+// and `truncated` on the wire and on the log line.
+#[cfg(unix)]
+#[test]
+fn gh40_shell_results_carry_exit_code_on_the_wire_and_in_the_log() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_tool_call("shell", r#"{"command":"exit 3"}"#)),
+        Reply::Sse(sse_text("done")),
+    ]));
+    let box_ = sandbox("headless-structured");
+    let output = box_.run(Some(&mock), &["--yolo", "-p", "run it", "--json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let envelopes: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let tool_result = envelopes
+        .iter()
+        .find(|l| l["type"] == "tool-result")
+        .expect("a tool-result envelope");
+    assert_eq!(
+        tool_result["exit_code"], 3,
+        "the envelope names it: {tool_result}"
+    );
+    assert_eq!(tool_result["truncated"], false);
+    assert!(
+        tool_result.get("full_output_path").is_none() || tool_result["full_output_path"].is_null(),
+        "no spill means no path: {tool_result}"
+    );
+
+    let logs = session_logs(&box_);
+    let lines = logs.values().next().expect("the session log");
+    let record = lines
+        .iter()
+        .find(|l| l["t"] == "tool-result")
+        .expect("a tool-result record");
+    assert_eq!(record["exit_code"], 3, "the record names it: {record}");
 }

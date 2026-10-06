@@ -20,7 +20,7 @@ fn executor(workspace: &Path) -> ToolExecutor {
         workspace.to_path_buf(),
         workspace.to_path_buf(),
         65536,
-        Duration::from_secs(120),
+        Some(Duration::from_secs(120)),
     )
 }
 
@@ -37,7 +37,7 @@ fn bash_executor(workspace: &Path, limit: usize, timeout: Duration) -> Option<To
         workspace.to_path_buf(),
         workspace.to_path_buf(),
         limit,
-        timeout,
+        Some(timeout),
     ))
 }
 
@@ -179,7 +179,7 @@ async fn read_truncates_over_the_limit_and_marks_it() {
         ws.clone(),
         ws.clone(),
         1024,
-        Duration::from_secs(120),
+        Some(Duration::from_secs(120)),
     );
     let result = run(
         &mut exec,
@@ -765,6 +765,150 @@ async fn shell_reports_exit_codes_with_output() {
     assert!(result.content.contains("code 3"), "{}", result.content);
 }
 
+// Verifies: gh #40 (a per-call `timeout` overrides the configured
+// default for that call): a 1s per-call timeout kills a command the
+// 120s default would let live, tree and all.
+#[tokio::test]
+async fn a_per_call_timeout_kills_the_command_tree() {
+    let ws = scratch("per-call-timeout");
+    let Some(mut exec) = bash_executor(&ws, 65536, Duration::from_secs(120)) else {
+        eprintln!("skip: no bash on this host");
+        return;
+    };
+    let started = std::time::Instant::now();
+    let result = run(
+        &mut exec,
+        &call(
+            "shell",
+            serde_json::json!({
+                "command": "sleep 30 & echo started-child $!; wait",
+                "timeout": 1,
+            }),
+        ),
+    )
+    .await;
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the per-call timeout fires, not the 120s default"
+    );
+    assert_eq!(
+        result.status,
+        ToolResultStatus::Timeout,
+        "{}",
+        result.content
+    );
+    assert!(result.content.contains("timed out"), "{}", result.content);
+
+    // The background grandchild is gone too, not just the shell.
+    if cfg!(unix) {
+        let pid = result
+            .content
+            .lines()
+            .find_map(|l| l.split_whitespace().last())
+            .and_then(|token| token.parse::<i32>().ok())
+            .expect("child pid echoed");
+        std::thread::sleep(Duration::from_millis(300));
+        let status = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .expect("kill -0");
+        assert!(
+            !status.success(),
+            "grandchild {pid} must be dead (FR-TOOL-5)"
+        );
+    }
+}
+
+// Verifies: gh #40 (no default timeout): with no configured default a
+// command runs until it exits, and a per-call timeout still bounds one
+// call without changing the default for the next.
+#[tokio::test]
+async fn no_default_timeout_runs_to_completion() {
+    let ws = scratch("no-default-timeout");
+    let shell = lca_tools::shell::resolve("bash", None).expect("bash");
+    let mut exec = ToolExecutor::new(
+        std::sync::Arc::new(NativeOps::new(shell)),
+        ws.clone(),
+        ws.clone(),
+        65536,
+        None,
+    );
+    let done = run(
+        &mut exec,
+        &call(
+            "shell",
+            serde_json::json!({"command": "sleep 2 && echo done"}),
+        ),
+    )
+    .await;
+    assert_eq!(done.status, ToolResultStatus::Ok, "{}", done.content);
+    assert!(done.content.contains("done"), "{}", done.content);
+    let killed = run(
+        &mut exec,
+        &call(
+            "shell",
+            serde_json::json!({"command": "sleep 30", "timeout": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(killed.status, ToolResultStatus::Timeout);
+}
+
+// Verifies: gh #40 (structured shell results): the result names the
+// exit code, so a failure is data rather than parsed text.
+#[tokio::test]
+async fn shell_results_carry_the_exit_code() {
+    let ws = scratch("exit-code");
+    let Some(mut exec) = bash_executor(&ws, 65536, Duration::from_secs(30)) else {
+        eprintln!("skip: no bash on this host");
+        return;
+    };
+    let ok = run(
+        &mut exec,
+        &call("shell", serde_json::json!({"command": "exit 0"})),
+    )
+    .await;
+    assert_eq!(ok.status, ToolResultStatus::Ok);
+    assert_eq!(ok.exit_code, Some(0));
+    let failed = run(
+        &mut exec,
+        &call("shell", serde_json::json!({"command": "exit 3"})),
+    )
+    .await;
+    assert_eq!(failed.status, ToolResultStatus::Error);
+    assert_eq!(failed.exit_code, Some(3));
+}
+
+// Verifies: gh #40 (structured shell results): a spilled result names
+// its full-output path, and the file holds the untruncated text.
+#[tokio::test]
+async fn shell_spill_names_its_full_output_path() {
+    let ws = scratch("spill-path");
+    let Some(mut exec) = bash_executor(&ws, 256, Duration::from_secs(30)) else {
+        eprintln!("skip: no bash on this host");
+        return;
+    };
+    let spill = ws.join("attachments");
+    exec.set_spill_dir(Some(spill.clone()));
+    let result = run(
+        &mut exec,
+        &call("shell", serde_json::json!({"command": "seq 1 500"})),
+    )
+    .await;
+    assert!(result.truncated, "500 lines over 256 bytes truncate");
+    let path = result
+        .full_output_path
+        .as_deref()
+        .expect("the spill path rides the result");
+    assert!(
+        std::path::Path::new(path).starts_with(&spill),
+        "the path points into the session attachments: {path}"
+    );
+    let spilled = std::fs::read_to_string(path).expect("spilled file");
+    assert!(spilled.contains("500"), "the full text is kept");
+    assert!(spilled.contains("1\n"), "including the dropped head");
+}
+
 // Verifies: FR-TOOL-5 (a timeout stops the command's process tree and
 // returns a timeout error)
 #[tokio::test]
@@ -832,7 +976,7 @@ async fn shell_uses_the_resolved_shell() {
         ws.clone(),
         ws.clone(),
         65536,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
     );
     // One command per family, each written for the dialect that runs it.
     let command = if is_posix {
@@ -908,7 +1052,7 @@ async fn over_limit_output_spills_by_content_hash() {
         ws.clone(),
         ws.clone(),
         256,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
     );
     exec.set_spill_dir(Some(spill.clone()));
 

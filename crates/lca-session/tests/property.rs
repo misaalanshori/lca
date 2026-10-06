@@ -59,6 +59,8 @@ fn arb_record(n: u32) -> impl Strategy<Value = Record> {
             content: Some(content),
             attachment: None,
             truncated,
+            exit_code: None,
+            full_output_path: None,
         }),
         arb_text().prop_map(move |detail| Record::ExtensionEvent {
             v: FORMAT_VERSION,

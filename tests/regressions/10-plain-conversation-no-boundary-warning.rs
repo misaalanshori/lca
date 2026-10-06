@@ -66,7 +66,7 @@ async fn a_plain_conversation_records_no_boundary_divergence() {
         project.clone(),
         project.clone(),
         65536,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
     );
     let provider = FakeProvider::builder()
         .turn(|t| t.text("one").usage(fake_usage(100, 10, 0, 0)))

@@ -655,6 +655,8 @@ fn export_lists_attachment_hashes_that_exist() {
                     content: Some("truncated".into()),
                     attachment: Some(hash.clone()),
                     truncated: true,
+                    exit_code: None,
+                    full_output_path: None,
                 },
             )
             .expect("append");
@@ -773,6 +775,8 @@ fn attachment_record(id: &str, hash: &str) -> Record {
         content: Some("[full output in an attachment]".to_string()),
         attachment: Some(hash.to_string()),
         truncated: true,
+        exit_code: None,
+        full_output_path: None,
     }
 }
 

@@ -609,6 +609,8 @@ impl Agent<'_> {
                 content: Some(result.content.clone()),
                 attachment: result.extras.get("attachment").cloned(),
                 truncated: result.truncated,
+                exit_code: result.exit_code,
+                full_output_path: result.full_output_path.clone(),
             },
         ) {
             return Err(self.fail(

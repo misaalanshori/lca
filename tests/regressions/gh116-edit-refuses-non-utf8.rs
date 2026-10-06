@@ -17,7 +17,7 @@ fn executor(workspace: &std::path::Path) -> lca_tools::ToolExecutor {
         workspace.to_path_buf(),
         workspace.to_path_buf(),
         65536,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
     )
 }
 

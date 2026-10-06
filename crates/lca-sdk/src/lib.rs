@@ -209,7 +209,7 @@ impl Session {
             self.cwd.clone(),
             self.cwd.clone(),
             TOOL_RESULT_LIMIT,
-            Duration::from_secs(TOOL_TIMEOUT_SECS),
+            Some(Duration::from_secs(TOOL_TIMEOUT_SECS)),
         );
         let mut deny_all = DenyAll;
         let mut callback = self

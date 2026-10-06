@@ -393,12 +393,15 @@ impl Ui {
             tracing::warn!(%error, "shell resolution failed");
             initial_head.push(format!("warning: {error}"));
         }
+        // Interactive runs carry no default timeout (gh #40, pi's
+        // default): the user cancels, and that is the mechanism. An
+        // explicit `tool.timeout_seconds` still applies.
         let tools = Arc::new(Mutex::new(ToolExecutor::new(
             Arc::new(ops),
             cwd.to_path_buf(),
             cwd.to_path_buf(),
             config.tool_result_limit_bytes() as usize,
-            std::time::Duration::from_secs(config.tool_timeout_seconds()),
+            crate::configured_tool_timeout(&config),
         )));
         // V1 (#20): the resolved shell, mirrored out of the executor once,
         // because `/settings` renders on the input thread while the turn

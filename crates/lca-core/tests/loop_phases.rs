@@ -763,7 +763,7 @@ async fn the_default_strategy_compacts_through_the_real_completion_backend() {
         project.clone(),
         project.clone(),
         65536,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
     );
     let mut sink = CollectingSink::default();
     let mut prompt = Prompt {

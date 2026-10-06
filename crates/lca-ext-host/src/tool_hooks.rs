@@ -72,6 +72,8 @@ pub(super) fn execute_work(
         truncated: guest_result.truncated,
         images: Vec::new(),
         extras: Default::default(),
+        exit_code: None,
+        full_output_path: None,
     })
 }
 

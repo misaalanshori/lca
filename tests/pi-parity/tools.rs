@@ -14,7 +14,7 @@ fn executor(workspace: &std::path::Path, limit: usize) -> ToolExecutor {
         workspace.to_path_buf(),
         workspace.to_path_buf(),
         limit,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
     )
 }
 

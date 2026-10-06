@@ -927,6 +927,16 @@ impl Config {
         &self.permissions_proposals
     }
 
+    /// Where one key's value came from: anything but `Default` means the
+    /// user set it (flag, env, or file). Callers that change behavior on
+    /// "explicitly configured" use this rather than comparing values.
+    pub fn source_of(&self, key: &str) -> MergeSource {
+        self.sources
+            .get(key)
+            .copied()
+            .unwrap_or(MergeSource::Default)
+    }
+
     /// Every resolved key with its display value and source (FR-CFG-2).
     pub fn resolved(&self) -> impl Iterator<Item = (&str, String, MergeSource)> + '_ {
         let values: BTreeMap<&str, String> = [

@@ -433,6 +433,8 @@ fn a_replayed_session_renders_like_the_live_one() {
             content: Some("line one".into()),
             attachment: None,
             truncated: false,
+            exit_code: None,
+            full_output_path: None,
         },
     ];
     chat.load_records(&records, None);

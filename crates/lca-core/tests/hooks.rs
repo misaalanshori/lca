@@ -270,7 +270,7 @@ fn harness(name: &str, provider: FakeProvider, registry: ExtensionRegistry) -> H
         project.clone(),
         project.clone(),
         65536,
-        std::time::Duration::from_secs(30),
+        Some(std::time::Duration::from_secs(30)),
     );
     let mut config = AgentConfig {
         provider: "fake".to_string(),

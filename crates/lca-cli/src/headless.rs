@@ -90,6 +90,8 @@ impl TurnSink for HeadlessSink {
                     "status": result.status,
                     "content": result.content,
                     "truncated": result.truncated,
+                    "exit_code": result.exit_code,
+                    "full_output_path": result.full_output_path,
                 }));
             }
             TurnEvent::Usage(usage) if self.json => {
@@ -272,12 +274,17 @@ pub async fn headless(
     if let Some(error) = ops.error() {
         eprintln!("warning: {error}");
     }
+    // Headless keeps a backstop where the interactive default is none:
+    // nobody can cancel a headless run, and an unbounded hang in CI is
+    // a worse failure than a timeout error (gh #40).
+    let default_timeout =
+        crate::configured_tool_timeout(&config).or(Some(std::time::Duration::from_secs(120)));
     let mut tools = ToolExecutor::new(
         std::sync::Arc::new(ops),
         cwd.to_path_buf(),
         cwd.to_path_buf(),
         config.tool_result_limit_bytes() as usize,
-        std::time::Duration::from_secs(config.tool_timeout_seconds()),
+        default_timeout,
     );
     let mut prompt_impl = HeadlessPrompt::default();
     // Extension-originated commands route through the same denying prompt, so a

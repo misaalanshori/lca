@@ -55,7 +55,7 @@ The `v` field is per record, not per file. A file written across a format upgrad
 
 `tool-call` holds one call the model requested. Fields: `id`, `call_id`, `name`, `arguments` as a JSON string, and `source` naming whether the tool is built in or comes from an extension.
 
-`tool-result` holds the outcome. Fields: `id`, `call_id` matching the call, `status` of ok, error, denied, or timeout, `content` or an attachment hash, and `truncated` as a boolean. `truncated = true` with an `attachment` means the display shown to the model was cut and the full text is in that attachment; `truncated = true` with no attachment means the content was dropped (no session was attached, as in one-shot use).
+`tool-result` holds the outcome. Fields: `id`, `call_id` matching the call, `status` of ok, error, denied, or timeout, `content` or an attachment hash, `truncated` as a boolean, and (gh #40) `exit_code` plus `full_output_path` when the tool ran a command and spilled: the process exit code and the session-attachments path holding the untruncated output. Non-shell tools leave both absent. `truncated = true` with an `attachment` means the display shown to the model was cut and the full text is in that attachment; `truncated = true` with no attachment means the content was dropped (no session was attached, as in one-shot use).
 
 `permission` records a grant decision made during the session. Fields: `action`, `decision` of once, always, or denied, and `pattern` when the decision was always. This is a record of what happened, not the grant store itself.
 

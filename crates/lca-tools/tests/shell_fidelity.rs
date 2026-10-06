@@ -266,7 +266,7 @@ fn run(shell: &Shell, cwd: &Path, command: &str) -> (ExecOutcome, Vec<u8>) {
         .block_on(ops.exec(
             command,
             cwd,
-            Duration::from_secs(60),
+            Some(Duration::from_secs(60)),
             &mut |chunk: &[u8]| chunks.extend_from_slice(chunk),
             CancelFlag::new(),
         ))

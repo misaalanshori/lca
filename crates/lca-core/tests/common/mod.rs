@@ -86,7 +86,7 @@ pub fn harness(name: &str, provider: FakeProvider, config: AgentConfig) -> Harne
         project.clone(),
         project.clone(),
         65536,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
     );
     Harness {
         root,

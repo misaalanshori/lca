@@ -519,6 +519,21 @@ pub fn config_file() -> PathBuf {
     data_dir().join("config.toml")
 }
 
+/// The explicitly configured `shell` default timeout (gh #40): `Some`
+/// when `tool.timeout_seconds` came from a flag, env, or file, `None`
+/// when it is just the built-in default. Callers add their own fallback
+/// for the unset case - none where the user can cancel (interactive),
+/// the historical backstop where nobody can (headless).
+pub fn configured_tool_timeout(config: &Config) -> Option<std::time::Duration> {
+    if config.source_of("tool.timeout_seconds") == lca_config::MergeSource::Default {
+        None
+    } else {
+        Some(std::time::Duration::from_secs(
+            config.tool_timeout_seconds(),
+        ))
+    }
+}
+
 /// Load merged configuration for `cwd`, honoring project-file trust
 /// (FR-CFG-1, FR-PERM-9).
 pub fn load_config(
@@ -712,6 +727,31 @@ fn lca_tui_entry(
 
 #[cfg(test)]
 mod tests {
+
+    // Verifies: gh #40 (the timeout default is mode-dependent): an
+    // explicit `tool.timeout_seconds` surfaces as the default, while
+    // the built-in default surfaces as none - the caller adds its own
+    // fallback (backstop headless, none interactive).
+    #[test]
+    fn an_explicit_tool_timeout_is_the_default_and_the_builtin_is_none() {
+        let plain = Config::load(&LoadInput::default()).expect("load");
+        assert_eq!(
+            configured_tool_timeout(&plain),
+            None,
+            "the built-in 120s default is not an explicit setting"
+        );
+        let mut flags = BTreeMap::new();
+        flags.insert("tool.timeout_seconds".to_string(), "60".to_string());
+        let set = Config::load(&LoadInput {
+            flags,
+            ..Default::default()
+        })
+        .expect("load");
+        assert_eq!(
+            configured_tool_timeout(&set),
+            Some(std::time::Duration::from_secs(60))
+        );
+    }
 
     // Verifies: FR-PERM-26 (ADR-0042) - `--yolo` reaches the config through the flag
     // layer (which beats a file that says ask), lands on the shared grant

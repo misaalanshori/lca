@@ -115,6 +115,8 @@ fn a_complete_turn_is_unchanged() {
             content: Some("ok".into()),
             attachment: None,
             truncated: false,
+            exit_code: None,
+            full_output_path: None,
         },
     ];
     let assembled = assemble(&records, "system");

@@ -50,7 +50,7 @@ async fn the_thinking_level_rides_the_request_extras() {
         project.clone(),
         project.clone(),
         65536,
-        Duration::from_secs(30),
+        Some(Duration::from_secs(30)),
     );
     let provider = FakeProvider::builder()
         .turn(|t| t.text("ok").usage(fake_usage(1, 1, 0, 0)))

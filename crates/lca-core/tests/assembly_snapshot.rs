@@ -74,6 +74,8 @@ fn canonical_records() -> Vec<Record> {
             content: Some("main.rs\nlib.rs\n".into()),
             attachment: None,
             truncated: false,
+            exit_code: None,
+            full_output_path: None,
         },
         Record::Assistant {
             v: 1,

@@ -562,6 +562,8 @@ mod vocabulary_tests {
                 content: Some("ok".into()),
                 attachment: None,
                 truncated: false,
+                exit_code: None,
+                full_output_path: None,
             },
             Record::ContextEdit {
                 v: FORMAT_VERSION,

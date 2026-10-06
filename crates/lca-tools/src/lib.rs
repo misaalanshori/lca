@@ -136,7 +136,10 @@ pub struct ToolExecutor {
     workspace: PathBuf,
     cwd: PathBuf,
     result_limit_bytes: usize,
-    default_timeout: Duration,
+    /// The timeout a `shell` call runs under when it names none (gh #40):
+    /// `None` runs until completion or cancellation (pi's interactive
+    /// default); `Some` keeps a backstop where nobody can cancel.
+    default_timeout: Option<Duration>,
     image_policy: ImagePolicy,
     tracker: ReadTracker,
     /// Where over-limit output is spilled, content-addressed, when a
@@ -163,7 +166,7 @@ impl ToolExecutor {
         workspace: PathBuf,
         cwd: PathBuf,
         result_limit_bytes: usize,
-        default_timeout: Duration,
+        default_timeout: Option<Duration>,
     ) -> ToolExecutor {
         ToolExecutor {
             ops,
@@ -217,6 +220,9 @@ impl ToolExecutor {
     /// Build a result, spilling the untruncated text when the display was
     /// cut (FR-TOOL-7). The hash rides in `extras` (the ABI's non-structural
     /// extension point) and the model gets a one-line stub naming it.
+    /// The spill path rides the structured fields (gh #40), so the
+    /// `--json` envelope and the session record name the file instead of
+    /// burying it in prose.
     fn spilled(
         &self,
         call_id: &str,
@@ -224,6 +230,7 @@ impl ToolExecutor {
         mut content: String,
         truncated: bool,
         status: ToolResultStatus,
+        exit_code: Option<i32>,
     ) -> ToolResult {
         let attachment = truncated.then(|| self.spill(full)).flatten();
         if let Some(hash) = &attachment {
@@ -232,6 +239,11 @@ impl ToolExecutor {
                 full.len()
             ));
         }
+        let full_output_path = attachment.as_deref().and_then(|hash| {
+            self.spill_dir
+                .as_ref()
+                .map(|dir| dir.join(hash).to_string_lossy().into_owned())
+        });
         let mut result = ToolResult {
             call_id: call_id.to_string(),
             status,
@@ -239,6 +251,8 @@ impl ToolExecutor {
             truncated,
             images: Vec::new(),
             extras: Default::default(),
+            exit_code,
+            full_output_path,
         };
         if let Some(hash) = attachment {
             result.extras.insert("attachment".to_string(), hash);
@@ -342,7 +356,7 @@ impl ToolExecutor {
                 &shell_description(shell),
                 serde_json::json!({
                     "command": {"type": "string"},
-                    "timeout": {"type": "integer", "description": "Seconds before the command is killed (default: configured tool timeout)"},
+                    "timeout": {"type": "integer", "description": "Seconds before the command is killed (optional; overrides the default for this call only)"},
                 }),
                 &["command"],
             ),
@@ -491,6 +505,7 @@ impl ToolExecutor {
                 out,
                 true,
                 ToolResultStatus::Ok,
+                None,
             );
         }
         let numbered = numbered_window(&lines, offset, end);
@@ -525,6 +540,7 @@ impl ToolExecutor {
             out,
             truncated,
             ToolResultStatus::Ok,
+            None,
         )
     }
 
@@ -715,6 +731,7 @@ impl ToolExecutor {
             content,
             truncated,
             ToolResultStatus::Ok,
+            None,
         )
     }
 
@@ -747,6 +764,7 @@ impl ToolExecutor {
             content,
             truncated,
             ToolResultStatus::Ok,
+            None,
         )
     }
 
@@ -879,6 +897,7 @@ impl ToolExecutor {
             content,
             truncated || bytes_truncated,
             ToolResultStatus::Ok,
+            None,
         )
     }
 
@@ -892,11 +911,20 @@ impl ToolExecutor {
         let Some(command) = args.get("command").and_then(|v| v.as_str()) else {
             return ToolResult::error(call.call_id.clone(), "command is required");
         };
-        let timeout = args
-            .get("timeout")
-            .and_then(|v| v.as_u64())
-            .map(Duration::from_secs)
-            .unwrap_or(self.default_timeout);
+        // A per-call `timeout` overrides the configured default for this
+        // call (gh #40, pi's `bash` parameter of the same name). Zero or
+        // negative is rejected like pi rejects it: a timeout that fires
+        // immediately helps nothing and hides the mistake.
+        let timeout = match args.get("timeout").and_then(|v| v.as_u64()) {
+            Some(0) => {
+                return ToolResult::error(
+                    call.call_id.clone(),
+                    "timeout must be at least 1 second",
+                );
+            }
+            Some(secs) => Some(Duration::from_secs(secs)),
+            None => self.default_timeout,
+        };
 
         let (outcome, full) = match self
             .ops
@@ -913,7 +941,7 @@ impl ToolExecutor {
         };
         let full_text = String::from_utf8_lossy(&full);
         let (content, truncated) = truncate_tail(&full_text, self.result_limit_bytes);
-        let (status, content) = match outcome {
+        let (status, content, exit_code) = match outcome {
             ExecOutcome::Exit { code: 0 } => (
                 ToolResultStatus::Ok,
                 if content.is_empty() {
@@ -921,24 +949,38 @@ impl ToolExecutor {
                 } else {
                     content
                 },
+                Some(0),
             ),
             ExecOutcome::Exit { code } => (
                 ToolResultStatus::Error,
                 format!("{content}\nCommand exited with code {code}"),
+                Some(code),
             ),
             ExecOutcome::Timeout => (
                 ToolResultStatus::Timeout,
-                format!(
-                    "{content}\nCommand timed out after {} seconds",
-                    timeout.as_secs()
-                ),
+                match timeout {
+                    Some(limit) => format!(
+                        "{content}\nCommand timed out after {} seconds",
+                        limit.as_secs()
+                    ),
+                    None => format!("{content}\nCommand timed out"),
+                },
+                None,
             ),
             ExecOutcome::Cancelled => (
                 ToolResultStatus::Error,
                 format!("{content}\nCommand cancelled"),
+                None,
             ),
         };
-        self.spilled(&call.call_id, &full_text, content, truncated, status)
+        self.spilled(
+            &call.call_id,
+            &full_text,
+            content,
+            truncated,
+            status,
+            exit_code,
+        )
     }
 }
 
