@@ -36,6 +36,22 @@ use lca_provider::{CompletionRequest, EventSender, ModelInfo, ProviderError};
 pub use fixture::TestEnv;
 pub use lca_provider::Provider;
 
+/// The live-test model: the one id every test that needs a real model
+/// names, so a delisting means one edit here instead of a repo-wide
+/// hunt. `LCA_SMOKE_MODEL` overrides it per run (CI, local experiments).
+///
+/// Pick a cheap stable model; free-tier ids vanish without notice (the
+/// `space-bunny-free` delisting that created this const).
+pub const SMOKE_MODEL: &str = "mimo-v2.6-flash";
+
+/// [`SMOKE_MODEL`], or `LCA_SMOKE_MODEL` when set and non-empty.
+pub fn smoke_model() -> String {
+    std::env::var("LCA_SMOKE_MODEL")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| SMOKE_MODEL.to_string())
+}
+
 /// Usage with cache fields set explicitly: every scripted turn carries one.
 pub fn fake_usage(input: u64, output: u64, cache_read: u64, cache_write: u64) -> Usage {
     Usage {

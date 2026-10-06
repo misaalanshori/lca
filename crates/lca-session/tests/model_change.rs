@@ -60,7 +60,7 @@ fn model_change_records_name_the_model_and_the_endpoint_that_will_bill() {
                 ts: 11,
                 id: "c2".to_string(),
                 from: Some("zen-free".to_string()),
-                to: "space-bunny-free".to_string(),
+                to: lca_testkit::SMOKE_MODEL.to_string(),
                 provider: "openai-compatible".to_string(),
                 profile: Some("opencode-go".to_string()),
             },
@@ -106,7 +106,7 @@ fn model_change_records_name_the_model_and_the_endpoint_that_will_bill() {
     match changes[1] {
         Record::ModelChange { from, to, .. } => {
             assert_eq!(from.as_deref(), Some("zen-free"), "the model it left");
-            assert_eq!(to, "space-bunny-free");
+            assert_eq!(to, lca_testkit::SMOKE_MODEL);
         }
         other => panic!("a model change reads back: {other:?}"),
     }

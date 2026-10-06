@@ -293,7 +293,7 @@ fn the_enabled_model_scope_merges_from_every_layer() {
     let dir = scratch("models-enabled");
     write(
         &dir.join("user.toml"),
-        "models.enabled = [\"zen/*\", \"*bunny*\"]\n",
+        "models.enabled = [\"zen/*\", \"*spark*\"]\n",
     );
 
     // 1. A file's array is the scope.
@@ -302,7 +302,7 @@ fn the_enabled_model_scope_merges_from_every_layer() {
         ..Default::default()
     })
     .expect("load");
-    assert_eq!(config.models_enabled(), vec!["zen/*", "*bunny*"]);
+    assert_eq!(config.models_enabled(), vec!["zen/*", "*spark*"]);
 
     // 2. Unset means no restriction: every offered model is in scope.
     let unset = Config::load(&lca_config::LoadInput::default()).expect("load");

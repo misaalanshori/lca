@@ -113,6 +113,3 @@ vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text
 
 ["qwen3.8-max"]
 vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video"])
-
-["space-bunny-free"]
-vision = true   # models.dev/`opencode-go` 2026-10-05 (modalities.input = ["text", "image", "video"])

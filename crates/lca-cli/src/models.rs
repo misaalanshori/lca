@@ -343,7 +343,7 @@ mod resolve_tests {
             model("claude-sonnet-4-5-20250929", None),
             model("mimo-v2.6-flash-free", Some("zen")),
             model("mimo-v2.6-flash-free", Some("opencode-go")),
-            model("space-bunny-free", Some("opencode-go")),
+            model(lca_testkit::SMOKE_MODEL, Some("opencode-go")),
             model("openrouter:weird", None),
         ]
     }
@@ -351,8 +351,8 @@ mod resolve_tests {
     // Exact id wins, and the id a user types is the id they get.
     #[test]
     fn an_exact_id_resolves_to_itself() {
-        let resolved = resolve_pattern("space-bunny-free", &catalog()).expect("resolve");
-        assert_eq!(resolved.id, "space-bunny-free");
+        let resolved = resolve_pattern(lca_testkit::SMOKE_MODEL, &catalog()).expect("resolve");
+        assert_eq!(resolved.id, lca_testkit::SMOKE_MODEL);
         assert_eq!(resolved.thinking, None, "no suffix, no thinking level");
     }
 
@@ -397,8 +397,9 @@ mod resolve_tests {
             resolved.id, "claude-sonnet-4-5",
             "the alias wins when both match"
         );
-        let resolved = resolve_pattern("BUNNY", &catalog()).expect("resolve");
-        assert_eq!(resolved.id, "space-bunny-free", "case-insensitive");
+        let resolved =
+            resolve_pattern(&lca_testkit::SMOKE_MODEL.to_uppercase(), &catalog()).expect("resolve");
+        assert_eq!(resolved.id, lca_testkit::SMOKE_MODEL, "case-insensitive");
     }
 
     // A `:thinking` suffix splits off when it names a level; a pattern
@@ -421,8 +422,16 @@ mod resolve_tests {
         assert_eq!(resolved.id, "openrouter:weird");
         assert_eq!(resolved.thinking.as_deref(), Some("medium"));
 
-        let resolved = resolve_pattern("bunny:not-a-level", &catalog()).expect("resolve");
-        assert_eq!(resolved.id, "space-bunny-free", "the id itself, no split");
+        let resolved = resolve_pattern(
+            &format!("{}:not-a-level", lca_testkit::SMOKE_MODEL),
+            &catalog(),
+        )
+        .expect("resolve");
+        assert_eq!(
+            resolved.id,
+            lca_testkit::SMOKE_MODEL,
+            "the id itself, no split"
+        );
         assert_eq!(resolved.thinking, None, "an unknown suffix is not a level");
     }
 
@@ -466,7 +475,7 @@ mod tests {
     fn an_empty_scope_keeps_every_offered_model() {
         let all = vec![
             model("zen-free", Some("zen")),
-            model("bunny-free", Some("opencode-go")),
+            model(lca_testkit::SMOKE_MODEL, Some("opencode-go")),
             model("plain", None),
         ];
         assert_eq!(filter_enabled(all.clone(), &[]), all, "empty = all");
@@ -480,7 +489,9 @@ mod tests {
         let all = vec![
             model("mimo-v2.6-flash-free", Some("zen")),
             model("mimo-v2.5-free", Some("zen")),
-            model("space-bunny-free", Some("opencode-go")),
+            // Arbitrary filter-fixture data, not the live model: any
+            // stable permitted id keeps these counts.
+            model("muse-spark-1.3-contributor", Some("opencode-go")),
             model("longcat-2.5-preview-free", Some("opencode-go")),
         ];
 
@@ -498,7 +509,7 @@ mod tests {
 
         let two = filter_enabled(
             all.clone(),
-            &["*bunny*".to_string(), "mimo-v2.5".to_string()],
+            &["*spark*".to_string(), "mimo-v2.5".to_string()],
         );
         assert_eq!(two.len(), 2, "several patterns union");
 

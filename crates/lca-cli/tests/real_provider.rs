@@ -9,9 +9,9 @@
 //! is readable, and a provider **usage-limit 429** becomes a *named
 //! skip* (the account is out of quota - environment, NFR-23's spirit)
 //! while real transport and provider errors still fail the run. The
-//! model is `space-bunny-free`: proven runnable on this account, where
-//! the paid models need the workspace's Global privacy setting and burn
-//! quota.
+//! model is [`lca_testkit::SMOKE_MODEL`] (`LCA_SMOKE_MODEL` overrides):
+//! one const, never a hardcoded id — a delisted model must mean one edit,
+//! not a repo-wide hunt.
 //!
 //! Verifies: NFR-23 (real-provider tests skip when their credential is
 //! absent), the quota skip path (gh #30), and the live quirks
@@ -67,7 +67,7 @@ fn opencode_go_completes_one_turn() {
         .env("XDG_DATA_HOME", &root)
         .env("LCA_UPDATE_CHECK", "false")
         .env("OPENAI_BASE_URL", "https://opencode.ai/zen/go/v1")
-        .env("OPENAI_MODEL", "space-bunny-free")
+        .env("OPENAI_MODEL", lca_testkit::smoke_model())
         .env("OPENCODE_API_KEY", &key)
         .env_remove("OPENAI_API_KEY")
         .output()

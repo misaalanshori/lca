@@ -60,7 +60,6 @@
 "qwen3.7-plus" = 1000000   # models.dev/`opencode-go` 2026-10-03
 "qwen3.8-flash" = 1000000   # models.dev/`opencode-go` 2026-10-03
 "qwen3.8-max" = 1000000   # models.dev/`opencode-go` 2026-10-03
-"space-bunny-free" = 1048576   # models.dev/`opencode-go` 2026-10-03
 
 # --- Vendor presets: the same provider's own catalog entry only. Ids the
 # --- catalog does not carry under that provider are deliberately absent ---
