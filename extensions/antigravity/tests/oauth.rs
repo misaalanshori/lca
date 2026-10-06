@@ -23,9 +23,17 @@ impl PermissionPrompt for Always {
 
 /// One mock Google: token, code-assist, catalog, quota, stream, and
 /// revoke behind a single loopback origin, with every request recorded.
+/// One scripted response: the path needle, the status, and the payload
+/// (`None` keeps the default payload for the path).
+type Scripted = (String, u16, Option<String>);
+
 struct Mock {
     base: String,
     requests: Arc<Mutex<Vec<(String, String)>>>,
+    /// Scripted one-shot responses, FIFO: the first entry whose needle
+    /// matches the request path answers with its status and payload,
+    /// then leaves the queue.
+    scripted: Arc<Mutex<Vec<Scripted>>>,
 }
 
 fn mock_server() -> Mock {
@@ -33,6 +41,8 @@ fn mock_server() -> Mock {
     let addr = listener.local_addr().expect("addr");
     let requests: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let recorded = requests.clone();
+    let scripted: Arc<Mutex<Vec<Scripted>>> = Arc::new(Mutex::new(Vec::new()));
+    let script = scripted.clone();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let mut stream = stream;
@@ -72,6 +82,17 @@ fn mock_server() -> Mock {
                 .expect("requests")
                 .push((path.clone(), body));
 
+            let mut scripted = script.lock().expect("script");
+            let hit = scripted
+                .iter()
+                .position(|(needle, _, _)| path.contains(needle))
+                .map(|index| scripted.remove(index));
+            drop(scripted);
+            let (status, forced) = match hit {
+                Some((_, status, payload)) => (status, payload),
+                None => (200, None),
+            };
+
             let payload = if path.contains("streamGenerateContent") {
                 concat!(
                     "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hi\"}]}}],",
@@ -98,8 +119,15 @@ fn mock_server() -> Mock {
             } else {
                 "{}".to_string()
             };
+            let payload = forced.unwrap_or(payload);
+            let reason = match status {
+                200 => "OK",
+                401 => "Unauthorized",
+                404 => "Not Found",
+                _ => "Error",
+            };
             let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\n\
                  content-length: {}\r\nconnection: close\r\n\r\n{}",
                 payload.len(),
                 payload
@@ -110,6 +138,19 @@ fn mock_server() -> Mock {
     Mock {
         base: format!("http://{addr}"),
         requests,
+        scripted,
+    }
+}
+
+impl Mock {
+    /// Answer the next request whose path contains `needle` with
+    /// `status` (`None` keeps the default payload for the path).
+    fn fail_once(&self, needle: &str, status: u16, payload: Option<&str>) {
+        self.scripted.lock().expect("script").push((
+            needle.to_string(),
+            status,
+            payload.map(str::to_string),
+        ));
     }
 }
 
@@ -594,4 +635,269 @@ fn manifest_toml_and_native_grants_agree() {
     );
     assert!(grants.oauth.is_some() && grants.credentials);
     assert!(grants.fs.is_empty() && !grants.process && !grants.pty);
+}
+
+// Verifies: gh #179 - a login with stored (even expired) tokens runs
+// the OAuth flow again instead of short-circuiting: the invocation is
+// the overwrite prompt, and a revoked token repairs rather than
+// deadlocking.
+#[test]
+fn a_login_with_stored_tokens_re_runs_the_flow() {
+    let mock = mock_server();
+    let cap = sandbox("relogin", &mock);
+    cap.credentials_set("access", "stale-access").expect("seed");
+    cap.credentials_set("refresh", "stale-refresh")
+        .expect("seed");
+    cap.credentials_set("expires", "1").expect("seed"); // long expired
+    cap.credentials_set("project", "p").expect("seed");
+
+    let outcome = drive_login(&cap).expect("login runs");
+    assert_eq!(outcome, IdentityOutcome::Ok);
+    assert_eq!(cap.oauth_opened().len(), 1, "the flow re-opened");
+    assert_eq!(stored(&cap, "access"), Some("mock-access".to_string()));
+    assert_eq!(stored(&cap, "refresh"), Some("mock-refresh".to_string()));
+    // The PKCE verifier crossed on the exchange (the receipt's pin).
+    assert!(!requests_of(&mock, "code_verifier").is_empty());
+}
+
+// Verifies: gh #179 - a 401 on the stream purges the stored tokens, so
+// the next call reports "no login" and re-authenticates instead of
+// looping on the dead token.
+#[test]
+fn a_401_purges_the_tokens_and_the_next_call_reauthenticates() {
+    let mock = mock_server();
+    let cap = sandbox("purge", &mock);
+    cap.credentials_set("access", "revoked-access")
+        .expect("seed");
+    cap.credentials_set("refresh", "revoked-refresh")
+        .expect("seed");
+    cap.credentials_set("expires", &format!("{}", u64::MAX - 60))
+        .expect("seed");
+    cap.credentials_set("project", "p").expect("seed");
+    mock.fail_once(
+        "streamGenerateContent",
+        401,
+        Some(r#"{"error":{"message":"Request had invalid credentials."}}"#),
+    );
+
+    let request = lca_protocol::CompletionRequest {
+        messages: vec![lca_protocol::ChatMessage {
+            role: lca_protocol::MessageRole::User,
+            content: vec![lca_protocol::ContentBlock::Text {
+                text: "hi".to_string(),
+            }],
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            usage: None,
+            extras: Default::default(),
+        }],
+        tools: Vec::new(),
+        model: "gemini-3.8-flash-low".to_string(),
+        stable_prefix: 0,
+        extras: Default::default(),
+    };
+    let failed = antigravity::run_provider_stream(cap.as_ref(), &request, &mut |_| true);
+    assert!(failed.is_err(), "the rejected call fails");
+
+    assert_eq!(stored(&cap, "access"), None, "access purged");
+    assert_eq!(stored(&cap, "refresh"), None, "refresh purged");
+    assert_eq!(stored(&cap, "expires"), None, "expiry purged");
+    // The next call no longer loops on the dead token: it reports that
+    // no login exists, which is what sends the user to re-authenticate.
+    let usage = antigravity::run_usage(cap.as_ref());
+    assert!(
+        format!("{usage:?}").contains("no Antigravity login yet"),
+        "re-authenticates, not loops: {usage:?}"
+    );
+}
+
+// Verifies: gh #179 - a 404 on a preview id falls back to the mapped
+// backend model, which serves: two stream calls, the fallback's model
+// id on the second body.
+#[test]
+fn a_404_on_a_preview_id_falls_back_to_the_mapped_model() {
+    let mock = mock_server();
+    let cap = sandbox("fallback", &mock);
+    cap.credentials_set("access", "live-access").expect("seed");
+    cap.credentials_set("expires", &format!("{}", u64::MAX - 60))
+        .expect("seed");
+    cap.credentials_set("project", "p").expect("seed");
+    mock.fail_once("streamGenerateContent", 404, Some("{}"));
+
+    let request = lca_protocol::CompletionRequest {
+        messages: vec![lca_protocol::ChatMessage {
+            role: lca_protocol::MessageRole::User,
+            content: vec![lca_protocol::ContentBlock::Text {
+                text: "hi".to_string(),
+            }],
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            usage: None,
+            extras: Default::default(),
+        }],
+        tools: Vec::new(),
+        model: "gemini-3.8-flash".to_string(),
+        stable_prefix: 0,
+        extras: Default::default(),
+    };
+    let mut events = Vec::new();
+    antigravity::run_provider_stream(cap.as_ref(), &request, &mut |event| {
+        events.push(event);
+        true
+    })
+    .expect("the fallback serves");
+
+    let streams = requests_of(&mock, "streamGenerateContent");
+    assert_eq!(streams.len(), 2, "initial plus fallback: {streams:?}");
+    assert!(
+        streams[0].contains("\"model\":\"gemini-3.8-flash-low\""),
+        "first the requested preview: {}",
+        streams[0]
+    );
+    assert!(
+        streams[1].contains("\"model\":\"gemini-3.7-flash-low\""),
+        "then the mapped backend model: {}",
+        streams[1]
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, lca_protocol::StreamEvent::TextDelta { .. })),
+        "the fallback's text arrives"
+    );
+}
+
+// Verifies: gh #179 - the hostile schema crosses the wire normalized
+// per model class: Claude's legacy `parameters` carry the allowlist
+// only (no `parametersJsonSchema`), Gemini's `parametersJsonSchema`
+// keeps the full schema minus metadata.
+#[test]
+fn the_hostile_schema_crosses_normalized_per_model_class() {
+    let hostile = serde_json::json!({
+        "type": "object",
+        "nullable": true,
+        "properties": {
+            "path": {"type": "string", "format": "uri"},
+            "choice": {"anyOf": [{"type": "string"}]},
+        },
+        "$defs": {"x": {"type": "string"}},
+    });
+    let request = |model: &str| lca_protocol::CompletionRequest {
+        messages: vec![lca_protocol::ChatMessage {
+            role: lca_protocol::MessageRole::User,
+            content: vec![lca_protocol::ContentBlock::Text {
+                text: "hi".to_string(),
+            }],
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            usage: None,
+            extras: Default::default(),
+        }],
+        tools: vec![lca_protocol::ToolSpec {
+            name: "read".to_string(),
+            description: "read".to_string(),
+            parameters: hostile.clone(),
+            extras: Default::default(),
+        }],
+        model: model.to_string(),
+        stable_prefix: 0,
+        extras: Default::default(),
+    };
+    let stream = |cap: &Arc<lca_tools::Capabilities>, model: &str| {
+        antigravity::run_provider_stream(cap.as_ref(), &request(model), &mut |_| true)
+            .expect("streams");
+    };
+
+    let mock = mock_server();
+    let claude = sandbox("hostile-claude", &mock);
+    let fresh = format!("{}", u64::MAX - 60);
+    for key in ["access", "expires", "project"] {
+        claude
+            .credentials_set(key, if key == "expires" { &fresh } else { "x" })
+            .expect("seed");
+    }
+    stream(&claude, "claude-sonnet-4-6");
+    let bodies = requests_of(&mock, "streamGenerateContent");
+    assert_eq!(bodies.len(), 1);
+    assert!(
+        bodies[0].contains(
+            r#""parameters":{"properties":{"choice":{},"path":{"type":"string"}},"type":"object"}"#
+        ),
+        "allowlist only: {}",
+        bodies[0]
+    );
+    assert!(
+        !bodies[0].contains("parametersJsonSchema"),
+        "no JsonSchema field on the legacy channel"
+    );
+    assert!(
+        !bodies[0].contains("nullable") && !bodies[0].contains("anyOf"),
+        "rejected keywords gone: {}",
+        bodies[0]
+    );
+
+    let gemini = sandbox("hostile-gemini", &mock);
+    for key in ["access", "expires", "project"] {
+        gemini
+            .credentials_set(key, if key == "expires" { &fresh } else { "x" })
+            .expect("seed");
+    }
+    stream(&gemini, "gemini-3.8-flash-low");
+    let bodies = requests_of(&mock, "streamGenerateContent");
+    assert_eq!(bodies.len(), 2, "one more call crossed");
+    assert!(
+        bodies[1].contains("parametersJsonSchema"),
+        "gemini keeps the JsonSchema channel"
+    );
+    assert!(
+        !bodies[1].contains("$defs"),
+        "metadata stripped even on the JsonSchema channel"
+    );
+}
+
+// Verifies: gh #179 - multi-turn labels cross the wire: a three-message
+// request carries `last_execution_id`, a single-message one does not.
+#[test]
+fn multi_turn_labels_carry_last_execution_id() {
+    let mock = mock_server();
+    let cap = sandbox("labels", &mock);
+    cap.credentials_set("access", "live-access").expect("seed");
+    cap.credentials_set("expires", &format!("{}", u64::MAX - 60))
+        .expect("seed");
+    cap.credentials_set("project", "p").expect("seed");
+    let message = |text: &str| lca_protocol::ChatMessage {
+        role: lca_protocol::MessageRole::User,
+        content: vec![lca_protocol::ContentBlock::Text {
+            text: text.to_string(),
+        }],
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        usage: None,
+        extras: Default::default(),
+    };
+    let request = |messages: Vec<lca_protocol::ChatMessage>| lca_protocol::CompletionRequest {
+        messages,
+        tools: Vec::new(),
+        model: "gemini-3.8-flash-low".to_string(),
+        stable_prefix: 0,
+        extras: Default::default(),
+    };
+    for messages in [
+        vec![message("hi")],
+        vec![message("a"), message("b"), message("c")],
+    ] {
+        antigravity::run_provider_stream(cap.as_ref(), &request(messages), &mut |_| true)
+            .expect("streams");
+    }
+    let bodies = requests_of(&mock, "streamGenerateContent");
+    assert_eq!(bodies.len(), 2);
+    assert!(
+        !bodies[0].contains("last_execution_id"),
+        "first step carries none"
+    );
+    assert!(
+        bodies[1].contains("last_execution_id"),
+        "later steps carry one: {}",
+        bodies[1]
+    );
 }

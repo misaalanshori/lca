@@ -367,6 +367,12 @@ fn access_token(cap: &dyn ProviderCap) -> Result<String, IdentityFailure> {
     });
     let (status, text) = post_json(cap, &url, "", &body)?;
     if !(200..300).contains(&status) {
+        if status == 401 {
+            // The refresh token itself is dead: purge it so the next
+            // call reports "no login" instead of retrying the dead
+            // token forever.
+            purge_tokens(cap);
+        }
         return Err(IdentityFailure(format!(
             "token refresh failed: {}",
             json_error_message(&text)
@@ -423,17 +429,29 @@ fn find_project_id(value: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// Clear the stored tokens after a rejection (gh #179): a revoked or
+/// expired token must not short-circuit the next login or poison the
+/// next call. Best effort — a store that fails is already broken, and
+/// the caller's error carries the news.
+pub fn purge_tokens(cap: &dyn ProviderCap) {
+    for key in ["access", "refresh", "expires"] {
+        let _ = cap.credentials_delete(key);
+    }
+}
+
 /// `login`: bind the host's loopback listener, build the authorization
 /// URL with a PKCE challenge, open it, wait for the callback, exchange
 /// the code, then learn this account's project id. The extension never
 /// binds anything itself (FR-PROV-4).
+///
+/// A login always runs the flow, even with tokens stored (gh #179): a
+/// stored token may be expired or revoked, and the invocation itself is
+/// the user's overwrite prompt — returning `Ok` on a stale token
+/// deadlocks re-authentication.
 pub fn run_login(
     cap: &dyn ProviderCap,
     oauth: &dyn OauthCap,
 ) -> Result<crate::IdentityOutcomeAlias, IdentityFailure> {
-    if !stored(cap, "access").is_empty() {
-        return Ok(lca_protocol::IdentityOutcome::Ok);
-    }
     let (client_id, client_secret) = client_pair(cap);
     if client_id.is_empty() {
         return Err(IdentityFailure(
@@ -615,6 +633,11 @@ pub fn run_usage(cap: &dyn ProviderCap) -> Result<lca_protocol::Usage, IdentityF
         &serde_json::json!({}),
     )?;
     if !(200..300).contains(&status) {
+        if status == 401 {
+            // The token the quota call carried is rejected: purge it so
+            // the next call re-authenticates instead of looping.
+            purge_tokens(cap);
+        }
         return Err(IdentityFailure(format!(
             "quota summary failed: {}",
             json_error_message(&text)
@@ -771,7 +794,10 @@ fn fallback_models() -> Vec<lca_protocol::ModelInfo> {
 
 mod stream;
 
-pub use stream::{StreamDriver, build_request, model_enum_for, resolve_runtime_model};
+pub use stream::{
+    StreamDriver, build_request, fallback_runtime_model, model_enum_for,
+    normalize_custom_tool_schema, resolve_runtime_model, stable_uuid,
+};
 
 /// Minimal percent-encoding for a URL query value (redirect URLs and
 /// scopes are the only things that pass through here).

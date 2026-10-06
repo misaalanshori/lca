@@ -121,6 +121,10 @@ shell-words = "1"
 # in Cargo.lock (via proptest); promoting the edge adds no new packages.
 tempfile = "3"
 sha2 = "0.10"
+# sha1 - pi-antigravity's stableUuid (RFC 4122 v5-style labels) needs
+# SHA-1 exactly; SHA-256 truncated would fingerprint differently.
+# Same RustCrypto family as sha2, pure Rust, wasm-safe.
+sha1 = "0.10"
 # zip - the ADR-0010 HTTPS archive format; DEFLATE gets a maintained
 # implementation instead of a hand-written one (SRDD dependency rule).
 zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -6,6 +6,7 @@ use crate::{
     failure_for_status, json_error_message, now_epoch,
 };
 use lca_protocol::ProviderCap;
+use sha1::Digest as _;
 
 /// Pure agy CLI wire alignment (pi-antigravity `src/utils/util.ts` & `src/stream/stream.ts`):
 /// Maps public model ID + reasoning effort to backend runtime model ID.
@@ -42,6 +43,80 @@ pub fn resolve_runtime_model(model: &str, effort: Option<&str>) -> &'static str 
     }
 }
 
+/// Deterministic v5-style UUID from a seed (pi-antigravity
+/// `src/utils/util.ts:stableUuid`): SHA-1, first 16 bytes, version and
+/// variant bits set. Labels must match pi byte-for-byte — a SHA-256
+/// truncation would fingerprint differently.
+pub fn stable_uuid(seed: &str) -> String {
+    let mut bytes: [u8; 16] = sha1::Sha1::digest(seed.as_bytes())[..16]
+        .try_into()
+        .unwrap_or([0u8; 16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
+}
+
+/// Port of pi-antigravity `getFallbackRuntimeModel`
+/// (`src/models/models.ts`): when a next-gen preview id 404s, the
+/// available backend model. A table, not branches: prefix rewrites
+/// first, then exact rows, in pi's order (a `gemini-3.8-flash-tiered`
+/// request rewrites its prefix, it does not take the bare `gemini-3.8`
+/// row). The tiered row follows the thinking effort like pi's
+/// `getAntigravityRequestModelId("gemini-3.6-flash", effort)` does.
+pub fn fallback_runtime_model(model: &str, effort: Option<&str>) -> Option<String> {
+    const PREFIXES: &[(&str, &str)] = &[
+        ("gemini-3.8-flash-", "gemini-3.7-flash-"),
+        ("gemini-3.7-flash-", "gemini-3.6-flash-"),
+    ];
+    const EXACT: &[(&str, &str)] = &[
+        ("gemini-3.8-flash", "gemini-3.7-flash-low"),
+        ("gemini-3.7-flash", "gemini-3.6-flash-low"),
+    ];
+    // pi's literal order: the 3.8 prefix before the bare 3.8 row, the
+    // tiered row before the 3.7 prefix, the 3.7 prefix before bare 3.7.
+    if let Some(rest) = model.strip_prefix(PREFIXES[0].0) {
+        return Some(format!("{}{rest}", PREFIXES[0].1));
+    }
+    if model == EXACT[0].0 {
+        return Some(EXACT[0].1.to_string());
+    }
+    if model == "gemini-3.7-flash-tiered" {
+        return Some(
+            match effort {
+                Some("medium") => "gemini-3.6-flash-medium",
+                Some("high") | Some("xhigh") => "gemini-3.6-flash-high",
+                _ => "gemini-3.6-flash-low",
+            }
+            .to_string(),
+        );
+    }
+    if let Some(rest) = model.strip_prefix(PREFIXES[1].0) {
+        return Some(format!("{}{rest}", PREFIXES[1].1));
+    }
+    if model == EXACT[1].0 {
+        return Some(EXACT[1].1.to_string());
+    }
+    None
+}
+
 /// Matches ANTIGRAVITY_MODEL_ENUM in pi-antigravity `src/models/models.ts`.
 pub fn model_enum_for(runtime_model: &str) -> Option<&'static str> {
     match runtime_model {
@@ -66,6 +141,180 @@ pub fn model_enum_for(runtime_model: &str) -> Option<&'static str> {
         "claude-sonnet-4-6" => Some("MODEL_PLACEHOLDER_M35"),
         "claude-opus-4-6" | "claude-opus-4-6-thinking" => Some("MODEL_PLACEHOLDER_M26"),
         _ => None,
+    }
+}
+
+/// Keywords pi strips as schema *metadata* before either tool channel
+/// (pi-antigravity `stripMetaSchema`'s `META_SCHEMA_KEYWORDS`), plus the
+/// map/value/array keyword sets that decide how deep the strip recurses.
+const META_SCHEMA_KEYWORDS: &[&str] = &[
+    "$schema",
+    "$id",
+    "$anchor",
+    "$dynamicAnchor",
+    "$vocabulary",
+    "$comment",
+    "$defs",
+    "definitions",
+];
+const SCHEMA_MAP_KEYWORDS: &[&str] = &[
+    "properties",
+    "patternProperties",
+    "dependentSchemas",
+    "dependencies",
+];
+const SCHEMA_VALUE_KEYWORDS: &[&str] = &[
+    "additionalItems",
+    "additionalProperties",
+    "contains",
+    "contentSchema",
+    "else",
+    "if",
+    "items",
+    "not",
+    "propertyNames",
+    "then",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+];
+const SCHEMA_ARRAY_KEYWORDS: &[&str] = &["allOf", "anyOf", "oneOf", "prefixItems"];
+
+/// Remove schema metadata without treating user-defined property names
+/// as keywords (pi-antigravity `stripMetaSchema`).
+fn strip_meta_schema(schema: &serde_json::Value) -> serde_json::Value {
+    fn strip_map(map: &serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
+        serde_json::Value::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), strip_meta_schema(value)))
+                .collect(),
+        )
+    }
+    match schema {
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(strip_meta_schema).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, value) in map {
+                if META_SCHEMA_KEYWORDS.contains(&key.as_str()) {
+                    continue;
+                }
+                let stripped = if SCHEMA_MAP_KEYWORDS.contains(&key.as_str()) {
+                    match value {
+                        serde_json::Value::Object(inner) => strip_map(inner),
+                        _ => strip_meta_schema(value),
+                    }
+                } else if SCHEMA_VALUE_KEYWORDS.contains(&key.as_str())
+                    || SCHEMA_ARRAY_KEYWORDS.contains(&key.as_str())
+                {
+                    strip_meta_schema(value)
+                } else {
+                    value.clone()
+                };
+                out.insert(key.clone(), stripped);
+            }
+            serde_json::Value::Object(out)
+        }
+        _ => schema.clone(),
+    }
+}
+
+/// A schema with no usable root is an empty object schema
+/// (pi-antigravity `ensureRootObjectSchema`).
+fn ensure_root_object_schema(schema: serde_json::Value) -> serde_json::Value {
+    match schema {
+        serde_json::Value::Object(mut map) => {
+            if !map.contains_key("type") {
+                map.insert(
+                    "type".to_string(),
+                    serde_json::Value::String("object".to_string()),
+                );
+                if !map.contains_key("properties") {
+                    map.insert(
+                        "properties".to_string(),
+                        serde_json::Value::Object(serde_json::Map::new()),
+                    );
+                }
+            }
+            serde_json::Value::Object(map)
+        }
+        _ => serde_json::json!({ "type": "object", "properties": {} }),
+    }
+}
+
+/// The protobuf bridge's accepted fields: anything else — `nullable`,
+/// `anyOf`, `format`, `$ref` — 400s as `Unknown name "..."`
+/// (pi-antigravity `CUSTOM_TOOL_SCHEMA_ALLOW`). Allowlist, not
+/// denylist, so new keywords cannot 400 the request.
+const CUSTOM_TOOL_SCHEMA_ALLOW: &[&str] = &[
+    "type",
+    "description",
+    "properties",
+    "required",
+    "items",
+    "enum",
+];
+
+/// Union types like `["string", "null"]` keep the first non-null
+/// scalar (pi-antigravity `normalizeCustomToolType`).
+fn normalize_custom_tool_type(value: &serde_json::Value) -> Option<serde_json::Value> {
+    match value {
+        serde_json::Value::String(_) => Some(value.clone()),
+        serde_json::Value::Array(entries) => entries
+            .iter()
+            .find(|entry| entry.as_str().is_some_and(|text| text != "null"))
+            .cloned(),
+        _ => None,
+    }
+}
+
+/// Filter one schema through the bridge allowlist
+/// (pi-antigravity `normalizeCustomToolSchema`). Property names are
+/// user-defined and never filtered; a non-string enum drops wholesale.
+///
+/// `$ref` is NOT resolved here (pi's `dereferenceSchema` has no port:
+/// LCA tool schemas are inline, so a reference key drops like any
+/// non-allowlisted keyword and the tool keeps an empty schema).
+pub fn normalize_custom_tool_schema(schema: &serde_json::Value) -> serde_json::Value {
+    match schema {
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(normalize_custom_tool_schema).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, value) in map {
+                if !CUSTOM_TOOL_SCHEMA_ALLOW.contains(&key.as_str()) {
+                    continue;
+                }
+                if key == "type" {
+                    if let Some(normalized) = normalize_custom_tool_type(value) {
+                        out.insert(key.clone(), normalized);
+                    }
+                    continue;
+                }
+                if key == "properties" {
+                    if let serde_json::Value::Object(props) = value {
+                        let mut kept = serde_json::Map::new();
+                        for (name, prop) in props {
+                            kept.insert(name.clone(), normalize_custom_tool_schema(prop));
+                        }
+                        out.insert(key.clone(), serde_json::Value::Object(kept));
+                    }
+                    continue;
+                }
+                if key == "enum" {
+                    let strings_only = value
+                        .as_array()
+                        .is_some_and(|entries| entries.iter().all(|entry| entry.is_string()));
+                    if !strings_only {
+                        continue;
+                    }
+                }
+                out.insert(key.clone(), normalize_custom_tool_schema(value));
+            }
+            serde_json::Value::Object(out)
+        }
+        _ => schema.clone(),
     }
 }
 
@@ -138,6 +387,14 @@ pub fn build_request(
         }
         contents.push(serde_json::json!({ "role": role, "parts": parts }));
     }
+    // pi-antigravity `convertTools(declaredTools, isClaude ||
+    // model.id.startsWith("gpt-oss-"))`: Gemini takes the schema as-is
+    // through `parametersJsonSchema`; Claude and GPT-OSS go through the
+    // allowlist into the legacy `parameters` field. Both channels strip
+    // schema metadata and default a missing root first.
+    let use_legacy_parameters = runtime_model.starts_with("claude-")
+        || request.model.starts_with("claude-")
+        || request.model.starts_with("gpt-oss-");
     let tools = if request.tools.is_empty() {
         serde_json::Value::Null
     } else {
@@ -145,11 +402,20 @@ pub fn build_request(
             .tools
             .iter()
             .map(|tool| {
-                serde_json::json!({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters,
-                })
+                let schema = strip_meta_schema(&ensure_root_object_schema(tool.parameters.clone()));
+                if use_legacy_parameters {
+                    serde_json::json!({
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": normalize_custom_tool_schema(&schema),
+                    })
+                } else {
+                    serde_json::json!({
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parametersJsonSchema": schema,
+                    })
+                }
             })
             .collect();
         serde_json::json!([{ "functionDeclarations": declarations }])
@@ -178,6 +444,15 @@ pub fn build_request(
     });
     if let Some(m_enum) = model_enum_for(runtime_model) {
         labels["model_enum"] = serde_json::Value::String(m_enum.to_string());
+    }
+    // Pure agy CLI wire alignment (pi-antigravity
+    // `antigravityRequestEnvelope`): `last_execution_id` is the previous
+    // turn's execution id, present on later steps only, never the first.
+    if step > 1 {
+        labels["last_execution_id"] = serde_json::Value::String(stable_uuid(&format!(
+            "antigravity:exec:{trajectory_id}:{}",
+            step - 1
+        )));
     }
 
     let mut inner_request = serde_json::json!({
@@ -362,13 +637,14 @@ impl<'a> StreamDriver<'a> {
             .join("\n");
         let project_id = crate::stored(cap, "project");
         let effort = request.extras.get("reasoning-effort").map(String::as_str);
-        let runtime_model = resolve_runtime_model(&request.model, effort);
-        let body = build_request(request, &system, &project_id, runtime_model);
-        let body_bytes = serde_json::to_vec(&body).map_err(|err| StreamFailure {
-            message: format!("cannot build request: {err}"),
-            class: "invalid",
-            retryable: false,
-        })?;
+        // pi-antigravity's candidate walk: the requested model first,
+        // then its fallback row when one exists. A 404 advances to the
+        // next candidate (a preview id the backend does not serve yet);
+        // any other status ends the walk with that response.
+        let mut candidates = vec![resolve_runtime_model(&request.model, effort).to_string()];
+        if let Some(fallback) = fallback_runtime_model(&candidates[0], effort) {
+            candidates.push(fallback);
+        }
         let url = format!(
             "{}/v1internal:streamGenerateContent?alt=sse",
             api_base.trim_end_matches('/')
@@ -379,9 +655,29 @@ impl<'a> StreamDriver<'a> {
             ("authorization", bearer.as_str()),
             ("user-agent", DEFAULT_USER_AGENT),
         ];
-        let handle = cap.net_request("POST", &url, &headers, Some(&body_bytes))?;
-        let status = cap.net_response_status(handle)?;
+        let mut handle = 0;
+        let mut status = 0;
+        for (index, candidate) in candidates.iter().enumerate() {
+            let body = build_request(request, &system, &project_id, candidate);
+            let body_bytes = serde_json::to_vec(&body).map_err(|err| StreamFailure {
+                message: format!("cannot build request: {err}"),
+                class: "invalid",
+                retryable: false,
+            })?;
+            handle = cap.net_request("POST", &url, &headers, Some(&body_bytes))?;
+            status = cap.net_response_status(handle)?;
+            if status == 404 && index + 1 < candidates.len() {
+                let _ = cap.net_close_response(handle);
+                continue;
+            }
+            break;
+        }
         if !(200..300).contains(&status) {
+            if status == 401 {
+                // A rejected token poisons every later call: purge it so
+                // the next call re-authenticates instead of looping.
+                crate::purge_tokens(cap);
+            }
             let mut detail = Vec::new();
             while let Some(chunk) = cap.net_read_body(handle, 64 * 1024)? {
                 detail.extend_from_slice(&chunk);

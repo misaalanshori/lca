@@ -4,6 +4,19 @@ Notable changes to LCA. Versions follow semantic versioning for the product;
 the `lca:ext` ABI version is independent and is printed by `lca --version`.
 Dates are UTC.
 
+## [Unreleased]
+
+### Fixed
+- **Antigravity 0.9.0 wire alignment (gh #179).** A login with stored
+  tokens re-runs the OAuth flow instead of short-circuiting to `Ok`, so
+  expired or revoked tokens repair rather than deadlock; a 401 purges
+  the stored tokens so the next call re-authenticates instead of
+  looping. Later steps carry pi's deterministic `last_execution_id`
+  label; tool schemas split by model class (Gemini takes
+  `parametersJsonSchema`, Claude/GPT-OSS take the allowlisted legacy
+  `parameters`); and a 404 on a preview id falls back to the mapped
+  backend model.
+
 ## [0.5.4] - 2026-10-05
 
 ### Added
