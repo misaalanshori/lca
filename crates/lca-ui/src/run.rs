@@ -194,6 +194,7 @@ fn copy_through_ladder(
 fn keybinding_problems(
     load_error: Option<String>,
     unknown: &[String],
+    invalid: &[(String, String)],
     conflicts: &[lca_tui::engine::keybindings::KeybindingConflict],
 ) -> Option<String> {
     let mut problems = Vec::new();
@@ -204,6 +205,11 @@ fn keybinding_problems(
         problems.push(format!(
             "unknown action(s): {} - keeping defaults for those",
             unknown.join(", ")
+        ));
+    }
+    for (action, key) in invalid {
+        problems.push(format!(
+            "invalid key {key} for {action} - keeping defaults for it"
         ));
     }
     for conflict in conflicts {
@@ -394,6 +400,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     let keybinding_notice = keybinding_problems(
         options.keybinding_error.clone(),
         &keybindings.unknown_actions(),
+        keybindings.invalid_keys(),
         keybindings.conflicts(),
     );
     // One permission-prompt channel for the session, not one per turn
@@ -759,10 +766,11 @@ mod tests {
     // stays silent when the file parsed clean.
     #[test]
     fn the_keybinding_report_names_every_problem() {
-        assert_eq!(keybinding_problems(None, &[], &[]), None);
+        assert_eq!(keybinding_problems(None, &[], &[], &[]), None);
         let report = keybinding_problems(
             Some("not valid TOML".to_string()),
             &["app.typo".to_string()],
+            &[("tui.editor.cursorLeft".to_string(), "ctrl+xyz".to_string())],
             &[lca_tui::engine::keybindings::KeybindingConflict {
                 key: "ctrl+x".to_string(),
                 keybindings: vec!["a".to_string(), "b".to_string()],
@@ -771,6 +779,7 @@ mod tests {
         .expect("a report");
         assert!(report.contains("not valid TOML"), "{report}");
         assert!(report.contains("app.typo"), "{report}");
+        assert!(report.contains("ctrl+xyz"), "{report}");
         assert!(report.contains("ctrl+x"), "{report}");
     }
 

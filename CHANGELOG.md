@@ -18,6 +18,11 @@ Dates are UTC.
   next demand votes get counted against.
 
 ### Added
+- **System-prompt files and flags (gh #68).** `~/.lca/SYSTEM.md`
+  replaces the built-in preamble and `APPEND_SYSTEM.md` appends after
+  project context (before the skills catalog); trusted-project files
+  win by replacement, untrusted projects are ignored; and
+  `--system-prompt` / `--append-system-prompt` win for one run.
 - **User key bindings (gh #66).** `~/.lca/keybindings.toml` maps action
   names to keys (string, list, or empty-to-disable) through the
   existing registry; `/hotkeys` prints the effective bindings. Unknown

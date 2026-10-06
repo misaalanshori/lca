@@ -202,6 +202,27 @@ fn parse_key_id(key_id: &str) -> ParsedKeyId {
     ParsedKeyId { key, modifier }
 }
 
+/// Whether a key identifier names a key `matches_key` can ever match
+/// (gh #66 follow-up): the named keys below plus one ASCII
+/// letter/digit/symbol, each with any modifier combination. Anything
+/// else (a `ctrl+xyz` typo, a bare modifier, an empty string) never
+/// matches, so the loader reports it instead of installing silence.
+pub fn is_valid_key_id(key_id: &str) -> bool {
+    let ParsedKeyId { key, .. } = parse_key_id(key_id);
+    match key.as_str() {
+        "escape" | "esc" | "space" | "tab" | "enter" | "return" | "backspace" | "insert"
+        | "delete" | "clear" | "home" | "end" | "pageup" | "pagedown" | "up" | "down" | "left"
+        | "right" | "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10"
+        | "f11" | "f12" => true,
+        _ => {
+            key.chars().count() == 1
+                && key.chars().next().is_some_and(|c| {
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || SYMBOL_KEYS.contains(c)
+                })
+        }
+    }
+}
+
 /// Match raw terminal input against a key identifier such as `ctrl+c`,
 /// `shift+enter`, or `escape`.
 pub fn matches_key(data: &str, key_id: &str) -> bool {
@@ -755,6 +776,48 @@ mod tests {
         set_kitty_protocol_active(active);
         f();
         set_kitty_protocol_active(prev);
+    }
+
+    // Verifies: gh #66 follow-up - the key vocabulary accepts every
+    // shape `matches_key` handles and rejects anything else, so a
+    // `ctrl+xyz` typo reports loud instead of never matching.
+    #[test]
+    fn the_key_vocabulary_accepts_named_and_single_keys_only() {
+        for valid in [
+            "up",
+            "down",
+            "left",
+            "right",
+            "pageUp",
+            "pageDown",
+            "home",
+            "end",
+            "escape",
+            "esc",
+            "enter",
+            "return",
+            "tab",
+            "space",
+            "backspace",
+            "delete",
+            "insert",
+            "clear",
+            "f1",
+            "f12",
+            "a",
+            "z",
+            "5",
+            ";",
+            "ctrl+x",
+            "ctrl+shift+n",
+            "alt+left",
+            "super+k",
+        ] {
+            assert!(is_valid_key_id(valid), "{valid} is a key");
+        }
+        for invalid in ["", "ctrl+xyz", "super-duper", "shift", "f13", "enter+"] {
+            assert!(!is_valid_key_id(invalid), "{invalid} is not a key");
+        }
     }
 
     // Verifies: I.1 key dialect tables (pi keys.ts golden cases).

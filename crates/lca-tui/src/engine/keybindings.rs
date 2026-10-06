@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::keys::matches_key;
+use super::keys::{is_valid_key_id, matches_key};
 
 /// One action's default bindings and description.
 #[derive(Debug, Clone, Copy)]
@@ -306,6 +306,7 @@ pub struct KeybindingsManager {
     user_bindings: BTreeMap<String, Vec<String>>,
     keys_by_action: BTreeMap<String, Vec<String>>,
     conflicts: Vec<KeybindingConflict>,
+    invalid_keys: Vec<(String, String)>,
 }
 
 impl Default for KeybindingsManager {
@@ -326,6 +327,7 @@ impl KeybindingsManager {
             user_bindings,
             keys_by_action: BTreeMap::new(),
             conflicts: Vec::new(),
+            invalid_keys: Vec::new(),
         };
         manager.rebuild();
         manager
@@ -334,6 +336,7 @@ impl KeybindingsManager {
     fn rebuild(&mut self) {
         self.keys_by_action.clear();
         self.conflicts.clear();
+        self.invalid_keys.clear();
 
         let mut user_claims: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for (action, keys) in &self.user_bindings {
@@ -341,6 +344,11 @@ impl KeybindingsManager {
                 continue;
             }
             for key in normalize_keys(keys) {
+                // Invalid keys never install (defaults hold instead),
+                // so they claim nothing.
+                if !is_valid_key_id(&key) {
+                    continue;
+                }
                 user_claims.entry(key).or_default().insert(action.clone());
             }
         }
@@ -354,13 +362,31 @@ impl KeybindingsManager {
         }
 
         for (action, definition) in tui_keybindings() {
+            let defaults: Vec<String> = definition
+                .default_keys
+                .iter()
+                .map(|k| (*k).to_string())
+                .collect();
             let keys = match self.user_bindings.get(*action) {
-                Some(user) => normalize_keys(user),
-                None => definition
-                    .default_keys
-                    .iter()
-                    .map(|k| (*k).to_string())
-                    .collect(),
+                Some(user) => {
+                    let invalid: Vec<String> = normalize_keys(user)
+                        .into_iter()
+                        .filter(|key| !is_valid_key_id(key))
+                        .collect();
+                    if invalid.is_empty() {
+                        normalize_keys(user)
+                    } else {
+                        // A poisoned action keeps defaults (gh #66
+                        // follow-up): installing the bad list would
+                        // silently disable the action, which is the
+                        // failure mode the report exists to kill.
+                        for key in invalid {
+                            self.invalid_keys.push(((*action).to_string(), key));
+                        }
+                        defaults
+                    }
+                }
+                None => defaults,
             };
             self.keys_by_action.insert((*action).to_string(), keys);
         }
@@ -407,6 +433,13 @@ impl KeybindingsManager {
         &self.conflicts
     }
 
+    /// `(action, key)` pairs whose value never names a key (gh #66
+    /// follow-up): the action keeps defaults, and the loader reports
+    /// the value loud.
+    pub fn invalid_keys(&self) -> &[(String, String)] {
+        &self.invalid_keys
+    }
+
     /// The primary key for an action, for a hint (`ctrl+o`).
     pub fn primary_key(&self, action: &str) -> String {
         self.keys(action).into_iter().next().unwrap_or_default()
@@ -449,6 +482,27 @@ mod tests {
         let kb = KeybindingsManager::with_user_bindings(user);
         assert_eq!(kb.unknown_actions(), vec!["app.typo.here".to_string()]);
         assert!(kb.matches("\x18", "tui.editor.cursorLeft"));
+    }
+
+    // Verifies: gh #66 follow-up - an unparseable key value falls back
+    // to defaults for its action and reports the offending value.
+    #[test]
+    fn an_unparseable_key_keeps_defaults_and_reports() {
+        let mut user = BTreeMap::new();
+        user.insert(
+            "tui.editor.cursorLeft".to_string(),
+            vec!["ctrl+xyz".to_string()],
+        );
+        let kb = KeybindingsManager::with_user_bindings(user);
+        assert_eq!(
+            kb.keys("tui.editor.cursorLeft"),
+            vec!["left".to_string(), "ctrl+b".to_string()],
+            "defaults hold for the poisoned action"
+        );
+        assert_eq!(
+            kb.invalid_keys(),
+            &[("tui.editor.cursorLeft".to_string(), "ctrl+xyz".to_string())]
+        );
     }
 
     // Verifies: gh #66 - every key in a multi-key list fires.

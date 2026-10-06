@@ -35,8 +35,9 @@ surface, and above the built-in defaults. There is no project key
 file. `/hotkeys` prints the effective bindings, and the startup
 notice names any problem loud while keeping defaults: an unknown
 action name (a typo that would otherwise silently do nothing), a key
-claimed by two actions, or a file that does not parse. Restart the
-session to apply an edit (there is no `/reload`).
+value that names no key (`ctrl+xyz` keeps defaults for its action),
+a key claimed by two actions, or a file that does not parse. Restart
+the session to apply an edit (there is no `/reload`).
 
 ## Diagnostics
 
