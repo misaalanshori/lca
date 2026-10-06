@@ -915,6 +915,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "grok"
+version = "0.5.4"
+dependencies = [
+ "lca-core",
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-subscription",
+ "lca-testkit",
+ "lca-tools",
+ "serde_json",
+ "tokio",
+ "toml",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "h2"
 version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"

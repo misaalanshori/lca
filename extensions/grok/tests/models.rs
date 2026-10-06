@@ -1,0 +1,78 @@
+//! The Grok catalog + dispatch surface (gh #181): the static
+//! table and the native handle's identity/model forwarding.
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
+mod common;
+
+use common::{mock_server, sandbox};
+
+// Verifies: gh #181 - the static table names the grounded model with
+// its window; no guessed rows.
+#[test]
+fn the_model_table_is_grounded() {
+    let mock = mock_server();
+    let cap = sandbox(
+        "grok",
+        "models",
+        &mock,
+        grok::manifest_grants(),
+        "test-client",
+    );
+    let models = grok::list_models(cap.as_ref());
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].id, "grok-4.20");
+    assert_eq!(
+        models[0].context_window, 0,
+        "unpublished means zero, never a guess"
+    );
+}
+
+// Verifies: gh #181 - the manifest file and the native grants agree:
+// the hosts, the loopback path, and the namespace say the same thing
+// both ways.
+#[test]
+fn manifest_toml_and_native_grants_agree() {
+    let manifest: toml::Value = grok::MANIFEST.parse().expect("MANIFEST parses");
+    let hosts = manifest["capabilities"]["net"]["hosts"]
+        .as_array()
+        .expect("hosts list");
+    let names: Vec<&str> = hosts.iter().filter_map(|v| v.as_str()).collect();
+    assert_eq!(names, vec!["cli-chat-proxy.grok.com", "auth.x.ai"]);
+    assert_eq!(
+        manifest["capabilities"]["oauth"]["redirect_path"].as_str(),
+        Some("/callback")
+    );
+    assert_eq!(
+        manifest["capabilities"]["credentials"]["namespace"].as_str(),
+        Some("grok")
+    );
+    let grants = grok::manifest_grants();
+    for host in ["cli-chat-proxy.grok.com", "auth.x.ai"] {
+        assert!(
+            grants.net.iter().any(|p| p.matches(host, 443)),
+            "{host} granted"
+        );
+    }
+}
+
+// Verifies: gh #181 - the native handle forwards identity and models
+// through the dispatch seam (login options stay empty: the flow, not
+// the picker).
+#[test]
+fn the_native_handle_serves_the_dispatch_seam() {
+    use lca_ext_abi::ExtensionDispatch;
+    let mock = mock_server();
+    let cap = sandbox(
+        "grok",
+        "dispatch",
+        &mock,
+        grok::manifest_grants(),
+        "test-client",
+    );
+    let handle = grok::Grok::new(cap);
+    assert_eq!(handle.name(), "grok");
+    assert!(handle.worlds().contains(&lca_ext_abi::World::Provider));
+    let options =
+        lca_core::drive_blocking(async move { handle.login_options().await }).expect("options");
+    assert!(options.is_empty(), "the identity flow, not the picker");
+}

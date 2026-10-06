@@ -1,0 +1,14 @@
+name = "grok"
+version = "0.1.0"
+abi = "0.5"
+worlds = ["provider"]
+description = "xAI Grok models via SuperGrok / X subscription."
+
+[capabilities.net]
+hosts = ["cli-chat-proxy.grok.com", "auth.x.ai"]
+
+[capabilities.oauth]
+redirect_path = "/callback"
+
+[capabilities.credentials]
+namespace = "grok"
