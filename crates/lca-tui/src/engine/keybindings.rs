@@ -387,6 +387,16 @@ impl KeybindingsManager {
         self.user_bindings.clone()
     }
 
+    /// User-bound action names the registry never defined (gh #66): the
+    /// loader reports these loud, so a typo cannot silently do nothing.
+    pub fn unknown_actions(&self) -> Vec<String> {
+        self.user_bindings
+            .keys()
+            .filter(|action| !tui_keybindings().iter().any(|(name, _)| name == *action))
+            .cloned()
+            .collect()
+    }
+
     /// The resolved action → keys view.
     pub fn resolved_bindings(&self) -> BTreeMap<String, Vec<String>> {
         self.keys_by_action.clone()
@@ -424,6 +434,38 @@ mod tests {
         assert!(kb.matches("\t", "tui.input.tab"));
         assert!(kb.matches("\x03", "tui.input.copy"));
         assert!(!kb.matches("\x1b[B", "tui.editor.cursorUp"));
+    }
+
+    // Verifies: gh #66 - the loader reports names the registry never
+    // defined, so a typo fails loud instead of silently doing nothing.
+    #[test]
+    fn unknown_action_names_are_reported() {
+        let mut user = BTreeMap::new();
+        user.insert(
+            "tui.editor.cursorLeft".to_string(),
+            vec!["ctrl+x".to_string()],
+        );
+        user.insert("app.typo.here".to_string(), vec!["ctrl+y".to_string()]);
+        let kb = KeybindingsManager::with_user_bindings(user);
+        assert_eq!(kb.unknown_actions(), vec!["app.typo.here".to_string()]);
+        assert!(kb.matches("\x18", "tui.editor.cursorLeft"));
+    }
+
+    // Verifies: gh #66 - every key in a multi-key list fires.
+    #[test]
+    fn every_key_in_a_list_fires() {
+        let mut user = BTreeMap::new();
+        user.insert(
+            "tui.editor.cursorLeft".to_string(),
+            vec!["ctrl+x".to_string(), "ctrl+y".to_string()],
+        );
+        let kb = KeybindingsManager::with_user_bindings(user);
+        assert!(kb.matches("\x18", "tui.editor.cursorLeft"));
+        assert!(kb.matches("\x19", "tui.editor.cursorLeft"));
+        assert!(
+            !kb.matches("\x02", "tui.editor.cursorLeft"),
+            "the default is replaced"
+        );
     }
 
     #[test]

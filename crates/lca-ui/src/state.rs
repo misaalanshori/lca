@@ -593,6 +593,13 @@ pub struct UiOptions {
     pub pending_models: Option<ModelList>,
     /// Workspace root for path completion.
     pub workspace: PathBuf,
+    /// User key overrides from `keybindings.toml` (gh #66): action →
+    /// keys, loaded by the host before `run`. Empty means defaults.
+    pub keybinding_overrides: std::collections::BTreeMap<String, Vec<String>>,
+    /// A `keybindings.toml` load failure, if any (gh #66): `run` shows
+    /// it loud and keeps defaults. `None` means the file parsed (or is
+    /// absent).
+    pub keybinding_error: Option<String>,
     /// Extension trees per region (`None`: no ui-capable extension is
     /// registered, which is the default).
     pub render_regions: Option<RegionRenderer>,
@@ -849,6 +856,8 @@ mod tests {
             slash_commands: Vec::new(),
             models: Vec::new(),
             workspace: PathBuf::from("."),
+            keybinding_overrides: Default::default(),
+            keybinding_error: None,
             render_regions: None,
             ui_events: None,
             update_notice: None,

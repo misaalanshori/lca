@@ -147,6 +147,8 @@ fn chat_with_models() -> Chat {
             slash_commands: Vec::new(),
             models: Vec::new(),
             workspace: PathBuf::from("."),
+            keybinding_overrides: Default::default(),
+            keybinding_error: None,
             render_regions: None,
             ui_events: None,
             update_notice: None,

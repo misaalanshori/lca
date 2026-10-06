@@ -16,6 +16,28 @@ Environment variables use the `LCA_` prefix with the key uppercased and dots rep
 
 `LCA_HYPERLINKS` is the one host variable outside that scheme: `1` forces OSC 8 terminal hyperlinks on, `0` forces the `text (url)` fallback, and unset leaves it to the capability ladder (the tmux client's own features, `screen` off, known-capable terminals on, unknown off), which is pi's `PI_HYPERLINKS` shape.
 
+## Key bindings
+
+`~/.lca/keybindings.toml` maps action names to keys (gh #66, pi's
+`keybindings.json` shape in our TOML): one key as a string, several
+as a list, an empty list to disable the action:
+
+```toml
+app.clear = "ctrl+x"
+tui.editor.cursorLeft = ["left", "ctrl+b"]
+tui.altScreen.pageUp = []
+```
+
+A configured value replaces the default for that action (a list
+replaces the whole default list). On the precedence ladder the file
+is the user rung: below flags and environment, which have no key
+surface, and above the built-in defaults. There is no project key
+file. `/hotkeys` prints the effective bindings, and the startup
+notice names any problem loud while keeping defaults: an unknown
+action name (a typo that would otherwise silently do nothing), a key
+claimed by two actions, or a file that does not parse. Restart the
+session to apply an edit (there is no `/reload`).
+
 ## Diagnostics
 
 Internal warnings and errors (`tracing` events from the agent loop,

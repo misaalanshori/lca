@@ -452,6 +452,26 @@ pub fn data_dir() -> PathBuf {
     lca_session::default_data_dir()
 }
 
+/// Load the user's key overrides (gh #66): `keybindings.toml` beside the
+/// config, action → keys. A missing file is no overrides and no error;
+/// anything else loud (returned for the startup notice) with defaults
+/// kept by the caller.
+pub fn load_user_keybindings(
+    dir: &std::path::Path,
+) -> (
+    std::collections::BTreeMap<String, Vec<String>>,
+    Option<String>,
+) {
+    let path = dir.join("keybindings.toml");
+    if !path.is_file() {
+        return (std::collections::BTreeMap::new(), None);
+    }
+    match lca_config::load_keybindings_file(&path) {
+        Ok(map) => (map, None),
+        Err(err) => (std::collections::BTreeMap::new(), Some(err.to_string())),
+    }
+}
+
 /// The per-session temporary directory the `temp` scope resolves to (FR-PERM
 /// via the capability catalog: a per-session dir, removed at exit). Set once
 /// when the session starts.
@@ -759,6 +779,25 @@ fn lca_tui_entry(
 
 #[cfg(test)]
 mod tests {
+
+    // Verifies: gh #66 - a missing key file is silent defaults; a broken
+    // one is a loud string for the startup notice.
+    #[test]
+    fn a_missing_key_file_is_silent_and_a_broken_one_is_loud() {
+        let dir = std::env::temp_dir().join(format!("lca-kb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let (map, err) = load_user_keybindings(&dir);
+        assert!(map.is_empty() && err.is_none(), "absent file, absent error");
+        std::fs::write(dir.join("keybindings.toml"), "app.clear = [\n").expect("write");
+        let (map, err) = load_user_keybindings(&dir);
+        assert!(map.is_empty(), "broken file binds nothing");
+        assert!(
+            err.as_deref().unwrap_or_default().contains("keybindings"),
+            "and says so loud: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // Verifies: gh #40 (the timeout default is mode-dependent): an
     // explicit `tool.timeout_seconds` surfaces as the default, while

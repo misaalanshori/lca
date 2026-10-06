@@ -26,6 +26,8 @@ impl Ui {
     /// interface calls for every slash command.
     pub(super) fn options(self: &Arc<Self>) -> UiOptions {
         let ui = self.clone();
+        let (keybinding_overrides, keybinding_error) =
+            crate::load_user_keybindings(&crate::data_dir());
         let invoke_command: lca_ui::CommandInvoker =
             Arc::new(move |name, argument| ui.dispatch_command(name, argument));
         UiOptions {
@@ -78,6 +80,11 @@ impl Ui {
             fullscreen: super::hooks::initial_screen_mode(&crate::data_dir()),
             slash_commands: self.slash_commands(),
             workspace: self.cwd.clone(),
+            // gh #66: the user key file sits beside the config (the
+            // settings ladder's user rung - below flags and env, which
+            // have no key surface, and above the built-in defaults).
+            keybinding_overrides,
+            keybinding_error,
         }
     }
 

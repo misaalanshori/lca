@@ -48,6 +48,8 @@ fn chat() -> Chat {
             slash_commands: vec!["/login".into()],
             models: Vec::new(),
             workspace: PathBuf::from("."),
+            keybinding_overrides: Default::default(),
+            keybinding_error: None,
             render_regions: None,
             ui_events: None,
             update_notice: None,

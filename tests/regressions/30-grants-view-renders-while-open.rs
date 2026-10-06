@@ -41,6 +41,8 @@ fn chat(grants: Vec<GrantEntry>) -> Chat {
             slash_commands: vec!["/grants".into()],
             models: Vec::new(),
             workspace: PathBuf::from("."),
+            keybinding_overrides: Default::default(),
+            keybinding_error: None,
             render_regions: None,
             ui_events: None,
             update_notice: None,

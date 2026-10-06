@@ -29,6 +29,8 @@ pub(super) fn options() -> UiOptions {
             ("beta".into(), "beta".into()),
         ],
         workspace: PathBuf::from("."),
+        keybinding_overrides: Default::default(),
+        keybinding_error: None,
         render_regions: None,
         ui_events: None,
         update_notice: None,
@@ -1031,4 +1033,52 @@ fn skill_colon_form_routes_like_the_space_form() {
         )],
         "colon form reaches the host as name + argument"
     );
+}
+
+// Verifies: gh #66 - `/hotkeys` prints the EFFECTIVE bindings: a rebound
+// action shows its new key, not the default.
+#[test]
+fn hotkeys_shows_the_effective_rebound_key() {
+    use lca_tui::engine::keybindings::KeybindingsManager;
+    use std::collections::BTreeMap;
+    let mut user = BTreeMap::new();
+    user.insert(
+        "tui.editor.deleteCharBackward".to_string(),
+        vec!["ctrl+q".to_string()],
+    );
+    let kb = std::sync::Arc::new(KeybindingsManager::with_user_bindings(user));
+    let mut chat = Chat::new(options(), kb);
+    for c in "/hotkeys".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    let notice = chat.world.notice.clone().unwrap_or_default();
+    assert!(
+        notice.contains("ctrl+q - Delete character backward"),
+        "the rebound key is listed: {notice}"
+    );
+    assert!(
+        !notice.contains("backspace - Delete character backward"),
+        "the replaced default is not: {notice}"
+    );
+}
+
+// Verifies: gh #66 - a rebound key fires in the harness: with Backspace
+// unbound and Ctrl+X bound to delete-backward, Ctrl+X deletes.
+#[test]
+fn a_rebound_key_fires() {
+    use lca_tui::engine::keybindings::KeybindingsManager;
+    use std::collections::BTreeMap;
+    let mut user = BTreeMap::new();
+    user.insert(
+        "tui.editor.deleteCharBackward".to_string(),
+        vec!["ctrl+q".to_string()],
+    );
+    let kb = std::sync::Arc::new(KeybindingsManager::with_user_bindings(user));
+    let mut chat = Chat::new(options(), kb);
+    for c in "ab".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\x11");
+    assert_eq!(chat.editor.text(), "a", "Ctrl+Q deleted backward");
 }

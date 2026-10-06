@@ -70,7 +70,7 @@ impl Chat {
                 return Action::Continue;
             }
             "hotkeys" => {
-                self.world.notice = Some(hotkeys_notice());
+                self.world.notice = Some(hotkeys_notice(&self.keybindings));
                 return Action::Continue;
             }
             "fullscreen" => {
@@ -368,9 +368,9 @@ fn command_help(command: &str) -> &'static str {
     }
 }
 
-/// The `/hotkeys` text: the binding registry prints itself.
-fn hotkeys_notice() -> String {
-    let kb = KeybindingsManager::new();
+/// The `/hotkeys` text: the LIVE binding registry prints itself (gh
+/// #66), so rebound keys show their effective bindings, not defaults.
+fn hotkeys_notice(kb: &KeybindingsManager) -> String {
     let mut lines = vec!["keys:".to_string()];
     for (action, keys) in kb.resolved_bindings() {
         if keys.is_empty() {

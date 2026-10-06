@@ -17,6 +17,13 @@ Dates are UTC.
   `docs/providers/README.md` gains the pi-provider parity table the
   next demand votes get counted against.
 
+### Added
+- **User key bindings (gh #66).** `~/.lca/keybindings.toml` maps action
+  names to keys (string, list, or empty-to-disable) through the
+  existing registry; `/hotkeys` prints the effective bindings. Unknown
+action names, double-claimed keys, and parse failures report loud on
+the startup notice while defaults hold.
+
 ### Fixed
 - **Ranked autocomplete (gh #176).** Slash-command and `@file` offers
   sort by pis fuzzy score (word-start and consecutive bonuses, gap and

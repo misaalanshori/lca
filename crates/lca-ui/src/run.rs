@@ -187,6 +187,38 @@ fn copy_through_ladder(
     }
 }
 
+/// The loud report for a `keybindings.toml` that failed, overrode nothing
+/// known, or double-claims a key (gh #66): `None` when the file parsed
+/// clean (or is absent). The caller shows it on the startup notice and
+/// keeps defaults - the failure mode being killed is the silent typo.
+fn keybinding_problems(
+    load_error: Option<String>,
+    unknown: &[String],
+    conflicts: &[lca_tui::engine::keybindings::KeybindingConflict],
+) -> Option<String> {
+    let mut problems = Vec::new();
+    if let Some(err) = load_error {
+        problems.push(err);
+    }
+    if !unknown.is_empty() {
+        problems.push(format!(
+            "unknown action(s): {} - keeping defaults for those",
+            unknown.join(", ")
+        ));
+    }
+    for conflict in conflicts {
+        problems.push(format!(
+            "key {} claimed by {} - first match wins",
+            conflict.key,
+            conflict.keybindings.join(", ")
+        ));
+    }
+    if problems.is_empty() {
+        return None;
+    }
+    Some(format!("keybindings.toml: {}", problems.join("; ")))
+}
+
 /// Handle one raw input event (R16): capability replies, mouse, and keys.
 #[allow(clippy::too_many_arguments)]
 fn handle_input(
@@ -352,7 +384,18 @@ fn handle_input(
 /// layer surfaces the I/O failure); the loop itself handles user exit by
 /// returning `Ok(0)`.
 pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
-    let keybindings = Arc::new(KeybindingsManager::new());
+    // gh #66: the user's key overrides replace defaults (an empty list
+    // disables); anything the registry never defined, any conflict, or a
+    // load failure is reported loud on the startup notice - a typo keeps
+    // defaults, never silently nothing.
+    let keybindings = Arc::new(KeybindingsManager::with_user_bindings(std::mem::take(
+        &mut options.keybinding_overrides,
+    )));
+    let keybinding_notice = keybinding_problems(
+        options.keybinding_error.clone(),
+        &keybindings.unknown_actions(),
+        keybindings.conflicts(),
+    );
     // One permission-prompt channel for the session, not one per turn
     // (gh #31 review): the host's endpoint consent asks outside a turn
     // too - when `/model` discovers an ungranted endpoint - and the
@@ -368,6 +411,10 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     // appear at flush, with the marker, like any queued message).
     let mut initial_messages = std::mem::take(&mut options.initial_messages);
     let mut chat = Chat::new(options, keybindings);
+    // gh #66: a bad keybindings file is loud from the first frame.
+    if let Some(notice) = keybinding_notice {
+        chat.world.notice = Some(notice);
+    }
     if !initial_messages.is_empty() {
         let first = initial_messages.remove(0);
         chat.transcript.push_user(first.clone());
@@ -708,6 +755,25 @@ mod tests {
     use super::*;
     use lca_tui::engine::terminal::FakeTerminal;
 
+    // Verifies: gh #66 - the loud report names every problem class and
+    // stays silent when the file parsed clean.
+    #[test]
+    fn the_keybinding_report_names_every_problem() {
+        assert_eq!(keybinding_problems(None, &[], &[]), None);
+        let report = keybinding_problems(
+            Some("not valid TOML".to_string()),
+            &["app.typo".to_string()],
+            &[lca_tui::engine::keybindings::KeybindingConflict {
+                key: "ctrl+x".to_string(),
+                keybindings: vec!["a".to_string(), "b".to_string()],
+            }],
+        )
+        .expect("a report");
+        assert!(report.contains("not valid TOML"), "{report}");
+        assert!(report.contains("app.typo"), "{report}");
+        assert!(report.contains("ctrl+x"), "{report}");
+    }
+
     // Verifies: FR-UI-21 - the runtime toggle swaps the renderer both ways.
     #[test]
     fn switch_screen_toggles_the_renderer() {
@@ -745,6 +811,8 @@ mod tests {
                 slash_commands: Vec::new(),
                 models: Vec::new(),
                 workspace: std::path::PathBuf::from("."),
+                keybinding_overrides: Default::default(),
+                keybinding_error: None,
                 render_regions: None,
                 ui_events: None,
                 update_notice: None,
