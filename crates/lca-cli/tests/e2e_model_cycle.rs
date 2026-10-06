@@ -576,7 +576,13 @@ fn a_switch_applies_the_models_thinking_default_and_an_allowed_suffix_lands() {
         session.send(&[&c.to_string()]);
     }
     session.send(&["Enter"]);
-    session.wait_for("model for this session", std::time::Duration::from_secs(10));
+    // Outcome-based (the footer), never the notice: a "model for this
+    // session" line from the earlier switch can still be on screen and
+    // satisfy a notice wait before `:high` lands (CI flake, twice).
+    session.wait_for(
+        "/second-model \u{2022} high",
+        std::time::Duration::from_secs(10),
+    );
     let pane = session.capture();
     let footer = pane
         .lines()
