@@ -119,14 +119,18 @@ pub fn load_prompt_files(
 
 /// Context files in one directory, pi's set and override rule: the
 /// same-directory `AGENTS.override.md` replaces its siblings, otherwise
-/// every present name loads. Attribution is the full path.
+/// every present name loads. Attribution is the full path. Entries
+/// dedupe by canonical path: on a case-insensitive filesystem
+/// `AGENTS.md` and `AGENTS.MD` are one file, and loading it twice
+/// would steer the prompt twice.
 fn read_context_dir(dir: &std::path::Path) -> Vec<ContextFile> {
     let present = |name: &str| {
-        read_if_present(&dir.join(name))
+        let path = dir.join(name);
+        read_if_present(&path)
             .filter(|text| !text.is_empty())
-            .map(|body| (name.to_string(), body))
+            .map(|body| (path, body))
     };
-    let mut found: Vec<(String, String)> = Vec::new();
+    let mut found: Vec<(std::path::PathBuf, String)> = Vec::new();
     if let Some(over) = present("AGENTS.override.md") {
         found.push(over);
     } else {
@@ -136,10 +140,19 @@ fn read_context_dir(dir: &std::path::Path) -> Vec<ContextFile> {
             }
         }
     }
+    let mut seen: Vec<std::path::PathBuf> = Vec::new();
     found
         .into_iter()
-        .map(|(name, body)| ContextFile {
-            source: dir.join(&name).to_string_lossy().into_owned(),
+        .filter(|(path, _)| {
+            let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            if seen.contains(&key) {
+                return false;
+            }
+            seen.push(key);
+            true
+        })
+        .map(|(path, body)| ContextFile {
+            source: path.to_string_lossy().into_owned(),
             body,
         })
         .collect()
@@ -526,5 +539,29 @@ mod acceptance_tests {
         }
         assert!(!out.contains("intent-bearing"), "no bodies ride along");
         assert!(out.contains("## Skills"), "the catalog has its section");
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod collision_tests {
+    use super::read_context_dir;
+
+    // Verifies: gh #74 review (case-insensitive filesystems): `AGENTS.md`
+    // and `AGENTS.MD` spell one file there - it loads once, not twice.
+    // A symlink reproduces the shared-canonical-path shape on Linux.
+    #[test]
+    fn case_variants_of_one_file_load_once() {
+        let root = lca_testkit::scratch_path("prompt-case-dedupe");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        std::fs::write(root.join("AGENTS.md"), "Steer.\n").expect("write");
+        if std::os::unix::fs::symlink(root.join("AGENTS.md"), root.join("AGENTS.MD")).is_err() {
+            eprintln!("skip: symlinks need privileges on this host");
+            return;
+        }
+        let files = read_context_dir(&root);
+        assert_eq!(files.len(), 1, "one file, one section: {files:?}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
