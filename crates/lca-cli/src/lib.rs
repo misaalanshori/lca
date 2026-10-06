@@ -95,6 +95,7 @@ mod headless;
 mod models;
 mod persist;
 pub(crate) mod prompt;
+mod rpc;
 
 pub use persist::persist_setting;
 mod registry;
@@ -103,6 +104,7 @@ mod session_cmds;
 pub mod sigpipe;
 
 pub use headless::{HeadlessSink, exit_code, headless};
+pub use rpc::rpc;
 use session_cmds::*;
 /// The `/login` picker flow (ADR-0033, `api-key-login-plan.md` D1): the
 /// state machine, with no I/O of its own.
@@ -617,7 +619,9 @@ impl PermissionPrompt for HeadlessPrompt {
     }
 }
 
-pub use session_cmds::{Route, SessionSelector, check_flag_contradictions, route};
+pub use session_cmds::{
+    OutputMode, Route, SessionSelector, check_flag_contradictions, output_mode, route,
+};
 
 /// Dispatch a parsed command line; returns the process exit code.
 pub async fn run(cli: Cli) -> i32 {
@@ -652,19 +656,41 @@ pub async fn run(cli: Cli) -> i32 {
             messages,
             model,
             session,
+            mode,
         } => {
-            headless(
-                &messages,
-                model.as_deref(),
-                &session,
-                cli.json,
-                &cwd,
-                &cli.attach,
-                cli.yolo,
-                &cli.allow_host,
-                &flags,
-            )
-            .await
+            // `--json` stays working as the deprecated alias for
+            // `--mode json` (gh #56): flags are stable within a major.
+            // Stderr, never stdout: scripts parse stdout as JSONL.
+            if cli.json && cli.mode.is_none() {
+                eprintln!("warning: --json is deprecated, use --mode json");
+            }
+            match mode {
+                OutputMode::Rpc => {
+                    rpc(
+                        model.as_deref(),
+                        &session,
+                        &cwd,
+                        cli.yolo,
+                        &cli.allow_host,
+                        &flags,
+                    )
+                    .await
+                }
+                OutputMode::Text | OutputMode::Json => {
+                    headless(
+                        &messages,
+                        model.as_deref(),
+                        &session,
+                        mode == OutputMode::Json,
+                        &cwd,
+                        &cli.attach,
+                        cli.yolo,
+                        &cli.allow_host,
+                        &flags,
+                    )
+                    .await
+                }
+            }
         }
         Route::Interactive {
             resume,

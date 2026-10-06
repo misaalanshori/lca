@@ -71,6 +71,12 @@ impl Agent<'_> {
             );
         }
 
+        // The run boundaries headless `--mode json` and `--mode rpc`
+        // reconstruct from (pi's agent/turn/message taxonomy, our names).
+        sink.on_event(TurnEvent::TurnStarted);
+        sink.on_event(TurnEvent::MessageStarted { role: "user" });
+        sink.on_event(TurnEvent::MessageEnded { role: "user" });
+
         // `pre-turn` fires once, after the user record and before any provider
         // or compaction work (SRDD hook points; `docs/flows.md`).
         self.config.extensions.on_pre_turn().await;
@@ -535,6 +541,7 @@ impl Agent<'_> {
         if !response.text.is_empty() {
             sink.on_event(TurnEvent::AssistantText(response.text.clone()));
         }
+        sink.on_event(TurnEvent::MessageEnded { role: "assistant" });
         sink.on_event(TurnEvent::Usage(response.usage.clone()));
         Ok(())
     }
@@ -826,6 +833,7 @@ impl Agent<'_> {
             self.config.completion_backend.as_ref(),
             candidate,
             sink,
+            "threshold",
         )
         .await
         .is_ok()
@@ -842,7 +850,12 @@ impl Agent<'_> {
         let mut attempt = 0u32;
         loop {
             match self.stream_once(request.clone(), sink, cancel).await {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    if attempt > 0 {
+                        sink.on_event(TurnEvent::RetryFinished { success: true });
+                    }
+                    return Ok(response);
+                }
                 Err(CallFail::Cancelled) => return Err(CallFail::Cancelled),
                 Err(CallFail::Provider {
                     message,
@@ -874,6 +887,7 @@ impl Agent<'_> {
                     // FR-CORE-7: the user sees that retries were tried and
                     // gave up, not just the raw transport error.
                     let message = if retryable && attempt > 0 {
+                        sink.on_event(TurnEvent::RetryFinished { success: false });
                         format!("{message} (retries exhausted after {attempt})")
                     } else {
                         message
@@ -894,6 +908,7 @@ impl Agent<'_> {
         sink: &mut dyn TurnSink,
         cancel: &CancelFlag,
     ) -> Result<CallResponse, CallFail> {
+        sink.on_event(TurnEvent::MessageStarted { role: "assistant" });
         let (tx, mut rx) = tokio::sync::mpsc::channel(32);
         let producer = self.provider.stream(request, tx);
         tokio::pin!(producer);

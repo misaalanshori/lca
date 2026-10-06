@@ -24,7 +24,8 @@ pub fn exit_code(outcome: &TurnOutcome, needed_approval: bool, error_class: Opti
 }
 
 /// The sink headless mode renders through: `--json` envelopes or plain
-/// final text (`docs/headless.md`).
+/// final text (`docs/headless.md`). `--mode rpc` reuses the same sink
+/// for its event stream and emits command responses beside it.
 pub struct HeadlessSink {
     /// Emit one JSON object per line.
     pub json: bool,
@@ -32,7 +33,7 @@ pub struct HeadlessSink {
     pub session_truncated: bool,
     pub(crate) plain: String,
     last_error_class: Option<String>,
-    out: std::io::Stdout,
+    out: Box<dyn std::io::Write + Send>,
 }
 
 impl HeadlessSink {
@@ -43,7 +44,22 @@ impl HeadlessSink {
             session_truncated,
             plain: String::new(),
             last_error_class: None,
-            out: std::io::stdout(),
+            out: Box::new(std::io::stdout()),
+        }
+    }
+
+    /// A sink writing JSONL to `out` (tests pin the taxonomy here).
+    pub fn with_writer(
+        json: bool,
+        session_truncated: bool,
+        out: Box<dyn std::io::Write + Send>,
+    ) -> HeadlessSink {
+        HeadlessSink {
+            json,
+            session_truncated,
+            plain: String::new(),
+            last_error_class: None,
+            out,
         }
     }
 
@@ -52,14 +68,52 @@ impl HeadlessSink {
         self.last_error_class.as_deref()
     }
 
-    fn emit(&mut self, line: serde_json::Value) {
+    /// One JSONL record (an event or, in RPC mode, a command response).
+    pub fn emit_json(&mut self, line: serde_json::Value) {
         let _ = writeln!(self.out, "{line}");
+    }
+
+    /// The session header pi's JSON mode opens with (our `session-start`
+    /// record shape, not pi's file shape).
+    pub fn emit_session_start(&mut self, id: &str) {
+        if self.json {
+            self.emit(serde_json::json!({ "type": "session-start", "id": id }));
+        }
+    }
+
+    fn emit(&mut self, line: serde_json::Value) {
+        self.emit_json(line);
     }
 }
 
 impl TurnSink for HeadlessSink {
     fn on_event(&mut self, event: TurnEvent) {
         match event {
+            TurnEvent::TurnStarted => {
+                if self.json {
+                    self.emit(serde_json::json!({ "type": "turn-start" }));
+                }
+            }
+            TurnEvent::MessageStarted { role } => {
+                if self.json {
+                    self.emit(serde_json::json!({ "type": "message-start", "role": role }));
+                }
+            }
+            TurnEvent::MessageEnded { role } => {
+                if self.json {
+                    self.emit(serde_json::json!({ "type": "message-end", "role": role }));
+                }
+            }
+            TurnEvent::TextDelta(delta) => {
+                if self.json {
+                    self.emit(serde_json::json!({ "type": "text-delta", "delta": delta }));
+                }
+            }
+            TurnEvent::ReasoningDelta(delta) => {
+                if self.json {
+                    self.emit(serde_json::json!({ "type": "thinking-delta", "delta": delta }));
+                }
+            }
             TurnEvent::AssistantText(text) => {
                 if self.json {
                     self.emit(serde_json::json!({ "type": "text", "content": text }));
@@ -80,6 +134,13 @@ impl TurnSink for HeadlessSink {
                     "call_id": call.call_id,
                     "name": call.name,
                     "arguments": call.arguments,
+                }));
+            }
+            TurnEvent::ToolOutputChunk { call_id, chunk } if self.json => {
+                self.emit(serde_json::json!({
+                    "type": "tool-update",
+                    "call_id": call_id,
+                    "chunk": chunk,
                 }));
             }
             TurnEvent::ToolFinished(result) if self.json => {
@@ -108,14 +169,49 @@ impl TurnSink for HeadlessSink {
             TurnEvent::RetryScheduled {
                 attempt,
                 max,
+                delay_ms,
                 error,
-                ..
             } if self.json => {
+                // The `error` row stays: scripts may match on it, and the
+                // headless contract removes nothing.
                 self.emit(serde_json::json!({
                     "type": "error",
                     "message": format!("retry {attempt}/{max}: {error}"),
                     "class": "transport",
                     "retryable": true,
+                }));
+                self.emit(serde_json::json!({
+                    "type": "retry-scheduled",
+                    "attempt": attempt,
+                    "max_attempts": max,
+                    "delay_ms": delay_ms,
+                    "error": error,
+                }));
+            }
+            TurnEvent::RetryFinished { success } if self.json => {
+                self.emit(serde_json::json!({
+                    "type": "retry-end",
+                    "success": success,
+                }));
+            }
+            TurnEvent::CompactionStarted { reason } if self.json => {
+                self.emit(serde_json::json!({
+                    "type": "compaction-start",
+                    "reason": reason,
+                }));
+            }
+            TurnEvent::CompactionEnded { reason, success } if self.json => {
+                self.emit(serde_json::json!({
+                    "type": "compaction-end",
+                    "reason": reason,
+                    "success": success,
+                }));
+            }
+            TurnEvent::UserInjected { text, mode } if self.json => {
+                self.emit(serde_json::json!({
+                    "type": "queue-flushed",
+                    "mode": mode,
+                    "text": text,
                 }));
             }
             TurnEvent::Error {
@@ -174,36 +270,49 @@ fn latest_session(store: &SessionStore, cwd: &Path) -> Option<String> {
         .map(|summary| summary.id)
 }
 
-/// Run headless turns, in order, in one session (FR-CORE-3) and return
-/// the exit code. The first failure stops the run; its outcome maps the
-/// code, exactly as a single turn did before (#109 keeps one message the
-/// common case and every old call site passes exactly one).
+/// Everything a headless-family run needs after flag parsing: the store
+/// and session, grants, config, provider, tools, and agent config (gh
+/// #56: `-p` turns and the RPC loop share it, so the two cannot drift).
+pub(crate) struct Setup {
+    pub(crate) store: SessionStore,
+    pub(crate) session: lca_session::Session,
+    pub(crate) grants: std::sync::Arc<std::sync::Mutex<GrantStore>>,
+    pub(crate) provider: std::sync::Arc<dyn lca_provider::Provider>,
+    pub(crate) tools: ToolExecutor,
+    pub(crate) agent_config: AgentConfig,
+    pub(crate) proposals: Option<lca_permissions::Proposals>,
+    pub(crate) prompt_impl: HeadlessPrompt,
+    // Held for the run: dropping it removes the session temp dir.
+    pub(crate) _temp_guard: crate::SessionTempGuard,
+}
+
+/// Grants, config, provider, tools, and agent config for one headless
+/// session: every early exit maps the headless codes, exactly as the
+/// one-shot path did before the RPC loop shared it.
 #[allow(clippy::too_many_arguments)]
-pub async fn headless(
-    messages: &[String],
+pub(crate) async fn setup(
+    cwd: &Path,
     model_override: Option<&str>,
     session: &crate::SessionSelector,
-    json: bool,
-    cwd: &Path,
-    attachments: &[std::path::PathBuf],
     yolo: bool,
     allow_host: &[String],
     flags: &crate::CliFlags,
-) -> i32 {
+    title: &str,
+) -> Result<Setup, i32> {
     let data = data_dir();
     let store = SessionStore::new(data.clone());
     let grants = match GrantStore::open(&data.join("grants.json")) {
         Ok(grants) => std::sync::Arc::new(std::sync::Mutex::new(grants)),
         Err(err) => {
             eprintln!("error: cannot open the grant store: {err}");
-            return exit::INTERNAL;
+            return Err(exit::INTERNAL);
         }
     };
     let config = match load_config_flags(cwd, &lock(&grants), true, yolo, flags) {
         Ok(config) => config,
         Err(err) => {
             eprintln!("error: {err}");
-            return exit::USAGE;
+            return Err(exit::USAGE);
         }
     };
     // Headless makes no request unless the option was switched on
@@ -213,26 +322,15 @@ pub async fn headless(
     // #96: installed here too, so headless restores the terminal even
     // when reached without `main`. Idempotent.
     lca_tui::install_panic_hook();
-    // Print mode with nothing to run is a usage error, said out loud
-    // (a bare `-p` with no message). Interactive mode would open the
-    // TUI; headless has nothing to turn into.
-    if messages.is_empty() {
-        eprintln!(
-            "error: no prompt given; pass `-p <text>`, `--prompt <text>`, or a positional message"
-        );
-        return exit::USAGE;
-    }
     let provider_name = config.provider().to_string();
     // #111: the run appends to the selected session. A continued run
     // shares the session's `log.jsonl`; only a fresh run starts one.
-    let title: String = messages[0].chars().take(60).collect();
-    let title = if title.is_empty() { "headless" } else { &title };
     let session = match session {
         crate::SessionSelector::New => match store.create_session(cwd, title) {
             Ok(session) => session,
             Err(err) => {
                 eprintln!("error: cannot start a session: {err}");
-                return exit::INTERNAL;
+                return Err(exit::INTERNAL);
             }
         },
         crate::SessionSelector::Continue => match latest_session(&store, cwd) {
@@ -240,27 +338,23 @@ pub async fn headless(
                 Ok(session) => session,
                 Err(err) => {
                     eprintln!("error: cannot open the last session: {err}");
-                    return exit::SESSION;
+                    return Err(exit::SESSION);
                 }
             },
             None => {
                 eprintln!("error: -c continues the last session, but this project has none yet");
-                return exit::SESSION;
+                return Err(exit::SESSION);
             }
         },
         crate::SessionSelector::Resume(id) => match store.session(cwd, id) {
             Ok(session) => session,
             Err(err) => {
                 eprintln!("error: cannot resume session `{id}`: {err}");
-                return exit::SESSION;
+                return Err(exit::SESSION);
             }
         },
     };
-    let session_truncated = store
-        .read(&session)
-        .map(|read| read.truncated)
-        .unwrap_or(false);
-    let _temp_guard = crate::SessionTempGuard;
+    let temp_guard = crate::SessionTempGuard;
     crate::init_session_temp(session.id());
 
     // ADR-0042: the same mode application as the interface, surfaced on
@@ -279,14 +373,14 @@ pub async fn headless(
     // a worse failure than a timeout error (gh #40).
     let default_timeout =
         crate::configured_tool_timeout(&config).or(Some(std::time::Duration::from_secs(120)));
-    let mut tools = ToolExecutor::new(
+    let tools = ToolExecutor::new(
         std::sync::Arc::new(ops),
         cwd.to_path_buf(),
         cwd.to_path_buf(),
         config.tool_result_limit_bytes() as usize,
         default_timeout,
     );
-    let mut prompt_impl = HeadlessPrompt::default();
+    let prompt_impl = HeadlessPrompt::default();
     // Extension-originated commands route through the same denying prompt, so a
     // headless approval need still surfaces as exit code 4.
     let mut shared_prompt = lca_permissions::SharedPrompt::default();
@@ -301,7 +395,7 @@ pub async fn headless(
         crate::net_consent::attach_allow_hosts(&grants, cwd, allow_host, &store, &session)
     {
         eprintln!("error: {err}");
-        return exit::USAGE;
+        return Err(exit::USAGE);
     }
     if let Some(host) = crate::net_consent::env_configured_host(&data)
         && crate::provider_ready(&provider_name, &data)
@@ -315,7 +409,7 @@ pub async fn headless(
         ) == crate::net_consent::EndpointConsent::Denied
     {
         eprintln!("{}", crate::net_consent::denied_message(&host));
-        return exit::PERMISSION;
+        return Err(exit::PERMISSION);
     }
     let (agent_config, provider) = match wire(
         cwd,
@@ -330,14 +424,75 @@ pub async fn headless(
         flags,
     ) {
         Ok(wired) => wired,
-        Err(code) => return code,
+        Err(code) => return Err(code),
     };
     let proposals = if lock(&grants).is_trusted(cwd) {
         Some(config.permissions_proposals().clone())
     } else {
         None
     };
+    Ok(Setup {
+        store,
+        session,
+        grants,
+        provider,
+        tools,
+        agent_config,
+        proposals,
+        prompt_impl,
+        _temp_guard: temp_guard,
+    })
+}
+
+/// Run headless turns, in order, in one session (FR-CORE-3) and return
+/// the exit code. The first failure stops the run; its outcome maps the
+/// code, exactly as a single turn did before (#109 keeps one message the
+/// common case and every old call site passes exactly one).
+#[allow(clippy::too_many_arguments)]
+pub async fn headless(
+    messages: &[String],
+    model_override: Option<&str>,
+    session: &crate::SessionSelector,
+    json: bool,
+    cwd: &Path,
+    attachments: &[std::path::PathBuf],
+    yolo: bool,
+    allow_host: &[String],
+    flags: &crate::CliFlags,
+) -> i32 {
+    // Print mode with nothing to run is a usage error, said out loud
+    // (a bare `-p` with no message). Interactive mode would open the
+    // TUI; headless has nothing to turn into.
+    if messages.is_empty() {
+        eprintln!(
+            "error: no prompt given; pass `-p <text>`, `--prompt <text>`, or a positional message"
+        );
+        return exit::USAGE;
+    }
+    let title: String = messages[0].chars().take(60).collect();
+    let title = if title.is_empty() { "headless" } else { &title };
+    let setup = match setup(cwd, model_override, session, yolo, allow_host, flags, title).await {
+        Ok(setup) => setup,
+        Err(code) => return code,
+    };
+    let Setup {
+        store,
+        session,
+        grants,
+        provider,
+        mut tools,
+        agent_config,
+        proposals,
+        mut prompt_impl,
+        _temp_guard: _,
+    } = setup;
+    let session_truncated = store
+        .read(&session)
+        .map(|read| read.truncated)
+        .unwrap_or(false);
+
     let mut sink = HeadlessSink::new(json, session_truncated);
+    sink.emit_session_start(session.id());
     let close_registry = agent_config.extensions.clone();
     // #109: one turn per message, in order, in the same session (pi's
     // print loop). The first failure stops the run; `--attach` images
@@ -585,4 +740,157 @@ fn wire(
         ..AgentConfig::default()
     };
     Ok((agent_config, provider))
+}
+
+#[cfg(test)]
+mod sink_tests {
+    use super::*;
+    use lca_core::TurnSink;
+
+    struct VecWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for VecWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn sink() -> (HeadlessSink, std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
+        let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = HeadlessSink::with_writer(true, false, Box::new(VecWriter(out.clone())));
+        (sink, out)
+    }
+
+    fn lines(out: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> Vec<serde_json::Value> {
+        let bytes = out
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        String::from_utf8(bytes)
+            .expect("utf8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("json line"))
+            .collect()
+    }
+
+    fn tool_call() -> lca_protocol::ToolCall {
+        lca_protocol::ToolCall {
+            call_id: "call-1".to_string(),
+            name: "shell".to_string(),
+            arguments: "{}".to_string(),
+        }
+    }
+
+    // Verifies: gh #44 (the golden turn): a scripted turn emits the
+    // taxonomy in order - turn-start, message-start, text deltas,
+    // tool-call, tool-update, tool-result, usage, turn-end - so a
+    // transcript rebuilds offline.
+    #[test]
+    fn the_json_stream_reconstructs_the_transcript() {
+        let (mut sink, out) = sink();
+        sink.emit_session_start("session-1");
+        sink.on_event(TurnEvent::TurnStarted);
+        sink.on_event(TurnEvent::MessageStarted { role: "user" });
+        sink.on_event(TurnEvent::MessageEnded { role: "user" });
+        sink.on_event(TurnEvent::MessageStarted { role: "assistant" });
+        sink.on_event(TurnEvent::TextDelta("Hello ".into()));
+        sink.on_event(TurnEvent::TextDelta("world".into()));
+        sink.on_event(TurnEvent::ToolStarted(tool_call()));
+        sink.on_event(TurnEvent::ToolOutputChunk {
+            call_id: "call-1".into(),
+            chunk: "partial".into(),
+        });
+        sink.on_event(TurnEvent::ToolFinished(lca_protocol::ToolResult::ok(
+            "call-1", "done",
+        )));
+        sink.on_event(TurnEvent::Usage(lca_protocol::Usage::default()));
+        sink.on_event(TurnEvent::AssistantText("Hello world".into()));
+        sink.on_event(TurnEvent::MessageEnded { role: "assistant" });
+        sink.on_event(TurnEvent::TurnEnded {
+            status: TurnStatus::Ok,
+            stop_reason: StopReason::Stop,
+        });
+
+        let types: Vec<String> = lines(&out)
+            .iter()
+            .map(|line| line["type"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(
+            types,
+            vec![
+                "session-start",
+                "turn-start",
+                "message-start",
+                "message-end",
+                "message-start",
+                "text-delta",
+                "text-delta",
+                "tool-call",
+                "tool-update",
+                "tool-result",
+                "usage",
+                "text",
+                "message-end",
+                "turn-end",
+            ]
+        );
+        let records = lines(&out);
+        assert_eq!(records[0]["id"], "session-1");
+        assert_eq!(records[2]["role"], "user");
+        assert_eq!(records[5]["delta"], "Hello ");
+        assert_eq!(records[7]["name"], "shell");
+        assert_eq!(records[8]["chunk"], "partial");
+    }
+
+    // Verifies: gh #44 (queue and compaction surface): a flushed steer
+    // and a compaction round-trip name their modes and reasons.
+    #[test]
+    fn queue_and_compaction_events_name_their_modes() {
+        let (mut sink, out) = sink();
+        sink.on_event(TurnEvent::UserInjected {
+            text: "faster".into(),
+            mode: "steer".into(),
+        });
+        sink.on_event(TurnEvent::CompactionStarted {
+            reason: "threshold".into(),
+        });
+        sink.on_event(TurnEvent::CompactionEnded {
+            reason: "threshold".into(),
+            success: true,
+        });
+        sink.on_event(TurnEvent::RetryScheduled {
+            attempt: 1,
+            max: 3,
+            delay_ms: 2000,
+            error: "overloaded".into(),
+        });
+        sink.on_event(TurnEvent::RetryFinished { success: true });
+        let records = lines(&out);
+        let types: Vec<&str> = records
+            .iter()
+            .map(|line| line["type"].as_str().unwrap_or(""))
+            .collect();
+        assert_eq!(
+            types,
+            vec![
+                "queue-flushed",
+                "compaction-start",
+                "compaction-end",
+                "error",
+                "retry-scheduled",
+                "retry-end",
+            ]
+        );
+        assert_eq!(records[0]["mode"], "steer");
+        assert_eq!(records[2]["success"], true);
+        assert_eq!(records[4]["max_attempts"], 3);
+    }
 }

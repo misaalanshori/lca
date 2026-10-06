@@ -2,7 +2,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use clap::Parser;
-use lca_cli::{Cli, Route, SessionSelector, exit, exit_code, route};
+use lca_cli::{
+    Cli, OutputMode, Route, SessionSelector, check_flag_contradictions, exit, exit_code,
+    output_mode, route,
+};
 
 fn parse(args: &[&str]) -> Cli {
     Cli::try_parse_from(std::iter::once("lca").chain(args.iter().copied())).expect("parses")
@@ -32,8 +35,64 @@ fn prompt_flag_routes_headless() {
             messages: vec!["hello".to_string()],
             model: None,
             session: SessionSelector::New,
+            mode: OutputMode::Json,
         }
     );
+}
+
+// Verifies: gh #56 (the `--mode` selector): text is the default,
+// `--mode json` matches `--json`, and `--mode rpc` routes headless
+// with no prompt of its own.
+#[test]
+fn mode_selector_routes_each_protocol() {
+    assert_eq!(output_mode(&parse(&[])).expect("default"), OutputMode::Text);
+    assert_eq!(
+        output_mode(&parse(&["--mode", "json"])).expect("json"),
+        OutputMode::Json
+    );
+    assert_eq!(
+        output_mode(&parse(&["--json"])).expect("alias"),
+        OutputMode::Json,
+        "--json stays working as the deprecated alias"
+    );
+    assert_eq!(
+        route(&parse(&["--mode", "rpc"])),
+        Route::Headless {
+            messages: Vec::new(),
+            model: None,
+            session: SessionSelector::New,
+            mode: OutputMode::Rpc,
+        }
+    );
+    assert_eq!(
+        route(&parse(&["-p", "hi"])),
+        Route::Headless {
+            messages: vec!["hi".to_string()],
+            model: None,
+            session: SessionSelector::New,
+            mode: OutputMode::Text,
+        }
+    );
+}
+
+// Verifies: gh #56 (contradictions are usage errors): `--json` against
+// a non-json `--mode`, prompts with `--mode rpc`, and bogus modes.
+#[test]
+fn mode_contradictions_are_usage_errors() {
+    assert!(
+        check_flag_contradictions(&parse(&["--json", "--mode", "text"])).is_some(),
+        "--json contradicts --mode text"
+    );
+    assert!(check_flag_contradictions(&parse(&["--json", "--mode", "rpc"])).is_some());
+    assert!(
+        check_flag_contradictions(&parse(&["--mode", "rpc", "-p", "hi"])).is_some(),
+        "rpc takes no prompt arguments"
+    );
+    assert!(parse_try(&["--mode", "bogus"]).is_err(), "clap rejects it");
+}
+
+fn parse_try(args: &[&str]) -> Result<Cli, clap::Error> {
+    Cli::try_parse_from(std::iter::once("lca").chain(args.iter().copied()))
 }
 
 // Verifies: FR-SESS-2 (resume with no id lists sessions)

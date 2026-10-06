@@ -332,6 +332,10 @@ impl Chat {
     /// Consume a turn event into the transcript and the counters.
     pub fn on_turn_event(&mut self, event: TurnEvent) {
         match event {
+            // Reconstruction events for headless/rpc; rendered elsewhere.
+            TurnEvent::TurnStarted | TurnEvent::MessageStarted { .. } => {}
+            TurnEvent::MessageEnded { .. } | TurnEvent::RetryFinished { .. } => {}
+            TurnEvent::CompactionStarted { .. } | TurnEvent::CompactionEnded { .. } => {}
             TurnEvent::TextDelta(delta) => {
                 self.transcript.append_text(&delta);
                 self.meter.open();

@@ -48,9 +48,18 @@ pub struct Cli {
     #[arg(long)]
     pub yolo: bool,
     // `docs/headless.md`: the JSON-lines envelope.
-    /// Print one JSON object per line, for scripts.
+    /// Print one JSON object per line, for scripts (deprecated alias
+    /// for `--mode json`; flags are stable within a major).
     #[arg(long)]
     pub json: bool,
+    // gh #56 (pi's `--mode`): text prints the reply, json prints the
+    // event stream, rpc starts the JSONL command loop on stdin/stdout.
+    // Short is `-m`: `-M` reads as the models flag elsewhere... which
+    // does not exist; `-m` is free and mirrors pi's own short.
+    /// Output protocol: `text` prints the reply, `json` prints the
+    /// event stream, `rpc` starts the stdin/stdout command loop.
+    #[arg(long = "mode", value_name = "MODE", value_parser = clap::builder::PossibleValuesParser::new(["text", "json", "rpc"]))]
+    pub mode: Option<String>,
     // #152: pi's `--verbose` debug shape. Diagnostics always land in
     // `~/.lca/logs/lca.log`; this flag also routes them to stderr.
     /// Print diagnostic logs to stderr as well as the log file.

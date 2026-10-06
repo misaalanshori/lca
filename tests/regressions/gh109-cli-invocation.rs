@@ -19,6 +19,7 @@ fn headless(args: &[&str]) -> (Vec<String>, Option<String>, SessionSelector) {
             messages,
             model,
             session,
+            ..
         } => (messages, model, session),
         other => panic!("headless, not {other:?}"),
     }

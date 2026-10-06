@@ -15,6 +15,33 @@ pub enum SessionSelector {
     Resume(String),
 }
 
+/// The headless output protocol (gh #56, pi's `--mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputMode {
+    /// Today's plain output.
+    Text,
+    /// Today's `--json` envelope.
+    Json,
+    /// The stdin/stdout JSONL command loop.
+    Rpc,
+}
+
+/// Resolve the output protocol: `--mode` wins, `--json` is its deprecated
+/// alias (flags are stable within a major - it keeps working), and the
+/// two contradicting is a usage error.
+pub fn output_mode(cli: &Cli) -> Result<OutputMode, String> {
+    match (cli.mode.as_deref(), cli.json) {
+        (Some("rpc"), true) | (Some("text"), true) => Err(format!(
+            "--json contradicts --mode {}; drop one (or use --mode json)",
+            cli.mode.as_deref().unwrap_or("")
+        )),
+        (Some("rpc"), false) => Ok(OutputMode::Rpc),
+        (Some("json"), _) | (None, true) => Ok(OutputMode::Json),
+        (Some("text"), false) | (None, false) => Ok(OutputMode::Text),
+        (Some(other), _) => Err(format!("unknown --mode {other:?}; use text, json, or rpc")),
+    }
+}
+
 /// What a parsed command line asks for. Split out so the dispatch rule
 /// itself is testable without a terminal.
 #[derive(Debug, PartialEq, Eq)]
@@ -28,6 +55,8 @@ pub enum Route {
         model: Option<String>,
         /// Which session the turns append to (#111).
         session: SessionSelector,
+        /// The output protocol (gh #56).
+        mode: OutputMode,
     },
     /// The interactive interface in the working directory (FR-CORE-2).
     Interactive {
@@ -88,6 +117,22 @@ pub fn check_flag_contradictions(cli: &Cli) -> Option<String> {
             "a subcommand takes its own arguments; pass -p/--prompt and messages without one"
                 .to_string(),
         );
+    }
+    // gh #56: `--mode rpc` is a command loop, not a turn runner.
+    if cli.mode.as_deref() == Some("rpc") {
+        if cli.command.is_some() {
+            return Some(
+                "--mode rpc takes no subcommand; drive the session from stdin".to_string(),
+            );
+        }
+        if cli.print.is_some() || cli.prompt.is_some() || !cli.messages.is_empty() {
+            return Some(
+                "--mode rpc takes no prompt arguments; send prompt commands on stdin".to_string(),
+            );
+        }
+    }
+    if let Err(err) = output_mode(cli) {
+        return Some(err);
     }
     None
 }
@@ -160,11 +205,21 @@ pub fn route(cli: &Cli) -> Route {
         SessionSelector::New
     };
 
-    if print_mode && cli.command.is_none() {
+    // gh #56: `--mode rpc` is headless by itself (a command loop takes
+    // no prompt arguments; the contradiction check rejects those).
+    let rpc = cli.mode.as_deref() == Some("rpc");
+    if (print_mode || rpc) && cli.command.is_none() {
         return Route::Headless {
             messages,
             model: cli.model.clone(),
             session: headless_session,
+            mode: if rpc {
+                OutputMode::Rpc
+            } else if cli.json || cli.mode.as_deref() == Some("json") {
+                OutputMode::Json
+            } else {
+                OutputMode::Text
+            },
         };
     }
     if let Some(id) = &cli.resume_id {
@@ -496,6 +551,7 @@ mod tests {
                 messages: vec!["hi".to_string()],
                 model: None,
                 session: SessionSelector::New,
+                mode: OutputMode::Text,
             }
         );
     }

@@ -89,6 +89,19 @@ pub fn steer_queue() -> SteerQueue {
 /// store them freely.
 #[derive(Debug, Clone)]
 pub enum TurnEvent {
+    /// One turn started (headless `turn-start` envelope, pi parity).
+    TurnStarted,
+    /// A message started streaming or landed whole (headless
+    /// `message-start` envelope: `role` is `user` or `assistant`).
+    MessageStarted {
+        /// Which side speaks.
+        role: &'static str,
+    },
+    /// A message completed (headless `message-end` envelope).
+    MessageEnded {
+        /// Which side spoke.
+        role: &'static str,
+    },
     /// A chunk of response text (FR-CORE-4).
     TextDelta(String),
     /// A chunk of reasoning text.
@@ -118,6 +131,25 @@ pub enum TurnEvent {
         delay_ms: u64,
         /// The error that caused the retry.
         error: String,
+    },
+    /// A scheduled retry finished (headless `retry-end` envelope):
+    /// success says whether the follow-up attempt worked.
+    RetryFinished {
+        /// Whether the retry recovered.
+        success: bool,
+    },
+    /// Compaction started (headless `compaction-start` envelope):
+    /// `reason` is `threshold` or `manual`.
+    CompactionStarted {
+        /// Why compaction began.
+        reason: String,
+    },
+    /// Compaction ended (headless `compaction-end` envelope).
+    CompactionEnded {
+        /// Why it began.
+        reason: String,
+        /// Whether a summary record was written.
+        success: bool,
     },
     /// An error surfaced to the interface (headless `error` envelope).
     Error {

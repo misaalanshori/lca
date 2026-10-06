@@ -37,14 +37,30 @@ fn json_mode_emits_one_typed_object_per_line() {
 
     let lines = json_lines(&output);
     assert!(!lines.is_empty());
+    // gh #44: the extended taxonomy. New kinds arrive only by design
+    // (docs/headless.md); anything else is still a bug.
     let allowed = [
+        "session-start",
+        "turn-start",
+        "message-start",
+        "message-end",
         "text",
+        "text-delta",
+        "thinking-delta",
         "tool-call",
+        "tool-update",
         "tool-result",
         "usage",
         "extension-event",
+        "queue-queued",
+        "queue-flushed",
+        "compaction-start",
+        "compaction-end",
+        "retry-scheduled",
+        "retry-end",
         "error",
         "turn-end",
+        "response",
     ];
     for line in &lines {
         let kind = line["type"].as_str().expect("type field");

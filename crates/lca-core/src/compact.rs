@@ -22,6 +22,7 @@ pub(super) async fn compact_candidate(
     completion_backend: Option<&Arc<dyn lca_tools::CompletionBackend>>,
     candidate: Vec<Record>,
     sink: &mut dyn TurnSink,
+    reason: &str,
 ) -> Result<String, String> {
     let Some(strategy) = extensions.compaction_strategy().cloned() else {
         return Err(
@@ -32,10 +33,17 @@ pub(super) async fn compact_candidate(
     if candidate.len() < 2 {
         return Err("nothing to compact: fewer than two compactable records".to_string());
     }
+    sink.on_event(TurnEvent::CompactionStarted {
+        reason: reason.to_string(),
+    });
     let summary = match strategy.compact(&candidate).await {
         Ok(summary) => summary,
         Err(err) => {
             let detail = format!("compaction strategy `{}` failed: {err}", strategy.name());
+            sink.on_event(TurnEvent::CompactionEnded {
+                reason: reason.to_string(),
+                success: false,
+            });
             sink.on_event(TurnEvent::ExtensionEvent {
                 extension: strategy.name().to_string(),
                 event: "compaction-failed".to_string(),
@@ -77,8 +85,16 @@ pub(super) async fn compact_candidate(
             event: "compaction-failed".to_string(),
             detail: detail.clone(),
         });
+        sink.on_event(TurnEvent::CompactionEnded {
+            reason: reason.to_string(),
+            success: false,
+        });
         return Err(detail);
     }
+    sink.on_event(TurnEvent::CompactionEnded {
+        reason: reason.to_string(),
+        success: true,
+    });
     Ok(summary)
 }
 
@@ -110,6 +126,7 @@ pub fn compact_now(
             completion_backend.as_ref(),
             candidate,
             &mut NullSink,
+            "manual",
         )
         .await
     })
