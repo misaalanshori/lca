@@ -105,6 +105,12 @@ impl Ui {
         names.insert(10, "/grants".to_string());
         names.insert(11, "/trust".to_string());
         names.insert(12, "/permissions".to_string());
+        // gh #43: the skill command plus one entry per skill, so
+        // `/skill:name` completes and forwards to the host.
+        names.push("/skill".to_string());
+        for skill in lca_tools::skills::collect(&crate::skills_roots(&self.cwd)) {
+            names.push(format!("/skill:{}", skill.name));
+        }
         names.extend(
             self.registry
                 .command_names()
@@ -120,6 +126,14 @@ impl Ui {
         match name {
             "attach" => self.command_attach(argument),
             "model" => self.command_model(argument),
+            // gh #43: `/skill` lists, `/skill:name [args]` (or the space
+            // form) loads the body and submits it with the args as one
+            // user block. Explicit invocation bypasses
+            // `disable-model-invocation` - that flag gates the model's
+            // paths, never this command.
+            name if name == "skill" || name.starts_with("skill:") => {
+                self.command_skill(name, argument)
+            }
             "compact" => {
                 // Summarization is a model round-trip. It used to run on
                 // this thread, which is the interface's: the pane went
@@ -304,6 +318,65 @@ impl Ui {
     /// `/attach <path>`: stage an image for the next turn (ADR-0029). The
     /// bytes land in the session's attachment store; the stub text rides
     /// with the next user message.
+    /// `/skill`: list the catalog, or load one skill's body with the
+    /// trailing args appended as the user request - one user-visible
+    /// block that submits as a turn (pi's `/skill:name` shape).
+    fn command_skill(&self, name: &str, argument: &str) -> CommandEffect {
+        let roots = crate::skills_roots(&self.cwd);
+        let mut rest = name
+            .strip_prefix("skill")
+            .unwrap_or("")
+            .trim_start_matches(':')
+            .to_string();
+        if !argument.trim().is_empty() {
+            if !rest.is_empty() {
+                rest.push(' ');
+            }
+            rest.push_str(argument.trim());
+        }
+        let mut words = rest.splitn(2, char::is_whitespace);
+        let skill_name = words.next().unwrap_or("").trim();
+        let args = words.next().unwrap_or("").trim();
+        if skill_name.is_empty() {
+            let skills = lca_tools::skills::collect(&roots);
+            if skills.is_empty() {
+                return CommandEffect::ShowWidget("no skills installed".to_string());
+            }
+            let mut lines = vec!["Skills (load one with /skill:name):".to_string()];
+            for skill in &skills {
+                let mut line = format!("/skill:{} - ", skill.name);
+                if skill.description.is_empty() {
+                    line.push_str(&format!("({})", skill.source.label()));
+                } else {
+                    line.push_str(&format!("{} ({})", skill.description, skill.source.label()));
+                }
+                lines.push(line);
+            }
+            return CommandEffect::ShowWidget(lines.join("\n"));
+        }
+        let found = lca_tools::skills::collect(&roots)
+            .into_iter()
+            .find(|skill| skill.name == skill_name);
+        match found {
+            None => CommandEffect::ShowWidget(format!(
+                "no skill named `{skill_name}` - /skill lists them"
+            )),
+            Some(skill) => {
+                let mut text = format!(
+                    "[skill {} from {}]\n{}",
+                    skill.name,
+                    skill.source.label(),
+                    skill.body
+                );
+                if !args.is_empty() {
+                    text.push_str("\n\n");
+                    text.push_str(args);
+                }
+                CommandEffect::SubmitPrompt(text)
+            }
+        }
+    }
+
     fn command_attach(&self, argument: &str) -> CommandEffect {
         let session = self.session();
         let path = std::path::Path::new(argument.trim());

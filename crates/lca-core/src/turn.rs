@@ -301,8 +301,8 @@ impl Agent<'_> {
         // extension transforms as a system message, so the stable cache
         // prefix is untouched by construction.
         let messages = {
-            let skills = crate::skills::collect(&self.config.skills_roots);
-            crate::skills::transform(messages, &skills)
+            let skills = lca_tools::skills::collect(&self.config.skills_roots);
+            lca_tools::skills::transform(messages, &skills, self.config.skills_inject_matched)
         };
         let stable_prefix = self.narrow_stable_prefix(&messages, stable_cap, sink);
         Ok(self.build_request(messages, stable_prefix))

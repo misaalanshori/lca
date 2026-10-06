@@ -48,11 +48,43 @@ convention: `LCA_LOG`, then `RUST_LOG`, then `warn` by default
 | `ui.fullscreen` | boolean | `false` | The `/fullscreen` toggle's persisted choice (FR-UI-21). `false` (the default, S1) is the main-screen terminal scrollback renderer, which appends to the real scrollback so the terminal's native selection, scrollbar, right-click paste, and Ctrl+V work by construction. `true` opts into the alt-screen renderer with app-owned scroll and selection. Written to `<config dir>/ui.json` when toggled, not to the config file, so the runtime toggle never rewrites user config. In this mode the viewport is a pinned dock (separator, notice, queue, editor, footer) over a scrolling transcript window with a scrollbar on its right margin and a jump-to-bottom indicator; `End` returns to the live bottom (gh #35). |
 | `shell.tool` | `auto`, `bash`, `pwsh`, `powershell`, or `cmd` | `auto` | The `shell` tool's interpreter (ADR-0041). `auto` on Windows walks Git Bash at its known install locations, then `pwsh.exe`, then `powershell.exe`, then `cmd.exe`; on Unix it is `sh`. A configured tool that cannot be found fails every shell call with the locations searched - never a silent fallback to a different shell. |
 | `shell.path` | string | unset | An exact interpreter path, which wins over `shell.tool`. It may name anything, including the WSL stub (`C:\Windows\System32\bash.exe`), because naming a path is deliberate; auto mode skips that stub (it runs in a different filesystem namespace). `lca config` shows the key rows and a `shell.resolved` row naming what the ladder actually picked (gh #30 moved the dump there; `/settings` is the editor for the keys themselves). |
+| `skills.inject_matched` | boolean | `false` | Matched skill full-text injection into the prompt (gh #43). Off by default: the system prompt carries the skill catalog (name, description, source) and bodies load on demand through the `skill` tool or `/skill:name`. On restores the previous behavior (matched skills inject full text). Restricted skills (`disable-model-invocation`) never inject either way. |
 | `ui.thinking` | `snippet`, `full`, or `hidden` | `snippet` | How much of a reasoning run the transcript shows (R6). `snippet` (the default) renders the first three non-empty lines and then `… +N lines`; `full` renders the whole run; `hidden` keeps pi's single dim line. Ctrl+T overrides the *latest* run in place, and the toggle is per run - older runs keep this setting. Distinct from `thinking` below, which is the effort level the model is asked for. |
 | `markdown.codeblock_border` | `full`, `horizontal`, or `none` | `full` | How fenced code blocks are framed (gh #32). `full` is the shipped four-sided frame; `horizontal` draws a `── python ──` bar above and a bar below with no side pipes, so a terminal mouse selection copies the code with nothing to clean up; `none` draws the code lines alone. Every shape keeps the fence's syntax highlighting. The environment variable is `LCA_MARKDOWN_CODEBLOCK_BORDER`. |
 | `thinking` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` | unset | The session's reasoning level, pi's vocabulary. Unset means the provider chooses; `/thinking` sets it live, and `--thinking <level>` sets it from the command line (a level outside this vocabulary is exit 2). `--model <pattern>:<level>` sets it for the session too, without persisting anything. It rides the request extras as `reasoning-effort`, which a provider honors where meaningful. |
 | `permissions.mode` | `ask` or `yolo` | `ask` | How permission prompts are answered (ADR-0042). `yolo` answers every prompt "always, for this exact pattern": the pattern is persisted and a `permission` record is written exactly as a human answer would write it. Explicit deny rules still deny. `--yolo` sets it for one process, beating any file. While it is on, the footer carries a `YOLO` line in the error role. Reads outside the workspace never prompt in either mode. |
 | `permissions.proposals` | table | empty | Project file only. Proposals with no force; see ADR-0006. |
+
+## Prompt files and context discovery
+
+The system prompt assembles in fixed sections — preamble, tool
+declarations, project context, additional instructions, skills catalog,
+workspace facts — each gathered block carrying an attribution header
+(gh #43, #68, #74).
+
+`~/.lca/SYSTEM.md` replaces the built-in preamble; `~/.lca/APPEND_SYSTEM.md`
+appends to it. In a trusted project, `.lca/SYSTEM.md` (resp.
+`.lca/APPEND_SYSTEM.md`) wins by replacement, never combined — pi's
+same-name precedence. `--system-prompt <path>` and
+`--append-system-prompt <path>` override for one run; a flag naming a
+missing file fails the startup.
+
+Context files steer the prompt with attribution: `AGENTS.md`,
+`AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD` from the user directory
+(`~/.lca/`) and from the project directory, plus a same-directory
+`AGENTS.override.md` that replaces its siblings. `-n` /
+`--no-context-files` disables all of it (note: `-c` already means
+`--continue`, so pi's `-nc` cluster is not offered).
+
+Trust divergence from pi, by design: pi reads context files from the
+working directory through its parents trust-free. LCA reads them from
+the user dir and the trusted project only — never untrusted parent
+traversal. A parent directory's `AGENTS.md` is prompt text from a
+project the user never approved, which is a prompt-injection surface
+the folder-trust model exists to close; the trust prompt already fires
+on first open, so this costs one keypress, not the feature. Project
+files load when the project is trusted at startup (trust granted
+mid-session applies from the next session).
 
 ## Environment
 

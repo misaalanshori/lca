@@ -998,3 +998,37 @@ fn the_cursor_column_is_uniform_across_every_editor_line() {
         "column 3 of the buffer, plus the two-column marker, on every line: {columns:?}"
     );
 }
+
+// Verifies: gh #43 (pi's `/skill:name` colon form): the colon routes
+// like the space form, so both reach the host's `skill` command with
+// the name first.
+#[test]
+fn skill_colon_form_routes_like_the_space_form() {
+    use std::sync::Mutex;
+    let seen: std::sync::Arc<Mutex<Vec<(String, String)>>> =
+        std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = seen.clone();
+    let mut options = options();
+    options.slash_commands = vec!["/skill".into()];
+    options.invoke_command = std::sync::Arc::new(move |name, argument| {
+        capture
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((name.to_string(), argument.to_string()));
+        CommandEffect::None
+    });
+    let mut chat = Chat::new(options, std::sync::Arc::new(KeybindingsManager::new()));
+    for c in "/skill:pdf-tools extract report.pdf".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    assert_eq!(chat.handle_key("\r"), Action::Continue);
+    let seen = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(
+        seen.as_slice(),
+        &[(
+            "skill".to_string(),
+            "pdf-tools extract report.pdf".to_string()
+        )],
+        "colon form reaches the host as name + argument"
+    );
+}

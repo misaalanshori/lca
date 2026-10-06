@@ -340,8 +340,11 @@ fn agent_config_for(
     registry: &Arc<ExtensionRegistry>,
     completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>>,
     cwd: &Path,
-) -> AgentConfig {
-    AgentConfig {
+    flags: &crate::CliFlags,
+    trusted: bool,
+) -> Result<AgentConfig, String> {
+    let system_prompt = crate::prompt::agent_system_prompt(cwd, model_id, flags, trusted)?;
+    Ok(AgentConfig {
         provider: provider_name.to_string(),
         model: model_id.to_string(),
         image_policy,
@@ -351,10 +354,11 @@ fn agent_config_for(
         compaction_threshold: config.compaction_threshold(),
         model_context_window: context_window,
         completion_backend,
-        system_prompt: lca_core::identity_prompt(model_id, std::env::consts::OS),
+        system_prompt,
         skills_roots: crate::skills_roots(cwd),
+        skills_inject_matched: config.skills_inject_matched(),
         ..AgentConfig::default()
-    }
+    })
 }
 
 impl Ui {
@@ -517,6 +521,7 @@ impl Ui {
         let context_window = model_context_window(provider.as_ref(), &model_id);
         // #39: the resolved model's image behavior reaches the tools.
         let image_policy = crate::models::image_policy_for(&provider.list_models(), &model_id);
+        let trusted = crate::lock(&grants).is_trusted(cwd);
         let agent_config = agent_config_for(
             &config,
             &provider_name,
@@ -526,7 +531,10 @@ impl Ui {
             &registry,
             completion_backend,
             cwd,
-        );
+            flags,
+            trusted,
+        )
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
 
         // The ui view over the registry: only handles that declared
         // regions register here (FR-UI-1's pull table; deny-by-default

@@ -338,7 +338,7 @@ FR-CACHE-6. IF the post-transform content within the stable-prefix boundary diff
 
 ### Tools
 
-FR-TOOL-1. The agent SHALL provide built-in tools for read, write, edit, list, glob, grep, and shell.
+FR-TOOL-1. The agent SHALL provide built-in tools for read, write, edit, list, glob, grep, shell, and skill. (Amended 2026-10-06, gh #43: the `skill` tool loads one skill's full instructions by name for model invocation; the catalog advertises, bodies lazy-load.)
 
 FR-TOOL-2. IF an edit call targets a file that changed after the last read in this session, THEN the agent SHALL reject the call and return an error to the model.
 

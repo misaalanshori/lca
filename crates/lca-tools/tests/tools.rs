@@ -81,7 +81,9 @@ fn the_shell_description_names_the_resolved_interpreter() {
 fn ships_exactly_the_documented_builtin_tools() {
     let specs = ToolExecutor::specs(None);
     let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
-    for expected in ["read", "write", "edit", "list", "glob", "grep", "shell"] {
+    for expected in [
+        "read", "write", "edit", "list", "glob", "grep", "shell", "skill",
+    ] {
         assert!(
             names.contains(&expected),
             "{expected} missing from {names:?}"
@@ -521,6 +523,88 @@ async fn a_per_call_timeout_kills_the_command_tree() {
 // Verifies: gh #40 (no default timeout): with no configured default a
 // command runs until it exits, and a per-call timeout still bounds one
 // call without changing the default for the next.
+/// An executor pointed at a scratch skills tree (user source only).
+fn skilled_executor(ws: &Path) -> ToolExecutor {
+    let mut exec = executor(ws);
+    exec.set_skills_roots(Some(lca_tools::skills::SkillsRoots {
+        project: ws.join("project"),
+        user: ws.join("skills"),
+        extensions: ws.join("extensions"),
+        disabled: Vec::new(),
+    }));
+    exec
+}
+
+#[allow(clippy::expect_used)] // a test helper: an unwritable scratch dir is the failure the rows report.
+fn write_skill(dir: &Path, name: &str, header: &str, body: &str) {
+    let skill = dir.join(name);
+    std::fs::create_dir_all(&skill).expect("mkdir");
+    std::fs::write(skill.join("SKILL.md"), format!("{header}\n---\n{body}")).expect("write");
+}
+
+// Verifies: gh #43 (model invocation): the `skill` tool loads a named
+// body through the same files the merge reads.
+#[tokio::test]
+async fn skill_tool_loads_a_named_body() {
+    let ws = scratch("skill-tool");
+    write_skill(
+        &ws.join("skills"),
+        "commits",
+        "name: commits\ndescription: Write commit messages.",
+        "Write one intent-bearing sentence.",
+    );
+    let mut exec = skilled_executor(&ws);
+    let result = run(
+        &mut exec,
+        &call("skill", serde_json::json!({"name": "commits"})),
+    )
+    .await;
+    assert_eq!(result.status, ToolResultStatus::Ok, "{}", result.content);
+    assert!(
+        result
+            .content
+            .contains("Write one intent-bearing sentence."),
+        "the full body loads: {}",
+        result.content
+    );
+    assert!(
+        result.content.contains("[skill commits"),
+        "{}",
+        result.content
+    );
+    let missing = run(
+        &mut exec,
+        &call("skill", serde_json::json!({"name": "nope"})),
+    )
+    .await;
+    assert_eq!(missing.status, ToolResultStatus::Error);
+}
+
+// Verifies: gh #43 (`disable-model-invocation`): the tool refuses a
+// restricted skill and names the explicit path.
+#[tokio::test]
+async fn skill_tool_refuses_restricted_skills() {
+    let ws = scratch("skill-restricted");
+    write_skill(
+        &ws.join("skills"),
+        "deploy",
+        "name: deploy\ndescription: Ship it.\ndisable-model-invocation: true",
+        "The deploy runbook.",
+    );
+    let mut exec = skilled_executor(&ws);
+    let result = run(
+        &mut exec,
+        &call("skill", serde_json::json!({"name": "deploy"})),
+    )
+    .await;
+    assert_eq!(result.status, ToolResultStatus::Error);
+    assert!(
+        result.content.contains("/skill:deploy"),
+        "the refusal names the explicit path: {}",
+        result.content
+    );
+}
+
 #[tokio::test]
 async fn no_default_timeout_runs_to_completion() {
     let ws = scratch("no-default-timeout");

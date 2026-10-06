@@ -327,6 +327,7 @@ pub async fn headless(
         &store,
         &session,
         &provider_name,
+        flags,
     ) {
         Ok(wired) => wired,
         Err(code) => return code,
@@ -438,6 +439,7 @@ fn wire(
     store: &SessionStore,
     session: &lca_session::Session,
     provider_name: &str,
+    flags: &crate::CliFlags,
 ) -> Result<(AgentConfig, std::sync::Arc<dyn lca_provider::Provider>), i32> {
     // The one registry assembly, shared with the interface and with
     // `--list-models` (gh #8); the stats source is this session's (ADR-0013).
@@ -555,8 +557,20 @@ fn wire(
         compaction_threshold: config.compaction_threshold(),
         model_context_window,
         completion_backend,
-        system_prompt: lca_core::identity_prompt(&model_id, std::env::consts::OS),
+        system_prompt: match crate::prompt::agent_system_prompt(
+            cwd,
+            &model_id,
+            flags,
+            lock(grants).is_trusted(cwd),
+        ) {
+            Ok(prompt) => prompt,
+            Err(err) => {
+                eprintln!("error: {err}");
+                return Err(exit::USAGE);
+            }
+        },
         skills_roots: skills_roots(cwd),
+        skills_inject_matched: config.skills_inject_matched(),
         // `--thinking` and the `thinking` key reach headless mode too: a
         // flag that works in one front end only is a flag that lies. A
         // `--model` suffix is explicit (gh #8 phase 4); otherwise the

@@ -63,8 +63,15 @@ impl SkillSource {
 pub struct Skill {
     /// The `name:` header, else the directory name.
     pub name: String,
+    /// The one-line `description:` header (the routing line the catalog
+    /// advertises; empty when the file has none).
+    pub description: String,
     /// Lowercase trigger words from `match:`.
     pub match_words: Vec<String>,
+    /// False when `disable-model-invocation: true`: explicit `/skill:`
+    /// invocation only, never the catalog, the model paths, or matched
+    /// injection (pi parity).
+    pub model_invocable: bool,
     /// The instruction body after the `---` line.
     pub body: String,
     /// Where it came from.
@@ -74,7 +81,9 @@ pub struct Skill {
 /// Parse one `SKILL.md` (the standard Claude format).
 pub fn parse_skill(fallback_name: &str, source: SkillSource, text: &str) -> Skill {
     let mut name = fallback_name.to_string();
+    let mut description = String::new();
     let mut match_line = String::new();
+    let mut model_invocable = true;
     let mut body_start = 0usize;
     let mut consumed = 0usize;
     for line in text.split('\n') {
@@ -88,7 +97,11 @@ pub fn parse_skill(fallback_name: &str, source: SkillSource, text: &str) -> Skil
         if let Some((key, value)) = trimmed.split_once(':') {
             match key.trim() {
                 "name" => name = value.trim().to_string(),
+                "description" => description = value.trim().to_string(),
                 "match" => match_line = value.to_string(),
+                "disable-model-invocation" => {
+                    model_invocable = value.trim() != "true";
+                }
                 _ => {} // unknown header keys are reserved, not errors
             }
         } else {
@@ -104,7 +117,9 @@ pub fn parse_skill(fallback_name: &str, source: SkillSource, text: &str) -> Skil
         .collect();
     Skill {
         name,
+        description,
         match_words,
+        model_invocable,
         body,
         source,
     }
@@ -187,6 +202,38 @@ pub fn skill_matches(skill: &Skill, latest_user: &str) -> bool {
     skill.match_words.iter().any(|word| haystack.contains(word))
 }
 
+/// The skill catalog: one advertised line per model-invocable skill -
+/// name, one-line description, source attribution. Bodies never ride it
+/// (gh #43: advertise by default, load bodies on demand). The model's
+/// way in names the loader: the `skill` tool, or `/skill:name`.
+pub fn catalog(skills: &[Skill]) -> String {
+    let mut out =
+        String::from("Available skills (load one with the `skill` tool or `/skill:name`):\n");
+    for skill in skills.iter().filter(|skill| skill.model_invocable) {
+        out.push_str("- ");
+        out.push_str(&skill.name);
+        if !skill.description.is_empty() {
+            out.push_str(" — ");
+            out.push_str(&skill.description);
+        }
+        out.push_str(" (from ");
+        out.push_str(&skill.source.label());
+        out.push_str(")\n");
+    }
+    out
+}
+
+/// A skill's full body by name, through the same files the merge reads:
+/// precedence first, so a project body shadows a user one with its name.
+/// Explicit invocation always loads, restricted or not - the flag gates
+/// the model's paths, never `/skill:`.
+pub fn load_body(roots: &SkillsRoots, name: &str) -> Option<String> {
+    collect(roots)
+        .into_iter()
+        .find(|skill| skill.name == name)
+        .map(|skill| skill.body)
+}
+
 /// The injection: every matched skill becomes one appended system message,
 /// each naming its source. Appended, never edited in place, so the stable
 /// cache region is untouched by construction (Phase 4 exit clause 4).
@@ -211,8 +258,17 @@ pub fn injection(matched: &[&Skill]) -> Option<ChatMessage> {
 }
 
 /// The whole host-side transform: find the latest user message, select the
-/// matches, append the attributed injection.
-pub fn transform(mut messages: Vec<ChatMessage>, skills: &[Skill]) -> Vec<ChatMessage> {
+/// matches, append the attributed injection - but only when the caller
+/// opted into matched injection (gh #43: the default is the catalog,
+/// not full text). Restricted skills never inject, opted in or not.
+pub fn transform(
+    mut messages: Vec<ChatMessage>,
+    skills: &[Skill],
+    inject_matched: bool,
+) -> Vec<ChatMessage> {
+    if !inject_matched {
+        return messages;
+    }
     let latest_user = messages
         .iter()
         .rev()
@@ -231,7 +287,7 @@ pub fn transform(mut messages: Vec<ChatMessage>, skills: &[Skill]) -> Vec<ChatMe
         .unwrap_or_default();
     let matched: Vec<&Skill> = skills
         .iter()
-        .filter(|skill| skill_matches(skill, &latest_user))
+        .filter(|skill| skill.model_invocable && skill_matches(skill, &latest_user))
         .collect();
     if let Some(injection) = injection(&matched) {
         messages.push(injection);

@@ -82,6 +82,23 @@ pub struct Cli {
         value_parser = clap::builder::PossibleValuesParser::new(lca_config::THINKING_LEVELS)
     )]
     pub thinking: Option<String>,
+    // gh #68 (pi's `--system-prompt`): a file whose content replaces
+    // the built-in prompt for this run only.
+    /// Replace the system prompt with a file's content, for this run.
+    #[arg(long = "system-prompt", value_name = "PATH")]
+    pub system_prompt: Option<std::path::PathBuf>,
+    // gh #68 (pi's `--append-system-prompt`): instructions appended for
+    // this run only.
+    /// Append a file's content to the system prompt, for this run.
+    #[arg(long = "append-system-prompt", value_name = "PATH")]
+    pub append_system_prompt: Option<std::path::PathBuf>,
+    // gh #74 (pi's `-nc`): skip AGENTS.md/CLAUDE.md discovery.
+    /// Skip AGENTS.md and CLAUDE.md discovery for this run.
+    // Short is `-n` only: `-c` already means `--continue`, so pi's
+    // `-nc` cluster would resume a session as a side effect. Spell it
+    // `-n` or `--no-context-files`.
+    #[arg(short = 'n', long = "no-context-files")]
+    pub no_context_files: bool,
     // Deliberate divergence from pi (gh #8's DNA box): pi also has
     // `--api-key <key>`, and LCA will not add one. argv is world-readable
     // in the process list (`ps`), and the standing rule is that secrets
@@ -194,6 +211,12 @@ pub struct CliFlags {
     /// key: `provider` names the provider *extension*, while this names
     /// a profile inside one - two different questions.
     pub provider: Option<String>,
+    /// `--system-prompt`: replace the prompt for this run (gh #68).
+    pub system_prompt: Option<std::path::PathBuf>,
+    /// `--append-system-prompt`: append for this run (gh #68).
+    pub append_system_prompt: Option<std::path::PathBuf>,
+    /// `-n`/`--no-context-files`: skip context-file discovery (gh #74).
+    pub no_context_files: bool,
 }
 
 impl CliFlags {
@@ -203,6 +226,9 @@ impl CliFlags {
             models: cli.models.clone(),
             thinking: cli.thinking.clone(),
             provider: cli.provider.clone(),
+            system_prompt: cli.system_prompt.clone(),
+            append_system_prompt: cli.append_system_prompt.clone(),
+            no_context_files: cli.no_context_files,
         }
     }
 

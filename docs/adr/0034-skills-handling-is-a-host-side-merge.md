@@ -75,3 +75,19 @@ into ADR-0013, whose rows are annotated to point here.
   hole with an extra step. Rejected.
 - **Keep the merge in the extension and only support one source.** Drops
   the user and package sources that ADR-0030 exists to provide. Rejected.
+
+## Addendum 2026-10-06 (gh #43): advertise by default, lazy-load bodies
+
+The merge above stays (three sources, precedence, attribution), but the
+default delivery flipped: the system prompt carries the skill CATALOG
+(name, one-line description, source) and bodies load on demand — pi's
+context economy. Matched full-text injection is opt-in
+(`skills.inject_matched`, default off). Rationale: injecting full text
+grows the stable prefix every turn and shifts it as skills change,
+which the cache-divergence detector then narrows; a catalog is stable.
+
+Two companions arrived with the flip: the `skill` built-in tool (model
+invocation by name, honoring `disable-model-invocation`) and the
+`/skill[:name]` command (explicit invocation, bypassing the flag).
+`crates/lca-core/src/skills.rs` moved to `crates/lca-tools/src/skills.rs`
+so the tool and the merge share one parser with no dependency cycle.

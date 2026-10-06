@@ -6,7 +6,8 @@
 //!
 //! Verifies: FR-PROV-9, ADR-0030 (the threat-model resources row).
 
-use lca_core::{SkillsRoots, skills};
+use lca_core::SkillsRoots;
+use lca_tools::skills;
 
 fn write_skill(dir: &std::path::Path, name: &str, body: &str) {
     let skill = dir.join(name);

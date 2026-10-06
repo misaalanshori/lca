@@ -578,3 +578,28 @@ fn bad_values_report_the_source_that_set_them() {
     assert!(message.contains("tool.timeout_seconds"), "{message}");
     assert!(message.contains("user file"), "{message}");
 }
+
+// Verifies: gh #43 (`skills.inject_matched`): matched skill-text
+// injection is opt-in, default off, settable from a file.
+#[test]
+fn skills_inject_matched_defaults_off_and_loads_from_file() {
+    let plain = Config::defaults();
+    assert!(!plain.skills_inject_matched(), "the default is the catalog");
+    assert_eq!(
+        plain.source_of("skills.inject_matched"),
+        lca_config::MergeSource::Default
+    );
+
+    let dir = scratch("skills-inject");
+    write(&dir.join("user.toml"), "[skills]\ninject_matched = true\n");
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert!(config.skills_inject_matched());
+    assert_eq!(
+        config.source_of("skills.inject_matched"),
+        lca_config::MergeSource::UserFile
+    );
+}

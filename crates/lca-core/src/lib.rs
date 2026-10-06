@@ -16,7 +16,6 @@
 mod assemble;
 mod compact;
 mod registry;
-pub mod skills;
 mod turn;
 
 pub mod ext_provider;
@@ -29,7 +28,7 @@ pub use registry::{
 // The turn types live in the protocol layer so the interface and the
 // embedding SDK can render them without depending on this crate.
 pub use lca_protocol::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
-pub use skills::{Skill, SkillSource, SkillsRoots};
+pub use lca_tools::skills::{Skill, SkillSource, SkillsRoots};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -94,6 +93,9 @@ pub struct AgentConfig {
     /// Host-side skill sources (FR-CTX-2, ADR-0030). Empty paths collect
     /// nothing.
     pub skills_roots: SkillsRoots,
+    /// Whether matched skill text injects into the prompt (gh #43).
+    /// Default off: the catalog advertises either way.
+    pub skills_inject_matched: bool,
     /// Messages the interface queued while the turn runs; drained at each
     /// model-call boundary (ADR-0038).
     pub steer: lca_protocol::SteerQueue,
@@ -167,6 +169,7 @@ impl Default for AgentConfig {
             completion_backend: None,
             sent_stable: Arc::new(std::sync::Mutex::new(None)),
             skills_roots: SkillsRoots::default(),
+            skills_inject_matched: false,
             steer: lca_protocol::steer_queue(),
         }
     }
@@ -242,6 +245,9 @@ impl<'a> Agent<'a> {
         tools.set_spill_dir(Some(session.dir().join("attachments")));
         // #39: the resolved model's image behavior reaches the tools.
         tools.set_image_policy(config.image_policy);
+        // gh #43: the `skill` tool loads through the same roots the
+        // merge reads.
+        tools.set_skills_roots(Some(config.skills_roots.clone()));
         Agent {
             store,
             session,

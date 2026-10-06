@@ -45,6 +45,20 @@ impl Chat {
         let mut parts = command_line.splitn(2, ' ');
         let name = parts.next().unwrap_or("").to_string();
         let argument = parts.next().unwrap_or("").to_string();
+        // gh #43: pi's `/skill:name` colon form routes like the space
+        // form (`/skill name`), so both reach the host's `skill` command.
+        // Only the `skill` head splits: other commands keep their colons.
+        let (name, argument) = match name.split_once(':') {
+            Some(("skill", rest)) => {
+                let argument = if argument.is_empty() {
+                    rest.to_string()
+                } else {
+                    format!("{rest} {argument}")
+                };
+                ("skill".to_string(), argument)
+            }
+            _ => (name, argument),
+        };
         // The live list, not the startup snapshot, so a login that
         // discovered models after its grant reaches the picker (pain point
         // #4). Computed once per command; the host hook is a cheap read.

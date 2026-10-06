@@ -18,6 +18,7 @@ mod ops;
 mod process;
 mod pty;
 pub mod shell;
+pub mod skills;
 
 pub use bridge::{BridgeError, bridge_stream};
 pub use capabilities::CompletionBackend;
@@ -147,6 +148,9 @@ pub struct ToolExecutor {
     /// session is attached (`<session>/attachments`); `None` keeps
     /// today's truncate-and-drop behavior (tests, one-shot use).
     spill_dir: Option<PathBuf>,
+    /// The host's skill sources for the `skill` tool (gh #43); `None`
+    /// answers "no skills" rather than reading somewhere unconfigured.
+    skills_roots: Option<crate::skills::SkillsRoots>,
 }
 
 impl ToolExecutor {
@@ -178,6 +182,7 @@ impl ToolExecutor {
             image_policy: ImagePolicy::unknown(),
             tracker: ReadTracker::default(),
             spill_dir: None,
+            skills_roots: None,
         }
     }
 
@@ -186,6 +191,13 @@ impl ToolExecutor {
     /// the resolved model's metadata.
     pub fn set_image_policy(&mut self, policy: ImagePolicy) {
         self.image_policy = policy;
+    }
+
+    /// Point the executor at the host's skill sources, so the `skill`
+    /// tool loads bodies through the same files the merge reads (gh #43).
+    /// Set by the front end alongside the agent config's own roots.
+    pub fn set_skills_roots(&mut self, roots: Option<crate::skills::SkillsRoots>) {
+        self.skills_roots = roots;
     }
 
     /// Point the executor at the session's attachment directory. Set by the
@@ -285,6 +297,14 @@ impl ToolExecutor {
                 }
             };
         vec![
+            spec(
+                "skill",
+                "Load a skill's full instructions by name (the system prompt advertises the catalog, not the bodies). Restricted skills answer here only through /skill:name.",
+                serde_json::json!({
+                    "name": {"type": "string", "description": "Skill name from the catalog"},
+                }),
+                &["name"],
+            ),
             spec(
                 "read",
                 "Read a file. Returns content with line numbers. Output is truncated to 2000 lines or the result size limit (whichever is hit first). Use offset (1-indexed) and limit to page through large files; when you need the full file, continue with offset until complete.",
@@ -423,6 +443,7 @@ impl ToolExecutor {
         };
         match call.name.as_str() {
             "read" => self.read(call, &args).await,
+            "skill" => self.skill(call, &args).await,
             "write" => self.write(call, &args).await,
             "edit" => self.edit(call, &args).await,
             "list" => self.list(call, &args).await,
@@ -430,6 +451,43 @@ impl ToolExecutor {
             "grep" => self.grep(call, &args).await,
             "shell" => self.shell(call, &args, on_output, cancel).await,
             other => ToolResult::error(call.call_id.clone(), format!("unknown tool `{other}`")),
+        }
+    }
+
+    /// The `skill` tool (gh #43): load one skill's full instructions by
+    /// name, through the same files the merge reads. No permission gate:
+    /// the merge already reads these files every turn without asking,
+    /// so gating the lazy load would be theater. A restricted skill
+    /// (`disable-model-invocation`) answers here only through
+    /// `/skill:name`, never through this tool.
+    async fn skill(&mut self, call: &ToolCall, args: &serde_json::Value) -> ToolResult {
+        let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
+            return ToolResult::error(call.call_id.clone(), "name is required");
+        };
+        let Some(roots) = self.skills_roots.as_ref() else {
+            return ToolResult::error(
+                call.call_id.clone(),
+                "skills are not configured on this host",
+            );
+        };
+        let found = crate::skills::collect(roots)
+            .into_iter()
+            .find(|skill| skill.name == name);
+        match found {
+            None => ToolResult::error(call.call_id.clone(), format!("no skill named `{name}`")),
+            Some(skill) if !skill.model_invocable => ToolResult::error(
+                call.call_id.clone(),
+                format!("skill `{name}` is available only through /skill:{name}"),
+            ),
+            Some(skill) => ToolResult::ok(
+                call.call_id.clone(),
+                format!(
+                    "[skill {} from {}]\n{}",
+                    name,
+                    skill.source.label(),
+                    skill.body
+                ),
+            ),
         }
     }
 

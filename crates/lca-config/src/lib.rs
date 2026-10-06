@@ -153,6 +153,9 @@ pub struct Config {
     shell_path: Option<String>,
     permissions_mode: Option<String>,
     thinking_visibility: Option<String>,
+    // gh #43: matched skill-text injection is opt-in (default OFF);
+    // the catalog advertises either way.
+    skills_inject_matched: bool,
     // gh #32: how fenced code blocks are framed; `full` is the shipped
     // look, `horizontal` exists so a copy-paste has no side pipes.
     markdown_codeblock_border: String,
@@ -197,6 +200,7 @@ impl Default for Config {
             shell_path: None,
             permissions_mode: None,
             thinking_visibility: None,
+            skills_inject_matched: false,
             markdown_codeblock_border: "full".to_string(),
             permissions_proposals: BTreeMap::new(),
             models_enabled: Vec::new(),
@@ -351,6 +355,10 @@ fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigEr
                 )))
             }
         }
+        "skills.inject_matched" => raw
+            .parse::<bool>()
+            .map(TypedValue::Bool)
+            .map_err(|_| invalid(format!("expected a boolean, got `{raw}`"))),
         "permissions.mode" => {
             if PERMISSION_MODES.contains(&raw) {
                 Ok(TypedValue::Text(raw.to_string()))
@@ -436,6 +444,7 @@ impl Config {
             "shell.path",
             "permissions.mode",
             "ui.thinking",
+            "skills.inject_matched",
             "markdown.codeblock_border",
         ] {
             config.sources.insert(key.to_string(), MergeSource::Default);
@@ -623,6 +632,12 @@ impl Config {
                     }
                     this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
                 }
+                "skills.inject_matched" => {
+                    let flag = value.as_bool().ok_or_else(|| {
+                        invalid(format!("expected a boolean, got {}", type_name(&value)))
+                    })?;
+                    this.apply(key.to_string(), TypedValue::Bool(flag), source)?;
+                }
                 "markdown.codeblock_border" => {
                     let text = value.as_str().ok_or_else(|| {
                         invalid(format!("expected a string, got {}", type_name(&value)))
@@ -706,6 +721,7 @@ impl Config {
             "shell.path",
             "permissions.mode",
             "ui.thinking",
+            "skills.inject_matched",
             "markdown.codeblock_border",
         ] {
             if let Some(value) = table_value(table, key) {
@@ -755,6 +771,7 @@ impl Config {
             ("shell.path", TypedValue::Text(v)) => self.shell_path = Some(v),
             ("permissions.mode", TypedValue::Text(v)) => self.permissions_mode = Some(v),
             ("ui.thinking", TypedValue::Text(v)) => self.thinking_visibility = Some(v),
+            ("skills.inject_matched", TypedValue::Bool(v)) => self.skills_inject_matched = v,
             ("thinking", TypedValue::Text(v)) => self.thinking = Some(v),
             ("markdown.codeblock_border", TypedValue::Text(v)) => {
                 self.markdown_codeblock_border = v
@@ -922,6 +939,12 @@ impl Config {
         self.thinking_visibility.as_deref()
     }
 
+    /// Whether matched skill text injects into the prompt (gh #43).
+    /// Default off: the catalog advertises either way.
+    pub fn skills_inject_matched(&self) -> bool {
+        self.skills_inject_matched
+    }
+
     /// Permission proposals read from a trusted project file (ADR-0006).
     pub fn permissions_proposals(&self) -> &BTreeMap<String, String> {
         &self.permissions_proposals
@@ -1039,6 +1062,10 @@ impl Config {
                 self.thinking_visibility
                     .clone()
                     .unwrap_or_else(|| "snippet".to_string()),
+            ),
+            (
+                "skills.inject_matched",
+                self.skills_inject_matched.to_string(),
             ),
             (
                 "permissions.proposals",

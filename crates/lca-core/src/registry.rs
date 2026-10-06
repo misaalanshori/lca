@@ -14,7 +14,9 @@ use lca_protocol::{
 
 /// Built-in tool names are reserved (FR-TOOL-1's set; an extension
 /// registering one is the later registration and loses, FR-EXT-11).
-pub const BUILTIN_TOOLS: &[&str] = &["read", "write", "edit", "list", "glob", "grep", "shell"];
+pub const BUILTIN_TOOLS: &[&str] = &[
+    "read", "write", "edit", "list", "glob", "grep", "shell", "skill",
+];
 
 /// Pi-name aliases dispatch as built-ins (gh #119), so they are
 /// reserved exactly like the canonical names: an extension registering

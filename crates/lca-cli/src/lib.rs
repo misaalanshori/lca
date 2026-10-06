@@ -94,6 +94,7 @@ pub mod ext;
 mod headless;
 mod models;
 mod persist;
+pub(crate) mod prompt;
 
 pub use persist::persist_setting;
 mod registry;
@@ -425,14 +426,14 @@ pub(crate) fn openai_capabilities(
 
 /// The host-side skill sources (FR-CTX-2, ADR-0030): the workspace's
 /// `.lca/skills`, the user skills dir, and the extension install tree.
-pub(crate) fn skills_roots(cwd: &Path) -> lca_core::SkillsRoots {
+pub(crate) fn skills_roots(cwd: &Path) -> lca_tools::skills::SkillsRoots {
     // A package disabled for this project contributes no skills (FR-PROV-9):
     // the merge reads the install tree directly, so it must apply the same
     // enablement filter the registry does.
     let disabled = lca_permissions::GrantStore::open(&data_dir().join("grants.json"))
         .map(|store| store.disabled_extensions(cwd))
         .unwrap_or_default();
-    lca_core::SkillsRoots {
+    lca_tools::skills::SkillsRoots {
         project: cwd.to_path_buf(),
         user: data_dir().join("skills"),
         extensions: data_dir().join("extensions"),
