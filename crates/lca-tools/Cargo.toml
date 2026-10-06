@@ -34,6 +34,18 @@ regex = "1"
 # verification): attachment content addresses are SHA-256, matching the
 # proposal hash (`lca-permissions`) and keeping one hash vocabulary.
 sha2.workspace = true
+# Dependency justification (SRDD dependency rule + review): `ignore` is
+# ripgrep's parallel gitignore-respecting walker, which the `glob` and
+# `grep` tools enumerate through (#118, #119). Hand-rolling gitignore
+# semantics (negations, parent dirs, global excludes) is a correctness
+# trap; footprint is the same automata crates already in the graph
+# (regex-automata, memchr) plus walkdir/crossbeam-utils.
+ignore.workspace = true
+# Dependency justification (SRDD dependency rule + review): `globset`
+# matches the `glob` tool's patterns with `*`-stays-in-segment
+# semantics (#119, pi's `find` contract). The hand-rolled matcher it
+# replaces knew no character classes; footprint is aho-corasick/bstr.
+globset.workspace = true
 # Dependency justification (SRDD dependency rule + review): `unicode-
 # normalization` supplies NFKC for the `edit` tool's fuzzy fallback
 # (#114, pi's `normalizeForFuzzyMatch`). The normalization tables are

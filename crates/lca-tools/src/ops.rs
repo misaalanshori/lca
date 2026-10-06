@@ -180,39 +180,58 @@ impl ToolOps for NativeOps {
     }
 
     fn walk(&self, root: &Path) -> std::io::Result<Vec<Entry>> {
+        // ripgrep's walker (gh #118, #119): `.gitignore`, global and
+        // parent excludes, and negations are honored; hidden files are
+        // still walked (pi passes `--hidden`), symlinks never followed.
+        // The build-output floor stays: `.git`, `target`, and
+        // `node_modules` never enumerate even when no ignore file names
+        // them. `require_git(false)` keeps ignores working outside a
+        // repo, pi's `fd --no-require-git` posture.
+        if !root.is_dir() {
+            return Err(std::io::Error::other(format!(
+                "not a directory: {}",
+                root.display()
+            )));
+        }
         let mut out = Vec::new();
-        let mut stack: Vec<(PathBuf, String)> = vec![(root.to_path_buf(), String::new())];
-        while let Some((dir, prefix)) = stack.pop() {
-            for entry in std::fs::read_dir(&dir)? {
-                let entry = entry?;
-                let file_type = entry.file_type()?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if file_type.is_symlink() {
-                    continue; // never follow a link out of the workspace
-                }
-                let rel = if prefix.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{prefix}/{name}")
-                };
-                if file_type.is_dir() {
-                    if SKIP_DIRS.contains(&name.as_str()) {
-                        continue;
-                    }
-                    stack.push((entry.path(), rel.clone()));
-                    out.push(Entry {
-                        rel_path: rel,
-                        is_dir: true,
-                        len: 0,
-                    });
-                } else {
-                    out.push(Entry {
-                        rel_path: rel,
-                        is_dir: false,
-                        len: entry.metadata().map(|m| m.len()).unwrap_or(0),
-                    });
-                }
+        let walker = ignore::WalkBuilder::new(root)
+            .hidden(false)
+            .require_git(false)
+            .filter_entry(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_none_or(|name| !SKIP_DIRS.contains(&name))
+            })
+            .build();
+        for entry in walker {
+            let entry = entry.map_err(std::io::Error::other)?;
+            let path = entry.path();
+            if path == root {
+                continue;
             }
+            let Some(rel) = path
+                .strip_prefix(root)
+                .ok()
+                .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            else {
+                continue;
+            };
+            let file_type = entry
+                .file_type()
+                .ok_or_else(|| std::io::Error::other(format!("cannot stat {}", path.display())))?;
+            if file_type.is_symlink() {
+                continue; // never follow a link out of the workspace
+            }
+            out.push(Entry {
+                rel_path: rel,
+                is_dir: file_type.is_dir(),
+                len: if file_type.is_dir() {
+                    0
+                } else {
+                    entry.metadata().map(|meta| meta.len()).unwrap_or(0)
+                },
+            });
         }
         Ok(out)
     }

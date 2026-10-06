@@ -695,6 +695,8 @@ The dependency list stays short on purpose. Each entry below states what it does
 | cargo-nextest | Test runner | `cargo test` |
 | proptest | Property-based testing for session log, compaction, and transform-chain invariants | Hand-written table-driven test cases |
 | unicode-normalization | NFKC for the `edit` tool's fuzzy fallback (#114) | Generated Unicode tables, not hand-writable; no smaller source exists |
+| ignore | ripgrep's gitignore-respecting walker for `glob` and `grep` (#118, #119) | Hand-rolled gitignore semantics (negations, parent dirs, global excludes) is a correctness trap |
+| globset | `*`-stays-in-segment glob matching for the `glob` tool (#119) | The hand-rolled matcher knew no character classes; aho-corasick/bstr footprint |
 | criterion | Benchmark harness for the NFR-1 through NFR-7 and NFR-29 performance gates, and the cache-hit-ratio benchmark | Custom timing harness over `std::time` |
 | cargo-deny | License and advisory checks | `cargo audit` |
 

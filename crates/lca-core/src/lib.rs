@@ -23,7 +23,9 @@ pub mod ext_provider;
 pub use assemble::{Assembled, Attachment, StagedAttachment, assemble, assemble_with, stage_image};
 pub use compact::compact_now;
 pub use ext_provider::ExtensionProvider;
-pub use registry::{BUILTIN_COMMANDS, BUILTIN_TOOLS, CollisionReport, ExtensionRegistry};
+pub use registry::{
+    BUILTIN_COMMANDS, BUILTIN_TOOL_ALIASES, BUILTIN_TOOLS, CollisionReport, ExtensionRegistry,
+};
 // The turn types live in the protocol layer so the interface and the
 // embedding SDK can render them without depending on this crate.
 pub use lca_protocol::{StopReason, TurnEvent, TurnOutcome, TurnStatus};

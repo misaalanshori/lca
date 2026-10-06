@@ -325,29 +325,33 @@ impl ToolExecutor {
             ),
             spec(
                 "list",
-                "List a directory. Directories are suffixed with '/'.",
+                "List a directory (also callable as `ls`). Entries sort alphabetically with '/' suffixing directories, dotfiles included.",
                 serde_json::json!({
                     "path": {"type": "string", "description": "Directory relative to the workspace (default: .)"},
+                    "limit": {"type": "integer", "description": "Maximum entries to return (default 500)"},
                 }),
                 &[],
             ),
             spec(
                 "glob",
-                "Find files by glob pattern. Supports *, ?, and ** (any depth). Results are workspace-relative paths.",
+                "Find files by glob pattern (also callable as `find`). Supports *, ?, ** (any depth), character classes. Honors .gitignore. Results are workspace-relative paths.",
                 serde_json::json!({
                     "pattern": {"type": "string", "description": "Glob pattern such as src/**/*.rs"},
+                    "path": {"type": "string", "description": "Directory to search in (default: workspace root)"},
+                    "limit": {"type": "integer", "description": "Maximum results to return (default 1000)"},
                 }),
                 &["pattern"],
             ),
             spec(
                 "grep",
-                "Search file contents with a regular expression. Returns path:line:match lines. Skips .git, target, and node_modules; .gitignore is not honored.",
+                "Search file contents with a regular expression. Returns path:line:match lines, with path-line- context lines when context is set. Honors .gitignore; skips .git, target, and node_modules.",
                 serde_json::json!({
                     "pattern": {"type": "string", "description": "Regular expression, or literal text when literal is true"},
                     "path": {"type": "string", "description": "Directory or file to search (default: workspace root)"},
                     "glob": {"type": "string", "description": "Filter files by glob, e.g. '*.rs'"},
                     "ignoreCase": {"type": "boolean"},
                     "literal": {"type": "boolean", "description": "Treat the pattern as a literal string"},
+                    "context": {"type": "integer", "description": "Lines to show before and after each match (default 0)"},
                     "limit": {"type": "integer", "description": "Maximum matches to return (default 100)"},
                 }),
                 &["pattern"],
@@ -569,6 +573,7 @@ impl ToolExecutor {
 
     async fn list(&mut self, call: &ToolCall, args: &serde_json::Value) -> ToolResult {
         let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(500) as usize;
         let target = resolve_target(&self.cwd, Path::new(path));
         let entries = match self.ops.list(&target) {
             Ok(entries) => entries,
@@ -579,18 +584,27 @@ impl ToolExecutor {
                 );
             }
         };
+        // pi's `ls` order (gh #120): alphabetical, case-insensitive,
+        // files and directories interleaved, dotfiles in place.
         let mut entries = entries;
-        entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.rel_path.cmp(&b.rel_path)));
+        entries.sort_by_key(|a| a.rel_path.to_lowercase());
         let mut out = String::new();
-        for entry in &entries {
+        for entry in entries.iter().take(limit) {
             if entry.is_dir {
                 out.push_str(&format!("{}/\n", entry.rel_path));
             } else {
                 out.push_str(&format!("{}\n", entry.rel_path));
             }
         }
+        let capped = entries.len() > limit;
         if out.is_empty() {
             out.push_str("(empty directory)\n");
+        }
+        if capped {
+            out.push_str(&format!(
+                "\n[{limit} entries limit reached. Use limit={} for more]\n",
+                limit * 2
+            ));
         }
         let (content, truncated) = truncate_head(&out, self.result_limit_bytes);
         self.spilled(
@@ -607,24 +621,55 @@ impl ToolExecutor {
         let Some(pattern) = args.get("pattern").and_then(|v| v.as_str()) else {
             return ToolResult::error(call.call_id.clone(), "pattern is required");
         };
-        let entries = match self.ops.walk(&self.workspace) {
+        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(1000) as usize;
+        let path_arg = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let root = resolve_target(&self.cwd, Path::new(path_arg));
+        let matcher = match glob_matcher(pattern) {
+            Ok(matcher) => matcher,
+            Err(err) => {
+                return ToolResult::error(call.call_id.clone(), format!("invalid pattern: {err}"));
+            }
+        };
+        let entries = match self.ops.walk(&root) {
             Ok(entries) => entries,
             Err(err) => {
                 return ToolResult::error(call.call_id.clone(), format!("walk failed: {err}"));
             }
         };
+        let prefix = root.strip_prefix(&self.workspace).unwrap_or(&root);
         let mut matches: Vec<String> = entries
             .iter()
             .filter(|e| !e.is_dir)
-            .map(|e| e.rel_path.clone())
-            .filter(|path| glob_match(pattern, path))
+            .filter(|e| matcher.is_match(&e.rel_path))
+            .map(|e| {
+                if prefix.as_os_str().is_empty() {
+                    e.rel_path.clone()
+                } else {
+                    format!(
+                        "{}/{}",
+                        prefix.to_string_lossy().replace('\\', "/"),
+                        e.rel_path
+                    )
+                }
+            })
             .collect();
         matches.sort();
         if matches.is_empty() {
             return ToolResult::ok(call.call_id.clone(), format!("No matches for {pattern}"));
         }
-        let mut out = matches.join("\n");
+        let capped = matches.len() > limit;
+        let mut out = matches
+            .into_iter()
+            .take(limit)
+            .collect::<Vec<_>>()
+            .join("\n");
         out.push('\n');
+        if capped {
+            out.push_str(&format!(
+                "\n[{limit} results limit reached. Use limit={} for more, or refine pattern]\n",
+                limit * 2
+            ));
+        }
         let (content, truncated) = truncate_head(&out, self.result_limit_bytes);
         self.spilled(
             &call.call_id,
@@ -649,10 +694,16 @@ impl ToolExecutor {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
-        let glob_filter = args
-            .get("glob")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
+        let glob_filter = match args.get("glob").and_then(|v| v.as_str()) {
+            Some(filter) => match glob_matcher(filter) {
+                Ok(matcher) => Some(matcher),
+                Err(err) => {
+                    return ToolResult::error(call.call_id.clone(), format!("invalid glob: {err}"));
+                }
+            },
+            None => None,
+        };
+        let context = args.get("context").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let path_arg = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
         let target = resolve_target(&self.cwd, Path::new(path_arg));
         // A file path greps that one file; walking it as a directory failed
@@ -705,10 +756,11 @@ impl ToolExecutor {
 
         let prefix = root.strip_prefix(&self.workspace).unwrap_or(&root);
         let mut matches: Vec<String> = Vec::new();
+        let mut match_count = 0usize;
         let mut truncated = false;
         'files: for entry in entries.iter().filter(|e| !e.is_dir) {
             if let Some(filter) = &glob_filter
-                && !glob_match(filter, &entry.rel_path)
+                && !filter.is_match(&entry.rel_path)
             {
                 continue;
             }
@@ -721,28 +773,42 @@ impl ToolExecutor {
                 continue; // binary
             }
             let text = String::from_utf8_lossy(&bytes);
-            for (index, line) in text.lines().enumerate() {
+            let display_path = if prefix.as_os_str().is_empty() {
+                entry.rel_path.clone()
+            } else {
+                format!(
+                    "{}/{}",
+                    prefix.to_string_lossy().replace('\\', "/"),
+                    entry.rel_path
+                )
+            };
+            let lines: Vec<&str> = text.lines().collect();
+            let mut hits: Vec<usize> = Vec::new();
+            for (index, line) in lines.iter().enumerate() {
                 if !regex.is_match(line) {
                     continue;
                 }
-                if matches.len() >= limit {
+                if match_count >= limit {
                     truncated = true;
                     break 'files;
                 }
-                let display_path = if prefix.as_os_str().is_empty() {
-                    entry.rel_path.clone()
-                } else {
-                    format!(
-                        "{}/{}",
-                        prefix.to_string_lossy().replace('\\', "/"),
-                        entry.rel_path
-                    )
-                };
-                matches.push(format!(
-                    "{display_path}:{}:{}",
-                    index + 1,
-                    truncate_line(line, 500)
-                ));
+                match_count += 1;
+                hits.push(index);
+            }
+            // pi's context-block shape: `path:line:` marks the hit,
+            // `path-line-` marks context. Adjacent hits repeat their
+            // shared context lines, exactly like pi's per-match blocks.
+            for hit in &hits {
+                let start = hit.saturating_sub(context);
+                let end = (*hit + context).min(lines.len().saturating_sub(1));
+                for (lineno, line) in lines.iter().enumerate().take(end + 1).skip(start) {
+                    let rendered = truncate_line(line, 500);
+                    if lineno == *hit {
+                        matches.push(format!("{display_path}:{}: {rendered}", lineno + 1));
+                    } else {
+                        matches.push(format!("{display_path}-{}- {rendered}", lineno + 1));
+                    }
+                }
             }
         }
         if matches.is_empty() {
@@ -857,7 +923,7 @@ impl ToolExecutor {
 /// guarantee. `None` when the backend owns no interpreter (the web target's
 /// host-delegated backend).
 fn shell_description(shell: Option<&Shell>) -> String {
-    let base = "Run a command in the workspace directory and return its output.                 Output streams as it runs; the tail is kept when too large.                 Optionally set a timeout in seconds.";
+    let base = "Run a command in the workspace directory and return its output (also callable as `bash`).                 Output streams as it runs; the tail is kept when too large.                 Optionally set a timeout in seconds.";
     match shell {
         Some(shell) => format!("{base} {}", shell.describe()),
         None => base.to_string(),
@@ -995,54 +1061,36 @@ fn format_bytes(bytes: usize) -> String {
     }
 }
 
-/// Glob matching over `/`-separated paths: `*` and `?` stay inside one
-/// segment, `**` spans any number of segments (including none).
-pub fn glob_match(pattern: &str, path: &str) -> bool {
-    let p: Vec<&str> = pattern.split('/').collect();
-    let v: Vec<&str> = path.split('/').collect();
-    fn walk(p: &[&str], v: &[&str]) -> bool {
-        match p.first() {
-            None => v.is_empty(),
-            Some(&"**") => (0..=v.len()).any(|skip| walk(&p[1..], &v[skip..])),
-            Some(segment) => match v.first() {
-                None => false,
-                Some(&head) => {
-                    segment_match(segment.as_bytes(), head.as_bytes()) && walk(&p[1..], &v[1..])
-                }
-            },
-        }
+/// Pi-name aliases for built-in tools (gh #119 decision): the model may
+/// call these names; everything downstream (permission, dispatch, records)
+/// sees the canonical name. One entry per tool in the schema (no
+/// tool-count bloat); the descriptions name the aliases. Records always
+/// store the canonical name, so logs, the reserved-name registry
+/// (FR-EXT-11), and headless consumers never break.
+pub fn canonical_tool_name(name: &str) -> &str {
+    match name {
+        "find" => "glob",
+        "ls" => "list",
+        "bash" => "shell",
+        _ => name,
     }
-    walk(&p, &v)
 }
 
-fn segment_match(pattern: &[u8], value: &[u8]) -> bool {
-    let (mut pi, mut vi) = (0usize, 0usize);
-    let (mut star, mut backtrack) = (None, 0usize);
-    while vi < value.len() {
-        if pi < pattern.len() && (pattern[pi] == b'?' || pattern[pi] == value[vi]) {
-            pi += 1;
-            vi += 1;
-        } else if pi < pattern.len() && pattern[pi] == b'*' {
-            star = Some(pi);
-            backtrack = vi;
-            pi += 1;
-        } else if let Some(s) = star {
-            pi = s + 1;
-            backtrack += 1;
-            vi = backtrack;
-        } else {
-            return false;
-        }
-    }
-    while pi < pattern.len() && pattern[pi] == b'*' {
-        pi += 1;
-    }
-    pi == pattern.len()
+/// A compiled glob with `*`-stays-in-segment semantics (gh #119,
+/// pi's `find` contract): `*` and `?` never cross `/`, `**` spans any
+/// number of segments including none. Character classes and alternates
+/// ride along; the hand-rolled matcher they replace knew neither.
+pub fn glob_matcher(pattern: &str) -> Result<globset::GlobMatcher, String> {
+    globset::GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
+        .map(|glob| glob.compile_matcher())
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{glob_match, is_inside, resolve_target, truncate_head, truncate_tail};
+    use super::{glob_matcher, is_inside, resolve_target, truncate_head, truncate_tail};
     use std::path::Path;
 
     #[test]
@@ -1064,12 +1112,15 @@ mod tests {
 
     #[test]
     fn glob_matches_segments_and_double_star() {
-        assert!(glob_match("src/**/*.rs", "src/a/b/main.rs"));
-        assert!(glob_match("**/*.rs", "main.rs"));
-        assert!(glob_match("*.rs", "main.rs"));
-        assert!(!glob_match("*.rs", "src/main.rs"));
-        assert!(glob_match("a?c", "abc"));
-        assert!(!glob_match("a?c", "ac"));
+        let yes = |pattern: &str, path: &str| {
+            glob_matcher(pattern).expect("valid pattern").is_match(path)
+        };
+        assert!(yes("src/**/*.rs", "src/a/b/main.rs"));
+        assert!(yes("**/*.rs", "main.rs"));
+        assert!(yes("*.rs", "main.rs"));
+        assert!(!yes("*.rs", "src/main.rs"));
+        assert!(yes("a?c", "abc"));
+        assert!(!yes("a?c", "ac"));
     }
 
     #[test]

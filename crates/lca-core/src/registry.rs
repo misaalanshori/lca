@@ -16,6 +16,11 @@ use lca_protocol::{
 /// registering one is the later registration and loses, FR-EXT-11).
 pub const BUILTIN_TOOLS: &[&str] = &["read", "write", "edit", "list", "glob", "grep", "shell"];
 
+/// Pi-name aliases dispatch as built-ins (gh #119), so they are
+/// reserved exactly like the canonical names: an extension registering
+/// `find` loses to the host's `glob` alias the same way.
+pub const BUILTIN_TOOL_ALIASES: &[&str] = &["find", "ls", "bash"];
+
 /// Built-in slash command names, reserved the same way (SRDD's list).
 pub const BUILTIN_COMMANDS: &[&str] = &["login", "logout", "usage", "model", "compact", "stats"];
 
@@ -245,7 +250,9 @@ impl ExtensionRegistry {
             match handle.tool_specs() {
                 Ok(specs) => {
                     for spec in specs {
-                        let winner = if BUILTIN_TOOLS.contains(&spec.name.as_str()) {
+                        let winner = if BUILTIN_TOOLS.contains(&spec.name.as_str())
+                            || BUILTIN_TOOL_ALIASES.contains(&spec.name.as_str())
+                        {
                             Some("built-in".to_string())
                         } else {
                             self.tools

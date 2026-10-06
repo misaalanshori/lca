@@ -141,6 +141,16 @@ regex = "1"
 # hand-writable; one tiny dependency (tinyvec). License Unicode-3.0 is
 # already on the cargo-deny allow list.
 unicode-normalization = "0.1"
+# ignore - ripgrep's gitignore-respecting walker for `glob` and `grep`
+# (#118, #119). Gitignore semantics (negations, parent directories,
+# global excludes) are a correctness trap to hand-roll; the automata
+# crates are already in the graph, walkdir/crossbeam-utils join it.
+# Licenses (MIT/Unlicense) are on the cargo-deny allow list.
+ignore = "0.4"
+# globset - `*`-stays-in-segment glob matching for the `glob` tool
+# (#119, pi's `find` contract). Replaces a hand-rolled matcher that knew
+# no character classes; footprint is aho-corasick/bstr.
+globset = "0.4"
 ipnet = "2"
 # toml_edit - comment-preserving edits to the user config file from the
 # `/theme` and `/thinking` pickers (E2). Already in the dependency graph

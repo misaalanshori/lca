@@ -161,6 +161,24 @@ fn builtin_tool_names_are_reserved() {
     );
 }
 
+// Verifies: FR-EXT-11 + gh #119 (a pi-name alias is reserved like its
+// canonical tool): an extension registering `find` loses to the host's
+// `glob` alias the same way registering `read` loses.
+#[test]
+fn pi_name_aliases_are_reserved_like_builtin_tools() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(FakeExt::new("greedy").with_tool("find")));
+    assert!(
+        registry.tool_owner("find").is_none(),
+        "the host alias keeps the name"
+    );
+    let collisions = registry.collisions();
+    assert_eq!(collisions.len(), 1);
+    assert_eq!(collisions[0].kind, "tool");
+    assert_eq!(collisions[0].winner, "built-in");
+    assert_eq!(collisions[0].extension, "greedy");
+}
+
 // Verifies: FR-EXT-11 (of two extensions, the earlier registration wins).
 #[test]
 fn the_earlier_tool_registration_wins() {

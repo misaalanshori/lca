@@ -971,7 +971,12 @@ impl Agent<'_> {
                 retryable,
             });
         }
-        let (calls, protocol_errors) = acc.finish(natural_end);
+        let (mut calls, protocol_errors) = acc.finish(natural_end);
+        // Pi-name aliases dispatch as their canonical tool (gh #119):
+        // one seam, before records, permission, and dispatch see the name.
+        for call in &mut calls {
+            call.name = lca_tools::canonical_tool_name(&call.name).to_string();
+        }
         Ok(CallResponse {
             text,
             reasoning: if reasoning.is_empty() {
