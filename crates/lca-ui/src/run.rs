@@ -213,8 +213,24 @@ fn handle_input(
         chat.apply_detected_scheme(scheme);
         return InputResult::Continue;
     }
-    // Mouse (selection, wheel) is the renderer's.
+    // Mouse (selection, wheel) is the renderer's - except wheel motion
+    // over the autocomplete popup, which scrolls the offers (gh #175,
+    // pi's select-list wheel path).
     if data.starts_with("\x1b[<") {
+        if let Some(mouse) = lca_tui::engine::alt_screen::parse_sgr_mouse(data)
+            && mouse.bits & 64 != 0
+        {
+            let (width, height) = chat.world.size;
+            let row = mouse.y.saturating_sub(1);
+            if let Some((top, len)) = chat.popup_rect(width, height)
+                && row >= top
+                && row < top.saturating_add(len)
+            {
+                let delta = if mouse.bits & 3 == 0 { -1 } else { 1 };
+                chat.editor.move_suggestion(delta);
+                return InputResult::Continue;
+            }
+        }
         screen.handle_mouse(data);
         // gh #11: a completed single click hit-tests the transcript
         // before selection claims it. A toggled run drops the row's link
@@ -227,6 +243,7 @@ fn handle_input(
                     let _ = screen.take_clicked_link();
                 }
                 ClickOutcome::JumpBottom => screen.set_scroll(0),
+                ClickOutcome::SuggestionAccepted => {}
                 ClickOutcome::Ignored => {}
             }
         }

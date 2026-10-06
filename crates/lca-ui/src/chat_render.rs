@@ -132,8 +132,29 @@ impl Chat {
             )));
         }
 
-        // The autocomplete popup, when open.
-        dock.extend(self.editor.render_popup(width));
+        // The autocomplete popup, when open (gh #175): the window rows
+        // only, the selected row in `SelectedBg` over the full width, and
+        // a dim scroll hint when offers overflow the window.
+        if let Some((start, _)) = self.editor.popup_window() {
+            let selected = self.editor.suggestion_index();
+            for (k, row) in self.editor.render_popup(width).iter().enumerate() {
+                if start + k == selected {
+                    let cell = truncate_to_width(row, width as usize, "", false);
+                    let pad = (width as usize).saturating_sub(visible_width(&cell));
+                    let padded = format!("{cell}{}", " ".repeat(pad));
+                    dock.push((self.theme.bg(Role::SelectedBg))(&(self
+                        .theme
+                        .role(Role::Text))(
+                        &padded
+                    )));
+                } else {
+                    dock.push(row.clone());
+                }
+            }
+            if let Some(hint) = self.editor.popup_hint() {
+                dock.push((self.theme.dim)(&hint));
+            }
+        }
 
         // The editor: the prompt marker on the first row, and its two
         // columns (`>` + space) as a plain pad on every continuation row,
@@ -160,6 +181,26 @@ impl Chat {
         out
     }
 
+    /// The popup's viewport rows (gh #175): `(top, len)` covering the
+    /// suggestion rows plus the scroll hint, or `None` when the popup
+    /// is closed. Alt-screen only: the main screen never captures the
+    /// mouse, so there is nothing to hit-test.
+    pub fn popup_rect(&self, width: u16, height: u16) -> Option<(u16, u16)> {
+        if !self.screen_mode {
+            return None;
+        }
+        let rows = self.editor.render_popup(width).len();
+        if rows == 0 {
+            return None;
+        }
+        let hint = usize::from(self.editor.popup_hint().is_some());
+        let editor = self.editor.render(width.saturating_sub(2)).len();
+        let footer = self.footer_lines(width).len();
+        let block = rows + hint + editor + footer;
+        let top = (height as usize).saturating_sub(block);
+        Some((top as u16, (rows + hint) as u16))
+    }
+
     /// Handle a click at viewport cell `(col, row)` (gh #11): the
     /// viewport row maps to a transcript content row through the same
     /// window math [`Self::viewport`] slices by. A reasoning-run row
@@ -179,7 +220,19 @@ impl Chat {
         }
         let (transcript, dock) = self.sections(width);
         let window = height.saturating_sub(dock.len() as u16) as usize;
+        // gh #175: a click on a popup row applies that offer (pi's
+        // select-list click-to-confirm); the scroll hint is not an offer.
         if window == 0 || row as usize >= window {
+            if let Some((top, _)) = self.popup_rect(width, height) {
+                let rows = self.editor.render_popup(width).len();
+                let offset = row.saturating_sub(top) as usize;
+                if row >= top && offset < rows {
+                    let (start, _) = self.editor.popup_window().unwrap_or((0, 0));
+                    self.editor.select_suggestion(start + offset);
+                    self.editor.accept_suggestion();
+                    return ClickOutcome::SuggestionAccepted;
+                }
+            }
             return ClickOutcome::Ignored;
         }
         let content = transcript.len();

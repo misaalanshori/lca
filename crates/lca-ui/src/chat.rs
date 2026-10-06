@@ -64,6 +64,8 @@ fn is_turn_boundary_command(line: &str) -> bool {
 pub enum ClickOutcome {
     /// No clickable region under the cursor.
     Ignored,
+    /// A popup offer was clicked and applied.
+    SuggestionAccepted,
     /// A reasoning run toggled its visibility.
     ThinkingToggled,
     /// The jump-to-bottom indicator was hit: return to the live bottom.

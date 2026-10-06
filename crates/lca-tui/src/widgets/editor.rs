@@ -22,6 +22,11 @@ use crate::engine::text::{truncate_to_width, visible_width};
 use crate::widgets::autocomplete::{AutocompleteProvider, Suggestions};
 use crate::widgets::editor_rows;
 
+/// The most suggestion rows the popup ever shows (gh #175): pi's
+/// `autocompleteMaxVisible` default. The popup is windowed, never
+/// clipped, so the dock keeps the editor and footer on screen.
+pub const AUTOCOMPLETE_MAX_VISIBLE: usize = 5;
+
 /// What a key did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorEvent {
@@ -575,6 +580,13 @@ impl Editor {
         self.suggestion_index = 0;
     }
 
+    /// Select a suggestion by absolute index, clamped into range.
+    pub fn select_suggestion(&mut self, index: usize) {
+        if let Some(s) = &self.suggestions {
+            self.suggestion_index = index.min(s.items.len().saturating_sub(1));
+        }
+    }
+
     /// Move the suggestion selection.
     pub fn move_suggestion(&mut self, delta: i32) {
         if let Some(s) = &self.suggestions {
@@ -1006,17 +1018,55 @@ impl Editor {
         (visual, None, "")
     }
 
-    /// Render the autocomplete popup (to be placed near the editor).
+    /// The visible popup window into the suggestions (gh #175): pi's
+    /// `select-list` rolling viewport (`getVisibleRange`) around the
+    /// selection, at most [`AUTOCOMPLETE_MAX_VISIBLE`] rows, so the
+    /// dock never pushes the editor and footer offscreen. `None` when
+    /// the popup is closed or empty.
+    pub fn popup_window(&self) -> Option<(usize, usize)> {
+        let total = self.suggestions.as_ref()?.items.len();
+        if total == 0 {
+            return None;
+        }
+        let max = AUTOCOMPLETE_MAX_VISIBLE.min(total);
+        let start = self
+            .suggestion_index
+            .saturating_sub(max / 2)
+            .min(total.saturating_sub(max));
+        Some((start, (start + max).min(total)))
+    }
+
+    /// The scroll hint for a truncated popup (gh #175): `None` when
+    /// every offer fits the window.
+    pub fn popup_hint(&self) -> Option<String> {
+        let total = self.suggestions.as_ref()?.items.len();
+        let (start, end) = self.popup_window()?;
+        if total <= end - start {
+            return None;
+        }
+        Some(match (start, total - end) {
+            (0, down) => format!("  ↓ {down} more"),
+            (up, 0) => format!("  ↑ {up} more"),
+            (up, down) => format!("  ↑ {up} · ↓ {down} more"),
+        })
+    }
+
+    /// Render the autocomplete popup (to be placed near the editor):
+    /// the window rows only (see [`Self::popup_window`]); the caller
+    /// highlights the selected row and appends [`Self::popup_hint`].
     pub fn render_popup(&self, width: u16) -> Vec<String> {
         let Some(s) = &self.suggestions else {
             return Vec::new();
         };
+        let Some((start, end)) = self.popup_window() else {
+            return Vec::new();
+        };
         let width = width as usize;
-        s.items
+        s.items[start..end]
             .iter()
             .enumerate()
-            .map(|(i, item)| {
-                let marker = if i == self.suggestion_index {
+            .map(|(k, item)| {
+                let marker = if start + k == self.suggestion_index {
                     "▸ "
                 } else {
                     "  "

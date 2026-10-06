@@ -257,3 +257,155 @@ fn the_prompt_jump_measures_scrolls_against_the_transcript() {
         "target 0 centers the window on the transcript's start, in transcript rows"
     );
 }
+
+// Verifies: gh #175 - the popup is bounded: with 30 commands `/` offers
+// 30, but the dock renders at most five suggestion rows, and on an
+// 80x24 frame the editor and footer stay on screen.
+#[test]
+fn the_popup_never_pushes_the_editor_offscreen() {
+    use super::Chat;
+    use super::tests::options;
+    use std::sync::Arc;
+    let mut opts = options();
+    opts.slash_commands = (0..30).map(|i| format!("/cmd{i:02}")).collect();
+    let mut chat = Chat::new(
+        opts,
+        Arc::new(lca_tui::engine::keybindings::KeybindingsManager::new()),
+    );
+    chat.screen_mode = true;
+    chat.handle_key("/");
+    let total = chat
+        .editor
+        .suggestions()
+        .map(|s| s.items.len())
+        .unwrap_or(0);
+    assert!(total > 5, "the test needs more offers than fit: {total}");
+    let rows = chat.editor.render_popup(80);
+    assert!(
+        rows.len() <= 5,
+        "at most five suggestion rows: {}",
+        rows.len()
+    );
+    let frame = chat.viewport(80, 24, 0);
+    assert_eq!(frame.len(), 24, "the frame fills the viewport");
+    let strip = |row: &String| lca_tui::engine::text::strip_terminal_sequences(row);
+    assert!(
+        frame
+            .iter()
+            .any(|row| strip(row).trim_start().starts_with("> /")),
+        "the prompt editor is on screen"
+    );
+    assert!(
+        frame.iter().any(|row| strip(row).contains("interrupt")),
+        "the footer is on screen"
+    );
+}
+
+// Verifies: gh #175 - the rolling window centers on the selection: the
+// selected row always renders, and the window slides as it moves.
+#[test]
+fn the_popup_window_follows_the_selection() {
+    use super::Chat;
+    use super::tests::options;
+    use std::sync::Arc;
+    let mut opts = options();
+    opts.slash_commands = (0..30).map(|i| format!("/cmd{i:02}")).collect();
+    let mut chat = Chat::new(
+        opts,
+        Arc::new(lca_tui::engine::keybindings::KeybindingsManager::new()),
+    );
+    chat.handle_key("/");
+    assert_eq!(chat.editor.popup_window(), Some((0, 5)));
+    chat.editor.move_suggestion(4);
+    assert_eq!(chat.editor.popup_window(), Some((2, 7)));
+    chat.editor.move_suggestion(25);
+    let (start, end) = chat.editor.popup_window().expect("a window");
+    assert_eq!(end - start, 5, "still five rows at the bottom");
+    assert!(
+        (start..end).contains(&chat.editor.suggestion_index()),
+        "the selection stays inside"
+    );
+    let rows = chat.editor.render_popup(80);
+    assert!(
+        rows.iter().any(|row| row.starts_with("▸ ")),
+        "one row is marked"
+    );
+}
+
+// Verifies: gh #175 - the selected popup row carries a background SGR
+// (the `SelectedBg` role); unselected rows carry none.
+#[test]
+fn the_selected_popup_row_is_highlighted() {
+    use super::Chat;
+    use super::tests::options;
+    use std::sync::Arc;
+    let mut opts = options();
+    opts.slash_commands = (0..30).map(|i| format!("/cmd{i:02}")).collect();
+    // Styling on: the plain theme renders no escapes at all (FR-UI-5),
+    // so the highlight has nothing to assert under it.
+    opts.plain = false;
+    let mut chat = Chat::new(
+        opts,
+        Arc::new(lca_tui::engine::keybindings::KeybindingsManager::new()),
+    );
+    chat.screen_mode = true;
+    chat.handle_key("/");
+    chat.editor.move_suggestion(1);
+    let frame = chat.viewport(80, 24, 0);
+    let strip = |row: &String| lca_tui::engine::text::strip_terminal_sequences(row);
+    let popup: Vec<&String> = frame
+        .iter()
+        .filter(|row| {
+            let plain = strip(row);
+            plain.starts_with("▸ ") || plain.starts_with("  /cmd")
+        })
+        .collect();
+    assert!(!popup.is_empty(), "popup rows render");
+    let (selected, plain): (Vec<&&String>, Vec<&&String>) =
+        popup.iter().partition(|row| strip(row).starts_with("▸ "));
+    assert_eq!(selected.len(), 1, "exactly one row is selected");
+    assert!(
+        selected[0].contains("48;"),
+        "the selected row carries a background SGR: {:?}",
+        selected[0]
+    );
+    assert!(
+        plain.iter().all(|row| !row.contains("48;")),
+        "unselected rows carry no background"
+    );
+}
+
+// Verifies: gh #175 - clicking a popup row applies that completion.
+#[test]
+fn clicking_a_popup_row_applies_it() {
+    use super::tests::options;
+    use super::{Chat, ClickOutcome};
+    use std::sync::Arc;
+    let mut opts = options();
+    opts.slash_commands = (0..30).map(|i| format!("/cmd{i:02}")).collect();
+    let mut chat = Chat::new(
+        opts,
+        Arc::new(lca_tui::engine::keybindings::KeybindingsManager::new()),
+    );
+    chat.screen_mode = true;
+    chat.handle_key("/");
+    let (w, h) = (80u16, 24u16);
+    let frame = chat.viewport(w, h, 0);
+    let strip = |row: &String| lca_tui::engine::text::strip_terminal_sequences(row);
+    let target = chat.editor.suggestions().expect("offers").items[2]
+        .label
+        .clone();
+    let row = frame
+        .iter()
+        .position(|line| strip(line).contains(&target))
+        .expect("the third offer renders") as u16;
+    assert!(matches!(
+        chat.click_at(4, row, 0, w, h),
+        ClickOutcome::SuggestionAccepted
+    ));
+    assert!(
+        chat.editor.text().starts_with(&format!("{target} ")),
+        "the offer applied: {:?}",
+        chat.editor.text()
+    );
+}
