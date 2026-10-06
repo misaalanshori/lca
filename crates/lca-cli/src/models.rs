@@ -120,6 +120,27 @@ pub fn model_change_record(
     }
 }
 
+/// The `thinking-level-change` record one switch appends (gh #47
+/// review): the log's witness of a level switch, mirroring
+/// `model_change_record` - including its only-on-change rule, so
+/// reopening the picker or re-picking the active level writes nothing.
+/// `None` when the level did not move; a move to or from unset records
+/// the `default` sentinel (no level in the picker's set is named that).
+pub fn thinking_level_change_record(
+    previous: Option<&str>,
+    effective: Option<&str>,
+) -> Option<lca_protocol::Record> {
+    if previous == effective {
+        return None;
+    }
+    Some(lca_protocol::Record::ThinkingLevelChange {
+        v: lca_protocol::FORMAT_VERSION,
+        ts: lca_session::now_ms(),
+        id: lca_session::new_record_id(),
+        level: effective.unwrap_or("default").to_string(),
+    })
+}
+
 // Verifies: EFG-041 (the resolver rules pi's `model-resolver.ts` states,
 // mirrored) - exact id, `profile/id`, an ambiguous id that names its
 // candidates instead of guessing, alias-over-dated fuzzy matching, and a
@@ -538,5 +559,52 @@ mod tests {
             Some(1),
             "two models ping-pong"
         );
+    }
+
+    // Verifies: gh #47 review (a level switch appends a record, like a
+    // model switch): a move lands with the level, a re-pick appends
+    // nothing, and a move to the provider default records `default`.
+    #[test]
+    fn a_thinking_switch_appends_a_record_and_a_repick_does_not() {
+        let moved = thinking_level_change_record(None, Some("high"));
+        let Some(lca_protocol::Record::ThinkingLevelChange { level, .. }) = moved else {
+            panic!("a switch must produce a record");
+        };
+        assert_eq!(level, "high");
+        assert!(
+            thinking_level_change_record(Some("high"), Some("high")).is_none(),
+            "re-picking the active level is no change"
+        );
+        let Some(lca_protocol::Record::ThinkingLevelChange { level, .. }) =
+            thinking_level_change_record(Some("high"), None)
+        else {
+            panic!("a move to unset must produce a record");
+        };
+        assert_eq!(level, "default");
+    }
+
+    // Verifies: gh #47 review (the record lands in the log): the
+    // helper's record appends through the store and reads back.
+    #[test]
+    fn a_thinking_switch_record_lands_in_the_log() {
+        let root = lca_testkit::scratch_path("lca-thinking-record");
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let store = lca_session::SessionStore::new(root.clone());
+        let session = store.create_session(&project, "test").expect("create");
+        let record =
+            thinking_level_change_record(None, Some("high")).expect("a switch produces a record");
+        store.append(&session, record).expect("append");
+        let outcome = store.read(&session).expect("read");
+        assert!(!outcome.truncated);
+        assert!(
+            outcome.records.iter().any(|r| matches!(
+                r,
+                lca_protocol::Record::ThinkingLevelChange { level, .. }
+                if level == "high"
+            )),
+            "the thinking-level-change record is in the log"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

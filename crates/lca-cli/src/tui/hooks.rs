@@ -197,6 +197,11 @@ impl Ui {
                     // `models.thinking_levels` set becomes its default,
                     // and unset stays unset (the provider's choice).
                     let effective = ui.config.clamp_thinking(level, &model);
+                    let previous = ui
+                        .thinking_cell
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .clone();
                     *ui.thinking_cell.lock().unwrap_or_else(|p| p.into_inner()) = effective.clone();
                     let saved = crate::persist_setting("thinking", effective.as_deref());
                     let notice = match (level, effective.as_deref()) {
@@ -206,6 +211,18 @@ impl Ui {
                         (_, Some(effort)) => format!("thinking: {effort}"),
                         (_, None) => "thinking: provider default".to_string(),
                     };
+                    // gh #47 review: the log's witness of the switch,
+                    // like `model-change` - but only when the level
+                    // actually moved.
+                    if let Some(record) = crate::models::thinking_level_change_record(
+                        previous.as_deref(),
+                        effective.as_deref(),
+                    ) {
+                        let session = ui.session();
+                        if let Err(err) = ui.store.append(&session, record) {
+                            return format!("{notice} - not recorded: {err}");
+                        }
+                    }
                     match saved {
                         Ok(()) => notice,
                         Err(err) => format!("{notice} - not saved: {err}"),
