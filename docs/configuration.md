@@ -55,6 +55,38 @@ convention: `LCA_LOG`, then `RUST_LOG`, then `warn` by default
 | `permissions.mode` | `ask` or `yolo` | `ask` | How permission prompts are answered (ADR-0042). `yolo` answers every prompt "always, for this exact pattern": the pattern is persisted and a `permission` record is written exactly as a human answer would write it. Explicit deny rules still deny. `--yolo` sets it for one process, beating any file. While it is on, the footer carries a `YOLO` line in the error role. Reads outside the workspace never prompt in either mode. |
 | `permissions.proposals` | table | empty | Project file only. Proposals with no force; see ADR-0006. |
 
+## Model metadata overrides
+
+`~/.lca/models.toml` fixes per-model metadata without a release (gh
+#64), mirroring what `~/.lca/provider-presets.toml` does for endpoints:
+
+```toml
+[[model]]
+id = "gpt-4o"             # matches the `list-models` id
+provider = "openai-compatible"  # optional: scope to one provider
+context_window = 128000   # or "$MY_WINDOW"
+input = ["text", "image"]
+
+[model.input_limits.images.resize]
+max_width = 1568
+max_height = 1568
+max_bytes = 524288
+
+[model.prompt_cache]
+short = 300
+long = 3600
+```
+
+Precedence is user-beats-curated-beats-discovered: the file beats the
+endpoint's own answer and the curated tables, never an explicit
+`OPENAI_CONTEXT_WINDOW`. Unknown ids are ignored; a malformed file
+yields no entries (an optional file must not break sign-in); an absent
+file changes nothing. `$VAR`/`${VAR}` values read the environment. A
+leading `!command` never executes — pi loads keys from shell commands,
+and running arbitrary commands from a config file turns the permission
+model inside out (documented divergence). The lifetimes ride along for
+the cache-warming epic; nothing acts on them yet.
+
 ## Prompt files and context discovery
 
 The system prompt assembles in fixed sections — preamble, tool

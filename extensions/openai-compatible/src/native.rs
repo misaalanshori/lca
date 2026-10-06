@@ -201,14 +201,19 @@ impl ExtensionDispatch for OpenAiCompat {
         };
         let windows = load_context_windows(self.cap.as_ref());
         let image_limits = load_image_limits(self.cap.as_ref());
+        // gh #64: the user's file beats curated and discovered. Parsed
+        // once per listing; an absent file parses to nothing.
+        let overrides = crate::parse_model_overrides(&self.settings.model_overrides);
         Ok(
             profiles::picker_models(self.cap.as_ref(), &self.settings, &stored, &configured)
                 .into_iter()
                 .map(|picked| {
+                    let user = crate::override_for(&overrides, "openai-compatible", &picked.id)
+                        .and_then(|item| item.context_window);
                     let context_window = context_window_for(
                         &picked.id,
                         self.settings.context_window,
-                        picked.window,
+                        user.or(picked.window),
                         &windows,
                     );
                     let mut extras: std::collections::BTreeMap<String, String> =
@@ -217,6 +222,13 @@ impl ExtensionDispatch for OpenAiCompat {
                     // so unknown models simply carry nothing.
                     for (key, value) in image_extras(&picked.id, &image_limits) {
                         extras.insert(key, value);
+                    }
+                    if let Some(item) =
+                        crate::override_for(&overrides, "openai-compatible", &picked.id)
+                    {
+                        for (key, value) in crate::override_extras(item) {
+                            extras.insert(key, value);
+                        }
                     }
                     ModelInfo {
                         id: picked.id.clone(),

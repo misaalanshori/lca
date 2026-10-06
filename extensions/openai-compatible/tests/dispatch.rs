@@ -64,6 +64,7 @@ fn settings_for(base_url: &str, key: Option<&str>) -> openai_compatible::Setting
         context_window: 0,
         prompt_cache_key: true,
         supports_reasoning: true,
+        model_overrides: String::new(),
     }
 }
 

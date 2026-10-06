@@ -18,6 +18,9 @@ use crate::tool::ToolSpec;
 pub const IMAGE_VISION_EXTRA: &str = "image.vision";
 /// `WIDTHxHEIGHT:BYTES`, present only with a vendor-sourced profile.
 pub const IMAGE_RESIZE_EXTRA: &str = "image.resize";
+/// Cache lifetimes (`short=SEC,long=SEC`, tiers present only), carried
+/// for the warming epic (gh #64); no consumer reads it yet.
+pub const PROMPT_CACHE_EXTRA: &str = "prompt_cache";
 
 /// A per-model image profile: pi's `ModelImageResizeOptions` shape.
 /// `max_bytes` bounds the encoded payload. Vendor-sourced when present;

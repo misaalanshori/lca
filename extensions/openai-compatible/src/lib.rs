@@ -63,6 +63,11 @@ pub struct Settings {
     pub api_key: Option<String>,
     /// Default model identifier.
     pub model: String,
+    /// User model-metadata overrides (`~/.lca/models.toml`, gh #64):
+    /// raw file text, parsed per call. Empty means no overrides. The
+    /// host reads the file; the extension never touches the user config
+    /// dir, so both delivery modes share the parse.
+    pub model_overrides: String,
     /// The model's context window when the endpoint publishes none; the
     /// FR-SESS-4 threshold needs it, `0` means unknown (never compacts).
     pub context_window: u32,
@@ -104,13 +109,19 @@ impl Default for Settings {
                 std::env::var("OPENAI_SUPPORTS_REASONING").as_deref(),
                 Ok("0") | Ok("false") | Ok("off")
             ),
+            model_overrides: String::new(),
         }
     }
 }
 
 /// Provider profiles: per-profile credentials, routing, and the labels
 /// the picker rows show (gh #31).
+pub mod models_override;
 pub mod profiles;
+pub use models_override::{
+    ModelOverride, PromptCache, apply_model_overrides, override_extras, override_for,
+    parse_model_overrides,
+};
 
 /// OpenAI's `prompt_cache_key` is capped at 64 characters (V1, ADR-0031).
 fn clamp_cache_key(key: &str) -> String {

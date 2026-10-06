@@ -29,7 +29,10 @@ use exports::lca::ext::provider_models::{Guest as ModelsGuest, ModelInfo as Wasm
 use lca::ext::types::{ExtraPair, Usage as WasmUsage};
 use lca::host::{credentials, net, resources};
 
-use crate::{Settings, login_options, login_submit, profiles, run_login, run_logout};
+use crate::{
+    Settings, login_options, login_submit, override_extras, override_for, parse_model_overrides,
+    profiles, run_login, run_logout,
+};
 
 fn map_resources(err: resources::Error) -> lca_protocol::CapabilityError {
     use lca_protocol::CapabilityError as E;
@@ -320,20 +323,43 @@ impl ModelsGuest for OpenAiCompatWasm {
         // come from `profiles`: one resolver, no drift (NFR-25).
         let windows = load_context_windows(&GUEST_CAP);
         let image_limits = load_image_limits(&GUEST_CAP);
+        // gh #64: the guest honors a `models.toml` pair the same way
+        // native honors its settings field. The host sends none today
+        // (no user-file channel into the sandbox; documented
+        // divergence), so this parses empty - the wiring stays for the
+        // day it does.
+        let overrides = pairs
+            .iter()
+            .find(|pair| pair.key == "models.toml")
+            .map(|pair| parse_model_overrides(&pair.value))
+            .unwrap_or_default();
         profiles::picker_models(&GUEST_CAP, &settings, &stored, &configured)
             .into_iter()
             .map(|picked| {
+                let user = override_for(&overrides, "openai-compatible", &picked.id)
+                    .and_then(|item| item.context_window);
                 let context_window = context_window_for(
                     &picked.id,
                     settings.context_window,
-                    picked.window,
+                    user.or(picked.window),
                     &windows,
                 );
                 // #39: image behavior rides the non-structural extras,
-                // so unknown models simply carry nothing.
-                let extras = profiles::row_extras(&picked)
+                // so unknown models simply carry nothing. Override keys
+                // replace same-named entries (a Vec keeps duplicates,
+                // unlike the native map).
+                let mut pairs: Vec<(String, String)> = profiles::row_extras(&picked)
                     .into_iter()
                     .chain(image_extras(&picked.id, &image_limits))
+                    .collect();
+                if let Some(item) = override_for(&overrides, "openai-compatible", &picked.id) {
+                    for (key, value) in override_extras(item) {
+                        pairs.retain(|pair| pair.0 != key);
+                        pairs.push((key, value));
+                    }
+                }
+                let extras = pairs
+                    .into_iter()
                     .map(|(key, value)| ExtraPair { key, value })
                     .collect();
                 WasmModel {

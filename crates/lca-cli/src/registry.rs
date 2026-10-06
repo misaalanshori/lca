@@ -35,9 +35,19 @@ pub(crate) fn assemble(
     for handle in lca_ext_native::default_native_extensions(stats) {
         registry.register(handle);
     }
+    // gh #64: the user's model-metadata overrides ride the provider's
+    // settings into native mode (an absent file parses to nothing).
+    // The WASM guest has no user-file channel, so it honors a
+    // `models.toml` pair the host does not send yet (documented
+    // divergence; the conformance suite guards identical answers).
     #[cfg(feature = "bundled-openai-compat")]
-    registry.register(Arc::new(openai_compatible::OpenAiCompat::new(
+    registry.register(Arc::new(openai_compatible::OpenAiCompat::with_settings(
         crate::openai_capabilities(cwd, shared_prompt, grants.clone()),
+        openai_compatible::Settings {
+            model_overrides: std::fs::read_to_string(crate::data_dir().join("models.toml"))
+                .unwrap_or_default(),
+            ..Default::default()
+        },
     )));
     #[cfg(not(feature = "bundled-openai-compat"))]
     let _ = shared_prompt;
