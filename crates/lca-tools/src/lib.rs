@@ -11,6 +11,7 @@
 mod bridge;
 mod capabilities;
 mod diff;
+mod edit;
 mod image;
 mod open;
 mod ops;
@@ -305,7 +306,7 @@ impl ToolExecutor {
             ),
             spec(
                 "edit",
-                "Make precise file edits with exact text replacement. Every edits[].oldText must be unique in the original file and must not overlap another edit. Each edit matches the original file, not the result of earlier edits. Files that are not valid UTF-8 are refused, never rewritten.",
+                "Make precise file edits with exact text replacement. Every edits[].oldText must be unique in the original file and must not overlap another edit. Each edit matches the original file, not the result of earlier edits. When exact text fails, a fuzzy fallback matches after Unicode normalization (quotes, dashes, spacing, compatibility forms); several fuzzy hits are an error, not a guess. CRLF files match LF text and keep CRLF; a UTF-8 BOM is preserved. Files that are not valid UTF-8 are refused, never rewritten.",
                 serde_json::json!({
                     "path": {"type": "string"},
                     "edits": {
@@ -559,139 +560,6 @@ impl ToolExecutor {
                     call.call_id.clone(),
                     format!("Wrote {} to {path}.", format_bytes(content.len())),
                 )
-            }
-            Err(err) => {
-                ToolResult::error(call.call_id.clone(), format!("cannot write {path}: {err}"))
-            }
-        }
-    }
-
-    async fn edit(&mut self, call: &ToolCall, args: &serde_json::Value) -> ToolResult {
-        let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
-            return ToolResult::error(call.call_id.clone(), "path is required");
-        };
-        // EFG-014: pi's legacy input - a single top-level
-        // `{oldText,newText}` applies like a one-element `edits` array
-        // (models trained on pi emit it), normalized here at parse time.
-        // An `edits` array that has entries wins; the validation below
-        // and every edit/replace rule are untouched.
-        let edits: Vec<serde_json::Value> = match args.get("edits").and_then(|v| v.as_array()) {
-            Some(array) if !array.is_empty() => array.clone(),
-            _ => match (
-                args.get("oldText").and_then(|v| v.as_str()),
-                args.get("newText").and_then(|v| v.as_str()),
-            ) {
-                (Some(old), Some(new)) => {
-                    vec![serde_json::json!({ "oldText": old, "newText": new })]
-                }
-                _ => {
-                    return ToolResult::error(
-                        call.call_id.clone(),
-                        "edits must contain at least one replacement",
-                    );
-                }
-            },
-        };
-        let target = resolve_target(&self.cwd, Path::new(path));
-        let original = match self.ops.read(&target) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                return ToolResult::error(
-                    call.call_id.clone(),
-                    format!("Could not edit file: {path}. {err}."),
-                );
-            }
-        };
-        // FR-TOOL-2: reject when the file changed since this session last
-        // read it (or was never read at all).
-        if !self.tracker.fresh_read(&target, &original) {
-            return ToolResult::error(
-                call.call_id.clone(),
-                format!(
-                    "The file {path} changed since it was last read (or was never read this session). \
-                     Read it again before editing."
-                ),
-            );
-        }
-        // #116: strict decode at the entry. Lossy decoding here would
-        // write U+FFFD over bytes outside the edited region — silent
-        // corruption of Latin-1/Shift-JIS files. Refuse instead; the
-        // file's bytes stay exactly as they were.
-        let original = match String::from_utf8(original) {
-            Ok(text) => text,
-            Err(_) => {
-                return ToolResult::error(
-                    call.call_id.clone(),
-                    format!(
-                        "cannot edit {path}: the file is not valid UTF-8; editing it would corrupt the undecodable bytes, so the file was left unchanged"
-                    ),
-                );
-            }
-        };
-
-        // Match every edit against the ORIGINAL, require uniqueness, reject
-        // overlap: the contract stated in the tool description.
-        let mut spans: Vec<(usize, usize, String)> = Vec::new();
-        for (index, edit) in edits.iter().enumerate() {
-            let (Some(old), Some(new)) = (
-                edit.get("oldText").and_then(|v| v.as_str()),
-                edit.get("newText").and_then(|v| v.as_str()),
-            ) else {
-                return ToolResult::error(
-                    call.call_id.clone(),
-                    format!("edits[{index}] needs oldText and newText"),
-                );
-            };
-            let mut matches = original.match_indices(old);
-            let Some((start, text)) = matches.next() else {
-                return ToolResult::error(
-                    call.call_id.clone(),
-                    format!("edits[{index}].oldText not found in {path}"),
-                );
-            };
-            if matches.next().is_some() {
-                return ToolResult::error(
-                    call.call_id.clone(),
-                    format!(
-                        "edits[{index}].oldText matches more than once in {path}; make it unique"
-                    ),
-                );
-            }
-            spans.push((start, start + text.len(), new.to_string()));
-        }
-        spans.sort_by_key(|(start, ..)| *start);
-        for pair in spans.windows(2) {
-            if pair[0].1 > pair[1].0 {
-                return ToolResult::error(
-                    call.call_id.clone(),
-                    "edits overlap; merge overlapping changes into one edit",
-                );
-            }
-        }
-        let mut out = String::with_capacity(original.len());
-        let mut cursor = 0usize;
-        for (start, end, new) in &spans {
-            out.push_str(&original[cursor..*start]);
-            out.push_str(new);
-            cursor = *end;
-        }
-        out.push_str(&original[cursor..]);
-        match self.ops.write(&target, out.as_bytes()) {
-            Ok(()) => {
-                self.tracker.record(&target, out.as_bytes());
-                let mut result = ToolResult::ok(
-                    call.call_id.clone(),
-                    format!("Successfully replaced {} block(s) in {path}.", spans.len()),
-                );
-                // EFG-014: the diff rides as structured data, computed
-                // from the before/after this call already holds - display
-                // only, never a claim: a change that did not happen
-                // produces no diff and no `diff` entry.
-                let diff = diff::unified_diff(&original, &out, path);
-                if !diff.is_empty() {
-                    result.extras.insert("diff".to_string(), diff);
-                }
-                result
             }
             Err(err) => {
                 ToolResult::error(call.call_id.clone(), format!("cannot write {path}: {err}"))

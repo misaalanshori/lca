@@ -694,6 +694,7 @@ The dependency list stays short on purpose. Each entry below states what it does
 | cargo-xwin | Cross-compilation for Windows MSVC targets | The `pc-windows-gnu` target, or native Windows runners |
 | cargo-nextest | Test runner | `cargo test` |
 | proptest | Property-based testing for session log, compaction, and transform-chain invariants | Hand-written table-driven test cases |
+| unicode-normalization | NFKC for the `edit` tool's fuzzy fallback (#114) | Generated Unicode tables, not hand-writable; no smaller source exists |
 | criterion | Benchmark harness for the NFR-1 through NFR-7 and NFR-29 performance gates, and the cache-hit-ratio benchmark | Custom timing harness over `std::time` |
 | cargo-deny | License and advisory checks | `cargo audit` |
 
