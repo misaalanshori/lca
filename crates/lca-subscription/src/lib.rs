@@ -6,7 +6,7 @@
 
 pub mod responses;
 
-pub use responses::{ResponsesStream, build_responses_body, responses_usage};
+pub use responses::{ResponseStreamDriver, ResponsesStream, build_responses_body, responses_usage};
 
 use lca_protocol::{OauthCap, ProviderCap};
 
@@ -20,6 +20,16 @@ pub struct IdentityFailure(pub String);
 impl From<StreamFailure> for IdentityFailure {
     fn from(err: StreamFailure) -> Self {
         IdentityFailure(err.message)
+    }
+}
+
+impl From<IdentityFailure> for StreamFailure {
+    fn from(err: IdentityFailure) -> Self {
+        StreamFailure {
+            message: err.0,
+            class: "invalid",
+            retryable: false,
+        }
     }
 }
 
@@ -302,7 +312,9 @@ pub fn access_token(cap: &dyn ProviderCap, spec: &OAuthSpec) -> Result<String, I
 }
 
 /// Decode the account id from the access token's JWT payload.
-fn account_from_jwt(token: &str, claim: &str, field: &str) -> Option<String> {
+/// Exported for live smokes, which seed a scratch namespace from an
+/// operator-provided token.
+pub fn account_from_jwt(token: &str, claim: &str, field: &str) -> Option<String> {
     let payload = token.split('.').nth(1)?;
     let json: serde_json::Value = serde_json::from_slice(&base64url_decode(payload)?).ok()?;
     json.get(claim)?.get(field)?.as_str().map(str::to_string)

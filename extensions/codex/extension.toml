@@ -1,0 +1,14 @@
+name = "codex"
+version = "0.1.0"
+abi = "0.5"
+worlds = ["provider"]
+description = "OpenAI Codex models via ChatGPT subscription login."
+
+[capabilities.net]
+hosts = ["chatgpt.com", "auth.openai.com"]
+
+[capabilities.oauth]
+redirect_path = "/callback"
+
+[capabilities.credentials]
+namespace = "codex"

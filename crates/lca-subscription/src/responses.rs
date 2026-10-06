@@ -316,3 +316,137 @@ pub fn responses_usage(response: &serde_json::Value) -> Option<Usage> {
         extras: Default::default(),
     })
 }
+
+/// A pull-based driver over one Responses streaming completion: open
+/// sends the request and checks the status (a 401 purges the stored
+/// tokens, gh #179's rule, shared by every gateway on this kit);
+/// `next_event` yields typed events as the host yields body chunks.
+pub struct ResponseStreamDriver<'a> {
+    cap: &'a dyn lca_protocol::ProviderCap,
+    handle: u32,
+    buffer: String,
+    mapper: ResponsesStream,
+    pending: std::collections::VecDeque<lca_protocol::StreamEvent>,
+    finished: bool,
+}
+
+impl<'a> ResponseStreamDriver<'a> {
+    /// Send the request and check the status.
+    pub fn open(
+        cap: &'a dyn lca_protocol::ProviderCap,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> Result<ResponseStreamDriver<'a>, super::StreamFailure> {
+        let handle = cap
+            .net_request("POST", url, headers, Some(body))
+            .map_err(super::StreamFailure::from)?;
+        let status = cap
+            .net_response_status(handle)
+            .map_err(super::StreamFailure::from)?;
+        if !(200..300).contains(&status) {
+            if status == 401 {
+                super::purge_tokens(cap);
+            }
+            let mut detail = Vec::new();
+            while let Some(chunk) = cap
+                .net_read_body(handle, 64 * 1024)
+                .map_err(super::StreamFailure::from)?
+            {
+                detail.extend_from_slice(&chunk);
+                if detail.len() > 1024 * 1024 {
+                    break;
+                }
+            }
+            let _ = cap.net_close_response(handle);
+            let text = String::from_utf8_lossy(&detail);
+            return Err(super::failure_for_status(
+                status,
+                &super::json_error_message(&text),
+            ));
+        }
+        Ok(ResponseStreamDriver {
+            cap,
+            handle,
+            buffer: String::new(),
+            mapper: ResponsesStream::new(),
+            pending: std::collections::VecDeque::new(),
+            finished: false,
+        })
+    }
+
+    /// The next typed event.
+    pub fn next_event(
+        &mut self,
+    ) -> Option<Result<lca_protocol::StreamEvent, super::StreamFailure>> {
+        loop {
+            if let Some(event) = self.pending.pop_front() {
+                return Some(Ok(event));
+            }
+            if self.finished {
+                return None;
+            }
+            match self
+                .cap
+                .net_read_body(self.handle, 64 * 1024)
+                .map_err(super::StreamFailure::from)
+            {
+                Ok(Some(chunk)) => {
+                    self.buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    self.drain_frames();
+                }
+                Ok(None) => self.finished = true,
+                Err(err) => {
+                    self.finished = true;
+                    return Some(Err(err));
+                }
+            }
+        }
+    }
+
+    /// Decode every complete `\n\n`-terminated frame currently buffered.
+    fn drain_frames(&mut self) {
+        loop {
+            let Some(end) = self.buffer.find("\n\n") else {
+                return;
+            };
+            let frame: String = self.buffer.drain(..end + 2).collect();
+            for line in frame.lines() {
+                let line = line.trim_end_matches('\r');
+                let Some(payload) = line.strip_prefix("data:").map(str::trim) else {
+                    continue;
+                };
+                if payload.is_empty() || payload == "[DONE]" {
+                    continue;
+                }
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+                    continue;
+                };
+                if let Some(event) = single_error(&value) {
+                    self.pending.push_back(event);
+                    continue;
+                }
+                self.pending.extend(self.mapper.feed(&value));
+            }
+        }
+    }
+}
+
+impl Drop for ResponseStreamDriver<'_> {
+    fn drop(&mut self) {
+        let _ = self.cap.net_close_response(self.handle);
+    }
+}
+
+/// A top-level `{"error": ...}` frame (outside any response object).
+fn single_error(value: &serde_json::Value) -> Option<lca_protocol::StreamEvent> {
+    let error = value.get("error")?;
+    let message = error
+        .get("message")
+        .and_then(|message| message.as_str())
+        .unwrap_or("vendor error");
+    Some(lca_protocol::StreamEvent::Error {
+        message: message.to_string(),
+        retryable: false,
+    })
+}
