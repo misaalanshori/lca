@@ -123,21 +123,35 @@ impl AutocompleteProvider for CombinedAutocompleteProvider {
 }
 
 impl CombinedAutocompleteProvider {
+    /// Score every command, keep the matches, best first (pi's
+    /// `fuzzyFilter`); ties hold registration order (stable sort).
     fn command_items(&self, query: &str) -> Vec<AutocompleteItem> {
-        self.commands
-            .iter()
-            .filter(|c| fuzzy_match(&c.name, query))
-            .map(|c| AutocompleteItem {
-                value: format!("/{} ", c.name),
-                label: format!("/{}", c.name),
-                description: match (&c.argument_hint, &c.description) {
-                    (Some(h), Some(d)) => Some(format!("{h} — {d}")),
-                    (Some(h), None) => Some(h.clone()),
-                    (None, Some(d)) => Some(d.clone()),
-                    (None, None) => None,
-                },
-            })
-            .collect()
+        let mut scored: Vec<(f64, usize, AutocompleteItem)> = Vec::new();
+        for (index, c) in self.commands.iter().enumerate() {
+            let matched = fuzzy_match_scored(query, &c.name);
+            if matched.matches {
+                scored.push((
+                    matched.score,
+                    index,
+                    AutocompleteItem {
+                        value: format!("/{} ", c.name),
+                        label: format!("/{}", c.name),
+                        description: match (&c.argument_hint, &c.description) {
+                            (Some(h), Some(d)) => Some(format!("{h} — {d}")),
+                            (Some(h), None) => Some(h.clone()),
+                            (None, Some(d)) => Some(d.clone()),
+                            (None, None) => None,
+                        },
+                    },
+                ));
+            }
+        }
+        scored.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.1.cmp(&b.1))
+        });
+        scored.into_iter().map(|(_, _, item)| item).collect()
     }
 
     fn file_items(&self, dir_part: &str, base: &str) -> Vec<AutocompleteItem> {
@@ -193,10 +207,11 @@ impl CombinedAutocompleteProvider {
 
 /// The `@file` matcher: rank by score, then path length, then name.
 fn fuzzy_files(query: &str, base: &Path) -> Suggestions {
-    let mut items = Vec::new();
+    let mut items: Vec<(f64, usize, String, AutocompleteItem)> = Vec::new();
     collect_files(base, base, query, 0, &mut items);
     items.sort_by(|a, b| {
-        b.0.cmp(&a.0)
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
             .then(a.1.cmp(&b.1))
             .then(a.2.len().cmp(&b.2.len()))
     });
@@ -212,7 +227,7 @@ fn collect_files(
     dir: &Path,
     query: &str,
     depth: usize,
-    out: &mut Vec<(i32, usize, String, AutocompleteItem)>,
+    out: &mut Vec<(f64, usize, String, AutocompleteItem)>,
 ) {
     if depth > 6 || out.len() > 200 {
         return;
@@ -233,10 +248,10 @@ fn collect_files(
             .to_string_lossy()
             .to_string();
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        if fuzzy_match(&rel, query) {
-            let score = score_entry(&name, query, is_dir);
+        let matched = fuzzy_match_scored(query, &rel);
+        if matched.matches {
             out.push((
-                score,
+                matched.score,
                 depth,
                 rel.clone(),
                 AutocompleteItem {
@@ -306,29 +321,129 @@ fn score_entry(name: &str, query: &str, is_dir: bool) -> i32 {
     score
 }
 
-/// Subsequence fuzzy match.
-fn fuzzy_match(text: &str, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
-    let mut chars = text
-        .to_lowercase()
-        .chars()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .peekable();
-    for q in query.to_lowercase().chars() {
-        loop {
-            match chars.next() {
-                Some(c) if c == q => break,
-                Some(_) => {}
-                None => return false,
-            }
-        }
-    }
-    true
+/// A scored fuzzy match (pi's `packages/tui/src/fuzzy.ts`): lower
+/// scores rank first. Word starts and consecutive runs earn bonuses;
+/// gaps and late positions cost.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FuzzyMatch {
+    /// Whether every query character appears in order.
+    pub matches: bool,
+    /// Lower ranks first (pi's `totalScore`).
+    pub score: f64,
 }
 
+/// Score `text` against `query` (pi's `fuzzyMatch`).
+pub fn fuzzy_match_scored(query: &str, text: &str) -> FuzzyMatch {
+    let query_lower = query.to_lowercase();
+    let text_lower = text.to_lowercase();
+    let primary = match_query(&query_lower, &text_lower);
+    if primary.matches {
+        return primary;
+    }
+    // pi's letter/digit swap fallback (`gpt4o` for a `4ogpt` typo): the
+    // swapped shape costs 5 extra points.
+    let swapped = swap_alpha_digits(&query_lower);
+    let Some(swapped) = swapped else {
+        return primary;
+    };
+    let retry = match_query(&swapped, &text_lower);
+    if retry.matches {
+        FuzzyMatch {
+            matches: true,
+            score: retry.score + 5.0,
+        }
+    } else {
+        primary
+    }
+}
+
+fn match_query(query: &str, text: &str) -> FuzzyMatch {
+    let none = FuzzyMatch {
+        matches: false,
+        score: 0.0,
+    };
+    if query.is_empty() {
+        return FuzzyMatch {
+            matches: true,
+            score: 0.0,
+        };
+    }
+    let query_chars: Vec<char> = query.chars().collect();
+    let text_chars: Vec<char> = text.chars().collect();
+    if query_chars.len() > text_chars.len() {
+        return none;
+    }
+    let mut score = 0.0;
+    let mut last: i32 = -1;
+    let mut consecutive = 0i32;
+    let mut matched = 0usize;
+    while matched < query_chars.len() {
+        // pi's greedy `indexOf` from the previous match on.
+        let from = (last + 1) as usize;
+        let found = text_chars
+            .iter()
+            .skip(from)
+            .position(|&c| c == query_chars[matched])
+            .map(|offset| from + offset);
+        let Some(index) = found else { break };
+        let boundary = index == 0 || is_word_boundary(text_chars[index - 1]);
+        if last == index as i32 - 1 {
+            consecutive += 1;
+            score -= f64::from(consecutive) * 5.0;
+        } else {
+            consecutive = 0;
+            if last >= 0 {
+                score += f64::from(index as i32 - last - 1) * 2.0;
+            }
+        }
+        if boundary {
+            score -= 10.0;
+        }
+        score += index as f64 * 0.1;
+        last = index as i32;
+        matched += 1;
+    }
+    if matched < query_chars.len() {
+        return none;
+    }
+    if query == text {
+        score -= 100.0;
+    }
+    FuzzyMatch {
+        matches: true,
+        score,
+    }
+}
+
+/// pi's word-boundary set: whitespace plus `-_.`/`:`.
+fn is_word_boundary(before: char) -> bool {
+    before.is_whitespace() || matches!(before, '-' | '_' | '.' | '/' | ':')
+}
+
+/// pi's swapped letter/digit shape (`abc123` <-> `123abc`): one run
+/// of letters and one run of digits, in either order.
+fn swap_alpha_digits(query: &str) -> Option<String> {
+    if query.is_empty()
+        || !query
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        return None;
+    }
+    // ASCII-only from here, so byte indexing is safe.
+    let bytes = query.as_bytes();
+    let first_letter = bytes[0].is_ascii_lowercase();
+    let split = bytes
+        .iter()
+        .position(|&b| b.is_ascii_lowercase() != first_letter)?;
+    let (head, tail) = (&query[..split], &query[split..]);
+    if tail.bytes().any(|b| b.is_ascii_lowercase() == first_letter) {
+        return None;
+    }
+    Some(format!("{tail}{head}"))
+}
+
+/// Subsequence fuzzy match.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,11 +498,87 @@ mod tests {
         assert!(p.get_suggestions("/login an", false).is_none());
     }
 
+    /// Subsequence fuzzy match (the boolean face of [`super::fuzzy_match_scored`]).
+    fn fuzzy_match(text: &str, query: &str) -> bool {
+        super::fuzzy_match_scored(query, text).matches
+    }
+
     #[test]
     fn fuzzy_match_is_subsequence() {
         assert!(fuzzy_match("model", "mdl"));
         assert!(fuzzy_match("model", ""));
         assert!(!fuzzy_match("model", "xyz"));
+    }
+
+    fn ranking_provider() -> CombinedAutocompleteProvider {
+        let commands = ["settings", "trust", "stats", "grants", "antigravity.login"]
+            .iter()
+            .map(|name| SlashCommand {
+                name: name.to_string(),
+                description: None,
+                argument_hint: None,
+                argument_completions: None,
+            })
+            .collect();
+        CombinedAutocompleteProvider::new(commands, Path::new("."))
+    }
+
+    #[test]
+    fn a_consecutive_prefix_outranks_a_scattered_subsequence() {
+        // gh #176: `/st` must select `/stats` (`st…`), not `/settings`
+        // (`s…t…`) or `/trust` (`…s.t`).
+        let p = ranking_provider();
+        let labels: Vec<String> = p
+            .get_suggestions("/st", false)
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.label.clone())
+            .collect();
+        assert_eq!(labels[0], "/stats", "{labels:?}");
+    }
+
+    #[test]
+    fn a_word_start_outranks_a_mid_word_scatter() {
+        // gh #176: `/ant` must select `/antigravity.login`, not
+        // `/grants` (`gr-a-n-t-s`).
+        let p = ranking_provider();
+        let labels: Vec<String> = p
+            .get_suggestions("/ant", false)
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.label.clone())
+            .collect();
+        assert_eq!(labels[0], "/antigravity.login", "{labels:?}");
+    }
+
+    #[test]
+    fn scores_reward_prefix_and_penalize_gaps() {
+        let stats = fuzzy_match_scored("st", "stats");
+        let settings = fuzzy_match_scored("st", "settings");
+        let trust = fuzzy_match_scored("st", "trust");
+        assert!(stats.matches && settings.matches && trust.matches);
+        assert!(
+            stats.score < settings.score && settings.score < trust.score,
+            "stats {} settings {} trust {}",
+            stats.score,
+            settings.score,
+            trust.score
+        );
+    }
+
+    #[test]
+    fn an_empty_query_keeps_registration_order() {
+        let p = ranking_provider();
+        let labels: Vec<String> = p
+            .get_suggestions("/", false)
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.label.clone())
+            .collect();
+        assert_eq!(labels[0], "/settings", "{labels:?}");
     }
 
     #[test]
