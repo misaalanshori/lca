@@ -105,6 +105,32 @@ as a second response.
 
 The RPC Extension UI sub-protocol is out: extension-UI-over-RPC needs
 the ui@0.6.0 world work (#172's train).
+## The `auth` commands
+
+`lca auth ...` manages provider credentials without opening the
+interface (gh #72, pi's credential commands). `check` probes state
+and prints `ready`, `not_ready`, or `invalid` — pi's words, pi's exit
+table: 0, 1, or 2. `--json` writes pi's shape
+(`{"status","provider","reason?","authType?"}`); `--provider` names
+an extension, `--model` resolves through the first provider listing
+it, and neither flag is pi's usage error (exit 2, like an
+unresolvable model). A `--credentials` flag that emitted the secret
+is refused outright, like the printers below.
+
+`auth login --provider <name>` signs in: an API key resolves from
+the environment inside the extension, while an OAuth flow prints its
+authorization URL and reads the pasted callback from stdin (pi's
+remote/headless shape; `docs/flows.md`). The IdP hosts need the same
+`--allow-host` this run's turns would. `auth logout --provider <name>`
+signs out through the provider's own logout.
+
+`lca` never prints credentials: `auth print-api-key` and `auth
+print-bearer-token` fail with the reason instead of the secret, because
+tokens in scrollback or history would outlive the command. The
+secrets law outranks parity; `--no-refresh` is likewise absent (a
+check refreshes like pi's default, and the extension owns the
+refresh).
+
 ## Exit codes
 
 | Code | Meaning |
@@ -118,3 +144,6 @@ the ui@0.6.0 world work (#172's train).
 | 6 | Session error: the named session is missing, malformed, or belongs to another project. |
 
 A run that ends non-zero still writes its session records; whatever completed before the failure is durable (FR-CONC-3).
+
+For `auth check` the codes are pi's credential table — 0/1/2 is
+ready/not_ready/invalid — not the turn rows above.

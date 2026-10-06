@@ -71,6 +71,8 @@ pub enum Route {
     Config,
     /// An extension-management subcommand (FR-DIST-*).
     Ext(ext::ExtCmd),
+    /// A credential subcommand (gh #72, pi's `auth`).
+    Auth(AuthCmd),
     /// The session listing (FR-SESS-2).
     ResumeList,
     /// Fork at a message (FR-SESS-3).
@@ -280,6 +282,7 @@ pub fn route(cli: &Cli) -> Route {
             },
         },
         Some(Command::Ext { cmd }) => Route::Ext(cmd.clone()),
+        Some(Command::Auth { cmd }) => Route::Auth(cmd.clone()),
     }
 }
 

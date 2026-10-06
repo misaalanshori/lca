@@ -148,6 +148,7 @@ lca -p "fix the failing test"   # one headless turn, reply on stdout
 lca -p one two            # headless turns, in order, in one session
 lca -p "..." --json       # one JSON object per line (docs/headless.md)
 lca --mode rpc            # stdin/stdout JSONL command loop (docs/headless.md)
+lca auth check --provider openai-compatible  # ready/not_ready/invalid, exit 0/1/2 (docs/headless.md)
 lca -c -p "continue"        # headless, appending to the last session (#111)
 lca resume                # list this project's sessions, reopen one
 lca ext list              # installed extensions and what they can reach

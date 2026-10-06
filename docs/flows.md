@@ -258,6 +258,21 @@ State verification is the extension's job. The host returns the parsed parameter
 
 Tokens land in the credential store under the extension's own namespace. No other extension can read them, and they never enter the session log.
 
+## The headless OAuth shape
+
+On a remote or headless machine the browser cannot reach the loopback
+listener, so `lca auth login --provider <name>` runs pi's paste shape
+instead of the browser shape: the host prints the authorization URL the
+extension asked to open, reads the pasted callback URL (or bare
+`code=…&state=…`) from stdin, parses it with the one callback parser
+(`login::parse_callback`, shared with the interface's manual fallback),
+and delivers the parameters through `oauth_manual_callback` — the same
+wakeup `oauth_await` gets from the listener, so the exchange and store
+code is identical. The interface keeps the browser flow; when the
+browser stays quiet for 8 seconds it offers the same paste prompt
+(R4(c)), and a paste there delivers through the same seam. One parser,
+one delivery, two prompts.
+
 ## The streaming pipeline
 
 From a byte arriving on a socket to a character on screen.
@@ -385,6 +400,16 @@ preset's curated short list is the fallback (D2).
 
 `/login <provider>` scopes the picker to one extension. `/login <option-id>`
 skips the picker entirely and is the same journey, drivable from a script.
+
+`lca auth ...` is the same surface without the interface (gh #72):
+`auth check [--provider|--model] [--json]` probes credential state with
+pi's exit table (0/1/2 = ready/not_ready/invalid), `auth login
+--provider <name>` signs in (an API key resolves from the environment;
+an OAuth flow prints its URL and reads the pasted callback from stdin —
+the headless shape above), and `auth logout --provider <name>` signs
+out. A check that cannot reach a self-probe resolves an API key like a
+login would, including storing an environment key on first sight; it
+never launches a browser or a paste prompt.
 
 ## `/attach` and its notice
 

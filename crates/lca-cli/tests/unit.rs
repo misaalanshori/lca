@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use clap::Parser;
 use lca_cli::{
-    Cli, OutputMode, Route, SessionSelector, check_flag_contradictions, exit, exit_code,
+    AuthCmd, Cli, OutputMode, Route, SessionSelector, check_flag_contradictions, exit, exit_code,
     output_mode, route,
 };
 
@@ -118,6 +118,42 @@ fn fork_routes_to_the_fork_command() {
             session: "s1".into(),
             message: "r2".into()
         }
+    );
+}
+
+// Verifies: gh #72 (the credential subcommands route to the auth seam
+// with their selectors intact)
+#[test]
+fn auth_routes_to_the_auth_command() {
+    assert_eq!(
+        route(&parse(&[
+            "auth",
+            "check",
+            "--provider",
+            "openai-compatible"
+        ])),
+        Route::Auth(AuthCmd::Check {
+            provider: Some("openai-compatible".to_string()),
+            model: None,
+            json: false,
+        })
+    );
+    assert_eq!(
+        route(&parse(&["auth", "login", "--provider", "antigravity"])),
+        Route::Auth(AuthCmd::Login {
+            provider: "antigravity".to_string(),
+        })
+    );
+    assert_eq!(
+        route(&parse(&[
+            "auth",
+            "logout",
+            "--provider",
+            "openai-compatible"
+        ])),
+        Route::Auth(AuthCmd::Logout {
+            provider: "openai-compatible".to_string(),
+        })
     );
 }
 

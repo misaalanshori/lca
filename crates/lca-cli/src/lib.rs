@@ -85,7 +85,11 @@ pub fn split_product_version(product: &str) -> (&str, Option<&str>) {
 /// Split out for the file ceiling (gate 11); everything is re-exported
 /// below, so `lca_cli::Cli` and `crate::Cli` are unchanged.
 mod cli_args;
-pub use cli_args::{Cli, CliFlags, Command, SessionCmd};
+pub use cli_args::{AuthCmd, Cli, CliFlags, Command, SessionCmd};
+
+/// `lca auth ...`: pi's credential commands without the printers (gh
+/// #72, #38).
+mod auth;
 
 /// `lca ext ...`: resolve, consent, store (FR-DIST-*).
 pub mod diagnostics;
@@ -712,6 +716,7 @@ pub async fn run(cli: Cli) -> i32 {
         Route::Export { session, audit } => export_command(&cwd, &session, audit),
         Route::Gc { session } => gc_command(&cwd, &session),
         Route::Ext(cmd) => ext::run(cmd).await,
+        Route::Auth(cmd) => auth::run(&cmd, &cli.allow_host),
     }
 }
 

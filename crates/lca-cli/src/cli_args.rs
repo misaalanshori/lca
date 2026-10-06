@@ -187,12 +187,70 @@ pub enum Command {
     // FR-CFG-2.
     /// Show the merged configuration and where each value came from.
     Config,
+    // gh #72 (pi's credential commands): probe and manage provider
+    // credentials without opening the interface.
+    /// Check, log in, and log out without opening the interface.
+    Auth {
+        /// What to do with the credentials.
+        #[command(subcommand)]
+        cmd: AuthCmd,
+    },
     // The SRDD's command-line section, FR-DIST-*.
     /// Install, update, remove, and inspect extensions.
     Ext {
         /// What to do with extensions.
         #[command(subcommand)]
         cmd: ext::ExtCmd,
+    },
+}
+
+/// `lca auth ...`: pi's credential commands, minus the printers (gh
+/// #72). `lca` never prints credentials: tokens in scrollback or
+/// history is the secrets law, and no parity flag overrides it.
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum AuthCmd {
+    /// Probe credential state: print `ready`, `not_ready`, or
+    /// `invalid`; exit 0, 1, or 2, respectively. Requires
+    /// `--provider` or `--model`, like pi.
+    Check {
+        /// Resolve credentials for a provider.
+        #[arg(long, value_name = "PROVIDER")]
+        provider: Option<String>,
+        /// Resolve credentials from a model id or pattern.
+        #[arg(long, value_name = "MODEL")]
+        model: Option<String>,
+        /// Write the structured result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Sign in non-interactively where the provider allows it: an
+    /// API key resolves from the environment, an OAuth flow prints
+    /// its authorization URL and reads the pasted callback from stdin.
+    Login {
+        /// The provider to sign in to.
+        #[arg(long, value_name = "PROVIDER")]
+        provider: String,
+    },
+    /// Sign out: revoke where the endpoint supports it, then clear
+    /// the stored credential.
+    Logout {
+        /// The provider to sign out of.
+        #[arg(long, value_name = "PROVIDER")]
+        provider: String,
+    },
+    /// Refused: `lca` never prints credentials (see above).
+    #[command(hide = true)]
+    PrintApiKey {
+        /// Accepted and ignored: the refusal names the provider.
+        #[arg(long, value_name = "PROVIDER")]
+        provider: Option<String>,
+    },
+    /// Refused: `lca` never prints credentials (see above).
+    #[command(hide = true)]
+    PrintBearerToken {
+        /// Accepted and ignored: the refusal names the provider.
+        #[arg(long, value_name = "PROVIDER")]
+        provider: Option<String>,
     },
 }
 
