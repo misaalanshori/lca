@@ -21,7 +21,7 @@ mod osc8;
 use ansi::update_tracker_from_text;
 pub use ansi::{AnsiCodeTracker, get_active_background_ansi};
 use osc8::get_active_osc8_close;
-pub use osc8::{ActiveHyperlink, Osc8Terminator, parse_osc8_hyperlink};
+pub use osc8::{ActiveHyperlink, Osc8Terminator, linkify_urls, parse_osc8_hyperlink};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1004,6 +1004,45 @@ mod tests {
         assert_eq!(extract_ansi_code("\x1b[2J", 0).unwrap().0, "\x1b[2J");
         assert!(extract_ansi_code("\x1b[999z", 0).is_none()); // unsupported final
         assert_eq!(extract_ansi_code("\x1b]8;;http://x\x07", 0).unwrap().1, 14);
+    }
+
+    // Verifies: gh #178 - a wrapped OSC 8 hyperlink re-opens with the
+    // full URL on every segment, so clicking any wrapped row opens the
+    // whole URL, and hit-testing any segment resolves the same link.
+    #[test]
+    fn a_wrapped_osc8_link_reopens_with_the_full_url_on_every_row() {
+        let url = format!(
+            "https://accounts.example.com/o/oauth2/auth?response_type=code&client_id={}&redirect_uri=https%3A%2F%2Flocalhost%2Fcallback&scope=email+profile",
+            "9".repeat(120)
+        );
+        assert!(url.len() > 200, "the receipt needs a long URL");
+        let linked = format!("\x1b]8;;{url}\x07{url}\x1b]8;;\x07");
+        let rows = wrap_text_with_ansi(&linked, 40);
+        assert!(rows.len() >= 3, "it wraps: {:?}", rows.len());
+        for row in &rows {
+            assert!(
+                row.contains(&format!("\x1b]8;;{url}\x07")),
+                "every row re-opens the full URL: {row:?}"
+            );
+            assert!(
+                row.contains("\x1b]8;;\x07"),
+                "every row closes the link: {row:?}"
+            );
+        }
+        for row in rows.iter().skip(1) {
+            let plain = strip_terminal_sequences(row);
+            let col = plain.find(|c: char| !c.is_whitespace()).unwrap_or(0);
+            assert_eq!(
+                get_osc8_link_at_column(row, col),
+                Some(url.clone()),
+                "hit-testing a wrapped row resolves the link"
+            );
+        }
+        let joined: String = rows
+            .iter()
+            .map(|row| strip_terminal_sequences(row))
+            .collect();
+        assert_eq!(joined, url, "selection across the wrap reads the URL");
     }
 
     #[test]

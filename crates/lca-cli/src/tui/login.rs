@@ -299,8 +299,10 @@ impl Ui {
                 .login_url_shown
                 .lock()
                 .unwrap_or_else(|p| p.into_inner()) = Some(url.clone());
+            // gh #178 (pi's login-dialog): the URL rides in an explicit
+            // OSC 8 sequence, so a wrapped modal row still clicks whole.
             return Some(LoginNext::Waiting {
-                label: format!("{WAIT_LABEL}\n\n{url}"),
+                label: format!("{WAIT_LABEL}\n\n\x1b]8;;{url}\x07{url}\x1b]8;;\x07"),
             });
         }
         // R4(c): after a quiet period, offer the manual fallback — paste

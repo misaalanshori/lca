@@ -9,7 +9,7 @@
 use lca_tui::engine::core::{SEGMENT_RESET, resolve_overlay_layout};
 
 use crate::theme::{Role, Theme};
-use lca_tui::engine::text::{slice_by_column, visible_width, wrap_text_with_ansi};
+use lca_tui::engine::text::{linkify_urls, slice_by_column, visible_width, wrap_text_with_ansi};
 
 /// A centered box drawn over `base`, which is the visible viewport.
 ///
@@ -114,7 +114,9 @@ fn overlay_box_placed(
     ));
     owner.push(usize::MAX);
     for (index, line) in body.iter().enumerate() {
-        for wrapped in wrap_text_with_ansi(line, inner) {
+        // gh #178: a raw URL linkifies before the wrap, so every wrapped
+        // segment re-opens the full link and clicks open the whole URL.
+        for wrapped in wrap_text_with_ansi(&linkify_urls(line), inner) {
             let pad = inner.saturating_sub(visible_width(&wrapped));
             box_lines.push(format!("│ {wrapped}{} │", " ".repeat(pad)));
             owner.push(index);

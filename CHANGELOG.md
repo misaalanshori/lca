@@ -18,6 +18,20 @@ Dates are UTC.
   next demand votes get counted against.
 
 ### Fixed
+- **Ranked autocomplete (gh #176).** Slash-command and `@file` offers
+  sort by pis fuzzy score (word-start and consecutive bonuses, gap and
+  position penalties, exact-match reward), so `/st` selects `/stats`
+  and `/ant` selects `/antigravity.*`; an empty query keeps
+  registration order.
+- **Bounded, highlighted, clickable popup (gh #175).** The suggestion
+  popup shows at most five rows in a rolling window around the
+  selection, paints the selected row in `SelectedBg`, appends a dim
+  scroll hint on overflow, and answers clicks (apply) and wheel
+  (scroll) over its rows. The editor and footer stay on screen.
+- **Wrapped modal URLs stay clickable (gh #178).** The OAuth waiting
+  label carries an explicit OSC 8 sequence and `overlay_box`
+  linkifies raw URLs before wrapping, so every wrapped segment
+  re-opens the full link and any row clicks open the whole URL.
 - **Antigravity 0.9.0 wire alignment (gh #179).** A login with stored
   tokens re-runs the OAuth flow instead of short-circuiting to `Ok`, so
   expired or revoked tokens repair rather than deadlock; a 401 purges

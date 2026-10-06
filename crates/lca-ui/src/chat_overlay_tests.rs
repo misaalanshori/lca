@@ -700,3 +700,43 @@ fn the_namespaced_login_reaches_the_host_command_dispatch() {
     );
     assert_eq!(chat.world.notice.as_deref(), Some("identity flow started"));
 }
+
+// Verifies: gh #178 - the OAuth receipt case: a 200+ character sign-in
+// URL in the login modal wraps across rows with every row re-opening
+// the full OSC 8 link, so any wrapped row clicks open the whole URL.
+#[test]
+fn a_wrapped_modal_url_clicks_open_whole() {
+    let mut chat = chat();
+    let url = format!(
+        "https://accounts.example.com/o/oauth2/v2/auth?response_type=code&client_id={}&redirect_uri=https%3A%2F%2Flocalhost%3A8080%2Fcallback&scope=email%20profile",
+        "7".repeat(120)
+    );
+    chat.apply_login_next(LoginNext::Waiting {
+        label: format!("waiting for browser sign-in… (esc cancels)\n\n{url}"),
+    });
+    let frame = chat.viewport(80, 24, 0);
+    let rows: Vec<&String> = frame
+        .iter()
+        .filter(|row| {
+            lca_tui::engine::text::strip_terminal_sequences(row).contains("accounts.example.com")
+                || row.contains("accounts.example.com")
+        })
+        .collect();
+    assert!(rows.len() >= 3, "the URL wraps: {}", rows.len());
+    for row in &rows {
+        assert!(
+            row.contains(&format!("\x1b]8;;{url}\x07")),
+            "every wrapped row re-opens the full URL: {row:?}"
+        );
+    }
+    let middle = rows[rows.len() / 2];
+    let plain = lca_tui::engine::text::strip_terminal_sequences(middle);
+    // A column inside the link text (the row's midpoint is URL on every
+    // wrapped segment, never the box border).
+    let col = lca_tui::engine::text::visible_width(&plain) / 2;
+    assert_eq!(
+        lca_tui::engine::text::get_osc8_link_at_column(middle, col),
+        Some(url),
+        "hit-testing a wrapped modal row resolves the link"
+    );
+}
