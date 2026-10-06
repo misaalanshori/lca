@@ -5,6 +5,7 @@
 //! provider quirks live in their tables, never in core (#157).
 
 pub mod responses;
+pub mod wasm;
 
 pub use responses::{ResponseStreamDriver, ResponsesStream, build_responses_body, responses_usage};
 
