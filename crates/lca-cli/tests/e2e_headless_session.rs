@@ -4,7 +4,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 mod common;
 
-use common::{Reply, rt, sandbox, sse_text, sse_tool_call, start_mock};
+#[cfg(unix)]
+use common::sse_tool_call;
+use common::{Reply, rt, sandbox, sse_text, start_mock};
 use std::collections::HashMap;
 
 /// Every `log.jsonl` under the sandbox state dir, with its parsed lines.
