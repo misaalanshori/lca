@@ -1500,6 +1500,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lca-subscription"
+version = "0.5.4"
+dependencies = [
+ "getrandom 0.3.4",
+ "lca-protocol",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "lca-testkit"
 version = "0.5.4"
 dependencies = [

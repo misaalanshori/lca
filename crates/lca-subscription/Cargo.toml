@@ -1,0 +1,20 @@
+[package]
+name = "lca-subscription"
+description = "The shared kit for subscription-gateway provider extensions (OAuth PKCE login, token refresh, the Responses SSE protocol)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lca-protocol = { path = "../lca-protocol" }
+serde_json.workspace = true
+# PKCE S256 (RFC 7636): the code challenge is a SHA-256 of the verifier.
+sha2.workspace = true
+# The platform CSPRNG for the PKCE verifier and OAuth state.
+getrandom = "0.3"
+
+[lints]
+workspace = true
