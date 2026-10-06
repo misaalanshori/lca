@@ -20,11 +20,12 @@ mod turn;
 
 pub mod ext_provider;
 pub use assemble::{Assembled, Attachment, StagedAttachment, assemble, assemble_with, stage_image};
-pub use compact::compact_now;
+pub use compact::{compact_now, compaction_reserve};
 pub use ext_provider::ExtensionProvider;
 pub use registry::{
     BUILTIN_COMMANDS, BUILTIN_TOOL_ALIASES, BUILTIN_TOOLS, CollisionReport, ExtensionRegistry,
 };
+pub use turn::effective_context_window;
 // The turn types live in the protocol layer so the interface and the
 // embedding SDK can render them without depending on this crate.
 pub use lca_protocol::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
@@ -73,6 +74,16 @@ pub struct AgentConfig {
     /// Context-window fraction that triggers compaction (FR-SESS-4,
     /// `compaction.threshold`). At or below zero disables the check.
     pub compaction_threshold: f64,
+    /// Whether automatic compaction runs (gh #36 phase 1,
+    /// `compaction.enabled`). False skips the check without error.
+    pub compaction_enabled: bool,
+    /// Absolute token reserve (gh #36 phase 1,
+    /// `compaction.reserve_tokens`). Zero derives it from the
+    /// threshold fraction, preserving the stopgap's default.
+    pub compaction_reserve_tokens: u64,
+    /// Recent tokens kept verbatim past the cut point (gh #36 phase 1,
+    /// `compaction.keep_recent_tokens`).
+    pub compaction_keep_recent_tokens: u64,
     /// The active model's context window in tokens; `0` means unknown. The
     /// threshold check then uses a conservative fallback
     /// (`turn::FALLBACK_CONTEXT_WINDOW`) so the session still compacts; the
@@ -162,6 +173,9 @@ impl Default for AgentConfig {
                     .to_string(),
             extensions: Arc::new(ExtensionRegistry::new()),
             compaction_threshold: 0.8,
+            compaction_enabled: true,
+            compaction_reserve_tokens: 0,
+            compaction_keep_recent_tokens: 20_000,
             model_context_window: 0,
             // #39: unknown vision until the front end resolves the model
             // against the provider's list; images pass through as today.

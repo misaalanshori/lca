@@ -388,9 +388,13 @@ fn a_resumed_session_compacts_at_the_turn_boundary() {
     // (`LCA_COMPACTION_THRESHOLD`), and the provider's window is
     // `OPENAI_CONTEXT_WINDOW` (docs/providers/openai-compatible.md). A
     // 1000-token window at 1% compacts once a turn reports 10 prompt tokens.
+    // (gh #36 phase 1: the two-record session fits the default
+    // keep-recent window whole, so the test keeps nothing and the
+    // candidate is the pre-turn range, as the stopgap saw it.)
     let budget = [
         ("OPENAI_CONTEXT_WINDOW", "1000"),
         ("LCA_COMPACTION_THRESHOLD", "0.01"),
+        ("LCA_COMPACTION_KEEP_RECENT_TOKENS", "0"),
     ];
 
     // Run 1: create the session in one process, then exit.

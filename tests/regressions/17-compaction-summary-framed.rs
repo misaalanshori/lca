@@ -17,6 +17,7 @@ fn a_compaction_summary_reaches_the_model_framed_as_compacted_history() {
         id: "c1".into(),
         replaced_from: "u1".into(),
         replaced_to: "a1".into(),
+        first_kept_id: String::new(),
         summary: "the codeword is BANANA".into(),
         strategy: "compaction-default".into(),
         usage: None,

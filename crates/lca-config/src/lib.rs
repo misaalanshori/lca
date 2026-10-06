@@ -139,6 +139,9 @@ pub struct Config {
     provider: String,
     model: Option<String>,
     compaction_threshold: f64,
+    compaction_enabled: bool,
+    compaction_reserve_tokens: u64,
+    compaction_keep_recent_tokens: u64,
     provider_retry_limit: u64,
     tool_timeout_seconds: u64,
     tool_result_limit_bytes: u64,
@@ -184,6 +187,12 @@ impl Default for Config {
             provider: "openai-compatible".to_string(),
             model: None,
             compaction_threshold: 0.8,
+            compaction_enabled: true,
+            // 0 = derive the reserve from the threshold fraction (gh
+            // #36 phase 1): the stopgap's fraction behavior stays the
+            // default, an absolute token budget is opt-in.
+            compaction_reserve_tokens: 0,
+            compaction_keep_recent_tokens: 20_000,
             provider_retry_limit: 3,
             tool_timeout_seconds: 120,
             tool_result_limit_bytes: 65536,
@@ -233,6 +242,9 @@ pub const KNOWN_KEYS: &[&str] = &[
     "model",
     "models.enabled",
     "compaction.threshold",
+    "compaction.enabled",
+    "compaction.reserve_tokens",
+    "compaction.keep_recent_tokens",
     "provider.retry_limit",
     "tool.timeout_seconds",
     "tool.result_limit_bytes",
@@ -430,6 +442,10 @@ fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigEr
             .parse::<bool>()
             .map(TypedValue::Bool)
             .map_err(|_| invalid(format!("expected a boolean, got `{raw}`"))),
+        "compaction.enabled" => raw
+            .parse::<bool>()
+            .map(TypedValue::Bool)
+            .map_err(|_| invalid(format!("expected a boolean, got `{raw}`"))),
         "permissions.mode" => {
             if PERMISSION_MODES.contains(&raw) {
                 Ok(TypedValue::Text(raw.to_string()))
@@ -465,7 +481,9 @@ fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigEr
         | "tool.result_limit_bytes"
         | "tool.max_iterations"
         | "cache.noise_floor_tokens"
-        | "extensions.log_limit_bytes" => raw
+        | "extensions.log_limit_bytes"
+        | "compaction.reserve_tokens"
+        | "compaction.keep_recent_tokens" => raw
             .parse::<u64>()
             .map(TypedValue::Count)
             .map_err(|_| invalid(format!("expected a non-negative integer, got `{raw}`"))),
@@ -501,6 +519,9 @@ impl Config {
             "models.enabled",
             "models.thinking_levels",
             "compaction.threshold",
+            "compaction.enabled",
+            "compaction.reserve_tokens",
+            "compaction.keep_recent_tokens",
             "provider.retry_limit",
             "tool.timeout_seconds",
             "tool.result_limit_bytes",
@@ -646,7 +667,7 @@ impl Config {
                     };
                     this.apply(key.to_string(), TypedValue::List(list), source)?;
                 }
-                "update.check" => {
+                "update.check" | "compaction.enabled" => {
                     let flag = value.as_bool().ok_or_else(|| {
                         invalid(format!("expected a boolean, got {}", type_name(&value)))
                     })?;
@@ -750,7 +771,9 @@ impl Config {
                 | "tool.result_limit_bytes"
                 | "tool.max_iterations"
                 | "cache.noise_floor_tokens"
-                | "extensions.log_limit_bytes" => {
+                | "extensions.log_limit_bytes"
+                | "compaction.reserve_tokens"
+                | "compaction.keep_recent_tokens" => {
                     let count = value
                         .as_integer()
                         .and_then(|i| u64::try_from(i).ok())
@@ -778,6 +801,9 @@ impl Config {
             "models.enabled",
             "models.thinking_levels",
             "compaction.threshold",
+            "compaction.enabled",
+            "compaction.reserve_tokens",
+            "compaction.keep_recent_tokens",
             "provider.retry_limit",
             "tool.timeout_seconds",
             "tool.result_limit_bytes",
@@ -827,6 +853,13 @@ impl Config {
                 self.models_thinking_levels = v
             }
             ("compaction.threshold", TypedValue::Number(v)) => self.compaction_threshold = v,
+            ("compaction.enabled", TypedValue::Bool(v)) => self.compaction_enabled = v,
+            ("compaction.reserve_tokens", TypedValue::Count(v)) => {
+                self.compaction_reserve_tokens = v;
+            }
+            ("compaction.keep_recent_tokens", TypedValue::Count(v)) => {
+                self.compaction_keep_recent_tokens = v;
+            }
             ("provider.retry_limit", TypedValue::Count(v)) => self.provider_retry_limit = v,
             ("tool.timeout_seconds", TypedValue::Count(v)) => self.tool_timeout_seconds = v,
             ("tool.result_limit_bytes", TypedValue::Count(v)) => self.tool_result_limit_bytes = v,
@@ -923,6 +956,22 @@ impl Config {
     /// Context-window fraction that triggers compaction (FR-SESS-4).
     pub fn compaction_threshold(&self) -> f64 {
         self.compaction_threshold
+    }
+
+    /// Whether automatic compaction runs (gh #36 phase 1).
+    pub fn compaction_enabled(&self) -> bool {
+        self.compaction_enabled
+    }
+
+    /// Absolute token reserve (gh #36 phase 1): 0 derives it from the
+    /// threshold fraction, matching the stopgap's default behavior.
+    pub fn compaction_reserve_tokens(&self) -> u64 {
+        self.compaction_reserve_tokens
+    }
+
+    /// Recent tokens kept verbatim past the cut point (gh #36 phase 1).
+    pub fn compaction_keep_recent_tokens(&self) -> u64 {
+        self.compaction_keep_recent_tokens
     }
 
     /// Retry attempts for retryable transport errors (FR-CORE-6).
@@ -1060,6 +1109,15 @@ impl Config {
             (
                 "compaction.threshold",
                 self.compaction_threshold.to_string(),
+            ),
+            ("compaction.enabled", self.compaction_enabled.to_string()),
+            (
+                "compaction.reserve_tokens",
+                self.compaction_reserve_tokens.to_string(),
+            ),
+            (
+                "compaction.keep_recent_tokens",
+                self.compaction_keep_recent_tokens.to_string(),
             ),
             (
                 "provider.retry_limit",

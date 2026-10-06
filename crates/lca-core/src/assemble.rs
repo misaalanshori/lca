@@ -377,7 +377,8 @@ fn heal_dangling_tool_calls(messages: &mut Vec<ChatMessage>) {
 }
 
 /// One request's prompt token count, the number FR-CACHE-1 compares.
-pub(super) fn usage_prompt_tokens(usage: &Usage) -> u64 {
+/// The compaction cut planner reads it too (gh #36 phase 1).
+pub(crate) fn usage_prompt_tokens(usage: &Usage) -> u64 {
     usage.input + usage.cache_read + usage.cache_write + usage.cache_write_1h
 }
 

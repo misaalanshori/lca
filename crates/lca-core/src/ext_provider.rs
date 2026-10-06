@@ -176,6 +176,10 @@ pub struct ProviderBackend {
     model: std::sync::Mutex<String>,
     session_id: String,
     usage: std::sync::Mutex<Option<lca_protocol::Usage>>,
+    /// The summarization generation budget (gh #36 phase 1): the host
+    /// derives it from the compaction reserve once the model window is
+    /// known. Unset keeps [`SUMMARIZATION_MAX_TOKENS`].
+    summarization_budget: std::sync::Mutex<Option<u32>>,
 }
 
 /// The generation budget every request through the `completion`
@@ -187,6 +191,17 @@ pub struct ProviderBackend {
 /// channel `session-id` rides (ADR-0023); the openai-compatible
 /// provider maps it to the body's `max_tokens`.
 pub const SUMMARIZATION_MAX_TOKENS: u32 = 4096;
+
+/// The summarization budget derived from the compaction reserve (gh
+/// #36 phase 1, pi's shape): `0.8 × reserve`, so the summary fits in
+/// the headroom the trigger holds back. A zero reserve keeps the
+/// stopgap constant.
+pub fn summarization_max_tokens(reserve_tokens: u64) -> u32 {
+    if reserve_tokens == 0 {
+        return SUMMARIZATION_MAX_TOKENS;
+    }
+    (reserve_tokens as f64 * 0.8).floor() as u64 as u32
+}
 
 impl ProviderBackend {
     /// Adapt the provider the agent itself talks to. `model` follows
@@ -202,7 +217,16 @@ impl ProviderBackend {
             model: std::sync::Mutex::new(model.into()),
             session_id: session_id.into(),
             usage: std::sync::Mutex::new(None),
+            summarization_budget: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Override the summarization generation budget (gh #36 phase 1).
+    pub fn set_summarization_budget(&self, max_tokens: u32) {
+        *self
+            .summarization_budget
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(max_tokens);
     }
 
     /// Follow a session-scoped model change (`/model`).
@@ -223,10 +247,12 @@ impl lca_tools::CompletionBackend for ProviderBackend {
         extras.insert("session-id".to_string(), self.session_id.clone());
         // gh #169: an explicit generation budget, so the endpoint's
         // default never decides when a summarization is cut.
-        extras.insert(
-            "max-tokens".to_string(),
-            SUMMARIZATION_MAX_TOKENS.to_string(),
-        );
+        let budget = self
+            .summarization_budget
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or(SUMMARIZATION_MAX_TOKENS);
+        extras.insert("max-tokens".to_string(), budget.to_string());
         let model = self
             .model
             .lock()

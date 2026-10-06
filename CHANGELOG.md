@@ -18,6 +18,14 @@ Dates are UTC.
   next demand votes get counted against.
 
 ### Added
+- **Compaction trigger + budget, phase 1 (gh #36).** The trigger is
+  `context_tokens > context_window − reserve` with
+  `compaction.enabled/reserve_tokens/keep_recent_tokens` (reserve 0
+  derives the old fraction behavior); the cut keeps the recent window
+  verbatim, anchors `first_kept_id` on the record, and never splits a
+  tool pair; the summary budget derives `0.8 × reserve`. Later phases
+  (split spans, recovery ordering, checkpoints) are recorded in
+  `docs/compaction.md`, not built.
 - **System-prompt files and flags (gh #68).** `~/.lca/SYSTEM.md`
   replaces the built-in preamble and `APPEND_SYSTEM.md` appends after
   project context (before the skills catalog); trusted-project files

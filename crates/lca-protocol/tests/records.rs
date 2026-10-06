@@ -168,6 +168,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 id: "a".into(),
                 replaced_from: "1".into(),
                 replaced_to: "2".into(),
+                first_kept_id: String::new(),
                 summary: "s".into(),
                 strategy: "compaction-default".into(),
                 usage: None,

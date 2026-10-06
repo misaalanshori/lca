@@ -673,7 +673,7 @@ fn wire(
         }
     };
     #[cfg(feature = "bundled-compaction-default")]
-    let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = {
+    let summarization_backend = {
         let backend = Arc::new(lca_core::ext_provider::ProviderBackend::new(
             provider.clone(),
             model_id.clone(),
@@ -693,7 +693,7 @@ fn wire(
         Some(backend)
     };
     #[cfg(not(feature = "bundled-compaction-default"))]
-    let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = None;
+    let summarization_backend: Option<Arc<lca_core::ext_provider::ProviderBackend>> = None;
     apply_enablement(&mut registry, disabled);
     let model_context_window = provider
         .list_models()
@@ -701,6 +701,22 @@ fn wire(
         .find(|model| model.id == model_id)
         .map(|model| model.context_window)
         .unwrap_or(0);
+    // gh #36 phase 1: the summarization budget derives from the same
+    // reserve the trigger uses, once the model window is known.
+    if let Some(backend) = &summarization_backend {
+        backend.set_summarization_budget(lca_core::ext_provider::summarization_max_tokens(
+            lca_core::compaction_reserve(
+                config.compaction_threshold(),
+                config.compaction_reserve_tokens(),
+                lca_core::effective_context_window(model_context_window),
+            ),
+        ));
+    }
+    #[cfg(feature = "bundled-compaction-default")]
+    let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> =
+        summarization_backend.map(|backend| backend as Arc<dyn lca_tools::CompletionBackend>);
+    #[cfg(not(feature = "bundled-compaction-default"))]
+    let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = None;
     let agent_config = AgentConfig {
         provider: provider_name.to_string(),
         model: model_id.clone(),
@@ -710,6 +726,9 @@ fn wire(
         max_iterations: config.tool_max_iterations() as u32,
         extensions: Arc::new(registry),
         compaction_threshold: config.compaction_threshold(),
+        compaction_enabled: config.compaction_enabled(),
+        compaction_reserve_tokens: config.compaction_reserve_tokens(),
+        compaction_keep_recent_tokens: config.compaction_keep_recent_tokens(),
         model_context_window,
         completion_backend,
         system_prompt: match crate::prompt::agent_system_prompt(

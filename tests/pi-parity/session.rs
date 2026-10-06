@@ -165,6 +165,7 @@ fn pi_parity_compaction_appends_marker_and_keeps_originals() {
                 id: "c1".to_string(),
                 replaced_from: "u1".to_string(),
                 replaced_to: "a1".to_string(),
+                first_kept_id: String::new(),
                 summary: "the user asked; the model answered".to_string(),
                 strategy: "parity-harness".to_string(),
                 usage: None,

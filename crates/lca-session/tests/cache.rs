@@ -110,6 +110,7 @@ fn compaction_resets_the_baseline_but_model_switches_do_not() {
             id: "c1".into(),
             replaced_from: "t1".into(),
             replaced_to: "t1".into(),
+            first_kept_id: String::new(),
             summary: "summarized".into(),
             strategy: "compaction-default".into(),
             usage: None,

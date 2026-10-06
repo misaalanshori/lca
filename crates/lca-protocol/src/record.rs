@@ -161,6 +161,11 @@ pub enum Record {
         replaced_from: String,
         /// Last replaced record id (inclusive).
         replaced_to: String,
+        /// First kept record id after the cut (gh #36 phase 1): the
+        /// next compaction starts here instead of the session start.
+        /// Empty on records written before the kept boundary existed.
+        #[serde(default)]
+        first_kept_id: String,
         /// Replacement content.
         summary: String,
         /// Name of the `compaction` extension that ran (FR-SESS-5).

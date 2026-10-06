@@ -196,6 +196,11 @@ fn phase_config(registry: ExtensionRegistry, window: u32, threshold: f64) -> Age
         extensions: Arc::new(registry),
         model_context_window: window,
         compaction_threshold: threshold,
+        // The threshold path in isolation: no keep-recent window, so
+        // the candidate is the whole pre-turn range (gh #36 phase 1
+        // derives the reserve from the threshold here, as in production
+        // when no absolute reserve is configured).
+        compaction_keep_recent_tokens: 0,
         ..default_config()
     }
 }
@@ -265,13 +270,20 @@ async fn crossing_the_threshold_compacts_once_and_the_summary_survives_a_restart
         .iter()
         .filter_map(|record| match record {
             Record::Compaction {
-                summary, strategy, ..
-            } => Some((summary, strategy)),
+                summary,
+                strategy,
+                first_kept_id,
+                ..
+            } => Some((summary, strategy, first_kept_id)),
             _ => None,
         })
         .collect();
     assert_eq!(compactions.len(), 1, "one durable record (FR-CTX-1)");
     assert_eq!(compactions[0].0, "compacted 2 records", "the range it saw");
+    assert!(
+        !compactions[0].2.is_empty(),
+        "the kept boundary is anchored (gh #36 phase 1)"
+    );
     assert_eq!(
         compactions[0].1, "phase-double",
         "FR-SESS-5's strategy name"
@@ -340,10 +352,12 @@ async fn the_cache_baseline_resets_exactly_on_the_compaction_record() {
     // t1 reports caching (write), t2 reads none of the old prompt: a
     //1500-token miss above the1024 floor, before any compaction. t3
     // crosses the threshold, t4 compacts first, then stays small.
+    // (gh #36 phase 1: the trigger is strict `>` on `window -
+    // reserve`, so the crossing sits one token past the boundary.)
     let provider = FakeProvider::builder()
         .turn(|t| t.text("ok").usage(fake_usage(900, 10, 0, 600)))
         .turn(|t| t.text("ok").usage(fake_usage(2000, 10, 0, 0)))
-        .turn(|t| t.text("ok").usage(fake_usage(3000, 10, 2000, 0)))
+        .turn(|t| t.text("ok").usage(fake_usage(3000, 10, 2001, 0)))
         .turn(|t| t.text("ok").usage(fake_usage(50, 10, 0, 0)))
         .turn(|t| t.text("ok").usage(fake_usage(50, 10, 0, 0)))
         .build();
@@ -1029,6 +1043,96 @@ fn the_completion_backend_follows_a_model_change() {
         fake.last_request().expect("request").model,
         "switched-model",
         "the session's model after /model"
+    );
+}
+
+// Verifies: gh #36 phase 1 - the summarization budget derives from
+// the reserve (`0.8 × reserve`, pi's shape): 16384 reserves a 13107
+// budget, and an unset budget keeps the stopgap constant.
+#[test]
+fn the_summarization_budget_derives_from_the_reserve() {
+    use lca_core::ext_provider::{SUMMARIZATION_MAX_TOKENS, summarization_max_tokens};
+    assert_eq!(summarization_max_tokens(16_384), 13_107);
+    assert_eq!(summarization_max_tokens(0), SUMMARIZATION_MAX_TOKENS);
+
+    let fake = Arc::new(
+        FakeProvider::builder()
+            .turn(|t| t.text("hi").usage(fake_usage(10, 2, 0, 0)))
+            .build(),
+    );
+    let backend = lca_core::ext_provider::ProviderBackend::new(fake.clone(), "m", "sess-1");
+    let messages = vec![lca_protocol::ChatMessage::text(
+        lca_protocol::MessageRole::User,
+        "hello",
+    )];
+    backend.set_summarization_budget(summarization_max_tokens(16_384));
+    backend.complete(&messages).expect("answers");
+    assert_eq!(
+        fake.last_request()
+            .expect("request")
+            .extras
+            .get("max-tokens")
+            .map(String::as_str),
+        Some("13107"),
+        "the derived budget rides the request"
+    );
+}
+
+// Verifies: gh #36 phase 1 - an absolute reserve replaces the
+// fraction: usage far below `threshold × window` still compacts when
+// it clears `window − reserve`.
+#[tokio::test]
+async fn an_absolute_reserve_replaces_the_fraction() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("ok").usage(fake_usage(1500, 10, 0, 0)))
+        .turn(|t| t.text("ok").usage(fake_usage(50, 10, 0, 0)))
+        .build();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let registry = registry_with(PhaseDouble::strategy("phase-double", calls.clone()));
+    let mut config = phase_config(registry, 10_000, 0.8);
+    // 1500 never crosses 0.8 × 10000, but clears 10000 − 9000.
+    config.compaction_reserve_tokens = 9000;
+    let mut h = harness("absolute-reserve", provider, config);
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: Vec::new(),
+        asked: Vec::new(),
+    };
+    turn(&mut h, "first", &mut sink, &mut prompt).await;
+    turn(&mut h, "second", &mut sink, &mut prompt).await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the absolute reserve fired where the fraction would not"
+    );
+}
+
+// Verifies: gh #36 phase 1 - disabled means no compaction and no
+// error: the turn runs clean over a crossing usage.
+#[tokio::test]
+async fn disabled_compaction_never_fires() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("ok").usage(fake_usage(9000, 10, 0, 0)))
+        .turn(|t| t.text("ok").usage(fake_usage(9000, 10, 0, 0)))
+        .build();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let registry = registry_with(PhaseDouble::strategy("phase-double", calls.clone()));
+    let mut config = phase_config(registry, 10_000, 0.5);
+    config.compaction_enabled = false;
+    let mut h = harness("disabled-compaction", provider, config);
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: Vec::new(),
+        asked: Vec::new(),
+    };
+    for index in 0..2 {
+        let outcome = turn(&mut h, &format!("turn {index}"), &mut sink, &mut prompt).await;
+        assert_eq!(outcome.status, lca_core::TurnStatus::Ok, "turn {index}");
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "never fired, never errored"
     );
 }
 

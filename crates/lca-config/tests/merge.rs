@@ -28,6 +28,13 @@ fn defaults_match_the_documented_key_reference() {
         "model defaults to the provider's own default"
     );
     assert_eq!(config.compaction_threshold(), 0.8);
+    assert!(config.compaction_enabled(), "on by default");
+    assert_eq!(
+        config.compaction_reserve_tokens(),
+        0,
+        "0 = derive the reserve from the threshold fraction"
+    );
+    assert_eq!(config.compaction_keep_recent_tokens(), 20_000);
     assert_eq!(config.provider_retry_limit(), 3);
     assert_eq!(config.tool_timeout_seconds(), 120);
     assert_eq!(config.tool_result_limit_bytes(), 65536);
@@ -601,5 +608,43 @@ fn skills_inject_matched_defaults_off_and_loads_from_file() {
     assert_eq!(
         config.source_of("skills.inject_matched"),
         lca_config::MergeSource::UserFile
+    );
+}
+
+// Verifies: gh #36 phase 1 - the compaction budget keys load from the
+// user file and report their source; a bad value names its key.
+#[test]
+fn compaction_budget_keys_load_and_a_bad_value_names_its_key() {
+    let dir = scratch("compaction-budget");
+    write(
+        &dir.join("user.toml"),
+        "[compaction]\nenabled = false\nreserve_tokens = 4096\nkeep_recent_tokens = 5000\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert!(!config.compaction_enabled());
+    assert_eq!(config.compaction_reserve_tokens(), 4096);
+    assert_eq!(config.compaction_keep_recent_tokens(), 5000);
+    assert_eq!(
+        config.source_of("compaction.reserve_tokens"),
+        lca_config::MergeSource::UserFile
+    );
+
+    let bad = scratch("compaction-budget-bad");
+    write(
+        &bad.join("user.toml"),
+        "[compaction]\nreserve_tokens = -5\n",
+    );
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(bad.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("rejects");
+    assert!(
+        err.to_string().contains("compaction.reserve_tokens"),
+        "{err}"
     );
 }

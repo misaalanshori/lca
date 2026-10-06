@@ -42,6 +42,7 @@ fn compaction(id: &str) -> Record {
         id: id.to_string(),
         replaced_from: "u0".to_string(),
         replaced_to: "a0".to_string(),
+        first_kept_id: String::new(),
         summary: "summary".to_string(),
         strategy: "parity-harness".to_string(),
         usage: None,

@@ -249,6 +249,7 @@ proptest! {
             id: "c0".into(),
             replaced_from: ids[start].clone(),
             replaced_to: ids[end].clone(),
+            first_kept_id: String::new(),
             summary: "summary".into(),
             strategy: "test".into(),
             usage: None,

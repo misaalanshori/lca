@@ -300,7 +300,7 @@ FR-SESS-2. WHEN the user runs the resume command, the agent SHALL list sessions 
 
 FR-SESS-3. WHEN the user selects a message and asks to fork, the agent SHALL create a new session that shares history up to that message.
 
-FR-SESS-4. WHEN context use crosses the configured threshold, the agent SHALL invoke the enabled `compaction` extension.
+FR-SESS-4. WHEN context use exceeds the context window minus the configured reserve (`compaction.reserve_tokens`, defaulting to the `compaction.threshold` fraction derivation), and automatic compaction is enabled (`compaction.enabled`), the agent SHALL invoke the enabled `compaction` extension, keeping the most recent `compaction.keep_recent_tokens` verbatim past a cut that never splits a tool-call/result pair (gh #36 phase 1).
 
 FR-SESS-5. The agent SHALL perform compaction exclusively through a `compaction` world extension; there is no separate built-in compaction path outside that world. A default extension SHALL be enabled unless the user disables it.
 

@@ -782,7 +782,7 @@ impl Agent<'_> {
         Ok(None)
     }
 
-    /// FR-SESS-4's threshold check, then the shared compaction call.
+    /// FR-SESS-4's budget check, then the shared compaction call.
     /// Returns whether a record was written (the caller re-reads).
     async fn maybe_compact(
         &self,
@@ -790,6 +790,10 @@ impl Agent<'_> {
         turn_record_id: &str,
         sink: &mut dyn TurnSink,
     ) -> bool {
+        // gh #36 phase 1: disabled means no compaction and no error.
+        if !self.config.compaction_enabled {
+            return false;
+        }
         let threshold = self.config.compaction_threshold;
         if threshold <= 0.0 {
             return false;
@@ -807,16 +811,28 @@ impl Agent<'_> {
         let Some(last_prompt) = last_prompt else {
             return false;
         };
-        if (last_prompt as f64) < (window as f64) * threshold {
+        let reserve = super::compact::compaction_reserve(
+            threshold,
+            self.config.compaction_reserve_tokens,
+            window,
+        );
+        if !super::compact::compaction_fires(last_prompt, window, reserve) {
             return false;
         }
-        // The candidate range: everything visible before this turn's
-        // own user record, minus records without ids (session-start).
+        // The candidate range ends at this turn's own user record; the
+        // cut planner holds the keep-recent window verbatim, anchors
+        // the kept boundary, and never splits a tool pair.
         let cut = records
             .iter()
             .position(|record| record.id() == Some(turn_record_id))
             .unwrap_or(records.len());
-        let candidate: Vec<Record> = records[..cut]
+        let plan = super::compact::plan_cut(
+            records,
+            cut,
+            self.config.compaction_keep_recent_tokens,
+            last_prompt,
+        );
+        let candidate: Vec<Record> = records[plan.start..plan.kept_start]
             .iter()
             .filter(|record| record.id().is_some())
             .cloned()
@@ -832,6 +848,7 @@ impl Agent<'_> {
             &self.config.extensions,
             self.config.completion_backend.as_ref(),
             candidate,
+            &plan.first_kept_id,
             sink,
             "threshold",
         )
@@ -1017,7 +1034,10 @@ impl Agent<'_> {
 /// ponytail: a fixed 128k; a per-model catalog is the accurate upgrade.
 const FALLBACK_CONTEXT_WINDOW: u32 = 128_000;
 
-fn effective_context_window(configured: u32) -> u32 {
+/// The effective window, shared with the front ends (gh #36 phase 1):
+/// they derive the summarization budget from the same window the
+/// trigger uses.
+pub fn effective_context_window(configured: u32) -> u32 {
     if configured > 0 {
         configured
     } else {
