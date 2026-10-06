@@ -112,10 +112,11 @@ fn dollar_var_values_interpolate_from_the_environment() {
 fn bang_command_values_never_execute() {
     let probe = std::env::temp_dir().join("lca-must-not-exist-47");
     let _ = std::fs::remove_file(&probe);
-    let toml_text = format!(
-        "[[model]]\nid = \"m1\"\ncontext_window = \"!touch {}\"\n",
-        probe.display()
-    );
+    // Forward slashes: a Windows temp path carries backslashes, which
+    // are not valid TOML escapes and would fail parsing before the
+    // refusal is even reached. The value stays hostile either way.
+    let hostile = probe.display().to_string().replace('\\', "/");
+    let toml_text = format!("[[model]]\nid = \"m1\"\ncontext_window = \"!touch {hostile}\"\n");
     let overrides = parse_model_overrides(&toml_text);
     assert_eq!(overrides.len(), 1);
     assert_eq!(
