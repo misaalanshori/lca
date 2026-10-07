@@ -10,16 +10,15 @@
 use std::collections::BTreeMap;
 
 // Verifies: pi:packages/coding-agent/docs/compaction.md#when-it-triggers
-// (auto-compaction triggers on a token budget: `reserveTokens`/`keepRecentTokens`).
-// Witness for #36 (EFG-001, RM-012/RM-013): LCA still triggers on a context
-// fraction (`compaction.threshold`), so the budget keys do not exist yet.
+// (auto-compaction triggers on a token budget). Landed gh #36 phase 1:
+// the budget keys exist in our snake_case vocabulary, so this witness
+// runs un-ignored (its camelCase spelling predates the vocabulary).
 #[test]
-#[ignore = "witness for #36: compaction.reserveTokens is not a key yet"]
 fn pi_parity_compaction_uses_token_budget_trigger() {
     let mut flags = BTreeMap::new();
-    flags.insert("compaction.reserveTokens".to_string(), "16384".to_string());
+    flags.insert("compaction.reserve_tokens".to_string(), "16384".to_string());
     flags.insert(
-        "compaction.keepRecentTokens".to_string(),
+        "compaction.keep_recent_tokens".to_string(),
         "20000".to_string(),
     );
     let config = lca_config::Config::load(&lca_config::LoadInput {

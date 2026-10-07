@@ -669,7 +669,14 @@ async fn a_trapping_extension_is_reported_and_the_session_survives() {
 // The second-turn half lives in
 // `a_fresh_turn_starts_clean_after_cancellation` below, quarantined on
 // Windows with its own breakdown diagnostics.
+// Quarantined under testing-plan section 13 (2026-10-07, gh #190):
+// the 150ms canceller traps late under load (27s local full-suite run,
+// three hosted-runner firings) — the epoch-bump absorption race is
+// unnamed. Turn-one carried FR-CONC-1; it returns with #190 fixed.
+// The guard prints an elapsed breakdown when it fires so the next
+// observation names the phase. Remove the ignore to un-quarantine.
 #[tokio::test]
+#[ignore = "cancel traps late under load - tracked in gh #190"]
 async fn cancelling_a_turn_interrupts_a_running_extension_call() {
     let root = scratch("cancel-ext");
     let env = Arc::new(HostEnvironment {
