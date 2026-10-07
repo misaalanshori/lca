@@ -253,7 +253,7 @@ macro_rules! subscription_wasm_dispatcher {
         /// The `completion-stream` resource: a pull stream over the kit
         /// driver, so events leave as the host yields body chunks.
         pub struct QueuedStream {
-            driver: RefCell<Option<::lca_subscription::ResponseStreamDriver<'static>>>,
+            driver: RefCell<Option<::lca_wire_openai::ResponseStreamDriver<'static>>>,
         }
 
         impl GuestCompletionStream for QueuedStream {
@@ -278,7 +278,7 @@ macro_rules! subscription_wasm_dispatcher {
         /// build the Responses body, send it.
         fn open_stream(
             request: &lca_protocol::CompletionRequest,
-        ) -> Result<::lca_subscription::ResponseStreamDriver<'static>, String> {
+        ) -> Result<::lca_wire_openai::ResponseStreamDriver<'static>, String> {
             let token =
                 ::lca_subscription::access_token(&GUEST_CAP, &$spec).map_err(|err| err.0)?;
             let account_id = $stored(&GUEST_CAP, "account_id");
@@ -298,7 +298,7 @@ macro_rules! subscription_wasm_dispatcher {
                 .collect::<Vec<_>>()
                 .join("\n");
             let effort = request.extras.get("reasoning-effort").map(String::as_str);
-            let body = ::lca_subscription::build_responses_body(
+            let body = ::lca_wire_openai::build_responses_body(
                 request,
                 &system,
                 &request.model,
@@ -316,7 +316,13 @@ macro_rules! subscription_wasm_dispatcher {
                 .iter()
                 .map(|(key, value)| (key.as_str(), value.as_str()))
                 .collect();
-            ::lca_subscription::ResponseStreamDriver::open(&GUEST_CAP, &url, &refs, &body_bytes)
+            ::lca_wire_openai::ResponseStreamDriver::open(
+                &GUEST_CAP,
+                &url,
+                &refs,
+                &body_bytes,
+                &|| ::lca_subscription::purge_tokens(&GUEST_CAP),
+            )
                 .map_err(|failure| failure.message)
         }
 

@@ -1,0 +1,16 @@
+[package]
+name = "lca-wire-anthropic"
+description = "The shared Anthropic-family wire protocol kit (gh #189): the Messages request builder and SSE decoder (text, thinking with signature preservation, tool use, prompt-cache breakpoints, usage buckets). Minimal viable shape per pi's anthropic-messages grammar; thinking-signature continuity pairs with #41."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lca-protocol = { path = "../lca-protocol" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

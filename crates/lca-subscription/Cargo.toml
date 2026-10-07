@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 lca-protocol = { path = "../lca-protocol" }
+lca-wire-openai = { path = "../lca-wire-openai" }
 serde_json.workspace = true
 # PKCE S256 (RFC 7636): the code challenge is a SHA-256 of the verifier.
 sha2.workspace = true

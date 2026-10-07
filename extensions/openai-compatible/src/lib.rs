@@ -23,9 +23,8 @@
 use std::collections::BTreeMap;
 
 use lca_protocol::CompletionRequest;
-use lca_protocol::{
-    ChatMessage, ContentBlock, IdentityOutcome, MessageRole, StreamEvent, ToolSpec, Usage,
-};
+use lca_protocol::{IdentityOutcome, StreamEvent};
+use lca_wire_openai::{SseDecoder, StreamFailure, to_wire, tools_wire};
 
 // The capability traits live with the protocol types now that more than
 // one provider shares them; re-exported so this crate's public surface
@@ -127,141 +126,6 @@ pub use models_override::{
 fn clamp_cache_key(key: &str) -> String {
     key.chars().take(64).collect()
 }
-
-/// Whether an HTTP status is worth retrying (FR-CORE-6).
-pub fn classify_status(status: u16) -> bool {
-    status == 429 || status == 408 || (500..=599).contains(&status)
-}
-
-fn class_for_status(status: u16) -> &'static str {
-    match status {
-        401 | 403 => "auth",
-        400..=499 => "invalid",
-        _ => "transport",
-    }
-}
-
-/// How a shared stream run failed, in the vocabulary the core's
-/// `ProviderError` speaks.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StreamFailure {
-    /// Human-readable message.
-    pub message: String,
-    /// Class for the headless envelope (`docs/headless.md`).
-    pub class: &'static str,
-    /// Whether a retry could help (FR-CORE-6).
-    pub retryable: bool,
-}
-
-impl From<lca_protocol::CapabilityError> for StreamFailure {
-    fn from(err: lca_protocol::CapabilityError) -> Self {
-        use lca_protocol::CapabilityError as E;
-        // A refusal is a configuration problem, not a flaky network:
-        // never retried, and its class keeps it out of "transport".
-        let (class, retryable) = match &err {
-            E::Permission(_) | E::NotGranted(_) | E::NotFound(_) | E::Invalid(_) => {
-                ("invalid", false)
-            }
-            E::Io(_) | E::Timeout(_) => ("transport", true),
-        };
-        StreamFailure {
-            message: err.to_string(),
-            class,
-            retryable,
-        }
-    }
-}
-
-/// Map the resolved message list onto the OpenAI chat shape. Reasoning
-/// blocks are model-internal and are not resent. Text and image blocks both
-/// map: text becomes the string content, and a message with an image becomes
-/// the content-part array OpenAI uses for vision (the "cannot carry images"
-/// case is the text stub the attach path already put in the message).
-fn to_wire(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
-    messages
-        .iter()
-        .map(|message| {
-            let role = match message.role {
-                MessageRole::System => "system",
-                MessageRole::User => "user",
-                MessageRole::Assistant => "assistant",
-                MessageRole::Tool => "tool",
-            };
-            let text: String = message
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    ContentBlock::Reasoning { .. } => None,
-                    ContentBlock::ToolCall { .. } => None,
-                    ContentBlock::Image { .. } => None,
-                })
-                .collect();
-            let mut wire = serde_json::json!({ "role": role, "content": text });
-            if message
-                .content
-                .iter()
-                .any(|block| matches!(block, ContentBlock::Image { .. }))
-            {
-                let mut parts = Vec::new();
-                if !text.is_empty() {
-                    parts.push(serde_json::json!({ "type": "text", "text": text }));
-                }
-                for block in &message.content {
-                    if let ContentBlock::Image { media_type, bytes } = block {
-                        parts.push(serde_json::json!({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": format!(
-                                    "data:{media_type};base64,{}",
-                                    lca_protocol::base64_encode(bytes)
-                                ),
-                            },
-                        }));
-                    }
-                }
-                wire["content"] = serde_json::Value::Array(parts);
-            }
-            if !message.tool_calls.is_empty() {
-                let calls: Vec<serde_json::Value> = message
-                    .tool_calls
-                    .iter()
-                    .map(|call| {
-                        serde_json::json!({
-                            "id": call.call_id,
-                            "type": "function",
-                            "function": { "name": call.name, "arguments": call.arguments },
-                        })
-                    })
-                    .collect();
-                wire["tool_calls"] = serde_json::Value::Array(calls);
-            }
-            if let Some(call_id) = &message.tool_call_id {
-                wire["tool_call_id"] = serde_json::Value::String(call_id.clone());
-            }
-            wire
-        })
-        .collect()
-}
-
-fn tools_wire(tools: &[ToolSpec]) -> Vec<serde_json::Value> {
-    tools
-        .iter()
-        .map(|tool| {
-            serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters,
-                }
-            })
-        })
-        .collect()
-}
-
-mod sse;
-pub use sse::{SseDecoder, parse_sse};
 
 /// A pull-based driver over one streaming completion: [`next_event`] returns
 /// one typed event at a time, reading more of the response body only when its
@@ -397,10 +261,14 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
             } else {
                 format!("provider returned HTTP {status}: {message}")
             };
+            // The kit classifies the status; this extension only shapes
+            // the message (the model hint above stays local UX, never
+            // double-prefixed by the kit's envelope).
+            let classified = lca_wire_openai::failure_for_status(status, &message);
             return Err(StreamFailure {
                 message,
-                class: class_for_status(status),
-                retryable: classify_status(status),
+                class: classified.class,
+                retryable: classified.retryable,
             });
         }
         Ok(StreamDriver {
@@ -1054,66 +922,5 @@ mod tests {
             r#"{"model":"deepseek-v4.1-flash"}"#
         );
         assert_eq!(error_message("", 503), "HTTP 503");
-    }
-
-    // Verifies: ADR-0029 - a message with an image maps to the OpenAI
-    // content-part array with a base64 data URI; a text-only message keeps
-    // the plain string content (no behavior change for the common case).
-    #[test]
-    fn an_image_maps_to_the_vision_content_array() {
-        let message = ChatMessage {
-            role: MessageRole::User,
-            content: vec![
-                ContentBlock::Text {
-                    text: "look".to_string(),
-                },
-                ContentBlock::Image {
-                    media_type: "image/png".to_string(),
-                    bytes: vec![1, 2, 3],
-                },
-            ],
-            tool_calls: Vec::new(),
-            tool_call_id: None,
-            usage: None,
-            extras: Default::default(),
-        };
-        let wire = to_wire(&[message]);
-        let parts = wire[0]["content"].as_array().expect("array content");
-        assert_eq!(parts[0]["type"], "text");
-        assert_eq!(parts[1]["type"], "image_url");
-        assert_eq!(parts[1]["image_url"]["url"], "data:image/png;base64,AQID");
-
-        let text_only = to_wire(&[ChatMessage::text(MessageRole::User, "hi")]);
-        assert_eq!(
-            text_only[0]["content"], "hi",
-            "no image keeps the string form"
-        );
-    }
-
-    #[test]
-    fn a_body_with_no_sse_frames_reports_an_error() {
-        let mut events = Vec::new();
-        parse_sse(b"this is not SSE at all\n", &mut |event| events.push(event));
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, StreamEvent::Error { .. })),
-            "a non-SSE body must surface, not read as an empty success: {events:?}"
-        );
-    }
-
-    #[test]
-    fn a_valid_stream_with_no_content_is_not_an_error() {
-        let mut events = Vec::new();
-        parse_sse(
-            b"data: {\"choices\":[{\"delta\":{}}]}\n\ndata: [DONE]\n\n",
-            &mut |event| events.push(event),
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, StreamEvent::Error { .. })),
-            "an empty but well-formed stream is a valid empty answer: {events:?}"
-        );
     }
 }

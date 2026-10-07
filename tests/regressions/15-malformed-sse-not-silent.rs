@@ -6,7 +6,7 @@
 //! Verifies: FR-CORE-4.
 
 use lca_protocol::StreamEvent;
-use openai_compatible::parse_sse;
+use lca_wire_openai::parse_sse;
 
 fn events(body: &[u8]) -> Vec<StreamEvent> {
     let mut events = Vec::new();

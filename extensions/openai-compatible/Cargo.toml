@@ -13,6 +13,7 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 lca-protocol = { path = "../../crates/lca-protocol" }
+lca-wire-openai = { path = "../../crates/lca-wire-openai" }
 serde_json.workspace = true
 # Parsing the extension's own `resources/provider-presets.toml` (ADR-0031).
 toml.workspace = true

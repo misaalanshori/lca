@@ -1,5 +1,9 @@
 use super::*;
 use std::sync::Arc;
+// Names this handle used to inherit through `super::*` from the crate
+// root's imports; the engine move (gh #189) trimmed those, so the
+// handle names its own protocol types now.
+use lca_protocol::Usage;
 
 use lca_ext_abi::{DeliveryMode, DispatchFuture, ExtensionDispatch, World};
 use lca_protocol::{DispatchError, ModelInfo};

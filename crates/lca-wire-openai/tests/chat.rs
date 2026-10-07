@@ -2,7 +2,7 @@
 //! only (testing plan section 4).
 
 use lca_protocol::StreamEvent;
-use openai_compatible::{SseDecoder, classify_status, parse_sse};
+use lca_wire_openai::{SseDecoder, classify_status, parse_sse};
 
 fn events_of(body: &str) -> Vec<StreamEvent> {
     let mut sink = Vec::new();
@@ -160,4 +160,65 @@ fn a_length_finish_stays_quiet_when_no_budget_was_set() {
         })
         .collect();
     assert_eq!(text, "partial");
+}
+
+use lca_protocol::{ChatMessage, ContentBlock, MessageRole, StreamEvent as E2};
+use lca_wire_openai::to_wire;
+
+// Verifies: ADR-0029 - a message with an image maps to the OpenAI
+// content-part array with a base64 data URI; a text-only message keeps
+// the plain string content (no behavior change for the common case).
+// Moved with the mapper from `openai-compatible` (gh #189).
+#[test]
+fn an_image_maps_to_the_vision_content_array() {
+    let message = ChatMessage {
+        role: MessageRole::User,
+        content: vec![
+            ContentBlock::Text {
+                text: "look".to_string(),
+            },
+            ContentBlock::Image {
+                media_type: "image/png".to_string(),
+                bytes: vec![1, 2, 3],
+            },
+        ],
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        usage: None,
+        extras: Default::default(),
+    };
+    let wire = to_wire(&[message]);
+    let parts = wire[0]["content"].as_array().expect("array content");
+    assert_eq!(parts[0]["type"], "text");
+    assert_eq!(parts[1]["type"], "image_url");
+    assert_eq!(parts[1]["image_url"]["url"], "data:image/png;base64,AQID");
+
+    let text_only = to_wire(&[ChatMessage::text(MessageRole::User, "hi")]);
+    assert_eq!(
+        text_only[0]["content"], "hi",
+        "no image keeps the string form"
+    );
+}
+
+#[test]
+fn a_body_with_no_sse_frames_reports_an_error() {
+    let mut events = Vec::new();
+    lca_wire_openai::parse_sse(b"this is not SSE at all\n", &mut |event| events.push(event));
+    assert!(
+        events.iter().any(|event| matches!(event, E2::Error { .. })),
+        "a non-SSE body must surface, not read as an empty success: {events:?}"
+    );
+}
+
+#[test]
+fn a_valid_stream_with_no_content_is_not_an_error() {
+    let mut events = Vec::new();
+    lca_wire_openai::parse_sse(
+        b"data: {\"choices\":[{\"delta\":{}}]}\n\ndata: [DONE]\n\n",
+        &mut |event| events.push(event),
+    );
+    assert!(
+        !events.iter().any(|event| matches!(event, E2::Error { .. })),
+        "an empty but well-formed stream is a valid empty answer: {events:?}"
+    );
 }

@@ -1,18 +1,20 @@
 //! The shared kit for subscription-gateway provider extensions (gh
-//! #63): one OAuth PKCE login/refresh flow and one Responses-protocol
-//! stream core, parameterized by small spec tables instead of branches.
-//! `extensions/codex` and `extensions/grok` are thin specs over this;
-//! provider quirks live in their tables, never in core (#157).
+//! #63): one OAuth PKCE login/refresh flow, parameterized by small
+//! spec tables instead of branches. `extensions/codex` and
+//! `extensions/grok` are thin specs over this; provider quirks live in
+//! their tables, never in core (#157). The Responses wire protocol
+//! this kit used to carry lives in `lca-wire-openai` now (gh #189).
 
-pub mod responses;
 pub mod wasm;
 
-pub use responses::{ResponseStreamDriver, ResponsesStream, build_responses_body, responses_usage};
-
 use lca_protocol::{OauthCap, ProviderCap};
+use lca_wire_openai::StreamFailure;
 
 /// Re-exported so extensions name the outcome in their signatures.
 pub use lca_protocol::IdentityOutcome;
+
+/// The kit's error helpers, still used by the token calls below.
+pub use lca_wire_openai::json_error_message;
 
 /// An identity operation failed; the string is shown to the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,50 +33,6 @@ impl From<IdentityFailure> for StreamFailure {
             class: "invalid",
             retryable: false,
         }
-    }
-}
-
-/// How a provider call failed, in the vocabulary the core's
-/// `ProviderError` speaks (`docs/headless.md`'s classes).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StreamFailure {
-    /// Human-readable message.
-    pub message: String,
-    /// Class for the headless envelope.
-    pub class: &'static str,
-    /// Whether a retry could help (FR-CORE-6).
-    pub retryable: bool,
-}
-
-impl From<lca_protocol::CapabilityError> for StreamFailure {
-    fn from(err: lca_protocol::CapabilityError) -> Self {
-        use lca_protocol::CapabilityError as E;
-        let (class, retryable) = match &err {
-            E::Permission(_) | E::NotGranted(_) | E::NotFound(_) | E::Invalid(_) => {
-                ("invalid", false)
-            }
-            E::Timeout(_) => ("transport", true),
-            E::Io(_) => ("transport", true),
-        };
-        StreamFailure {
-            message: err.to_string(),
-            class,
-            retryable,
-        }
-    }
-}
-
-/// Classify an HTTP status into the headless envelope's classes.
-pub fn failure_for_status(status: u16, detail: &str) -> StreamFailure {
-    let class = match status {
-        401 | 403 => "auth",
-        400..=499 => "invalid",
-        _ => "transport",
-    };
-    StreamFailure {
-        message: format!("provider returned HTTP {status}: {detail}"),
-        class,
-        retryable: status == 429 || status == 408 || (500..=599).contains(&status),
     }
 }
 
@@ -506,24 +464,6 @@ pub fn run_logout(cap: &dyn ProviderCap, spec: &OAuthSpec) -> IdentityOutcome {
         }
     }
     IdentityOutcome::Ok
-}
-
-/// The one-line error inside a vendor JSON error envelope, else the
-/// first 200 chars of the body.
-pub fn json_error_message(text: &str) -> String {
-    let json: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
-    json.get("error")
-        .and_then(|error| error.get("message"))
-        .and_then(|message| message.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            let text = text.trim();
-            if text.is_empty() {
-                "unknown error".to_string()
-            } else {
-                text.chars().take(200).collect()
-            }
-        })
 }
 
 /// Seconds since the Unix epoch (bounds, labels, expiries).

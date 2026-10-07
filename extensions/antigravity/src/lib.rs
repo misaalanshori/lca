@@ -213,34 +213,10 @@ impl From<StreamFailure> for IdentityFailure {
 // Shared HTTP over the capability surface
 // ---------------------------------------------------------------------------
 
-/// How a provider call failed, in the vocabulary the core's
-/// `ProviderError` speaks (`docs/headless.md`'s classes).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StreamFailure {
-    /// Human-readable message.
-    pub message: String,
-    /// Class for the headless envelope.
-    pub class: &'static str,
-    /// Whether a retry could help (FR-CORE-6).
-    pub retryable: bool,
-}
-
-impl From<lca_protocol::CapabilityError> for StreamFailure {
-    fn from(err: lca_protocol::CapabilityError) -> Self {
-        use lca_protocol::CapabilityError as E;
-        let (class, retryable) = match &err {
-            E::Permission(_) | E::NotGranted(_) | E::NotFound(_) | E::Invalid(_) => {
-                ("invalid", false)
-            }
-            E::Io(_) | E::Timeout(_) => ("transport", true),
-        };
-        StreamFailure {
-            message: err.to_string(),
-            class,
-            retryable,
-        }
-    }
-}
+// The failure vocabulary lives in the shared wire kit (gh #189);
+// this extension keeps only its deliberate difference: an identity
+// failure here is `auth` (re-authenticate), not `invalid`.
+use lca_wire_openai::{StreamFailure, failure_for_status, json_error_message};
 
 impl From<IdentityFailure> for StreamFailure {
     fn from(err: IdentityFailure) -> Self {
@@ -249,19 +225,6 @@ impl From<IdentityFailure> for StreamFailure {
             class: "auth",
             retryable: false,
         }
-    }
-}
-
-fn failure_for_status(status: u16, detail: &str) -> StreamFailure {
-    let class = match status {
-        401 | 403 => "auth",
-        400..=499 => "invalid",
-        _ => "transport",
-    };
-    StreamFailure {
-        message: format!("provider returned HTTP {status}: {detail}"),
-        class,
-        retryable: status == 429 || status == 408 || (500..=599).contains(&status),
     }
 }
 
@@ -295,22 +258,6 @@ fn post_json(
     }
     let _ = cap.net_close_response(handle);
     Ok((status, String::from_utf8_lossy(&collected).into_owned()))
-}
-
-fn json_error_message(text: &str) -> String {
-    let json: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
-    json.get("error")
-        .and_then(|error| error.get("message"))
-        .and_then(|message| message.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            let text = text.trim();
-            if text.is_empty() {
-                "unknown error".to_string()
-            } else {
-                text.chars().take(200).collect()
-            }
-        })
 }
 
 // ---------------------------------------------------------------------------

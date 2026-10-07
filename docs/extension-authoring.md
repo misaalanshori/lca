@@ -223,6 +223,8 @@ default_profile = true
 
 The host prompts for the declared fields in order and submits the answers to your `login-submit` like any preset. `kind = "custom"` keeps the host's preset-less treatment (no `preset` pair is stored; the extension name stands in), and `default_profile = true` stores bare default-profile keys, like a direct setup. Any field ids are allowed - the host prompts generically and masks `api-key`-shaped ids - and the option rides the same consent and discovery path as every preset.
 
+Build on the shared wire kits (gh #189) instead of writing your own SSE parser. An OpenAI-family provider (`/v1/chat/completions` and/or `/v1/responses`) depends on `lca-wire-openai`: `chat_completions::{SseDecoder, parse_sse, to_wire, tools_wire, map_usage}` for the Completions shape, `responses::{build_responses_body, ResponsesStream, responses_usage, ResponseStreamDriver}` for the Responses shape, and the shared `StreamFailure` vocabulary for every failure. The Responses driver takes an `on_unauthorized` callback for the 401 purge - credential lifecycle stays the caller's (`lca_subscription::purge_tokens`). An Anthropic-family provider (`/v1/messages`) depends on `lca-wire-anthropic`: `build_messages_body` (with `cache_breakpoints` for pi's ephemeral markers) and `AnthropicStream` (thinking signatures emit as `thinking-signature` vendor events until #41). Both kits build for native targets and `wasm32-wasip2`; a second copy of any of these engines outside the kits fails `scripts/docs-consistency.sh`.
+
 Refresh expired tokens before the next call, not on failure. Waiting for a 401 costs a round trip and produces a confusing error if the refresh also fails.
 
 ## Capabilities in practice

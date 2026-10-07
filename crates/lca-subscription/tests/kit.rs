@@ -6,7 +6,6 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use lca_protocol::{CapabilityError, OauthCap, ProviderCap};
-use lca_subscription::responses::{ResponsesStream, build_responses_body};
 use lca_subscription::{AccountStrategy, IdentityOutcome, OAuthSpec};
 
 /// One recorded request: method, URL, headers, body.
@@ -265,105 +264,4 @@ fn a_state_mismatch_fails_before_the_exchange() {
     let outcome = lca_subscription::run_login(&cap, &oauth, &spec);
     assert!(outcome.is_err());
     assert!(cap.request_bodies().is_empty(), "no exchange attempted");
-}
-
-// Verifies: gh #63 - the Responses body pins pi's shape: `store`
-// false, instructions, input items, tools, and the effort mapping.
-#[test]
-fn the_responses_body_pins_pi_shape() {
-    use lca_protocol::{CompletionRequest, ContentBlock, MessageRole, ToolSpec};
-    let request = CompletionRequest {
-        messages: vec![
-            lca_protocol::ChatMessage {
-                role: MessageRole::User,
-                content: vec![ContentBlock::Text {
-                    text: "hi".to_string(),
-                }],
-                tool_calls: Vec::new(),
-                tool_call_id: None,
-                usage: None,
-                extras: Default::default(),
-            },
-            lca_protocol::ChatMessage {
-                role: MessageRole::Tool,
-                content: vec![ContentBlock::Text {
-                    text: "out".to_string(),
-                }],
-                tool_calls: Vec::new(),
-                tool_call_id: Some("c1".to_string()),
-                usage: None,
-                extras: Default::default(),
-            },
-        ],
-        tools: vec![ToolSpec {
-            name: "read".to_string(),
-            description: "read".to_string(),
-            parameters: serde_json::json!({"type": "object"}),
-            extras: Default::default(),
-        }],
-        model: "m".to_string(),
-        stable_prefix: 0,
-        extras: Default::default(),
-    };
-    let body = build_responses_body(&request, "sys", "m", Some("minimal"));
-    assert_eq!(body["store"], false);
-    assert_eq!(body["model"], "m");
-    assert_eq!(body["instructions"], "sys");
-    assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
-    assert_eq!(body["input"][1]["type"], "function_call_output");
-    assert_eq!(body["tools"][0]["type"], "function");
-    assert_eq!(body["reasoning"]["effort"], "low", "minimal maps to low");
-}
-
-// Verifies: gh #63 - the SSE mapper turns the Responses event shapes
-// into typed events, closing calls on `.done` with whole arguments
-// when no deltas came.
-#[test]
-fn the_sse_mapper_turns_responses_events_typed() {
-    use lca_protocol::StreamEvent;
-    let mut stream = ResponsesStream::new();
-    let mut event = |payload: serde_json::Value| stream.feed(&payload);
-    let added = serde_json::json!({
-        "type": "response.output_item.added",
-        "output_index": 0,
-        "item": {"type": "function_call", "call_id": "c1", "name": "read"},
-    });
-    assert_eq!(
-        event(added),
-        vec![StreamEvent::ToolCallStart {
-            call_id: "c1".to_string(),
-            name: "read".to_string(),
-        }]
-    );
-    let delta = serde_json::json!({
-        "type": "response.function_call_arguments.delta",
-        "output_index": 0,
-        "delta": "{\"path\":",
-    });
-    assert!(matches!(
-        event(delta)[..],
-        [StreamEvent::ToolCallArgDelta { .. }]
-    ));
-    let done = serde_json::json!({
-        "type": "response.function_call_arguments.done",
-        "output_index": 0,
-        "arguments": "{\"path\":\"a.txt\"}",
-    });
-    let events = event(done);
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            StreamEvent::ToolCallArgDelta { delta, .. } if delta == "\"a.txt\"}"
-        )),
-        "the suffix past the fragments streams: {events:?}"
-    );
-    assert!(events.iter().any(|event| matches!(
-        event,
-        StreamEvent::ToolCallEnd { call_id } if call_id == "c1"
-    )));
-    let completed = serde_json::json!({
-        "type": "response.completed",
-        "response": {"usage": {"input_tokens": 10, "output_tokens": 3}},
-    });
-    assert!(matches!(event(completed)[..], [StreamEvent::Usage { .. }]));
 }

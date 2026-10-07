@@ -1,0 +1,16 @@
+[package]
+name = "lca-wire-openai"
+description = "The shared OpenAI-family wire protocol kit (gh #189): the Chat Completions SSE decoder and request mappers plus the Responses request builder and event mapper. Pure protocol over plain values and the host's ProviderCap; provider differences (endpoints, headers, credentials) stay in the extensions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lca-protocol = { path = "../lca-protocol" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

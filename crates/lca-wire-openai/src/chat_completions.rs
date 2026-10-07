@@ -1,10 +1,12 @@
-//! The streaming response decoder: bytes in, typed events out. Split
-//! from `lib.rs` for the 1,200-line ceiling (gate 11); the public
-//! surface (`parse_sse`, `SseDecoder`) is re-exported there unchanged.
+//! The Chat Completions wire engine (`POST /v1/chat/completions`):
+//! the SSE decoder, the request mappers (messages with vision parts and
+//! tool calls, tool declarations), and the usage mapper. Extracted
+//! verbatim from `extensions/openai-compatible` (gh #189); the extension
+//! keeps only transport, settings, presets, and credentials.
 
 use std::collections::BTreeMap;
 
-use lca_protocol::{StreamEvent, Usage};
+use lca_protocol::{ChatMessage, ContentBlock, MessageRole, StreamEvent, ToolSpec, Usage};
 
 /// Streaming response decoder: feed it bytes, it emits typed events.
 #[derive(Default)]
@@ -189,7 +191,9 @@ impl SseDecoder {
     }
 }
 
-fn map_usage(value: &serde_json::Value) -> Usage {
+/// The token counts off a Chat Completions `usage` object, including the
+/// prompt-cache buckets OpenAI-shaped endpoints report.
+pub fn map_usage(value: &serde_json::Value) -> Usage {
     let prompt = value
         .get("prompt_tokens")
         .and_then(|v| v.as_u64())
@@ -229,4 +233,93 @@ pub fn parse_sse(body: &[u8], emit: &mut dyn FnMut(StreamEvent)) {
     let mut decoder = SseDecoder::default();
     decoder.feed(body, emit);
     decoder.finish(emit);
+}
+
+/// Map the resolved message list onto the OpenAI chat shape. Reasoning
+/// blocks are model-internal and are not resent. Text and image blocks both
+/// map: text becomes the string content, and a message with an image becomes
+/// the content-part array OpenAI uses for vision (the "cannot carry images"
+/// case is the text stub the attach path already put in the message).
+pub fn to_wire(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .map(|message| {
+            let role = match message.role {
+                MessageRole::System => "system",
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => "tool",
+            };
+            let text: String = message
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    ContentBlock::Reasoning { .. } => None,
+                    ContentBlock::ToolCall { .. } => None,
+                    ContentBlock::Image { .. } => None,
+                })
+                .collect();
+            let mut wire = serde_json::json!({ "role": role, "content": text });
+            if message
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::Image { .. }))
+            {
+                let mut parts = Vec::new();
+                if !text.is_empty() {
+                    parts.push(serde_json::json!({ "type": "text", "text": text }));
+                }
+                for block in &message.content {
+                    if let ContentBlock::Image { media_type, bytes } = block {
+                        parts.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!(
+                                    "data:{media_type};base64,{}",
+                                    lca_protocol::base64_encode(bytes)
+                                ),
+                            },
+                        }));
+                    }
+                }
+                wire["content"] = serde_json::Value::Array(parts);
+            }
+            if !message.tool_calls.is_empty() {
+                let calls: Vec<serde_json::Value> = message
+                    .tool_calls
+                    .iter()
+                    .map(|call| {
+                        serde_json::json!({
+                            "id": call.call_id,
+                            "type": "function",
+                            "function": { "name": call.name, "arguments": call.arguments },
+                        })
+                    })
+                    .collect();
+                wire["tool_calls"] = serde_json::Value::Array(calls);
+            }
+            if let Some(call_id) = &message.tool_call_id {
+                wire["tool_call_id"] = serde_json::Value::String(call_id.clone());
+            }
+            wire
+        })
+        .collect()
+}
+
+/// One tool declaration in the Chat Completions shape.
+pub fn tools_wire(tools: &[ToolSpec]) -> Vec<serde_json::Value> {
+    tools
+        .iter()
+        .map(|tool| {
+            serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                }
+            })
+        })
+        .collect()
 }

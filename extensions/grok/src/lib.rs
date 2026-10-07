@@ -4,7 +4,8 @@
 //! kit; this crate is the spec table over it (gh #63).
 
 use lca_protocol::ProviderCap;
-use lca_subscription::{AccountStrategy, IdentityFailure, OAuthSpec, StreamFailure};
+use lca_subscription::{AccountStrategy, IdentityFailure, OAuthSpec};
+use lca_wire_openai::StreamFailure;
 
 /// Everything about the Grok gateway that is data (port sources:
 /// `~/gits/my-fx-fork/src/core/auth/grok_oauth.zig` and
@@ -150,7 +151,7 @@ pub fn run_provider_stream(
         .collect::<Vec<_>>()
         .join("\n");
     let effort = request.extras.get("reasoning-effort").map(String::as_str);
-    let body = lca_subscription::build_responses_body(request, &system, &request.model, effort);
+    let body = lca_wire_openai::build_responses_body(request, &system, &request.model, effort);
     let body_bytes = serde_json::to_vec(&body).map_err(|err| StreamFailure {
         message: format!("cannot build request: {err}"),
         class: "invalid",
@@ -165,7 +166,10 @@ pub fn run_provider_stream(
         .iter()
         .map(|(key, value)| (key.as_str(), value.as_str()))
         .collect();
-    let mut driver = lca_subscription::ResponseStreamDriver::open(cap, &url, &refs, &body_bytes)?;
+    let mut driver =
+        lca_wire_openai::ResponseStreamDriver::open(cap, &url, &refs, &body_bytes, &|| {
+            lca_subscription::purge_tokens(cap)
+        })?;
     while let Some(event) = driver.next_event() {
         if !emit(event?) {
             break;

@@ -1,10 +1,14 @@
-//! The Responses-protocol core every subscription gateway shares
-//! (gh #63): one request-body builder and one SSE event mapper over
-//! the OpenAI Responses shapes both Codex and Grok speak. Provider
-//! differences (endpoints, headers, account) stay in the extensions'
-//! spec tables.
+//! The Responses wire engine (`POST /v1/responses`, gh #63/#189):
+//! one request-body builder and one SSE event mapper over the shapes
+//! Codex and Grok speak, plus the pull-based driver over the host's
+//! `ProviderCap` surface. Extracted verbatim from `lca-subscription`;
+//! provider differences (endpoints, headers, account) stay in the
+//! extensions' spec tables, and credential lifecycle (the 401 purge)
+//! stays the caller's - it arrives as a callback.
 
 use lca_protocol::{CompletionRequest, ContentBlock, MessageRole, StreamEvent, ToolSpec, Usage};
+
+use crate::error::{StreamFailure, failure_for_status, json_error_message};
 
 /// One request body for the Responses gateways: model, instructions,
 /// input items, tools, and the reasoning effort when the caller names
@@ -331,27 +335,30 @@ pub struct ResponseStreamDriver<'a> {
 }
 
 impl<'a> ResponseStreamDriver<'a> {
-    /// Send the request and check the status.
+    /// Send the request and check the status. A 401 calls
+    /// `on_unauthorized` (the caller's credential purge, gh #179's
+    /// rule) before the status error is built.
     pub fn open(
         cap: &'a dyn lca_protocol::ProviderCap,
         url: &str,
         headers: &[(&str, &str)],
         body: &[u8],
-    ) -> Result<ResponseStreamDriver<'a>, super::StreamFailure> {
+        on_unauthorized: &dyn Fn(),
+    ) -> Result<ResponseStreamDriver<'a>, StreamFailure> {
         let handle = cap
             .net_request("POST", url, headers, Some(body))
-            .map_err(super::StreamFailure::from)?;
+            .map_err(StreamFailure::from)?;
         let status = cap
             .net_response_status(handle)
-            .map_err(super::StreamFailure::from)?;
+            .map_err(StreamFailure::from)?;
         if !(200..300).contains(&status) {
             if status == 401 {
-                super::purge_tokens(cap);
+                on_unauthorized();
             }
             let mut detail = Vec::new();
             while let Some(chunk) = cap
                 .net_read_body(handle, 64 * 1024)
-                .map_err(super::StreamFailure::from)?
+                .map_err(StreamFailure::from)?
             {
                 detail.extend_from_slice(&chunk);
                 if detail.len() > 1024 * 1024 {
@@ -360,10 +367,7 @@ impl<'a> ResponseStreamDriver<'a> {
             }
             let _ = cap.net_close_response(handle);
             let text = String::from_utf8_lossy(&detail);
-            return Err(super::failure_for_status(
-                status,
-                &super::json_error_message(&text),
-            ));
+            return Err(failure_for_status(status, &json_error_message(&text)));
         }
         Ok(ResponseStreamDriver {
             cap,
@@ -376,9 +380,7 @@ impl<'a> ResponseStreamDriver<'a> {
     }
 
     /// The next typed event.
-    pub fn next_event(
-        &mut self,
-    ) -> Option<Result<lca_protocol::StreamEvent, super::StreamFailure>> {
+    pub fn next_event(&mut self) -> Option<Result<lca_protocol::StreamEvent, StreamFailure>> {
         loop {
             if let Some(event) = self.pending.pop_front() {
                 return Some(Ok(event));
@@ -389,7 +391,7 @@ impl<'a> ResponseStreamDriver<'a> {
             match self
                 .cap
                 .net_read_body(self.handle, 64 * 1024)
-                .map_err(super::StreamFailure::from)
+                .map_err(StreamFailure::from)
             {
                 Ok(Some(chunk)) => {
                     self.buffer.push_str(&String::from_utf8_lossy(&chunk));

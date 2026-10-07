@@ -98,6 +98,7 @@ dependencies = [
  "lca-protocol",
  "lca-testkit",
  "lca-tools",
+ "lca-wire-openai",
  "serde_json",
  "sha1",
  "sha2",
@@ -328,6 +329,7 @@ dependencies = [
  "lca-subscription",
  "lca-testkit",
  "lca-tools",
+ "lca-wire-openai",
  "serde_json",
  "tokio",
  "toml",
@@ -925,6 +927,7 @@ dependencies = [
  "lca-subscription",
  "lca-testkit",
  "lca-tools",
+ "lca-wire-openai",
  "serde_json",
  "tokio",
  "toml",
@@ -1501,6 +1504,7 @@ dependencies = [
  "lca-tools",
  "lca-tui",
  "lca-ui",
+ "lca-wire-openai",
  "openai-compatible",
  "serde_json",
  "tokio",
@@ -1541,6 +1545,7 @@ version = "0.5.4"
 dependencies = [
  "getrandom 0.3.4",
  "lca-protocol",
+ "lca-wire-openai",
  "serde_json",
  "sha2",
 ]
@@ -1606,6 +1611,22 @@ dependencies = [
  "lca-tui",
  "regex",
  "toml",
+]
+
+[[package]]
+name = "lca-wire-anthropic"
+version = "0.5.4"
+dependencies = [
+ "lca-protocol",
+ "serde_json",
+]
+
+[[package]]
+name = "lca-wire-openai"
+version = "0.5.4"
+dependencies = [
+ "lca-protocol",
+ "serde_json",
 ]
 
 [[package]]
@@ -1812,6 +1833,7 @@ dependencies = [
  "lca-protocol",
  "lca-testkit",
  "lca-tools",
+ "lca-wire-openai",
  "serde_json",
  "tokio",
  "toml",

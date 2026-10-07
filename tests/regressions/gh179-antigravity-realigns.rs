@@ -6,7 +6,7 @@
 //! file pins the wire-exactness invariants at the release-guard seam
 //! (NFR-24), so a drift in the shared kit breaks the build by name.
 
-use lca_subscription::responses::{ResponsesStream, build_responses_body};
+use lca_wire_openai::responses::{ResponsesStream, build_responses_body};
 
 // Verifies: gh #179 (divergence 2) - `stableUuid` matches pi-antigravity
 // byte-for-byte; a bit-level drift would fingerprint differently.

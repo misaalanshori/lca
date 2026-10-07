@@ -1,5 +1,9 @@
 use super::*;
 use core::cell::RefCell;
+// Names this guest used to inherit through `super::*` from the crate
+// root's imports; the engine move (gh #189) trimmed those, so the
+// guest names its own protocol types now.
+use lca_protocol::{ChatMessage, ContentBlock, MessageRole, ToolSpec, Usage};
 
 wit_bindgen::generate!({
     path: "../../wit",
