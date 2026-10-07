@@ -21,7 +21,12 @@ fn cmd(id: &str, command: &str, extra: &str) -> String {
 // runs, shutdown persists and exits clean - all correlated by id, all
 // turns in one session log. One long sleep makes mid-run delivery
 // deterministic; the pipe preserves command order.
+// Quarantined under testing-plan section 13 (2026-10-07, gh #195):
+// under full-suite parallel load the child exits 0 with responses
+// but zero turn-ends. Solo/group/reruns green; one Windows CI hit.
+// Remove the ignore to un-quarantine (exit: 5x stressed green).
 #[test]
+#[ignore = "turn-ends dropped under load - tracked in gh #195"]
 fn rpc_replays_prompt_steer_follow_up_cancel_shutdown() {
     let runtime = rt();
     let mock = runtime.block_on(start_mock(vec![
@@ -119,7 +124,9 @@ fn rpc_replays_prompt_steer_follow_up_cancel_shutdown() {
 
 // Verifies: gh #56 (malformed input and unknown commands fail loud,
 // never silent, and never kill the loop).
+// Same quarantine as above (gh #195): missing turn-end under load.
 #[test]
+#[ignore = "turn-end dropped under load - tracked in gh #195"]
 fn rpc_rejects_parse_errors_and_unknown_commands() {
     let runtime = rt();
     let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("hi"))]));
