@@ -816,3 +816,44 @@ fn declining_the_switch_confirm_stays_and_says_so() {
         "the decline says what it did:\n{viewport}"
     );
 }
+
+// Verifies: gh #172 pillar 1 end to end - a styled extension span
+// reaches the frame with its hex bytes on both channels and an
+// independent reset per channel, through the same render path a real
+// pane drives.
+#[test]
+fn a_styled_extension_span_reaches_the_frame() {
+    use lca_protocol::{TextStyle, Widget};
+    let mut opts = options();
+    opts.plain = false;
+    opts.theme = "dark".to_string();
+    opts.render_regions = Some(std::sync::Arc::new(|region: &str| {
+        if region != "footer" {
+            return Vec::new();
+        }
+        vec![(
+            "styled-demo".to_string(),
+            lca_protocol::WidgetTree {
+                nodes: vec![Widget::StyledText {
+                    content: "hex".to_string(),
+                    style: TextStyle {
+                        fg: Some("#50fa7b".to_string()),
+                        bg: Some("#282a36".to_string()),
+                        bold: false,
+                        dim: false,
+                        italic: false,
+                        underline: false,
+                    },
+                }],
+            },
+        )]
+    }));
+    let chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    let frame = chat.render(60);
+    assert!(
+        frame
+            .iter()
+            .any(|l| l.contains("\x1b[38;2;80;250;123;48;2;40;42;54mhex\x1b[39;49m")),
+        "hex on both channels, each reset alone: {frame:?}"
+    );
+}

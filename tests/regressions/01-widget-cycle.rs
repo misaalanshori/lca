@@ -6,6 +6,10 @@
 
 use lca_protocol::Widget;
 
+fn theme() -> lca_ui::theme::Theme {
+    lca_ui::theme::Theme::colored()
+}
+
 #[test]
 fn a_cyclic_widget_arena_renders_once_and_terminates() {
     // node0 boxes node1; node1 lists node0 and itself again.
@@ -19,7 +23,7 @@ fn a_cyclic_widget_arena_renders_once_and_terminates() {
         Widget::Column(vec![0, 1, 1]),
     ];
     assert_eq!(
-        lca_ui::widget_lines(&nodes),
+        lca_ui::widget_lines(&nodes, &theme()),
         vec!["[box]".to_string()],
         "each node renders once"
     );
@@ -31,5 +35,8 @@ fn a_cyclic_widget_arena_renders_once_and_terminates() {
         background: None,
         child: 0,
     }];
-    assert_eq!(lca_ui::widget_lines(&selfish), vec!["[self]".to_string()]);
+    assert_eq!(
+        lca_ui::widget_lines(&selfish, &theme()),
+        vec!["[self]".to_string()]
+    );
 }

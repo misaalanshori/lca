@@ -259,9 +259,13 @@ pub fn display_path(path: &str) -> String {
 /// untrusted extension, so a child index that points at an ancestor (or
 /// at itself) must not recurse forever or expand exponentially; the
 /// `visited` set is the guard the widget-shaped sibling attack needs.
-pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
+///
+/// The theme paints `StyledText` spans (gh #172): the walk carries it so
+/// a span resolves its roles and hex against the live palette.
+pub fn widget_lines(nodes: &[lca_protocol::Widget], theme: &crate::theme::Theme) -> Vec<String> {
     fn walk(
         nodes: &[lca_protocol::Widget],
+        theme: &crate::theme::Theme,
         index: usize,
         out: &mut Vec<String>,
         visited: &mut [bool],
@@ -276,6 +280,7 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
         }
         match node {
             Widget::Text { content, .. } => out.push(sanitize_text(content)),
+            Widget::StyledText { content, style } => out.push(theme.style_text(content, style)),
             Widget::Image { media_type, bytes } => {
                 out.push(format!("[image {media_type}, {} bytes]", bytes.len()))
             }
@@ -283,7 +288,6 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
             // its plain content until C2/C3 teach the host its chrome.
             // Every arm sanitizes - the no-escape rule never waits for
             // the styling commit.
-            Widget::StyledText { content, .. } => out.push(sanitize_text(content)),
             Widget::Markdown { source } => {
                 for line in source.lines() {
                     out.push(sanitize_text(line));
@@ -305,14 +309,14 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
             }
             Widget::ScrollContainer { children, .. } => {
                 for child in children {
-                    walk(nodes, *child as usize, out, visited);
+                    walk(nodes, theme, *child as usize, out, visited);
                 }
             }
             Widget::Boxed { title, child, .. } => {
                 if let Some(title) = title {
                     out.push(format!("[{title}]"));
                 }
-                walk(nodes, *child as usize, out, visited);
+                walk(nodes, theme, *child as usize, out, visited);
             }
             Widget::Row(children) => {
                 // Side by side, first line of each (v1 layout; ponytail:
@@ -321,7 +325,7 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
                     .iter()
                     .filter_map(|child| {
                         let mut lines = Vec::new();
-                        walk(nodes, *child as usize, &mut lines, visited);
+                        walk(nodes, theme, *child as usize, &mut lines, visited);
                         lines.into_iter().next()
                     })
                     .collect();
@@ -329,7 +333,7 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
             }
             Widget::Column(children) => {
                 for child in children {
-                    walk(nodes, *child as usize, out, visited);
+                    walk(nodes, theme, *child as usize, out, visited);
                 }
             }
             Widget::Spinner { frames } => {
@@ -367,7 +371,7 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
     let mut out = Vec::new();
     if !nodes.is_empty() {
         let mut visited = vec![false; nodes.len()];
-        walk(nodes, 0, &mut out, &mut visited);
+        walk(nodes, theme, 0, &mut out, &mut visited);
     }
     out
 }
@@ -945,7 +949,10 @@ mod tests {
             },
             Widget::KeyValue(vec![("k".into(), "v".into())]),
         ];
-        assert_eq!(widget_lines(&nodes), vec!["hello", "k: v"]);
+        assert_eq!(
+            widget_lines(&nodes, &crate::theme::Theme::colored()),
+            vec!["hello", "k: v"]
+        );
     }
 
     #[test]
@@ -957,7 +964,7 @@ mod tests {
             background: None,
             child: 0,
         }];
-        assert!(widget_lines(&nodes).is_empty());
+        assert!(widget_lines(&nodes, &crate::theme::Theme::colored()).is_empty());
     }
 
     #[test]
@@ -990,5 +997,34 @@ mod tests {
         let _ = Usage::default();
         let _ = TurnStatus::Ok;
         let _ = StopReason::Stop;
+    }
+}
+
+#[cfg(test)]
+mod styled_widget_tests {
+    use super::*;
+
+    // Verifies: gh #172 - a styled span paints through the walk with
+    // the live theme, and hostile bytes in styled content sanitize
+    // exactly like plain text (FR-UI-2 never waits for styling).
+    #[test]
+    fn styled_text_paints_and_sanitizes() {
+        use lca_protocol::{TextStyle, Widget};
+        let theme = crate::theme::Theme::colored();
+        let nodes = vec![Widget::StyledText {
+            content: "hi \u{1b}[31mx".to_string(),
+            style: TextStyle {
+                fg: Some("#50fa7b".to_string()),
+                bg: None,
+                bold: true,
+                dim: false,
+                italic: false,
+                underline: false,
+            },
+        }];
+        assert_eq!(
+            widget_lines(&nodes, &theme),
+            vec!["\x1b[1;38;2;80;250;123mhi \\x1b[31mx\x1b[22;39m"],
+        );
     }
 }

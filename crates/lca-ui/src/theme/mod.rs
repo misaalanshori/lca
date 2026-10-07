@@ -109,6 +109,22 @@ roles! {
     ToolErrorBg => "toolErrorBg",
 }
 
+/// How much color the styled-text renderer may spend (gh #172): the
+/// host degrades extension styling through these levels. Today the
+/// theme decides (`colored` → full RGB, `plain` → none); the middle
+/// rung is proven by guards and parked for the day terminal color
+/// detection lands anywhere in the product - no detection exists yet,
+/// and inventing it for one widget is the wrong layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorSupport {
+    /// The full palette: roles and `#RRGGBB` as RGB bytes.
+    Truecolor,
+    /// Sixteen ANSI colors: every channel maps to its nearest.
+    Ansi16,
+    /// No escapes at all (FR-UI-5).
+    None,
+}
+
 /// One color: the terminal default, a 24-bit color, or a 256-color index.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Color {
@@ -144,6 +160,111 @@ fn decoration_reset(decoration: &str) -> &'static str {
         "9" => "29",       // strikethrough (ECMA-48 / ANSI SGR 29)
         _ => "22",
     }
+}
+
+/// The SGR for one style color on one channel (`38` fg, `48` bg): RGB
+/// bytes in full color, the nearest ANSI index capped at sixteen.
+fn channel_sgr(color: Color, channel: u8, capped: bool) -> String {
+    if capped {
+        let (r, g, b) = color_rgb(color);
+        let index = nearest_16(r, g, b);
+        // The dim half sits at the base (30-37 fg, 40-47 bg); the
+        // bright half sits sixty higher (90-97/100-107). A bare
+        // `base + index` would land bright red on `39` - the fg reset.
+        let base = if channel == 38 { 30 } else { 40 };
+        let code = if index < 8 {
+            base + index
+        } else {
+            base + 60 + (index - 8)
+        };
+        return code.to_string();
+    }
+    match color {
+        Color::Default => String::new(),
+        Color::Rgb(r, g, b) => format!("{channel};2;{r};{g};{b}"),
+        Color::Ansi256(index) => format!("{channel};5;{index}"),
+    }
+}
+
+/// One color as RGB bytes, for the capped ladder: 256-color indices
+/// expand through the standard cube first.
+fn color_rgb(color: Color) -> (u8, u8, u8) {
+    match color {
+        Color::Default => (0, 0, 0),
+        Color::Rgb(r, g, b) => (r, g, b),
+        Color::Ansi256(index) => ansi256_rgb(index),
+    }
+}
+
+/// The standard 256-color index as RGB: the 16 system colors (the VGA
+/// table below), the 6x6x6 cube, then the grayscale ramp.
+fn ansi256_rgb(index: u8) -> (u8, u8, u8) {
+    const SYSTEM: [(u8, u8, u8); 16] = [
+        (0, 0, 0),
+        (170, 0, 0),
+        (0, 170, 0),
+        (170, 85, 0),
+        (0, 0, 170),
+        (170, 0, 170),
+        (0, 170, 170),
+        (170, 170, 170),
+        (85, 85, 85),
+        (255, 85, 85),
+        (85, 255, 85),
+        (255, 255, 85),
+        (85, 85, 255),
+        (255, 85, 255),
+        (85, 255, 255),
+        (255, 255, 255),
+    ];
+    if index < 16 {
+        return SYSTEM[index as usize];
+    }
+    if index < 232 {
+        let cube = index - 16;
+        let step = |n: u8| if n == 0 { 0 } else { 55 + 40 * n };
+        return (step(cube / 36), step((cube / 6) % 6), step(cube % 6));
+    }
+    let gray = 8 + 10 * (index - 232);
+    (gray, gray, gray)
+}
+
+/// The nearest of the sixteen ANSI colors to one RGB triple: squared
+/// Euclidean distance over the VGA table, ties going to the dimmer
+/// entry (the first minimum wins).
+fn nearest_16(r: u8, g: u8, b: u8) -> u8 {
+    const TABLE: [(u8, u8, u8); 16] = [
+        (0, 0, 0),
+        (170, 0, 0),
+        (0, 170, 0),
+        (170, 85, 0),
+        (0, 0, 170),
+        (170, 0, 170),
+        (0, 170, 170),
+        (170, 170, 170),
+        (85, 85, 85),
+        (255, 85, 85),
+        (85, 255, 85),
+        (255, 255, 85),
+        (85, 85, 255),
+        (255, 85, 255),
+        (85, 255, 255),
+        (255, 255, 255),
+    ];
+    let distance = |(tr, tg, tb): (u8, u8, u8)| {
+        let (dr, dg, db) = (
+            r as i32 - tr as i32,
+            g as i32 - tg as i32,
+            b as i32 - tb as i32,
+        );
+        dr * dr + dg * dg + db * db
+    };
+    TABLE
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, entry)| distance(**entry))
+        .map(|(index, _)| index as u8)
+        .unwrap_or(7)
 }
 
 /// Build a foreground style function: pi's `fg()` - opens the color (and
@@ -226,6 +347,8 @@ pub struct Theme {
     roles: BTreeMap<Role, StyleFn>,
     /// Every role's background style, precomputed for `bg()`.
     bgs: BTreeMap<Role, StyleFn>,
+    /// How much color extension styled text may spend (gh #172).
+    pub color_support: ColorSupport,
 }
 
 impl Theme {
@@ -250,10 +373,16 @@ impl Theme {
         let warn = style(palette.get(Role::Warning), "", colored);
         let footer = style(palette.get(Role::Muted), "", colored);
         let accent = style(palette.get(Role::Accent), "", colored);
+        let color_support = if colored {
+            ColorSupport::Truecolor
+        } else {
+            ColorSupport::None
+        };
         Theme {
             colored,
             palette,
             name: name.to_string(),
+            color_support,
             dim: if colored { dim } else { identity() },
             bold: if colored { bold } else { identity() },
             user: if colored { user } else { identity() },
@@ -300,6 +429,94 @@ impl Theme {
             .or_else(|| background.map(|background| background.scheme()))
             .unwrap_or(lca_tui::engine::colors::ColorScheme::Dark);
         Self::from_palette("system", Palette::system(background, scheme), true)
+    }
+
+    /// Paint one extension span under a `text-style` (gh #172): each
+    /// color resolves as a role through the palette or a `#RRGGBB`
+    /// to its bytes, and the span closes
+    /// every channel it opened - decorations, then foreground (`39`),
+    /// then background (`49`) - so a custom background never leaks
+    /// into the rows behind the widget.
+    pub fn style_text(&self, content: &str, style: &lca_protocol::TextStyle) -> String {
+        let content = crate::state::sanitize_text(content);
+        match self.color_support {
+            ColorSupport::None => content,
+            ColorSupport::Truecolor | ColorSupport::Ansi16 => {
+                let capped = self.color_support == ColorSupport::Ansi16;
+                let mut open = Vec::new();
+                let mut close = Vec::new();
+                // Bold and dim share the `22` reset, so one close
+                // covers both.
+                if style.bold {
+                    open.push("1".to_string());
+                }
+                if style.dim {
+                    open.push("2".to_string());
+                }
+                if style.bold || style.dim {
+                    close.push("22".to_string());
+                }
+                if style.italic {
+                    open.push("3".to_string());
+                    close.push("23".to_string());
+                }
+                if style.underline {
+                    open.push("4".to_string());
+                    close.push("24".to_string());
+                }
+                if let Some(color) = style
+                    .fg
+                    .as_deref()
+                    .and_then(|fg| self.resolve_style_color(fg))
+                {
+                    open.push(channel_sgr(color, 38, capped));
+                    close.push("39".to_string());
+                }
+                if let Some(color) = style
+                    .bg
+                    .as_deref()
+                    .and_then(|bg| self.resolve_style_color(bg))
+                {
+                    open.push(channel_sgr(color, 48, capped));
+                    close.push("49".to_string());
+                }
+                if open.is_empty() {
+                    content
+                } else {
+                    format!("\x1b[{}m{content}\x1b[{}m", open.join(";"), close.join(";"))
+                }
+            }
+        }
+    }
+
+    /// One style color to a terminal color: a `#RRGGBB` (or pi's
+    /// three-digit form) parses to its bytes, anything else resolves
+    /// as a role through the palette. `None` is an unknown role or
+    /// junk hex: the channel stays default, never a guess.
+    fn resolve_style_color(&self, color: &str) -> Option<Color> {
+        if color.starts_with('#') {
+            // Hex must carry real bytes: `Default` (an empty value)
+            // paints nothing, so only RGB survives.
+            return match palette::parse_color(color) {
+                Some(rgb @ Color::Rgb(..)) => Some(rgb),
+                _ => None,
+            };
+        }
+        match Role::parse(color).map(|role| self.palette.get(role)) {
+            // The terminal default paints nothing: the channel stays
+            // default, which reads the same and nests safely.
+            Some(Color::Default) | None => None,
+            some => some,
+        }
+    }
+
+    /// The 16-color theme (gh #172): the dark palette capped at the
+    /// ANSI ladder. The transcript keeps its own styles; only the
+    /// extension styled-text path reads `color_support`.
+    pub fn limited() -> Self {
+        let mut limited = Self::from_palette("limited", Palette::dark(), true);
+        limited.color_support = ColorSupport::Ansi16;
+        limited
     }
 
     /// The plain theme (FR-UI-5).
@@ -742,5 +959,83 @@ mod tests {
         for role in Role::ALL {
             assert_eq!(Role::parse(role.key()), Some(*role));
         }
+    }
+}
+
+#[cfg(test)]
+mod styled_text_tests {
+    use super::*;
+
+    fn styled(fg: Option<&str>, bg: Option<&str>) -> lca_protocol::TextStyle {
+        lca_protocol::TextStyle {
+            fg: fg.map(str::to_string),
+            bg: bg.map(str::to_string),
+            bold: false,
+            dim: false,
+            italic: false,
+            underline: false,
+        }
+    }
+
+    // Verifies: gh #172 pillar 1 - hex parses to RGB bytes on both
+    // channels at once, and each channel closes independently (39/49,
+    // never a shared 0m that would blank the row behind the widget).
+    #[test]
+    fn hex_paints_both_channels_with_independent_resets() {
+        let theme = Theme::colored();
+        let mut style = styled(Some("#50fa7b"), Some("#282a36"));
+        style.bold = true;
+        style.underline = true;
+        assert_eq!(
+            theme.style_text("hex", &style),
+            "\x1b[1;4;38;2;80;250;123;48;2;40;42;54mhex\x1b[22;24;39;49m"
+        );
+    }
+
+    // Verifies: gh #172 - a role resolves through the palette, and an
+    // unknown role degrades to the channel default (no SGR for that
+    // channel), never an error and never a guess.
+    #[test]
+    fn roles_resolve_and_unknown_roles_degrade() {
+        let theme = Theme::colored();
+        let out = theme.style_text("x", &styled(Some("accent"), None));
+        assert!(
+            out.starts_with("\x1b[38;2;") && out.ends_with("x\x1b[39m"),
+            "the accent role paints and closes fg-only: {out:?}"
+        );
+        assert_eq!(
+            theme.style_text("x", &styled(Some("no-such-role"), None)),
+            "x",
+            "an unknown role paints nothing"
+        );
+        assert_eq!(
+            theme.style_text("x", &styled(Some("#zzzzzz"), Some("#12345"))),
+            "x",
+            "junk hex paints nothing"
+        );
+    }
+
+    // Verifies: FR-UI-5 on the new surface - without color the styled
+    // span is its bare text, decorations included.
+    #[test]
+    fn no_color_renders_bare_text() {
+        let theme = Theme::plain();
+        let mut style = styled(Some("#50fa7b"), Some("#282a36"));
+        style.bold = true;
+        assert_eq!(theme.style_text("x", &style), "x");
+    }
+
+    // Verifies: gh #172 - the 16-color ladder maps each channel to the
+    // nearest ANSI color, decorations intact.
+    #[test]
+    fn sixteen_color_maps_to_the_nearest_ansi() {
+        let theme = Theme::limited();
+        let out = theme.style_text("x", &styled(Some("#ff0000"), Some("#0000ff")));
+        assert_eq!(out, "\x1b[31;44mx\x1b[39;49m", "red on blue: {out:?}");
+        let out = theme.style_text("x", &styled(Some("accent"), None));
+        assert!(
+            out.starts_with("\x1b[3") && out.ends_with("x\x1b[39m"),
+            "a role rides the same ladder: {out:?}"
+        );
     }
 }

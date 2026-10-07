@@ -12,6 +12,7 @@ use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::text::{strip_terminal_sequences, visible_width};
 use lca_ui::Chat;
 use lca_ui::state::{UiOptions, widget_lines};
+use lca_ui::theme::Theme;
 
 fn options(plain: bool) -> UiOptions {
     UiOptions {
@@ -75,7 +76,7 @@ fn extension_widget_trees_render_through_the_host() {
             Widget::KeyValue(vec![("k".into(), "v".into())]),
         ],
     };
-    let lines = widget_lines(&tree.nodes);
+    let lines = widget_lines(&tree.nodes, &Theme::colored());
     assert!(lines.iter().any(|l| l.contains("status")), "{lines:?}");
     assert!(
         lines.iter().any(|l| l.contains("k") && l.contains("v")),
