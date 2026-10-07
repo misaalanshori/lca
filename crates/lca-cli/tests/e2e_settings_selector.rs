@@ -58,9 +58,11 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     session.spawn(&sandbox, Some(&mock), true, &[], &[]);
     session.wait_for("[session in", std::time::Duration::from_secs(20));
 
-    // 1. The selector opens: key, current value, winning source.
+    // 1. The selector opens: key, current value, winning source. The
+    // needle is a curated key, never a bare word: `wait_for("thinking")`
+    // matched footer/status text before the selector opened (macOS CI).
     session.send(&["/settings", "Enter"]);
-    let pane = session.wait_for("thinking", std::time::Duration::from_secs(15));
+    let pane = session.wait_for("ui.theme", std::time::Duration::from_secs(15));
     assert!(
         pane.contains("ui.theme") && pane.contains("permissions.mode"),
         "the curated keys are listed:\n{pane}"

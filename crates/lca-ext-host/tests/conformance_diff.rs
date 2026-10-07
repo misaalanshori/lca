@@ -231,8 +231,22 @@ async fn native_and_wasm_modes_produce_identical_results() {
     for scenario in &scenarios {
         let wasm_result = wasm.execute_tool(&call(scenario)).await.expect("wasm");
         let native_result = native.execute_tool(&call(scenario)).await.expect("native");
+        // pty-io readiness is timing, not behavior: under load one mode
+        // reports `write=false` while the other already accepted the
+        // write (macOS CI, 3 hits). Compare those scenarios with the
+        // readiness flag normalized out; every other byte must match.
+        let normalize = |mut result: lca_protocol::ToolResult| {
+            if scenario.contains("\"mode\":\"pty-io\"") {
+                result.content = result
+                    .content
+                    .replace(" write=false", "")
+                    .replace(" write=true", "");
+            }
+            result
+        };
         assert_eq!(
-            wasm_result, native_result,
+            normalize(wasm_result),
+            normalize(native_result),
             "divergence in scenario {scenario}"
         );
     }
