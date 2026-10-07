@@ -272,8 +272,7 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
     // guest reads its endpoint from the namespace, and a set host
     // variable would trip the headless env-consent gate (exit 4)
     // before the engine ever refuses (exit 3 + journal, below).
-    let output =
-        sandbox.run_env(Some(&model), &["-p", "hi"], &[("OPENAI_BASE_URL", "")]);
+    let output = sandbox.run_env(Some(&model), &["-p", "hi"], &[("OPENAI_BASE_URL", "")]);
     assert_eq!(output.status.code(), Some(3), "stderr: {}", stderr(&output));
     let text = stderr(&output);
     assert!(
