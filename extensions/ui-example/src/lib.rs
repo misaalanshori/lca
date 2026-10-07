@@ -5,6 +5,11 @@
 //! everything crossing back is data in a widget tree (ADR-0003: no raw
 //! terminal access of its own, FR-UI-2 at the host, not here).
 //!
+//! The modal demonstrates the 0.6 vocabulary's interactive half (gh
+//! #172): a `button` widget whose `click-widget` input answers with a
+//! notice, alongside the styled vocabulary the conformance extension
+//! probes exhaustively.
+//!
 //! # Delivery modes
 //!
 //! Both modes share every function here. The one thing a WASM guest
