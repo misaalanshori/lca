@@ -17,7 +17,7 @@
 //! refresh) need an OAuth provider, which this binary does not bundle;
 //! they are guarded by the classifier unit tests beside the
 //! implementation and proven live by the mock-IdP receipt.
-
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 mod common;
 
 #[cfg(unix)]
