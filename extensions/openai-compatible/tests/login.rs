@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use lca_protocol::{CapabilityError, LoginAnswer, ProviderCap};
-use openai_compatible::{login_options, login_submit, parse_presets};
+use openai_compatible::{Settings, login_options, login_submit, parse_presets, run_login};
 
 const PRESETS: &[u8] = include_bytes!("../resources/provider-presets.toml");
 
@@ -86,6 +86,18 @@ fn cap() -> FakeCap {
     cap.resources
         .insert("provider-presets.toml".to_string(), PRESETS.to_vec());
     cap
+}
+
+fn settings_for(base_url: &str, key: Option<&str>) -> Settings {
+    Settings {
+        base_url: base_url.to_string(),
+        api_key: key.map(str::to_string),
+        model: "test-model".to_string(),
+        context_window: 0,
+        prompt_cache_key: true,
+        supports_reasoning: true,
+        model_overrides: String::new(),
+    }
 }
 
 // Verifies: ADR-0031 (presets are the extension's own resource data, mapped
@@ -340,4 +352,37 @@ mod discovery {
             "sorted, deduplicated, and the endpoint's own limit rides along"
         );
     }
+}
+
+// Verifies: gh #211 - a credential-free endpoint (`auth = "none"`)
+// signs in with no key anywhere: neither the namespace nor the
+// settings carry one, and the attempt still succeeds so the catalog
+// probe (and `auth check`) reports ready.
+#[test]
+fn a_credential_free_endpoint_signs_in_without_a_key() {
+    use lca_protocol::IdentityOutcome;
+    let cap = cap();
+    let settings = settings_for("http://localhost:11434/v1", None);
+    assert!(
+        matches!(run_login(&cap, &settings), IdentityOutcome::Ok),
+        "the ollama preset needs no key"
+    );
+    assert!(
+        cap.credentials_get("api_key").is_none(),
+        "no key is invented where none is needed"
+    );
+}
+
+// Verifies: gh #211 - the keyless path never weakens the keyed one: a
+// bearer endpoint with no key anywhere still fails, so it stays out
+// of the catalog.
+#[test]
+fn a_bearer_endpoint_without_a_key_still_fails() {
+    use lca_protocol::IdentityOutcome;
+    let cap = cap();
+    let settings = settings_for("https://api.openai.com/v1", None);
+    assert!(
+        matches!(run_login(&cap, &settings), IdentityOutcome::Failed(_)),
+        "a bearer endpoint without a key is not ready"
+    );
 }

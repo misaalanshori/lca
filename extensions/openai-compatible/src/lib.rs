@@ -352,6 +352,13 @@ pub fn run_login(cap: &dyn ProviderCap, settings: &Settings) -> IdentityOutcome 
         return IdentityOutcome::Ok;
     }
     let Some(key) = settings.api_key.clone() else {
+        // Gh #211: a credential-free endpoint (`auth = "none"` in the
+        // preset table) needs no key: the login succeeds keyless so the
+        // catalog probe and `auth check` report ready, and discovery
+        // decides reachability. Anything else still fails below.
+        if preset_auth_is_none(&load_presets(cap), &settings.base_url) {
+            return store_base_url(cap, &settings.base_url);
+        }
         return IdentityOutcome::Failed(
             "no API key is configured. Set OPENAI_API_KEY (or OPENCODE_API_KEY) \
              and run /login again."
@@ -361,8 +368,28 @@ pub fn run_login(cap: &dyn ProviderCap, settings: &Settings) -> IdentityOutcome 
     if let Err(err) = cap.credentials_set("api_key", &key) {
         return IdentityOutcome::Failed(format!("cannot store the key: {err}"));
     }
-    if settings.base_url != "https://api.openai.com/v1"
-        && let Err(err) = cap.credentials_set("base_url", &settings.base_url)
+    store_base_url(cap, &settings.base_url)
+}
+
+/// Whether the preset table declares this base URL credential-free
+/// (`auth = "none"`, gh #211): trailing slashes never distinguish
+/// an endpoint, and a preset without a base URL (the custom entry)
+/// never matches by URL.
+fn preset_auth_is_none(presets: &[Preset], base_url: &str) -> bool {
+    let base = base_url.trim_end_matches('/');
+    presets.iter().any(|preset| {
+        !preset.base_url.is_empty()
+            && preset.base_url.trim_end_matches('/') == base
+            && preset.auth == "none"
+    })
+}
+
+/// Persist a non-default base URL alongside the login, so the endpoint
+/// sticks once the environment no longer names it. The default needs
+/// no row: absence already means the default.
+fn store_base_url(cap: &dyn ProviderCap, base_url: &str) -> IdentityOutcome {
+    if base_url != "https://api.openai.com/v1"
+        && let Err(err) = cap.credentials_set("base_url", base_url)
     {
         return IdentityOutcome::Failed(format!("cannot store the base URL: {err}"));
     }

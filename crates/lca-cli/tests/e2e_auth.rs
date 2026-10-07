@@ -7,6 +7,8 @@
 //! | `check --provider nope` | unknown provider | 1 | `not_ready` |
 //! | `check` (no selector) | usage error | 2 | stderr names the rule |
 //! | `check --provider openai-compatible` | no key anywhere | 1 | `not_ready` |
+//! | `check --provider openai-compatible` | keyless `auth = "none"` endpoint (gh #211) | 0 | `ready` |
+//! | `check --provider openai-compatible` | keyless bearer endpoint | 1 | `not_ready` |
 //! | `check --provider openai-compatible` | `OPENAI_API_KEY` set | 0 | `ready` |
 //! | `login/logout` | env key | 0, and the key persists for later checks |
 //! | `print-api-key`, `print-bearer-token` | always | refused, secrets stay out of scrollback |
@@ -169,4 +171,62 @@ fn auth_credential_printers_are_refused() {
             "{sub} names the refusal: {stderr}"
         );
     }
+}
+
+// Verifies: gh #211 - the check agrees with the login attempt both
+// ways: a keyless `auth = "none"` endpoint (Ollama here) is `ready`
+// with no key anywhere, while a keyless bearer endpoint stays
+// `not_ready`. Neither row touches the network (the probe answers
+// locally; discovery never runs in a check).
+/// The first `auth = "bearer"` preset's base URL, read off the
+/// extension's own resource (gh #157: no provider literals in this
+/// crate, not even in tests).
+#[cfg(unix)]
+fn first_bearer_base_url() -> String {
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../extensions/openai-compatible/resources/provider-presets.toml"),
+    )
+    .expect("the preset resource reads");
+    let mut base_url = String::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(url) = line
+            .strip_prefix("base_url = ")
+            .and_then(|rest| rest.trim().strip_prefix('"'))
+            .and_then(|rest| rest.strip_suffix('"'))
+        {
+            base_url = url.to_string();
+        }
+        if line == "auth = \"bearer\"" && !base_url.is_empty() {
+            return base_url;
+        }
+        if line == "[[preset]]" {
+            base_url.clear();
+        }
+    }
+    panic!("no bearer preset in the resource");
+}
+
+#[cfg(unix)]
+#[test]
+fn auth_check_agrees_with_the_credential_free_rule() {
+    let box_ = sandbox("auth-none-endpoint");
+    let (code, stdout, _) = check_out(&box_.run_env(
+        None,
+        &["auth", "check", "--provider", "openai-compatible"],
+        &[("OPENAI_BASE_URL", "http://localhost:11434/v1")],
+    ));
+    assert_eq!(code, 0, "a keyless local endpoint is ready");
+    assert_eq!(stdout.trim(), "ready");
+
+    let box_ = sandbox("auth-bearer-no-key");
+    let bearer = first_bearer_base_url();
+    let (code, stdout, _) = check_out(&box_.run_env(
+        None,
+        &["auth", "check", "--provider", "openai-compatible"],
+        &[("OPENAI_BASE_URL", bearer.as_str())],
+    ));
+    assert_eq!(code, 1, "a keyless bearer endpoint is not");
+    assert_eq!(stdout.trim(), "not_ready");
 }

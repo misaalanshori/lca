@@ -258,3 +258,46 @@ fn an_unready_provider_contributes_nothing_silently() {
     session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
 }
+
+// Verifies: gh #211's picker half - a keyless `auth = "none"` endpoint
+// lists with no key anywhere: the catalog probe reports ready, so the
+// configured model reaches the picker (discovery has nothing to say to
+// an unreachable endpoint, and no login ever ran to discover with).
+#[cfg(unix)]
+#[test]
+fn a_keyless_local_endpoint_lists_its_models() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("gh211-ollama");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    let session = Tmux::new("gh211-ollama");
+    session.spawn(
+        &sandbox,
+        None,
+        false,
+        &[
+            ("OPENAI_BASE_URL", "http://localhost:11434/v1"),
+            ("OPENAI_MODEL", "qwen2.5-coder:7b"),
+        ],
+        &[],
+    );
+    // Keyless starts model-less (startup still uses the credentials
+    // heuristic for the initial pick); the catalog probe is what
+    // reports ready, so the picker is where the row appears.
+    session.wait_for("[session in", std::time::Duration::from_secs(20));
+
+    session.send(&["/model", "Enter"]);
+    let pane = session.wait_for("qwen2.5-coder:7b", std::time::Duration::from_secs(10));
+    assert!(
+        pane.contains("qwen2.5-coder:7b (localhost)"),
+        "the row names the service that would bill the call: {pane}"
+    );
+
+    session.send(&["Escape"]);
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}
