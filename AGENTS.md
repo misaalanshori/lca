@@ -116,17 +116,6 @@ When in doubt about TUI behavior, read the reverse-engineering workspace
 `~/projects/pi-tui-re/` first (it documents pi's exact rules with file
 references), then pi's source.
 
-## Antigravity (Google) — account safety
-
-**One wrong HTTP move and the owner's Google account gets banned.**
-`~/gits/pi-antigravity/` (git-pull it; it updates often) is the GROUND
-TRUTH for our `extensions/antigravity`: the exact User-Agent
-(`antigravity/cli/1.2.4 (aidev_client; ...)`), the exact three headers
-(Bearer/content-type/UA), request shapes, and the **hardcoded model
-list** (there is no model-list API). A parity test pins the list to a
-named pi-antigravity commit. Ambiguity = read pi-antigravity; never
-invent. Secondary reference: `~/gits/my-fx-fork/`.
-
 ## Codebase idioms
 
 - Crate docs (`//!`) state the contract; function docs state surprises.
