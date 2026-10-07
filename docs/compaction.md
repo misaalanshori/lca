@@ -61,11 +61,51 @@ is capped at 4000 characters (and the strategy caps every excerpt at
 `<previous-summary>` tags with an iteration instruction, and the
 mechanical fallback carries it as "Earlier summary".
 
+## File tracking (phase 3)
+
+Compaction records carry cumulative `read_files` / `modified_files`
+lists (pi's `CompactionDetails`): tool calls in the summarized range
+plus the lists of earlier compactions in scope, so repeated
+compactions accumulate the same picture. A file both read and
+modified counts as modified. The summarizer sees the lists appended
+to the summary text in pi's `<read-files>` / `<modified-files>`
+shape, when relevant; a fileless range reads unchanged. Divergence,
+documented: each list is capped at 200 sorted entries (bounded
+storage); pi tracks unbounded sets. Only `read` / `write` / `edit`
+calls count, pi's mapping.
+
+## System-message checkpoint (phase 3)
+
+Every compaction checkpoints the system prompt on the record (pi
+snapshots the system message onto the entry and replays it before
+the summary). A later compaction whose prompt differs from the
+latest checkpoint appends a `custom` record of type
+`system-prompt-change` first: the detection, not a migration.
+
+## Overflow recovery ordering (phase 3)
+
+A provider failure matching the overflow patterns (`token cap`,
+`prompt is too long`, `exceeds token limit`, `max_tokens …
+exceed`, `context window` / `length`) compacts and retries the turn
+once, instead of ending it dead. The aborted attempt stays visible
+to `TurnEnded` (error), the `overflow` compaction runs, and the
+retry starts fresh on the compacted log; a still-capped retry
+surfaces, and a failed recovery compacts nothing and retries
+nothing. Divergence, documented: the aborted attempt's partial text
+is not persisted (LCA never persists failed attempts) — the error
+marks the boundary. Recovery respects `compaction.enabled`: opted
+out means no strategy to compact with, so the error surfaces.
+
+## Retain-none (phase 3)
+
+A `/compact` that keeps nothing anchors the record's own id as
+`first_kept_id` (pi's shape: `firstKeptEntryId = own id`); the next
+plan starts after the entry instead of the session start. Nothing is
+declined: manual compaction is the only retain-none path, and it
+follows pi exactly.
+
 ## Later phases (explicitly not this cycle)
 
-Cumulative file tracking, the system-message checkpoint,
-overflow/length recovery ordering, retain-none. The trigger, the cut
-planner (`crates/lca-core/src/compact.rs`), and the record field carry
-extension-point comments naming each one; none is built here. The
-symmetrical head-preservation proposal (`keep_initial_tokens`, raised
-in review) is out of scope: it is not pi behavior.
+None: the #36 epic is complete. The symmetrical head-preservation
+proposal (`keep_initial_tokens`, raised in review) stays out of
+scope: it is not pi behavior.

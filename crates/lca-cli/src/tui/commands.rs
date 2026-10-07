@@ -168,8 +168,17 @@ impl Ui {
                 let session = self.session();
                 let extensions = self.agent_config.extensions.clone();
                 let backend = self.agent_config.completion_backend.clone();
+                // Gh #36 phase 3: the manual checkpoint records the
+                // prompt the turn would have used.
+                let system_prompt = Some(self.agent_config.system_prompt.clone());
                 std::thread::spawn(move || {
-                    let notice = match lca_core::compact_now(store, session, extensions, backend) {
+                    let notice = match lca_core::compact_now(
+                        store,
+                        session,
+                        extensions,
+                        backend,
+                        system_prompt,
+                    ) {
                         Ok(summary) => format!("compacted: {summary}"),
                         Err(detail) => format!("nothing was compacted: {detail}"),
                     };

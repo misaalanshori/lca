@@ -20,7 +20,7 @@ mod turn;
 
 pub mod ext_provider;
 pub use assemble::{Assembled, Attachment, StagedAttachment, assemble, assemble_with, stage_image};
-pub use compact::{compact_now, compaction_reserve};
+pub use compact::{MAX_TRACKED_FILES, SYSTEM_PROMPT_CHANGE_TYPE, compact_now, compaction_reserve};
 pub use ext_provider::ExtensionProvider;
 pub use registry::{
     BUILTIN_COMMANDS, BUILTIN_TOOL_ALIASES, BUILTIN_TOOLS, CollisionReport, ExtensionRegistry,

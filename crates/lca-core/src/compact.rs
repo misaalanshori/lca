@@ -15,8 +15,8 @@ use crate::registry::ExtensionRegistry;
 /// comes from the compaction world's strategy (FR-SESS-5 - there is no
 /// built-in summarizing path), the durable record is the host's, and
 /// the candidate range is the caller's to choose.
-// Eight inputs: the five context handles plus candidate, kept anchor,
-// and reason - a parameter struct would only rename them.
+// Seven inputs: the five context handles plus candidate, the phase-3
+// meta bundle, and reason - one struct for what the caller chose.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn compact_candidate(
     store: &SessionStore,
@@ -24,7 +24,7 @@ pub(super) async fn compact_candidate(
     extensions: &ExtensionRegistry,
     completion_backend: Option<&Arc<dyn lca_tools::CompletionBackend>>,
     candidate: Vec<Record>,
-    first_kept_id: &str,
+    meta: CompactMeta,
     sink: &mut dyn TurnSink,
     reason: &str,
 ) -> Result<String, String> {
@@ -82,18 +82,31 @@ pub(super) async fn compact_candidate(
         .filter_map(Record::id)
         .next_back()
         .unwrap_or_default();
+    // Gh #36 phase 3: retain-none anchors the record's own id (pi's
+    // shape), so the id exists before the append.
+    let id = lca_session::new_record_id();
+    let first_kept_id = meta.first_kept_id.unwrap_or_else(|| id.clone());
+    // Gh #36 phase 3: the file lists ride the summary text (pi
+    // appends them when relevant) and the record fields.
+    let summary = format!(
+        "{summary}{}",
+        format_file_lists(&meta.read_files, &meta.modified_files)
+    );
     if let Err(err) = store.append(
         session,
         Record::Compaction {
             v: FORMAT_VERSION,
             ts: lca_session::now_ms(),
-            id: lca_session::new_record_id(),
+            id,
             replaced_from: replaced_from.to_string(),
             replaced_to: replaced_to.to_string(),
-            first_kept_id: first_kept_id.to_string(),
+            first_kept_id,
             summary: summary.clone(),
             strategy: strategy.name().to_string(),
             usage,
+            read_files: meta.read_files,
+            modified_files: meta.modified_files,
+            system_prompt: meta.system_prompt,
         },
     ) {
         let detail = format!("cannot write the compaction record: {err}");
@@ -119,10 +132,10 @@ pub(super) async fn compact_candidate(
 /// absolute reserve, or the stopgap's fraction derivation when unset
 /// (0), so the default behavior is the old threshold by construction.
 ///
-/// Later #36 phases hook here without changing the shape: split-span
-/// cuts, iterative previous-summary context, file tracking, the
-/// system-message checkpoint, recovery ordering, retain-none. Each
-/// gets a parameter on the plan below, not a new trigger.
+/// The #36 epic is complete (trigger, reserve, cut points, split
+/// spans, iteration, file tracking, checkpoint, recovery, retain-none).
+/// Later compaction work gets a parameter on the plan below, not a
+/// new trigger.
 pub fn compaction_reserve(threshold: f64, reserve_tokens: u64, window: u32) -> u64 {
     if reserve_tokens > 0 {
         return reserve_tokens;
@@ -137,6 +150,21 @@ pub fn compaction_reserve(threshold: f64, reserve_tokens: u64, window: u32) -> u
 /// `context_tokens > context_window - reserve`, strict on both sides.
 pub(crate) fn compaction_fires(context_tokens: u64, window: u32, reserve: u64) -> bool {
     context_tokens > u64::from(window).saturating_sub(reserve)
+}
+
+/// Whether a provider failure is a context overflow (gh #36 phase 3):
+/// the provider patterns from the #36 discussion plus our own budgeted
+/// `token cap` message. Anything else (validation, auth, transport)
+/// surfaces without compacting.
+pub(crate) fn is_overflow_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("token cap")
+        || lower.contains("prompt is too long")
+        || lower.contains("exceeds token limit")
+        || lower.contains("context window")
+        || lower.contains("context length")
+        || lower.contains("context_length")
+        || (lower.contains("max_tokens") && lower.contains("exceed"))
 }
 
 /// One cut decision (gh #36 phase 1): where the summarized range
@@ -226,6 +254,12 @@ fn previous_kept_start(records: &[Record], cut: usize) -> usize {
             .iter()
             .position(|record| record.id() == Some(first_kept_id.as_str()))
     {
+        // Gh #36 phase 3: a retain-none anchor (the record's own id)
+        // starts the next range after the entry itself, pi's shape;
+        // any other anchor starts at the kept record.
+        if matches!(&records[found], Record::Compaction { .. }) {
+            return (found + 1).min(end);
+        }
         return found;
     }
     position + 1
@@ -303,16 +337,161 @@ pub(crate) fn previous_summary_marker(summary: &str) -> Record {
     }
 }
 
+/// Files per list a compaction record carries (gh #36 phase 3):
+/// cumulative tracking stays bounded storage, sorted and truncated.
+/// Pi tracks unbounded sets; the cap is the documented divergence.
+pub const MAX_TRACKED_FILES: usize = 200;
+
+/// The `custom` record type noting a system-prompt change across
+/// compactions (gh #36 phase 3): the detection, not a migration.
+pub const SYSTEM_PROMPT_CHANGE_TYPE: &str = "system-prompt-change";
+
+/// What the caller chose for this compaction (gh #36 phase 3): the
+/// kept anchor (`None` compacts everything and anchors the record's
+/// own id, pi's retain-none shape), the accumulated file lists, and
+/// the system-prompt checkpoint (`None` when the caller never knew
+/// the prompt).
+pub(super) struct CompactMeta {
+    pub(super) first_kept_id: Option<String>,
+    pub(super) read_files: Vec<String>,
+    pub(super) modified_files: Vec<String>,
+    pub(super) system_prompt: Option<String>,
+}
+
+/// Cumulative file lists for a compaction (gh #36 phase 3, pi's
+/// `CompactionDetails`): tool calls in the candidate plus the file
+/// lists of earlier compactions in scope, read-only files sorted
+/// first, each list capped at [`MAX_TRACKED_FILES`]. A file both read
+/// and modified counts as modified, pi's rule.
+pub(crate) fn accumulate_files(
+    candidate: &[Record],
+    priors: &[Record],
+) -> (Vec<String>, Vec<String>) {
+    use std::collections::BTreeSet;
+    let mut read: BTreeSet<String> = BTreeSet::new();
+    let mut modified: BTreeSet<String> = BTreeSet::new();
+    let mut file_op = |name: &str, arguments: &str| {
+        let path = serde_json::from_str::<serde_json::Value>(arguments)
+            .ok()
+            .and_then(|args| args.get("path")?.as_str().map(str::to_string));
+        let Some(path) = path else { return };
+        match lca_tools::canonical_tool_name(name) {
+            "read" => {
+                read.insert(path);
+            }
+            "write" | "edit" => {
+                modified.insert(path);
+            }
+            _ => {}
+        }
+    };
+    for record in candidate {
+        match record {
+            Record::ToolCall {
+                name, arguments, ..
+            } => file_op(name, arguments),
+            Record::Assistant { content, .. } => {
+                for block in content {
+                    if let lca_protocol::ContentBlock::ToolCall {
+                        name, arguments, ..
+                    } = block
+                    {
+                        file_op(name, arguments);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Earlier compactions accumulate: their lists survive into the
+    // next record, so repeated compactions refine the same picture.
+    for record in priors {
+        if let Record::Compaction {
+            read_files,
+            modified_files,
+            ..
+        } = record
+        {
+            read.extend(read_files.iter().cloned());
+            modified.extend(modified_files.iter().cloned());
+        }
+    }
+    for path in &modified {
+        read.remove(path);
+    }
+    (
+        read.into_iter().take(MAX_TRACKED_FILES).collect(),
+        modified.into_iter().take(MAX_TRACKED_FILES).collect(),
+    )
+}
+
+/// The file sections appended to a summary when relevant (gh #36
+/// phase 3, pi's `<read-files>` / `<modified-files>` shape). Empty
+/// lists append nothing: a fileless range reads unchanged.
+pub(crate) fn format_file_lists(read: &[String], modified: &[String]) -> String {
+    let mut sections = Vec::new();
+    if !read.is_empty() {
+        sections.push(format!("<read-files>\n{}\n</read-files>", read.join("\n")));
+    }
+    if !modified.is_empty() {
+        sections.push(format!(
+            "<modified-files>\n{}\n</modified-files>",
+            modified.join("\n")
+        ));
+    }
+    if sections.is_empty() {
+        return String::new();
+    }
+    format!("\n\n{}", sections.join("\n\n"))
+}
+
+/// A system-prompt change across compactions (gh #36 phase 3): the
+/// latest checkpointed prompt differs from the current one, so the
+/// change is recorded as its own `custom` record - the detection,
+/// not a migration. `None` means no earlier checkpoint or no change.
+pub(crate) fn detect_system_change(records: &[Record], current: &str) -> Option<Record> {
+    let (id, previous) = records.iter().rev().find_map(|record| match record {
+        Record::Compaction {
+            id,
+            system_prompt: Some(previous),
+            ..
+        } => Some((id.clone(), previous.clone())),
+        _ => None,
+    })?;
+    if previous == current {
+        return None;
+    }
+    Some(Record::Custom {
+        v: FORMAT_VERSION,
+        ts: lca_session::now_ms(),
+        id: lca_session::new_record_id(),
+        custom_type: SYSTEM_PROMPT_CHANGE_TYPE.to_string(),
+        data: serde_json::json!({
+            "detail": format!(
+                "system prompt changed since compaction {id} ({} to {} chars); \
+                 the new compaction checkpoints the current prompt",
+                previous.chars().count(),
+                current.chars().count(),
+            ),
+        }),
+    })
+}
+
 /// The manual trigger behind the `/compact` built-in: compact now,
 /// every compactable record, no threshold involved - still through the
 /// compaction world only (FR-SESS-5). Synchronous by contract: the
 /// caller is the interface's command thread, and `drive_blocking`
 /// gives the work a thread of its own.
+///
+/// Manual compaction keeps nothing past the range (gh #36 phase 3):
+/// the record anchors its own id, pi's retain-none shape, so the
+/// next plan starts after the entry instead of the session start.
 pub fn compact_now(
     store: Arc<SessionStore>,
     session: Session,
     extensions: Arc<ExtensionRegistry>,
     completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>>,
+    system_prompt: Option<String>,
 ) -> Result<String, String> {
     drive_blocking(async move {
         let read = store
@@ -324,15 +503,27 @@ pub fn compact_now(
             .filter(|record| record.id().is_some())
             .cloned()
             .collect();
+        let (read_files, modified_files) = accumulate_files(&candidate, &read.records);
+        if let Some(change) = system_prompt
+            .as_deref()
+            .and_then(|current| detect_system_change(&read.records, current))
+        {
+            // A changed prompt is recorded; a failed write never
+            // blocks the compaction the user asked for.
+            let _ = store.append(&session, change);
+        }
         compact_candidate(
             &store,
             &session,
             &extensions,
             completion_backend.as_ref(),
             candidate,
-            // Manual compaction keeps nothing past the range: no kept
-            // boundary for the next plan to start from.
-            "",
+            CompactMeta {
+                first_kept_id: None,
+                read_files,
+                modified_files,
+                system_prompt,
+            },
             &mut NullSink,
             "manual",
         )
@@ -478,6 +669,9 @@ mod cut_tests {
                 replaced_from: "u1".to_string(),
                 replaced_to: "a1".to_string(),
                 first_kept_id: "u2".to_string(),
+                read_files: Vec::new(),
+                modified_files: Vec::new(),
+                system_prompt: None,
                 summary: "S1".to_string(),
                 strategy: "x".to_string(),
                 usage: None,
@@ -548,6 +742,9 @@ mod cut_tests {
                 replaced_from: "u1".to_string(),
                 replaced_to: "a1".to_string(),
                 first_kept_id: "u2".to_string(),
+                read_files: Vec::new(),
+                modified_files: Vec::new(),
+                system_prompt: None,
                 summary: "s".to_string(),
                 strategy: "x".to_string(),
                 usage: None,
@@ -557,5 +754,184 @@ mod cut_tests {
         ];
         let plan = plan_cut(&records, 5, 20_000, 100_000);
         assert_eq!(plan.start, 3, "starts at the kept boundary");
+    }
+
+    fn file_call(id: &str, name: &str, path: Option<&str>) -> Record {
+        let arguments = match path {
+            Some(path) => format!("{{\"path\": \"{path}\"}}"),
+            None => "{}".to_string(),
+        };
+        Record::ToolCall {
+            v: FORMAT_VERSION,
+            ts: 1,
+            id: id.to_string(),
+            call_id: format!("k-{id}"),
+            name: name.to_string(),
+            arguments,
+            source: lca_protocol::ToolSource::Builtin,
+        }
+    }
+
+    fn compaction_with_files(id: &str, kept: &str, read: &[&str], modified: &[&str]) -> Record {
+        Record::Compaction {
+            v: FORMAT_VERSION,
+            ts: 1,
+            id: id.to_string(),
+            replaced_from: "u0".to_string(),
+            replaced_to: "a0".to_string(),
+            first_kept_id: kept.to_string(),
+            read_files: read.iter().map(ToString::to_string).collect(),
+            modified_files: modified.iter().map(ToString::to_string).collect(),
+            system_prompt: None,
+            summary: "s".to_string(),
+            strategy: "x".to_string(),
+            usage: None,
+        }
+    }
+
+    // Verifies: gh #36 phase 3 - file extraction reads tool calls
+    // (records and assistant blocks): reads stay reads, writes and
+    // edits count as modified, a file both read and modified counts
+    // as modified, and calls without a path never count.
+    #[test]
+    fn file_extraction_sorts_reads_from_modifications() {
+        let candidate = vec![
+            file_call("c1", "read", Some("b.md")),
+            file_call("c2", "edit", Some("a.rs")),
+            file_call("c3", "write", Some("b.md")),
+            file_call("c4", "read", None),
+            file_call("c5", "bash", Some("run.sh")),
+            // Pi tracks read/write/edit only: a grep read never counts.
+            file_call("c6", "grep", Some("x")),
+            file_call("c7", "read", Some("notes.md")),
+        ];
+        let (read, modified) = accumulate_files(&candidate, &[]);
+        assert_eq!(read, vec!["notes.md".to_string()], "read-only survivors");
+        assert_eq!(
+            modified,
+            vec!["a.rs".to_string(), "b.md".to_string()],
+            "edited plus written, sorted"
+        );
+    }
+
+    // Verifies: gh #36 phase 3 - earlier compactions accumulate: the
+    // next record's lists union the candidate's with the priors'.
+    #[test]
+    fn file_lists_union_with_earlier_compactions() {
+        let candidate = vec![file_call("c1", "read", Some("new.md"))];
+        let priors = vec![compaction_with_files(
+            "cmp0",
+            "u1",
+            &["old.md"],
+            &["main.rs"],
+        )];
+        let (read, modified) = accumulate_files(&candidate, &priors);
+        assert_eq!(read, vec!["new.md".to_string(), "old.md".to_string()]);
+        assert_eq!(modified, vec!["main.rs".to_string()]);
+    }
+
+    // Verifies: gh #36 phase 3 - the lists stay bounded: past
+    // `MAX_TRACKED_FILES` the record keeps the first sorted entries.
+    #[test]
+    fn file_lists_stay_bounded() {
+        let candidate: Vec<Record> = (0..MAX_TRACKED_FILES + 50)
+            .map(|n| file_call(&format!("c{n}"), "read", Some(&format!("f{n:04}.md"))))
+            .collect();
+        let (read, _) = accumulate_files(&candidate, &[]);
+        assert_eq!(read.len(), MAX_TRACKED_FILES, "capped");
+        assert_eq!(read[0], "f0000.md", "sorted head kept");
+    }
+
+    // Verifies: gh #36 phase 3 - the summary sections use pi's
+    // `<read-files>` / `<modified-files>` shape, and empty lists
+    // append nothing.
+    #[test]
+    fn file_sections_shape_or_vanish() {
+        let shaped = format_file_lists(&["r.md".to_string()], &["m.rs".to_string()]);
+        assert_eq!(
+            shaped,
+            "\n\n<read-files>\nr.md\n</read-files>\n\n<modified-files>\nm.rs\n</modified-files>"
+        );
+        assert_eq!(
+            format_file_lists(&[], &[]),
+            "",
+            "a fileless range reads unchanged"
+        );
+    }
+
+    // Verifies: gh #36 phase 3 - the overflow patterns from the #36
+    // discussion plus our budgeted cap message trigger recovery;
+    // anything else surfaces without compacting.
+    #[test]
+    fn overflow_errors_match_the_documented_patterns() {
+        for message in [
+            "generation hit the token cap (max_tokens 13107) before finishing",
+            "This model's maximum context length is 200000 tokens, prompt is too long",
+            "request exceeds token limit",
+            "max_tokens 100 exceeds model maximum",
+            "input exceeds the context window",
+            "CONTEXT_LENGTH exceeded",
+        ] {
+            assert!(is_overflow_error(message), "recovers: {message}");
+        }
+        for message in [
+            "model not found",
+            "max_tokens must be positive",
+            "connection reset by peer",
+            "invalid api key",
+        ] {
+            assert!(!is_overflow_error(message), "surfaces: {message}");
+        }
+    }
+
+    // Verifies: gh #36 phase 3 - the checkpoint detects a move: an
+    // unchanged prompt records nothing, a changed one records the
+    // detection, and a first compaction has nothing to compare.
+    #[test]
+    fn system_change_detects_only_a_move() {
+        let plain = vec![user("u1"), assistant("a1", 10)];
+        assert_eq!(detect_system_change(&plain, "prompt"), None);
+        let mut checked = plain.clone();
+        checked.push(compaction_with_files("cmp1", "u1", &[], &[]));
+        // No checkpoint on the record: nothing to compare.
+        assert_eq!(detect_system_change(&checked, "prompt"), None);
+        let mut checkpointed = plain.clone();
+        let mut first = compaction_with_files("cmp1", "u1", &[], &[]);
+        if let Record::Compaction { system_prompt, .. } = &mut first {
+            *system_prompt = Some("prompt A".to_string());
+        }
+        checkpointed.push(first);
+        assert_eq!(
+            detect_system_change(&checkpointed, "prompt A"),
+            None,
+            "unchanged prompt records nothing"
+        );
+        let change =
+            detect_system_change(&checkpointed, "prompt B").expect("a changed prompt is recorded");
+        match &change {
+            Record::Custom { custom_type, .. } => {
+                assert_eq!(custom_type, SYSTEM_PROMPT_CHANGE_TYPE);
+            }
+            other => panic!("a custom detection record, not {other:?}"),
+        }
+    }
+
+    // Verifies: gh #36 phase 3 - a retain-none anchor (the record's
+    // own id, pi's shape) starts the next range after the entry
+    // itself; any other anchor still starts at the kept record.
+    #[test]
+    fn retain_none_starts_after_the_entry() {
+        let records = vec![
+            user("u1"),
+            assistant("a1", 30_000),
+            compaction_with_files("cmp1", "cmp1", &[], &[]),
+            user("u2"),
+            assistant("a2", 100_000),
+        ];
+        assert_eq!(
+            previous_kept_start(&records, 5),
+            3,
+            "after the retain-none entry"
+        );
     }
 }

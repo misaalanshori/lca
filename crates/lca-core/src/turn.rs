@@ -83,6 +83,9 @@ impl Agent<'_> {
 
         let mut turn_usage = Usage::default();
         let mut rounds = 0u32;
+        // Gh #36 phase 3: one overflow recovery per turn - compact and
+        // retry once, then surface if still capped.
+        let mut overflow_recovered = false;
         loop {
             if cancel.is_cancelled() {
                 return self.cancelled(turn_usage, sink);
@@ -110,6 +113,43 @@ impl Agent<'_> {
                     class,
                     retryable,
                 }) => {
+                    // Gh #36 phase 3: the error is the signal - a capped
+                    // generation compacts and retries (pi's recovery
+                    // ordering: the aborted attempt stays visible to
+                    // TurnEnded, recovery compacts, the retry runs fresh).
+                    // The partial attempt text is not persisted (LCA never
+                    // persists failed attempts); the error marks the
+                    // boundary. A failed recovery compacts nothing and
+                    // retries nothing: the error surfaces as-is.
+                    if !overflow_recovered && super::compact::is_overflow_error(&message) {
+                        overflow_recovered = true;
+                        sink.on_event(TurnEvent::Error {
+                            message: message.clone(),
+                            class: class.clone(),
+                            retryable,
+                        });
+                        sink.on_event(TurnEvent::TurnEnded {
+                            status: TurnStatus::Error,
+                            stop_reason: StopReason::Error,
+                        });
+                        let records = match self.store.read_with(self.session, ViewMode::Display) {
+                            Ok(outcome) => outcome.records,
+                            Err(_) => {
+                                return self.fail(
+                                    StopReason::Error,
+                                    format!(
+                                        "cannot re-read the log after the capped turn: {message}"
+                                    ),
+                                );
+                            }
+                        };
+                        if self
+                            .compact_before_turn(&records, &turn_record_id, sink, "overflow")
+                            .await
+                        {
+                            continue;
+                        }
+                    }
                     sink.on_event(TurnEvent::Error {
                         message: message.clone(),
                         class: class.clone(),
@@ -799,9 +839,6 @@ impl Agent<'_> {
             return false;
         }
         let window = effective_context_window(self.config.model_context_window);
-        if self.config.extensions.compaction_strategy().is_none() {
-            return false;
-        }
         let last_prompt = records.iter().rev().find_map(|record| match record {
             Record::Assistant {
                 usage: Some(usage), ..
@@ -819,6 +856,28 @@ impl Agent<'_> {
         if !super::compact::compaction_fires(last_prompt, window, reserve) {
             return false;
         }
+        self.compact_before_turn(records, turn_record_id, sink, "threshold")
+            .await
+    }
+
+    /// The shared compaction call behind threshold and overflow
+    /// recovery (gh #36 phase 3): no threshold of its own, so the
+    /// recovery path compacts on the error alone. Still needs a
+    /// strategy, and still refuses a range too small to summarize.
+    /// Returns whether a record was written (the caller re-reads).
+    async fn compact_before_turn(
+        &self,
+        records: &[Record],
+        turn_record_id: &str,
+        sink: &mut dyn TurnSink,
+        reason: &str,
+    ) -> bool {
+        if !self.config.compaction_enabled {
+            return false;
+        }
+        if self.config.extensions.compaction_strategy().is_none() {
+            return false;
+        }
         // The candidate range ends at this turn's own user record; the
         // cut planner holds the keep-recent window verbatim, anchors
         // the kept boundary, and never splits a tool pair.
@@ -826,11 +885,17 @@ impl Agent<'_> {
             .iter()
             .position(|record| record.id() == Some(turn_record_id))
             .unwrap_or(records.len());
+        let last_prompt = records.iter().rev().find_map(|record| match record {
+            Record::Assistant {
+                usage: Some(usage), ..
+            } => Some(usage_prompt_tokens(usage)),
+            _ => None,
+        });
         let plan = super::compact::plan_cut(
             records,
             cut,
             self.config.compaction_keep_recent_tokens,
-            last_prompt,
+            last_prompt.unwrap_or(0),
         );
         let mut candidate: Vec<Record> = records[plan.start..plan.kept_start]
             .iter()
@@ -848,15 +913,31 @@ impl Agent<'_> {
         if let Some(summary) = super::compact::previous_summary_text(records, cut) {
             candidate.insert(0, super::compact::previous_summary_marker(&summary));
         }
+        // Gh #36 phase 3: cumulative file lists, the prompt
+        // checkpoint, and a recorded detection when the prompt moved
+        // since the last checkpoint. A failed detection write never
+        // blocks the compaction itself.
+        let (read_files, modified_files) =
+            super::compact::accumulate_files(&candidate, &records[..cut]);
+        if let Some(change) =
+            super::compact::detect_system_change(records, &self.config.system_prompt)
+        {
+            let _ = self.store.append(self.session, change);
+        }
         compact_candidate(
             self.store,
             self.session,
             &self.config.extensions,
             self.config.completion_backend.as_ref(),
             candidate,
-            &plan.first_kept_id,
+            super::compact::CompactMeta {
+                first_kept_id: Some(plan.first_kept_id),
+                read_files,
+                modified_files,
+                system_prompt: Some(self.config.system_prompt.clone()),
+            },
             sink,
-            "threshold",
+            reason,
         )
         .await
         .is_ok()

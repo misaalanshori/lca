@@ -167,6 +167,8 @@ fn compact(f: &Fixture) -> String {
         f.session.clone(),
         f.extensions.clone(),
         Some(f.backend.clone() as Arc<dyn CompletionBackend>),
+        // The budget under test, not the prompt checkpoint.
+        None,
     )
     .expect("compaction runs")
 }

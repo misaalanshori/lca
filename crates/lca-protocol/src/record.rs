@@ -173,6 +173,20 @@ pub enum Record {
         /// Usage of the summarization call, when the strategy made one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
+        /// Files read (not modified) across the summarized range and
+        /// earlier compactions, cumulative and bounded (gh #36 phase 3).
+        /// Empty on records written before file tracking existed.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        read_files: Vec<String>,
+        /// Files written or edited, same accumulation (gh #36 phase 3).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        modified_files: Vec<String>,
+        /// The system prompt at compaction time (gh #36 phase 3): a
+        /// later compaction whose prompt differs records the change
+        /// instead of migrating anything. Absent when the compactor
+        /// did not know the prompt (manual `/compact` before plumbing).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system_prompt: Option<String>,
     },
     /// Names the fork origin in a forked session.
     ForkPoint {

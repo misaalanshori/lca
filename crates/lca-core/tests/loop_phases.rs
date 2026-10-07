@@ -964,6 +964,7 @@ async fn the_manual_trigger_compacts_through_the_world_without_a_threshold() {
         session.clone(),
         h.config.extensions.clone(),
         h.config.completion_backend.clone(),
+        Some(h.config.system_prompt.clone()),
     )
     .expect("manual compaction runs");
     assert!(
@@ -997,6 +998,7 @@ async fn the_manual_trigger_compacts_through_the_world_without_a_threshold() {
         fresh,
         h.config.extensions.clone(),
         h.config.completion_backend.clone(),
+        None,
     )
     .expect_err("one message cannot compact into itself");
     assert!(!err.is_empty(), "the refusal explains itself");

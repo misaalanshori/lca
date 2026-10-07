@@ -303,3 +303,372 @@ async fn the_second_compaction_iterates_the_first_summary() {
         "the second anchors its kept boundary"
     );
 }
+
+// Verifies: gh #36 phase 3 - file lists union across two manual
+// compactions: the second record carries the first's files plus the
+// new turn's, and the summary text names them.
+#[test]
+fn file_lists_union_across_two_compactions() {
+    let provider = FakeProvider::builder().build();
+    let registry = seeing_registry(SeeingDouble {
+        calls: Arc::new(AtomicUsize::new(0)),
+        saw_previous: Arc::new(Mutex::new(Vec::new())),
+    });
+    let h = harness(
+        "files-union",
+        provider,
+        budget_config(registry, 10_000, 0.5),
+    );
+    let store = Arc::new(lca_session::SessionStore::new(h.root.join("data")));
+    let session = store.session(&h.project, h.session.id()).expect("reattach");
+    let tool_call = |id: &str, name: &str, path: &str| Record::ToolCall {
+        v: lca_protocol::FORMAT_VERSION,
+        ts: 1,
+        id: id.to_string(),
+        call_id: format!("k-{id}"),
+        name: name.to_string(),
+        arguments: format!("{{\"path\": \"{path}\"}}"),
+        source: lca_protocol::ToolSource::Builtin,
+    };
+    let user = |id: &str| Record::User {
+        v: lca_protocol::FORMAT_VERSION,
+        ts: 1,
+        id: id.to_string(),
+        content: id.to_string(),
+        attachments: Vec::new(),
+        queue: None,
+    };
+    store.append(&session, user("u1")).expect("append");
+    store
+        .append(&session, tool_call("c1", "read", "old.md"))
+        .expect("append");
+    lca_core::compact_now(
+        store.clone(),
+        session.clone(),
+        h.config.extensions.clone(),
+        h.config.completion_backend.clone(),
+        Some("prompt".to_string()),
+    )
+    .expect("first compaction runs");
+    store.append(&session, user("u2")).expect("append");
+    store
+        .append(&session, tool_call("c2", "edit", "main.rs"))
+        .expect("append");
+    lca_core::compact_now(
+        store.clone(),
+        session.clone(),
+        h.config.extensions.clone(),
+        h.config.completion_backend.clone(),
+        Some("prompt".to_string()),
+    )
+    .expect("second compaction runs");
+    let records = store
+        .read_with(&session, ViewMode::Audit)
+        .expect("read")
+        .records;
+    let compactions: Vec<&Record> = records
+        .iter()
+        .filter(|record| matches!(record, Record::Compaction { .. }))
+        .collect();
+    assert_eq!(compactions.len(), 2, "two durable records");
+    match compactions[1] {
+        Record::Compaction {
+            read_files,
+            modified_files,
+            summary,
+            ..
+        } => {
+            assert_eq!(
+                read_files,
+                &vec!["old.md".to_string()],
+                "the first's reads survive"
+            );
+            assert_eq!(
+                modified_files,
+                &vec!["main.rs".to_string()],
+                "plus the new turn's edits"
+            );
+            assert!(
+                summary.contains("<read-files>") && summary.contains("<modified-files>"),
+                "the summary text names them: {summary}"
+            );
+        }
+        other => panic!("a compaction record, not {other:?}"),
+    }
+}
+
+// Verifies: gh #36 phase 3 - the checkpoint records the prompt and a
+// later move records the detection, exactly once per move.
+#[test]
+fn checkpoint_records_and_detects_a_move() {
+    let provider = FakeProvider::builder().build();
+    let registry = seeing_registry(SeeingDouble {
+        calls: Arc::new(AtomicUsize::new(0)),
+        saw_previous: Arc::new(Mutex::new(Vec::new())),
+    });
+    let h = harness(
+        "checkpoint-move",
+        provider,
+        budget_config(registry, 10_000, 0.5),
+    );
+    let store = Arc::new(lca_session::SessionStore::new(h.root.join("data")));
+    let session = store.session(&h.project, h.session.id()).expect("reattach");
+    // Each compaction needs fresh compactable records: the previous
+    // range suppresses from the view once summarized.
+    let compact_with = |id: &str, prompt: Option<String>| {
+        store
+            .append(
+                &session,
+                Record::User {
+                    v: lca_protocol::FORMAT_VERSION,
+                    ts: 1,
+                    id: format!("{id}a"),
+                    content: "hi".to_string(),
+                    attachments: Vec::new(),
+                    queue: None,
+                },
+            )
+            .expect("append");
+        store
+            .append(
+                &session,
+                Record::User {
+                    v: lca_protocol::FORMAT_VERSION,
+                    ts: 1,
+                    id: format!("{id}b"),
+                    content: "hi again".to_string(),
+                    attachments: Vec::new(),
+                    queue: None,
+                },
+            )
+            .expect("append");
+        lca_core::compact_now(
+            store.clone(),
+            session.clone(),
+            h.config.extensions.clone(),
+            h.config.completion_backend.clone(),
+            prompt,
+        )
+        .expect("compaction runs")
+    };
+    compact_with("u1", Some("prompt A".to_string()));
+    compact_with("u2", Some("prompt B".to_string()));
+    compact_with("u3", Some("prompt B".to_string()));
+    let records = store
+        .read_with(&session, ViewMode::Audit)
+        .expect("read")
+        .records;
+    let checkpoints: Vec<Option<&str>> = records
+        .iter()
+        .filter_map(|record| match record {
+            Record::Compaction { system_prompt, .. } => Some(system_prompt.as_deref()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        checkpoints,
+        vec![Some("prompt A"), Some("prompt B"), Some("prompt B")],
+        "every compaction checkpoints its prompt"
+    );
+    let detections = records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record,
+                Record::Custom { custom_type, .. }
+                if custom_type == lca_core::SYSTEM_PROMPT_CHANGE_TYPE
+            )
+        })
+        .count();
+    assert_eq!(
+        detections, 1,
+        "the A-to-B move records exactly one detection"
+    );
+}
+
+// Verifies: gh #36 phase 3 - manual compaction keeps nothing and
+// anchors its own id (pi's retain-none shape), not an empty string.
+#[test]
+fn manual_compaction_anchors_its_own_id() {
+    let provider = FakeProvider::builder().build();
+    let registry = seeing_registry(SeeingDouble {
+        calls: Arc::new(AtomicUsize::new(0)),
+        saw_previous: Arc::new(Mutex::new(Vec::new())),
+    });
+    let h = harness(
+        "retain-none",
+        provider,
+        budget_config(registry, 10_000, 0.5),
+    );
+    let store = Arc::new(lca_session::SessionStore::new(h.root.join("data")));
+    let session = store.session(&h.project, h.session.id()).expect("reattach");
+    store
+        .append(
+            &session,
+            Record::User {
+                v: lca_protocol::FORMAT_VERSION,
+                ts: 1,
+                id: "u1".to_string(),
+                content: "hi".to_string(),
+                attachments: Vec::new(),
+                queue: None,
+            },
+        )
+        .expect("append");
+    store
+        .append(
+            &session,
+            Record::User {
+                v: lca_protocol::FORMAT_VERSION,
+                ts: 1,
+                id: "u2".to_string(),
+                content: "hi again".to_string(),
+                attachments: Vec::new(),
+                queue: None,
+            },
+        )
+        .expect("append");
+    lca_core::compact_now(
+        store.clone(),
+        session.clone(),
+        h.config.extensions.clone(),
+        h.config.completion_backend.clone(),
+        None,
+    )
+    .expect("compaction runs");
+    let records = store
+        .read_with(&session, ViewMode::Audit)
+        .expect("read")
+        .records;
+    match records.iter().find_map(|record| match record {
+        Record::Compaction {
+            id, first_kept_id, ..
+        } => Some((id, first_kept_id)),
+        _ => None,
+    }) {
+        Some((id, kept)) => assert_eq!(kept, id, "retain-none anchors its own id"),
+        None => panic!("a compaction record was written"),
+    }
+}
+
+// Verifies: gh #36 phase 3 - a capped generation compacts and retries
+// once (pi's recovery ordering): the aborted attempt stays visible to
+// TurnEnded, the overflow compaction runs, the retry completes.
+#[tokio::test]
+async fn overflow_compacts_and_retries_once() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("first").usage(fake_usage(50, 10, 0, 0)))
+        .turn(|t| {
+            t.error(
+                "generation hit the token cap (max_tokens 13107) before finishing",
+                false,
+            )
+            .usage(fake_usage(9000, 10, 0, 0))
+        })
+        .turn(|t| t.text("recovered").usage(fake_usage(50, 10, 0, 0)))
+        .build();
+    let registry = seeing_registry(SeeingDouble {
+        calls: Arc::new(AtomicUsize::new(0)),
+        saw_previous: Arc::new(Mutex::new(Vec::new())),
+    });
+    let mut h = harness(
+        "overflow-retry",
+        provider,
+        budget_config(registry, 10_000, 0.5),
+    );
+    let fake = h.provider.clone();
+    h.config.retry_limit = 0;
+    let mut sink = CollectingSink::default();
+    let mut prompt = prompt();
+    turn(&mut h, "first", &mut sink, &mut prompt).await;
+    let outcome = turn(&mut h, "second", &mut sink, &mut prompt).await;
+    assert!(outcome.error.is_none(), "the retry completes: {outcome:?}");
+    assert!(sink.texts().contains("recovered"), "the retry's text lands");
+    assert_eq!(
+        fake.requests().len(),
+        3,
+        "two turns, three calls: one retry"
+    );
+    assert_eq!(
+        sink.count(|event| matches!(
+            event,
+            lca_core::TurnEvent::CompactionStarted { reason } if reason == "overflow"
+        )),
+        1,
+        "exactly one overflow compaction"
+    );
+}
+
+// Verifies: gh #36 phase 3 - a still-capped retry surfaces: one
+// recovery per turn, never a loop.
+#[tokio::test]
+async fn a_second_overflow_surfaces_without_another_compaction() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("first").usage(fake_usage(50, 10, 0, 0)))
+        .turn(|t| {
+            t.error("prompt is too long", false)
+                .usage(fake_usage(9000, 10, 0, 0))
+        })
+        .turn(|t| {
+            t.error("prompt is too long", false)
+                .usage(fake_usage(9000, 10, 0, 0))
+        })
+        .build();
+    let registry = seeing_registry(SeeingDouble {
+        calls: Arc::new(AtomicUsize::new(0)),
+        saw_previous: Arc::new(Mutex::new(Vec::new())),
+    });
+    let mut h = harness(
+        "overflow-once",
+        provider,
+        budget_config(registry, 10_000, 0.5),
+    );
+    let fake = h.provider.clone();
+    h.config.retry_limit = 0;
+    let mut sink = CollectingSink::default();
+    let mut prompt = prompt();
+    turn(&mut h, "first", &mut sink, &mut prompt).await;
+    let outcome = turn(&mut h, "second", &mut sink, &mut prompt).await;
+    assert!(outcome.error.is_some(), "the second cap surfaces");
+    assert_eq!(fake.requests().len(), 3, "no third attempt");
+    assert_eq!(
+        sink.count(|event| matches!(event, lca_core::TurnEvent::CompactionStarted { .. })),
+        1,
+        "compacted once, never looped"
+    );
+}
+
+// Verifies: gh #36 phase 3 - an ordinary provider error never
+// compacts: recovery is overflow-only.
+#[tokio::test]
+async fn a_plain_error_never_compacts() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("first").usage(fake_usage(50, 10, 0, 0)))
+        .turn(|t| {
+            t.error("model not found", false)
+                .usage(fake_usage(50, 10, 0, 0))
+        })
+        .build();
+    let registry = seeing_registry(SeeingDouble {
+        calls: Arc::new(AtomicUsize::new(0)),
+        saw_previous: Arc::new(Mutex::new(Vec::new())),
+    });
+    let mut h = harness(
+        "plain-error",
+        provider,
+        budget_config(registry, 10_000, 0.5),
+    );
+    let fake = h.provider.clone();
+    h.config.retry_limit = 0;
+    let mut sink = CollectingSink::default();
+    let mut prompt = prompt();
+    turn(&mut h, "first", &mut sink, &mut prompt).await;
+    let outcome = turn(&mut h, "second", &mut sink, &mut prompt).await;
+    assert!(outcome.error.is_some(), "the error surfaces");
+    assert_eq!(fake.requests().len(), 2, "no retry");
+    assert_eq!(
+        sink.count(|event| matches!(event, lca_core::TurnEvent::CompactionStarted { .. })),
+        0,
+        "no compaction on a plain error"
+    );
+}

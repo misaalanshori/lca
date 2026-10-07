@@ -63,7 +63,7 @@ The `v` field is per record, not per file. A file written across a format upgrad
 
 `extension-event` records a load, a disable, a trap, or a capability denial. Fields: `extension`, `event`, and `detail`.
 
-`compaction` marks a compaction. Fields: `replaced_from` and `replaced_to` as record identifiers, `first_kept_id` naming the first record kept verbatim past the cut (gh #36 phase 1; empty on older records), `summary` as the replacement content, `strategy` naming the extension that ran, and optional `usage` with the input, output, and cost of the summarization call when the strategy asked the model for one.
+`compaction` marks a compaction. Fields: `replaced_from` and `replaced_to` as record identifiers, `first_kept_id` naming the first record kept verbatim past the cut (gh #36 phase 1; empty on older records; the record's own id on a retain-none `/compact`, gh #36 phase 3, so the next plan starts after the entry), `summary` as the replacement content, `strategy` naming the extension that ran, optional `usage` with the input, output, and cost of the summarization call when the strategy asked the model for one, cumulative `read_files` / `modified_files` (gh #36 phase 3, each capped at 200 sorted entries), and optional `system_prompt` checkpointing the prompt at compaction time (gh #36 phase 3; a later move appends a `custom` record of type `system-prompt-change`, the detection, not a migration).
 
 `fork-point` appears in a forked session and names the parent session and the record identifier the fork was taken at.
 
