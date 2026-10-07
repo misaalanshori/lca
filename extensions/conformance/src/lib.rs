@@ -709,7 +709,7 @@ pub fn ui_script(region: &str) -> Option<Vec<lca_protocol::Widget>> {
         // covers every surface, so the widget variant's cases all cross
         // here in both modes.
         "footer" => vec![
-            Widget::Column(vec![1, 2, 3, 4, 5, 6, 7]),
+            Widget::Column(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]),
             text("hostile: \u{1b}[31mNOT A PROMPT\u{1b}[0m", "warning"),
             Widget::Row(vec![3, 4]),
             text("row-left", "muted"),
@@ -726,6 +726,35 @@ pub fn ui_script(region: &str) -> Option<Vec<lca_protocol::Widget>> {
                 bytes: vec![1, 2, 3, 4],
             },
             Widget::Vendor("conformance.demo".to_string()),
+            // The 0.6 vocabulary page (gh #172): dual-channel hex
+            // plus a hostile-role twin the host must degrade, not
+            // paint.
+            Widget::StyledText {
+                content: "styled \u{1b}[32mhex".to_string(),
+                style: lca_protocol::TextStyle {
+                    fg: Some("#50fa7b".to_string()),
+                    bg: Some("#282a36".to_string()),
+                    bold: true,
+                    dim: false,
+                    italic: false,
+                    underline: true,
+                },
+            },
+            Widget::Markdown {
+                source: "# conformance\n\n- one\n- two".to_string(),
+            },
+            Widget::Button {
+                id: "ok".to_string(),
+                label: "OK".to_string(),
+            },
+            Widget::Table {
+                headers: vec!["name".to_string(), "value".to_string()],
+                rows: vec![vec!["a".to_string(), "1".to_string()]],
+            },
+            Widget::ScrollContainer {
+                max_height: 2,
+                children: vec![10, 12],
+            },
         ],
         "panel" => vec![Widget::KeyValue(vec![
             ("mode".to_string(), "stateless".to_string()),
@@ -736,6 +765,8 @@ pub fn ui_script(region: &str) -> Option<Vec<lca_protocol::Widget>> {
         "modal" => vec![
             Widget::Boxed {
                 title: Some("conformance modal".to_string()),
+                border: Some("accent".to_string()),
+                background: None,
                 child: 1,
             },
             Widget::Column(vec![2, 3]),
@@ -755,7 +786,8 @@ pub fn ui_event_script(region: &str, input: &lca_protocol::UiInput) -> lca_proto
             UiInput::Key { key } if key == "m" => UiEffect::OpenModal,
             UiInput::Submit { text } => UiEffect::ShowNotice(format!("heard: {text}")),
             UiInput::Cancel => UiEffect::CloseModal,
-            _ => UiEffect::None,
+            UiInput::ClickWidget { id } => UiEffect::ShowNotice(format!("clicked: {id}")),
+            UiInput::Click { .. } | UiInput::Scroll { .. } | UiInput::Key { .. } => UiEffect::None,
         };
     }
     UiEffect::None

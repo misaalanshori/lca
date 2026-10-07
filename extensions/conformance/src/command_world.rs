@@ -2,6 +2,9 @@ wit_bindgen::generate!({
     path: "../../wit",
     world: "command",
     export_macro_name: "export_command",
+    with: {
+        "lca:host/ui-dialogs@0.6.0": generate,
+    },
 });
 
 use exports::lca::ext::command_spec::{Guest as SpecGuest, Spec};

@@ -369,7 +369,7 @@ fn version_prints_all_four_facts() {
     assert_eq!(output.status.code(), Some(0));
     let text = stdout(&output);
     assert!(
-        text.contains("abi 0.5"),
+        text.contains("abi 0.6"),
         "the window's live ABI line: {text}"
     );
     assert!(text.contains("target"), "{text}");

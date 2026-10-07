@@ -1,4 +1,4 @@
-package lca:ext@0.5.0;
+package lca:ext@0.6.0;
 
 
 /// The `provider` world: model listing, a streamed completion, and the
@@ -6,12 +6,12 @@ package lca:ext@0.5.0;
 /// needs to reach its endpoint through host capabilities instead of a
 /// socket of its own.
 world provider {
-  import lca:host/log@0.5.0;
-  import lca:host/resources@0.5.0;
-  import lca:host/state@0.5.0;
-  import lca:host/net@0.5.0;
-  import lca:host/oauth@0.5.0;
-  import lca:host/credentials@0.5.0;
+  import lca:host/log@0.6.0;
+  import lca:host/resources@0.6.0;
+  import lca:host/state@0.6.0;
+  import lca:host/net@0.6.0;
+  import lca:host/oauth@0.6.0;
+  import lca:host/credentials@0.6.0;
   export provider-models;
   export provider-completion;
   export provider-identity;

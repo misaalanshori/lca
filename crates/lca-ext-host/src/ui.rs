@@ -14,8 +14,31 @@ fn from_wit_widget(widget: ui_exports::render::Widget) -> lca_protocol::Widget {
     use ui_exports::render::Widget as Wit;
     match widget {
         Wit::Text((content, role)) => W::Text { content, role },
+        Wit::StyledText((content, style)) => W::StyledText {
+            content,
+            style: lca_protocol::TextStyle {
+                fg: style.fg,
+                bg: style.bg,
+                bold: style.bold,
+                dim: style.dim,
+                italic: style.italic,
+                underline: style.underline,
+            },
+        },
+        Wit::Markdown(source) => W::Markdown { source },
+        Wit::Button((id, label)) => W::Button { id, label },
+        Wit::Table((headers, rows)) => W::Table { headers, rows },
+        Wit::ScrollContainer((max_height, children)) => W::ScrollContainer {
+            max_height,
+            children,
+        },
         Wit::Image((media_type, bytes)) => W::Image { media_type, bytes },
-        Wit::Boxed((title, child)) => W::Boxed { title, child },
+        Wit::Boxed((title, border, background, child)) => W::Boxed {
+            title,
+            border,
+            background,
+            child,
+        },
         Wit::Row(children) => W::Row(children),
         Wit::Column(children) => W::Column(children),
         Wit::Spinner(frames) => W::Spinner { frames },
@@ -65,6 +88,9 @@ pub(super) fn event_work(
         lca_protocol::UiInput::Key { key } => WasmInput::Key(key.clone()),
         lca_protocol::UiInput::Submit { text } => WasmInput::Submit(text.clone()),
         lca_protocol::UiInput::Cancel => WasmInput::Cancel,
+        lca_protocol::UiInput::ClickWidget { id } => WasmInput::ClickWidget(id.clone()),
+        lca_protocol::UiInput::Click { col, row } => WasmInput::Click((*col, *row)),
+        lca_protocol::UiInput::Scroll { delta } => WasmInput::Scroll(*delta),
     };
     let effect = instance
         .lca_ext_interaction()

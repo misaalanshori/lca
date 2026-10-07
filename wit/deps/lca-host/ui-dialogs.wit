@@ -1,0 +1,24 @@
+/// The `ui-dialogs` capability's imports: host-rendered questions an
+/// extension asks without building its own modal (gh #124, gh #172).
+/// Every dialog runs on the host's native picker/modal chrome, so the
+/// user always knows who is asking (the capability catalog's `ui`
+/// table); the answers cross back as plain data.
+interface ui-dialogs {
+  /// A modal with Yes/No buttons. `true` is an explicit yes;
+  /// headless (and a dismissal) answers `false` - the denied value
+  /// (#124's acceptance: a headless run returns the default/denied
+  /// value).
+  confirm: func(title: string, message: string) -> result<bool, string>;
+
+  /// A searchable picker over `options`, like the host's own model
+  /// picker. `ok(none)` is a dismissal; headless answers `none`.
+  select: func(title: string, options: list<string>) -> result<option<string>, string>;
+
+  /// A single line of text. `ok(none)` is a dismissal or an empty
+  /// submit; headless answers `none`.
+  input: func(label: string, placeholder: option<string>) -> result<option<string>, string>;
+
+  /// A transient status notification. Fire and forget: headless drops
+  /// it silently (no row, no error), because nobody is watching.
+  notify: func(message: string, level: string);
+}

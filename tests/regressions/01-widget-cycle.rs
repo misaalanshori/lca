@@ -12,6 +12,8 @@ fn a_cyclic_widget_arena_renders_once_and_terminates() {
     let nodes = vec![
         Widget::Boxed {
             title: Some("box".to_string()),
+            border: None,
+            background: None,
             child: 1,
         },
         Widget::Column(vec![0, 1, 1]),
@@ -25,6 +27,8 @@ fn a_cyclic_widget_arena_renders_once_and_terminates() {
     // A node that points at itself must also terminate.
     let selfish = vec![Widget::Boxed {
         title: Some("self".to_string()),
+        border: None,
+        background: None,
         child: 0,
     }];
     assert_eq!(lca_ui::widget_lines(&selfish), vec!["[self]".to_string()]);

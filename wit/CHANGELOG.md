@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.0 (ABI train, 2026-10-07 — cycle 3: gh #172 + #124)
+
+The train's first real interface break: the `ui` world redesign plus the
+`ui-dialogs` host import. `lca:ext@0.6.0` / `lca:host@0.6.0`; the host
+loads manifests declaring `0.5` or `0.6` (the window), but a 0.5-built
+`ui` component that links the old widget shapes is refused legibly -
+interface bytes changed, so same-line indistinguishability no longer
+applies to the `ui` world.
+
+- **Added:** `text-style` (fg/bg role-or-hex plus bold/dim/italic/
+  underline) and the `styled-text`, `markdown`, `button`, `table`, and
+  `scroll-container` widget cases (gh #172).
+- **Changed (breaking):** `boxed` carries the border role and
+  background tint (`tuple<option<string>, option<string>,
+  option<string>, u32>`); the `interaction` input gains
+  `click-widget`, `click`, and `scroll` (gh #172).
+- **Added:** the `lca:host/ui-dialogs` import (`confirm`, `select`,
+  `input`, `notify`), imported by the `tool`, `command`, `hooks`, and
+  `ui` worlds (gh #124, gh #172).
+
+**Migration:** rebuild against `@0.6.0`, declare `abi = "0.6"`, and
+adjust `boxed` constructions plus the `interaction` handler's new cases
+(the handler must be exhaustive over the `input` variant). A `ui`
+component still built against 0.5 shapes does not link (its imports name
+`@0.5.0`, which the 0.6 host no longer provides) and is refused with
+the window message; other worlds' 0.5 components are unaffected where
+their shapes did not change.
+
 ## 0.4.0 (release train, 2026-09-27)
 
 The ABI label now tracks the product minor (ADR-0028's second annotation):

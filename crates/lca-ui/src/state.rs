@@ -279,7 +279,36 @@ pub fn widget_lines(nodes: &[lca_protocol::Widget]) -> Vec<String> {
             Widget::Image { media_type, bytes } => {
                 out.push(format!("[image {media_type}, {} bytes]", bytes.len()))
             }
-            Widget::Boxed { title, child } => {
+            // C1 fallbacks (gh #172): the new vocabulary renders as
+            // its plain content until C2/C3 teach the host its chrome.
+            // Every arm sanitizes - the no-escape rule never waits for
+            // the styling commit.
+            Widget::StyledText { content, .. } => out.push(sanitize_text(content)),
+            Widget::Markdown { source } => {
+                for line in source.lines() {
+                    out.push(sanitize_text(line));
+                }
+            }
+            Widget::Button { label, .. } => out.push(format!("[{}]", sanitize_text(label))),
+            Widget::Table { headers, rows } => {
+                let cells = |cells: &[String]| {
+                    cells
+                        .iter()
+                        .map(|cell| sanitize_text(cell))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                };
+                out.push(cells(headers));
+                for row in rows {
+                    out.push(cells(row));
+                }
+            }
+            Widget::ScrollContainer { children, .. } => {
+                for child in children {
+                    walk(nodes, *child as usize, out, visited);
+                }
+            }
+            Widget::Boxed { title, child, .. } => {
                 if let Some(title) = title {
                     out.push(format!("[{title}]"));
                 }
@@ -924,6 +953,8 @@ mod tests {
         use lca_protocol::Widget;
         let nodes = vec![Widget::Boxed {
             title: None,
+            border: None,
+            background: None,
             child: 0,
         }];
         assert!(widget_lines(&nodes).is_empty());

@@ -3,12 +3,13 @@ wit_bindgen::generate!({
     world: "tool",
     export_macro_name: "export_tool",
     with: {
-        "lca:host/log@0.5.0": generate,
-        "lca:host/fs@0.5.0": generate,
-        "lca:host/process@0.5.0": generate,
-        "lca:host/pty@0.5.0": generate,
-        "lca:host/resources@0.5.0": generate,
-        "lca:host/state@0.5.0": generate,
+        "lca:host/log@0.6.0": generate,
+        "lca:host/fs@0.6.0": generate,
+        "lca:host/process@0.6.0": generate,
+        "lca:host/pty@0.6.0": generate,
+        "lca:host/ui-dialogs@0.6.0": generate,
+        "lca:host/resources@0.6.0": generate,
+        "lca:host/state@0.6.0": generate,
     },
 });
 

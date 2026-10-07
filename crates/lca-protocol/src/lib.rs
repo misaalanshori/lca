@@ -36,5 +36,5 @@ pub use turn::{
     QueuedMessage, SteerQueue, StopReason, SubmitMode, TurnEvent, TurnOutcome, TurnStatus,
     steer_queue,
 };
-pub use ui::{UiEffect, UiInput, Widget, WidgetTree};
+pub use ui::{DialogAnswer, TextStyle, UiDialog, UiEffect, UiInput, Widget, WidgetTree};
 pub use usage::Usage;

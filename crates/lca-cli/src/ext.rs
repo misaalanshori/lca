@@ -872,7 +872,7 @@ redirect_path = "/callback"
             "{err}"
         );
         assert!(
-            err.to_string().contains("0.4") && err.to_string().contains("0.5"),
+            err.to_string().contains("0.5") && err.to_string().contains("0.6"),
             "the refusal names the accepted lines: {err}"
         );
     }
@@ -913,7 +913,7 @@ redirect_path = "/callback"
         std::fs::create_dir_all(pkg.join("resources/skills/demo")).expect("mkdir");
         std::fs::write(
             pkg.join("extension.toml"),
-            "name = \"demo-pack\"\nversion = \"1.0.0\"\nabi = \"0.4\"\nworlds = []\nresources = [\"skills\"]\n",
+            "name = \"demo-pack\"\nversion = \"1.0.0\"\nabi = \"0.5\"\nworlds = []\nresources = [\"skills\"]\n",
         )
         .expect("manifest");
         let skill = pkg.join("resources/skills/demo/SKILL.md");

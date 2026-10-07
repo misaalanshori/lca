@@ -1,14 +1,15 @@
-package lca:ext@0.5.0;
+package lca:ext@0.6.0;
 
 /// The `ui` world: draw without the terminal (ADR-0003). The host owns
 /// layout and drawing; a text span carries data, never control codes
 /// (FR-UI-2), and the widget variant reserves a case so the vocabulary
 /// can grow before the ABI freeze without breaking it then.
 world ui {
-  import lca:host/log@0.5.0;
-  import lca:host/resources@0.5.0;
-  import lca:host/state@0.5.0;
-  import lca:host/ui@0.5.0;
+  import lca:host/log@0.6.0;
+  import lca:host/resources@0.6.0;
+  import lca:host/state@0.6.0;
+  import lca:host/ui@0.6.0;
+  import lca:host/ui-dialogs@0.6.0;
   export render;
   export interaction;
 }
@@ -36,10 +37,20 @@ interface render {
 interface interaction {
   /// A key or button the user produced (`key`), or a submission of what
   /// they typed into a modal (`submit`), or their dismissal (`cancel`).
+  /// The 0.6 mouse cases arrive only for real pointer events the host
+  /// hit-tested against the region (gh #172): a declared button's id,
+  /// a cell relative to the region's top-left, or a wheel delta
+  /// (+1 down, -1 up) the focused scroll-container consumes.
   variant input {
     key(string),
     submit(string),
     cancel,
+    /// The user clicked a declared `button` widget's id.
+    click-widget(string),
+    /// The user clicked inside the region at relative cell (col, row).
+    click(tuple<u32, u32>),
+    /// The user turned the wheel over the region.
+    scroll(s32),
   }
 
   /// What the event asks the host to do (the `command` world's effect

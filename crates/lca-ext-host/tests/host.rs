@@ -320,7 +320,7 @@ fn manifest_parses_identity_fields() {
     );
     assert!(
         Manifest::parse(
-            "name = \"Bad Name\"\nversion = \"1.0.0\"\nabi = \"0.4\"\nworlds = [\"tool\"]"
+            "name = \"Bad Name\"\nversion = \"1.0.0\"\nabi = \"0.5\"\nworlds = [\"tool\"]"
         )
         .is_err(),
         "identifier rules enforced"

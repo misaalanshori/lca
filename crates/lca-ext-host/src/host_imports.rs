@@ -681,3 +681,24 @@ impl wit_cap_completion::Host for HostState {
         Ok(to_host_response(text, usage))
     }
 }
+
+/// The `ui-dialogs` import's C1 stub (gh #172/gh #124): linked so 0.6
+/// components instantiate, denied until C4 wires the real prompter
+/// through `HostEnvironment`. Every world shares the one canonical
+/// import name, so the tool world's registration serves all four.
+impl lca_ext_abi::host::tool::lca::host::ui_dialogs::Host for HostState {
+    fn confirm(&mut self, _title: String, _message: String) -> Result<bool, String> {
+        Err("host dialogs are not wired yet".to_string())
+    }
+    fn select(&mut self, _title: String, _options: Vec<String>) -> Result<Option<String>, String> {
+        Err("host dialogs are not wired yet".to_string())
+    }
+    fn input(
+        &mut self,
+        _label: String,
+        _placeholder: Option<String>,
+    ) -> Result<Option<String>, String> {
+        Err("host dialogs are not wired yet".to_string())
+    }
+    fn notify(&mut self, _message: String, _level: String) {}
+}

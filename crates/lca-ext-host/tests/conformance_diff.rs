@@ -573,6 +573,32 @@ async fn ui_regions_and_effects_agree_across_modes() {
         modal.nodes.iter().any(|w| matches!(w, W::Boxed { .. })),
         "boxed"
     );
+    // The 0.6 vocabulary (gh #172): every new widget case crosses the
+    // boundary in both modes, same as the old ones above.
+    assert!(
+        footer_nodes
+            .iter()
+            .any(|w| matches!(w, W::StyledText { .. })),
+        "styled-text"
+    );
+    assert!(
+        footer_nodes.iter().any(|w| matches!(w, W::Markdown { .. })),
+        "markdown"
+    );
+    assert!(
+        footer_nodes.iter().any(|w| matches!(w, W::Button { .. })),
+        "button"
+    );
+    assert!(
+        footer_nodes.iter().any(|w| matches!(w, W::Table { .. })),
+        "table"
+    );
+    assert!(
+        footer_nodes
+            .iter()
+            .any(|w| matches!(w, W::ScrollContainer { .. })),
+        "scroll-container"
+    );
     let panel = wasm.render("panel").expect("panel").expect("tree");
     assert!(
         panel.nodes.iter().any(|w| matches!(w, W::KeyValue(_))),
@@ -605,6 +631,41 @@ async fn ui_regions_and_effects_agree_across_modes() {
             .expect("event"),
         lca_protocol::UiEffect::None,
         "only the modal region answers"
+    );
+    // The 0.6 mouse inputs (gh #172): a button click names its widget
+    // in both modes, and the relative forms cross intact.
+    assert_eq!(
+        wasm.on_ui_event(
+            "modal",
+            &lca_protocol::UiInput::ClickWidget { id: "ok".into() }
+        )
+        .expect("event"),
+        native
+            .on_ui_event(
+                "modal",
+                &lca_protocol::UiInput::ClickWidget { id: "ok".into() }
+            )
+            .expect("event")
+    );
+    assert_eq!(
+        wasm.on_ui_event(
+            "modal",
+            &lca_protocol::UiInput::ClickWidget { id: "ok".into() }
+        )
+        .expect("event"),
+        lca_protocol::UiEffect::ShowNotice("clicked: ok".to_string())
+    );
+    assert_eq!(
+        wasm.on_ui_event("modal", &lca_protocol::UiInput::Click { col: 3, row: 1 })
+            .expect("event"),
+        native
+            .on_ui_event("modal", &lca_protocol::UiInput::Click { col: 3, row: 1 })
+            .expect("event")
+    );
+    assert_eq!(
+        wasm.on_ui_event("modal", &lca_protocol::UiInput::Scroll { delta: -1 })
+            .expect("event"),
+        lca_protocol::UiEffect::None
     );
 }
 

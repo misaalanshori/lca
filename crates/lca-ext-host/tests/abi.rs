@@ -90,7 +90,7 @@ fn a_stale_line_is_refused_legibly_at_the_manifest_check() {
     let text = err.to_string();
     assert!(text.contains(&stale), "names the declared line: {text}");
     assert!(
-        text.contains("0.4") && text.contains("0.5"),
+        text.contains("0.5") && text.contains("0.6"),
         "names the accepted lines: {text}"
     );
 }

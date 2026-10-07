@@ -95,7 +95,7 @@ fn limits() -> ExtensionLimits {
 
 fn manifest_with(caps: &str) -> String {
     format!(
-        "name = \"conformance\"\nversion = \"0.1.0\"\nabi = \"0.4\"\nworlds = [\"tool\"]\n{caps}"
+        "name = \"conformance\"\nversion = \"0.1.0\"\nabi = \"0.5\"\nworlds = [\"tool\"]\n{caps}"
     )
 }
 
@@ -394,7 +394,7 @@ fn pty_spawn_delivers_terminal_output() {
 #[test]
 fn an_ungranted_ui_region_never_renders_and_is_recorded() {
     use lca_ext_host::Manifest;
-    let manifest_text = "name = \"region-test\"\nversion = \"1.0.0\"\nabi = \"0.4\"\n\
+    let manifest_text = "name = \"region-test\"\nversion = \"1.0.0\"\nabi = \"0.5\"\n\
 worlds = [\"ui\"]\ndescription = \"x\"\n\
 [capabilities.ui]\nregions = [\"status-line\"]\n";
     let manifest = Manifest::parse(manifest_text).expect("parses");

@@ -1,4 +1,4 @@
-package lca:ext@0.5.0;
+package lca:ext@0.6.0;
 
 /// Types shared by every world. Every record that crosses the ABI carries
 /// a reserved `extras` map so non-structural data can travel without a
@@ -86,6 +86,28 @@ interface types {
     extras: list<extra-pair>,
   }
 
+  /// How one span paints (gh #172): a foreground and a background
+  /// that travel independently, plus decorations. Each color is a
+  /// semantic role (`accent`, `success`, ...) OR a `#RRGGBB` hex
+  /// literal; the host parses hex into RGB bytes, resolves roles
+  /// through the theme, and degrades both to plain text where the
+  /// terminal has no color (FR-UI-5). Absent means the surrounding
+  /// default for that channel.
+  record text-style {
+    /// Foreground role or hex.
+    fg: option<string>,
+    /// Background role or hex.
+    bg: option<string>,
+    /// Bold.
+    bold: bool,
+    /// Dim.
+    dim: bool,
+    /// Italic.
+    italic: bool,
+    /// Underline.
+    underline: bool,
+  }
+
   /// The widget vocabulary (ADR-0003): the host lays out and draws;
   /// text carries data, never control codes (FR-UI-2). A color field is
   /// a semantic role - intent, not color - so it renders under any theme
@@ -94,6 +116,25 @@ interface types {
     /// Content plus its semantic role (`default`, `muted`, `warning`,
     /// `error`, `accent`, ... a string vocabulary, not an enum).
     text(tuple<string, string>),
+    /// Content with independent foreground/background channels and
+    /// decorations (gh #172): the dual-channel upgrade of `text`.
+    /// The old case stays so 0.5 guests keep rendering unchanged.
+    styled-text(tuple<string, text-style>),
+    /// Markdown source, rendered through the host's own markdown
+    /// engine (code fences highlighted, lists, tables, links).
+    markdown(string),
+    /// A clickable button: the `id` the `click-widget` input names
+    /// back, and the label the host draws with hover/active chrome.
+    button(tuple<string, string>),
+    /// Headers plus body rows; the host aligns every column.
+    table(tuple<list<string>, list<list<string>>>),
+    /// A virtual viewport over child indices: the host clips to
+    /// `max-height` rows and paints a scrollbar thumb from the scroll
+    /// offset wheel events move. (The tuple is height-first because
+    /// the height is the layout contract and the children are the
+    /// content; gh #172's sketch carried no children, which cannot
+    /// clip.)
+    scroll-container(tuple<u32, list<u32>>),
     /// An image: media type plus bytes (ADR-0003's pre-freeze addition
     /// for provider image output).
     image(tuple<string, list<u8>>),
@@ -101,7 +142,10 @@ interface types {
     /// A child reference is an index into the same node list: WIT
     /// records cannot be recursive, so trees travel as an arena with
     /// node0 as the root (documented at the `render` interface).
-    boxed(tuple<option<string>, u32>),
+    /// The 0.6 shape adds the border's role and the background tint
+    /// (both role-or-hex like `text-style`); absent means the theme's
+    /// box default for that channel.
+    boxed(tuple<option<string>, option<string>, option<string>, u32>),
     /// Children side by side, as node indices.
     row(list<u32>),
     /// Children stacked, as node indices.

@@ -1,10 +1,11 @@
-package lca:ext@0.5.0;
+package lca:ext@0.6.0;
 
 /// The `hooks` world. Hook points are fixed at `pre-turn`, `pre-tool-use`,
 /// `post-tool-use`, `post-turn-end`, `attention-required`, and
 /// `session-close` (docs/abi-versioning.md punch list). Only the pre-tool
 /// hook carries a verdict; every other point observes (FR-CORE-10).
 world hooks {
+  import lca:host/ui-dialogs@0.6.0;
   export hook-pre-turn;
   export hook-pre-tool-use;
   export hook-post-tool-use;

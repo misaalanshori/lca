@@ -2,6 +2,9 @@ wit_bindgen::generate!({
     path: "../../wit",
     world: "hooks",
     export_macro_name: "export_hooks",
+    with: {
+        "lca:host/ui-dialogs@0.6.0": generate,
+    },
 });
 
 use exports::lca::ext::hook_attention_required::Guest as AttentionGuest;
