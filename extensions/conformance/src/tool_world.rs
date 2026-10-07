@@ -77,6 +77,9 @@ fn map_state(err: state::Error) -> crate::CapabilityError {
 struct GuestCap;
 
 impl Cap for GuestCap {
+    fn dialog_confirm(&self, title: &str, message: &str) -> Result<bool, String> {
+        lca::host::ui_dialogs::confirm(title, message)
+    }
     fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, crate::CapabilityError> {
         fs::read(scope, path).map_err(map_fs)
     }

@@ -49,6 +49,7 @@ fn env(tag: &str) -> Arc<HostEnvironment> {
         )),
         project: root.join("workspace"),
         proposals: None,
+        dialogs: lca_permissions::SharedDialogs::default(),
     })
 }
 

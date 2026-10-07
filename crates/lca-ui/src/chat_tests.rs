@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub(super) fn options() -> UiOptions {
     UiOptions {
         prompt_slot: Default::default(),
+        dialog_slot: Default::default(),
         pending_models: None,
         model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
         context_window: Arc::new(std::sync::Mutex::new(0)),
@@ -1082,4 +1083,107 @@ fn a_rebound_key_fires() {
     }
     chat.handle_key("\x11");
     assert_eq!(chat.editor.text(), "a", "Ctrl+Q deleted backward");
+}
+
+// Verifies: gh #124 - a confirm dialog answers on y/n and closes, and
+// the worker hears it through the exchange channel.
+#[test]
+fn a_confirm_dialog_answers_and_closes() {
+    use lca_protocol::{DialogAnswer, UiDialog};
+    let mut chat = chat();
+    let (respond, response) = std::sync::mpsc::sync_channel(1);
+    chat.world.dialog = Some(crate::state::DialogModal {
+        exchange: crate::state::DialogExchange {
+            dialog: UiDialog::Confirm {
+                title: "t".into(),
+                message: "m".into(),
+            },
+            respond,
+        },
+        query: String::new(),
+        matches: Vec::new(),
+        selected: 0,
+        input: String::new(),
+    });
+    chat.handle_key("n");
+    assert_eq!(response.try_recv().ok(), Some(DialogAnswer::Confirm(false)));
+    assert!(chat.world.dialog.is_none(), "answered dialogs close");
+}
+
+// Verifies: gh #124 - a select filters on typing and picks the
+// highlight on enter; escape dismisses to None.
+#[test]
+fn a_select_dialog_filters_and_picks() {
+    use lca_protocol::{DialogAnswer, UiDialog};
+    let mut chat = chat();
+    let (respond, response) = std::sync::mpsc::sync_channel(1);
+    let options = vec!["alpha".to_string(), "beta".to_string()];
+    chat.world.dialog = Some(crate::state::DialogModal {
+        exchange: crate::state::DialogExchange {
+            dialog: UiDialog::Select {
+                title: "t".into(),
+                options: options.clone(),
+            },
+            respond,
+        },
+        query: String::new(),
+        matches: vec![0, 1],
+        selected: 0,
+        input: String::new(),
+    });
+    chat.handle_key("b");
+    assert_eq!(chat.world.dialog.as_ref().unwrap().matches, vec![1]);
+    chat.handle_key("\r");
+    assert_eq!(
+        response.try_recv().ok(),
+        Some(DialogAnswer::Select(Some("beta".to_string())))
+    );
+    assert!(chat.world.dialog.is_none());
+}
+
+// Verifies: gh #124 - an input dialog edits one line; enter submits,
+// escape dismisses, and an empty submit is None (the WIT contract).
+#[test]
+fn an_input_dialog_edits_and_submits() {
+    use lca_protocol::{DialogAnswer, UiDialog};
+    let mut chat = chat();
+    let (respond, response) = std::sync::mpsc::sync_channel(1);
+    chat.world.dialog = Some(crate::state::DialogModal {
+        exchange: crate::state::DialogExchange {
+            dialog: UiDialog::Input {
+                label: "l".into(),
+                placeholder: None,
+            },
+            respond,
+        },
+        query: String::new(),
+        matches: Vec::new(),
+        selected: 0,
+        input: String::new(),
+    });
+    for c in "hi".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert_eq!(
+        response.try_recv().ok(),
+        Some(DialogAnswer::Input(Some("hi".to_string())))
+    );
+
+    let (respond, response) = std::sync::mpsc::sync_channel(1);
+    chat.world.dialog = Some(crate::state::DialogModal {
+        exchange: crate::state::DialogExchange {
+            dialog: UiDialog::Input {
+                label: "l".into(),
+                placeholder: None,
+            },
+            respond,
+        },
+        query: String::new(),
+        matches: Vec::new(),
+        selected: 0,
+        input: String::new(),
+    });
+    chat.handle_key("\x1b");
+    assert_eq!(response.try_recv().ok(), Some(DialogAnswer::Input(None)));
 }

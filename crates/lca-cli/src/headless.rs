@@ -408,6 +408,7 @@ pub(crate) async fn setup(
         cwd,
         &config,
         shared_prompt.clone(),
+        lca_permissions::SharedDialogs::default(),
         &grants,
         Arc::new(move || crate::tui::session_stats(&stats_store, &stats_session)),
     );

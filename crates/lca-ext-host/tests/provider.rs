@@ -93,6 +93,7 @@ impl Fixture {
             grant_store: self.store.clone(),
             project: self.root.join("project"),
             proposals: None,
+            dialogs: lca_permissions::SharedDialogs::default(),
         })
     }
 

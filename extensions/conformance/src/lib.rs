@@ -43,6 +43,10 @@ pub trait Cap {
     fn state_delete(&self, key: &str) -> Result<(), CapabilityError>;
     /// List the extension's own state bag.
     fn state_list(&self) -> Result<Vec<(String, u64)>, CapabilityError>;
+    /// Ask a host-rendered yes/no question (gh #124): the WASM twin
+    /// crosses the `ui-dialogs` import, the native twin answers through
+    /// its own injected prompter, and both report the same verdict.
+    fn dialog_confirm(&self, title: &str, message: &str) -> Result<bool, String>;
     /// Spawn a program in a granted scope.
     fn process_spawn(
         &self,
@@ -182,6 +186,26 @@ pub fn run_shared(cap: &dyn Cap, mode: &str, args: &serde_json::Value) -> ModeOu
             ok: true,
             text: "conformance ok".to_string(),
         },
+        // Gh #124's acceptance: a tool asking `ui.confirm`, reporting
+        // the verdict as data (a denial is `ok` too - the question was
+        // asked and answered, which is what the mode probes).
+        "ask-confirm" => {
+            let title = args
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("conformance");
+            let message = args
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("proceed?");
+            match cap.dialog_confirm(title, message) {
+                Ok(verdict) => ModeOutcome {
+                    ok: true,
+                    text: format!("confirm: {verdict}"),
+                },
+                Err(err) => fail(CapabilityError::Invalid(err)),
+            }
+        }
         "fs-read" => {
             let (Some(scope), Some(path)) = (
                 args.get("scope").and_then(|v| v.as_str()),

@@ -21,6 +21,7 @@ pub(crate) fn assemble(
     cwd: &Path,
     config: &Config,
     shared_prompt: SharedPrompt,
+    shared_dialogs: lca_permissions::SharedDialogs,
     grants: &Arc<Mutex<GrantStore>>,
     stats: StatsSource,
 ) -> ExtensionRegistry {
@@ -30,6 +31,7 @@ pub(crate) fn assemble(
         cwd,
         config.extensions_log_limit_bytes() as usize,
         shared_prompt.clone(),
+        shared_dialogs,
         grants,
     );
     for handle in lca_ext_native::default_native_extensions(stats) {
@@ -92,6 +94,7 @@ mod tests {
             &project,
             &config,
             lca_permissions::SharedPrompt::default(),
+            lca_permissions::SharedDialogs::default(),
             &grants,
             std::sync::Arc::new(|| String::new()),
         );

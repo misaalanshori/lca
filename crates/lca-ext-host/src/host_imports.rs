@@ -682,23 +682,68 @@ impl wit_cap_completion::Host for HostState {
     }
 }
 
-/// The `ui-dialogs` import's C1 stub (gh #172/gh #124): linked so 0.6
-/// components instantiate, denied until C4 wires the real prompter
-/// through `HostEnvironment`. Every world shares the one canonical
-/// import name, so the tool world's registration serves all four.
+thread_local! {
+    /// Whether this thread is inside loop-thread dispatch (gh #124):
+    /// `render`, `interaction`, and command `invoke` all run on the
+    /// TUI loop's own thread, so a dialog there would wait for the
+    /// loop to answer itself - a deadlock. Worker threads (tools,
+    /// hooks) never set it, so their questions reach the user.
+    static DIALOG_FORBIDDEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `call` with dialogs forbidden on this thread (gh #124): the
+/// loop-thread dispatch entries (`render`, `interaction`, command
+/// `invoke`) wrap their guest call in this.
+pub fn without_dialogs<R>(call: impl FnOnce() -> R) -> R {
+    DIALOG_FORBIDDEN.with(|forbidden| {
+        let was = forbidden.get();
+        forbidden.set(true);
+        let out = call();
+        forbidden.set(was);
+        out
+    })
+}
+
+/// The denial text for a dialog asked on the loop thread.
+const LOOP_THREAD_DENIAL: &str =
+    "cannot ask a question while handling interface input; ask from a tool or hook instead.";
+
+/// Whether this thread is currently inside loop-thread dispatch.
+fn dialogs_forbidden() -> bool {
+    DIALOG_FORBIDDEN.with(|forbidden| forbidden.get())
+}
+
+/// The `ui-dialogs` import (gh #124/gh #172): through the session's
+/// live slot, or the denied values with nothing installed (the
+/// headless contract). Every world shares the one canonical import
+/// name, so the tool world's registration serves all four.
 impl lca_ext_abi::host::tool::lca::host::ui_dialogs::Host for HostState {
-    fn confirm(&mut self, _title: String, _message: String) -> Result<bool, String> {
-        Err("host dialogs are not wired yet".to_string())
+    fn confirm(&mut self, title: String, message: String) -> Result<bool, String> {
+        if dialogs_forbidden() {
+            return Err(LOOP_THREAD_DENIAL.to_string());
+        }
+        Ok(self.dialogs.confirm(&title, &message))
     }
-    fn select(&mut self, _title: String, _options: Vec<String>) -> Result<Option<String>, String> {
-        Err("host dialogs are not wired yet".to_string())
+    fn select(&mut self, title: String, options: Vec<String>) -> Result<Option<String>, String> {
+        if dialogs_forbidden() {
+            return Err(LOOP_THREAD_DENIAL.to_string());
+        }
+        Ok(self.dialogs.select(&title, &options))
     }
     fn input(
         &mut self,
-        _label: String,
-        _placeholder: Option<String>,
+        label: String,
+        placeholder: Option<String>,
     ) -> Result<Option<String>, String> {
-        Err("host dialogs are not wired yet".to_string())
+        if dialogs_forbidden() {
+            return Err(LOOP_THREAD_DENIAL.to_string());
+        }
+        Ok(self.dialogs.input(&label, placeholder.as_deref()))
     }
-    fn notify(&mut self, _message: String, _level: String) {}
+    fn notify(&mut self, message: String, level: String) {
+        if dialogs_forbidden() {
+            return;
+        }
+        self.dialogs.notify(&message, &level);
+    }
 }

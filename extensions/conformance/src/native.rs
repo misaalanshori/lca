@@ -4,9 +4,16 @@ use std::sync::Arc;
 
 /// The native twin of the guest's `Cap`: it calls the same
 /// [`Capabilities`] engine the WASM host's imports call.
-pub struct NativeCap(pub Arc<Capabilities>);
+/// The native twin's capability handle: the shared engine plus its own
+/// injected dialog prompter (gh #124 - the fixture answers both twins
+/// through scripted prompters, so the verdicts agree by construction).
+pub struct NativeCap(pub Arc<Capabilities>, pub lca_permissions::SharedDialogs);
 
 impl Cap for NativeCap {
+    fn dialog_confirm(&self, title: &str, message: &str) -> Result<bool, String> {
+        use lca_permissions::DialogPrompt;
+        Ok(self.1.clone().confirm(title, message))
+    }
     fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, CapabilityError> {
         self.0.fs_read(scope, path)
     }
@@ -123,12 +130,22 @@ impl crate::IdentityCap for NativeCap {
 /// dispatch, same capability engine (FR-EXT-6).
 pub struct NativeConformance {
     cap: Arc<Capabilities>,
+    dialogs: lca_permissions::SharedDialogs,
 }
 
 impl NativeConformance {
     /// Wrap the extension's capability engine.
     pub fn new(cap: Arc<Capabilities>) -> NativeConformance {
-        NativeConformance { cap }
+        NativeConformance {
+            cap,
+            dialogs: lca_permissions::SharedDialogs::default(),
+        }
+    }
+
+    /// Inject the dialog prompter the twin asks through (gh #124).
+    pub fn with_dialogs(mut self, dialogs: lca_permissions::SharedDialogs) -> NativeConformance {
+        self.dialogs = dialogs;
+        self
     }
 
     /// The tool schema (identical to the guest's).
@@ -147,7 +164,11 @@ impl NativeConformance {
     /// report unknown here; the conformance diff never uses them.
     pub fn execute(&self, call: &ToolCall) -> ToolResult {
         let (mode, args) = mode_and_args(&call.arguments);
-        let outcome = run_shared(&NativeCap(self.cap.clone()), &mode, &args);
+        let outcome = run_shared(
+            &NativeCap(self.cap.clone(), self.dialogs.clone()),
+            &mode,
+            &args,
+        );
         outcome_to_result(&call.call_id, outcome)
     }
 }
@@ -272,7 +293,12 @@ impl lca_ext_abi::ExtensionDispatch for NativeConformance {
         let cap = self.cap.clone();
         // Lazy: the oauth flow blocks in `oauth_await`, so the caller
         // must be able to run this future off the test thread.
-        Box::pin(async move { Ok(crate::scripted_login(&NativeCap(cap))) })
+        Box::pin(async move {
+            Ok(crate::scripted_login(&NativeCap(
+                cap,
+                lca_permissions::SharedDialogs::default(),
+            )))
+        })
     }
 
     fn identity_logout(

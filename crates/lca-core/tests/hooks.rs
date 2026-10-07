@@ -436,6 +436,7 @@ async fn wasm_and_native_extension_tools_both_run_in_the_loop() {
         )),
         project: root.join("project"),
         proposals: None,
+        dialogs: lca_permissions::SharedDialogs::default(),
     });
     let mut host = ExtHost::new(
         ExtensionLimits {
@@ -565,6 +566,7 @@ async fn a_trapping_extension_is_reported_and_the_session_survives() {
         )),
         project: root.join("project"),
         proposals: None,
+        dialogs: lca_permissions::SharedDialogs::default(),
     });
     let mut host = ExtHost::new(
         ExtensionLimits {
@@ -693,6 +695,7 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
         )),
         project: root.join("project"),
         proposals: None,
+        dialogs: lca_permissions::SharedDialogs::default(),
     });
     let mut host = ExtHost::new(
         ExtensionLimits {
@@ -811,6 +814,7 @@ async fn a_fresh_turn_starts_clean_after_cancellation() {
         )),
         project: root.join("project"),
         proposals: None,
+        dialogs: lca_permissions::SharedDialogs::default(),
     });
     let mut host = ExtHost::new(
         ExtensionLimits {

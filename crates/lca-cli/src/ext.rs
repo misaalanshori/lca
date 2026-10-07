@@ -103,11 +103,13 @@ fn host_roots(cwd: &std::path::Path) -> lca_permissions::ScopeRoots {
 fn installed_environment(
     cwd: &std::path::Path,
     prompt: lca_permissions::SharedPrompt,
+    dialogs: lca_permissions::SharedDialogs,
     grants: &std::sync::Arc<std::sync::Mutex<lca_permissions::GrantStore>>,
 ) -> std::sync::Arc<lca_ext_host::HostEnvironment> {
     std::sync::Arc::new(lca_ext_host::HostEnvironment {
         roots: host_roots(cwd),
         prompt: std::sync::Arc::new(std::sync::Mutex::new(prompt)),
+        dialogs,
         grant_store: grants.clone(),
         project: cwd.to_path_buf(),
         proposals: None,
@@ -125,6 +127,7 @@ pub fn load_installed(
     cwd: &std::path::Path,
     log_limit_bytes: usize,
     prompt: lca_permissions::SharedPrompt,
+    dialogs: lca_permissions::SharedDialogs,
     grants: &std::sync::Arc<std::sync::Mutex<lca_permissions::GrantStore>>,
 ) {
     let tree = install_tree();
@@ -138,7 +141,7 @@ pub fn load_installed(
     if entries.is_empty() {
         return;
     }
-    let env = installed_environment(cwd, prompt, grants);
+    let env = installed_environment(cwd, prompt, dialogs, grants);
     let mut host = lca_ext_host::ExtHost::new(
         lca_ext_host::ExtensionLimits {
             memory_bytes: 64 * 1024 * 1024,
@@ -960,8 +963,12 @@ redirect_path = "/callback"
         let grants = std::sync::Arc::new(std::sync::Mutex::new(
             lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
         ));
-        let env =
-            installed_environment(&project, lca_permissions::SharedPrompt::default(), &grants);
+        let env = installed_environment(
+            &project,
+            lca_permissions::SharedPrompt::default(),
+            lca_permissions::SharedDialogs::default(),
+            &grants,
+        );
 
         // A grant attached mid-session, exactly as the prompt attaches it
         // (persisted through the shared handle).

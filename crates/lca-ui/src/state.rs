@@ -514,6 +514,11 @@ pub struct UiOptions {
     /// whole session; `None` before `run` starts.
     pub prompt_slot:
         std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::SyncSender<PromptRequest>>>>,
+    /// The session's dialog sender (gh #124): a worker asking a
+    /// host-rendered question. Published by `run` like `prompt_slot`;
+    /// `None` before `run` starts.
+    pub dialog_slot:
+        std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::SyncSender<DialogExchange>>>>,
     /// Rows the host has ready for the `/model` picker after its consent
     /// finished (that flow's second step): a non-empty list opens the
     /// picker once; the host clears its cell as it hands them over.
@@ -550,6 +555,33 @@ pub struct UiOptions {
     pub hooks: UiHooks,
     /// Whether the session starts in the fullscreen (alt-screen) renderer.
     pub fullscreen: bool,
+}
+
+/// A worker asking a host-rendered question (gh #124): the question
+/// plus where the answer goes. The TUI loop drains these and opens
+/// native chrome; headless answers the denied values without asking.
+#[derive(Debug)]
+pub struct DialogExchange {
+    /// The question.
+    pub dialog: lca_protocol::UiDialog,
+    /// Where the answer goes.
+    pub respond: SyncSender<lca_protocol::DialogAnswer>,
+}
+
+/// The open dialog modal: the exchange plus per-kind UI state (the
+/// select filter and highlight, the input buffer).
+#[derive(Debug)]
+pub struct DialogModal {
+    /// The waiting worker.
+    pub exchange: DialogExchange,
+    /// The select filter text.
+    pub query: String,
+    /// The select matches (indices into the options).
+    pub matches: Vec<usize>,
+    /// The select highlight (an index into `matches`).
+    pub selected: usize,
+    /// The input buffer.
+    pub input: String,
 }
 
 /// The permission modal: what is being asked, and how to answer.
@@ -591,6 +623,9 @@ pub struct UiState {
     /// An extension modal is open (one at a time, user-dismissible:
     /// capability catalog `ui`).
     pub modal_open: bool,
+    /// A host-rendered dialog is open (gh #124): one modal at a time,
+    /// so this and `permission` never stack (the drains check both).
+    pub dialog: Option<DialogModal>,
     /// Terminal size, tracked across resizes (FR-UI-3).
     pub size: (u16, u16),
 }
@@ -617,6 +652,7 @@ impl UiState {
             ctrl_c_armed: false,
             panel_open: false,
             modal_open: false,
+            dialog: None,
             size: (80, 24),
         }
     }
@@ -774,6 +810,7 @@ mod tests {
     fn options() -> UiOptions {
         UiOptions {
             prompt_slot: Default::default(),
+            dialog_slot: Default::default(),
             pending_models: None,
             model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
             context_window: Arc::new(std::sync::Mutex::new(0)),

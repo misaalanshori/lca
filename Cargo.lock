@@ -367,6 +367,7 @@ name = "conformance"
 version = "0.5.4"
 dependencies = [
  "lca-ext-abi",
+ "lca-permissions",
  "lca-protocol",
  "lca-tools",
  "serde_json",

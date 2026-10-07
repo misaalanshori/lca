@@ -78,6 +78,7 @@ impl Fixture {
             grant_store: self.store.clone(),
             project: self.root.join("project"),
             proposals: None,
+            dialogs: lca_permissions::SharedDialogs::default(),
         })
     }
 
@@ -698,4 +699,89 @@ async fn the_login_surface_agrees_across_modes() {
         wasm_settings.iter().any(|(key, _)| key == "base_url"),
         "the settings the host persists came back"
     );
+}
+
+// Verifies: gh #124 - a conformance tool asking `ui.confirm` hears the
+// same verdict in both modes: the WASM twin crosses the real host
+// import, the native twin answers through its injected prompter, and
+// the Fixture scripts both sides alike.
+#[test]
+fn the_dialog_verdict_agrees_across_modes() {
+    use lca_permissions::{DialogPrompt, SharedDialogs};
+
+    struct Scripted(bool);
+    impl DialogPrompt for Scripted {
+        fn confirm(&mut self, _title: &str, _message: &str) -> bool {
+            self.0
+        }
+        fn select(&mut self, _title: &str, _options: &[String]) -> Option<String> {
+            None
+        }
+        fn input(&mut self, _label: &str, _placeholder: Option<&str>) -> Option<String> {
+            None
+        }
+        fn notify(&mut self, _message: &str, _level: &str) {}
+    }
+
+    fn asking(handle: &Arc<dyn ExtensionDispatch>) -> String {
+        // Tools run off the loop thread (gh #124), so no guard is set
+        // here - exactly like the turn worker calling in.
+        let call = ToolCall {
+            call_id: "dialog-1".to_string(),
+            name: "conformance".to_string(),
+            arguments: "{\"mode\":\"ask-confirm\"}".to_string(),
+        };
+        let handle = handle.clone();
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(handle.execute_tool(&call))
+        })
+        .join()
+        .expect("tool thread")
+        .expect("tool ran")
+        .content
+    }
+
+    fn ask(wasm: &Arc<dyn ExtensionDispatch>, native: &Arc<dyn ExtensionDispatch>, verdict: &str) {
+        let wasm_text = asking(wasm);
+        let native_text = asking(native);
+        assert_eq!(wasm_text, native_text, "the verdict agrees");
+        assert!(
+            wasm_text.contains(verdict),
+            "the scripted verdict crossed: {wasm_text}"
+        );
+    }
+
+    for verdict in [false, true] {
+        let fixture = Fixture::new(&format!("dialog-{verdict}"));
+        let scripted = Arc::new(Mutex::new(Scripted(verdict)));
+        let dialogs = SharedDialogs::default();
+        dialogs.set(scripted);
+
+        let mut host = ExtHost::new(
+            ExtensionLimits {
+                memory_bytes: 64 * 1024 * 1024,
+                fuel_per_call: 100_000_000,
+                log_limit_bytes: 4096,
+            },
+            Arc::new(HostEnvironment {
+                roots: fixture.roots.clone(),
+                prompt: fixture.prompt.clone(),
+                dialogs: dialogs.clone(),
+                grant_store: fixture.store.clone(),
+                project: fixture.root.join("project"),
+                proposals: None,
+                // (kept alphabetical like the constructor)
+            }),
+        );
+        let wasm: Arc<dyn ExtensionDispatch> =
+            Arc::new(host.load(FIXTURE, MANIFEST).expect("load wasm mode"));
+        let engine = fixture.capabilities();
+        let native: Arc<dyn ExtensionDispatch> =
+            Arc::new(conformance::NativeConformance::new(engine).with_dialogs(dialogs));
+        ask(&wasm, &native, &format!("confirm: {verdict}"));
+    }
 }

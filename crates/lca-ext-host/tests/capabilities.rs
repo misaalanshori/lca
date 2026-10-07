@@ -81,6 +81,7 @@ impl Sandbox {
             grant_store: store,
             project: self.root.join("workspace"),
             proposals: None,
+            dialogs: lca_permissions::SharedDialogs::default(),
         })
     }
 }

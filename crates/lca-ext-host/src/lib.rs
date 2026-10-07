@@ -30,7 +30,8 @@ use lca_ext_abi::host::tool::{Tool, ToolPre};
 use lca_ext_abi::host::ui::UiPre;
 use lca_ext_abi::{DeliveryMode, World};
 use lca_permissions::{
-    GrantStore, OAuthSettings, PermissionPrompt, Proposals, ScopeGrant, ScopeRoots,
+    DialogPrompt, GrantStore, OAuthSettings, PermissionPrompt, Proposals, ScopeGrant, ScopeRoots,
+    SharedDialogs,
 };
 use lca_protocol::{
     CapabilityError, CommandEffect, CompletionRequest, DispatchError, EventSink, HookAction,
@@ -93,6 +94,10 @@ pub struct HostEnvironment {
     pub roots: ScopeRoots,
     /// The approval prompt (TUI modal, headless deny, scripted in tests).
     pub prompt: Arc<Mutex<dyn PermissionPrompt>>,
+    /// The dialog prompter (gh #124): host-rendered questions backing
+    /// the `ui-dialogs` import. Empty denies (the headless contract);
+    /// the interface installs the live one per session.
+    pub dialogs: SharedDialogs,
     /// The user grant store (ADR-0006).
     pub grant_store: Arc<Mutex<GrantStore>>,
     /// The current project, keyed into the grant store by canonical path.
@@ -137,6 +142,7 @@ struct HostState {
     logs: Arc<Mutex<Vec<String>>>,
     log_limit: usize,
     cap: Arc<Capabilities>,
+    dialogs: SharedDialogs,
 }
 
 impl WasiView for HostState {
@@ -350,6 +356,7 @@ impl ExtHost {
                 interrupted: AtomicBool::new(false),
                 logs: Arc::new(Mutex::new(Vec::new())),
                 cap,
+                dialogs: self.env.dialogs.clone(),
             }),
         })
     }
@@ -379,6 +386,9 @@ struct Inner {
     enabled: Arc<AtomicBool>,
     logs: Arc<Mutex<Vec<String>>>,
     cap: Arc<Capabilities>,
+    /// The dialog prompter (gh #124): cloned into every store so the
+    /// `ui-dialogs` import answers through the session's live slot.
+    dialogs: SharedDialogs,
     /// Calls currently inside the guest: incremented the moment the
     /// component is instantiated and the run begins, decremented when
     /// it returns. Cancellation semantics are about interrupting a
@@ -424,6 +434,7 @@ impl Inner {
                 logs: self.logs.clone(),
                 log_limit: self.limits.log_limit_bytes,
                 cap: self.cap.clone(),
+                dialogs: self.dialogs.clone(),
             },
         );
         store.limiter(|state| &mut state.limits);

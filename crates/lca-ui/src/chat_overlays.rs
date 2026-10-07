@@ -326,10 +326,94 @@ impl Chat {
         false
     }
 
+    /// Draw one host-rendered dialog (gh #124): confirm is a yes/no
+    /// box, select is a filterable list on the pickers' chrome, input
+    /// is one line. The extension's name never appears - the chrome is
+    /// the host's, so the user always knows who is asking.
+    fn compose_dialog(
+        &self,
+        viewport: &mut [String],
+        width: u16,
+        height: u16,
+        modal: &crate::state::DialogModal,
+    ) {
+        use lca_protocol::UiDialog;
+        match &modal.exchange.dialog {
+            UiDialog::Confirm { title, message } => {
+                let body = vec![
+                    message.clone(),
+                    String::new(),
+                    "Yes [y] / No [n]".to_string(),
+                ];
+                super::render::overlay_box(viewport, width, height, title, &body, &self.theme);
+            }
+            UiDialog::Select { title, options, .. } => {
+                let rows = 10usize.min(height.saturating_sub(7) as usize).max(1);
+                let total = modal.matches.len();
+                let start = modal
+                    .selected
+                    .saturating_sub(rows - 1)
+                    .min(total.saturating_sub(rows));
+                let end = (start + rows).min(total);
+                let mut body = Vec::new();
+                if !modal.query.is_empty() {
+                    body.push(format!("> {}", modal.query));
+                }
+                let base = body.len();
+                for position in start..end {
+                    let marker = if position == modal.selected { '>' } else { ' ' };
+                    let option = modal
+                        .matches
+                        .get(position)
+                        .and_then(|index| options.get(*index))
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    body.push(format!(" {marker} {option}"));
+                }
+                if modal.matches.is_empty() {
+                    body.push(" (no matches)".to_string());
+                }
+                let selected = (!modal.matches.is_empty())
+                    .then(|| base + modal.selected.saturating_sub(start));
+                super::render::overlay_box_selected(
+                    viewport,
+                    width,
+                    height,
+                    title,
+                    &body,
+                    &self.theme,
+                    selected,
+                );
+            }
+            UiDialog::Input { label, .. } => {
+                let shown = if modal.input.is_empty() {
+                    "(type a value)".to_string()
+                } else {
+                    modal.input.clone()
+                };
+                let body = vec![
+                    format!("  {shown}"),
+                    String::new(),
+                    "Enter submits; Esc cancels.".to_string(),
+                ];
+                super::render::overlay_box(viewport, width, height, label, &body, &self.theme);
+            }
+            UiDialog::Notify { .. } => {
+                // Never opens (the drain notices and answers); reaching
+                // here means a bug, and a stuck modal is worse than a
+                // dropped notice.
+            }
+        }
+    }
+
     /// Draw the open login/grant/permission/extension modal, if any.
     /// Compose the extension modal over the viewport.
     fn compose_modals(&self, viewport: &mut [String], width: u16, height: u16) {
-        if let Some(label) = &self.world.login_waiting {
+        // A host-rendered dialog owns the screen outright (gh #124):
+        // nothing stacks under it while it is open.
+        if let Some(modal) = &self.world.dialog {
+            self.compose_dialog(viewport, width, height, modal);
+        } else if let Some(label) = &self.world.login_waiting {
             // R4: a cancellable waiting state, so a slow OAuth callback is
             // visible and interruptible instead of freezing the app.
             let body = vec![label.clone(), String::new(), "esc cancels".to_string()];

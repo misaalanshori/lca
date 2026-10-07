@@ -52,21 +52,26 @@ pub(super) fn render_work(
     inner: &Inner,
     region: &str,
 ) -> Result<Option<lca_protocol::WidgetTree>, CallError> {
-    let pre = inner
-        .ui
-        .as_ref()
-        .ok_or_else(|| CallError::InvalidArguments("no ui world".into()))?;
-    let mut store = inner.build_store()?;
-    let instance = pre
-        .instantiate(&mut store)
-        .map_err(|err| inner.classify(err))?;
-    let tree = instance
-        .lca_ext_render()
-        .call_render(&mut store, region)
-        .map_err(|err| inner.classify(err))?;
-    Ok(tree.map(|nodes| lca_protocol::WidgetTree {
-        nodes: nodes.into_iter().map(from_wit_widget).collect(),
-    }))
+    // Loop-thread dispatch (gh #124): a question here would wait for the
+    // loop to answer itself, so the import refuses while this wraps the
+    // guest call (worker threads never wrap, so tools and hooks ask).
+    super::host_imports::without_dialogs(|| {
+        let pre = inner
+            .ui
+            .as_ref()
+            .ok_or_else(|| CallError::InvalidArguments("no ui world".into()))?;
+        let mut store = inner.build_store()?;
+        let instance = pre
+            .instantiate(&mut store)
+            .map_err(|err| inner.classify(err))?;
+        let tree = instance
+            .lca_ext_render()
+            .call_render(&mut store, region)
+            .map_err(|err| inner.classify(err))?;
+        Ok(tree.map(|nodes| lca_protocol::WidgetTree {
+            nodes: nodes.into_iter().map(from_wit_widget).collect(),
+        }))
+    })
 }
 
 pub(super) fn event_work(
@@ -74,36 +79,39 @@ pub(super) fn event_work(
     region: &str,
     input: &lca_protocol::UiInput,
 ) -> Result<lca_protocol::UiEffect, CallError> {
-    use lca_protocol::UiEffect;
-    use ui_exports::interaction::Input as WasmInput;
-    let pre = inner
-        .ui
-        .as_ref()
-        .ok_or_else(|| CallError::InvalidArguments("no ui world".into()))?;
-    let mut store = inner.build_store()?;
-    let instance = pre
-        .instantiate(&mut store)
-        .map_err(|err| inner.classify(err))?;
-    let wasm_input = match input {
-        lca_protocol::UiInput::Key { key } => WasmInput::Key(key.clone()),
-        lca_protocol::UiInput::Submit { text } => WasmInput::Submit(text.clone()),
-        lca_protocol::UiInput::Cancel => WasmInput::Cancel,
-        lca_protocol::UiInput::ClickWidget { id } => WasmInput::ClickWidget(id.clone()),
-        lca_protocol::UiInput::Click { col, row } => WasmInput::Click((*col, *row)),
-        lca_protocol::UiInput::Scroll { delta } => WasmInput::Scroll(*delta),
-    };
-    let effect = instance
-        .lca_ext_interaction()
-        .call_handle(&mut store, region, &wasm_input)
-        .map_err(|err| inner.classify(err))?;
-    use ui_exports::interaction::Effect;
-    let _ = region;
-    Ok(match effect {
-        Effect::None => UiEffect::None,
-        Effect::CloseModal => UiEffect::CloseModal,
-        Effect::OpenModal => UiEffect::OpenModal,
-        Effect::ShowNotice(text) => UiEffect::ShowNotice(text),
-        Effect::InsertText(text) => UiEffect::InsertText(text),
-        Effect::SubmitPrompt(text) => UiEffect::SubmitPrompt(text),
+    // Loop-thread dispatch, like `render_work` above (gh #124).
+    super::host_imports::without_dialogs(|| {
+        use lca_protocol::UiEffect;
+        use ui_exports::interaction::Input as WasmInput;
+        let pre = inner
+            .ui
+            .as_ref()
+            .ok_or_else(|| CallError::InvalidArguments("no ui world".into()))?;
+        let mut store = inner.build_store()?;
+        let instance = pre
+            .instantiate(&mut store)
+            .map_err(|err| inner.classify(err))?;
+        let wasm_input = match input {
+            lca_protocol::UiInput::Key { key } => WasmInput::Key(key.clone()),
+            lca_protocol::UiInput::Submit { text } => WasmInput::Submit(text.clone()),
+            lca_protocol::UiInput::Cancel => WasmInput::Cancel,
+            lca_protocol::UiInput::ClickWidget { id } => WasmInput::ClickWidget(id.clone()),
+            lca_protocol::UiInput::Click { col, row } => WasmInput::Click((*col, *row)),
+            lca_protocol::UiInput::Scroll { delta } => WasmInput::Scroll(*delta),
+        };
+        let effect = instance
+            .lca_ext_interaction()
+            .call_handle(&mut store, region, &wasm_input)
+            .map_err(|err| inner.classify(err))?;
+        use ui_exports::interaction::Effect;
+        let _ = region;
+        Ok(match effect {
+            Effect::None => UiEffect::None,
+            Effect::CloseModal => UiEffect::CloseModal,
+            Effect::OpenModal => UiEffect::OpenModal,
+            Effect::ShowNotice(text) => UiEffect::ShowNotice(text),
+            Effect::InsertText(text) => UiEffect::InsertText(text),
+            Effect::SubmitPrompt(text) => UiEffect::SubmitPrompt(text),
+        })
     })
 }

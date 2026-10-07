@@ -77,6 +77,7 @@ impl Ui {
             // The session's prompt channel (run publishes its sender here)
             // and the consent flow's rows for the picker (gh #31 review).
             prompt_slot: self.prompt_slot.clone(),
+            dialog_slot: self.dialog_slot.clone(),
             pending_models: Some({
                 let ui = self.clone();
                 Arc::new(move || ui.take_pending_models())

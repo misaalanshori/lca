@@ -107,25 +107,28 @@ pub(super) fn invoke_work(
     leaf: &str,
     argument: &str,
 ) -> Result<CommandEffect, CallError> {
-    let pre = inner
-        .command
-        .as_ref()
-        .ok_or_else(|| CallError::InvalidArguments("no command world".into()))?;
-    let mut store = inner.build_store()?;
-    let instance = pre
-        .instantiate(&mut store)
-        .map_err(|err| inner.classify(err))?;
-    let effect = instance
-        .lca_ext_invoke()
-        .call_run(&mut store, argument)
-        .map_err(|err| inner.classify(err))?;
-    let _ = leaf;
-    use lca_ext_abi::host::command::exports::lca::ext::invoke::Effect;
-    Ok(match effect {
-        Effect::InsertText(text) => CommandEffect::InsertText(text),
-        Effect::SubmitPrompt(text) => CommandEffect::SubmitPrompt(text),
-        Effect::ShowWidget(text) => CommandEffect::ShowWidget(text),
-        Effect::None => CommandEffect::None,
+    // Command dispatch runs on the loop thread (gh #124): no questions.
+    super::host_imports::without_dialogs(|| {
+        let pre = inner
+            .command
+            .as_ref()
+            .ok_or_else(|| CallError::InvalidArguments("no command world".into()))?;
+        let mut store = inner.build_store()?;
+        let instance = pre
+            .instantiate(&mut store)
+            .map_err(|err| inner.classify(err))?;
+        let effect = instance
+            .lca_ext_invoke()
+            .call_run(&mut store, argument)
+            .map_err(|err| inner.classify(err))?;
+        let _ = leaf;
+        use lca_ext_abi::host::command::exports::lca::ext::invoke::Effect;
+        Ok(match effect {
+            Effect::InsertText(text) => CommandEffect::InsertText(text),
+            Effect::SubmitPrompt(text) => CommandEffect::SubmitPrompt(text),
+            Effect::ShowWidget(text) => CommandEffect::ShowWidget(text),
+            Effect::None => CommandEffect::None,
+        })
     })
 }
 

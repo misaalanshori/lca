@@ -156,6 +156,9 @@ pub(crate) struct Ui {
     /// `UiOptions` for `run` to fill, read by [`SessionPrompt`] so the
     /// host's own consent can ask outside a turn (gh #31 review).
     prompt_slot: Arc<Mutex<Option<std::sync::mpsc::SyncSender<lca_ui::PromptRequest>>>>,
+    /// The session-lifetime dialog sender (gh #124): published into
+    /// `UiOptions` for `run` to fill, read by [`SessionDialogs`].
+    dialog_slot: Arc<Mutex<Option<std::sync::mpsc::SyncSender<lca_ui::DialogExchange>>>>,
     /// Rows discovered after the endpoint consent landed, for the picker
     /// to open with (`None`: nothing pending).
     pending_models: Arc<Mutex<Option<Vec<lca_ui::ModelRow>>>>,
@@ -268,6 +271,89 @@ impl PermissionPrompt for SessionPrompt {
 
     fn review_proposals(&mut self, _diff: &ProposalDiff) -> bool {
         false
+    }
+}
+
+/// The session-lifetime dialog bridge (gh #124): `SharedDialogs` routes
+/// here, and each question rendezvous with the TUI loop over
+/// `dialog_slot`. A dead loop answers the denied values, exactly like
+/// [`SessionPrompt`] denies a dead prompt.
+struct SessionDialogs {
+    slot: Arc<Mutex<Option<std::sync::mpsc::SyncSender<lca_ui::DialogExchange>>>>,
+}
+
+impl SessionDialogs {
+    /// Ask one question: send the exchange, wait for the answer, and map
+    /// a dead loop to `denied`.
+    fn ask(&mut self, dialog: lca_protocol::UiDialog) -> lca_protocol::DialogAnswer {
+        // Decided up front: both dead-loop paths below answer this.
+        let denied = denied_answer(&dialog);
+        let Some(sender) = self
+            .slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        else {
+            return denied;
+        };
+        let (respond, response) = std::sync::mpsc::sync_channel(1);
+        if sender
+            .send(lca_ui::DialogExchange { dialog, respond })
+            .is_err()
+        {
+            return denied;
+        }
+        response.recv().unwrap_or(denied)
+    }
+}
+
+/// The denied value for one question (gh #124's headless contract,
+/// shared with the dead-loop path above).
+fn denied_answer(dialog: &lca_protocol::UiDialog) -> lca_protocol::DialogAnswer {
+    match dialog {
+        lca_protocol::UiDialog::Confirm { .. } => lca_protocol::DialogAnswer::Confirm(false),
+        lca_protocol::UiDialog::Select { .. } => lca_protocol::DialogAnswer::Select(None),
+        lca_protocol::UiDialog::Input { .. } => lca_protocol::DialogAnswer::Input(None),
+        lca_protocol::UiDialog::Notify { .. } => lca_protocol::DialogAnswer::Notify,
+    }
+}
+
+impl lca_permissions::DialogPrompt for SessionDialogs {
+    fn confirm(&mut self, title: &str, message: &str) -> bool {
+        matches!(
+            self.ask(lca_protocol::UiDialog::Confirm {
+                title: title.to_string(),
+                message: message.to_string(),
+            }),
+            lca_protocol::DialogAnswer::Confirm(true)
+        )
+    }
+
+    fn select(&mut self, title: &str, options: &[String]) -> Option<String> {
+        match self.ask(lca_protocol::UiDialog::Select {
+            title: title.to_string(),
+            options: options.to_vec(),
+        }) {
+            lca_protocol::DialogAnswer::Select(choice) => choice,
+            _ => None,
+        }
+    }
+
+    fn input(&mut self, label: &str, placeholder: Option<&str>) -> Option<String> {
+        match self.ask(lca_protocol::UiDialog::Input {
+            label: label.to_string(),
+            placeholder: placeholder.map(str::to_string),
+        }) {
+            lca_protocol::DialogAnswer::Input(text) => text,
+            _ => None,
+        }
+    }
+
+    fn notify(&mut self, message: &str, level: &str) {
+        let _ = self.ask(lca_protocol::UiDialog::Notify {
+            message: message.to_string(),
+            level: level.to_string(),
+        });
     }
 }
 
@@ -458,11 +544,21 @@ impl Ui {
         shared_prompt.set(Arc::new(Mutex::new(SessionPrompt {
             slot: prompt_slot.clone(),
         })));
+        // The dialog seam (gh #124): same session-lifetime shape as the
+        // prompt above, installed once - dialogs can arrive outside
+        // turns too (a command asking), so this is not per-turn.
+        let dialog_slot: Arc<Mutex<Option<std::sync::mpsc::SyncSender<lca_ui::DialogExchange>>>> =
+            Arc::new(Mutex::new(None));
+        let shared_dialogs = lca_permissions::SharedDialogs::default();
+        shared_dialogs.set(Arc::new(Mutex::new(SessionDialogs {
+            slot: dialog_slot.clone(),
+        })));
 
         let mut registry = load_registry(
             cwd,
             &config,
             shared_prompt.clone(),
+            shared_dialogs.clone(),
             &grants,
             &store,
             &current_session,
@@ -648,6 +744,7 @@ impl Ui {
             proposals,
             shared_prompt,
             prompt_slot,
+            dialog_slot,
             pending_models: Arc::new(Mutex::new(None)),
             consent_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_regions,
@@ -816,6 +913,7 @@ fn load_registry(
     cwd: &Path,
     config: &Config,
     shared_prompt: SharedPrompt,
+    shared_dialogs: lca_permissions::SharedDialogs,
     grants: &Arc<Mutex<GrantStore>>,
     store: &Arc<SessionStore>,
     session_cell: &Arc<Mutex<Session>>,
@@ -829,6 +927,7 @@ fn load_registry(
         cwd,
         config,
         shared_prompt,
+        shared_dialogs,
         grants,
         Arc::new(move || {
             let session = stats_session

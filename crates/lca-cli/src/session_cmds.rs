@@ -460,7 +460,14 @@ pub(super) fn list_models_command(
     let prompt = crate::HeadlessPrompt::default();
     let shared_prompt = lca_permissions::SharedPrompt::default();
     shared_prompt.set(std::sync::Arc::new(std::sync::Mutex::new(prompt.clone())));
-    let registry = crate::registry::assemble(cwd, &config, shared_prompt, &grants, stats);
+    let registry = crate::registry::assemble(
+        cwd,
+        &config,
+        shared_prompt,
+        lca_permissions::SharedDialogs::default(),
+        &grants,
+        stats,
+    );
     if let Some(host) =
         crate::net_consent::env_configured_host(&data, &provider_name, Some(&registry))
         && crate::ungranted_host(&grants, cwd, Some(host.clone())).is_some()

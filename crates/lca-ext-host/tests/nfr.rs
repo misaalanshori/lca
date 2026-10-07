@@ -46,6 +46,7 @@ fn load() -> (lca_ext_host::WasmExtension, ExtHost) {
         )),
         project: root.join("project"),
         proposals: None,
+        dialogs: lca_permissions::SharedDialogs::default(),
     });
     let mut host = ExtHost::new(
         ExtensionLimits {

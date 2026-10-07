@@ -430,3 +430,36 @@ fn verbose_routes_store_warnings_to_stderr() {
         );
     }
 }
+
+// Gh #124's acceptance: a headless run answers a tool's `ui.confirm`
+// with the denied value - no modal, no hang, exit 0 with the verdict
+// as the tool result.
+#[test]
+fn headless_answers_a_tool_dialog_with_the_denied_value() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_tool_call("conformance", r#"{"mode":"ask-confirm"}"#)),
+        Reply::Sse(sse_text("noted")),
+    ]));
+    let box_ = sandbox("headless-dialog");
+    box_.install_component(
+        "conformance",
+        include_str!("../../../extensions/conformance/extension.toml"),
+        include_bytes!("../../../extensions/conformance/fixtures/tool-world.wasm"),
+    );
+    let output = box_.run(Some(&mock), &["-p", "ask the question", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let lines = json_lines(&output);
+    let result = lines
+        .iter()
+        .find(|l| l["type"] == "tool-result")
+        .expect("tool-result envelope");
+    assert_eq!(result["status"], "ok");
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("confirm: false"),
+        "the denied verdict crossed: {result}"
+    );
+}

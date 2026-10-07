@@ -231,7 +231,14 @@ pub(super) fn run(cmd: &AuthCmd, allow_host: &[String]) -> i32 {
     let shared_prompt = lca_permissions::SharedPrompt::default();
     shared_prompt.set(Arc::new(std::sync::Mutex::new(prompt.clone())));
     let stats: lca_ext_native::StatsSource = Arc::new(String::new);
-    let registry = crate::registry::assemble(&cwd, &config, shared_prompt, &grants, stats);
+    let registry = crate::registry::assemble(
+        &cwd,
+        &config,
+        shared_prompt,
+        lca_permissions::SharedDialogs::default(),
+        &grants,
+        stats,
+    );
     match cmd {
         AuthCmd::Check {
             provider,

@@ -20,6 +20,7 @@ fn chat_with_theme(theme: &str) -> Chat {
     Chat::new(
         UiOptions {
             prompt_slot: Default::default(),
+            dialog_slot: Default::default(),
             pending_models: None,
             model_label: Arc::new(Mutex::new("openai-compatible/m".to_string())),
             context_window: Arc::new(std::sync::Mutex::new(0)),

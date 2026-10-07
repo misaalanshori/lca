@@ -229,6 +229,95 @@ impl PermissionPrompt for SharedPrompt {
     }
 }
 
+/// One host-rendered question an extension asks (gh #124, gh #172): the
+/// answers cross back as plain data, and the chrome is always the
+/// host's own (spoof-proof by construction).
+///
+/// The swappable slot below mirrors [`SharedPrompt`]: with nothing
+/// installed every question answers its denied value (`false`/`None`,
+/// notify drops), which is the right answer headless and between
+/// sessions.
+pub trait DialogPrompt: Send {
+    /// Yes/No buttons; `false` is no or dismissed.
+    fn confirm(&mut self, title: &str, message: &str) -> bool;
+    /// A picker over options; `None` is dismissed.
+    fn select(&mut self, title: &str, options: &[String]) -> Option<String>;
+    /// One line of text; `None` is dismissed.
+    fn input(&mut self, label: &str, placeholder: Option<&str>) -> Option<String>;
+    /// A transient notice; fire and forget.
+    fn notify(&mut self, message: &str, level: &str);
+}
+
+/// A swappable dialog slot (the [`SharedPrompt`] pattern for questions).
+#[derive(Default, Clone)]
+pub struct SharedDialogs {
+    /// The installed prompter, when any.
+    inner: SharedDialogsSlot,
+}
+
+/// The interior of [`SharedDialogs`].
+type SharedDialogsSlot =
+    std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<std::sync::Mutex<dyn DialogPrompt>>>>>;
+
+impl SharedDialogs {
+    /// Route subsequent questions to `prompt`.
+    pub fn set(&self, prompt: std::sync::Arc<std::sync::Mutex<dyn DialogPrompt>>) {
+        *self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(prompt);
+    }
+
+    /// The installed prompter, when any.
+    fn current(&self) -> Option<std::sync::Arc<std::sync::Mutex<dyn DialogPrompt>>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
+impl DialogPrompt for SharedDialogs {
+    fn confirm(&mut self, title: &str, message: &str) -> bool {
+        match self.current() {
+            Some(prompt) => prompt
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .confirm(title, message),
+            None => false,
+        }
+    }
+
+    fn select(&mut self, title: &str, options: &[String]) -> Option<String> {
+        match self.current() {
+            Some(prompt) => prompt
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .select(title, options),
+            None => None,
+        }
+    }
+
+    fn input(&mut self, label: &str, placeholder: Option<&str>) -> Option<String> {
+        match self.current() {
+            Some(prompt) => prompt
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .input(label, placeholder),
+            None => None,
+        }
+    }
+
+    fn notify(&mut self, message: &str, level: &str) {
+        if let Some(prompt) = self.current() {
+            prompt
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .notify(message, level);
+        }
+    }
+}
+
 /// Result of one authorize call.
 #[derive(Debug, Clone)]
 pub struct Outcome {
@@ -1037,3 +1126,55 @@ pub use net::{
     LocalPattern, NetPattern, PatternError, is_local_address, normalize_ip, parse_local_pattern,
     parse_net_pattern,
 };
+
+#[cfg(test)]
+mod dialog_tests {
+    use super::*;
+
+    // Verifies: gh #124 - with nothing installed every question answers
+    // its denied value, which is the headless contract (no modal, no
+    // hang, notify silently dropped).
+    #[test]
+    fn an_empty_slot_denies_every_question() {
+        let mut slot = SharedDialogs::default();
+        assert!(!slot.confirm("t", "m"));
+        assert_eq!(slot.select("t", &["a".to_string()]), None);
+        assert_eq!(slot.input("l", None), None);
+        slot.notify("hello", "info");
+    }
+
+    struct Scripted {
+        answers: Vec<String>,
+    }
+
+    impl DialogPrompt for Scripted {
+        fn confirm(&mut self, _title: &str, _message: &str) -> bool {
+            true
+        }
+        fn select(&mut self, _title: &str, options: &[String]) -> Option<String> {
+            options.first().cloned()
+        }
+        fn input(&mut self, _label: &str, placeholder: Option<&str>) -> Option<String> {
+            Some(placeholder.unwrap_or("typed").to_string())
+        }
+        fn notify(&mut self, message: &str, _level: &str) {
+            self.answers.push(message.to_string());
+        }
+    }
+
+    // Verifies: gh #124 - an installed prompter answers, so the live
+    // TUI side and the headless side share one seam.
+    #[test]
+    fn an_installed_prompter_answers() {
+        let mut slot = SharedDialogs::default();
+        slot.set(std::sync::Arc::new(std::sync::Mutex::new(Scripted {
+            answers: Vec::new(),
+        })));
+        assert!(slot.confirm("t", "m"));
+        assert_eq!(
+            slot.select("t", &["a".to_string(), "b".to_string()]),
+            Some("a".to_string())
+        );
+        assert_eq!(slot.input("l", Some("ph")), Some("ph".to_string()));
+    }
+}

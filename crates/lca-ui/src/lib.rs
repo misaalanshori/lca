@@ -15,6 +15,7 @@ mod chat_pickers;
 mod chat_render;
 mod chat_search;
 mod chat_shell;
+pub mod dialogs;
 pub mod ext_widgets;
 pub mod footer;
 pub mod render;
@@ -40,11 +41,11 @@ pub use lca_tui::widgets::markdown::{
 pub use run::run;
 pub use separator::{Separator, SeparatorState};
 pub use state::{
-    Action, CommandInvoker, LoginCancel, LoginComplete, LoginConfirm, LoginNext, LoginPick,
-    LoginPoll, LoginRequest, ModelRow, PickerOption, PromptRequest, RegionInteractor,
-    RegionRenderer, SettingRow, SettingsRows, ShellEvent, ShellHandle, ShellRunner, SwitchConfirm,
-    TurnChannels, TurnRunner, UiHooks, UiOptions, UiState, display_path, sanitize_block,
-    sanitize_text,
+    Action, CommandInvoker, DialogExchange, DialogModal, LoginCancel, LoginComplete, LoginConfirm,
+    LoginNext, LoginPick, LoginPoll, LoginRequest, ModelRow, PickerOption, PromptRequest,
+    RegionInteractor, RegionRenderer, SettingRow, SettingsRows, ShellEvent, ShellHandle,
+    ShellRunner, SwitchConfirm, TurnChannels, TurnRunner, UiHooks, UiOptions, UiState,
+    display_path, sanitize_block, sanitize_text,
 };
 pub use state::{CompactPoll, CompactState};
 pub use theme::Theme;

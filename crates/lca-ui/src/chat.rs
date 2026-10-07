@@ -179,7 +179,6 @@ pub struct Chat {
     /// The open `/resume` session picker (R2).
     pub resume_picker: Option<crate::resume::ResumePicker>,
 }
-
 impl Chat {
     /// Build the chat: widgets, theme, and the autocomplete chain.
     pub fn new(options: UiOptions, keybindings: Arc<KeybindingsManager>) -> Chat {
@@ -797,6 +796,11 @@ impl Chat {
                 self.world.notice = Some("login cancelled".to_string());
             }
             return Some(Action::Continue);
+        }
+        // A host-rendered dialog owns the keyboard outright (gh #124):
+        // nothing behind it hears a key while it is open.
+        if self.world.dialog.is_some() {
+            return crate::dialogs::handle_dialog(self, data, key);
         }
         self.handle_login_picker(key)
             .or_else(|| self.handle_login_secret(data, key))
