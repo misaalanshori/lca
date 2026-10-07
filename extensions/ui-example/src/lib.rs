@@ -116,7 +116,7 @@ pub fn render_region(
                 background: None,
                 child: 1,
             },
-            Widget::Column(vec![2, 3]),
+            Widget::Column(vec![2, 3, 4]),
             text(
                 "A modal is user-dismissible and cannot appear mid-turn on its own.",
                 "default",
@@ -124,6 +124,12 @@ pub fn render_region(
             Widget::Progress {
                 label: "example".to_string(),
                 fill: 0.5,
+            },
+            // Gh #172: the clickable demo button - clicking it answers
+            // with a notice, which the mouse receipt drives.
+            Widget::Button {
+                id: "demo-ok".to_string(),
+                label: "OK".to_string(),
             },
         ],
         _ => return None,
@@ -141,6 +147,10 @@ pub fn handle_event(region: &str, input: &lca_protocol::UiInput) -> lca_protocol
             UiInput::Key { key } if key == "q" => UiEffect::CloseModal,
             UiInput::Submit { text } => UiEffect::ShowNotice(format!("modal said: {text}")),
             UiInput::Cancel => UiEffect::CloseModal,
+            // Gh #172: the demo button answers with a notice.
+            UiInput::ClickWidget { id } if id == "demo-ok" => {
+                UiEffect::ShowNotice("demo ok clicked".to_string())
+            }
             _ => UiEffect::None,
         },
         _ => match input {

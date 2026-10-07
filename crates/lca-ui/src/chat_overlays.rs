@@ -89,7 +89,15 @@ impl Chat {
             let mut panel: Vec<String> = Vec::new();
             if let Some(render) = &self.world.options.render_regions {
                 for (_name, tree) in render("panel") {
-                    panel.extend(widget_lines(&tree.nodes, &self.theme, width as usize));
+                    panel.extend(widget_lines(
+                        &tree.nodes,
+                        &crate::ext_widgets::widget_ctx(
+                            &self.theme,
+                            "panel",
+                            width as usize,
+                            &self.world.ext_scroll,
+                        ),
+                    ));
                 }
             }
             if panel.is_empty() {
@@ -545,7 +553,15 @@ impl Chat {
             let mut body: Vec<String> = Vec::new();
             let mut title = String::from("extension");
             for (name, tree) in &trees {
-                for line in widget_lines(&tree.nodes, &self.theme, width as usize) {
+                for line in widget_lines(
+                    &tree.nodes,
+                    &crate::ext_widgets::widget_ctx(
+                        &self.theme,
+                        "modal",
+                        width as usize,
+                        &self.world.ext_scroll,
+                    ),
+                ) {
                     // A bordered box paints its title (gh #172): the
                     // chrome reads through the escapes.
                     if title == "extension"

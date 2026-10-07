@@ -39,45 +39,46 @@ fn switch_screen_toggles_the_renderer() {
     assert!(!screen.is_fullscreen());
 }
 
+fn options() -> UiOptions {
+    UiOptions {
+        prompt_slot: Default::default(),
+        dialog_slot: Default::default(),
+        pending_models: None,
+        model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
+        context_window: Arc::new(std::sync::Mutex::new(0)),
+        thinking: Arc::new(std::sync::Mutex::new(None)),
+        theme: "auto".to_string(),
+        theme_dir: std::path::PathBuf::new(),
+        themes: crate::theme::THEMES.iter().map(|s| s.to_string()).collect(),
+        initial_lines: Vec::new(),
+        initial_records: Vec::new(),
+        initial_tail_lines: Vec::new(),
+        initial_messages: Vec::new(),
+        yolo: false,
+        thinking_visibility: Default::default(),
+        codeblock_border: Default::default(),
+        plain: true,
+        invoke_command: Arc::new(|_, _| lca_protocol::CommandEffect::None),
+        slash_commands: Vec::new(),
+        models: Vec::new(),
+        workspace: std::path::PathBuf::from("."),
+        keybinding_overrides: Default::default(),
+        keybinding_error: None,
+        render_regions: None,
+        ui_events: None,
+        update_notice: None,
+        login: None,
+        complete_login: None,
+        pick_login: None,
+        confirm_login_grant: None,
+        confirm_switch: None,
+        hooks: crate::state::UiHooks::default(),
+        fullscreen: false,
+    }
+}
+
 fn chat() -> Chat {
-    Chat::new(
-        UiOptions {
-            prompt_slot: Default::default(),
-            dialog_slot: Default::default(),
-            pending_models: None,
-            model_label: Arc::new(std::sync::Mutex::new("p/m".into())),
-            context_window: Arc::new(std::sync::Mutex::new(0)),
-            thinking: Arc::new(std::sync::Mutex::new(None)),
-            theme: "auto".to_string(),
-            theme_dir: std::path::PathBuf::new(),
-            themes: crate::theme::THEMES.iter().map(|s| s.to_string()).collect(),
-            initial_lines: Vec::new(),
-            initial_records: Vec::new(),
-            initial_tail_lines: Vec::new(),
-            initial_messages: Vec::new(),
-            yolo: false,
-            thinking_visibility: Default::default(),
-            codeblock_border: Default::default(),
-            plain: true,
-            invoke_command: Arc::new(|_, _| lca_protocol::CommandEffect::None),
-            slash_commands: Vec::new(),
-            models: Vec::new(),
-            workspace: std::path::PathBuf::from("."),
-            keybinding_overrides: Default::default(),
-            keybinding_error: None,
-            render_regions: None,
-            ui_events: None,
-            update_notice: None,
-            login: None,
-            complete_login: None,
-            pick_login: None,
-            confirm_login_grant: None,
-            confirm_switch: None,
-            hooks: crate::state::UiHooks::default(),
-            fullscreen: false,
-        },
-        Arc::new(KeybindingsManager::new()),
-    )
+    Chat::new(options(), Arc::new(KeybindingsManager::new()))
 }
 
 // Verifies: gh #9 / R6 - the copy ladder writes the text through the
@@ -437,4 +438,126 @@ fn a_click_on_a_reasoning_row_toggles_the_run_through_the_loop() {
         "main-screen clicks stay with the terminal:\n{}",
         frame.join("\n")
     );
+}
+
+// Verifies: gh #172 - a button click's bytes travel the loop's input
+// path: SGR press+release at the button's cell reaches the extension
+// as `ClickWidget` through the alt-screen renderer.
+#[test]
+fn a_click_on_an_extension_button_names_its_widget_through_the_loop() {
+    use lca_protocol::{UiInput, Widget};
+    let seen: std::sync::Arc<std::sync::Mutex<Vec<UiInput>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen_in = seen.clone();
+    let mut opts = options();
+    opts.render_regions = Some(std::sync::Arc::new(|region: &str| {
+        if region != "modal" {
+            return Vec::new();
+        }
+        vec![(
+            "click-demo".to_string(),
+            lca_protocol::WidgetTree {
+                nodes: vec![Widget::Button {
+                    id: "fire".into(),
+                    label: "FIRE".into(),
+                }],
+            },
+        )]
+    }));
+    opts.ui_events = Some(std::sync::Arc::new(move |_, input: &UiInput| {
+        seen_in.lock().unwrap().push(input.clone());
+        None
+    }));
+    let mut term = FakeTerminal::new(80, 24);
+    let mut screen = Screen::Main(MainScreenRenderer::new());
+    switch_screen(&mut screen, true, &mut term);
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    chat.screen_mode = true;
+    chat.world.modal_open = true;
+    // Find the button's cell through the mapping itself, then prove
+    // the loop's bytes land on it.
+    let mut target = None;
+    for row in 0..24u16 {
+        for col in 0..80u16 {
+            seen.lock().unwrap().clear();
+            if matches!(
+                chat.click_extension(col, row, 80, 24),
+                Some(crate::chat_mouse::ExtClick::Event(
+                    _,
+                    UiInput::ClickWidget { .. }
+                ))
+            ) {
+                target = Some((col, row));
+            }
+        }
+    }
+    let (col, row) = target.expect("a clickable button cell");
+    seen.lock().unwrap().clear();
+    let (input_tx, _input_rx) = std::sync::mpsc::channel();
+    let (resize_tx, _resize_rx) = std::sync::mpsc::channel();
+    let press = format!("\x1b[<0;{};{}M", col + 1, row + 1);
+    let release = format!("\x1b[<0;{};{}m", col + 1, row + 1);
+    for data in [&press, &release] {
+        let outcome = handle_input(
+            data,
+            &mut chat,
+            &mut screen,
+            &mut term,
+            &input_tx,
+            &resize_tx,
+            &None,
+            &mut false,
+        );
+        assert!(matches!(outcome, InputResult::Continue));
+    }
+    assert!(
+        seen.lock().unwrap().iter().any(|input| matches!(
+            input,
+            UiInput::ClickWidget { id } if id == "fire"
+        )),
+        "the click named the widget through the loop"
+    );
+}
+
+// Verifies: gh #172 - wheel bytes over a panel scroll container travel
+// the loop's input path and move the region's offset.
+#[test]
+fn wheel_over_a_panel_scrolls_through_the_loop() {
+    use lca_protocol::Widget;
+    let mut opts = options();
+    opts.render_regions = Some(std::sync::Arc::new(|region: &str| {
+        if region != "panel" {
+            return Vec::new();
+        }
+        vec![(
+            "wheel-demo".to_string(),
+            lca_protocol::WidgetTree {
+                nodes: vec![Widget::ScrollContainer {
+                    max_height: 2,
+                    children: vec![1, 2, 3],
+                }],
+            },
+        )]
+    }));
+    let mut term = FakeTerminal::new(80, 24);
+    let mut screen = Screen::Main(MainScreenRenderer::new());
+    switch_screen(&mut screen, true, &mut term);
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    chat.screen_mode = true;
+    chat.world.panel_open = true;
+    let (input_tx, _input_rx) = std::sync::mpsc::channel();
+    let (resize_tx, _resize_rx) = std::sync::mpsc::channel();
+    // Wheel down (button bit 1) over the panel's right columns.
+    let outcome = handle_input(
+        "\x1b[<65;79;2M",
+        &mut chat,
+        &mut screen,
+        &mut term,
+        &input_tx,
+        &resize_tx,
+        &None,
+        &mut false,
+    );
+    assert!(matches!(outcome, InputResult::Continue));
+    assert_eq!(chat.world.ext_scroll.get("panel"), Some(&1));
 }

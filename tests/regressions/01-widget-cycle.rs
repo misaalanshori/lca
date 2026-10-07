@@ -5,6 +5,19 @@
 //! Verifies: ADR-0003's rendering boundary (defect 1).
 
 use lca_protocol::Widget;
+use lca_ui::ext_widgets::WidgetCtx;
+
+fn ctx<'a>(
+    theme: &'a lca_ui::theme::Theme,
+    offsets: &'a std::collections::HashMap<String, usize>,
+) -> WidgetCtx<'a> {
+    WidgetCtx {
+        theme,
+        width: 80,
+        region: "panel",
+        offsets,
+    }
+}
 
 fn theme() -> lca_ui::theme::Theme {
     lca_ui::theme::Theme::colored()
@@ -23,7 +36,10 @@ fn a_cyclic_widget_arena_renders_once_and_terminates() {
         Widget::Column(vec![0, 1, 1]),
     ];
     assert_eq!(
-        lca_ui::ext_widgets::widget_lines(&nodes, &theme(), 60),
+        lca_ui::ext_widgets::widget_lines(
+            &nodes,
+            &ctx(&theme(), &std::collections::HashMap::new()),
+        ),
         vec!["[box]".to_string()],
         "each node renders once"
     );
@@ -36,7 +52,10 @@ fn a_cyclic_widget_arena_renders_once_and_terminates() {
         child: 0,
     }];
     assert_eq!(
-        lca_ui::ext_widgets::widget_lines(&selfish, &theme(), 60),
+        lca_ui::ext_widgets::widget_lines(
+            &selfish,
+            &ctx(&theme(), &std::collections::HashMap::new()),
+        ),
         vec!["[self]".to_string()]
     );
 }

@@ -802,6 +802,13 @@ impl Chat {
         if self.world.dialog.is_some() {
             return crate::dialogs::handle_dialog(self, data, key);
         }
+        // The panel toggle is a host binding (gh #172): it works while
+        // the panel is open too, or the open panel would eat the very
+        // key that closes it and trap `/exit` behind it.
+        if self.keybindings.matches(data, "app.panel.toggle") {
+            self.world.panel_open = !self.world.panel_open;
+            return Some(Action::Continue);
+        }
         self.handle_login_picker(key)
             .or_else(|| self.handle_login_secret(data, key))
             .or_else(|| self.handle_login_grant(key))
@@ -956,7 +963,7 @@ impl Chat {
     }
 
     /// Apply one extension effect (from real user input only, FR-UI-6).
-    fn apply_effect(&mut self, effect: lca_protocol::UiEffect) -> Action {
+    pub(super) fn apply_effect(&mut self, effect: lca_protocol::UiEffect) -> Action {
         use lca_protocol::UiEffect;
         match effect {
             UiEffect::None => Action::Continue,
@@ -1176,6 +1183,10 @@ pub(super) fn highlight_matches(line: &str, query: &str) -> String {
 #[cfg(test)]
 #[path = "chat_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "chat_dialog_tests.rs"]
+mod dialog_tests;
 
 #[cfg(test)]
 #[path = "chat_overlay_tests.rs"]

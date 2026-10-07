@@ -31,9 +31,11 @@ fn a_tool_dialog_confirms_on_a_real_terminal() {
 
     let session = Tmux::new("dialog");
     session.spawn(&sandbox, Some(&mock), true, &[], &[]);
+    // Wall-clock margin (gh #172 cycle: debug WASM compiles stack up
+    // when heavy tmux tests share few cores).
     session.wait_for(
         "openai-compatible/test-model",
-        std::time::Duration::from_secs(20),
+        std::time::Duration::from_secs(30),
     );
 
     // The turn asks its question through the host's chrome.

@@ -626,6 +626,9 @@ pub struct UiState {
     /// A host-rendered dialog is open (gh #124): one modal at a time,
     /// so this and `permission` never stack (the drains check both).
     pub dialog: Option<DialogModal>,
+    /// Scroll offsets by region (gh #172): the wheel moves them, and
+    /// scroll containers clip from them on the next frame.
+    pub ext_scroll: std::collections::HashMap<String, usize>,
     /// Terminal size, tracked across resizes (FR-UI-3).
     pub size: (u16, u16),
 }
@@ -653,6 +656,7 @@ impl UiState {
             panel_open: false,
             modal_open: false,
             dialog: None,
+            ext_scroll: std::collections::HashMap::new(),
             size: (80, 24),
         }
     }
@@ -863,7 +867,15 @@ mod tests {
             Widget::KeyValue(vec![("k".into(), "v".into())]),
         ];
         assert_eq!(
-            widget_lines(&nodes, &crate::theme::Theme::colored(), 60),
+            widget_lines(
+                &nodes,
+                &crate::ext_widgets::WidgetCtx {
+                    theme: &crate::theme::Theme::colored(),
+                    width: 60,
+                    region: "panel",
+                    offsets: &std::collections::HashMap::new(),
+                },
+            ),
             vec!["hello", "k: v"]
         );
     }
@@ -877,7 +889,18 @@ mod tests {
             background: None,
             child: 0,
         }];
-        assert!(widget_lines(&nodes, &crate::theme::Theme::colored(), 60).is_empty());
+        assert!(
+            widget_lines(
+                &nodes,
+                &crate::ext_widgets::WidgetCtx {
+                    theme: &crate::theme::Theme::colored(),
+                    width: 60,
+                    region: "panel",
+                    offsets: &std::collections::HashMap::new(),
+                },
+            )
+            .is_empty()
+        );
     }
 
     #[test]

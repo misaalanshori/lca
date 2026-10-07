@@ -255,18 +255,26 @@ fn handle_input(
     }
     // Mouse (selection, wheel) is the renderer's - except wheel motion
     // over the autocomplete popup, which scrolls the offers (gh #175,
-    // pi's select-list wheel path).
+    // pi's select-list wheel path), and motion and clicks over
+    // extension regions, which the host maps first (gh #172).
     if data.starts_with("\x1b[<") {
         if let Some(mouse) = lca_tui::engine::alt_screen::parse_sgr_mouse(data)
             && mouse.bits & 64 != 0
         {
             let (width, height) = chat.world.size;
+            let delta = if mouse.bits & 3 == 0 { -1 } else { 1 };
+            let (col, row) = (mouse.x.saturating_sub(1), mouse.y.saturating_sub(1));
+            // A wheel over an extension region scrolls it (gh #172):
+            // scroll containers glide, dialog selects move, and the
+            // gesture never reaches the transcript behind a modal.
+            if chat.wheel_extension(col, row, width, height, delta) {
+                return InputResult::Continue;
+            }
             let row = mouse.y.saturating_sub(1);
             if let Some((top, len)) = chat.popup_rect(width, height)
                 && row >= top
                 && row < top.saturating_add(len)
             {
-                let delta = if mouse.bits & 3 == 0 { -1 } else { 1 };
                 chat.editor.move_suggestion(delta);
                 return InputResult::Continue;
             }
@@ -276,15 +284,23 @@ fn handle_input(
         // before selection claims it. A toggled run drops the row's link
         // with it (the click chose the run, not the link); anything
         // else falls through to the link and copy paths below.
+        // Extension cells map first (gh #172): a mapped click never
+        // reaches the transcript, and a swallowed one eats the link
+        // behind the chrome with it.
         if let Some((col, row)) = screen.take_clicked_cell() {
             let (width, height) = chat.world.size;
-            match chat.click_at(col, row, screen.scroll(), width, height) {
-                ClickOutcome::ThinkingToggled => {
+            match chat.click_extension(col, row, width, height) {
+                Some(_) => {
                     let _ = screen.take_clicked_link();
                 }
-                ClickOutcome::JumpBottom => screen.set_scroll(0),
-                ClickOutcome::SuggestionAccepted => {}
-                ClickOutcome::Ignored => {}
+                None => match chat.click_at(col, row, screen.scroll(), width, height) {
+                    ClickOutcome::ThinkingToggled => {
+                        let _ = screen.take_clicked_link();
+                    }
+                    ClickOutcome::JumpBottom => screen.set_scroll(0),
+                    ClickOutcome::SuggestionAccepted => {}
+                    ClickOutcome::Ignored => {}
+                },
             }
         }
         // A click on an OSC-8 link opens it (R6).

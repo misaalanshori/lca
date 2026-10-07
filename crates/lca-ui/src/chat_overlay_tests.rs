@@ -872,3 +872,139 @@ fn a_painted_box_title_still_names_the_modal() {
     );
     assert_eq!(crate::chat_overlays::modal_title_line("body text"), None);
 }
+
+// Verifies: gh #172 - clicking a modal button's cells names its widget,
+// and every other modal cell reports relative coordinates. The scan
+// covers the whole viewport, so the geometry is proven, not assumed.
+#[test]
+fn modal_clicks_map_to_widgets_and_relative_cells() {
+    use lca_protocol::{UiInput, Widget};
+    let seen: std::sync::Arc<std::sync::Mutex<Vec<UiInput>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen_in = seen.clone();
+    let mut opts = options();
+    opts.render_regions = Some(std::sync::Arc::new(|region: &str| {
+        if region != "modal" {
+            return Vec::new();
+        }
+        vec![(
+            "click-demo".to_string(),
+            lca_protocol::WidgetTree {
+                nodes: vec![
+                    Widget::Column(vec![1, 2]),
+                    Widget::Button {
+                        id: "ok".into(),
+                        label: "OK".into(),
+                    },
+                    Widget::Text {
+                        content: "body".into(),
+                        role: "default".into(),
+                    },
+                ],
+            },
+        )]
+    }));
+    opts.ui_events = Some(std::sync::Arc::new(move |_, input: &UiInput| {
+        seen_in.lock().unwrap().push(input.clone());
+        None
+    }));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    chat.screen_mode = true;
+    chat.world.modal_open = true;
+    let (width, height) = (80u16, 24u16);
+    let mut widget_cells = 0;
+    let mut relative_cells = 0;
+    for row in 0..height {
+        for col in 0..width {
+            seen.lock().unwrap().clear();
+            // Chrome with no owner, or outside the box: no input.
+            if let Some(crate::chat_mouse::ExtClick::Event(_, input)) =
+                chat.click_extension(col, row, width, height)
+            {
+                match input {
+                    UiInput::ClickWidget { id } if id == "ok" => widget_cells += 1,
+                    UiInput::Click { .. } => relative_cells += 1,
+                    other => panic!("unexpected input: {other:?}"),
+                }
+            }
+            assert!(seen.lock().unwrap().len() <= 1, "one click asks once");
+        }
+    }
+    assert!(widget_cells > 0, "the button is clickable somewhere");
+    assert!(relative_cells > 0, "the chrome around it reports cells");
+}
+
+// Verifies: gh #172 - the wheel over a panel scroll container moves the
+// region's offset and the next frame shows the shifted viewport, and a
+// `Scroll` input rides the interactor too.
+#[test]
+fn wheel_over_a_scroll_container_moves_the_viewport() {
+    use lca_protocol::{UiInput, Widget};
+    let seen: std::sync::Arc<std::sync::Mutex<Vec<UiInput>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen_in = seen.clone();
+    let mut opts = options();
+    opts.render_regions = Some(std::sync::Arc::new(|region: &str| {
+        if region != "panel" {
+            return Vec::new();
+        }
+        let mut nodes = vec![Widget::ScrollContainer {
+            max_height: 2,
+            children: vec![1, 2, 3],
+        }];
+        for i in 1..=3 {
+            nodes.push(Widget::Text {
+                content: format!("row{i}"),
+                role: "default".into(),
+            });
+        }
+        vec![("wheel-demo".to_string(), lca_protocol::WidgetTree { nodes })]
+    }));
+    opts.ui_events = Some(std::sync::Arc::new(move |_, input: &UiInput| {
+        seen_in.lock().unwrap().push(input.clone());
+        None
+    }));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    chat.screen_mode = true;
+    chat.world.panel_open = true;
+    // The panel owns the right 40 columns of an 80-wide viewport.
+    assert!(chat.wheel_extension(79, 0, 80, 24, 1));
+    assert_eq!(chat.world.ext_scroll.get("panel"), Some(&1));
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .any(|input| matches!(input, UiInput::Scroll { delta: 1 }))
+    );
+    let lines = crate::ext_widgets::widget_lines(
+        &lca_protocol::WidgetTree {
+            nodes: vec![
+                Widget::ScrollContainer {
+                    max_height: 2,
+                    children: vec![1, 2, 3],
+                },
+                Widget::Text {
+                    content: "row1".into(),
+                    role: "default".into(),
+                },
+                Widget::Text {
+                    content: "row2".into(),
+                    role: "default".into(),
+                },
+                Widget::Text {
+                    content: "row3".into(),
+                    role: "default".into(),
+                },
+            ],
+        }
+        .nodes,
+        &crate::ext_widgets::widget_ctx(&chat.theme, "panel", 80, &chat.world.ext_scroll),
+    );
+    assert!(
+        lines[0].starts_with("row2"),
+        "one line scrolled off: {lines:?}"
+    );
+    // Scrolling back up returns to the top.
+    assert!(chat.wheel_extension(79, 0, 80, 24, -1));
+    assert_eq!(chat.world.ext_scroll.get("panel"), Some(&0));
+}

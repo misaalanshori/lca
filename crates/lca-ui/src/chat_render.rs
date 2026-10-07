@@ -78,9 +78,17 @@ impl Chat {
         // the frame: they are status, not history.
         if let Some(render) = &self.world.options.render_regions {
             for (_name, tree) in render("footer") {
-                for line in widget_lines(&tree.nodes, &self.theme, width as usize)
-                    .into_iter()
-                    .take(3)
+                for line in widget_lines(
+                    &tree.nodes,
+                    &crate::ext_widgets::widget_ctx(
+                        &self.theme,
+                        "footer",
+                        width as usize,
+                        &self.world.ext_scroll,
+                    ),
+                )
+                .into_iter()
+                .take(3)
                 {
                     transcript.push((self.theme.dim)(&line));
                 }
@@ -460,9 +468,17 @@ impl Chat {
         }
         if let Some(render) = &self.world.options.render_regions {
             for (_name, tree) in render("status-line") {
-                for line in widget_lines(&tree.nodes, &self.theme, width as usize)
-                    .into_iter()
-                    .take(1)
+                for line in widget_lines(
+                    &tree.nodes,
+                    &crate::ext_widgets::widget_ctx(
+                        &self.theme,
+                        "status-line",
+                        width as usize,
+                        &self.world.ext_scroll,
+                    ),
+                )
+                .into_iter()
+                .take(1)
                 {
                     footer.statuses.push(line);
                 }

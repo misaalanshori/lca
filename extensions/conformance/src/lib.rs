@@ -735,21 +735,6 @@ pub fn ui_script(region: &str) -> Option<Vec<lca_protocol::Widget>> {
         "footer" => vec![
             Widget::Column(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]),
             text("hostile: \u{1b}[31mNOT A PROMPT\u{1b}[0m", "warning"),
-            Widget::Row(vec![3, 4]),
-            text("row-left", "muted"),
-            text("row-right", "muted"),
-            Widget::Spinner {
-                frames: "\u{280b}\u{2819}".to_string(),
-            },
-            Widget::Progress {
-                label: "conformance".to_string(),
-                fill: 0.5,
-            },
-            Widget::Image {
-                media_type: "image/png".to_string(),
-                bytes: vec![1, 2, 3, 4],
-            },
-            Widget::Vendor("conformance.demo".to_string()),
             // The 0.6 vocabulary page (gh #172): dual-channel hex
             // plus a hostile-role twin the host must degrade, not
             // paint.
@@ -764,6 +749,21 @@ pub fn ui_script(region: &str) -> Option<Vec<lca_protocol::Widget>> {
                     underline: true,
                 },
             },
+            Widget::Row(vec![4, 5]),
+            text("row-left", "muted"),
+            text("row-right", "muted"),
+            Widget::Spinner {
+                frames: "\u{280b}\u{2819}".to_string(),
+            },
+            Widget::Progress {
+                label: "conformance".to_string(),
+                fill: 0.5,
+            },
+            Widget::Image {
+                media_type: "image/png".to_string(),
+                bytes: vec![1, 2, 3, 4],
+            },
+            Widget::Vendor("conformance.demo".to_string()),
             Widget::Markdown {
                 source: "# conformance\n\n- one\n- two".to_string(),
             },
@@ -777,13 +777,21 @@ pub fn ui_script(region: &str) -> Option<Vec<lca_protocol::Widget>> {
             },
             Widget::ScrollContainer {
                 max_height: 2,
-                children: vec![10, 12],
+                children: vec![11, 13],
             },
         ],
-        "panel" => vec![Widget::KeyValue(vec![
-            ("mode".to_string(), "stateless".to_string()),
-            ("arena".to_string(), "node0 is the root".to_string()),
-        ])],
+        "panel" => vec![
+            Widget::Column(vec![1, 2]),
+            Widget::KeyValue(vec![
+                ("mode".to_string(), "stateless".to_string()),
+                ("arena".to_string(), "node0 is the root".to_string()),
+            ]),
+            // Gh #172: the clickable panel button the mouse receipt drives.
+            Widget::Button {
+                id: "ok".to_string(),
+                label: "OK".to_string(),
+            },
+        ],
         // The modal pairs the two remaining cases: a boxed child and a
         // column beneath it.
         "modal" => vec![
@@ -813,6 +821,12 @@ pub fn ui_event_script(region: &str, input: &lca_protocol::UiInput) -> lca_proto
             UiInput::ClickWidget { id } => UiEffect::ShowNotice(format!("clicked: {id}")),
             UiInput::Click { .. } | UiInput::Scroll { .. } | UiInput::Key { .. } => UiEffect::None,
         };
+    }
+    // Gh #172: the panel button answers like the modal one.
+    if region == "panel"
+        && let UiInput::ClickWidget { id } = input
+    {
+        return UiEffect::ShowNotice(format!("clicked: {id}"));
     }
     UiEffect::None
 }

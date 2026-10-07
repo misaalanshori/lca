@@ -78,7 +78,17 @@ fn extension_widget_trees_render_through_the_host() {
             Widget::KeyValue(vec![("k".into(), "v".into())]),
         ],
     };
-    let lines = widget_lines(&tree.nodes, &Theme::colored(), 60);
+    let theme = Theme::colored();
+    let offsets = std::collections::HashMap::new();
+    let lines = widget_lines(
+        &tree.nodes,
+        &lca_ui::ext_widgets::WidgetCtx {
+            theme: &theme,
+            width: 60,
+            region: "panel",
+            offsets: &offsets,
+        },
+    );
     assert!(lines.iter().any(|l| l.contains("status")), "{lines:?}");
     assert!(
         lines.iter().any(|l| l.contains("k") && l.contains("v")),

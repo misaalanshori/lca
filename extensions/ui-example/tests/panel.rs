@@ -52,7 +52,20 @@ fn panel_lines(handle: &dyn ExtensionDispatch) -> String {
         .render("panel")
         .expect("render")
         .expect("the panel has content");
-    lca_ui::ext_widgets::widget_lines(&tree.nodes, &lca_ui::theme::Theme::colored(), 60).join("\n")
+    {
+        let theme = lca_ui::theme::Theme::colored();
+        let offsets = std::collections::HashMap::new();
+        lca_ui::ext_widgets::widget_lines(
+            &tree.nodes,
+            &lca_ui::ext_widgets::WidgetCtx {
+                theme: &theme,
+                width: 60,
+                region: "panel",
+                offsets: &offsets,
+            },
+        )
+        .join("\n")
+    }
 }
 
 // Verifies: all four regions are registered and answer, and the panel

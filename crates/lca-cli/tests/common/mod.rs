@@ -682,6 +682,17 @@ impl Tmux {
         );
     }
 
+    /// Send literal bytes (SGR-1006 mouse synthesis: tmux key names
+    /// cannot spell `ESC[<`, so the bytes go literally).
+    pub fn send_literal(&self, bytes: &str) {
+        let out = Self::tmux(&["send-keys", "-t", &self.name, "-l", bytes]);
+        assert!(
+            out.status.success(),
+            "tmux send-keys -l: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     /// Poll the pane until `needle` appears (150 ms cadence). The timeout
     /// is wall-clock margin for a loaded machine, not a performance claim:
     /// a full parallel `cargo test -p lca-cli` blew a 10 s paste budget
