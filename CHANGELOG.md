@@ -18,6 +18,7 @@ Dates are UTC.
   next demand votes get counted against.
 
 ### Added
+- **Extension-owned custom endpoints (gh #188).** The host no longer synthesizes `__custom__`: `openai-compatible` declares its own `custom` preset (base-url/api-key/model, preset-less, default-profile), and `/login` with no options names the way out.
 - **Compaction file tracking, checkpoint, recovery, retain-none, phase 3 (gh #36, epic complete).** Records carry cumulative capped file lists; the system prompt is checkpointed with change detection; a capped generation compacts and retries once; manual `/compact` anchors its own id.
 - **Compaction split spans + iterative summaries, phase 2 (gh #36).**
   A straddling span splits at record granularity (prefix summarizes,

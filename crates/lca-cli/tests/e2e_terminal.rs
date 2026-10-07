@@ -167,7 +167,7 @@ fn a_real_paste_into_the_base_url_field_is_shown() {
     session.wait_for("no model", std::time::Duration::from_secs(20));
     session.send(&["/login", "Enter"]);
     session.wait_for("Sign in with", std::time::Duration::from_secs(15));
-    // Walk to the host's universal entry (last row).
+    // Walk to the extension-declared custom entry (last row).
     let mut reached = false;
     for _ in 0..24 {
         session.send(&["Down"]);
@@ -204,8 +204,8 @@ fn a_fragmented_raw_paste_reassembles() {
 
 // Verifies: ADR-0033 / `api-key-login-plan.md` D1 - `/login` with no
 // argument is a list picker: the extension's presets, and always the host's
-// universal "Custom endpoint..." entry. The list is longer than the box, so
-// it scrolls - and the universal entry, which sits last, has to stay
+// declared "Custom endpoint..." entry. The list is longer than the box, so
+// it scrolls - and the custom entry, which sits last, has to stay
 // reachable.
 #[cfg(unix)]
 #[test]
@@ -227,7 +227,7 @@ fn the_login_picker_lists_the_presets_and_scrolls_to_the_custom_entry() {
     assert!(pane.contains("> "), "the cursor marks a row:\n{pane}");
     assert!(
         !pane.contains("Custom endpoint"),
-        "the universal entry is last, below the fold at the top:\n{pane}"
+        "the custom entry is last, below the fold at the top:\n{pane}"
     );
 
     // Walking to the end reaches it.
@@ -240,7 +240,7 @@ fn the_login_picker_lists_the_presets_and_scrolls_to_the_custom_entry() {
             break;
         }
     }
-    assert!(reached, "the host's universal entry is reachable");
+    assert!(reached, "the declared custom entry is reachable");
 }
 
 // Verifies: ADR-0033 - choosing a preset reaches that preset's own field
@@ -796,18 +796,39 @@ fn the_interface_opens_in_the_zero_provider_state_and_recovers_through_login() {
         "the first frame says how to recover: {pane}"
     );
 
-    // `/login` opens its picker: zero providers means no presets, but the
-    // host's universal entry is always there and is the way back.
+    // `/login` with zero providers names the state and the way out
+    // (gh #188): the host synthesizes no phantom custom entry, so the
+    // message points at `ext install` / `ext enable` instead of a
+    // picker that could configure nothing.
     session.send(&["/login", "Enter"]);
-    session.wait_for("Custom endpoint", std::time::Duration::from_secs(15));
-    let pane = session.capture();
+    let pane = session.wait_for("no login options", std::time::Duration::from_secs(15));
     assert!(
-        pane.contains("Custom endpoint"),
-        "the picker still offers a way to configure one: {pane}"
+        pane.contains("lca ext enable"),
+        "the message names the way back: {pane}"
     );
+    session.send(&["Escape"]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    drop(session);
 
-    // Walk to it and complete the three fields: the state has to be
-    // *leavable*, not merely reportable.
+    // Re-enable the provider and come back: the state has to be
+    // *leavable*, not merely reportable. The custom endpoint is now
+    // the extension's own declared preset, reached the same way.
+    let out = sandbox.run(None, &["ext", "enable", "openai-compatible"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let session = Tmux::new("zeroprov-back");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    session.wait_for("[session in", std::time::Duration::from_secs(20));
+    session.send(&["/login", "Enter"]);
+    session.wait_for("Sign in with", std::time::Duration::from_secs(15));
+
+    // Walk to the extension-declared custom entry (last row) and
+    // complete the three fields.
     for _ in 0..24 {
         session.send(&["Down"]);
         std::thread::sleep(std::time::Duration::from_millis(120));

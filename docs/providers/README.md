@@ -78,7 +78,7 @@ Every capability line in a provider's manifest should be traceable to something 
 the extension takes the list with it; a user's own entries live at
 `<config>/provider-presets.toml` and are merged into the same picker.
 
-20 presets ship today:
+21 presets ship today:
 
 | id | Name | Base URL | Auth |
 |---|---|---|---|
@@ -102,6 +102,7 @@ the extension takes the list with it; a user's own entries live at
 | `vercel` | Vercel AI Gateway | `https://ai-gateway.vercel.sh/v1` | `bearer` |
 | `ollama` | Ollama (local) | `http://localhost:11434/v1` | `none` |
 | `lmstudio` | LM Studio (local) | `http://localhost:1234/v1` | `none` |
+| `custom` | Custom endpoint… | *(you supply it)* | `bearer` |
 
 ### Declaring a preset
 

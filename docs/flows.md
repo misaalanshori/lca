@@ -375,16 +375,18 @@ The three branches run concurrently, not in sequence: a cancelled turn does not 
 
 `/login` with no argument opens a list picker (ADR-0033). The host asks
 every *enabled* provider extension for its `login-options` and renders what
-comes back - display name and host, nothing else - plus two host-owned
-rows: the user's named custom endpoints from `<config>/provider-presets.toml`
-(D1's override layer) and, always last, "Custom endpoint…". The list is
-longer than the box for a provider with many presets, so it scrolls and
-shows `[n/total]`; the universal entry stays reachable at the end.
+comes back - display name and host, nothing else - plus the user's named
+custom endpoints from `<config>/provider-presets.toml` (D1's override
+layer). With no options at all the host answers with the way out
+(`lca ext install` / `lca ext enable`) instead of a phantom entry
+(gh #188). The list is longer than the box for a provider with many
+presets, so it scrolls and shows `[n/total]`; the extension-declared
+"Custom endpoint…" stays reachable at the end.
 
 Choosing a row runs that option's own field list. A preset declares its
 fields (`api-key` for a bearer endpoint, nothing at all for a local
-`auth = "none"` one, which signs in on selection). "Custom endpoint…"
-collects base URL, key, and model. One prompt at a time, and the masking is
+`auth = "none"` one, which signs in on selection); a custom endpoint
+declares base URL, key, and model. One prompt at a time, and the masking is
 per-field: a **key is asterisks and never renders**; a base URL or a model
 id renders as typed, because typing those blind is worse than any leak of a
 value that is not secret.

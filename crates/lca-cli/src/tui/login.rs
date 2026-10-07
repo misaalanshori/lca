@@ -30,9 +30,10 @@ fn identity_instead_of_picker(argument: &str, names: &[String], owned_by_target:
 }
 
 impl Ui {
-    /// Every picker choice: each enabled provider extension's own options,
-    /// plus the user's named custom endpoints (D1's override layer). The
-    /// host's universal "Custom endpoint..." entry is appended by the flow.
+    /// Every picker choice: each enabled provider extension's own options
+    /// (custom endpoints included, gh #188), plus the user's named
+    /// custom endpoints (D1's override layer). The host appends
+    /// nothing: an empty set answers with the way out.
     fn gather(&self, scope: &[String]) -> Vec<(String, lca_protocol::LoginOption)> {
         let mut out: Vec<(String, lca_protocol::LoginOption)> = Vec::new();
         for name in scope {
@@ -67,6 +68,7 @@ impl Ui {
             Step::Submit {
                 provider,
                 choice,
+                kind,
                 values,
             } => {
                 let target = if provider.is_empty() {
@@ -77,7 +79,7 @@ impl Ui {
                 self.begin_wait(&target);
                 let ui = self.clone();
                 std::thread::spawn(move || {
-                    let next = ui.finish_login(target, choice, values);
+                    let next = ui.finish_login(target, choice, kind, values);
                     *ui.login_pending.lock().unwrap_or_else(|p| p.into_inner()) = Some(next);
                 });
                 LoginNext::Waiting {
@@ -119,6 +121,7 @@ impl Ui {
         &self,
         target: String,
         choice: String,
+        kind: String,
         values: std::collections::BTreeMap<String, String>,
     ) -> LoginNext {
         // Choosing a login option for a provider that was disabled is an
@@ -133,31 +136,27 @@ impl Ui {
                 false
             }
         };
-        // The host's universal entry has no extension behind it: the values
-        // themselves are the settings. A preset delegates to its extension,
-        // which stores the key and returns its own settings.
-        let mut settings = if choice == lca_ui::CUSTOM_OPTION {
-            values
-                .iter()
-                .filter(|(field, _)| *field != "api-key")
-                .map(|(field, value)| (field.replace('-', "_"), value.clone()))
-                .collect::<Vec<_>>()
-        } else {
-            let Some(handle) = self.registry.provider(&target).cloned() else {
-                return LoginNext::Message(format!("`{target}` cannot log in"));
-            };
-            let answer = lca_protocol::LoginAnswer {
-                choice: choice.clone(),
-                values: values.clone(),
-            };
+        // Every option delegates to its extension (gh #188): the host
+        // renders the declared fields and submits the answers, and the
+        // extension stores the key and returns its own settings - the
+        // custom endpoint included, through its declared preset.
+        let Some(handle) = self.registry.provider(&target).cloned() else {
+            return LoginNext::Message(format!("`{target}` cannot log in"));
+        };
+        let answer = lca_protocol::LoginAnswer {
+            choice: choice.clone(),
+            values: values.clone(),
+        };
+        let mut settings =
             match lca_core::drive_blocking(async move { handle.login_submit(answer).await }) {
                 Ok(settings) => settings,
                 Err(err) => return LoginNext::Message(format!("could not sign in: {err}")),
-            }
-        };
+            };
         // E5: the footer names the preset (`opencode-go`), not the extension.
-        // A custom endpoint has no preset, so the extension name stands in.
-        let identity = if choice == lca_ui::CUSTOM_OPTION {
+        // A `custom`-kind option has no preset, so the extension name
+        // stands in - the kind is the extension's own declaration (WIT
+        // `login-option.kind`), never host knowledge of an id.
+        let identity = if kind == "custom" {
             target.clone()
         } else {
             settings.push(("preset".to_string(), choice.clone()));
@@ -168,25 +167,6 @@ impl Ui {
         // existed and could not reach the endpoint.
         *self.login_answer.lock().unwrap_or_else(|p| p.into_inner()) =
             Some((target.clone(), choice.clone(), values.clone()));
-        // The key's home depends on who is writing it (gh #31): a custom
-        // endpoint has no extension behind it, so the host stores it under
-        // the bare name - the default profile. A preset's login runs the
-        // extension's `login-submit`, which stores it under that profile;
-        // writing it bare here would hand every later default-profile
-        // request whichever service logged in last.
-        if choice == lca_ui::CUSTOM_OPTION
-            && let Some(secret) = values.get("api-key")
-            && let Err(err) = crate::store_provider_secret(
-                &self.data,
-                &self.cwd,
-                &target,
-                "api_key",
-                secret,
-                &self.grants,
-            )
-        {
-            return LoginNext::Message(format!("could not store the key for {target}: {err}"));
-        }
         for (key, value) in &settings {
             if let Err(err) = crate::store_provider_secret(
                 &self.data,
@@ -472,7 +452,7 @@ impl Ui {
                     .map(|(owner, option)| (owner.clone(), option.clone()))
             {
                 let mut flow = ui.flow.lock().unwrap_or_else(|p| p.into_inner());
-                let _ = flow.offer(options, &ui.provider_name);
+                let _ = flow.offer(options);
                 return match flow.pick(&owner, argument) {
                     crate::login::Step::Next(next) => next,
                     step => ui.login_apply(step),
@@ -505,7 +485,7 @@ impl Ui {
                 return LoginNext::Message(WAIT_LABEL.to_string());
             }
             let mut flow = ui.flow.lock().unwrap_or_else(|p| p.into_inner());
-            flow.offer(options, &ui.provider_name)
+            flow.offer(options)
         })
     }
 
@@ -631,7 +611,7 @@ impl Ui {
         let Some((target, choice, values)) = answer else {
             return;
         };
-        if target != provider || choice == lca_ui::CUSTOM_OPTION {
+        if target != provider {
             return;
         }
         let Some(handle) = self.registry.provider(provider).cloned() else {
@@ -688,8 +668,8 @@ mod tests {
 
     // Verifies: gh #25 (the fallback-leak row) - `/login` scoped to a
     // provider with no picker options runs its identity `login` export.
-    // Offering the picker instead opens it empty but for the host's
-    // universal `Custom endpoint…`, attributed to openai-compatible.
+    // Offering the picker instead opens it empty, and an empty set
+    // answers with the way out (gh #188: no phantom custom entry).
     #[test]
     fn login_scoped_to_a_provider_with_no_options_asks_for_its_identity_flow() {
         assert!(identity_instead_of_picker(

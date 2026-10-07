@@ -201,6 +201,19 @@ For authentication with an API key, read it from the `credentials` capability, a
 
 A provider may also export `provider-login` (ADR-0033): `login-options` returns the picker choices the host renders (load them from your own `resources/provider-presets.toml` through `lca:host/resources`), and `login-submit` consumes the chosen id and the field values, stores the secret in your `credentials` namespace, and returns opaque `setting: value` pairs for the host to persist. The host never parses provider-shaped data; it renders the picker, masks the secret, persists the settings, and runs the ad hoc `net` grant when the chosen host is outside the manifest's vocabulary. A provider whose login is self-contained (an OAuth flow) exports `provider-login` returning no options and keeps its flow in `login`.
 
+To offer a custom endpoint of your own (gh #188), declare it as a preset with no `base_url` and explicit `fields`, `kind`, and `default_profile`:
+
+```toml
+[[preset]]
+id = "custom"
+name = "Custom endpoint…"
+fields = ["base-url", "api-key", "model"]
+kind = "custom"
+default_profile = true
+```
+
+The host prompts for the declared fields in order and submits the answers to your `login-submit` like any preset. `kind = "custom"` keeps the host's preset-less treatment (no `preset` pair is stored; the extension name stands in), and `default_profile = true` stores bare default-profile keys, like a direct setup. Any field ids are allowed - the host prompts generically and masks `api-key`-shaped ids - and the option rides the same consent and discovery path as every preset.
+
 Refresh expired tokens before the next call, not on failure. Waiting for a 401 costs a round trip and produces a confusing error if the refresh also fails.
 
 ## Capabilities in practice

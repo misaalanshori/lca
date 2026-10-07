@@ -92,8 +92,8 @@ fn a_wrong_preset_count_in_docs_fails_the_net() {
     drift_file(
         &tree,
         "docs/providers/README.md",
-        "20 presets ship today",
         "21 presets ship today",
+        "22 presets ship today",
     );
     let output = run_net(&tree);
     assert!(

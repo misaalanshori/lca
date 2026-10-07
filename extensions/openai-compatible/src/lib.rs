@@ -534,6 +534,17 @@ pub struct Preset {
     pub auth: String,
     /// A curated model list (a fallback for `GET /models`).
     pub models: Vec<String>,
+    /// Declared login fields, overriding the `auth`-derived default
+    /// (gh #188): a custom endpoint names its own prompts, so any
+    /// extension can declare arbitrary fields and the host prompts
+    /// for them sequentially. Empty means the default.
+    pub fields: Vec<String>,
+    /// The picker's `kind` for this option (gh #188): `custom` keeps
+    /// the host's preset-less treatment. Defaults to `api-key`.
+    pub kind: String,
+    /// Store bare default-profile keys, like a direct setup (gh #188):
+    /// the custom endpoint has no profile of its own. Defaults off.
+    pub default_profile: bool,
     /// Whether the endpoint honors a reasoning parameter (R1). Extension
     /// data, like everything in `provider-presets.toml`; `complete` also
     /// gates on the `OPENAI_SUPPORTS_REASONING` setting because it reads
@@ -556,7 +567,13 @@ pub fn parse_presets(text: &str) -> Vec<Preset> {
                     Some(Preset {
                         id: item.get("id")?.as_str()?.to_string(),
                         name: item.get("name")?.as_str()?.to_string(),
-                        base_url: item.get("base_url")?.as_str()?.to_string(),
+                        // A custom endpoint declares no base URL: the
+                        // user supplies it at login.
+                        base_url: item
+                            .get("base_url")
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         env: string_list(item.get("env")),
                         auth: item
                             .get("auth")
@@ -564,6 +581,16 @@ pub fn parse_presets(text: &str) -> Vec<Preset> {
                             .unwrap_or("bearer")
                             .to_string(),
                         models: string_list(item.get("models")),
+                        fields: string_list(item.get("fields")),
+                        kind: item
+                            .get("kind")
+                            .and_then(|k| k.as_str())
+                            .unwrap_or("api-key")
+                            .to_string(),
+                        default_profile: item
+                            .get("default_profile")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
                         supports_reasoning: item
                             .get("supports_reasoning")
                             .and_then(|v| v.as_bool())
@@ -785,16 +812,23 @@ pub fn login_options(cap: &dyn ProviderCap) -> Vec<lca_protocol::LoginOption> {
             if !preset.models.is_empty() {
                 extras.insert("models".to_string(), preset.models.join(","));
             }
-            lca_protocol::LoginOption {
-                id: preset.id,
-                name: preset.name,
-                kind: "api-key".to_string(),
-                host: host_of(&preset.base_url),
-                fields: if preset.auth == "none" {
+            // A preset's declared fields win (gh #188's custom
+            // endpoint); otherwise the `auth`-derived default.
+            let fields = if preset.fields.is_empty() {
+                if preset.auth == "none" {
                     Vec::new()
                 } else {
                     vec!["api-key".to_string()]
-                },
+                }
+            } else {
+                preset.fields.clone()
+            };
+            lca_protocol::LoginOption {
+                id: preset.id,
+                name: preset.name,
+                kind: preset.kind,
+                host: host_of(&preset.base_url),
+                fields,
                 extras,
             }
         })
@@ -895,21 +929,24 @@ pub fn login_submit(
     // The choice's id is this login's profile (gh #31): a second login
     // adds its own keys instead of overwriting the first, and a login for
     // a profile that exists updates that one profile only. The keys live
-    // in this extension's own namespace, under `profile.<id>.`.
-    let profile = answer.choice.clone();
+    // in this extension's own namespace, under `profile.<id>.` - unless
+    // the preset declares the default profile (gh #188's custom
+    // endpoint), which stores bare keys, like a direct setup.
+    let profile = if preset.is_some_and(|preset| preset.default_profile) {
+        None
+    } else {
+        Some(answer.choice.clone())
+    };
     if let Some(key) = answer.value("api-key")
         && !key.is_empty()
     {
-        cap.credentials_set(
-            &profiles::credential_key(&Some(profile.clone()), "api_key"),
-            key,
-        )
-        .map_err(|err| format!("cannot store the key: {err}"))?;
+        cap.credentials_set(&profiles::credential_key(&profile, "api_key"), key)
+            .map_err(|err| format!("cannot store the key: {err}"))?;
     }
     // The base URL rides back as an opaque pair the host persists under
     // the same profile key - the host never parses it (ADR-0031).
     let mut settings = vec![(
-        profiles::credential_key(&Some(profile.clone()), "base_url"),
+        profiles::credential_key(&profile, "base_url"),
         base_url.clone(),
     )];
     // D2: the endpoint's own model list when it answers, the preset's
@@ -933,12 +970,11 @@ pub fn login_submit(
     // service keeps the first one's models instead of replacing them.
     let mut entries = profiles::model_entries(&cap.credentials_get("models").unwrap_or_default());
     for (model, window) in discovered {
-        entries.retain(|entry| {
-            !(entry.id == model && entry.profile.as_deref() == Some(profile.as_str()))
-        });
+        entries
+            .retain(|entry| !(entry.id == model && entry.profile.as_deref() == profile.as_deref()));
         entries.push(profiles::ModelEntry {
             id: model,
-            profile: Some(profile.clone()),
+            profile: profile.clone(),
             window,
         });
     }

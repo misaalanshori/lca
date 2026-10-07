@@ -28,6 +28,8 @@ During 0.x, the minor position is normally the breaking position. **Amended 2026
 
 **Annotated 2026-10-05 (owner):** the label-tracks-minor rule above is superseded - the label now bumps only on a real breaking change. `lca 0.5.x` ships `abi 0.5` for the whole line: no `wit/`, manifest-schema, or `ABI_VERSION` change rides a patch, and `v0.5.4` verifies it (empty `wit/`+`schemas/` diff against `v0.5.3`, `ABI_VERSION` still `"0.5"`). A train that needs a new line says so in its own annotation.
 
+**Annotated 2026-10-07 (0.6 train, cycle 1: #188 + #157):** no label bump. Cycle 1 is WIT-compatible by construction: #188 travels over the existing `login-options`/`login-submit` shape (the custom preset is extension data, not interface), and #157's manifest `[login]` table is an optional additive key (old manifests parse on new hosts; new manifests parse on old hosts, which ignore it). The train takes a new line only if a later cycle breaks interface.
+
 ## What breaks and what does not
 
 The Component Model canonical ABI decides most of this, not taste. The following table is the working rule.

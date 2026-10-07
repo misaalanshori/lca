@@ -32,17 +32,14 @@ pub type CommandInvoker = Arc<dyn Fn(&str, &str) -> CommandEffect + Send + Sync>
 pub struct PickerOption {
     /// The provider this choice belongs to; the picker mixes several.
     pub provider: String,
-    /// The id handed back to `login-submit`. The host keeps the universal
-    /// "custom" entry's id in [`CUSTOM_OPTION`].
+    /// The id handed back to `login-submit`: the extension's own
+    /// preset id, whatever it declares (gh #188).
     pub id: String,
     /// Display line, e.g. "OpenRouter".
     pub label: String,
     /// Right-hand hint, e.g. "openrouter.ai".
     pub hint: String,
 }
-
-/// The host-owned picker entry: base URL + key + model, no preset.
-pub const CUSTOM_OPTION: &str = "__custom__";
 
 /// What `/login <provider>` should do next, decided by the CLI.
 #[derive(Debug)]

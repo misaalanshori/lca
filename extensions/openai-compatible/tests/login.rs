@@ -156,6 +156,77 @@ fn login_submit_stores_the_key_and_returns_opaque_settings() {
     assert!(login_submit(&cap, &unknown).is_err());
 }
 
+// Verifies: gh #188 - the custom endpoint is the extension's own
+// preset, not host synthesis: kind `custom`, the three declared
+// fields in prompt order, and no endpoint host of its own.
+#[test]
+fn the_custom_preset_is_an_extension_declared_option() {
+    let options = login_options(&cap());
+    let custom = options
+        .iter()
+        .find(|option| option.id == "custom")
+        .expect("the custom preset is declared");
+    assert_eq!(custom.kind, "custom");
+    assert_eq!(
+        custom.fields,
+        vec![
+            "base-url".to_string(),
+            "api-key".to_string(),
+            "model".to_string()
+        ],
+        "base URL, key, model - the old universal entry's order"
+    );
+    assert!(custom.host.is_empty(), "no endpoint of its own");
+    assert_eq!(
+        options.last().map(|option| option.id.as_str()),
+        Some("custom"),
+        "still last in the picker"
+    );
+}
+
+// Verifies: gh #188 - a custom submit stores bare default-profile
+// keys (like a direct setup) and hands the host bare pairs to
+// persist, so `complete` reads them with no profile involved.
+#[test]
+fn a_custom_submit_stores_bare_default_profile_keys() {
+    let cap = cap();
+    let answer = LoginAnswer {
+        choice: "custom".to_string(),
+        values: [
+            (
+                "base-url".to_string(),
+                "https://llm.example.com/v1".to_string(),
+            ),
+            ("api-key".to_string(), "sk-x".to_string()),
+            ("model".to_string(), "m1".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    let settings = login_submit(&cap, &answer).expect("submit");
+    assert_eq!(
+        cap.credentials_get("api_key").as_deref(),
+        Some("sk-x"),
+        "the key went to the bare default-profile key"
+    );
+    assert!(
+        settings
+            .iter()
+            .any(|(key, value)| { key == "base_url" && value == "https://llm.example.com/v1" }),
+        "the host is handed the bare base URL to persist: {settings:?}"
+    );
+    assert!(
+        settings
+            .iter()
+            .any(|(key, value)| key == "model" && value == "m1"),
+        "and the bare model: {settings:?}"
+    );
+    assert!(
+        settings.iter().all(|(key, _)| !key.starts_with("profile.")),
+        "nothing profile-scoped: {settings:?}"
+    );
+}
+
 // Verifies: parse_presets tolerates junk (a hostile or truncated resource
 // yields no options rather than a panic).
 #[test]

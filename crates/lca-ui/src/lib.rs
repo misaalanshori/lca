@@ -37,8 +37,8 @@ pub use lca_tui::widgets::markdown::{
 pub use run::run;
 pub use separator::{Separator, SeparatorState};
 pub use state::{
-    Action, CUSTOM_OPTION, CommandInvoker, LoginCancel, LoginComplete, LoginConfirm, LoginNext,
-    LoginPick, LoginPoll, LoginRequest, ModelRow, PickerOption, PromptRequest, RegionInteractor,
+    Action, CommandInvoker, LoginCancel, LoginComplete, LoginConfirm, LoginNext, LoginPick,
+    LoginPoll, LoginRequest, ModelRow, PickerOption, PromptRequest, RegionInteractor,
     RegionRenderer, SettingRow, SettingsRows, ShellEvent, ShellHandle, ShellRunner, TurnChannels,
     TurnRunner, UiHooks, UiOptions, UiState, display_path, sanitize_block, sanitize_text,
     widget_lines,

@@ -175,3 +175,17 @@ base_url = "http://localhost:1234/v1"
 env = []
 auth = "none"
 models = ["local-model"]
+
+# The custom endpoint (gh #188): the host's old synthetic `__custom__`
+# entry, now declared by the extension that speaks the protocol. No
+# `base_url`: the user supplies it. `fields` overrides the
+# auth-derived default; `kind = "custom"` keeps the host's preset-less
+# treatment (no `preset` pair, the extension name stands in); and
+# `default_profile = true` stores bare keys, like a direct setup. Last
+# in the file, so the picker keeps it last.
+[[preset]]
+id = "custom"
+name = "Custom endpoint…"
+fields = ["base-url", "api-key", "model"]
+kind = "custom"
+default_profile = true

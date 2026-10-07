@@ -13,11 +13,7 @@
 use std::collections::BTreeMap;
 
 use lca_protocol::LoginOption;
-use lca_ui::{CUSTOM_OPTION, LoginNext, PickerOption};
-
-/// The host-owned universal entry's fields, in prompt order (D1: base URL +
-/// key + model). A preset declares its own; this one never does.
-pub const CUSTOM_FIELDS: &[&str] = &["base-url", "api-key", "model"];
+use lca_ui::{LoginNext, PickerOption};
 
 /// What one field asks for: the label to show, and whether to mask it.
 ///
@@ -98,8 +94,11 @@ pub enum Step {
     Submit {
         /// The provider being signed in to.
         provider: String,
-        /// The chosen option id ([`CUSTOM_OPTION`] for the host's entry).
+        /// The chosen option id.
         choice: String,
+        /// The chosen option's `kind` (gh #188): a `custom` option
+        /// keeps the preset-less treatment downstream.
+        kind: String,
         /// Field id -> value, in the order collected.
         values: BTreeMap<String, String>,
     },
@@ -108,6 +107,7 @@ pub enum Step {
 struct Pending {
     provider: String,
     choice: String,
+    kind: String,
     fields: Vec<String>,
     answers: BTreeMap<String, String>,
 }
@@ -129,27 +129,21 @@ impl LoginFlow {
     /// Remember what the picker is showing so a later `pick` can find the
     /// option's declared fields, and return the modal to open.
     ///
-    /// `options` is `(provider, option)` per choice. The host's universal
-    /// entry is appended when it is missing, so a picker never comes up
-    /// without a way out.
-    pub fn offer(&mut self, mut options: Vec<(String, LoginOption)>, fallback: &str) -> LoginNext {
-        if options.iter().any(|(_, option)| option.id == CUSTOM_OPTION) {
-            // The caller already put one there (an override entry).
-        } else {
-            options.push((
-                fallback.to_string(),
-                LoginOption {
-                    id: CUSTOM_OPTION.to_string(),
-                    name: "Custom endpoint\u{2026}".to_string(),
-                    kind: "custom".to_string(),
-                    host: String::new(),
-                    fields: CUSTOM_FIELDS.iter().map(|f| (*f).to_string()).collect(),
-                    extras: BTreeMap::new(),
-                },
-            ));
-        }
+    /// `options` is `(provider, option)` per choice. The host renders
+    /// whatever the extensions declare and synthesizes nothing (gh
+    /// #188): an empty set answers with the way out instead of a
+    /// phantom entry.
+    pub fn offer(&mut self, options: Vec<(String, LoginOption)>) -> LoginNext {
         self.pending = None;
         self.options = options;
+        if self.options.is_empty() {
+            return LoginNext::Message(
+                "no login options are available: no provider extensions are installed or enabled. \
+                 Install one (`lca ext install <provider>`) or re-enable one \
+                 (`lca ext enable <provider>`)."
+                    .to_string(),
+            );
+        }
         let rows: Vec<PickerOption> = self
             .options
             .iter()
@@ -184,15 +178,14 @@ impl LoginFlow {
         } else {
             owner
         };
-        let fields: Vec<String> = if option.id == CUSTOM_OPTION {
-            CUSTOM_FIELDS.iter().map(|f| (*f).to_string()).collect()
-        } else {
-            option.fields.clone()
-        };
+        // The option's declared fields, whatever they are (gh #188):
+        // the host prompts for them sequentially and never substitutes
+        // its own list.
         self.pending = Some(Pending {
             provider: provider.clone(),
             choice: option.id.clone(),
-            fields,
+            kind: option.kind.clone(),
+            fields: option.fields.clone(),
             answers: BTreeMap::new(),
         });
         if self
@@ -205,6 +198,7 @@ impl LoginFlow {
             return Step::Submit {
                 provider: done.provider,
                 choice: done.choice,
+                kind: done.kind,
                 values: done.answers,
             };
         }
@@ -229,6 +223,7 @@ impl LoginFlow {
             return Step::Submit {
                 provider: done.provider,
                 choice: done.choice,
+                kind: done.kind,
                 values: done.answers,
             };
         }
@@ -274,68 +269,29 @@ mod tests {
         }
     }
 
-    // The picker always offers the host's universal entry, even when the
-    // extension supplies nothing (D1: "always Custom endpoint…").
+    // Gh #188: the host synthesizes nothing. An empty option set
+    // answers with the way out instead of a phantom custom entry.
     #[test]
-    fn an_empty_option_set_still_offers_the_custom_entry() {
+    fn an_empty_option_set_names_the_way_out() {
         let mut flow = LoginFlow::new();
-        let LoginNext::Picker { options } = flow.offer(vec![], "openai-compatible") else {
-            panic!("the picker opened");
+        let LoginNext::Message(text) = flow.offer(vec![]) else {
+            panic!("no picker without options");
         };
-        assert_eq!(options.len(), 1);
-        assert_eq!(options[0].id, CUSTOM_OPTION);
-        assert_eq!(
-            options[0].provider, "openai-compatible",
-            "it belongs to a provider"
-        );
+        assert!(text.contains("lca ext install"), "{text}");
+        assert!(text.contains("lca ext enable"), "{text}");
     }
 
+    // Gh #188: an extension-declared custom option flows like any
+    // preset - the host prompts for its declared fields in order and
+    // hands the kind through for the preset-less treatment downstream.
     #[test]
-    fn a_preset_collects_its_declared_fields_then_submits() {
+    fn an_extension_declared_custom_option_collects_its_fields_in_order() {
+        let mut custom = option("custom", &["base-url", "api-key", "model"]);
+        custom.kind = "custom".to_string();
+        custom.host = String::new();
         let mut flow = LoginFlow::new();
-        let _ = flow.offer(
-            vec![(
-                "openai-compatible".into(),
-                option("openrouter", &["api-key"]),
-            )],
-            "openai-compatible",
-        );
-        let Step::Next(next) = flow.pick("openai-compatible", "openrouter") else {
-            panic!("a preset with a key asks for it");
-        };
-        let LoginNext::Secret { masked, label, .. } = next else {
-            panic!("a field prompt, got {next:?}");
-        };
-        assert!(masked, "a key is masked");
-        assert!(label.contains("API key"), "{label}");
-        let Step::Submit { choice, values, .. } = flow.push("openai-compatible", "sk-x") else {
-            panic!("one field submits");
-        };
-        assert_eq!(choice, "openrouter");
-        assert_eq!(values.get("api-key").map(String::as_str), Some("sk-x"));
-    }
-
-    #[test]
-    fn an_option_with_no_fields_submits_without_a_prompt() {
-        let mut flow = LoginFlow::new();
-        let _ = flow.offer(
-            vec![("openai-compatible".into(), option("ollama", &[]))],
-            "openai-compatible",
-        );
-        // A local `auth = "none"` endpoint has no key step, so the choice
-        // itself completes the login.
-        let Step::Submit { choice, values, .. } = flow.pick("openai-compatible", "ollama") else {
-            panic!("a field-less option submits on selection");
-        };
-        assert_eq!(choice, "ollama");
-        assert!(values.is_empty(), "nothing was asked for");
-    }
-
-    #[test]
-    fn the_custom_entry_collects_base_url_key_and_model_in_order() {
-        let mut flow = LoginFlow::new();
-        let _ = flow.offer(vec![], "openai-compatible");
-        let Step::Next(next) = flow.pick("openai-compatible", CUSTOM_OPTION) else {
+        let _ = flow.offer(vec![("openai-compatible".into(), custom)]);
+        let Step::Next(next) = flow.pick("openai-compatible", "custom") else {
             panic!("the custom entry asks for its fields");
         };
         let LoginNext::Secret { masked, label, .. } = next else {
@@ -360,16 +316,58 @@ mod tests {
         };
         assert!(!masked, "a model id is shown as typed");
 
-        let Step::Submit { choice, values, .. } = flow.push("", "gpt-4o") else {
+        let Step::Submit {
+            choice,
+            kind,
+            values,
+            ..
+        } = flow.push("", "gpt-4o")
+        else {
             panic!("three fields submit");
         };
-        assert_eq!(choice, CUSTOM_OPTION);
+        assert_eq!(choice, "custom");
+        assert_eq!(kind, "custom", "the kind rides along");
         assert_eq!(
             values.get("base-url").map(String::as_str),
             Some("https://x.test/v1")
         );
         assert_eq!(values.get("api-key").map(String::as_str), Some("sk-x"));
         assert_eq!(values.get("model").map(String::as_str), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn a_preset_collects_its_declared_fields_then_submits() {
+        let mut flow = LoginFlow::new();
+        let _ = flow.offer(vec![(
+            "openai-compatible".into(),
+            option("openrouter", &["api-key"]),
+        )]);
+        let Step::Next(next) = flow.pick("openai-compatible", "openrouter") else {
+            panic!("a preset with a key asks for it");
+        };
+        let LoginNext::Secret { masked, label, .. } = next else {
+            panic!("a field prompt, got {next:?}");
+        };
+        assert!(masked, "a key is masked");
+        assert!(label.contains("API key"), "{label}");
+        let Step::Submit { choice, values, .. } = flow.push("openai-compatible", "sk-x") else {
+            panic!("one field submits");
+        };
+        assert_eq!(choice, "openrouter");
+        assert_eq!(values.get("api-key").map(String::as_str), Some("sk-x"));
+    }
+
+    #[test]
+    fn an_option_with_no_fields_submits_without_a_prompt() {
+        let mut flow = LoginFlow::new();
+        let _ = flow.offer(vec![("openai-compatible".into(), option("ollama", &[]))]);
+        // A local `auth = "none"` endpoint has no key step, so the choice
+        // itself completes the login.
+        let Step::Submit { choice, values, .. } = flow.pick("openai-compatible", "ollama") else {
+            panic!("a field-less option submits on selection");
+        };
+        assert_eq!(choice, "ollama");
+        assert!(values.is_empty(), "nothing was asked for");
     }
 
     #[test]
@@ -382,7 +380,10 @@ mod tests {
     #[test]
     fn an_unknown_choice_is_reported_not_panicked() {
         let mut flow = LoginFlow::new();
-        let _ = flow.offer(vec![], "openai-compatible");
+        let _ = flow.offer(vec![(
+            "openai-compatible".into(),
+            option("openrouter", &["api-key"]),
+        )]);
         assert!(matches!(
             flow.pick("openai-compatible", "nope"),
             Step::Next(LoginNext::Message(_))
@@ -425,7 +426,7 @@ pub fn override_presets(text: &str, provider: &str) -> Vec<(String, LoginOption)
     };
     file.preset
         .into_iter()
-        .filter(|entry| !entry.id.is_empty() && entry.id != CUSTOM_OPTION)
+        .filter(|entry| !entry.id.is_empty())
         .map(|entry| {
             let name = if entry.name.is_empty() {
                 entry.id.clone()
@@ -565,18 +566,6 @@ mod override_tests {
         assert!(
             override_presets("[[preset]]\nname = \"no id\"\n", "openai-compatible").is_empty(),
             "an entry with no id is dropped"
-        );
-    }
-
-    #[test]
-    fn the_custom_entry_id_is_reserved() {
-        assert!(
-            override_presets(
-                &format!("[[preset]]\nid = \"{CUSTOM_OPTION}\"\n"),
-                "openai-compatible"
-            )
-            .is_empty(),
-            "a user preset cannot shadow the host's universal entry"
         );
     }
 }
