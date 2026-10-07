@@ -857,3 +857,18 @@ fn a_styled_extension_span_reaches_the_frame() {
         "hex on both channels, each reset alone: {frame:?}"
     );
 }
+
+// Verifies: gh #172 - a painted box title still names the modal, and a
+// non-title line does not.
+#[test]
+fn a_painted_box_title_still_names_the_modal() {
+    assert_eq!(
+        crate::chat_overlays::modal_title_line("\x1b[38;2;138;190;183m[box]\x1b[39m").as_deref(),
+        Some("box")
+    );
+    assert_eq!(
+        crate::chat_overlays::modal_title_line("[plain]").as_deref(),
+        Some("plain")
+    );
+    assert_eq!(crate::chat_overlays::modal_title_line("body text"), None);
+}

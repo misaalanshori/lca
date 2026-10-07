@@ -2,8 +2,8 @@
 //! ceiling). The modals and pickers composite over the visible viewport.
 
 use super::chat::{Chat, highlight_matches};
+use super::ext_widgets::widget_lines;
 use super::render::{overlay_box, overlay_box_picker, side_panel};
-use super::state::widget_lines;
 use crate::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
 
 // E3: a picker owns the keyboard while open, so a slash command typed into
@@ -17,6 +17,16 @@ const HINT_GRANTS: &str = "↑↓ move · enter revoke · esc close";
 const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
 const HINT_SETTINGS: &str = "↑↓ move · enter/←→ change · q/esc close";
 const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
+
+/// The modal's title from one rendered line (gh #172): a bordered box
+/// paints its `[title]` in the border role, so the chrome strips escapes
+/// before reading it. `None` is not a title line.
+pub(super) fn modal_title_line(line: &str) -> Option<String> {
+    let plain = lca_tui::engine::text::strip_terminal_sequences(line);
+    plain
+        .starts_with('[')
+        .then(|| plain.trim_matches(['[', ']']).to_string())
+}
 
 impl Chat {
     /// Compose one picker overlay: the body plus its hint row (E3),
@@ -79,7 +89,7 @@ impl Chat {
             let mut panel: Vec<String> = Vec::new();
             if let Some(render) = &self.world.options.render_regions {
                 for (_name, tree) in render("panel") {
-                    panel.extend(widget_lines(&tree.nodes, &self.theme));
+                    panel.extend(widget_lines(&tree.nodes, &self.theme, width as usize));
                 }
             }
             if panel.is_empty() {
@@ -317,6 +327,7 @@ impl Chat {
     }
 
     /// Draw the open login/grant/permission/extension modal, if any.
+    /// Compose the extension modal over the viewport.
     fn compose_modals(&self, viewport: &mut [String], width: u16, height: u16) {
         if let Some(label) = &self.world.login_waiting {
             // R4: a cancellable waiting state, so a slow OAuth callback is
@@ -450,9 +461,13 @@ impl Chat {
             let mut body: Vec<String> = Vec::new();
             let mut title = String::from("extension");
             for (name, tree) in &trees {
-                for line in widget_lines(&tree.nodes, &self.theme) {
-                    if title == "extension" && line.starts_with('[') {
-                        title = line.trim_matches(['[', ']']).to_string();
+                for line in widget_lines(&tree.nodes, &self.theme, width as usize) {
+                    // A bordered box paints its title (gh #172): the
+                    // chrome reads through the escapes.
+                    if title == "extension"
+                        && let Some(name) = modal_title_line(&line)
+                    {
+                        title = name;
                     }
                     body.push(line);
                 }

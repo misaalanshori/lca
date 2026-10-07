@@ -15,6 +15,7 @@ mod chat_pickers;
 mod chat_render;
 mod chat_search;
 mod chat_shell;
+pub mod ext_widgets;
 pub mod footer;
 pub mod render;
 pub mod resume;
@@ -27,6 +28,7 @@ mod turn_metrics;
 
 pub use chat::{Chat, ClickOutcome, PendingMessage};
 pub use chat_pickers::ModelPicker;
+pub use ext_widgets::widget_lines;
 pub use footer::Footer;
 pub use lca_protocol::{QueuedMessage, SubmitMode, steer_queue};
 /// The markdown pre-parse transform seam (gh #12): the pipeline's own
@@ -42,7 +44,7 @@ pub use state::{
     LoginPoll, LoginRequest, ModelRow, PickerOption, PromptRequest, RegionInteractor,
     RegionRenderer, SettingRow, SettingsRows, ShellEvent, ShellHandle, ShellRunner, SwitchConfirm,
     TurnChannels, TurnRunner, UiHooks, UiOptions, UiState, display_path, sanitize_block,
-    sanitize_text, widget_lines,
+    sanitize_text,
 };
 pub use state::{CompactPoll, CompactState};
 pub use theme::Theme;

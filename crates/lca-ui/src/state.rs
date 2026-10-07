@@ -251,131 +251,6 @@ pub fn display_path(path: &str) -> String {
     path.to_string()
 }
 
-/// One node's lines, arena-style: node0 is the root and children are
-/// indices. Every text node passes through [`sanitize_text`] - the one
-/// choke point for FR-UI-2.
-///
-/// A node is rendered at most once per call. The arena is supplied by an
-/// untrusted extension, so a child index that points at an ancestor (or
-/// at itself) must not recurse forever or expand exponentially; the
-/// `visited` set is the guard the widget-shaped sibling attack needs.
-///
-/// The theme paints `StyledText` spans (gh #172): the walk carries it so
-/// a span resolves its roles and hex against the live palette.
-pub fn widget_lines(nodes: &[lca_protocol::Widget], theme: &crate::theme::Theme) -> Vec<String> {
-    fn walk(
-        nodes: &[lca_protocol::Widget],
-        theme: &crate::theme::Theme,
-        index: usize,
-        out: &mut Vec<String>,
-        visited: &mut [bool],
-    ) {
-        use lca_protocol::Widget;
-        let Some(node) = nodes.get(index) else { return };
-        if visited.get(index) == Some(&true) {
-            return;
-        }
-        if let Some(seen) = visited.get_mut(index) {
-            *seen = true;
-        }
-        match node {
-            Widget::Text { content, .. } => out.push(sanitize_text(content)),
-            Widget::StyledText { content, style } => out.push(theme.style_text(content, style)),
-            Widget::Image { media_type, bytes } => {
-                out.push(format!("[image {media_type}, {} bytes]", bytes.len()))
-            }
-            // C1 fallbacks (gh #172): the new vocabulary renders as
-            // its plain content until C2/C3 teach the host its chrome.
-            // Every arm sanitizes - the no-escape rule never waits for
-            // the styling commit.
-            Widget::Markdown { source } => {
-                for line in source.lines() {
-                    out.push(sanitize_text(line));
-                }
-            }
-            Widget::Button { label, .. } => out.push(format!("[{}]", sanitize_text(label))),
-            Widget::Table { headers, rows } => {
-                let cells = |cells: &[String]| {
-                    cells
-                        .iter()
-                        .map(|cell| sanitize_text(cell))
-                        .collect::<Vec<_>>()
-                        .join(" | ")
-                };
-                out.push(cells(headers));
-                for row in rows {
-                    out.push(cells(row));
-                }
-            }
-            Widget::ScrollContainer { children, .. } => {
-                for child in children {
-                    walk(nodes, theme, *child as usize, out, visited);
-                }
-            }
-            Widget::Boxed { title, child, .. } => {
-                if let Some(title) = title {
-                    out.push(format!("[{title}]"));
-                }
-                walk(nodes, theme, *child as usize, out, visited);
-            }
-            Widget::Row(children) => {
-                // Side by side, first line of each (v1 layout; ponytail:
-                // a real row shaper when an extension needs wrapping).
-                let parts: Vec<String> = children
-                    .iter()
-                    .filter_map(|child| {
-                        let mut lines = Vec::new();
-                        walk(nodes, theme, *child as usize, &mut lines, visited);
-                        lines.into_iter().next()
-                    })
-                    .collect();
-                out.push(parts.join(" | "));
-            }
-            Widget::Column(children) => {
-                for child in children {
-                    walk(nodes, theme, *child as usize, out, visited);
-                }
-            }
-            Widget::Spinner { frames } => {
-                let ticks = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|since| since.subsec_millis())
-                    .unwrap_or(0);
-                let count = frames.chars().count();
-                if count > 0 {
-                    let pick = (ticks / 80) as usize % count;
-                    out.push(frames.chars().nth(pick).unwrap_or(' ').to_string());
-                } else {
-                    out.push(" ".to_string());
-                }
-            }
-            Widget::Progress { label, fill } => {
-                let fill = (*fill).clamp(0.0, 1.0);
-                let width = 20;
-                let done = (fill * width as f32).round() as usize;
-                out.push(format!(
-                    "{label} [{}{}] {:>3}%",
-                    "#".repeat(done),
-                    "-".repeat(width - done),
-                    (fill * 100.0).round() as u32
-                ));
-            }
-            Widget::KeyValue(pairs) => {
-                for (key, value) in pairs {
-                    out.push(format!("{key}: {}", sanitize_text(value)));
-                }
-            }
-            Widget::Vendor(kind) => out.push(format!("[vendor {kind}]")),
-        }
-    }
-    let mut out = Vec::new();
-    if !nodes.is_empty() {
-        let mut visited = vec![false; nodes.len()];
-        walk(nodes, theme, 0, &mut out, &mut visited);
-    }
-    out
-}
-
 /// A streamed `!`/`!!` shell event (R4).
 #[derive(Debug, Clone)]
 pub enum ShellEvent {
@@ -893,6 +768,7 @@ pub type TurnRunner = Box<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widget_lines;
     use lca_protocol::{StopReason, TurnStatus, Usage};
 
     fn options() -> UiOptions {
@@ -950,7 +826,7 @@ mod tests {
             Widget::KeyValue(vec![("k".into(), "v".into())]),
         ];
         assert_eq!(
-            widget_lines(&nodes, &crate::theme::Theme::colored()),
+            widget_lines(&nodes, &crate::theme::Theme::colored(), 60),
             vec!["hello", "k: v"]
         );
     }
@@ -964,7 +840,7 @@ mod tests {
             background: None,
             child: 0,
         }];
-        assert!(widget_lines(&nodes, &crate::theme::Theme::colored()).is_empty());
+        assert!(widget_lines(&nodes, &crate::theme::Theme::colored(), 60).is_empty());
     }
 
     #[test]
@@ -997,34 +873,5 @@ mod tests {
         let _ = Usage::default();
         let _ = TurnStatus::Ok;
         let _ = StopReason::Stop;
-    }
-}
-
-#[cfg(test)]
-mod styled_widget_tests {
-    use super::*;
-
-    // Verifies: gh #172 - a styled span paints through the walk with
-    // the live theme, and hostile bytes in styled content sanitize
-    // exactly like plain text (FR-UI-2 never waits for styling).
-    #[test]
-    fn styled_text_paints_and_sanitizes() {
-        use lca_protocol::{TextStyle, Widget};
-        let theme = crate::theme::Theme::colored();
-        let nodes = vec![Widget::StyledText {
-            content: "hi \u{1b}[31mx".to_string(),
-            style: TextStyle {
-                fg: Some("#50fa7b".to_string()),
-                bg: None,
-                bold: true,
-                dim: false,
-                italic: false,
-                underline: false,
-            },
-        }];
-        assert_eq!(
-            widget_lines(&nodes, &theme),
-            vec!["\x1b[1;38;2;80;250;123mhi \\x1b[31mx\x1b[22;39m"],
-        );
     }
 }

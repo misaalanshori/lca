@@ -437,8 +437,12 @@ impl Theme {
     /// every channel it opened - decorations, then foreground (`39`),
     /// then background (`49`) - so a custom background never leaks
     /// into the rows behind the widget.
+    ///
+    /// `content` must already be sanitized ([`crate::state::sanitize_text`]):
+    /// this paints over live styles too (a tinted box washes styled
+    /// children), and sanitizing here would escape those bytes twice.
     pub fn style_text(&self, content: &str, style: &lca_protocol::TextStyle) -> String {
-        let content = crate::state::sanitize_text(content);
+        let content = content.to_string();
         match self.color_support {
             ColorSupport::None => content,
             ColorSupport::Truecolor | ColorSupport::Ansi16 => {
