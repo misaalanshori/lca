@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 mod common;
 
+#[cfg(unix)]
 use common::*;
 
 /// Install the conformance extension (its footer carries the 0.6

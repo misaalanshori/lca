@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 mod common;
 
+#[cfg(unix)]
 use common::*;
 
 // Verifies: gh #124 on a real pane - a tool's `ui.confirm` opens the
