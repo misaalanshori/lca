@@ -57,7 +57,7 @@ Dependencies flow downward only; only `lca-cli` depends on everything:
   `lca-ui` — the agent interface on top.
 
 The extension contract lives in `wit/` (WIT package `lca:ext`,
-currently ABI `0.5`); the crates are internal structure.
+currently ABI `0.6`); the crates are internal structure.
 
 ## Build instructions
 

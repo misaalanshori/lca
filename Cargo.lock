@@ -90,7 +90,7 @@ dependencies = [
 
 [[package]]
 name = "antigravity"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "getrandom 0.3.4",
  "lca-ext-abi",
@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "codex"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-core",
  "lca-ext-abi",
@@ -350,7 +350,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "compaction-default"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-ext-abi",
  "lca-permissions",
@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "conformance"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-ext-abi",
  "lca-permissions",
@@ -919,7 +919,7 @@ dependencies = [
 
 [[package]]
 name = "grok"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-core",
  "lca-ext-abi",
@@ -988,7 +988,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hooks-example"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-ext-abi",
  "lca-protocol",
@@ -1321,7 +1321,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lca-cli"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1360,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "lca-config"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-testkit",
  "thiserror",
@@ -1369,7 +1369,7 @@ dependencies = [
 
 [[package]]
 name = "lca-core"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "compaction-default",
  "conformance",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "lca-ext-abi"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-protocol",
  "tokio",
@@ -1401,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "lca-ext-host"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "conformance",
@@ -1423,7 +1423,7 @@ dependencies = [
 
 [[package]]
 name = "lca-ext-native"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "hooks-example",
  "lca-ext-abi",
@@ -1432,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "lca-permissions"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "ipnet",
  "lca-protocol",
@@ -1446,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "lca-protocol"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1455,7 +1455,7 @@ dependencies = [
 
 [[package]]
 name = "lca-provider"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-protocol",
  "serde_json",
@@ -1465,7 +1465,7 @@ dependencies = [
 
 [[package]]
 name = "lca-registry"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "http-body-util",
  "hyper",
@@ -1515,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "lca-sdk"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-core",
  "lca-permissions",
@@ -1530,7 +1530,7 @@ dependencies = [
 
 [[package]]
 name = "lca-session"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-ext-abi",
  "lca-protocol",
@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "lca-subscription"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "getrandom 0.3.4",
  "lca-protocol",
@@ -1554,7 +1554,7 @@ dependencies = [
 
 [[package]]
 name = "lca-testkit"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-protocol",
  "lca-provider",
@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "lca-tools"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "globset",
  "http-body-util",
@@ -1591,7 +1591,7 @@ dependencies = [
 
 [[package]]
 name = "lca-tui"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "libc",
  "proptest",
@@ -1603,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "lca-ui"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "lca-permissions",
@@ -1617,7 +1617,7 @@ dependencies = [
 
 [[package]]
 name = "lca-wire-anthropic"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-protocol",
  "serde_json",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "lca-wire-openai"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-protocol",
  "serde_json",
@@ -1824,7 +1824,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openai-compatible"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "http-body-util",
  "hyper",
@@ -2394,7 +2394,7 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "skills"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-ext-abi",
  "lca-permissions",
@@ -2657,7 +2657,7 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "tool-legacy"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "wit-bindgen 0.41.0",
 ]
@@ -2749,7 +2749,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "ui-example"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "lca-ext-abi",
  "lca-permissions",

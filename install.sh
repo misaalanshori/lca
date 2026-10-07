@@ -49,7 +49,7 @@ Install:
   curl -fsSL $RAW_URL | sh
 
 Install a pinned version:
-  curl -fsSL $RAW_URL | sh -s -- --version v0.5.2
+  curl -fsSL $RAW_URL | sh -s -- --version v0.6.0
 
 Install (or update) the unstable line:
   curl -fsSL $RAW_URL | sh -s -- --unstable
@@ -101,7 +101,7 @@ hash_file() { # hash_file <file>
 }
 
 # The installed binary's first version line, or nothing. clap prints
-# "lca 0.5.2" for --version, so the leading name is dropped once here and
+# "lca 0.6.0" for --version, so the leading name is dropped once here and
 # every message downstream can say "lca <ver>" without saying it twice.
 read_version() { # read_version <binary>
   [ -x "$1" ] || return 1

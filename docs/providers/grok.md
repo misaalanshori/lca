@@ -11,7 +11,7 @@ A SuperGrok or X Premium subscription, through the loopback OAuth PKCE flow agai
 ```toml
 name = "grok"
 version = "0.1.0"
-abi = "0.5"
+abi = "0.6"
 worlds = ["provider"]
 description = "xAI Grok models via SuperGrok / X subscription."
 

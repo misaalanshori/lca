@@ -146,7 +146,7 @@ function Read-Version {
     $line = & $Path --version 2>$null | Select-Object -First 1
     if (-not $line) { return $null }
     $text = ([string]$line).Trim()
-    # clap prints "lca 0.5.2" for --version; drop the name once here so
+    # clap prints "lca 0.6.0" for --version; drop the name once here so
     # every message downstream can say "lca <ver>" without saying it twice.
     if ($text.StartsWith('lca ')) { $text = $text.Substring(4) }
     return $text

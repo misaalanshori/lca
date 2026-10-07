@@ -13,7 +13,7 @@ Nothing. LM Studio's local server needs no credential; the trust boundary is tha
 ```toml
 name = "lmstudio"
 version = "1.0.0"
-abi = "0.5"
+abi = "0.6"
 worlds = ["provider", "command"]
 description = "Connects to a local LM Studio server."
 

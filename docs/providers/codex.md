@@ -11,7 +11,7 @@ A ChatGPT Plus/Pro/Business/Enterprise/Edu subscription, through the loopback OA
 ```toml
 name = "codex"
 version = "0.1.0"
-abi = "0.5"
+abi = "0.6"
 worlds = ["provider"]
 description = "OpenAI Codex models via ChatGPT subscription login."
 

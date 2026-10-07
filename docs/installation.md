@@ -23,11 +23,11 @@ irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1 | iex
 A pinned version passes as an argument. The sh form is an ordinary invocation of the downloaded script; the PowerShell form wraps the fetched text in a script block so named parameters bind on 5.1 (verified in CI, not on paper):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --version v0.5.3
+curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --version v0.6.0
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1))) -Version v0.5.3
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1))) -Version v0.6.0
 ```
 
 ## Flags
@@ -64,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh |
 curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --unstable
 ```
 
-Switching lines is just running the other form: no flag installs (or re-installs) the stable line over whatever is there, the flag installs the unstable line, and the report line says which is which (`lca 0.5.2.b6573049 -> 0.5.2`). The installed binary keeps whatever it was given; nothing about a line is stored, so the next run decides again.
+Switching lines is just running the other form: no flag installs (or re-installs) the stable line over whatever is there, the flag installs the unstable line, and the report line says which is which (`lca 0.6.0.b6573049 -> 0.6.0`). The installed binary keeps whatever it was given; nothing about a line is stored, so the next run decides again.
 
 **Trust stance.** The unstable line verifies exactly like the stable one: `artifacts.sha256` from the same directory, mismatch refuses and leaves the old binary in place, and the same `actions/attest-build-provenance` attestation is produced per artifact, so `gh attestation verify ./lca --repo misaalanshori/lca` works on an unstable binary too. What it does not carry is a promise: no changelog entry, no support window, and a build that may be broken by design. When in doubt, run the one-liner without the flag.
 
@@ -176,7 +176,7 @@ For anyone who would rather not pipe a script into a shell (this is a legitimate
 
 ## Security stance
 
-- **Binaries are not code-signed or notarized in 0.5.x.** macOS Gatekeeper will quarantine a downloaded binary; notarization is the release policy's stated direction and has not happened for these releases. The sh installer strips the quarantine attribute deliberately (`xattr -d com.apple.quarantine`) after it has verified the SHA-256 digest, because the alternative is a script that installs a binary the user then cannot run without a right-click override — and it says so rather than hiding it. The digest check, the published `artifacts.sha256`, and the in-toto provenance attestation are the trust chain until signing exists.
+- **Binaries are not code-signed or notarized in 0.6.x.** macOS Gatekeeper will quarantine a downloaded binary; notarization is the release policy's stated direction and has not happened for these releases. The sh installer strips the quarantine attribute deliberately (`xattr -d com.apple.quarantine`) after it has verified the SHA-256 digest, because the alternative is a script that installs a binary the user then cannot run without a right-click override — and it says so rather than hiding it. The digest check, the published `artifacts.sha256`, and the in-toto provenance attestation are the trust chain until signing exists.
 - **Checksum verification is mandatory in both scripts.** There is no `--skip-verify` flag and there will not be one; a script whose verification can be disabled by a flag is a script whose verification will be disabled by someone.
 - **The scripts are the product surface.** They are plain POSIX sh (shellcheck `--shell=sh` clean, no bashisms) and plain PowerShell 5.1, so what a reviewer reads in the repository is what a user's shell executes: `raw.githubusercontent.com/<owner>/<repo>/main/install.sh` is the repository's own bytes, not a build output or a redirect chain.
 - **Trust on first use is real.** The first run fetches a script and a binary from GitHub over TLS. A user who wants a stronger start reads the script first (`curl -fsSL <url>` to a file, read it, `sh install.sh`), and `docs/adr/0040` records why no stronger mechanism (signed script, custom domain) is in place.

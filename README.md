@@ -92,11 +92,11 @@ Pin a release by passing it as an argument (both invocations below are the
 ones the CI job exercises):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --version v0.5.3
+curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --version v0.6.0
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1))) -Version v0.5.3
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1))) -Version v0.6.0
 ```
 
 | | Default install directory | Overrides |
@@ -122,7 +122,7 @@ Windows) and prints the `source` line to run — skip that with `--no-path`.
   the release page, verify the digest yourself, and check provenance with
   `gh attestation verify ./lca --repo misaalanshori/lca`. The full manual
   path, the flags, the exit codes, and the security stance (binaries are
-  unsigned in 0.5.x; checksums and attestations are the trust chain; the
+  unsigned in 0.6.x; checksums and attestations are the trust chain; the
   macOS quarantine strip is deliberate and explained) are in
   [`docs/installation.md`](docs/installation.md). The decision record is
   [ADR-0040](docs/adr/0040-install-and-update.md).
@@ -282,7 +282,7 @@ widget tree. Everything below is one workspace member:
 | `lca-testkit` | the scripted fake provider (pi's `providers/faux.ts` idea) and fixtures |
 
 The extension contract itself lives in [`wit/`](wit/), a WIT package
-versioned as the ABI line (currently `0.5`); the crates are internal
+versioned as the ABI line (currently `0.6`); the crates are internal
 structure, not a public API.
 
 ---
@@ -351,10 +351,10 @@ gh attestation verify ./lca --repo misaalanshori/lca
 ```
 
 Extensions publish to `ghcr.io` under an immutable version tag and a moving
-ABI-line tag (`abi-0.5`), and load by digest afterwards:
+ABI-line tag (`abi-0.6`), and load by digest afterwards:
 
 ```sh
-lca ext install ghcr.io/misaalanshori/lca/antigravity:abi-0.5
+lca ext install ghcr.io/misaalanshori/lca/antigravity:abi-0.6
 ```
 
 Versioning, the artifact matrix, the gate list, and the manual release gate
@@ -364,7 +364,7 @@ are in [`docs/release-policy.md`](docs/release-policy.md).
 
 ## Status and scope
 
-Implemented, gated, and released — currently **0.5.3**, extension ABI **0.5**
+Implemented, gated, and released — currently **0.6.0**, extension ABI **0.6**
 — with phase-by-phase receipts in [`docs/phase-log.md`](docs/phase-log.md):
 
 | Area | Status |
@@ -372,7 +372,7 @@ Implemented, gated, and released — currently **0.5.3**, extension ABI **0.5**
 | Interactive TUI, tested on real terminals (tmux / ConPTY) | shipped |
 | Sessions: resume, fork, export, attach, compaction | shipped |
 | Permissions: pattern store, folder trust, read-only tools, `--yolo` | shipped |
-| Extensions: WIT ABI `0.5`, installed from OCI/HTTPS/local or linked in natively | shipped |
+| Extensions: WIT ABI `0.6`, installed from OCI/HTTPS/local or linked in natively | shipped |
 | Providers: 20 presets + any OpenAI-compatible endpoint, login/usage, Codex + Grok subscription extensions | shipped |
 | Built-in tools: `read` `write` `edit` `list` `glob` `grep` `shell` | shipped |
 | Windows: first-class, real CI runners and dedicated tests | shipped |
@@ -382,7 +382,7 @@ Implemented, gated, and released — currently **0.5.3**, extension ABI **0.5**
 
 What ships and publishes today is `openai-compatible` (bundled, enabled by
 default), `antigravity`, `skills`, and `compaction-default`. Binaries are
-unsigned in 0.5.x: checksums and attestations carry trust until signing
+unsigned in 0.6.x: checksums and attestations carry trust until signing
 lands, and [`SECURITY.md`](SECURITY.md) describes private reporting.
 
 ---

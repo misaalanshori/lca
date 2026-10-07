@@ -4,7 +4,30 @@ Notable changes to LCA. Versions follow semantic versioning for the product;
 the `lca:ext` ABI version is independent and is printed by `lca --version`.
 Dates are UTC.
 
-## [Unreleased]
+## [0.6.0] - 2026-10-08
+
+The 0.6 train release: extension decoupling, shared wire kits, the
+unified `/model` catalog, the `ui@0.6.0` world with host dialogs, and
+the tool world with the additive hooks expansion. Extension ABI `0.6`
+(window `0.5..=0.6`); `wit/` + `schemas/` freeze for the 0.6 line
+after this release — no interface change rides a 0.6 patch.
+
+### Upgrade notes (extension authors)
+- **Single-tool and six-hook guests: rebuild, no source change.**
+  The `tool` world's exports and the six-point `hooks` world are
+  byte-identical; a `0.5` manifest keeps loading on `0.6` hosts.
+  Declare `abi = "0.6"` on new builds.
+- **`ui` world: breaking.** Rebuild against `lca:ext@0.6.0` with
+  source changes: `boxed` carries border role + background tint, the
+  `interaction` input gains `click-widget`/`click`/`scroll`, and the
+  new widgets (`styled-text`, `markdown`, `button`, `table`,
+  `scroll-container`) replace hand-rolled chrome. Ask questions
+  through `lca:host/ui-dialogs`, not a custom modal.
+- **New surface, opt in by declaring it:** the `tool-catalog` world
+  for multi-tool suites (exposure + namespaces; only `direct` tools
+  declare), the `tools` capability import for orchestrators
+  (declare `[capabilities.tools]` with a reason), and the eight
+  `hooks-*` worlds. Nothing new runs unless the manifest names it.
 
 ### Added
 - **Tool suites, exposure, nested calls + the additive hooks expansion (gh #77, #45 — train cycle 4, final).**

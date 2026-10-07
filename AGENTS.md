@@ -71,8 +71,8 @@ lines" exit ramp).
 
 ## Release discipline (`docs/release-policy.md`, `docs/abi-versioning.md`)
 
-- The **ABI label bumps only on a real breaking change**: `lca 0.5.x`
-  ships `abi 0.5` for the whole line (owner decision, annotated in
+- The **ABI label bumps only on a real breaking change**: `lca 0.6.x`
+  ships `abi 0.6` for the whole line (owner decision, annotated in
   `docs/abi-versioning.md`). A release that needs a new ABI line is a
   minor bump and an owner decision; inside a line the interface still
   mutates freely (ADR-0028 development window).

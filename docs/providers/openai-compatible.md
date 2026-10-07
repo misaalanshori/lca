@@ -19,7 +19,7 @@ by). Authentication is a bearer token in the request header, read from the `cred
 ```toml
 name = "openai-compatible"
 version = "1.0.0"
-abi = "0.5"
+abi = "0.6"
 worlds = ["provider"]
 description = "Any OpenAI-compatible chat completions endpoint. Configurable base URL and key."
 
