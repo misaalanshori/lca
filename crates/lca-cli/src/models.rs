@@ -227,12 +227,31 @@ fn canonical(model: &ModelInfo) -> String {
     }
 }
 
-/// One exact match: the canonical form first, then the bare id. Zero
-/// matches is `None`; several is an error naming every candidate.
+/// One exact match: a `provider/id` qualification first (gh #177),
+/// then the canonical form, then the bare id. Zero matches is `None`;
+/// several is an error naming every candidate.
 fn exact_match<'a>(
     pattern: &str,
     available: &'a [ModelInfo],
 ) -> Result<Option<&'a ModelInfo>, String> {
+    // A qualification names the cross-provider model directly; the
+    // provider tag is the catalog's, never the profile's, so a
+    // `profile/id` pattern still falls to the canonical reading below.
+    if let Some((scope, id)) = pattern.split_once('/') {
+        let qualified: Vec<&ModelInfo> = available
+            .iter()
+            .filter(|model| {
+                model.id.eq_ignore_ascii_case(id)
+                    && model
+                        .extras
+                        .get("provider")
+                        .is_some_and(|provider| provider.eq_ignore_ascii_case(scope))
+            })
+            .collect();
+        if qualified.len() == 1 {
+            return Ok(Some(qualified[0]));
+        }
+    }
     let by_canonical: Vec<&ModelInfo> = available
         .iter()
         .filter(|model| canonical(model).eq_ignore_ascii_case(pattern))
@@ -249,13 +268,24 @@ fn exact_match<'a>(
         0 => Ok(None),
         1 => Ok(Some(matches[0])),
         _ => Err(format!(
-            "`{pattern}` is ambiguous across profiles: {}. Say which one as `profile/id`.",
+            "`{pattern}` is ambiguous across providers and profiles: {}. Say which one as `profile/id` or `provider/id`.",
             matches
                 .iter()
-                .map(|model| canonical(model))
+                .map(|model| qualified_label(model))
                 .collect::<Vec<_>>()
                 .join(", ")
         )),
+    }
+}
+
+/// The candidate label an ambiguity error lists: the profile reading
+/// first (most specific within one provider), else the provider
+/// reading, else the bare id.
+fn qualified_label(model: &ModelInfo) -> String {
+    match (model.extras.get("profile"), model.extras.get("provider")) {
+        (Some(profile), _) => format!("{profile}/{}", model.id),
+        (None, Some(provider)) => format!("{provider}/{}", model.id),
+        _ => model.id.clone(),
     }
 }
 
@@ -354,6 +384,31 @@ mod resolve_tests {
         let resolved = resolve_pattern(lca_testkit::SMOKE_MODEL, &catalog()).expect("resolve");
         assert_eq!(resolved.id, lca_testkit::SMOKE_MODEL);
         assert_eq!(resolved.thinking, None, "no suffix, no thinking level");
+    }
+
+    // Verifies: gh #177 - a `provider/id` qualification picks the
+    // cross-provider model directly, while a bare shared id stays
+    // ambiguous and lists the provider readings.
+    #[test]
+    fn a_provider_qualified_id_resolves_across_providers() {
+        let catalog = vec![
+            model("shared", None),
+            lca_protocol::ModelInfo {
+                id: "shared".to_string(),
+                name: "shared (codex)".to_string(),
+                context_window: 0,
+                max_tokens: 0,
+                extras: [("provider".to_string(), "codex".to_string())].into(),
+            },
+        ];
+        let resolved = resolve_pattern("codex/shared", &catalog).expect("resolve");
+        assert_eq!(resolved.id, "shared");
+        let err = resolve_pattern("shared", &catalog).expect_err("still shared");
+        assert!(
+            err.contains("codex/shared"),
+            "lists the provider reading: {err}"
+        );
+        assert!(err.contains("provider/id"), "says how to fix it: {err}");
     }
 
     // `profile/id` picks the profile's model when the bare id is shared.

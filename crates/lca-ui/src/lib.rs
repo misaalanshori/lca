@@ -8,6 +8,7 @@
 
 pub mod chat;
 mod chat_commands;
+mod chat_confirm;
 mod chat_keys;
 mod chat_overlays;
 mod chat_pickers;
@@ -39,9 +40,9 @@ pub use separator::{Separator, SeparatorState};
 pub use state::{
     Action, CommandInvoker, LoginCancel, LoginComplete, LoginConfirm, LoginNext, LoginPick,
     LoginPoll, LoginRequest, ModelRow, PickerOption, PromptRequest, RegionInteractor,
-    RegionRenderer, SettingRow, SettingsRows, ShellEvent, ShellHandle, ShellRunner, TurnChannels,
-    TurnRunner, UiHooks, UiOptions, UiState, display_path, sanitize_block, sanitize_text,
-    widget_lines,
+    RegionRenderer, SettingRow, SettingsRows, ShellEvent, ShellHandle, ShellRunner, SwitchConfirm,
+    TurnChannels, TurnRunner, UiHooks, UiOptions, UiState, display_path, sanitize_block,
+    sanitize_text, widget_lines,
 };
 pub use state::{CompactPoll, CompactState};
 pub use theme::Theme;

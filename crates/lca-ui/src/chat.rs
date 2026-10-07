@@ -801,6 +801,7 @@ impl Chat {
         self.handle_login_picker(key)
             .or_else(|| self.handle_login_secret(data, key))
             .or_else(|| self.handle_login_grant(key))
+            .or_else(|| self.handle_switch_confirm(key))
             .or_else(|| self.handle_permission(key))
             .or_else(|| self.handle_extension_modal(data, key))
             .or_else(|| self.handle_panel(data, key))
@@ -865,25 +866,6 @@ impl Chat {
                 }
                 None => self.world.secret = Some(prompt),
             },
-        }
-        Some(Action::Continue)
-    }
-
-    /// The ad hoc `net` grant confirm, while open.
-    fn handle_login_grant(&mut self, key: Option<&str>) -> Option<Action> {
-        let prompt = self.world.grant.take()?;
-        match key {
-            Some("y" | "Y" | "enter") => {
-                let message = self.world.options.confirm_login_grant.as_ref().map_or_else(
-                    || "nothing was changed".to_string(),
-                    |confirm| confirm(&prompt.provider, &prompt.host),
-                );
-                self.world.notice = Some(crate::state::sanitize_block(&message));
-            }
-            Some("n" | "N" | "escape") => {
-                self.world.notice = Some(format!("kept {} without the ad hoc grant", prompt.host));
-            }
-            _ => self.world.grant = Some(prompt),
         }
         Some(Action::Continue)
     }

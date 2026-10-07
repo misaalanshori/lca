@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use lca_config::ColorMode;
 use lca_protocol::CommandEffect;
+use lca_provider::Provider as _;
 use lca_ui::UiOptions;
 
 use super::BUILTIN_SLOTS;
@@ -13,13 +14,43 @@ use super::Ui;
 use super::display::model_effect_on;
 
 impl Ui {
-    /// Every model this session offers: the provider's list across its
-    /// profiles (gh #31), cut to the enabled scope (`models.enabled` /
-    /// `--models`, gh #8). The picker's listing, the model cycle, and
-    /// `/model <name>` all read this one list, so what a user can see is
-    /// what the keys can reach; an empty scope is no restriction.
+    /// Every model this session offers: every enabled provider's list
+    /// (each across its profiles, gh #31), cut to the enabled scope
+    /// (`models.enabled` / `--models`, gh #8). A provider contributes
+    /// only when it is ready in the `auth check` sense (gh #177) - an
+    /// unready provider contributes nothing, silently. Each model tags
+    /// its provider in `extras["provider"]` (absent only when the
+    /// extension tagged it first), so a cross-provider pick can route.
+    /// The picker's listing, the model cycle, and `/model <name>` all
+    /// read this one list, so what a user can see is what the keys can
+    /// reach; an empty scope is no restriction.
     pub(super) fn offered_models(&self) -> Vec<lca_protocol::ModelInfo> {
-        crate::models::filter_enabled(self.provider.list_models(), self.config.models_enabled())
+        let mut catalog = Vec::new();
+        for handle in self.registry.enabled() {
+            if !handle.worlds().contains(&lca_ext_abi::World::Provider) {
+                continue;
+            }
+            let name = handle.name().to_string();
+            if crate::auth::check_status(&self.registry, &name) != crate::auth::Status::Ready {
+                continue;
+            }
+            // The active provider lists through its own adapter: the
+            // login flow persists discoveries into the shared settings
+            // cell (ADR-0035), and a fresh adapter would not see them.
+            let listed = if name == self.live_name() {
+                self.live_provider().list_models()
+            } else {
+                lca_core::ExtensionProvider::new(handle.clone()).list_models()
+            };
+            for mut model in crate::models::filter_enabled(listed, self.config.models_enabled()) {
+                model
+                    .extras
+                    .entry("provider".to_string())
+                    .or_insert(name.clone());
+                catalog.push(model);
+            }
+        }
+        catalog
     }
 
     /// The interface's options (S1): the static inputs plus the closure the
@@ -42,7 +73,7 @@ impl Ui {
             initial_records: self.initial_records.clone(),
             initial_tail_lines: self.initial_tail.clone(),
             initial_messages: self.initial_messages.clone(),
-            models: super::display::model_rows(&self.offered_models(), &self.provider_name),
+            models: super::display::model_rows(&self.offered_models(), &self.live_name()),
             // The session's prompt channel (run publishes its sender here)
             // and the consent flow's rows for the picker (gh #31 review).
             prompt_slot: self.prompt_slot.clone(),
@@ -73,6 +104,7 @@ impl Ui {
             pick_login: Some(self.login_pick()),
             complete_login: Some(self.login_complete()),
             confirm_login_grant: Some(self.login_confirm()),
+            confirm_switch: Some(self.switch_confirm()),
             hooks: self.hooks(),
             // FR-UI-21/R2: a fresh session starts on the main screen (the
             // terminal's own selection); `/fullscreen` opts into the
@@ -166,11 +198,12 @@ impl Ui {
                 let state = self.compact_state.clone();
                 let store = self.store.clone();
                 let session = self.session();
-                let extensions = self.agent_config.extensions.clone();
-                let backend = self.agent_config.completion_backend.clone();
+                let live = crate::lock(&self.live).agent_config.clone();
+                let extensions = live.extensions.clone();
+                let backend = live.completion_backend.clone();
                 // Gh #36 phase 3: the manual checkpoint records the
                 // prompt the turn would have used.
-                let system_prompt = Some(self.agent_config.system_prompt.clone());
+                let system_prompt = Some(live.system_prompt.clone());
                 std::thread::spawn(move || {
                     let notice = match lca_core::compact_now(
                         store,
@@ -224,9 +257,9 @@ impl Ui {
             // FR-PROV-6's report shows instead.
             "login" | "logout" | "usage" => self
                 .registry
-                .invoke_generic(name, argument, &self.provider_name)
+                .invoke_generic(name, argument, &self.live_name())
                 .unwrap_or_else(|| {
-                    CommandEffect::ShowWidget(crate::no_model_message(&self.provider_name))
+                    CommandEffect::ShowWidget(crate::no_model_message(&self.live_name()))
                 }),
             // R4: a provider's namespaced identity `login` blocks on a
             // browser callback (the owner's freeze). It runs on a
@@ -449,13 +482,34 @@ impl Ui {
         if models.is_empty() && argument.trim().is_empty() && self.start_model_consent() {
             let host = crate::net_consent::env_configured_host(
                 &self.data,
-                &self.provider_name,
+                &self.live_name(),
                 Some(self.registry.as_ref()),
             )
             .unwrap_or_default();
             return CommandEffect::ShowWidget(format!(
                 "{host} is not granted yet - approve the prompt to list its models"
             ));
+        }
+        // Gh #177: a pick from another ready provider swaps the whole
+        // generation (provider, model, backend, record), not just the
+        // cell - the pick IS the confirmation, the way pi switches on
+        // selection.
+        if resolves
+            && let Ok(resolved) = crate::models::resolve_pattern(argument, &models)
+            && let Some(picked) = models.iter().find(|model| model.id == resolved.id)
+            && picked
+                .extras
+                .get("provider")
+                .is_some_and(|owner| *owner != self.live_name())
+        {
+            let target = picked.extras.get("provider").cloned().unwrap_or_default();
+            return self.command_model_switch(
+                &target,
+                &picked.id,
+                picked.context_window,
+                picked.extras.get("profile").cloned(),
+                suffix_level.as_deref(),
+            );
         }
         // E5: the label keeps the preset identity across a model switch.
         let identity = self
@@ -474,6 +528,7 @@ impl Ui {
         let effect = model_effect_on(
             &models,
             &identity,
+            &self.live_name(),
             argument,
             Some(&self.model_cell),
             Some(&self.label_cell),
@@ -527,7 +582,7 @@ impl Ui {
                 let record = crate::models::model_change_record(
                     Some(&previous),
                     &chosen.id,
-                    &self.provider_name,
+                    &self.live_name(),
                     profile.as_deref(),
                 );
                 if let Err(err) = self.store.append(&session, record) {
@@ -536,9 +591,9 @@ impl Ui {
                     ));
                 }
             }
-            if let Err(err) =
-                self.store
-                    .record_model_used(&session, &self.provider_name, &chosen.id)
+            if let Err(err) = self
+                .store
+                .record_model_used(&session, &self.live_name(), &chosen.id)
             {
                 return CommandEffect::ShowWidget(format!(
                     "cannot update the session metadata: {err}"
@@ -546,6 +601,158 @@ impl Ui {
             }
         }
         effect
+    }
+
+    /// A `/model` pick from another ready provider (gh #177): swap the
+    /// live generation - name, provider, agent config - then follow with
+    /// the compaction backend and every cell, the thinking level, the
+    /// `model-change` record carrying both sides, and `meta.json`. The
+    /// pick is explicit, so no further confirmation asks.
+    fn command_model_switch(
+        self: &Arc<Self>,
+        target: &str,
+        model_id: &str,
+        window: u32,
+        profile: Option<String>,
+        suffix_level: Option<&str>,
+    ) -> CommandEffect {
+        match self.apply_provider_switch(target, model_id, window, profile, suffix_level) {
+            Ok(notice) => CommandEffect::ShowWidget(notice),
+            Err(err) => CommandEffect::ShowWidget(err),
+        }
+    }
+
+    /// Move this session to another provider (gh #177): the one routine
+    /// both `/model` and the `/login` switch confirmation share. Returns
+    /// the notice naming what now answers, or the refusal.
+    fn apply_provider_switch(
+        &self,
+        target: &str,
+        model_id: &str,
+        window: u32,
+        profile: Option<String>,
+        suffix_level: Option<&str>,
+    ) -> Result<String, String> {
+        let Some(handle) = self.registry.provider(target).cloned() else {
+            return Err(format!("no provider named `{target}`"));
+        };
+        let previous = self
+            .model_cell
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .id
+            .clone();
+        let previous_provider = self.live_name();
+        let provider = Arc::new(lca_core::ExtensionProvider::new_with_settings(
+            handle,
+            self.settings_cell.clone(),
+        ));
+        let listed = provider.list_models();
+        if !listed.iter().any(|model| model.id == model_id) {
+            return Err(format!("no model named `{model_id}` for {target}"));
+        }
+        // The new generation's identity reads like startup's (E5): the
+        // stored login preset when one is known, else the extension.
+        let identity =
+            crate::stored_provider_preset(&self.data, target).unwrap_or_else(|| target.to_string());
+        super::adopt_login_identity(&self.identity_cell, &identity);
+        *self.model_cell.lock().unwrap_or_else(|p| p.into_inner()) = super::ModelChoice {
+            id: model_id.to_string(),
+            window,
+        };
+        *self
+            .context_window_cell
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = u64::from(window);
+        *self.label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
+            format!("{identity}/{model_id}");
+        if let Some(backend) = self.provider_backend.as_ref() {
+            backend.set_provider(provider.clone());
+            backend.set_model(model_id.to_string());
+        }
+        {
+            let mut live = crate::lock(&self.live);
+            live.name = target.to_string();
+            live.provider = provider.clone();
+            live.agent_config.provider = target.to_string();
+            live.agent_config.model = model_id.to_string();
+            live.agent_config.model_context_window = window;
+            live.agent_config.image_policy = crate::models::image_policy_for(&listed, model_id);
+        }
+        // The session's thinking follows the model it runs on (gh #8
+        // phase 4, same rule as a same-provider switch).
+        let current = self
+            .thinking_cell
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let effective = match suffix_level {
+            Some(level) => self.config.clamp_thinking(Some(level), model_id),
+            None if model_id != previous => {
+                self.config.switch_thinking(current.as_deref(), model_id)
+            }
+            None => current,
+        };
+        *self.thinking_cell.lock().unwrap_or_else(|p| p.into_inner()) = effective;
+        // The log's witness carries both sides (gh #8, gh #177); only an
+        // actual change appends one. `meta.json` follows, the way a
+        // same-provider switch writes it (ADR-0024).
+        let session = self.session();
+        if model_id != previous || target != previous_provider {
+            let record = crate::models::model_change_record(
+                Some(&previous),
+                model_id,
+                target,
+                profile.as_deref(),
+            );
+            if let Err(err) = self.store.append(&session, record) {
+                return Err(format!("cannot record the model change: {err}"));
+            }
+        }
+        if let Err(err) = self.store.record_model_used(&session, target, model_id) {
+            return Err(format!("cannot update the session metadata: {err}"));
+        }
+        Ok(format!("model for this session: {target}/{model_id}"))
+    }
+
+    /// Answer the provider-switch confirmation after a `/login` (gh
+    /// #177): keep the session's model when the new provider offers
+    /// it, else fall back to that provider's default the way startup
+    /// resolves it. A decline never reaches here (the interface
+    /// answers it), so this always moves.
+    pub(super) fn switch_confirm(self: &Arc<Self>) -> lca_ui::SwitchConfirm {
+        let ui = self.clone();
+        Arc::new(move |provider: &str| -> String {
+            let Some(handle) = ui.registry.provider(provider).cloned() else {
+                return format!("no provider named `{provider}`");
+            };
+            let adapter =
+                lca_core::ExtensionProvider::new_with_settings(handle, ui.settings_cell.clone());
+            let listed = adapter.list_models();
+            let current = ui
+                .model_cell
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .id
+                .clone();
+            let default_id = super::resolve_model_id(&ui.config, true, &adapter);
+            let pick = listed
+                .iter()
+                .find(|model| model.id == current)
+                .or_else(|| listed.iter().find(|model| model.id == default_id));
+            let Some(pick) = pick else {
+                return format!("`{provider}` offers no models");
+            };
+            let (id, window, profile) = (
+                pick.id.clone(),
+                pick.context_window,
+                pick.extras.get("profile").cloned(),
+            );
+            match ui.apply_provider_switch(provider, &id, window, profile, None) {
+                Ok(notice) => notice,
+                Err(err) => err,
+            }
+        })
     }
 
     /// One step of the model cycle (gh #8, pi's `cycleForward` /
@@ -573,7 +780,7 @@ impl Ui {
         let target = models[next].id.clone();
         match self.command_model(&target) {
             CommandEffect::ShowWidget(text) => text,
-            _ => format!("model for this session: {}", self.provider_name),
+            _ => format!("model for this session: {}", self.live_name()),
         }
     }
 
@@ -599,7 +806,7 @@ impl Ui {
     fn start_model_consent(self: &Arc<Self>) -> bool {
         let Some(host) = crate::net_consent::env_configured_host(
             &self.data,
-            &self.provider_name,
+            &self.live_name(),
             Some(self.registry.as_ref()),
         ) else {
             return false;
@@ -649,7 +856,8 @@ impl Ui {
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
                         .clone();
-                    let rows = super::display::model_rows(&ui.provider.list_models(), &identity);
+                    let rows =
+                        super::display::model_rows(&ui.live_provider().list_models(), &identity);
                     if rows.is_empty() {
                         Some(format!("no models were offered by {host}"))
                     } else {

@@ -369,6 +369,20 @@ impl Chat {
                 &body,
                 &self.theme,
             );
+        } else if let Some(switch) = &self.world.switch_confirm {
+            let body = vec![
+                switch.prompt.clone(),
+                String::new(),
+                "Switch [y] / Stay [n]".to_string(),
+            ];
+            overlay_box(
+                viewport,
+                width,
+                height,
+                &format!("switch provider: {}", switch.provider),
+                &body,
+                &self.theme,
+            );
         } else if let Some(secret) = &self.world.secret {
             let shown = if secret.masked {
                 let masked = "*".repeat(secret.input.chars().count());

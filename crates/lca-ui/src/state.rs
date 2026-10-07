@@ -64,6 +64,16 @@ pub enum LoginNext {
         /// The choices to show, in order.
         options: Vec<PickerOption>,
     },
+    /// Offer to switch this session to the provider just signed in to
+    /// (gh #177); the answer goes to the [`SwitchConfirm`] seam. The
+    /// surviving half of the old stranded message: instead of reporting
+    /// that the session still uses the old provider, the flow asks.
+    ConfirmSwitch {
+        /// The provider just signed in to.
+        provider: String,
+        /// The question to show, e.g. "switch this session to `codex`?".
+        prompt: String,
+    },
     /// Offer an ad hoc `net` grant for the endpoint host the login flow
     /// just named (FR-PERM-16); the answer goes to the [`LoginConfirm`]
     /// seam.
@@ -104,6 +114,10 @@ pub type LoginComplete = Arc<dyn Fn(&str, &str) -> LoginNext + Send + Sync>;
 /// Persist an ad hoc `net` grant the user approved at login; returns the
 /// message to show.
 pub type LoginConfirm = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
+
+/// Switch this session to a freshly signed-in provider; returns the
+/// message to show.
+pub type SwitchConfirm = Arc<dyn Fn(&str) -> String + Send + Sync>;
 
 /// Poll a background login/identity step (R4): `Some` applies the next
 /// [`LoginNext`], `None` keeps the waiting state.
@@ -161,6 +175,14 @@ pub struct GrantPrompt {
     /// The exact host being added.
     pub host: String,
     /// The consent text naming the host.
+    pub prompt: String,
+}
+
+/// A yes/no confirm for switching to a freshly signed-in provider.
+pub struct SwitchPrompt {
+    /// The provider just signed in to.
+    pub provider: String,
+    /// The question naming it.
     pub prompt: String,
 }
 
@@ -614,6 +636,8 @@ pub struct UiOptions {
     pub pick_login: Option<LoginPick>,
     /// Persists an ad hoc `net` grant the user approved at login.
     pub confirm_login_grant: Option<LoginConfirm>,
+    /// Switches the session to a freshly signed-in provider.
+    pub confirm_switch: Option<SwitchConfirm>,
     /// Host hooks (P6).
     pub hooks: UiHooks,
     /// Whether the session starts in the fullscreen (alt-screen) renderer.
@@ -647,6 +671,8 @@ pub struct UiState {
     pub picker: Option<PickerPrompt>,
     /// The open ad hoc-grant confirm, if any (`/login`).
     pub grant: Option<GrantPrompt>,
+    /// The open provider-switch confirm, if any (`/login`, gh #177).
+    pub switch_confirm: Option<SwitchPrompt>,
     /// A background login/identity step is running (R4); the label names
     /// it (and carries the auth URL once the provider has asked for one).
     pub login_waiting: Option<String>,
@@ -678,6 +704,7 @@ impl UiState {
             secret: None,
             picker: None,
             grant: None,
+            switch_confirm: None,
             login_waiting: None,
             ctrl_c_armed: false,
             panel_open: false,
@@ -776,6 +803,10 @@ pub fn apply_login_next(state: &mut UiState, next: LoginNext) {
                 });
             }
         }
+        LoginNext::ConfirmSwitch { provider, prompt } => {
+            state.login_waiting = None;
+            state.switch_confirm = Some(SwitchPrompt { provider, prompt });
+        }
         LoginNext::Grant {
             provider,
             host,
@@ -862,6 +893,7 @@ mod tests {
             complete_login: None,
             pick_login: None,
             confirm_login_grant: None,
+            confirm_switch: None,
             hooks: UiHooks::default(),
             fullscreen: false,
         }

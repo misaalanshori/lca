@@ -90,7 +90,7 @@ fn turn_worker(
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
-        let mut turn_config = ui.agent_config.clone();
+        let mut turn_config = crate::lock(&ui.live).agent_config.clone();
         turn_config.model = choice.id;
         turn_config.model_context_window = choice.window;
         // gh #8 phase 4, read-time: the cell is the session's intent,
@@ -121,9 +121,9 @@ fn turn_worker(
         // stream starts, so the modal lands while the turn is running.
         if let Some(host) = crate::net_consent::env_configured_host(
             &ui.data,
-            &ui.provider_name,
+            &ui.live_name(),
             Some(ui.registry.as_ref()),
-        ) && crate::provider_ready(&ui.provider_name, &ui.data)
+        ) && crate::provider_ready(&ui.live_name(), &ui.data)
             && crate::net_consent::endpoint_consent(
                 &host,
                 &ui.grants,
@@ -140,10 +140,11 @@ fn turn_worker(
                 error: Some(crate::net_consent::denied_message(&host)),
             };
         }
+        let live = ui.live_provider();
         let mut agent = Agent::new(
             &ui.store,
             &session,
-            ui.provider.as_ref(),
+            live.as_ref(),
             &mut tools,
             ui.grants.clone(),
             &mut prompt,

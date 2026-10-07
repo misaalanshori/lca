@@ -50,6 +50,7 @@ fn chat() -> Chat {
             complete_login: None,
             pick_login: None,
             confirm_login_grant: None,
+            confirm_switch: None,
             hooks: lca_ui::UiHooks::default(),
             fullscreen: true,
         },

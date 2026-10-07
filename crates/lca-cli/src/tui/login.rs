@@ -79,7 +79,7 @@ impl Ui {
                 values,
             } => {
                 let target = if provider.is_empty() {
-                    self.provider_name.clone()
+                    self.live_name()
                 } else {
                     provider
                 };
@@ -194,7 +194,19 @@ impl Ui {
             cell.extend(settings.iter().cloned());
         }
         // Light the session up now that the provider can answer (G3: one
-        // seam for both login paths, see `adopt_login_success`).
+        // seam for both login paths, see `adopt_login_success`). A
+        // foreign target asks the switch confirmation first (gh #177) -
+        // the request path still consents its endpoint later (gh #29), so
+        // skipping the login-time grant offer here loses nothing.
+        if target != self.live_name() {
+            return LoginNext::ConfirmSwitch {
+                provider: target.clone(),
+                prompt: format!(
+                    "signed in to `{target}` - switch this session from `{}` to it?",
+                    self.live_name(),
+                ),
+            };
+        }
         self.adopt_login_success(&target, &identity);
         // A non-default endpoint needs its ad hoc `net` grant, offered now
         // that the user is signed in (FR-PERM-16). gh #21: this login's
@@ -357,14 +369,17 @@ impl Ui {
     /// for both login paths: the host's submit flow and a provider's own
     /// `login` export.
     pub(super) fn adopt_login_success(&self, target: &str, identity: &str) {
-        if target != self.provider_name {
+        // A foreign target's move belongs to the switch confirmation
+        // (gh #177): adopting its identity now would relabel a session
+        // still running on the old provider.
+        if target != self.live_name() {
             return;
         }
         super::adopt_login_identity(&self.identity_cell, identity);
         // First *non-empty* id: a provider with nothing listed yet leaves
         // the session as it was rather than resolving to a blank model.
         if let Some(model) = self
-            .provider
+            .live_provider()
             .list_models()
             .into_iter()
             .find(|model| !model.id.is_empty())
@@ -418,15 +433,7 @@ impl Ui {
                     let identity = crate::stored_provider_preset(&ui.data, &name)
                         .unwrap_or_else(|| name.clone());
                     ui.adopt_login_success(&name, &identity);
-                    if name == ui.provider_name {
-                        LoginNext::Message(format!("logged in via `{name}`"))
-                    } else {
-                        LoginNext::Message(format!(
-                            "signed in `{name}`; this session still uses `{}` - set \
-                             provider = {name} to switch",
-                            ui.provider_name
-                        ))
-                    }
+                    confirm_switch_next(&name, &ui.live_name())
                 }
                 Ok(lca_protocol::IdentityOutcome::NotSupported) => {
                     LoginNext::Message(format!("login is not supported by `{name}`"))
@@ -655,6 +662,20 @@ impl Ui {
     }
 }
 
+/// What a successful login to `name` says next (gh #177): the same
+/// provider reports the sign-in; a foreign one asks the switch
+/// confirmation - the surviving half of the old stranded message.
+fn confirm_switch_next(name: &str, current: &str) -> LoginNext {
+    if name == current {
+        LoginNext::Message(format!("logged in via `{name}`"))
+    } else {
+        LoginNext::ConfirmSwitch {
+            provider: name.to_string(),
+            prompt: format!("signed in to `{name}` - switch this session from `{current}` to it?"),
+        }
+    }
+}
+
 /// Endpoint hosts this login configured (gh #21): the submit's own
 /// `*.base_url` pairs in order, deduplicated. A manifest-declared
 /// default host never needs a grant, so it never appears here.
@@ -679,10 +700,33 @@ fn login_endpoint_hosts(
 
 #[cfg(test)]
 mod tests {
-    use super::identity_instead_of_picker;
+    use super::{confirm_switch_next, identity_instead_of_picker};
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    // Verifies: gh #177 - a login to the session's own provider
+    // reports the sign-in; a login anywhere else asks the switch
+    // confirmation naming both sides (the stranded message is gone).
+    #[test]
+    fn a_login_reports_home_and_asks_away() {
+        let home = confirm_switch_next("openai-compatible", "openai-compatible");
+        assert!(
+            matches!(home, lca_ui::LoginNext::Message(_)),
+            "home reports the sign-in"
+        );
+        let away = confirm_switch_next("codex", "openai-compatible");
+        match away {
+            lca_ui::LoginNext::ConfirmSwitch { provider, prompt } => {
+                assert_eq!(provider, "codex");
+                assert!(
+                    prompt.contains("openai-compatible") && prompt.contains("codex"),
+                    "the question names both sides: {prompt}"
+                );
+            }
+            other => panic!("away must ask, got a message: {other:?}"),
+        }
     }
 
     // Verifies: gh #25 (the fallback-leak row) - `/login` scoped to a

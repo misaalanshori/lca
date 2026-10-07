@@ -26,21 +26,31 @@ pub(super) fn age_label(now_ms: u64, then_ms: u64) -> String {
 
 /// The model picker's text: every model the active provider offers,
 /// the active one marked (FR-PROV-2 at the interface).
-pub(super) fn model_picker_text(models: &[lca_protocol::ModelInfo], current: &str) -> String {
+pub(super) fn model_picker_text(
+    models: &[lca_protocol::ModelInfo],
+    current: &str,
+    provider: &str,
+) -> String {
     if models.is_empty() {
-        return "no models are offered by the active provider".to_string();
+        return "no models are offered - no provider is ready; run /login".to_string();
     }
     let active = if current.is_empty() { "none" } else { current };
     let mut lines = vec![format!("models offered (active: {active}):")];
     for model in models {
         let marker = if model.id == current { " (active)" } else { "" };
+        // A model from another provider names it (gh #177); the active
+        // provider's own rows read as they always did.
+        let origin = match model.extras.get("provider") {
+            Some(origin) if origin != provider => format!(" ({origin})"),
+            _ => String::new(),
+        };
         // The bundled provider's name repeats its id; don't print it twice.
         let label = if model.name == model.id {
             String::new()
         } else {
             format!(" - {}", model.name)
         };
-        lines.push(format!("  {}{marker}{label}", model.id));
+        lines.push(format!("  {}{marker}{origin}{label}", model.id));
     }
     lines.push("set one with /model <id>".to_string());
     lines.join("\n")
@@ -68,17 +78,24 @@ pub(super) fn model_rows(
                 // Already provider-qualified: printing it twice helps nobody.
                 (id.to_string(), id.to_string())
             } else {
-                // gh #31: the row names the service that will bill the
-                // call. The provider says so per model - in `extras`, the
-                // carrier the WIT record already had - and the caller's
-                // provider name is only the fallback for a provider that
-                // carries no per-model identity (a bundled or fake one).
-                let label = model
+                // gh #177: a model from another provider names that
+                // provider. gh #31: the row names the service that will
+                // bill the call. The provider says so per model - in
+                // `extras`, the carrier the WIT record already had - and
+                // the caller's provider name is only the fallback for a
+                // provider that carries no per-model identity (a bundled
+                // or fake one).
+                let foreign = model
                     .extras
-                    .get("label")
+                    .get("provider")
+                    .filter(|origin| *origin != provider);
+                let label = foreign
                     .map(String::as_str)
-                    .unwrap_or(provider);
-                (id.to_string(), format!("{id} ({label})"))
+                    .or_else(|| model.extras.get("label").map(String::as_str));
+                match label {
+                    Some(label) => (id.to_string(), format!("{id} ({label})")),
+                    None => (id.to_string(), format!("{id} ({provider})")),
+                }
             })
         })
         .collect()
@@ -92,6 +109,7 @@ pub(super) fn model_rows(
 pub(super) fn model_effect_on(
     models: &[lca_protocol::ModelInfo],
     provider_name: &str,
+    active_provider: &str,
     argument: &str,
     model_cell: Option<&Arc<Mutex<ModelChoice>>>,
     label_cell: Option<&Arc<Mutex<String>>>,
@@ -107,7 +125,7 @@ pub(super) fn model_effect_on(
                     .clone()
             })
             .unwrap_or_default();
-        return CommandEffect::ShowWidget(model_picker_text(models, &current));
+        return CommandEffect::ShowWidget(model_picker_text(models, &current, active_provider));
     }
     // EFG-041: `/model <arg>` resolves like `--model` does - exact id,
     // `profile/id`, then a fuzzy substring (gh #8's `resolve_pattern`,
@@ -364,7 +382,7 @@ mod tests {
     // human).
     #[test]
     fn the_model_picker_lists_every_offered_model_and_marks_the_active_one() {
-        let text = model_picker_text(&models(&["alpha", "beta"]), "beta");
+        let text = model_picker_text(&models(&["alpha", "beta"]), "beta", "openai-compatible");
         assert!(text.contains("alpha"), "first model listed:\n{text}");
         assert!(text.contains("beta"), "second model listed:\n{text}");
         assert!(
@@ -373,10 +391,63 @@ mod tests {
         );
     }
 
+    // Verifies: gh #177 - a model from another provider names it in
+    // both listings, while the active provider's own rows read as they
+    // always did (no redundant suffix when origin and provider agree).
+    #[test]
+    fn a_foreign_model_names_its_provider_in_both_listings() {
+        let offered = vec![
+            ModelInfo {
+                id: "gpt-5.4-mini".to_string(),
+                name: "GPT 5.4 Mini (Codex)".to_string(),
+                context_window: 272000,
+                max_tokens: 0,
+                extras: [("provider".to_string(), "codex".to_string())].into(),
+            },
+            ModelInfo {
+                id: "home-model".to_string(),
+                name: "home-model".to_string(),
+                context_window: 100_000,
+                max_tokens: 0,
+                extras: [("provider".to_string(), "openai-compatible".to_string())].into(),
+            },
+        ];
+        let rows = model_rows(&offered, "openai-compatible");
+        assert_eq!(
+            rows[0].1, "gpt-5.4-mini (codex)",
+            "the foreign row names its provider"
+        );
+        assert_eq!(
+            rows[1].1, "home-model (openai-compatible)",
+            "the home row keeps the old fallback label"
+        );
+        let text = model_picker_text(&offered, "home-model", "openai-compatible");
+        assert!(
+            !text.contains("gpt-5.4-mini (active)"),
+            "active marks the current model, not the foreign one:\n{text}"
+        );
+        assert!(
+            text.contains("gpt-5.4-mini (codex)"),
+            "the text listing names the foreign provider:\n{text}"
+        );
+        assert!(
+            text.contains("home-model (active)"),
+            "the home row marks active without a suffix:\n{text}"
+        );
+    }
+
     #[test]
     fn an_unknown_model_is_refused_with_the_real_alternatives() {
         let offered = models(&["alpha", "beta"]);
-        let effect = model_effect_on(&offered, "openai-compatible", "gamma", None, None, None);
+        let effect = model_effect_on(
+            &offered,
+            "openai-compatible",
+            "openai-compatible",
+            "gamma",
+            None,
+            None,
+            None,
+        );
         let CommandEffect::ShowWidget(text) = effect else {
             panic!("an unknown model answers with text, not an action")
         };

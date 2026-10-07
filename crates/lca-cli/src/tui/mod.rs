@@ -102,12 +102,14 @@ pub(crate) struct Ui {
     grants: Arc<Mutex<GrantStore>>,
     /// The session the interface is showing; swappable (`/tree`, `/resume`).
     current_session: Arc<Mutex<Session>>,
-    /// The active provider extension name.
-    provider_name: String,
+    /// The live provider generation (gh #177): the name, the resolved
+    /// provider, and the agent config built for them, under one lock so
+    /// a `/model` switch or a `/login` move never mixes generations.
+    /// A turn clones this whole; the compaction backend is stable (its
+    /// own `set_provider` follows the switch in place).
+    live: Arc<Mutex<LiveTarget>>,
     /// The loaded extension registry.
     registry: Arc<ExtensionRegistry>,
-    /// The resolved provider.
-    provider: Arc<dyn Provider>,
     /// The adapter's settings cell (ADR-0035).
     settings_cell: Arc<Mutex<Vec<(String, String)>>>,
     /// The live model (`/model`).
@@ -127,8 +129,7 @@ pub(crate) struct Ui {
     theme_cell: Arc<Mutex<String>>,
     /// The compaction provider backend, when the bundled strategy is on.
     provider_backend: Option<Arc<lca_core::ext_provider::ProviderBackend>>,
-    /// The agent config reused per turn.
-    agent_config: AgentConfig,
+
     /// Images staged for the next turn (`/attach`).
     pending_attachments: Arc<Mutex<Vec<lca_core::StagedAttachment>>>,
     /// The `/login` flow state.
@@ -364,7 +365,27 @@ fn agent_config_for(
     })
 }
 
+/// One provider generation a session runs on (gh #177).
+struct LiveTarget {
+    /// The active provider extension name.
+    name: String,
+    /// The resolved provider.
+    provider: Arc<dyn Provider>,
+    /// The agent config reused per turn, built for this generation.
+    agent_config: AgentConfig,
+}
+
 impl Ui {
+    /// The active provider extension name.
+    fn live_name(&self) -> String {
+        crate::lock(&self.live).name.clone()
+    }
+
+    /// The resolved provider this generation runs on.
+    fn live_provider(&self) -> Arc<dyn Provider> {
+        crate::lock(&self.live).provider.clone()
+    }
+
     /// Build the wiring state (S1): resolve the session, provider, and
     /// tools, then assemble the extension registry and the live cells.
     fn new(
@@ -603,9 +624,12 @@ impl Ui {
             config,
             grants,
             current_session,
-            provider_name,
+            live: Arc::new(Mutex::new(LiveTarget {
+                name: provider_name,
+                provider,
+                agent_config,
+            })),
             registry,
-            provider,
             settings_cell,
             model_cell: cells.model,
             label_cell: cells.label,
@@ -614,7 +638,6 @@ impl Ui {
             thinking_cell: cells.thinking,
             theme_cell: Arc::new(Mutex::new(theme_setting)),
             provider_backend,
-            agent_config,
             pending_attachments: Arc::new(Mutex::new(Vec::new())),
             flow,
             login_answer: Arc::new(Mutex::new(None)),

@@ -267,8 +267,13 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
     );
 
     // --- Turn one, WITHOUT ad hoc consent: the installed provider
-    // reaches for127.0.0.1, the engine refuses and journals it.
-    let output = sandbox.run(Some(&model), &["-p", "hi"]);
+    // reaches for127.0.0.1, the engine refuses and journals it. The
+    // host env override is cleared for this run (gh #177): the
+    // guest reads its endpoint from the namespace, and a set host
+    // variable would trip the headless env-consent gate (exit 4)
+    // before the engine ever refuses (exit 3 + journal, below).
+    let output =
+        sandbox.run_env(Some(&model), &["-p", "hi"], &[("OPENAI_BASE_URL", "")]);
     assert_eq!(output.status.code(), Some(3), "stderr: {}", stderr(&output));
     let text = stderr(&output);
     assert!(

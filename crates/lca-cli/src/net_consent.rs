@@ -194,10 +194,12 @@ pub fn env_configured_host(
         .and_then(|needs| needs.env_base_url.as_deref())?;
     let base = std::env::var(var).ok().filter(|value| !value.is_empty())?;
     let host = host_from_base(&base, needs.as_ref())?;
-    match stored_endpoint_host(data, provider, needs.as_ref()) {
-        Some(stored) if stored == host => None,
-        _ => Some(host),
-    }
+    // No stored-equals-env suppression (gh #177): a stored base URL
+    // does not mean its host was granted - the readiness probe itself
+    // promotes env keys into the namespace, so suppressing here hid a
+    // host the user never approved. Granted hosts need no ask anyway:
+    // every caller checks the grant store before prompting.
+    Some(host)
 }
 
 /// The host of a base URL (`https://host/v1`): lowercased, port stripped,
@@ -208,20 +210,6 @@ fn host_from_base(
 ) -> Option<String> {
     let rest = base.split("://").nth(1).unwrap_or(base);
     crate::ad_hoc_host_from_authority(rest, needs)
-}
-
-/// The base URL stored in the provider's credential namespace - what
-/// `/login` wrote (gh #157: the `<provider>.json` file, FR-PERM-6).
-fn stored_endpoint_host(
-    data: &Path,
-    provider: &str,
-    needs: Option<&crate::provider_needs::ProviderNeeds>,
-) -> Option<String> {
-    let path = data.join("credentials").join(format!("{provider}.json"));
-    let text = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let base = value.get("base_url")?.as_str()?.to_string();
-    host_from_base(&base, needs)
 }
 
 /// The flag parser for `--allow-host`: the same `net` vocabulary the

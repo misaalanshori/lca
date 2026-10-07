@@ -246,7 +246,7 @@ impl Ui {
             models: {
                 let ui = self.clone();
                 Some(Arc::new(move || {
-                    super::display::model_rows(&ui.offered_models(), &ui.provider_name)
+                    super::display::model_rows(&ui.offered_models(), &ui.live_name())
                 }))
             },
             trust_needed: {

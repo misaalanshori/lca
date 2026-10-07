@@ -95,8 +95,7 @@ pub fn build_messages_body(
             }
         }
     }
-    let mut tools: Vec<serde_json::Value> =
-        request.tools.iter().map(tool_declaration).collect();
+    let mut tools: Vec<serde_json::Value> = request.tools.iter().map(tool_declaration).collect();
     if cache_breakpoints && let Some(last) = tools.last_mut() {
         last["cache_control"] = breakpoint();
     }

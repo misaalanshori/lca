@@ -38,6 +38,7 @@ pub(super) fn options() -> UiOptions {
         complete_login: None,
         pick_login: None,
         confirm_login_grant: None,
+        confirm_switch: None,
         hooks: crate::state::UiHooks::default(),
         fullscreen: true,
     }

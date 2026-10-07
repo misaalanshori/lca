@@ -31,8 +31,10 @@ use lca_protocol::{DispatchError, IdentityOutcome, LoginOption};
 use lca_provider::Provider as _;
 
 /// pi's `AuthCheckStatus` (`docs/cli.md#credential-commands`).
+/// Shared with the `/model` catalog (gh #177): readiness there is this
+/// probe, not mere installation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Status {
+pub(crate) enum Status {
     Ready,
     NotReady,
     Invalid,
@@ -318,18 +320,13 @@ fn emit(json: bool, report: &Report) -> i32 {
     report.status.exit()
 }
 
-/// Probe one provider and report pi's table.
-fn check(
-    registry: &lca_core::ExtensionRegistry,
-    config: &lca_config::Config,
-    provider: Option<&str>,
-    model: Option<&str>,
-    json: bool,
-) -> i32 {
-    let (name, handle) = match resolve_target(registry, config, provider, model, json) {
-        Ok(target) => target,
-        Err(code) => return code,
-    };
+/// Run one provider's probe: `usage`, then its login options, then the
+/// fallback login attempt exactly where `auth check` runs it (options
+/// on offer, none of them OAuth - an API-key login resolving from the
+/// environment, never a browser or a prompt). The attempt keeps
+/// `auth check`'s side effect: a key it resolves is promoted into the
+/// namespace, so a provider found ready stays ready.
+fn probe(handle: &Arc<dyn ExtensionDispatch>) -> Result<Probe, ()> {
     let usage = lca_core::drive_blocking({
         let handle = handle.clone();
         async move { handle.identity_usage().await }
@@ -337,17 +334,7 @@ fn check(
     let usage = match usage {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(outcome)) => Err(outcome),
-        Err(_) => {
-            return emit(
-                json,
-                &Report {
-                    status: Status::Invalid,
-                    provider: name.clone(),
-                    reason: Some("invalid_state"),
-                    auth_type: None,
-                },
-            );
-        }
+        Err(_) => return Err(()),
     };
     let options = lca_core::drive_blocking({
         let handle = handle.clone();
@@ -371,17 +358,54 @@ fn check(
     } else {
         None
     };
-    emit(
-        json,
-        &classify(
-            &name,
-            Probe {
-                usage,
-                options,
-                login,
-            },
-        ),
-    )
+    Ok(Probe {
+        usage,
+        options,
+        login,
+    })
+}
+
+/// Probe one provider the way `auth check` does and return only its
+/// status (gh #177): the `/model` catalog lists a provider's models
+/// exactly when this answers `Ready`; anything else contributes
+/// nothing, silently.
+pub(crate) fn check_status(registry: &lca_core::ExtensionRegistry, provider: &str) -> Status {
+    let Some(handle) = registry.provider(provider).cloned() else {
+        return Status::NotReady;
+    };
+    match probe(&handle) {
+        Ok(probe) => classify(provider, probe).status,
+        Err(()) => Status::Invalid,
+    }
+}
+
+/// Probe one provider and report pi's table.
+fn check(
+    registry: &lca_core::ExtensionRegistry,
+    config: &lca_config::Config,
+    provider: Option<&str>,
+    model: Option<&str>,
+    json: bool,
+) -> i32 {
+    let (name, handle) = match resolve_target(registry, config, provider, model, json) {
+        Ok(target) => target,
+        Err(code) => return code,
+    };
+    let probe = match probe(&handle) {
+        Ok(probe) => probe,
+        Err(()) => {
+            return emit(
+                json,
+                &Report {
+                    status: Status::Invalid,
+                    provider: name.clone(),
+                    reason: Some("invalid_state"),
+                    auth_type: None,
+                },
+            );
+        }
+    };
+    emit(json, &classify(&name, probe))
 }
 
 /// Sign in: one driver for both shapes. An API-key login resolves from

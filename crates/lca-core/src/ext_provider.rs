@@ -170,7 +170,10 @@ impl Provider for ExtensionProvider {
 /// `AgentConfig`, so the usage this accumulates lands on the
 /// compaction record that caused the spend.
 pub struct ProviderBackend {
-    provider: std::sync::Arc<dyn lca_provider::Provider>,
+    /// The provider the agent talks to: `/model` moves it across
+    /// providers (gh #177), so compaction keeps asking whichever
+    /// provider the conversation switched to.
+    provider: std::sync::Mutex<std::sync::Arc<dyn lca_provider::Provider>>,
     /// The session's current model: `/model` moves it, so compaction
     /// keeps asking whichever model the conversation switched to.
     model: std::sync::Mutex<String>,
@@ -213,7 +216,7 @@ impl ProviderBackend {
         session_id: impl Into<String>,
     ) -> ProviderBackend {
         ProviderBackend {
-            provider,
+            provider: std::sync::Mutex::new(provider),
             model: std::sync::Mutex::new(model.into()),
             session_id: session_id.into(),
             usage: std::sync::Mutex::new(None),
@@ -227,6 +230,15 @@ impl ProviderBackend {
             .summarization_budget
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(max_tokens);
+    }
+
+    /// Follow a session-scoped provider change (a `/model` pick from
+    /// another provider, gh #177).
+    pub fn set_provider(&self, provider: std::sync::Arc<dyn lca_provider::Provider>) {
+        *self
+            .provider
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = provider;
     }
 
     /// Follow a session-scoped model change (`/model`).
@@ -272,7 +284,14 @@ impl lca_tools::CompletionBackend for ProviderBackend {
             // and drain whatever it buffered: a scripted or cached
             // response can complete before the first event is read.
             let done = {
-                let producer = self.provider.stream(request, tx);
+                // Clone under the lock: the stream outlives this scope
+                // and must not hold the provider lock (gh #177).
+                let provider = self
+                    .provider
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let producer = provider.stream(request, tx);
                 tokio::pin!(producer);
                 let done;
                 let mut collected = (

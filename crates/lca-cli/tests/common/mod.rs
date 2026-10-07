@@ -335,6 +335,9 @@ pub const OPENAI_MANIFEST: &str =
 pub const SKILLS_COMPONENT: &[u8] =
     include_bytes!("../../../../extensions/skills/fixtures/component.wasm");
 pub const SKILLS_MANIFEST: &str = include_str!("../../../../extensions/skills/extension.toml");
+pub const CODEX_COMPONENT: &[u8] =
+    include_bytes!("../../../../extensions/codex/fixtures/component.wasm");
+pub const CODEX_MANIFEST: &str = include_str!("../../../../extensions/codex/extension.toml");
 
 /// An anonymous OCI registry serving the two-layer convention (config
 impl Sandbox {
@@ -386,6 +389,50 @@ impl Sandbox {
     /// The installed-extension tree under this sandbox's data dir.
     pub fn extensions_root(&self) -> PathBuf {
         self.state_dir().join("extensions")
+    }
+
+    /// Hand-install a fixture component (gh #177): the manifest, the
+    /// digest-named component, and the lockfile record - the same tree
+    /// `ext install` writes, without the registry round-trip. The
+    /// component bytes ride `include_bytes!` (rebuilt at publish time
+    /// like every fixture component).
+    pub fn install_component(&self, name: &str, manifest: &str, component: &[u8]) {
+        use sha2::{Digest, Sha256};
+        let dir = self.extensions_root().join(name);
+        std::fs::create_dir_all(&dir).expect("mkdir extension");
+        std::fs::write(dir.join("extension.toml"), manifest).expect("write manifest");
+        let digest = format!("sha256:{:x}", Sha256::digest(component));
+        let file = digest.replace(':', "-");
+        std::fs::write(dir.join(format!("{file}.wasm")), component).expect("write component");
+        let field = |key: &str| {
+            manifest
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(key))
+                .map(str::trim)
+                .and_then(|rest| rest.strip_prefix('='))
+                .map(str::trim)
+                .and_then(|value| value.strip_prefix('"'))
+                .and_then(|value| value.strip_suffix('"'))
+                .unwrap_or_default()
+                .to_string()
+        };
+        let lock = serde_json::json!({
+            "version": 1,
+            "extensions": {
+                name: {
+                    "digest": digest,
+                    "source": "test-fixture",
+                    "grant_hash": "",
+                    "version": field("version"),
+                    "abi": field("abi"),
+                }
+            }
+        });
+        std::fs::write(
+            self.extensions_root().join("lockfile.json"),
+            serde_json::to_vec_pretty(&lock).expect("lockfile serialize"),
+        )
+        .expect("write lockfile");
     }
 
     /// Write the grant store (ad hoc loopback net consent, the stand-in

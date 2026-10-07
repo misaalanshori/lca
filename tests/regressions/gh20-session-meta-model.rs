@@ -203,12 +203,15 @@ fn newest_file(root: &Path, name: &str) -> Option<PathBuf> {
 
 /// Two models for `/model` to choose between - the env one and a second
 /// from the extension's own credentials namespace, no endpoint needed.
+/// The namespace carries a key (gh #177): the catalog lists a provider
+/// only when it is ready in the `auth check` sense, and a keyless
+/// namespace is not ready. No turn runs here, so the key is never used.
 fn two_models(home: &Path) {
     let dir = home.join(".lca").join("credentials");
     std::fs::create_dir_all(&dir).expect("credentials dir");
     std::fs::write(
         dir.join("openai-compatible.json"),
-        "{\"models\":\"first-model,second-model\"}\n",
+        "{\"models\":\"first-model,second-model\",\"api_key\":\"test-key\"}\n",
     )
     .expect("write credentials");
 }

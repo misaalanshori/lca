@@ -740,3 +740,79 @@ fn a_wrapped_modal_url_clicks_open_whole() {
         "hit-testing a wrapped modal row resolves the link"
     );
 }
+
+// Verifies: gh #177 - the switch confirmation renders the question with
+// the provider, and both answers resolve through the seam: yes switches
+// (the seam's message shows), no stays, anything else keeps asking.
+#[test]
+fn the_switch_confirm_renders_and_both_answers_resolve() {
+    let mut chat = chat();
+    let switched = Arc::new(std::sync::Mutex::new(String::new()));
+    let cell = switched.clone();
+    chat.world.options.confirm_switch = Some(Arc::new(move |provider: &str| {
+        *cell.lock().unwrap_or_else(|p| p.into_inner()) = provider.to_string();
+        format!("model for this session: {provider}/next-model")
+    }));
+    crate::state::apply_login_next(
+        &mut chat.world,
+        LoginNext::ConfirmSwitch {
+            provider: "codex".to_string(),
+            prompt: "signed in to `codex` - switch this session from `openai-compatible` to it?"
+                .to_string(),
+        },
+    );
+    let viewport = strip(&chat.viewport(120, 30, 0)).join("\n");
+    assert!(
+        viewport.contains("switch provider: codex"),
+        "the overlay names the provider:\n{viewport}"
+    );
+    assert!(
+        viewport.contains("switch this session from `openai-compatible` to it?"),
+        "the question shows:\n{viewport}"
+    );
+    assert!(
+        viewport.contains("Switch [y] / Stay [n]"),
+        "the keys show:\n{viewport}"
+    );
+
+    chat.handle_key("y");
+    assert!(
+        chat.world.switch_confirm.is_none(),
+        "an answer closes the confirm"
+    );
+    assert_eq!(
+        *switched.lock().unwrap_or_else(|p| p.into_inner()),
+        "codex",
+        "yes reaches the seam with the provider"
+    );
+    let viewport = strip(&chat.viewport(120, 30, 0)).join("\n");
+    assert!(
+        viewport.contains("model for this session: codex/next-model"),
+        "the seam's message shows:\n{viewport}"
+    );
+}
+
+// Verifies: gh #177 - declining the switch confirmation stays where the
+// session is and says so; the confirm closes either way.
+#[test]
+fn declining_the_switch_confirm_stays_and_says_so() {
+    let mut chat = chat();
+    crate::state::apply_login_next(
+        &mut chat.world,
+        LoginNext::ConfirmSwitch {
+            provider: "codex".to_string(),
+            prompt: "signed in to `codex` - switch this session from `openai-compatible` to it?"
+                .to_string(),
+        },
+    );
+    chat.handle_key("n");
+    assert!(
+        chat.world.switch_confirm.is_none(),
+        "a decline closes the confirm"
+    );
+    let viewport = strip(&chat.viewport(120, 30, 0)).join("\n");
+    assert!(
+        viewport.contains("staying with the current provider"),
+        "the decline says what it did:\n{viewport}"
+    );
+}
