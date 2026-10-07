@@ -434,6 +434,7 @@ fn a_replayed_session_renders_like_the_live_one() {
             attachment: None,
             truncated: false,
             exit_code: None,
+            nested: Vec::new(),
             full_output_path: None,
         },
     ];

@@ -4,6 +4,91 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+/// How the model reaches a tool (pi's `ToolExposure`, gh #77). Only
+/// `direct` tools are declared to the model. A string on the wire, not
+/// an enum: new values stay additive (the abi-versioning table's
+/// string-vocabulary row); unknown values refuse loudly at
+/// registration instead of guessing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToolExposure {
+    /// Declared to the model while active, and callable while active.
+    #[default]
+    Direct,
+    /// Never declared and never callable: host-side tools the model
+    /// neither sees nor calls (a narrower `hidden`).
+    ModelOnly,
+    /// Callable whenever registered, never declared; listed for
+    /// codemode-style callers.
+    Codemode,
+    /// Like `codemode`, but found through discovery (`tool_search`)
+    /// instead of listing; resolves on first use.
+    Deferred,
+    /// Registered but unreachable: not declared, not callable, not
+    /// searchable. Re-register `hidden` to withdraw a tool.
+    Hidden,
+}
+
+impl ToolExposure {
+    /// Parse the wire string; unknown values refuse with the value
+    /// itself, so a typo fails at registration, not at call time.
+    pub fn parse(value: &str) -> Result<ToolExposure, String> {
+        match value {
+            "direct" => Ok(ToolExposure::Direct),
+            "model-only" => Ok(ToolExposure::ModelOnly),
+            "codemode" => Ok(ToolExposure::Codemode),
+            "deferred" => Ok(ToolExposure::Deferred),
+            "hidden" => Ok(ToolExposure::Hidden),
+            unknown => Err(format!("unknown tool exposure `{unknown}`")),
+        }
+    }
+
+    /// The wire string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolExposure::Direct => "direct",
+            ToolExposure::ModelOnly => "model-only",
+            ToolExposure::Codemode => "codemode",
+            ToolExposure::Deferred => "deferred",
+            ToolExposure::Hidden => "hidden",
+        }
+    }
+}
+
+/// What namespace a tool belongs to (pi's `ToolNamespace`, gh #77):
+/// related tools list under one heading with the description;
+/// `instructions` holds longer usage guidance discovery surfaces,
+/// never the declaration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolNamespace {
+    /// The grouping name.
+    pub name: String,
+    /// Listed alongside the tools.
+    pub description: String,
+    /// Longer guidance; shown by discovery, never declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+}
+
+/// Hints about what a tool does (MCP tool annotations, gh #77): the
+/// model sees them; the host's permission layer never decides on
+/// them. A hint is not a bypass.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolAnnotations {
+    /// The tool only reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_hint: Option<bool>,
+    /// The tool may destroy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive_hint: Option<bool>,
+    /// Repeated calls are safe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotent_hint: Option<bool>,
+    /// The tool reaches the open world.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_world_hint: Option<bool>,
+}
+
 /// A tool as advertised to the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolSpec {
@@ -13,6 +98,16 @@ pub struct ToolSpec {
     pub description: String,
     /// JSON Schema for the arguments.
     pub parameters: serde_json::Value,
+    /// How the model reaches the tool (gh #77); absent means
+    /// `direct`, so specs written before exposure parse unchanged.
+    #[serde(default)]
+    pub exposure: ToolExposure,
+    /// The grouping the tool belongs to, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<ToolNamespace>,
+    /// What the tool does; model-visible, never permission-deciding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
     /// Reserved map for non-structural extensions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: BTreeMap<String, String>,
@@ -21,12 +116,18 @@ pub struct ToolSpec {
 /// One tool call the model requested.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
-    /// Provider-side call identifier; results reference it.
+    /// Provider-side call identifier; results reference it. A nested
+    /// call (gh #77) carries `<parent id>/<n>` here.
     pub call_id: String,
     /// Tool name.
     pub name: String,
     /// Argument string (JSON object text) as accumulated by the host.
     pub arguments: String,
+    /// The calling tool's id, when another tool made this call (pi's
+    /// `parentToolCallId`). Absent for model-issued calls; skipped on
+    /// the wire when absent, so older readers never see it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_call_id: Option<String>,
 }
 
 /// Outcome status of a tool call, as recorded in the session log and the
@@ -75,6 +176,11 @@ pub struct ToolResult {
     /// file the session record references by hash).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_output_path: Option<String>,
+    /// Bounded nested-call record (gh #77): filed under the calling
+    /// tool, attached by the turn when the call finishes. Empty for
+    /// calls that nested nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nested: Vec<crate::record::NestedCallRecord>,
     /// Images the tool returned (R5): a tool that read an image file, for
     /// example. Empty for text-only results.
     ///
@@ -107,6 +213,7 @@ impl ToolResult {
             extras: BTreeMap::new(),
             exit_code: None,
             full_output_path: None,
+            nested: Vec::new(),
         }
     }
 
@@ -121,6 +228,7 @@ impl ToolResult {
             extras: BTreeMap::new(),
             exit_code: None,
             full_output_path: None,
+            nested: Vec::new(),
         }
     }
 
@@ -135,6 +243,7 @@ impl ToolResult {
             extras: BTreeMap::new(),
             exit_code: None,
             full_output_path: None,
+            nested: Vec::new(),
         }
     }
 
@@ -149,6 +258,7 @@ impl ToolResult {
             extras: BTreeMap::new(),
             exit_code: None,
             full_output_path: None,
+            nested: Vec::new(),
         }
     }
 }

@@ -9,8 +9,31 @@ use std::sync::Arc;
 use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};
 use lca_protocol::{
     ChatMessage, CommandEffect, DispatchError, HookAction, IdentityOutcome, PostToolObservation,
-    ToolCall, ToolSpec, Usage,
+    ToolCall, ToolExposure, ToolSpec, Usage,
 };
+
+/// A namespace and the tools grouped under it (gh #77's grouping:
+/// related tools list under one heading with the description).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamespaceView {
+    /// The grouping name.
+    pub name: String,
+    /// Listed alongside the tools.
+    pub description: String,
+    /// Tool names in the namespace, sorted.
+    pub tools: Vec<String>,
+}
+
+/// The session's dynamic tool set (pi's active tools, gh #77): `None`
+/// is the default (every registered tool is active); `Some` is a
+/// `set-active-tools` replacement. Only registered names take
+/// effect; unknown names are ignored at set time, never here.
+#[derive(Debug, Default)]
+struct ActiveSet {
+    names: Option<std::collections::HashSet<String>>,
+    /// Bumped on every set; the turn records the transcript entry.
+    revision: u64,
+}
 
 /// Built-in tool names are reserved (FR-TOOL-1's set; an extension
 /// registering one is the later registration and loses, FR-EXT-11).
@@ -22,6 +45,11 @@ pub const BUILTIN_TOOLS: &[&str] = &[
 /// reserved exactly like the canonical names: an extension registering
 /// `find` loses to the host's `glob` alias the same way.
 pub const BUILTIN_TOOL_ALIASES: &[&str] = &["find", "ls", "bash"];
+
+/// The discovery tool's reserved name (gh #77): the turn serves it,
+/// so no extension may register it (refused as built-in at
+/// registration, like the eight built-ins).
+pub const TOOL_SEARCH_NAME: &str = "tool_search";
 
 /// Built-in slash command names, reserved the same way (SRDD's list).
 pub const BUILTIN_COMMANDS: &[&str] = &["login", "logout", "usage", "model", "compact", "stats"];
@@ -83,6 +111,11 @@ struct Registered {
 #[derive(Default)]
 pub struct ExtensionRegistry {
     entries: Vec<Registered>,
+    active: std::sync::Mutex<ActiveSet>,
+    /// The running turn's nested-call server (gh #77), if any. The
+    /// turn installs it around the run and clears it after; the
+    /// `tools` import serves through it from blocking threads.
+    nested: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<lca_ext_abi::NestedCall>>>,
     /// Bare tool name -> entry index.
     tools: HashMap<String, usize>,
     /// The kept spec per registered tool name, so arguments can be validated
@@ -245,15 +278,20 @@ impl ExtensionRegistry {
     }
 
     /// Plan one handle's tool specs, refusing built-in shadowing and
-    /// earlier-registered names.
+    /// earlier-registered names. Handles merge their own worlds inside
+    /// `tool_specs` (a suite guest serves every tool through its
+    /// catalog, gh #77); the registry resolves names, not worlds.
     fn plan_tools(&mut self, name: &str, handle: &dyn ExtensionDispatch) -> Vec<ToolSpec> {
         let mut pending: Vec<ToolSpec> = Vec::new();
-        if handle.worlds().contains(&World::Tool) {
+        if handle.worlds().contains(&World::Tool) || handle.worlds().contains(&World::ToolCatalog) {
             match handle.tool_specs() {
                 Ok(specs) => {
                     for spec in specs {
+                        // `tool_search` is served by the turn itself (gh
+                        // #77's discovery): no extension may claim it.
                         let winner = if BUILTIN_TOOLS.contains(&spec.name.as_str())
                             || BUILTIN_TOOL_ALIASES.contains(&spec.name.as_str())
+                            || spec.name == TOOL_SEARCH_NAME
                         {
                             Some("built-in".to_string())
                         } else {
@@ -506,6 +544,178 @@ impl ExtensionRegistry {
         self.tool_schemas.get(name)
     }
 
+    /// Whether a tool name is active (gh #77): the default set holds
+    /// every registered non-hidden tool; a `set-active-tools`
+    /// replacement holds exactly its applied names.
+    fn is_active(&self, name: &str, exposure: ToolExposure) -> bool {
+        let active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        match &active.names {
+            None => exposure != ToolExposure::Hidden,
+            Some(names) => names.contains(name),
+        }
+    }
+
+    /// Replace the session's active tool set (pi's `setActiveTools`,
+    /// gh #77): only registered names take effect; unknown names are
+    /// ignored and reported, never applied. Returns `(applied,
+    /// ignored)`, both sorted. The turn records the transcript entry
+    /// before the next model request.
+    pub fn set_active_tools(&self, names: &[String]) -> (Vec<String>, Vec<String>) {
+        let mut applied = Vec::new();
+        let mut ignored = Vec::new();
+        for name in names {
+            if self.tool_schemas.contains_key(name) {
+                applied.push(name.clone());
+            } else {
+                ignored.push(name.clone());
+            }
+        }
+        applied.sort();
+        ignored.sort();
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        active.names = Some(applied.iter().cloned().collect());
+        active.revision += 1;
+        (applied, ignored)
+    }
+
+    /// The active tool names, sorted (gh #77's `getActiveTools`).
+    pub fn active_tools(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .tool_schemas
+            .iter()
+            .filter(|(name, spec)| self.is_active(name, spec.exposure))
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// The active set's revision: the turn compares it across requests
+    /// to record transcript entries for mid-turn changes (gh #77).
+    pub fn active_revision(&self) -> u64 {
+        self.active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .revision
+    }
+
+    /// Whether the host may run a tool by name right now (gh #77's
+    /// callable set): direct tools while active, codemode and deferred
+    /// tools whenever registered; model-only and hidden tools never.
+    pub fn is_callable(&self, name: &str) -> bool {
+        let enabled = self
+            .tools
+            .get(name)
+            .map(|index| self.entries[*index].enabled)
+            .unwrap_or(false);
+        if !enabled {
+            return false;
+        }
+        match self.tool_schemas.get(name) {
+            Some(spec) => match spec.exposure {
+                ToolExposure::Direct => self.is_active(name, spec.exposure),
+                ToolExposure::Codemode | ToolExposure::Deferred => true,
+                ToolExposure::ModelOnly | ToolExposure::Hidden => false,
+            },
+            None => false,
+        }
+    }
+
+    /// The callable tools for orchestrators (the `tools` import's
+    /// `list-tools`, gh #77): name plus description, sorted.
+    pub fn callable_names(&self) -> Vec<(String, String)> {
+        let mut names: Vec<(String, String)> = self
+            .tool_schemas
+            .iter()
+            .filter(|(name, _)| self.is_callable(name))
+            .map(|(_, spec)| (spec.name.clone(), spec.description.clone()))
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Deferred discovery (gh #77's `tool_search` shape, pi's
+    /// `deferred`): codemode and deferred tools whose name,
+    /// description, or namespace matches the query, sorted. Hidden
+    /// and model-only tools never match; direct tools are declared,
+    /// not discovered. Matching is case-insensitive substring; an
+    /// empty query lists every discoverable tool.
+    pub fn tool_search(&self, query: &str) -> Vec<ToolSpec> {
+        let needle = query.to_lowercase();
+        let mut matches: Vec<ToolSpec> = self
+            .tool_specs()
+            .into_iter()
+            .filter(|spec| {
+                matches!(
+                    spec.exposure,
+                    ToolExposure::Codemode | ToolExposure::Deferred
+                )
+            })
+            .filter(|spec| {
+                if needle.is_empty() {
+                    return true;
+                }
+                let haystack = match &spec.namespace {
+                    Some(namespace) => format!(
+                        "{} {} {} {}",
+                        spec.name, spec.description, namespace.name, namespace.description
+                    ),
+                    None => format!("{} {}", spec.name, spec.description),
+                };
+                haystack.to_lowercase().contains(&needle)
+            })
+            .collect();
+        matches.sort_by(|a, b| a.name.cmp(&b.name));
+        matches
+    }
+
+    /// Namespace grouping rows (gh #77): one row per namespace with
+    /// its enabled tools, both sorted. Tools without a namespace
+    /// group nowhere.
+    pub fn namespaces(&self) -> Vec<NamespaceView> {
+        let mut groups: HashMap<String, NamespaceView> = HashMap::new();
+        for spec in self.tool_specs() {
+            if let Some(namespace) = &spec.namespace {
+                groups
+                    .entry(namespace.name.clone())
+                    .or_insert_with(|| NamespaceView {
+                        name: namespace.name.clone(),
+                        description: namespace.description.clone(),
+                        tools: Vec::new(),
+                    })
+                    .tools
+                    .push(spec.name.clone());
+            }
+        }
+        let mut views: Vec<NamespaceView> = groups.into_values().collect();
+        for view in &mut views {
+            view.tools.sort();
+        }
+        views.sort_by(|a, b| a.name.cmp(&b.name));
+        views
+    }
+
+    /// What the next declaration request carries (gh #77): enabled,
+    /// active, `direct` tools, sorted. Everything else reaches the
+    /// model through discovery, orchestration, or not at all.
+    pub fn declared_tool_specs(&self) -> Vec<ToolSpec> {
+        let mut specs: Vec<ToolSpec> = self
+            .tool_specs()
+            .into_iter()
+            .filter(|spec| {
+                spec.exposure == ToolExposure::Direct && self.is_active(&spec.name, spec.exposure)
+            })
+            .collect();
+        specs.sort_by(|a, b| a.name.cmp(&b.name));
+        specs
+    }
+
     /// Every extension tool spec, for the provider's tool list. Sorted by
     /// name: a provider's prompt cache and the request-assembly snapshot key
     /// on stable bytes, and the registry's maps are unordered.
@@ -669,11 +879,261 @@ impl ExtensionRegistry {
         }
     }
 
+    /// Install the running turn's nested-call server (gh #77).
+    pub fn install_nested(&self, tx: tokio::sync::mpsc::UnboundedSender<lca_ext_abi::NestedCall>) {
+        *self
+            .nested
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(tx);
+    }
+
+    /// Remove the turn's nested-call server.
+    pub fn clear_nested(&self) {
+        *self
+            .nested
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = None;
+    }
+
+    /// The installed server, if a turn is running.
+    pub fn nested_slot(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedSender<lca_ext_abi::NestedCall>> {
+        self.nested
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    /// The `tools` import's registry surface (gh #77): the host holds
+    /// the registry behind the trait so the crates stay decoupled.
+    pub fn as_tools_view(
+        self: &std::sync::Arc<Self>,
+    ) -> std::sync::Arc<dyn lca_ext_abi::ToolsRegistryView> {
+        self.clone()
+    }
+
     /// Force any running WASM call to trap (epoch interruption,
     /// FR-CONC-1); native handles share the caller's cancellation flag.
     pub fn interrupt_all(&self) {
         for handle in self.enabled() {
             handle.interrupt();
+        }
+    }
+
+    /// Composable `tool_call` mutation (gh #45): every enabled
+    /// `hooks-tool-call` extension runs in order, each seeing the
+    /// previous handler's arguments. A `block` veto ends the chain
+    /// with the reason; hook errors are reported-and-skipped
+    /// (FR-EXT-3), never silent vetoes.
+    pub async fn mutate_tool_call(&self, call: &ToolCall) -> Result<ToolCall, String> {
+        let mut current = call.clone();
+        for handle in self
+            .enabled()
+            .filter(|h| h.worlds().contains(&World::HooksToolCall))
+        {
+            match handle.on_tool_call(&current).await {
+                Ok(patch) => {
+                    if let Some(reason) = patch.block {
+                        return Err(reason);
+                    }
+                    if let Some(arguments) = patch.arguments {
+                        current.arguments = arguments;
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(extension = handle.name(), %err, "tool_call hook failed; skipped");
+                }
+            }
+        }
+        Ok(current)
+    }
+
+    /// Composable `tool_result` mutation (gh #45): every enabled
+    /// `hooks-tool-result` extension runs in order over the same
+    /// result; omitted fields stay. Errors skip (FR-EXT-3).
+    pub async fn compose_tool_result(
+        &self,
+        call: &ToolCall,
+        result: lca_protocol::ToolResult,
+    ) -> lca_protocol::ToolResult {
+        let mut current = result;
+        for handle in self
+            .enabled()
+            .filter(|h| h.worlds().contains(&World::HooksToolResult))
+        {
+            match handle.on_tool_result(call, &current).await {
+                Ok(patch) => {
+                    if let Some(content) = patch.content {
+                        current.content = content;
+                    }
+                    if let Some(is_error) = patch.is_error {
+                        current.status = if is_error {
+                            lca_protocol::ToolResultStatus::Error
+                        } else {
+                            lca_protocol::ToolResultStatus::Ok
+                        };
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(extension = handle.name(), %err, "tool_result hook failed; skipped");
+                }
+            }
+        }
+        current
+    }
+
+    /// `message_end` replacement text (gh #45): every enabled
+    /// `hooks-message` extension sees the current text; the last
+    /// replacement wins. `None` observes. Errors skip (FR-EXT-3).
+    pub async fn message_end_replacement(&self, role: &str, text: &str) -> Option<String> {
+        let mut current = text.to_string();
+        let mut replaced = false;
+        for handle in self
+            .enabled()
+            .filter(|h| h.worlds().contains(&World::HooksMessage))
+        {
+            match handle.on_message_end(role, &current).await {
+                Ok(Some(replacement)) => {
+                    current = replacement;
+                    replaced = true;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(extension = handle.name(), %err, "message_end hook failed; skipped");
+                }
+            }
+        }
+        replaced.then_some(current)
+    }
+
+    /// Fold one handler's append into the composed decision (gh #45):
+    /// non-empty appends concatenate with a blank line.
+    pub(crate) fn merge_append(
+        decision: &mut lca_protocol::SettleDecision,
+        append: Option<String>,
+    ) {
+        if let Some(append) = append.filter(|text| !text.is_empty()) {
+            match &mut decision.append {
+                Some(existing) => {
+                    existing.push_str("\n\n");
+                    existing.push_str(&append);
+                }
+                None => decision.append = Some(append),
+            }
+        }
+    }
+
+    /// Actionable settle (gh #45): consult one phase (`turn_end`,
+    /// then `agent_before_settle`). Appends concatenate; any
+    /// `continue-once` continues. Errors settle (FR-EXT-3).
+    pub async fn settle_phase(
+        &self,
+        before_settle: bool,
+        rounds: u32,
+        tool_calls: u32,
+        status: &str,
+    ) -> lca_protocol::SettleDecision {
+        let mut decision = lca_protocol::SettleDecision::default();
+        for handle in self
+            .enabled()
+            .filter(|h| h.worlds().contains(&World::HooksSettle))
+        {
+            let outcome = if before_settle {
+                handle
+                    .on_agent_before_settle(rounds, tool_calls, status)
+                    .await
+            } else {
+                handle.on_turn_end(rounds, tool_calls, status).await
+            };
+            match outcome {
+                Ok(patch) => {
+                    Self::merge_append(&mut decision, patch.append);
+                    decision.continue_once |= patch.continue_once;
+                }
+                Err(err) => {
+                    tracing::warn!(extension = handle.name(), %err, "settle hook failed; settling");
+                }
+            }
+        }
+        decision
+    }
+
+    /// `session_before_compact` veto (gh #45): the first deny
+    /// cancels the compaction with its reason. Errors allow
+    /// (FR-EXT-3: a broken watcher must not freeze the session).
+    pub async fn session_before_compact(&self, reason: &str) -> Result<(), String> {
+        for handle in self
+            .enabled()
+            .filter(|h| h.worlds().contains(&World::HooksCompaction))
+        {
+            match handle.on_session_before_compact(reason).await {
+                Ok(lca_protocol::CompactVerdict::Allow) => {}
+                Ok(lca_protocol::CompactVerdict::Deny(reason)) => return Err(reason),
+                Err(err) => {
+                    tracing::warn!(extension = handle.name(), %err, "before-compact hook failed; allowing");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `session_compact_failed` observation (gh #45).
+    pub async fn session_compact_failed(&self, reason: &str, error: Option<&str>) {
+        for handle in self
+            .enabled()
+            .filter(|h| h.worlds().contains(&World::HooksCompaction))
+        {
+            let _ = handle.on_session_compact_failed(reason, error).await;
+        }
+    }
+
+    /// `cache_warming_decision` votes (gh #45): every enabled
+    /// `hooks-cache` extension votes; any `false` skips warming.
+    /// Errors warm (FR-EXT-3).
+    pub async fn cache_warm(&self, provider: &str, model: &str) -> bool {
+        for handle in self
+            .enabled()
+            .filter(|h| h.worlds().contains(&World::HooksCache))
+        {
+            match handle.on_cache_warming_decision(provider, model).await {
+                Ok(true) => {}
+                Ok(false) => return false,
+                Err(err) => {
+                    tracing::warn!(extension = handle.name(), %err, "cache hook failed; warming");
+                }
+            }
+        }
+        true
+    }
+
+    /// `project_trust` votes (gh #45): the first yes/no decides;
+    /// undecided falls through. Returns the vote and whether to
+    /// remember it. Errors are undecided (FR-EXT-3).
+    pub async fn project_trust(&self, cwd: &str) -> (lca_protocol::TrustVote, bool) {
+        for handle in self
+            .enabled()
+            .filter(|h| h.worlds().contains(&World::HooksTrust))
+        {
+            match handle.on_project_trust(cwd).await {
+                Ok((lca_protocol::TrustVote::Undecided, _)) => {}
+                Ok((vote, remember)) => return (vote, remember),
+                Err(err) => {
+                    tracing::warn!(extension = handle.name(), %err, "trust hook failed; undecided");
+                }
+            }
+        }
+        (lca_protocol::TrustVote::Undecided, false)
+    }
+
+    /// `provider_stream_event` observation (gh #45): normalized
+    /// events, in order, after the stream closes. Errors skip.
+    pub async fn observe_stream_event(&self, provider: &str, model: &str, kind: &str, data: &str) {
+        for handle in self
+            .enabled()
+            .filter(|h| h.worlds().contains(&World::HooksStream))
+        {
+            let _ = handle.on_stream_event(provider, model, kind, data).await;
         }
     }
 
@@ -685,5 +1145,35 @@ impl ExtensionRegistry {
         {
             let _ = handle.on_session_close().await;
         }
+    }
+}
+
+impl lca_ext_abi::ToolsRegistryView for ExtensionRegistry {
+    fn callable_names(&self) -> Vec<(String, String)> {
+        ExtensionRegistry::callable_names(self)
+    }
+
+    fn is_callable(&self, name: &str) -> bool {
+        ExtensionRegistry::is_callable(self, name)
+    }
+
+    fn active_tools(&self) -> Vec<String> {
+        ExtensionRegistry::active_tools(self)
+    }
+
+    fn set_active_tools(&self, names: &[String]) -> (Vec<String>, Vec<String>) {
+        ExtensionRegistry::set_active_tools(self, names)
+    }
+
+    fn install_nested(&self, tx: tokio::sync::mpsc::UnboundedSender<lca_ext_abi::NestedCall>) {
+        ExtensionRegistry::install_nested(self, tx)
+    }
+
+    fn clear_nested(&self) {
+        ExtensionRegistry::clear_nested(self)
+    }
+
+    fn nested_slot(&self) -> Option<tokio::sync::mpsc::UnboundedSender<lca_ext_abi::NestedCall>> {
+        ExtensionRegistry::nested_slot(self)
     }
 }

@@ -252,7 +252,30 @@ impl Ui {
             trust_needed: {
                 let grants = self.grants.clone();
                 let cwd = self.cwd.clone();
+                let registry = self.registry.clone();
                 Some(Arc::new(move || {
+                    // Gh #45's vote runs before the operator is asked:
+                    // the first yes/no decides (remembered or not),
+                    // undecided falls through to the prompt below.
+                    let cwd_text = cwd.to_string_lossy().into_owned();
+                    let voter = registry.clone();
+                    let (vote, remember) =
+                        lca_core::drive_blocking(
+                            async move { voter.project_trust(&cwd_text).await },
+                        );
+                    match vote {
+                        lca_protocol::TrustVote::Yes | lca_protocol::TrustVote::No => {
+                            let trusted = vote == lca_protocol::TrustVote::Yes;
+                            let mut store = grants.lock().unwrap_or_else(|p| p.into_inner());
+                            if remember {
+                                let _ = store.set_trusted(&cwd, trusted);
+                            } else if trusted {
+                                store.trust_for_session(&cwd);
+                            }
+                            return false;
+                        }
+                        lca_protocol::TrustVote::Undecided => {}
+                    }
                     // Prompt only when there is something to gate: a project
                     // `.lca/config.toml` that is not trusted yet (ADR-0039).
                     let trusted = grants

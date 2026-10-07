@@ -3,14 +3,15 @@
 //! Split out of `lib.rs`; the loop body reads as the calls in order
 //! (steer drain, assemble, provider call, persist, tool dispatch).
 
-use std::sync::Arc;
-
 use lca_protocol::{
-    ChatMessage, ContentBlock, DispatchError, FORMAT_VERSION, HookAction, MessageRole, Record,
-    StopReason, StreamEvent, ToolCall, ToolResult, ToolSource, TurnEvent, TurnOutcome, TurnStatus,
-    Usage,
+    ChatMessage, ContentBlock, FORMAT_VERSION, MessageRole, Record, StopReason, ToolCall,
+    ToolSource, TurnEvent, TurnOutcome, TurnStatus, Usage,
 };
-use lca_provider::{CompletionRequest, ProtocolError, ToolCallAccumulator};
+
+pub(super) mod execute;
+pub(super) mod stream;
+use self::execute::{NestedGuard, NestedServer, tool_search_spec};
+use lca_provider::{CompletionRequest, ProtocolError};
 use lca_session::ViewMode;
 use lca_tools::{CancelFlag, ToolExecutor};
 
@@ -81,6 +82,34 @@ impl Agent<'_> {
         // or compaction work (SRDD hook points; `docs/flows.md`).
         self.config.extensions.on_pre_turn().await;
 
+        // Gh #77's nested server lives for exactly this turn: the
+        // `tools` import sends here from blocking threads while the
+        // turn serves on its own task. The guard clears the slot on
+        // every exit, so no request outlives its turn.
+        let (nested_tx, nested_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.config.extensions.install_nested(nested_tx);
+        // Gh #77's registry surface reaches every handle before the
+        // first provider call, so the `tools` import serves from any
+        // thread the turn's tools run on.
+        for handle in self.config.extensions.handles() {
+            handle.set_tools_view(self.config.extensions.as_tools_view());
+        }
+        let _nested_guard = NestedGuard {
+            registry: self.config.extensions.clone(),
+        };
+        let mut nested = NestedServer {
+            rx: nested_rx,
+            counts: std::collections::HashMap::new(),
+            records: std::collections::HashMap::new(),
+        };
+        // The active set this turn has recorded: the first request
+        // carries the opening set implicitly (the declaration
+        // itself); only mid-turn changes write entries (gh #77).
+        let mut active_seen = self.config.extensions.active_revision();
+        // Gh #45's settle summary counts rounds and tool calls.
+        let mut tool_calls = 0u32;
+        let mut settle_continued = false;
+
         let mut turn_usage = Usage::default();
         let mut rounds = 0u32;
         // Gh #36 phase 3: one overflow recovery per turn - compact and
@@ -98,7 +127,7 @@ impl Agent<'_> {
             }
 
             let request = match self
-                .assemble_request(input, &turn_record_id, rounds == 0, sink)
+                .assemble_request(input, &turn_record_id, rounds == 0, sink, &mut active_seen)
                 .await
             {
                 Ok(request) => request,
@@ -172,11 +201,53 @@ impl Agent<'_> {
             if let Err(outcome) = self.reject_incomplete(&response, sink, &turn_usage) {
                 return outcome;
             }
-            if let Err(outcome) = self.persist_response(&response, sink) {
+            if let Err(outcome) = self.persist_response(&response, sink).await {
                 return outcome;
             }
 
             if response.calls.is_empty() {
+                // Gh #45's actionable settle: `turn_end` handlers run
+                // first, then `agent_before_settle` gets the last word.
+                // Appends inject as context messages the next request
+                // sees; one continuation runs one more request, then the
+                // turn settles regardless (a handler cannot loop it).
+                if !settle_continued {
+                    let mut decision = self
+                        .config
+                        .extensions
+                        .settle_phase(false, rounds, tool_calls, "ok")
+                        .await;
+                    let late = self
+                        .config
+                        .extensions
+                        .settle_phase(true, rounds, tool_calls, "ok")
+                        .await;
+                    crate::registry::ExtensionRegistry::merge_append(&mut decision, late.append);
+                    decision.continue_once |= late.continue_once;
+                    if let Some(append) = decision.append
+                        && let Err(err) = self.store.append(
+                            self.session,
+                            Record::CustomMessage {
+                                v: FORMAT_VERSION,
+                                ts: lca_session::now_ms(),
+                                id: lca_session::new_record_id(),
+                                custom_type: "settle-append".to_string(),
+                                content: append,
+                                display: false,
+                                details: None,
+                            },
+                        )
+                    {
+                        return self.fail(
+                            StopReason::Error,
+                            format!("cannot record the settle append: {err}"),
+                        );
+                    }
+                    if decision.continue_once {
+                        settle_continued = true;
+                        continue;
+                    }
+                }
                 sink.on_event(TurnEvent::TurnEnded {
                     status: TurnStatus::Ok,
                     stop_reason: StopReason::Stop,
@@ -217,7 +288,8 @@ impl Agent<'_> {
 
             // Sequential execution inside one turn (FR-CONC-2).
             for call in &response.calls {
-                if let Err(outcome) = self.run_tool_call(call, sink, cancel).await {
+                tool_calls += 1;
+                if let Err(outcome) = self.run_tool_call(call, sink, cancel, &mut nested).await {
                     return outcome;
                 }
                 if cancel.is_cancelled() {
@@ -288,7 +360,32 @@ impl Agent<'_> {
         turn_record_id: &str,
         first_round: bool,
         sink: &mut dyn TurnSink,
+        active_seen: &mut u64,
     ) -> Result<CompletionRequest, TurnOutcome> {
+        // Gh #77's transcript entry: a mid-turn active-set change
+        // records before the next model request (pi appends tool and
+        // prompt changes at the same boundary), so the log shows
+        // what each request declared.
+        let revision = self.config.extensions.active_revision();
+        if revision != *active_seen {
+            *active_seen = revision;
+            let active = self.config.extensions.active_tools();
+            if let Err(err) = self.store.append(
+                self.session,
+                Record::Custom {
+                    v: FORMAT_VERSION,
+                    ts: lca_session::now_ms(),
+                    id: lca_session::new_record_id(),
+                    custom_type: "tool-set-change".to_string(),
+                    data: serde_json::json!({ "active": active }),
+                },
+            ) {
+                return Err(self.fail(
+                    StopReason::Error,
+                    format!("cannot record the tool change: {err}"),
+                ));
+            }
+        }
         let mut records = match self.store.read_with(self.session, ViewMode::Display) {
             Ok(outcome) => outcome.records,
             Err(err) => {
@@ -440,10 +537,16 @@ impl Agent<'_> {
     }
 
     /// The request's tools, routing identity, and thinking-level hint
-    /// (ADR-0023, R1).
+    /// (ADR-0023, R1). Extension tools declare through the exposure
+    /// filter (gh #77): only active `direct` tools; discovery
+    /// (`tool_search`) joins the list exactly while undisclosed
+    /// tools exist, so requests without any carry no new bytes.
     fn build_request(&self, messages: Vec<ChatMessage>, stable_prefix: usize) -> CompletionRequest {
         let mut tools = ToolExecutor::specs(self.tools.resolved_shell());
-        tools.extend(self.config.extensions.tool_specs());
+        tools.extend(self.config.extensions.declared_tool_specs());
+        if !self.config.extensions.tool_search("").is_empty() {
+            tools.push(tool_search_spec());
+        }
         let mut extras = std::collections::BTreeMap::new();
         // ADR-0023: the conversation's routing identity travels on every
         // request; the OpenCode Go endpoint requires its header and every
@@ -509,7 +612,7 @@ impl Agent<'_> {
     /// Persist the response: one assistant record plus one record per tool
     /// call, then surface the text and usage (docs/session-log-format.md).
     #[allow(clippy::result_large_err)]
-    fn persist_response(
+    async fn persist_response(
         &self,
         response: &CallResponse,
         sink: &mut dyn TurnSink,
@@ -546,6 +649,27 @@ impl Agent<'_> {
                 StopReason::Error,
                 format!("cannot write to the session log: {err}"),
             ));
+        }
+        // Gh #45's `message_end` fires for the finalized assistant
+        // message; a replacement lands as an append-only edit (never
+        // a rewrite), keeping role and tool linkage.
+        if !response.text.is_empty()
+            && let Some(replacement) = self
+                .config
+                .extensions
+                .message_end_replacement("assistant", &response.text)
+                .await
+        {
+            let _ = self.store.append(
+                self.session,
+                Record::ContextEdit {
+                    v: FORMAT_VERSION,
+                    ts: lca_session::now_ms(),
+                    id: lca_session::new_record_id(),
+                    target_id: assistant_id.clone(),
+                    replacement: Some(replacement),
+                },
+            );
         }
         // The doc's promise (session-log-format §meta.json): meta carries
         // the model and provider last used. Written here, where both are
@@ -584,242 +708,6 @@ impl Agent<'_> {
         sink.on_event(TurnEvent::MessageEnded { role: "assistant" });
         sink.on_event(TurnEvent::Usage(response.usage.clone()));
         Ok(())
-    }
-
-    /// One tool call: pre-tool hooks first (FR-CORE-10 — a hook denial
-    /// ends the call without ever prompting), then the permission layer
-    /// on whatever call survives (a replaced call passes through like
-    /// any other and is not re-hooked), then execution through the
-    /// dispatch table or the built-in table. The result record, the
-    /// sink event, and the `post-tool-use` hook all belong here so no
-    /// caller can forget one.
-    // TurnOutcome grew with Usage's cost buckets past clippy's preferred
-    // Err size; boxing it would ripple through every caller for a lint.
-    #[allow(clippy::result_large_err)]
-    async fn run_tool_call(
-        &mut self,
-        call: &ToolCall,
-        sink: &mut dyn TurnSink,
-        cancel: &CancelFlag,
-    ) -> Result<(), TurnOutcome> {
-        let registry = self.config.extensions.clone();
-        let mut hook_errors: Vec<(String, String)> = Vec::new();
-        let mut effective = call.clone();
-        let action = {
-            let mut observe = |handle: &Arc<dyn lca_ext_abi::ExtensionDispatch>,
-                               err: &DispatchError| {
-                hook_errors.push((handle.name().to_string(), err.to_string()));
-            };
-            registry.pre_tool_use(&effective, &mut observe).await
-        };
-        for (extension, detail) in hook_errors {
-            if let Err(err) = self.record_extension_event(&extension, "error", &detail, sink) {
-                return Err(self.fail(StopReason::Error, err));
-            }
-        }
-
-        // The card exists from the moment the model *asks*: pi builds tool
-        // cards while the call is still streaming, and the session log has
-        // already recorded the request (`Record::ToolCall` is written with
-        // the response, before any permission). Emitting the start here is
-        // what makes a denied, hook-refused, or schema-invalid call visible
-        // at all - it settles into the same card instead of leaving the
-        // transcript silent - and it keeps the `tool-call` envelope always
-        // preceding its `tool-result` (docs/headless.md).
-        sink.on_event(TurnEvent::ToolStarted(effective.clone()));
-
-        let result = match action {
-            HookAction::Deny(reason) => {
-                // No permission prompt: the hook already answered
-                // (FR-CORE-10).
-                ToolResult::denied(effective.call_id.clone(), reason)
-            }
-            HookAction::Replace(replacement) => {
-                effective = replacement;
-                self.execute_after_permission(&effective, &registry, sink, cancel)
-                    .await?
-            }
-            HookAction::Allow => {
-                self.execute_after_permission(&effective, &registry, sink, cancel)
-                    .await?
-            }
-        };
-
-        if let Err(err) = self.store.append(
-            self.session,
-            Record::ToolResult {
-                v: FORMAT_VERSION,
-                ts: lca_session::now_ms(),
-                id: lca_session::new_record_id(),
-                call_id: result.call_id.clone(),
-                status: result.status,
-                content: Some(result.content.clone()),
-                attachment: result.extras.get("attachment").cloned(),
-                truncated: result.truncated,
-                exit_code: result.exit_code,
-                full_output_path: result.full_output_path.clone(),
-            },
-        ) {
-            return Err(self.fail(
-                StopReason::Error,
-                format!("cannot write to the session log: {err}"),
-            ));
-        }
-        sink.on_event(TurnEvent::ToolFinished(result.clone()));
-        registry.on_post_tool_use(&effective, &result).await;
-        Ok(())
-    }
-
-    /// The permission layer plus execution (FR-TOOL-3's path), shared by
-    /// allow and replace.
-    #[allow(clippy::result_large_err)]
-    async fn execute_after_permission(
-        &mut self,
-        call: &ToolCall,
-        registry: &Arc<crate::registry::ExtensionRegistry>,
-        sink: &mut dyn TurnSink,
-        cancel: &CancelFlag,
-    ) -> Result<ToolResult, TurnOutcome> {
-        // Phase 2 seam note: hooks have already run by the time this is
-        // called (FR-CORE-10: hook before permission).
-        //
-        // Validate the arguments against the schema the model saw before the
-        // tool runs (extension authoring guide); an invalid call never reaches
-        // the tool. Extension schemas come from the registry, built-ins from
-        // the executor's own table.
-        let schema = registry
-            .tool_schema(&call.name)
-            .map(|spec| spec.parameters.clone())
-            .or_else(|| {
-                ToolExecutor::specs(self.tools.resolved_shell())
-                    .into_iter()
-                    .find(|spec| spec.name == call.name)
-                    .map(|spec| spec.parameters)
-            });
-        if let Some(schema) = schema
-            && let Err(reason) = lca_provider::validate_against_schema(&schema, &call.arguments)
-        {
-            return Ok(ToolResult::error(
-                call.call_id.clone(),
-                format!("invalid arguments for `{}`: {reason}", call.name),
-            ));
-        }
-        if let Some(action) = self.tools.required_permission(call) {
-            match self.authorize(call, &action) {
-                Ok(None) => {}
-                Ok(Some(denied)) => return Ok(denied),
-                Err(outcome) => return Err(outcome),
-            }
-        }
-
-        // Extension tool or built-in: one dispatch table, no mode
-        // branching at this call site beyond asking who owns the name
-        // (FR-EXT-6 lives in the registry's single trait).
-        if let Some(handle) = registry.tool_owner(&call.name).cloned() {
-            let executed = handle.execute_tool(call).await;
-            return Ok(match executed {
-                Ok(result) => result,
-                Err(err) => {
-                    let event = match err {
-                        DispatchError::Disabled => "disabled",
-                        _ => "error",
-                    };
-                    if let Err(write_err) =
-                        self.record_extension_event(handle.name(), event, &err.to_string(), sink)
-                    {
-                        return Err(self.fail(StopReason::Error, write_err));
-                    }
-                    ToolResult::error(call.call_id.clone(), err.to_string())
-                }
-            });
-        }
-
-        let cancel_for_tool = cancel.clone();
-        let mut sink_chunk = |chunk: &[u8]| {
-            sink.on_event(TurnEvent::ToolOutputChunk {
-                call_id: call.call_id.clone(),
-                chunk: String::from_utf8_lossy(chunk).into_owned(),
-            });
-        };
-        let result = self
-            .tools
-            .execute(call, &mut sink_chunk, &cancel_for_tool)
-            .await;
-        Ok(result)
-    }
-
-    /// The permission check for a gated tool: lock the shared store for the
-    /// authorize call only, record the decision, and report a denial as a
-    /// denied result. `Ok(None)` means proceed; `Ok(Some(result))` is the
-    /// denial to return.
-    #[allow(clippy::result_large_err)]
-    fn authorize(
-        &mut self,
-        call: &ToolCall,
-        action: &lca_permissions::Action,
-    ) -> Result<Option<ToolResult>, TurnOutcome> {
-        // The grant store is shared with every capability engine and the
-        // login flow, so it is locked for the authorize call only, never
-        // for the whole turn: an extension's own permission check during
-        // this turn re-enters through the same Arc.
-        let grants = self.grants.clone();
-        let mut guard = match grants.lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                return Err(self.fail(
-                    StopReason::Error,
-                    "permission store lock is poisoned".to_string(),
-                ));
-            }
-        };
-        let outcome = match lca_permissions::authorize(
-            &mut guard,
-            self.tools.workspace(),
-            action,
-            self.proposals,
-            self.prompt,
-        ) {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                // #152: a grant-store write failure warns instead of
-                // evaporating; the `~/.lca/logs/lca.log` line is what a
-                // later reader has when the turn itself only says it
-                // failed.
-                tracing::warn!(%err, "permission store error; failing the turn");
-                return Err(self.fail(StopReason::Error, format!("permission store error: {err}")));
-            }
-        };
-        // A prompted answer and a yolo answer both belong in the log; a
-        // rule denial is recorded too (ADR-0042: approve everything must
-        // never mean forget everything).
-        if outcome.prompted || outcome.denied_by_rule || outcome.yolo {
-            let record = Record::Permission {
-                v: FORMAT_VERSION,
-                ts: lca_session::now_ms(),
-                id: lca_session::new_record_id(),
-                action: action.display(),
-                decision: if outcome.stored_pattern.is_some() {
-                    lca_protocol::PermissionDecision::Always
-                } else if outcome.allowed {
-                    lca_protocol::PermissionDecision::Once
-                } else {
-                    lca_protocol::PermissionDecision::Denied
-                },
-                pattern: outcome.stored_pattern.clone(),
-            };
-            if let Err(err) = self.store.append(self.session, record) {
-                tracing::error!(%err, "cannot record permission decision");
-            }
-        }
-        if !outcome.allowed {
-            let reason = if outcome.denied_by_rule {
-                format!("A permission rule denied this action: {}", action.display())
-            } else {
-                format!("The user denied this action: {}", action.display())
-            };
-            return Ok(Some(ToolResult::denied(call.call_id.clone(), reason)));
-        }
-        Ok(None)
     }
 
     /// FR-SESS-4's budget check, then the shared compaction call.
@@ -878,6 +766,24 @@ impl Agent<'_> {
         if self.config.extensions.compaction_strategy().is_none() {
             return false;
         }
+        // Gh #45's veto runs before any compaction work: a deny
+        // cancels this compaction, and the cancellation observes as
+        // a failure with no error (the veto, not a breakdown).
+        if let Err(veto) = self.config.extensions.session_before_compact(reason).await {
+            // The veto is the operator-visible outcome (not a silent
+            // skip): the failure hook observes the cancellation, and
+            // the event names the refusing reason.
+            sink.on_event(TurnEvent::Error {
+                message: format!("compaction vetoed: {veto}"),
+                class: "vetoed".to_string(),
+                retryable: false,
+            });
+            self.config
+                .extensions
+                .session_compact_failed(reason, None)
+                .await;
+            return false;
+        }
         // The candidate range ends at this turn's own user record; the
         // cut planner holds the keep-recent window verbatim, anchors
         // the kept boundary, and never splits a tool pair.
@@ -924,7 +830,9 @@ impl Agent<'_> {
         {
             let _ = self.store.append(self.session, change);
         }
-        compact_candidate(
+        // Gh #45's failure observation: a strategy breakdown reports
+        // with its error; the veto path above already reported.
+        let ok = compact_candidate(
             self.store,
             self.session,
             &self.config.extensions,
@@ -940,173 +848,14 @@ impl Agent<'_> {
             reason,
         )
         .await
-        .is_ok()
-    }
-
-    /// One completion call, with retry (FR-CORE-6) and cancellation
-    /// (FR-CONC-3: dropping the producer stops the in-flight stream).
-    pub(super) async fn provider_call(
-        &self,
-        request: CompletionRequest,
-        sink: &mut dyn TurnSink,
-        cancel: &CancelFlag,
-    ) -> Result<CallResponse, CallFail> {
-        let mut attempt = 0u32;
-        loop {
-            match self.stream_once(request.clone(), sink, cancel).await {
-                Ok(response) => {
-                    if attempt > 0 {
-                        sink.on_event(TurnEvent::RetryFinished { success: true });
-                    }
-                    return Ok(response);
-                }
-                Err(CallFail::Cancelled) => return Err(CallFail::Cancelled),
-                Err(CallFail::Provider {
-                    message,
-                    class,
-                    retryable,
-                }) => {
-                    if retryable && attempt < self.config.retry_limit {
-                        let delay = self
-                            .config
-                            .retry_base_delay
-                            .saturating_mul(1u32 << attempt.min(6));
-                        sink.on_event(TurnEvent::RetryScheduled {
-                            attempt: attempt + 1,
-                            max: self.config.retry_limit,
-                            delay_ms: delay.as_millis() as u64,
-                            error: message.clone(),
-                        });
-                        if !delay.is_zero() {
-                            tokio::select! {
-                                _ = tokio::time::sleep(delay) => {}
-                                _ = cancel.wait_cancelled() => return Err(CallFail::Cancelled),
-                            }
-                        } else if cancel.is_cancelled() {
-                            return Err(CallFail::Cancelled);
-                        }
-                        attempt += 1;
-                        continue;
-                    }
-                    // FR-CORE-7: the user sees that retries were tried and
-                    // gave up, not just the raw transport error.
-                    let message = if retryable && attempt > 0 {
-                        sink.on_event(TurnEvent::RetryFinished { success: false });
-                        format!("{message} (retries exhausted after {attempt})")
-                    } else {
-                        message
-                    };
-                    return Err(CallFail::Provider {
-                        message,
-                        class,
-                        retryable,
-                    });
-                }
-            }
+        .is_ok();
+        if !ok {
+            self.config
+                .extensions
+                .session_compact_failed(reason, Some("the compaction strategy failed"))
+                .await;
         }
-    }
-
-    async fn stream_once(
-        &self,
-        request: CompletionRequest,
-        sink: &mut dyn TurnSink,
-        cancel: &CancelFlag,
-    ) -> Result<CallResponse, CallFail> {
-        sink.on_event(TurnEvent::MessageStarted { role: "assistant" });
-        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
-        let producer = self.provider.stream(request, tx);
-        tokio::pin!(producer);
-
-        let mut text = String::new();
-        let mut reasoning = String::new();
-        let mut acc = ToolCallAccumulator::default();
-        let mut usage = Usage::default();
-        let mut failure: Option<(String, &'static str, bool)> = None;
-        let mut natural_end = false;
-
-        loop {
-            tokio::select! {
-                biased;
-                _ = cancel.wait_cancelled() => return Err(CallFail::Cancelled),
-                item = rx.recv() => match item {
-                    Some(StreamEvent::TextDelta { delta }) => {
-                        text.push_str(&delta);
-                        sink.on_event(TurnEvent::TextDelta(delta));
-                    }
-                    Some(StreamEvent::ReasoningDelta { delta }) => {
-                        reasoning.push_str(&delta);
-                        sink.on_event(TurnEvent::ReasoningDelta(delta));
-                    }
-                    Some(event @ (StreamEvent::ToolCallStart { .. }
-                    | StreamEvent::ToolCallArgDelta { .. }
-                    | StreamEvent::ToolCallEnd { .. })) => acc.handle(event),
-                    Some(StreamEvent::Usage { usage: reported }) => usage = reported,
-                    Some(StreamEvent::Error { message, retryable }) => {
-                        failure = Some((message, "transport", retryable));
-                        break;
-                    }
-                    Some(StreamEvent::VendorEvent { kind, payload }) => {
-                        tracing::debug!(%kind, %payload, "vendor event");
-                    }
-                    None => break,
-                },
-                produced = &mut producer => {
-                    // The producer finished; drain whatever it buffered.
-                    if let Err(err) = produced {
-                        failure = Some((err.message, err.class, err.retryable));
-                    }
-                    while let Some(item) = rx.recv().await {
-                        match item {
-                            StreamEvent::TextDelta { delta } => {
-                                text.push_str(&delta);
-                                sink.on_event(TurnEvent::TextDelta(delta));
-                            }
-                            StreamEvent::ReasoningDelta { delta } => {
-                                reasoning.push_str(&delta);
-                                sink.on_event(TurnEvent::ReasoningDelta(delta));
-                            }
-                            event @ (StreamEvent::ToolCallStart { .. }
-                            | StreamEvent::ToolCallArgDelta { .. }
-                            | StreamEvent::ToolCallEnd { .. }) => acc.handle(event),
-                            StreamEvent::Usage { usage: reported } => usage = reported,
-                            StreamEvent::Error { message, retryable } => {
-                                failure = Some((message, "transport", retryable));
-                            }
-                            StreamEvent::VendorEvent { kind, payload } => {
-                                tracing::debug!(%kind, %payload, "vendor event");
-                            }
-                        }
-                    }
-                    natural_end = failure.is_none();
-                    break;
-                }
-            }
-        }
-
-        if let Some((message, class, retryable)) = failure {
-            return Err(CallFail::Provider {
-                message,
-                class: class.to_string(),
-                retryable,
-            });
-        }
-        let (mut calls, protocol_errors) = acc.finish(natural_end);
-        // Pi-name aliases dispatch as their canonical tool (gh #119):
-        // one seam, before records, permission, and dispatch see the name.
-        for call in &mut calls {
-            call.name = lca_tools::canonical_tool_name(&call.name).to_string();
-        }
-        Ok(CallResponse {
-            text,
-            reasoning: if reasoning.is_empty() {
-                None
-            } else {
-                Some(reasoning)
-            },
-            calls,
-            protocol_errors,
-            usage,
-        })
+        ok
     }
 }
 

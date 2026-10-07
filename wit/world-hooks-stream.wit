@@ -1,0 +1,23 @@
+package lca:ext@0.6.0;
+
+/// The `hooks-stream` world: `provider_stream_event` observation
+/// (gh #45, pi's `provider_stream_event`). The host's events are the
+/// normalized stream (text and reasoning deltas, tool-call opens and
+/// argument fragments, usage), each labeled with the provider and
+/// model that produced it - the observation point pi's raw `data`
+/// becomes once the host normalizes it. Observe-only, in order, after
+/// the stream closes: observation never steers or stalls a live
+/// stream. Opt-in by declaring it in the manifest.
+world hooks-stream {
+  import lca:host/log@0.6.0;
+  export hook-stream-event;
+}
+
+interface hook-stream-event {
+  /// One normalized provider event. `kind` is the host's own stream
+  /// vocabulary (`text-delta`, `reasoning-delta`, `tool-call-start`,
+  /// `tool-call-arg-delta`, `usage`, `vendor-event`); `data` is the
+  /// event's payload (the delta text, the tool name, the argument
+  /// fragment) or empty where the kind carries none.
+  on-stream-event: func(provider: string, model: string, kind: string, data: string);
+}

@@ -1,48 +1,112 @@
 use super::*;
 use lca_tools::Capabilities;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// The native twin of the guest's `Cap`: it calls the same
 /// [`Capabilities`] engine the WASM host's imports call.
-/// The native twin's capability handle: the shared engine plus its own
+/// The native twin's capability handle: the shared engine, its own
 /// injected dialog prompter (gh #124 - the fixture answers both twins
-/// through scripted prompters, so the verdicts agree by construction).
-pub struct NativeCap(pub Arc<Capabilities>, pub lca_permissions::SharedDialogs);
+/// through scripted prompters, so the verdicts agree by construction),
+/// and the tool registry surface backing nested calls (gh #77).
+pub struct NativeCap {
+    cap: Arc<Capabilities>,
+    dialogs: lca_permissions::SharedDialogs,
+    tools_view: Option<Arc<dyn lca_ext_abi::ToolsRegistryView>>,
+}
 
 impl Cap for NativeCap {
     fn dialog_confirm(&self, title: &str, message: &str) -> Result<bool, String> {
         use lca_permissions::DialogPrompt;
-        Ok(self.1.clone().confirm(title, message))
+        Ok(self.dialogs.clone().confirm(title, message))
+    }
+    fn tools_execute(&self, parent_call_id: &str, name: &str, args: &str) -> ModeOutcome {
+        // The native twin of the `tools` import (gh #77): the grant
+        // gates first, exactly like the guest's import.
+        if let Err(err) = self.cap.check_tools() {
+            return ModeOutcome {
+                ok: false,
+                text: err.to_string(),
+            };
+        }
+        // Without a loaded registry there is nothing to call
+        // through, and both twins report the same absence.
+        let Some(view) = &self.tools_view else {
+            return ModeOutcome {
+                ok: false,
+                text: "no tool registry is loaded".to_string(),
+            };
+        };
+        if view.is_callable(name) {
+            // A registry-backed native runs inside a turn in the real
+            // path (the turn serves); standalone, the slot is absent
+            // and the call fails the same way the guest's would.
+            match view.nested_slot() {
+                Some(slot) => {
+                    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+                    let request = lca_ext_abi::NestedCall {
+                        parent_call_id: parent_call_id.to_string(),
+                        name: name.to_string(),
+                        arguments: args.to_string(),
+                        reply: reply_tx,
+                    };
+                    if slot.send(request).is_err() {
+                        return ModeOutcome {
+                            ok: false,
+                            text: "the turn is gone; the nested call was dropped".to_string(),
+                        };
+                    }
+                    match reply_rx.recv() {
+                        Ok(result) => ModeOutcome {
+                            ok: result.status == lca_protocol::ToolResultStatus::Ok,
+                            text: result.content,
+                        },
+                        Err(_) => ModeOutcome {
+                            ok: false,
+                            text: "the turn dropped the nested call".to_string(),
+                        },
+                    }
+                }
+                None => ModeOutcome {
+                    ok: false,
+                    text: "no turn is running to serve the nested call".to_string(),
+                },
+            }
+        } else {
+            ModeOutcome {
+                ok: false,
+                text: format!("tool `{name}` is not callable right now"),
+            }
+        }
     }
     fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, CapabilityError> {
-        self.0.fs_read(scope, path)
+        self.cap.fs_read(scope, path)
     }
     fn fs_write(&self, scope: &str, path: &str, bytes: &[u8]) -> Result<(), CapabilityError> {
-        self.0.fs_write(scope, path, bytes)
+        self.cap.fs_write(scope, path, bytes)
     }
     fn fs_stat(&self, scope: &str, path: &str) -> Result<(bool, u64), CapabilityError> {
-        self.0.fs_stat(scope, path)
+        self.cap.fs_stat(scope, path)
     }
     fn fs_list(&self, scope: &str, path: &str) -> Result<Vec<String>, CapabilityError> {
-        self.0.fs_list(scope, path)
+        self.cap.fs_list(scope, path)
     }
     fn resource_list(&self, prefix: &str) -> Result<Vec<(String, u64)>, CapabilityError> {
-        self.0.resource_list(prefix)
+        self.cap.resource_list(prefix)
     }
     fn resource_read(&self, path: &str) -> Result<Vec<u8>, CapabilityError> {
-        self.0.resource_read(path)
+        self.cap.resource_read(path)
     }
     fn state_read(&self, key: &str) -> Result<Option<Vec<u8>>, CapabilityError> {
-        self.0.state_read(key)
+        self.cap.state_read(key)
     }
     fn state_write(&self, key: &str, value: &[u8]) -> Result<(), CapabilityError> {
-        self.0.state_write(key, value)
+        self.cap.state_write(key, value)
     }
     fn state_delete(&self, key: &str) -> Result<(), CapabilityError> {
-        self.0.state_delete(key)
+        self.cap.state_delete(key)
     }
     fn state_list(&self) -> Result<Vec<(String, u64)>, CapabilityError> {
-        self.0.state_list()
+        self.cap.state_list()
     }
     fn process_spawn(
         &self,
@@ -50,30 +114,30 @@ impl Cap for NativeCap {
         args: &[String],
         cwd: &str,
     ) -> Result<u32, CapabilityError> {
-        self.0.process_spawn(program, args, cwd)
+        self.cap.process_spawn(program, args, cwd)
     }
     fn process_read_stdout(
         &self,
         handle: u32,
         max: usize,
     ) -> Result<Option<Vec<u8>>, CapabilityError> {
-        self.0.process_read_stdout(handle, max)
+        self.cap.process_read_stdout(handle, max)
     }
     fn process_read_stderr(
         &self,
         handle: u32,
         max: usize,
     ) -> Result<Option<Vec<u8>>, CapabilityError> {
-        self.0.process_read_stderr(handle, max)
+        self.cap.process_read_stderr(handle, max)
     }
     fn process_write_stdin(&self, handle: u32, bytes: &[u8]) -> Result<u64, CapabilityError> {
-        self.0.process_write_stdin(handle, bytes)
+        self.cap.process_write_stdin(handle, bytes)
     }
     fn process_wait(&self, handle: u32) -> Result<i32, CapabilityError> {
-        self.0.process_wait(handle)
+        self.cap.process_wait(handle)
     }
     fn process_kill(&self, handle: u32) -> Result<(), CapabilityError> {
-        self.0.process_kill(handle)
+        self.cap.process_kill(handle)
     }
     fn pty_spawn(
         &self,
@@ -83,46 +147,46 @@ impl Cap for NativeCap {
         rows: u16,
         cols: u16,
     ) -> Result<u32, CapabilityError> {
-        self.0.pty_spawn(program, args, cwd, rows, cols)
+        self.cap.pty_spawn(program, args, cwd, rows, cols)
     }
     fn pty_read(&self, handle: u32, max: usize) -> Result<Option<Vec<u8>>, CapabilityError> {
-        self.0.pty_read(handle, max)
+        self.cap.pty_read(handle, max)
     }
     fn pty_write(&self, handle: u32, bytes: &[u8]) -> Result<u64, CapabilityError> {
-        self.0.pty_write(handle, bytes)
+        self.cap.pty_write(handle, bytes)
     }
     fn pty_resize(&self, handle: u32, rows: u16, cols: u16) -> Result<(), CapabilityError> {
-        self.0.pty_resize(handle, rows, cols)
+        self.cap.pty_resize(handle, rows, cols)
     }
     fn pty_wait(&self, handle: u32) -> Result<i32, CapabilityError> {
-        self.0.pty_wait(handle)
+        self.cap.pty_wait(handle)
     }
     fn pty_kill(&self, handle: u32) -> Result<(), CapabilityError> {
-        self.0.pty_kill(handle)
+        self.cap.pty_kill(handle)
     }
 }
 
 impl crate::IdentityCap for NativeCap {
     fn credentials_set(&self, key: &str, value: &str) -> Result<(), CapabilityError> {
-        self.0.credentials_set(key, value)
+        self.cap.credentials_set(key, value)
     }
     fn credentials_get(&self, key: &str) -> Result<Option<String>, CapabilityError> {
-        self.0.credentials_get(key)
+        self.cap.credentials_get(key)
     }
     fn credentials_delete(&self, key: &str) -> Result<(), CapabilityError> {
-        self.0.credentials_delete(key)
+        self.cap.credentials_delete(key)
     }
     fn oauth_begin(&self, redirect_path: &str) -> Result<(String, u32), CapabilityError> {
-        self.0.oauth_begin(redirect_path)
+        self.cap.oauth_begin(redirect_path)
     }
     fn oauth_open(&self, url: &str) -> Result<(), CapabilityError> {
-        self.0.oauth_open(url)
+        self.cap.oauth_open(url)
     }
     fn oauth_await(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError> {
-        self.0.oauth_await(handle)
+        self.cap.oauth_await(handle)
     }
     fn oauth_end(&self, handle: u32) -> Result<(), CapabilityError> {
-        self.0.oauth_end(handle)
+        self.cap.oauth_end(handle)
     }
 }
 
@@ -131,6 +195,7 @@ impl crate::IdentityCap for NativeCap {
 pub struct NativeConformance {
     cap: Arc<Capabilities>,
     dialogs: lca_permissions::SharedDialogs,
+    tools_view: Mutex<Option<Arc<dyn lca_ext_abi::ToolsRegistryView>>>,
 }
 
 impl NativeConformance {
@@ -139,6 +204,7 @@ impl NativeConformance {
         NativeConformance {
             cap,
             dialogs: lca_permissions::SharedDialogs::default(),
+            tools_view: Mutex::new(None),
         }
     }
 
@@ -156,6 +222,9 @@ impl NativeConformance {
             name,
             description,
             parameters: serde_json::from_str(&parameters).expect("schema is json"),
+            exposure: lca_protocol::ToolExposure::Direct,
+            namespace: None,
+            annotations: None,
             extras: Default::default(),
         }
     }
@@ -165,7 +234,16 @@ impl NativeConformance {
     pub fn execute(&self, call: &ToolCall) -> ToolResult {
         let (mode, args) = mode_and_args(&call.arguments);
         let outcome = run_shared(
-            &NativeCap(self.cap.clone(), self.dialogs.clone()),
+            &NativeCap {
+                cap: self.cap.clone(),
+                dialogs: self.dialogs.clone(),
+                tools_view: self
+                    .tools_view
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .clone(),
+            },
+            &call.call_id,
             &mode,
             &args,
         );
@@ -185,8 +263,17 @@ impl lca_ext_abi::ExtensionDispatch for NativeConformance {
     fn worlds(&self) -> Vec<lca_ext_abi::World> {
         vec![
             lca_ext_abi::World::Tool,
+            lca_ext_abi::World::ToolCatalog,
             lca_ext_abi::World::Command,
             lca_ext_abi::World::Hooks,
+            lca_ext_abi::World::HooksMessage,
+            lca_ext_abi::World::HooksToolCall,
+            lca_ext_abi::World::HooksToolResult,
+            lca_ext_abi::World::HooksStream,
+            lca_ext_abi::World::HooksSettle,
+            lca_ext_abi::World::HooksCompaction,
+            lca_ext_abi::World::HooksCache,
+            lca_ext_abi::World::HooksTrust,
             lca_ext_abi::World::Provider,
             lca_ext_abi::World::Compaction,
             lca_ext_abi::World::ContextTransform,
@@ -294,10 +381,11 @@ impl lca_ext_abi::ExtensionDispatch for NativeConformance {
         // Lazy: the oauth flow blocks in `oauth_await`, so the caller
         // must be able to run this future off the test thread.
         Box::pin(async move {
-            Ok(crate::scripted_login(&NativeCap(
+            Ok(crate::scripted_login(&NativeCap {
                 cap,
-                lca_permissions::SharedDialogs::default(),
-            )))
+                dialogs: lca_permissions::SharedDialogs::default(),
+                tools_view: None,
+            }))
         })
     }
 
@@ -361,8 +449,17 @@ impl lca_ext_abi::ExtensionDispatch for NativeConformance {
         self.cap.reset_cancellation();
     }
 
+    fn set_tools_view(&self, view: Arc<dyn lca_ext_abi::ToolsRegistryView>) {
+        *self
+            .tools_view
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(view);
+    }
+
     fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {
-        Ok(vec![self.schema()])
+        // The suite serves every tool through the catalog (gh #77);
+        // the twin matches the guest exactly.
+        Ok(crate::catalog_specs())
     }
 
     fn execute_tool<'a>(
@@ -417,6 +514,82 @@ impl lca_ext_abi::ExtensionDispatch for NativeConformance {
         _status: &'a str,
     ) -> lca_ext_abi::DispatchFuture<'a, Result<(), lca_protocol::DispatchError>> {
         Box::pin(std::future::ready(Ok(())))
+    }
+
+    // Gh #45's twins: marker-gated behavior, inert by default, so
+    // ordinary turns never notice them. The guest mirrors every
+    // branch; the cross-mode tests drive the markers directly.
+    fn on_message_end<'a>(
+        &'a self,
+        _role: &'a str,
+        text: &'a str,
+    ) -> lca_ext_abi::DispatchFuture<'a, Result<Option<String>, lca_protocol::DispatchError>> {
+        let replacement = crate::redact_text(text);
+        Box::pin(std::future::ready(Ok(replacement)))
+    }
+
+    fn on_tool_call<'a>(
+        &'a self,
+        call: &'a ToolCall,
+    ) -> lca_ext_abi::DispatchFuture<
+        'a,
+        Result<lca_protocol::ToolCallPatch, lca_protocol::DispatchError>,
+    > {
+        let patch = crate::mutate_args(&call.arguments);
+        Box::pin(std::future::ready(Ok(patch)))
+    }
+
+    fn on_tool_result<'a>(
+        &'a self,
+        _call: &'a ToolCall,
+        result: &'a lca_protocol::ToolResult,
+    ) -> lca_ext_abi::DispatchFuture<
+        'a,
+        Result<lca_protocol::ToolResultPatch, lca_protocol::DispatchError>,
+    > {
+        let patch = lca_protocol::ToolResultPatch {
+            content: crate::redact_text(&result.content),
+            is_error: None,
+        };
+        Box::pin(std::future::ready(Ok(patch)))
+    }
+
+    fn on_session_before_compact<'a>(
+        &'a self,
+        _reason: &'a str,
+    ) -> lca_ext_abi::DispatchFuture<
+        'a,
+        Result<lca_protocol::CompactVerdict, lca_protocol::DispatchError>,
+    > {
+        Box::pin(std::future::ready(Ok(lca_protocol::CompactVerdict::Allow)))
+    }
+
+    fn on_cache_warming_decision<'a>(
+        &'a self,
+        _provider: &'a str,
+        model: &'a str,
+    ) -> lca_ext_abi::DispatchFuture<'a, Result<bool, lca_protocol::DispatchError>> {
+        // Marker-gated vote: models carrying `no-warm` decline.
+        Box::pin(std::future::ready(Ok(!model.contains("no-warm"))))
+    }
+
+    fn on_project_trust<'a>(
+        &'a self,
+        cwd: &'a str,
+    ) -> lca_ext_abi::DispatchFuture<
+        'a,
+        Result<(lca_protocol::TrustVote, bool), lca_protocol::DispatchError>,
+    > {
+        // Marker-gated vote: fixture paths decide, everything else
+        // falls through to the operator.
+        let vote = if cwd.contains("trust-yes") {
+            (lca_protocol::TrustVote::Yes, true)
+        } else if cwd.contains("trust-no") {
+            (lca_protocol::TrustVote::No, false)
+        } else {
+            (lca_protocol::TrustVote::Undecided, false)
+        };
+        Box::pin(std::future::ready(Ok(vote)))
     }
 
     fn on_attention_required<'a>(

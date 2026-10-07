@@ -220,6 +220,7 @@ fn from_wit_request(request: provider_completion::CompletionRequest) -> Completi
                     call_id: call.call_id.clone(),
                     name: call.name.clone(),
                     arguments: call.arguments.clone(),
+                    parent_call_id: None,
                 })
                 .collect(),
             tool_call_id: message.tool_call_id.clone(),
@@ -237,6 +238,9 @@ fn from_wit_request(request: provider_completion::CompletionRequest) -> Completi
             description: tool.description.clone(),
             parameters: serde_json::from_str(&tool.parameters)
                 .unwrap_or_else(|_| serde_json::json!({ "type": "object" })),
+            exposure: lca_protocol::ToolExposure::Direct,
+            namespace: None,
+            annotations: None,
             extras: tool
                 .extras
                 .iter()

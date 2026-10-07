@@ -89,6 +89,7 @@ fn a_finished_tool_call_names_the_tool_not_the_call_id() {
         call_id: "call-abc123".into(),
         name: "read".into(),
         arguments: "{\"path\":\"stats.py\"}".into(),
+        parent_call_id: None,
     }));
     chat.on_turn_event(TurnEvent::ToolFinished(ToolResult::ok(
         "call-abc123",

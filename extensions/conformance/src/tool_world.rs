@@ -10,6 +10,7 @@ wit_bindgen::generate!({
         "lca:host/ui-dialogs@0.6.0": generate,
         "lca:host/resources@0.6.0": generate,
         "lca:host/state@0.6.0": generate,
+        "lca:host/tools@0.6.0": generate,
     },
 });
 
@@ -74,11 +75,20 @@ fn map_state(err: state::Error) -> crate::CapabilityError {
 }
 
 /// The guest's capability view: host imports behind every call.
-struct GuestCap;
+/// Shared with the catalog world: one guest, one host.
+pub(crate) struct GuestCap;
 
 impl Cap for GuestCap {
     fn dialog_confirm(&self, title: &str, message: &str) -> Result<bool, String> {
         lca::host::ui_dialogs::confirm(title, message)
+    }
+    fn tools_execute(&self, _parent_call_id: &str, name: &str, args: &str) -> crate::ModeOutcome {
+        // The host parents the call; the guest only names it (gh #77).
+        let result = lca::host::tools::execute_tool(name, args);
+        crate::ModeOutcome {
+            ok: !result.is_error,
+            text: result.content,
+        }
     }
     fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, crate::CapabilityError> {
         fs::read(scope, path).map_err(map_fs)
@@ -209,32 +219,10 @@ impl SchemaGuest for ToolComponent {
 impl ExecuteTrait for ToolComponent {
     fn run(call: ToolCall) -> WasmResult {
         let (mode, args) = mode_and_args(&call.arguments);
-        let outcome = match mode.as_str() {
-            "trap" => panic!("conformance trap requested"),
-            "loop" => loop {
-                std::hint::spin_loop();
-            },
-            "log" => {
-                log::info(&"x".repeat(50_000));
-                ModeOutcome {
-                    ok: true,
-                    text: "logged".to_string(),
-                }
-            }
-            "alloc" => {
-                let mut hog: Vec<Vec<u8>> = Vec::new();
-                for i in 0..64u64 {
-                    let mut block = vec![0u8; 4 * 1024 * 1024];
-                    block[0] = i as u8;
-                    hog.push(block);
-                }
-                ModeOutcome {
-                    ok: true,
-                    text: "allocated".to_string(),
-                }
-            }
-            _ => run_shared(&GuestCap, &mode, &args),
-        };
+        if mode == "log" {
+            log::info(&"x".repeat(50_000));
+        }
+        let outcome = crate::run_tool_mode(&GuestCap, &call.call_id, &mode, &args);
         WasmResult {
             call_id: call.call_id,
             status: if outcome.ok { "ok" } else { "error" }.to_string(),

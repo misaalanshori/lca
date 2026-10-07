@@ -15,6 +15,7 @@ struct FakeExt {
     tools: Vec<ToolSpec>,
     commands: Vec<CommandSpec>,
     slots: Vec<String>,
+    patch: Option<lca_protocol::ToolCallPatch>,
 }
 
 impl FakeExt {
@@ -26,7 +27,15 @@ impl FakeExt {
             tools: Vec::new(),
             commands: Vec::new(),
             slots: Vec::new(),
+            patch: None,
         }
+    }
+
+    /// Answer every `tool_call` hook with this patch (gh #45's chain).
+    fn with_patch(mut self, patch: lca_protocol::ToolCallPatch) -> FakeExt {
+        self.worlds.push(World::HooksToolCall);
+        self.patch = Some(patch);
+        self
     }
 
     fn with_tool(mut self, tool: &str) -> FakeExt {
@@ -35,6 +44,9 @@ impl FakeExt {
             name: tool.to_string(),
             description: "test tool".to_string(),
             parameters: serde_json::json!({"type": "object"}),
+            exposure: ToolExposure::Direct,
+            namespace: None,
+            annotations: None,
             extras: Default::default(),
         });
         self
@@ -95,6 +107,15 @@ impl ExtensionDispatch for FakeExt {
     ) -> lca_ext_abi::DispatchFuture<'a, Result<HookAction, DispatchError>> {
         Box::pin(std::future::ready(Ok(HookAction::Allow)))
     }
+    fn on_tool_call<'a>(
+        &'a self,
+        _call: &'a ToolCall,
+    ) -> lca_ext_abi::DispatchFuture<'a, Result<lca_protocol::ToolCallPatch, DispatchError>> {
+        Box::pin(std::future::ready(Ok(self
+            .patch
+            .clone()
+            .unwrap_or_default())))
+    }
 
     fn on_post_tool_use<'a>(
         &'a self,
@@ -136,6 +157,9 @@ fn spec_name(tool: &str) -> ToolSpec {
         name: tool.to_string(),
         description: String::new(),
         parameters: serde_json::json!({}),
+        exposure: ToolExposure::Direct,
+        namespace: None,
+        annotations: None,
         extras: Default::default(),
     }
 }
@@ -373,7 +397,8 @@ fn the_native_conformance_handle_registers_through_the_table() {
             "conformance submitted".to_string()
         ))
     );
-    assert_eq!(registry.tool_specs().len(), 1);
+    // Gh #77's suite: three tools through the table, sorted.
+    assert_eq!(registry.tool_specs().len(), 3);
     let _ = spec_name("unused");
 }
 
@@ -391,4 +416,237 @@ fn tool_specs_are_sorted_for_a_stable_request() {
         .map(|spec| spec.name)
         .collect();
     assert_eq!(names, vec!["aardvark".to_string(), "zebra".to_string()]);
+}
+
+// ---------------------------------------------------------------------------
+// Gh #77: exposure, namespaces, and dynamic activation.
+// ---------------------------------------------------------------------------
+
+use lca_protocol::{ToolAnnotations, ToolExposure, ToolNamespace};
+
+impl FakeExt {
+    fn with_suite_tool(
+        mut self,
+        tool: &str,
+        exposure: ToolExposure,
+        namespace: Option<ToolNamespace>,
+    ) -> FakeExt {
+        if !self.worlds.contains(&World::Tool) {
+            self.worlds.push(World::Tool);
+        }
+        self.tools.push(ToolSpec {
+            name: tool.to_string(),
+            description: format!("{tool} tool"),
+            parameters: serde_json::json!({"type": "object"}),
+            exposure,
+            namespace,
+            annotations: None,
+            extras: Default::default(),
+        });
+        self
+    }
+}
+
+impl FakeExt {
+    fn with_annotated_tool(mut self, tool: &str) -> FakeExt {
+        if !self.worlds.contains(&World::Tool) {
+            self.worlds.push(World::Tool);
+        }
+        self.tools.push(ToolSpec {
+            name: tool.to_string(),
+            description: format!("{tool} tool"),
+            parameters: serde_json::json!({"type": "object"}),
+            exposure: ToolExposure::Direct,
+            namespace: None,
+            annotations: Some(ToolAnnotations {
+                read_only_hint: Some(true),
+                destructive_hint: Some(false),
+                idempotent_hint: None,
+                open_world_hint: None,
+            }),
+            extras: Default::default(),
+        });
+        self
+    }
+}
+
+fn namespaced(name: &str) -> Option<ToolNamespace> {
+    Some(ToolNamespace {
+        name: name.to_string(),
+        description: format!("{name} things"),
+        instructions: None,
+    })
+}
+
+// Verifies: gh #77 - only `direct` tools are declared to the model;
+// hidden and model-only tools never are.
+#[test]
+fn only_direct_tools_are_declared_to_the_model() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(
+        FakeExt::new("suite")
+            .with_suite_tool("seen", ToolExposure::Direct, None)
+            .with_suite_tool("quiet", ToolExposure::ModelOnly, None)
+            .with_suite_tool("lazy", ToolExposure::Deferred, None)
+            .with_suite_tool("gone", ToolExposure::Hidden, None),
+    ));
+    let declared: Vec<String> = registry
+        .declared_tool_specs()
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect();
+    assert_eq!(declared, vec!["seen".to_string()]);
+}
+
+// Verifies: gh #77 - namespace grouping rows name the namespace and
+// its tools.
+#[test]
+fn namespaces_group_their_tools() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(
+        FakeExt::new("suite")
+            .with_suite_tool("gh_open", ToolExposure::Direct, namespaced("github"))
+            .with_suite_tool("gh_close", ToolExposure::Direct, namespaced("github"))
+            .with_suite_tool("lonely", ToolExposure::Direct, None),
+    ));
+    let groups = registry.namespaces();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].name, "github");
+    assert_eq!(
+        groups[0].tools,
+        vec!["gh_close".to_string(), "gh_open".to_string()]
+    );
+}
+
+// Verifies: gh #77 - deferred tools resolve on first use: search
+// finds them, activation declares them, unknown names are ignored.
+#[test]
+fn a_deferred_tool_resolves_on_first_use() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(
+        FakeExt::new("suite")
+            .with_suite_tool("seen", ToolExposure::Direct, None)
+            .with_suite_tool("lazy", ToolExposure::Deferred, namespaced("github")),
+    ));
+    let found: Vec<String> = registry
+        .tool_search("lazy")
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect();
+    assert_eq!(found, vec!["lazy".to_string()]);
+    // Hidden tools are unreachable even to search.
+    registry.register(Arc::new(FakeExt::new("hideout").with_suite_tool(
+        "gone",
+        ToolExposure::Hidden,
+        None,
+    )));
+    assert!(registry.tool_search("gone").is_empty());
+    // Activation applies registered names and ignores the rest;
+    // the set replaces, so `seen` must be named to stay declared.
+    let (applied, ignored) =
+        registry.set_active_tools(&["lazy".to_string(), "seen".to_string(), "nope".to_string()]);
+    assert_eq!(applied, vec!["lazy".to_string(), "seen".to_string()]);
+    assert_eq!(ignored, vec!["nope".to_string()]);
+    // A deferred tool stays undeclared even when active: discovery,
+    // not declaration, is its path to the model.
+    let declared: Vec<String> = registry
+        .declared_tool_specs()
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect();
+    assert_eq!(declared, vec!["seen".to_string()]);
+}
+
+// Verifies: gh #77 - callable means direct-while-active plus
+// codemode/deferred-while-registered; model-only and hidden never.
+#[test]
+fn callable_is_direct_active_plus_registered_codemode() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(
+        FakeExt::new("suite")
+            .with_suite_tool("seen", ToolExposure::Direct, None)
+            .with_suite_tool("code", ToolExposure::Codemode, None)
+            .with_suite_tool("lazy", ToolExposure::Deferred, None)
+            .with_suite_tool("quiet", ToolExposure::ModelOnly, None)
+            .with_suite_tool("gone", ToolExposure::Hidden, None),
+    ));
+    for name in ["seen", "code", "lazy"] {
+        assert!(registry.is_callable(name), "{name} is callable");
+    }
+    for name in ["quiet", "gone", "unregistered"] {
+        assert!(!registry.is_callable(name), "{name} is not callable");
+    }
+    // Deactivating a direct tool withdraws its callability; a
+    // codemode tool stays callable while registered.
+    registry.set_active_tools(&["code".to_string()]);
+    assert!(!registry.is_callable("seen"));
+    assert!(registry.is_callable("code"));
+    assert!(registry.is_callable("lazy"));
+}
+
+// Verifies: gh #77 - annotations ride the spec without deciding
+// anything (a hint is not a bypass: the registry keeps them, the
+// permission layer never reads them).
+#[test]
+fn annotations_ride_the_spec() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(
+        FakeExt::new("suite").with_annotated_tool("readish"),
+    ));
+    let spec = registry.tool_schema("readish").expect("registered");
+    assert_eq!(spec.exposure, ToolExposure::Direct);
+    let annotations = spec.annotations.as_ref().expect("kept");
+    assert_eq!(annotations.read_only_hint, Some(true));
+    assert_eq!(annotations.destructive_hint, Some(false));
+}
+
+// Verifies: gh #45 - the mutation chain composes in order (each
+// handler sees the previous arguments) and a block vetoes with its
+// reason.
+#[tokio::test]
+async fn the_mutation_chain_composes_and_blocks() {
+    use lca_protocol::ToolCallPatch;
+    let call = ToolCall {
+        call_id: "c1".to_string(),
+        name: "read".to_string(),
+        arguments: r#"{"path":"a"}"#.to_string(),
+        parent_call_id: None,
+    };
+    // Identity: no hooks-tool-call handle, the call passes through.
+    let plain = ExtensionRegistry::new();
+    assert_eq!(plain.mutate_tool_call(&call).await.expect("passes"), call);
+    // Composition in registration order.
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(FakeExt::new("first").with_patch(ToolCallPatch {
+        arguments: Some(r#"{"path":"b"}"#.to_string()),
+        block: None,
+    })));
+    registry.register(Arc::new(FakeExt::new("second").with_patch(ToolCallPatch {
+        arguments: Some(r#"{"path":"c"}"#.to_string()),
+        block: None,
+    })));
+    let mutated = registry.mutate_tool_call(&call).await.expect("mutates");
+    assert_eq!(mutated.arguments, r#"{"path":"c"}"#);
+    // A block vetoes with its reason, wherever it sits.
+    let mut blocked = ExtensionRegistry::new();
+    blocked.register(Arc::new(FakeExt::new("veto").with_patch(ToolCallPatch {
+        arguments: None,
+        block: Some("no reads here".to_string()),
+    })));
+    assert_eq!(
+        blocked.mutate_tool_call(&call).await.expect_err("blocks"),
+        "no reads here"
+    );
+}
+
+// Verifies: gh #45 - cache votes default warm and trust votes default
+// undecided when no extension declares those worlds.
+#[tokio::test]
+async fn cache_and_trust_default_without_their_worlds() {
+    let registry = ExtensionRegistry::new();
+    assert!(registry.cache_warm("p", "m").await);
+    assert_eq!(
+        registry.project_trust("/tmp/work").await,
+        (lca_protocol::TrustVote::Undecided, false)
+    );
 }

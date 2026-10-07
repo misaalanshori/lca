@@ -1,0 +1,27 @@
+package lca:ext@0.6.0;
+
+/// The `hooks-trust` world: `project_trust` (gh #45, pi's event).
+/// Consulted where the host would otherwise ask the operator whether
+/// a project is trusted: the first handler answering `yes` or `no`
+/// decides, `undecided` falls through to the next handler and finally
+/// to the operator. `remember` persists the decision the way an
+/// operator's answer would. Extensions load after trust resolves, so
+/// a declaration here only ever fires for LATER trust questions (a
+/// newly opened project, `/trust`). Opt-in by declaring it in the
+/// manifest.
+world hooks-trust {
+  import lca:host/log@0.6.0;
+  export hook-project-trust;
+}
+
+interface hook-project-trust {
+  /// The decision. `trusted` is `yes`, `no`, or `undecided`
+  /// (case-insensitive; anything else reads as `undecided`).
+  record trust-decision {
+    trusted: string,
+    remember: bool,
+  }
+
+  /// `cwd` is the project the question covers.
+  on-project-trust: func(cwd: string) -> trust-decision;
+}

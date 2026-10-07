@@ -42,6 +42,7 @@ use wasmtime::component::{HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
+mod dispatch_hooks;
 mod host_imports;
 mod manifest;
 mod provider;
@@ -55,8 +56,8 @@ use provider::{
     provider_models_work, provider_stream_work,
 };
 use tool_hooks::{
-    DispatchCommandSpec, InFlightGuard, command_specs_work, execute_work, invoke_work,
-    observe_work, pre_tool_work, schema_work, session_close_work,
+    DispatchCommandSpec, InFlightGuard, catalog_specs_work, command_specs_work,
+    execute_catalog_work, execute_work, invoke_work, schema_work,
 };
 use transform::{compact_work, transform_work};
 use ui::{event_work, render_work};
@@ -143,6 +144,13 @@ struct HostState {
     log_limit: usize,
     cap: Arc<Capabilities>,
     dialogs: SharedDialogs,
+    /// The tool registry surface (gh #77): installed per handle by
+    /// the running turn, read by the `tools` import from blocking
+    /// threads. Empty outside a turn; the import refuses without it.
+    tools_view: Arc<Mutex<Option<Arc<dyn lca_ext_abi::ToolsRegistryView>>>>,
+    /// The tool call executing on this store, when a guest calls the
+    /// `tools` import: its id parents the nested call (gh #77).
+    executing_call: Option<String>,
 }
 
 impl WasiView for HostState {
@@ -187,6 +195,24 @@ impl ExtHost {
         &self.limits
     }
 
+    /// One opt-in hooks world (gh #45): instantiate its pre when the
+    /// manifest declares it, so a guest that never heard of the world
+    /// loads exactly as before.
+    fn hooks_pre<T>(
+        pre: &wasmtime::component::InstancePre<HostState>,
+        worlds: &[String],
+        world: &str,
+        construct: impl FnOnce(
+            wasmtime::component::InstancePre<HostState>,
+        ) -> Result<T, wasmtime::Error>,
+    ) -> Result<Option<T>, LoadError> {
+        worlds
+            .iter()
+            .any(|declared| declared == world)
+            .then(|| construct(pre.clone()).map_err(|err| LoadError::Link(err.to_string())))
+            .transpose()
+    }
+
     /// Load an extension: validate the manifest (identity, capabilities,
     /// ABI window), resolve its grants, then link and probe-instantiate
     /// so a broken component fails here, before the first input
@@ -215,6 +241,7 @@ impl ExtHost {
                 oauth: manifest.oauth.clone(),
                 credentials: manifest.credentials,
                 completion: manifest.completion,
+                tools: manifest.tools,
             },
             self.env.roots.clone(),
             self.env.prompt.clone(),
@@ -285,11 +312,68 @@ impl ExtHost {
         let pre = linker
             .instantiate_pre(&component)
             .map_err(|err| LoadError::Link(err.to_string()))?;
+        let hooks_message = Self::hooks_pre(
+            &pre,
+            &manifest.worlds,
+            "hooks-message",
+            lca_ext_abi::host::hooks_message::HooksMessagePre::new,
+        )?;
+        let hooks_tool_call = Self::hooks_pre(
+            &pre,
+            &manifest.worlds,
+            "hooks-tool-call",
+            lca_ext_abi::host::hooks_tool_call::HooksToolCallPre::new,
+        )?;
+        let hooks_tool_result = Self::hooks_pre(
+            &pre,
+            &manifest.worlds,
+            "hooks-tool-result",
+            lca_ext_abi::host::hooks_tool_result::HooksToolResultPre::new,
+        )?;
+        let hooks_stream = Self::hooks_pre(
+            &pre,
+            &manifest.worlds,
+            "hooks-stream",
+            lca_ext_abi::host::hooks_stream::HooksStreamPre::new,
+        )?;
+        let hooks_settle = Self::hooks_pre(
+            &pre,
+            &manifest.worlds,
+            "hooks-settle",
+            lca_ext_abi::host::hooks_settle::HooksSettlePre::new,
+        )?;
+        let hooks_compaction = Self::hooks_pre(
+            &pre,
+            &manifest.worlds,
+            "hooks-compaction",
+            lca_ext_abi::host::hooks_compaction::HooksCompactionPre::new,
+        )?;
+        let hooks_cache = Self::hooks_pre(
+            &pre,
+            &manifest.worlds,
+            "hooks-cache",
+            lca_ext_abi::host::hooks_cache::HooksCachePre::new,
+        )?;
+        let hooks_trust = Self::hooks_pre(
+            &pre,
+            &manifest.worlds,
+            "hooks-trust",
+            lca_ext_abi::host::hooks_trust::HooksTrustPre::new,
+        )?;
         let tool = manifest
             .worlds
             .iter()
             .any(|world| world == "tool")
             .then(|| ToolPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string())))
+            .transpose()?;
+        let tool_catalog = manifest
+            .worlds
+            .iter()
+            .any(|world| world == "tool-catalog")
+            .then(|| {
+                lca_ext_abi::host::tool_catalog::ToolCatalogPre::new(pre.clone())
+                    .map_err(|err| LoadError::Link(err.to_string()))
+            })
             .transpose()?;
         let command = manifest
             .worlds
@@ -342,6 +426,7 @@ impl ExtHost {
                 name: manifest.name,
                 worlds: manifest.worlds.clone(),
                 tool,
+                tool_catalog,
                 command,
                 hooks,
                 provider,
@@ -357,6 +442,15 @@ impl ExtHost {
                 logs: Arc::new(Mutex::new(Vec::new())),
                 cap,
                 dialogs: self.env.dialogs.clone(),
+                tools_view: Arc::new(Mutex::new(None)),
+                hooks_message,
+                hooks_tool_call,
+                hooks_tool_result,
+                hooks_stream,
+                hooks_settle,
+                hooks_compaction,
+                hooks_cache,
+                hooks_trust,
             }),
         })
     }
@@ -371,6 +465,21 @@ struct Inner {
     name: String,
     worlds: Vec<String>,
     tool: Option<ToolPre<HostState>>,
+    /// The multi-tool suite (gh #77): instantiated when the manifest
+    /// declares `tool-catalog`. A guest declaring both worlds serves
+    /// every suite tool through the catalog; the single-tool world
+    /// stays the legacy path.
+    tool_catalog: Option<lca_ext_abi::host::tool_catalog::ToolCatalogPre<HostState>>,
+    /// One pre-instance per new hooks world (gh #45), each opt-in by
+    /// manifest declaration; the six-point `hooks` world is untouched.
+    hooks_message: Option<lca_ext_abi::host::hooks_message::HooksMessagePre<HostState>>,
+    hooks_tool_call: Option<lca_ext_abi::host::hooks_tool_call::HooksToolCallPre<HostState>>,
+    hooks_tool_result: Option<lca_ext_abi::host::hooks_tool_result::HooksToolResultPre<HostState>>,
+    hooks_stream: Option<lca_ext_abi::host::hooks_stream::HooksStreamPre<HostState>>,
+    hooks_settle: Option<lca_ext_abi::host::hooks_settle::HooksSettlePre<HostState>>,
+    hooks_compaction: Option<lca_ext_abi::host::hooks_compaction::HooksCompactionPre<HostState>>,
+    hooks_cache: Option<lca_ext_abi::host::hooks_cache::HooksCachePre<HostState>>,
+    hooks_trust: Option<lca_ext_abi::host::hooks_trust::HooksTrustPre<HostState>>,
     command: Option<lca_ext_abi::host::command::CommandPre<HostState>>,
     hooks: Option<lca_ext_abi::host::hooks::HooksPre<HostState>>,
     provider: Option<ProviderPre<HostState>>,
@@ -389,6 +498,10 @@ struct Inner {
     /// The dialog prompter (gh #124): cloned into every store so the
     /// `ui-dialogs` import answers through the session's live slot.
     dialogs: SharedDialogs,
+    /// The tool registry surface (gh #77): the running turn
+    /// installs it per handle; every store shares the slot, so the
+    /// `tools` import lists, activates, and nests through it.
+    tools_view: Arc<Mutex<Option<Arc<dyn lca_ext_abi::ToolsRegistryView>>>>,
     /// Calls currently inside the guest: incremented the moment the
     /// component is instantiated and the run begins, decremented when
     /// it returns. Cancellation semantics are about interrupting a
@@ -435,6 +548,8 @@ impl Inner {
                 log_limit: self.limits.log_limit_bytes,
                 cap: self.cap.clone(),
                 dialogs: self.dialogs.clone(),
+                tools_view: self.tools_view.clone(),
+                executing_call: None,
             },
         );
         store.limiter(|state| &mut state.limits);
@@ -600,467 +715,5 @@ fn to_dispatch(call_err: CallError, extension: &str) -> DispatchError {
     match call_err {
         CallError::Disabled => DispatchError::Disabled,
         other => DispatchError::Failed(format!("{extension}: {other}")),
-    }
-}
-
-impl lca_ext_abi::ExtensionDispatch for WasmExtension {
-    fn name(&self) -> &str {
-        &self.inner.name
-    }
-
-    fn manifest_text(&self) -> Option<String> {
-        Some(self.inner.manifest_text.clone())
-    }
-
-    fn delivery(&self) -> DeliveryMode {
-        DeliveryMode::Wasm
-    }
-
-    fn worlds(&self) -> Vec<World> {
-        self.inner
-            .worlds
-            .iter()
-            .filter_map(|world| match world.as_str() {
-                "tool" => Some(World::Tool),
-                "command" => Some(World::Command),
-                "hooks" => Some(World::Hooks),
-                "provider" => Some(World::Provider),
-                "compaction" => Some(World::Compaction),
-                "context-transform" => Some(World::ContextTransform),
-                "ui" => Some(World::Ui),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn tool_specs(&self) -> Result<Vec<ToolSpec>, DispatchError> {
-        if !self.worlds().contains(&World::Tool) {
-            return Err(DispatchError::MissingWorld {
-                extension: self.name().to_string(),
-                world: "tool",
-            });
-        }
-        self.schema()
-            .map(|spec| vec![spec])
-            .map_err(|err| to_dispatch(err, self.name()))
-    }
-
-    fn execute_tool<'a>(
-        &'a self,
-        call: &'a ToolCall,
-    ) -> lca_ext_abi::DispatchFuture<'a, Result<lca_protocol::ToolResult, DispatchError>> {
-        Box::pin(async move {
-            if !self.worlds().contains(&World::Tool) {
-                return Err(DispatchError::MissingWorld {
-                    extension: self.name().to_string(),
-                    world: "tool",
-                });
-            }
-            let call = call.clone();
-            self.on_blocking_pool(move |inner| execute_work(inner, call))
-                .await
-                .map_err(|err| to_dispatch(err, self.name()))
-        })
-    }
-
-    fn command_specs(&self) -> Result<Vec<DispatchCommandSpec>, DispatchError> {
-        if !self.worlds().contains(&World::Command) {
-            return Err(DispatchError::MissingWorld {
-                extension: self.name().to_string(),
-                world: "command",
-            });
-        }
-        self.blocking(command_specs_work)
-            .map_err(|err| to_dispatch(err, self.name()))
-    }
-
-    fn invoke_command(&self, _name: &str, argument: &str) -> Result<CommandEffect, DispatchError> {
-        if !self.worlds().contains(&World::Command) {
-            return Err(DispatchError::MissingWorld {
-                extension: self.name().to_string(),
-                world: "command",
-            });
-        }
-        let leaf = _name.to_string();
-        let argument = argument.to_string();
-        self.blocking(move |inner| invoke_work(inner, &leaf, &argument))
-            .map_err(|err| to_dispatch(err, self.name()))
-    }
-
-    fn on_pre_turn(&self) -> lca_ext_abi::DispatchFuture<'static, Result<(), DispatchError>> {
-        let inner = self.inner.clone();
-        let name = inner.name.clone();
-        Box::pin(async move {
-            if !inner.worlds.contains(&"hooks".to_string()) {
-                return Ok(());
-            }
-            pool_call(inner, |inner| observe_work(inner, None, None, None))
-                .await
-                .map_err(|err| to_dispatch(err, &name))
-        })
-    }
-
-    fn on_pre_tool_use<'a>(
-        &'a self,
-        call: &'a ToolCall,
-    ) -> lca_ext_abi::DispatchFuture<'a, Result<HookAction, DispatchError>> {
-        Box::pin(async move {
-            if !self.worlds().contains(&World::Hooks) {
-                return Ok(HookAction::Allow);
-            }
-            let call = call.clone();
-            self.on_blocking_pool(move |inner| pre_tool_work(inner, call))
-                .await
-                .map_err(|err| to_dispatch(err, self.name()))
-        })
-    }
-
-    fn on_post_tool_use<'a>(
-        &'a self,
-        observation: &'a PostToolObservation,
-    ) -> lca_ext_abi::DispatchFuture<'a, Result<(), DispatchError>> {
-        Box::pin(async move {
-            if !self.worlds().contains(&World::Hooks) {
-                return Ok(());
-            }
-            let observation = observation.clone();
-            self.on_blocking_pool(move |inner| observe_work(inner, Some(&observation), None, None))
-                .await
-                .map_err(|err| to_dispatch(err, self.name()))
-        })
-    }
-
-    fn on_post_turn_end<'a>(
-        &'a self,
-        status: &'a str,
-    ) -> lca_ext_abi::DispatchFuture<'a, Result<(), DispatchError>> {
-        Box::pin(async move {
-            if !self.worlds().contains(&World::Hooks) {
-                return Ok(());
-            }
-            let status = status.to_string();
-            self.on_blocking_pool(move |inner| observe_work(inner, None, Some(&status), None))
-                .await
-                .map_err(|err| to_dispatch(err, self.name()))
-        })
-    }
-
-    fn on_attention_required<'a>(
-        &'a self,
-        reason: &'a str,
-    ) -> lca_ext_abi::DispatchFuture<'a, Result<(), DispatchError>> {
-        Box::pin(async move {
-            if !self.worlds().contains(&World::Hooks) {
-                return Ok(());
-            }
-            let reason = reason.to_string();
-            self.on_blocking_pool(move |inner| observe_work(inner, None, None, Some(&reason)))
-                .await
-                .map_err(|err| to_dispatch(err, self.name()))
-        })
-    }
-
-    fn on_session_close(&self) -> lca_ext_abi::DispatchFuture<'static, Result<(), DispatchError>> {
-        let inner = self.inner.clone();
-        let name = inner.name.clone();
-        Box::pin(async move {
-            if !inner.worlds.contains(&"hooks".to_string()) {
-                return Ok(());
-            }
-            pool_call(inner, session_close_work)
-                .await
-                .map_err(|err| to_dispatch(err, &name))
-        })
-    }
-
-    fn provider_models(
-        &self,
-        settings: &[(String, String)],
-    ) -> Result<Vec<ModelInfo>, DispatchError> {
-        if !self.worlds().contains(&World::Provider) {
-            return Err(DispatchError::MissingWorld {
-                extension: self.name().to_string(),
-                world: "provider",
-            });
-        }
-        let settings = settings.to_vec();
-        self.blocking(move |inner| provider_models_work(inner, &settings))
-            .map_err(|err| to_dispatch(err, self.name()))
-    }
-
-    fn stream_completion<'a>(
-        &'a self,
-        request: CompletionRequest,
-        sink: &'a dyn EventSink,
-    ) -> lca_ext_abi::DispatchFuture<'a, Result<(), DispatchError>> {
-        Box::pin(async move {
-            if !self.worlds().contains(&World::Provider) {
-                return Err(DispatchError::MissingWorld {
-                    extension: self.name().to_string(),
-                    world: "provider",
-                });
-            }
-            // The component call runs on the blocking pool (ADR-0014);
-            // events cross back through an unbounded bridge the async
-            // side drains into `sink` with real backpressure. A dropped
-            // `sink` (or a dropped future) ends the stream: the bridge
-            // send fails and the work loop stops (FR-CONC-3).
-            let (stx, mut srx) = tokio::sync::mpsc::unbounded_channel();
-            struct Bridge(tokio::sync::mpsc::UnboundedSender<lca_protocol::StreamEvent>);
-            impl EventSink for Bridge {
-                fn push(&self, event: lca_protocol::StreamEvent) -> bool {
-                    self.0.send(event).is_ok()
-                }
-            }
-            let engine = self.inner.engine.clone();
-            let work_inner = self.inner.clone();
-            let fail_inner = self.inner.clone();
-            let extension = self.inner.name.clone();
-            let mut join = tokio::task::spawn_blocking(move || {
-                provider_stream_work(&work_inner, request, Arc::new(Bridge(stx)))
-            });
-            let mut joined: Option<Result<Result<(), CallError>, tokio::task::JoinError>> = None;
-            loop {
-                if joined.is_some() {
-                    while let Some(event) = srx.recv().await {
-                        let _ = sink.push(event);
-                    }
-                    break;
-                }
-                tokio::select! {
-                    maybe = srx.recv() => match maybe {
-                        None => break,
-                        Some(event) => if !sink.push(event) {
-                            // Receiver gone: trap the guest so the blocking
-                            // work ends promptly, then drain the bridge.
-                            engine.increment_epoch();
-                            while srx.recv().await.is_some() {}
-                            break;
-                        },
-                    },
-                    result = &mut join => joined = Some(result),
-                }
-            }
-            let result = match joined {
-                Some(result) => result,
-                None => join.await,
-            };
-            match result {
-                Ok(inner_result) => inner_result.map_err(|err| to_dispatch(err, &extension)),
-                Err(_) => {
-                    fail_inner.disable();
-                    Err(DispatchError::Failed(format!(
-                        "{extension}: host call panicked"
-                    )))
-                }
-            }
-        })
-    }
-
-    fn identity_login(
-        &self,
-    ) -> lca_ext_abi::DispatchFuture<'static, Result<IdentityOutcome, DispatchError>> {
-        let inner = self.inner.clone();
-        let extension = inner.name.clone();
-        Box::pin(async move {
-            if !inner.worlds.contains(&"provider".to_string()) {
-                return Err(DispatchError::MissingWorld {
-                    extension,
-                    world: "provider",
-                });
-            }
-            pool_call(inner, |inner| {
-                identity_simple_work(inner, IdentityOp::Login)
-            })
-            .await
-            .map_err(|err| to_dispatch(err, &extension))
-        })
-    }
-
-    fn identity_logout(
-        &self,
-    ) -> lca_ext_abi::DispatchFuture<'static, Result<IdentityOutcome, DispatchError>> {
-        let inner = self.inner.clone();
-        let extension = inner.name.clone();
-        Box::pin(async move {
-            if !inner.worlds.contains(&"provider".to_string()) {
-                return Err(DispatchError::MissingWorld {
-                    extension,
-                    world: "provider",
-                });
-            }
-            pool_call(inner, |inner| {
-                identity_simple_work(inner, IdentityOp::Logout)
-            })
-            .await
-            .map_err(|err| to_dispatch(err, &extension))
-        })
-    }
-
-    fn identity_usage(
-        &self,
-    ) -> lca_ext_abi::DispatchFuture<'static, Result<Result<Usage, IdentityOutcome>, DispatchError>>
-    {
-        let inner = self.inner.clone();
-        let extension = inner.name.clone();
-        Box::pin(async move {
-            if !inner.worlds.contains(&"provider".to_string()) {
-                return Err(DispatchError::MissingWorld {
-                    extension,
-                    world: "provider",
-                });
-            }
-            pool_call(inner, identity_usage_work)
-                .await
-                .map_err(|err| to_dispatch(err, &extension))
-        })
-    }
-
-    fn login_options(
-        &self,
-    ) -> lca_ext_abi::DispatchFuture<'static, Result<Vec<lca_protocol::LoginOption>, DispatchError>>
-    {
-        let inner = self.inner.clone();
-        let extension = inner.name.clone();
-        Box::pin(async move {
-            // A provider without the login surface has no options; the host
-            // still shows its own "Custom endpoint…" entry.
-            if !inner.worlds.contains(&"provider".to_string()) {
-                return Ok(Vec::new());
-            }
-            pool_call(inner, login_options_work)
-                .await
-                .map_err(|err| to_dispatch(err, &extension))
-        })
-    }
-
-    fn login_submit(
-        &self,
-        answer: lca_protocol::LoginAnswer,
-    ) -> lca_ext_abi::DispatchFuture<'static, Result<Vec<(String, String)>, DispatchError>> {
-        let inner = self.inner.clone();
-        let extension = inner.name.clone();
-        Box::pin(async move {
-            if !inner.worlds.contains(&"provider".to_string()) {
-                return Ok(Vec::new());
-            }
-            pool_call(inner, move |inner| login_submit_work(inner, answer))
-                .await
-                .map_err(|err| to_dispatch(err, &extension))
-        })
-    }
-
-    fn compact(
-        &self,
-        records: &[lca_protocol::Record],
-    ) -> lca_ext_abi::DispatchFuture<'static, Result<String, DispatchError>> {
-        if !self.worlds().contains(&World::Compaction) {
-            return Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
-                extension: self.name().to_string(),
-                world: "compaction",
-            })));
-        }
-        let records = records.to_vec();
-        let inner = self.inner.clone();
-        let extension = inner.name.clone();
-        Box::pin(async move {
-            pool_call(inner, move |inner| compact_work(inner, records))
-                .await
-                .map_err(|err| to_dispatch(err, &extension))
-        })
-    }
-
-    fn transform_messages(
-        &self,
-        messages: Vec<lca_protocol::ChatMessage>,
-    ) -> lca_ext_abi::DispatchFuture<
-        'static,
-        Result<Result<Vec<lca_protocol::ChatMessage>, String>, DispatchError>,
-    > {
-        if !self.worlds().contains(&World::ContextTransform) {
-            return Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
-                extension: self.name().to_string(),
-                world: "context-transform",
-            })));
-        }
-        let inner = self.inner.clone();
-        let extension = inner.name.clone();
-        Box::pin(async move {
-            pool_call(inner, move |inner| transform_work(inner, messages))
-                .await
-                .map_err(|err| to_dispatch(err, &extension))
-        })
-    }
-
-    fn ui_regions(&self) -> Vec<String> {
-        self.inner.ui_regions.clone()
-    }
-
-    fn render(&self, region: &str) -> Result<Option<lca_protocol::WidgetTree>, DispatchError> {
-        if !self.worlds().contains(&World::Ui) || !self.inner.ui_regions.iter().any(|r| r == region)
-        {
-            if self.worlds().contains(&World::Ui) {
-                // Declared the world but not this region: the denial is
-                // recorded, the export is never called (catalog `ui`).
-                self.inner.cap.note_ui_denial(region);
-            }
-            return Ok(None);
-        }
-        let region = region.to_string();
-        // Frame-time call: the same blocking thread a registration call
-        // uses (Wasmtime's sync WASI needs no runtime poll). A small
-        // wasm component answers within the frame budget; ponytail:
-        // measure with NFR-4's numbers if a heavy extension ever
-        // misses it.
-        self.blocking(move |inner| render_work(inner, &region))
-            .map_err(|err| to_dispatch(err, self.name()))
-    }
-
-    fn on_ui_event(
-        &self,
-        region: &str,
-        input: &lca_protocol::UiInput,
-    ) -> Result<lca_protocol::UiEffect, DispatchError> {
-        if !self.worlds().contains(&World::Ui) || !self.inner.ui_regions.iter().any(|r| r == region)
-        {
-            return Ok(lca_protocol::UiEffect::None);
-        }
-        let region = region.to_string();
-        let input = input.clone();
-        self.blocking(move |inner| event_work(inner, &region, &input))
-            .map_err(|err| to_dispatch(err, self.name()))
-    }
-
-    fn interrupt(&self) {
-        // FR-CONC-1: epoch interruption, independent of the fuel budget.
-        // Flag first: a store built concurrently must see it, because its
-        // own deadline is measured from the epoch *after* this bump.
-        self.inner.interrupted.store(true, Ordering::SeqCst);
-        self.inner.engine.increment_epoch();
-        // An epoch bump only fires at a guest code point, so a host import
-        // blocked in a long wait would never see it: flag the capability
-        // engine too, and the wait polls its way out (FR-CONC-1, NFR-21).
-        self.inner.cap.cancel();
-    }
-
-    fn turn_started(&self) {
-        // The turn boundary clears both halves of the previous turn's
-        // cancellation, so this turn's first call starts clean
-        // (FR-CONC-1).
-        self.inner.interrupted.store(false, Ordering::SeqCst);
-        self.inner.cap.reset_cancellation();
-    }
-
-    fn oauth_manual_callback(&self, params: Vec<(String, String)>) -> Result<(), DispatchError> {
-        self.inner
-            .cap
-            .oauth_deliver_manual(params)
-            .map_err(|err| DispatchError::Failed(err.to_string()))
-    }
-
-    fn oauth_last_url(&self) -> Option<String> {
-        // Read, never pop: the recorded URL is also what the provider-flow
-        // tests assert on, and the host asks once per poll.
-        self.inner.cap.oauth_opened().last().cloned()
     }
 }

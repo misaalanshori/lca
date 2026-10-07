@@ -1,0 +1,52 @@
+package lca:ext@0.6.0;
+
+/// The `hooks-settle` world: actionable `turn_end` and
+/// `agent_before_settle` (gh #45, pi's 0.87 pair). A handler may
+/// append entries and continue one more provider request; the host
+/// honors one continuation per turn so a handler cannot loop the
+/// agent. Opt-in by declaring it in the manifest; the six-point
+/// `hooks` world's observe-only `post-turn-end` is unchanged.
+world hooks-settle {
+  import lca:host/log@0.6.0;
+  export hook-turn-end;
+  export hook-agent-before-settle;
+}
+
+/// Shared shapes: WIT files hold only worlds, interfaces, and uses,
+/// so the two points below share one unexported interface.
+interface settle-types {
+  /// What the turn did, in one summary.
+  record settle-summary {
+    /// Provider rounds this turn.
+    rounds: u32,
+    /// Tool calls the turn ran.
+    tool-calls: u32,
+    /// `ok` or `error`, the headless turn-end vocabulary.
+    status: string,
+  }
+
+  /// What one handler asks for: `append` injects the text as a
+  /// context message the next request sees; `continue-once` runs
+  /// exactly one more provider request before settling. Both absent
+  /// settles.
+  record settle-decision {
+    append: option<string>,
+    continue-once: bool,
+  }
+}
+
+interface hook-turn-end {
+  use settle-types.{settle-summary, settle-decision};
+
+  /// Fired at the end of each turn, before the turn settles.
+  on-turn-end: func(summary: settle-summary) -> settle-decision;
+}
+
+interface hook-agent-before-settle {
+  use settle-types.{settle-summary, settle-decision};
+
+  /// Fired after every `turn_end` handler ran and no retry,
+  /// compaction, or queued continuation will run: the last word
+  /// before settlement.
+  on-agent-before-settle: func(summary: settle-summary) -> settle-decision;
+}

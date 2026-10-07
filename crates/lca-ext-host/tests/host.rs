@@ -66,6 +66,7 @@ fn call(mode: &str) -> ToolCall {
         call_id: "c1".to_string(),
         name: "conformance".to_string(),
         arguments: format!(r#"{{"mode":"{mode}"}}"#),
+        parent_call_id: None,
     }
 }
 
@@ -311,8 +312,17 @@ fn manifest_parses_identity_fields() {
         manifest.worlds,
         vec![
             "tool".to_string(),
+            "tool-catalog".to_string(),
             "command".to_string(),
             "hooks".to_string(),
+            "hooks-message".to_string(),
+            "hooks-tool-call".to_string(),
+            "hooks-tool-result".to_string(),
+            "hooks-stream".to_string(),
+            "hooks-settle".to_string(),
+            "hooks-compaction".to_string(),
+            "hooks-cache".to_string(),
+            "hooks-trust".to_string(),
             "provider".to_string(),
             "compaction".to_string(),
             "context-transform".to_string(),
@@ -325,5 +335,45 @@ fn manifest_parses_identity_fields() {
         )
         .is_err(),
         "identifier rules enforced"
+    );
+}
+
+// Verifies: gh #77's old-guest compat - a single-tool guest that never
+// heard of `tool-catalog` loads on the 0.6 host and dispatches, and
+// the host wraps it as `direct` with no namespace (the pre-catalog
+// shape, unchanged).
+#[test]
+fn a_single_tool_guest_loads_and_dispatches_without_a_catalog() {
+    let wasm = include_bytes!("../../../extensions/tool-legacy/fixtures/component.wasm");
+    let manifest = include_str!("../../../extensions/tool-legacy/extension.toml");
+    let mut host = ExtHost::new(limits(), env("legacy"));
+    let handle = host.load(wasm, manifest).expect("legacy loads");
+    assert_eq!(
+        handle.worlds(),
+        vec![lca_ext_abi::World::Tool],
+        "one world, the legacy one"
+    );
+    let specs = handle.tool_specs().expect("legacy specs");
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].name, "legacy-echo");
+    assert_eq!(
+        specs[0].exposure,
+        lca_protocol::ToolExposure::Direct,
+        "a single-tool guest is direct"
+    );
+    assert!(specs[0].namespace.is_none(), "and namespaceless");
+    let result = handle
+        .execute(&ToolCall {
+            call_id: "c1".to_string(),
+            name: "legacy-echo".to_string(),
+            arguments: r#"{"text":"hi"}"#.to_string(),
+            parent_call_id: None,
+        })
+        .expect("legacy dispatches");
+    assert_eq!(result.status, ToolResultStatus::Ok);
+    assert!(
+        result.content.contains("legacy-echo"),
+        "the guest answered: {}",
+        result.content
     );
 }

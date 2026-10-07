@@ -116,6 +116,7 @@ fn call_json(json: &str) -> ToolCall {
         call_id: "c1".to_string(),
         name: "conformance".to_string(),
         arguments: json.to_string(),
+        parent_call_id: None,
     }
 }
 

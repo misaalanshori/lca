@@ -412,6 +412,7 @@ mod wasm_mode {
                             call_id: call.call_id.clone(),
                             name: call.name.clone(),
                             arguments: call.arguments.clone(),
+                            parent_call_id: None,
                         })
                         .collect(),
                     tool_call_id: message.tool_call_id.clone(),

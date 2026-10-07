@@ -672,3 +672,125 @@ async fn a_plain_error_never_compacts() {
         "no compaction on a plain error"
     );
 }
+
+/// A compaction double that always vetoes (gh #45).
+struct VetoAll;
+
+impl ExtensionDispatch for VetoAll {
+    fn name(&self) -> &str {
+        "veto-all"
+    }
+    fn delivery(&self) -> DeliveryMode {
+        DeliveryMode::Native
+    }
+    fn worlds(&self) -> Vec<World> {
+        vec![World::HooksCompaction]
+    }
+    fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, DispatchError> {
+        Ok(Vec::new())
+    }
+    fn execute_tool<'a>(
+        &'a self,
+        _call: &'a lca_protocol::ToolCall,
+    ) -> DispatchFuture<'a, Result<lca_protocol::ToolResult, DispatchError>> {
+        Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
+            extension: self.name().to_string(),
+            world: "tool",
+        })))
+    }
+    fn command_specs(&self) -> Result<Vec<lca_protocol::CommandSpec>, DispatchError> {
+        Ok(Vec::new())
+    }
+    fn invoke_command(
+        &self,
+        _name: &str,
+        _argument: &str,
+    ) -> Result<lca_protocol::CommandEffect, DispatchError> {
+        Ok(lca_protocol::CommandEffect::None)
+    }
+    fn on_pre_turn(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_pre_tool_use<'a>(
+        &'a self,
+        _call: &'a lca_protocol::ToolCall,
+    ) -> DispatchFuture<'a, Result<lca_protocol::HookAction, DispatchError>> {
+        Box::pin(std::future::ready(Ok(lca_protocol::HookAction::Allow)))
+    }
+    fn on_post_tool_use<'a>(
+        &'a self,
+        _observation: &'a lca_protocol::PostToolObservation,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_post_turn_end<'a>(
+        &'a self,
+        _status: &'a str,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_attention_required<'a>(
+        &'a self,
+        _reason: &'a str,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_session_before_compact<'a>(
+        &'a self,
+        _reason: &'a str,
+    ) -> DispatchFuture<'a, Result<lca_protocol::CompactVerdict, DispatchError>> {
+        Box::pin(std::future::ready(Ok(lca_protocol::CompactVerdict::Deny(
+            "vetoed for the journey".to_string(),
+        ))))
+    }
+}
+
+// Verifies: gh #45 - a `session_before_compact` veto cancels the
+// compaction (no record, strategy uncalled) and names the refusal.
+#[tokio::test]
+async fn a_compact_veto_cancels_the_compaction() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("ok").usage(fake_usage(9000, 10, 0, 0)))
+        .turn(|t| t.text("ok").usage(fake_usage(50, 10, 0, 0)))
+        .build();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(SeeingDouble {
+        calls: calls.clone(),
+        saw_previous: Arc::new(Mutex::new(Vec::new())),
+    }));
+    registry.register(Arc::new(VetoAll));
+    let mut h = harness("vetoed", provider, budget_config(registry, 10_000, 0.5));
+    let mut sink = CollectingSink::default();
+    let mut prompt = prompt();
+    // The first turn banks the usage the threshold fires on; the
+    // second turn meets the veto instead of the strategy.
+    turn(&mut h, "first", &mut sink, &mut prompt).await;
+    let outcome = turn(&mut h, "second", &mut sink, &mut prompt).await;
+    assert_eq!(
+        outcome.status,
+        lca_core::TurnStatus::Ok,
+        "the turn survives the veto"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "strategy never ran");
+    let log = h
+        .store
+        .read_with(&h.session, ViewMode::Audit)
+        .expect("read");
+    assert!(
+        !log.records
+            .iter()
+            .any(|record| matches!(record, lca_protocol::Record::Compaction { .. })),
+        "no compaction record"
+    );
+    assert!(
+        sink.events.iter().any(|event| matches!(
+            event,
+            lca_core::TurnEvent::Error { message, .. } if message.contains("vetoed for the journey")
+        )),
+        "the veto names its reason"
+    );
+}

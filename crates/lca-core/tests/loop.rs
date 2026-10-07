@@ -855,3 +855,288 @@ async fn a_denied_tool_call_is_announced_before_it_settles() {
         .expect("tool-result record");
     assert!(call < result, "record order: {:?}", log.records);
 }
+
+// ---------------------------------------------------------------------------
+// Gh #45 + #77 journeys: settle continuation, stream observation, and
+// the new hooks' turn-level behavior against scripted providers.
+// ---------------------------------------------------------------------------
+
+use lca_ext_abi::{DeliveryMode, DispatchFuture, ExtensionDispatch, World};
+use lca_protocol::DispatchError;
+use std::sync::{Arc, Mutex};
+
+/// A hooks double: continues once with an appended note (gh #45's
+/// actionable settle), then settles.
+struct SettleOnce {
+    continued: Arc<Mutex<bool>>,
+}
+
+impl ExtensionDispatch for SettleOnce {
+    fn name(&self) -> &str {
+        "settle-once"
+    }
+    fn delivery(&self) -> DeliveryMode {
+        DeliveryMode::Native
+    }
+    fn worlds(&self) -> Vec<World> {
+        vec![World::HooksSettle]
+    }
+    fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, DispatchError> {
+        Ok(Vec::new())
+    }
+    fn execute_tool<'a>(
+        &'a self,
+        _call: &'a lca_protocol::ToolCall,
+    ) -> DispatchFuture<'a, Result<lca_protocol::ToolResult, DispatchError>> {
+        Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
+            extension: self.name().to_string(),
+            world: "tool",
+        })))
+    }
+    fn command_specs(&self) -> Result<Vec<lca_protocol::CommandSpec>, DispatchError> {
+        Ok(Vec::new())
+    }
+    fn invoke_command(
+        &self,
+        _name: &str,
+        _argument: &str,
+    ) -> Result<lca_protocol::CommandEffect, DispatchError> {
+        Ok(lca_protocol::CommandEffect::None)
+    }
+    fn on_pre_turn(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_pre_tool_use<'a>(
+        &'a self,
+        _call: &'a lca_protocol::ToolCall,
+    ) -> DispatchFuture<'a, Result<lca_protocol::HookAction, DispatchError>> {
+        Box::pin(std::future::ready(Ok(lca_protocol::HookAction::Allow)))
+    }
+    fn on_post_tool_use<'a>(
+        &'a self,
+        _observation: &'a lca_protocol::PostToolObservation,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_post_turn_end<'a>(
+        &'a self,
+        _status: &'a str,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_attention_required<'a>(
+        &'a self,
+        _reason: &'a str,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_turn_end<'a>(
+        &'a self,
+        _rounds: u32,
+        _tool_calls: u32,
+        _status: &'a str,
+    ) -> DispatchFuture<'a, Result<lca_protocol::SettleDecision, DispatchError>> {
+        let mut continued = self.continued.lock().expect("continued");
+        let decision = if *continued {
+            lca_protocol::SettleDecision::default()
+        } else {
+            *continued = true;
+            lca_protocol::SettleDecision {
+                append: Some("settle-note".to_string()),
+                continue_once: true,
+            }
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+// Verifies: gh #45 - a settle handler appends entries and continues
+// one more provider request; the turn then settles (no loop).
+#[tokio::test]
+async fn a_settle_handler_continues_exactly_one_more_request() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("first").usage(fake_usage(10, 5, 0, 0)))
+        .turn(|t| t.text("second").usage(fake_usage(10, 5, 0, 0)))
+        .build();
+    let continued = Arc::new(Mutex::new(false));
+    let mut registry = lca_core::ExtensionRegistry::new();
+    registry.register(Arc::new(SettleOnce {
+        continued: continued.clone(),
+    }));
+    let mut config = default_config();
+    config.extensions = Arc::new(registry);
+    let mut h = harness("settle-once", provider, config);
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: vec![],
+        asked: vec![],
+    };
+
+    let outcome = turn(&mut h, "go", &mut sink, &mut prompt).await;
+    assert_eq!(outcome.status, lca_core::TurnStatus::Ok);
+    assert_eq!(h.provider.call_count(), 2, "exactly one continuation");
+    assert_eq!(sink.texts(), "firstsecond");
+    // The append rode a context message the second request saw.
+    let requests = h.provider.requests();
+    assert_eq!(requests.len(), 2);
+    let second_texts: Vec<String> = requests[1]
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            lca_protocol::ContentBlock::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        second_texts.iter().any(|text| text.contains("settle-note")),
+        "the append reached the continued request: {second_texts:?}"
+    );
+    // And the transcript kept it.
+    let log = h
+        .store
+        .read_with(&h.session, ViewMode::Audit)
+        .expect("read");
+    assert!(
+        log.records.iter().any(|record| matches!(
+            record,
+            Record::CustomMessage { content, .. } if content.contains("settle-note")
+        )),
+        "settle append recorded"
+    );
+}
+
+/// A stream double: records normalized event kinds in arrival order.
+struct StreamLog {
+    kinds: Arc<Mutex<Vec<String>>>,
+}
+
+impl ExtensionDispatch for StreamLog {
+    fn name(&self) -> &str {
+        "stream-log"
+    }
+    fn delivery(&self) -> DeliveryMode {
+        DeliveryMode::Native
+    }
+    fn worlds(&self) -> Vec<World> {
+        vec![World::HooksStream]
+    }
+    fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, DispatchError> {
+        Ok(Vec::new())
+    }
+    fn execute_tool<'a>(
+        &'a self,
+        _call: &'a lca_protocol::ToolCall,
+    ) -> DispatchFuture<'a, Result<lca_protocol::ToolResult, DispatchError>> {
+        Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
+            extension: self.name().to_string(),
+            world: "tool",
+        })))
+    }
+    fn command_specs(&self) -> Result<Vec<lca_protocol::CommandSpec>, DispatchError> {
+        Ok(Vec::new())
+    }
+    fn invoke_command(
+        &self,
+        _name: &str,
+        _argument: &str,
+    ) -> Result<lca_protocol::CommandEffect, DispatchError> {
+        Ok(lca_protocol::CommandEffect::None)
+    }
+    fn on_pre_turn(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_pre_tool_use<'a>(
+        &'a self,
+        _call: &'a lca_protocol::ToolCall,
+    ) -> DispatchFuture<'a, Result<lca_protocol::HookAction, DispatchError>> {
+        Box::pin(std::future::ready(Ok(lca_protocol::HookAction::Allow)))
+    }
+    fn on_post_tool_use<'a>(
+        &'a self,
+        _observation: &'a lca_protocol::PostToolObservation,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_post_turn_end<'a>(
+        &'a self,
+        _status: &'a str,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_attention_required<'a>(
+        &'a self,
+        _reason: &'a str,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_stream_event<'a>(
+        &'a self,
+        _provider: &'a str,
+        _model: &'a str,
+        kind: &'a str,
+        data: &'a str,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        self.kinds
+            .lock()
+            .expect("kinds")
+            .push(format!("{kind}:{data}"));
+        Box::pin(std::future::ready(Ok(())))
+    }
+}
+
+// Verifies: gh #45 (PG-051) - stream observers see the normalized
+// sequence in order with its payloads.
+#[tokio::test]
+async fn stream_observers_see_the_normalized_sequence_in_order() {
+    let provider = FakeProvider::builder()
+        .turn(|t| {
+            t.text("hi")
+                .tool_call("read", r#"{"path":"a"}"#)
+                .usage(fake_usage(10, 5, 0, 0))
+        })
+        .turn(|t| t.text("done").usage(fake_usage(10, 5, 0, 0)))
+        .build();
+    std::fs::write(scratch("stream-order").join("x"), "").expect("scratch");
+    let kinds = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = lca_core::ExtensionRegistry::new();
+    registry.register(Arc::new(StreamLog {
+        kinds: kinds.clone(),
+    }));
+    let mut config = default_config();
+    config.extensions = Arc::new(registry);
+    let mut h = harness("stream-order", provider, config);
+    std::fs::write(h.project.join("a"), "a").expect("write");
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: vec![Decision::Always],
+        asked: vec![],
+    };
+
+    let outcome = turn(&mut h, "read it", &mut sink, &mut prompt).await;
+    assert_eq!(outcome.status, lca_core::TurnStatus::Ok);
+    let kinds = kinds.lock().expect("kinds").clone();
+    assert!(
+        kinds.iter().any(|entry| entry == "text-delta:hi"),
+        "text delta with payload: {kinds:?}"
+    );
+    let tool_at = kinds
+        .iter()
+        .position(|entry| entry.starts_with("tool-call-start:read"))
+        .expect("tool-call-start names the tool");
+    let text_at = kinds
+        .iter()
+        .position(|entry| entry == "text-delta:hi")
+        .expect("text first");
+    assert!(text_at < tool_at, "arrival order kept: {kinds:?}");
+    assert!(
+        kinds.iter().any(|entry| entry.starts_with("usage:")),
+        "usage closes the sequence: {kinds:?}"
+    );
+}

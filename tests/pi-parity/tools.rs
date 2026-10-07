@@ -29,6 +29,7 @@ fn call(name: &str, arguments: serde_json::Value) -> ToolCall {
         call_id: "call-1".to_string(),
         name: name.to_string(),
         arguments: arguments.to_string(),
+        parent_call_id: None,
     }
 }
 

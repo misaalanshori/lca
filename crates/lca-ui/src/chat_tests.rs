@@ -169,6 +169,7 @@ fn a_finished_tool_names_the_tool_not_the_call_id() {
         call_id: "call-abc123".into(),
         name: "read".into(),
         arguments: "{\"path\":\"a.rs\"}".into(),
+        parent_call_id: None,
     }));
     chat.on_turn_event(TurnEvent::ToolFinished(ToolResult::ok(
         "call-abc123",
@@ -871,6 +872,7 @@ fn a_finished_turn_reports_tokens_per_second() {
         call_id: "c1".into(),
         name: "shell".into(),
         arguments: "{}".into(),
+        parent_call_id: None,
     }));
     // The tool's wall-clock time must not reach the reading: counting it
     // would cap 40 tokens at 40/0.15 = 266 tok/s.
@@ -911,6 +913,7 @@ fn a_turn_without_streaming_keeps_the_previous_rate() {
         call_id: "c2".into(),
         name: "shell".into(),
         arguments: "{}".into(),
+        parent_call_id: None,
     }));
     chat.on_turn_event(TurnEvent::ToolFinished(ToolResult::ok("c2", "out")));
     chat.on_turn_event(TurnEvent::Usage(Usage {

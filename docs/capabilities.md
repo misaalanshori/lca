@@ -251,6 +251,40 @@ The `reason` field is required. Consent text uses it directly: the reason string
 
 On denial: the request function returns a permission error.
 
+### tools
+
+Grants the right for one tool to call another through the host (gh
+#77): orchestrator suites that coordinate other tools, the one case
+that justified revisiting ADR-0008's no-extension-to-extension rule.
+The star keeps the host at the center — the extension never calls
+another extension directly, it asks the host, and the host runs the
+nested call through the same validation, hooks, and permission
+checks as a model-issued call.
+
+```toml
+[capabilities.tools]
+reason = "Coordinates the suite's helper tools through nested calls."
+```
+
+Import interface: `lca:host/tools`. `execute-tool(name, arguments)`
+runs one callable tool now (direct tools while active, codemode and
+deferred tools whenever registered; never hidden or model-only
+tools) and answers its result, never a rejection: unknown tools,
+blocks, and failures all arrive as error results. The host assigns
+`<parent id>/<n>` call ids, at most eight levels deep. `list-tools`
+lists the callable tools; `set-active-tools` replaces the session's
+active set (registered names apply, unknown names are ignored and
+reported); `get-active-tools` reads it back.
+
+The `reason` field is required. Consent text uses it directly: the
+reason string, followed by "This lets its tools call other tools
+through the agent."
+
+On denial: every function answers the refusal. `execute-tool`
+returns it as an error result (a guest cannot distinguish a denied
+call from a failed one, by design); the refusal is recorded
+(FR-EXT-9) either way.
+
 ## Capabilities deliberately absent from 0.1
 
 These come up in design discussion and are not in the first release. Each needs evidence from Phase 3 before it is added, following the pattern that already justified adding `net-local`, `pty`, and `completion` during design: a real, motivated case, not a speculative one.

@@ -75,6 +75,7 @@ fn canonical_records() -> Vec<Record> {
             attachment: None,
             truncated: false,
             exit_code: None,
+            nested: Vec::new(),
             full_output_path: None,
         },
         Record::Assistant {

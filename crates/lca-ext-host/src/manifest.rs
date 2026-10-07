@@ -34,6 +34,9 @@ pub struct Manifest {
     pub credentials: bool,
     /// The `completion` capability was declared (ADR-0015).
     pub completion: bool,
+    /// The `tools` capability was declared (gh #77): this extension
+    /// may call other tools through the host's `tools` import.
+    pub tools: bool,
     /// The `ui` regions this manifest declares (capability catalog's
     /// four-region enum; empty means no rendering rights at all).
     pub ui_regions: Vec<String>,
@@ -125,6 +128,7 @@ impl Manifest {
         let mut parsed_oauth: Option<OAuthSettings> = None;
         let mut parsed_credentials = false;
         let mut parsed_completion = false;
+        let mut tools = false;
         let mut parsed_ui_regions: Vec<String> = Vec::new();
         let mut parsed_limits: Option<ExtensionLimits> = None;
         if let Some(capabilities) = value.get("capabilities") {
@@ -134,7 +138,7 @@ impl Manifest {
             for key in table.keys() {
                 match key.as_str() {
                     "fs" | "process" | "pty" | "net" | "net-local" | "oauth" | "credentials"
-                    | "completion" | "ui" => {}
+                    | "completion" | "ui" | "tools" => {}
                     other => {
                         return Err(LoadError::InvalidManifest(format!(
                             "unknown capability `{other}`"
@@ -173,6 +177,10 @@ impl Manifest {
             if let Some(cap) = table.get("pty") {
                 reason_of(cap, "capabilities.pty")?;
                 pty = true;
+            }
+            if let Some(cap) = table.get("tools") {
+                reason_of(cap, "capabilities.tools")?;
+                tools = true;
             }
             let mut net = Vec::new();
             if let Some(cap) = table.get("net") {
@@ -324,6 +332,7 @@ impl Manifest {
             oauth: parsed_oauth,
             credentials: parsed_credentials,
             completion: parsed_completion,
+            tools,
             ui_regions: parsed_ui_regions,
             limits: parsed_limits,
             login_env_base_url,

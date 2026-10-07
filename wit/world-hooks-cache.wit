@@ -1,0 +1,23 @@
+package lca:ext@0.6.0;
+
+/// The `hooks-cache` world: `cache_warming_decision` (gh #45, pi's
+/// event). The host plants prompt-cache breakpoints on
+/// Anthropic-family requests only while at least one extension
+/// declares this world; every declaration votes, and any `false`
+/// skips the breakpoints for that request. No declaration, no
+/// breakpoints: request bytes are exactly what they were before
+/// this world existed. Opt-in by declaring it in the manifest.
+world hooks-cache {
+  import lca:host/log@0.6.0;
+  export hook-cache-warming;
+}
+
+interface hook-cache-warming {
+  /// Whether to plant cache breakpoints on this request.
+  record cache-decision {
+    warm: bool,
+  }
+
+  /// `provider` and `model` name the request the decision covers.
+  on-cache-warming-decision: func(provider: string, model: string) -> cache-decision;
+}

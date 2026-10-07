@@ -55,7 +55,12 @@ The `v` field is per record, not per file. A file written across a format upgrad
 
 `tool-call` holds one call the model requested. Fields: `id`, `call_id`, `name`, `arguments` as a JSON string, and `source` naming whether the tool is built in or comes from an extension.
 
-`tool-result` holds the outcome. Fields: `id`, `call_id` matching the call, `status` of ok, error, denied, or timeout, `content` or an attachment hash, `truncated` as a boolean, and (gh #40) `exit_code` plus `full_output_path` when the tool ran a command and spilled: the process exit code and the session-attachments path holding the untruncated output. Non-shell tools leave both absent. `truncated = true` with an `attachment` means the display shown to the model was cut and the full text is in that attachment; `truncated = true` with no attachment means the content was dropped (no session was attached, as in one-shot use).
+`tool-result` holds the outcome. Fields: `id`, `call_id` matching the call (a nested call carries `<parent id>/<n>` with `parent_call_id` on the call), `status` of ok, error, denied, or timeout, `content` or an attachment hash, `truncated` as a boolean, and (gh #40) `exit_code` plus `full_output_path` when the tool ran a command and spilled: the process exit code and the session-attachments path holding the untruncated output. Non-shell tools leave both absent. `nested` (gh #77) is the bounded
+nested-call record: one entry per directly nested call (`name`,
+`status`, `content_head` capped at 500 characters), the first twenty
+winning; calls that nested nothing carry none. Nested calls never
+appear as their own records - the parent's result is where they
+persist. `truncated = true` with an `attachment` means the display shown to the model was cut and the full text is in that attachment; `truncated = true` with no attachment means the content was dropped (no session was attached, as in one-shot use).
 
 `permission` records a grant decision made during the session. Fields: `action`, `decision` of once, always, or denied, and `pattern` when the decision was always. This is a record of what happened, not the grant store itself.
 
@@ -78,10 +83,17 @@ The `v` field is per record, not per file. A file written across a format upgrad
 `session-info` records the session display name (gh #47: pi's `session_info` semantics): the name the session selector shows instead of the first message. Fields: `id`, `name`. Writer: the interface (`/name` equivalent), the `--name` flag, or an extension through the host; nothing writes it yet. Readers: assembly ignores it. Kept minimal (name + set) on purpose.
 
 `custom` persists extension state (gh #47: pi's `custom` semantics). Fields: `id`, `custom_type` (which extension owns the entry - readers use it to find their own entries on reload), `data` (the extension's JSON). Writer: the host, appending on the extension's behalf under the capability model - an extension never touches the log file (guest-side imports for this are a minor-version decision for the tree/compaction epics; no `wit/` change in this cycle). Readers: assembly ignores it - it never enters model context. Audit-only on export (see below).
+The host's own `custom_type` values: `tool-set-change` (gh #77 -
+the active tool set after a mid-turn change, `data.active` naming
+every active tool; written before the next model request, so the log
+shows what each request declared) and `previous-summary` (gh #36).
 
-`custom-message` is extension context injection (gh #47: pi's `custom_message` semantics). Fields: `id`, `custom_type`, `content` (the injected text - a string; content blocks ride a later record version if an extension needs them), `display` (whether the interface shows it with distinct styling), optional `details` (extension metadata, never sent to the model). Writer: the host, like `custom`. Readers: assembly injects it as a user message carrying `custom-type` and `display` in its extras; `display = false` hides it from the transcript, never from the model.
+`custom-message` is extension context injection (gh #47: pi's `custom_message` semantics). Fields: `id`, `custom_type`, `content` (the injected text - a string; content blocks ride a later record version if an extension needs them), `display` (whether the interface shows it with distinct styling), optional `details` (extension metadata, never sent to the model). Writer: the host, like `custom` - on an extension's behalf, or on
+its own for `settle-append` (gh #45: a settle handler's appended
+entries, injected for the continued request). Readers: assembly injects it as a user message carrying `custom-type` and `display` in its extras; `display = false` hides it from the transcript, never from the model.
 
-`context-edit` appends an omission or replacement of one earlier context-producing entry (gh #47: pi's `context_edit` semantics). Fields: `id`, `target_id` (a `user`, `assistant`, `tool-result`, or `custom-message` record), `replacement` (absent omits the target from future model context; present swaps its text, keeping role and tool linkage - an assistant replacement keeps its tool calls, a tool-result keeps its `call_id`). Writer: the interface's context-surgery surfaces; nothing writes it yet. Readers: assembly applies the latest edit per target; the target record itself stays unchanged in raw history, display, exports, and accounting. Omitting an assistant message whose tool calls have results leaves orphan `tool` messages a provider may reject - the surgery is explicit, so the log keeps what was asked.
+`context-edit` appends an omission or replacement of one earlier context-producing entry (gh #47: pi's `context_edit` semantics). Fields: `id`, `target_id` (a `user`, `assistant`, `tool-result`, or `custom-message` record), `replacement` (absent omits the target from future model context; present swaps its text, keeping role and tool linkage - an assistant replacement keeps its tool calls, a tool-result keeps its `call_id`). Writer: the interface's context-surgery surfaces, and `message_end`
+hooks (gh #45) - a replacement lands here, never as a rewrite. Readers: assembly applies the latest edit per target; the target record itself stays unchanged in raw history, display, exports, and accounting. Omitting an assistant message whose tool calls have results leaves orphan `tool` messages a provider may reject - the surgery is explicit, so the log keeps what was asked.
 
 ## Ordering and identity
 

@@ -1,6 +1,42 @@
 # Changelog
 
-## 0.6.0 (ABI train, 2026-10-07 — cycle 3: gh #172 + #124)
+## 0.6.0 (ABI train, 2026-10-07 — cycles 3+4: gh #172 + #124, gh #77 + #45)
+
+The train's last break, then the freeze: the `tool-catalog` world
+(multi-tool suites with exposure and namespaces), the `lca:host/tools`
+import (nested calls, active-set control, callable listing), and eight
+opt-in hooks worlds. The `tool` world and the six-point `hooks` world
+are byte-identical: single-tool guests and old hook guests load and
+run unchanged. Same label, same window (`0.5..=0.6`); after this
+cycle `wit/` + `schemas/` freeze for the 0.6 line (the freeze note in
+`docs/abi-versioning.md`).
+
+- **Added:** the `tool-catalog` world: `get-tools` over `tool-spec`
+  (`name`, `description`, `parameters`, `exposure`, `namespace`,
+  `annotations`, `extras`) and `run-tool(name, call)` (gh #77).
+  Exposure is a validated string (`direct`, `model-only`, `codemode`,
+  `deferred`, `hidden`); only `direct` tools declare.
+- **Added:** the `lca:host/tools` import (`execute-tool`, `list-tools`,
+  `set-active-tools`, `get-active-tools`), imported by the `tool` and
+  `tool-catalog` worlds and gated by the `tools` manifest capability
+  (gh #77). Nested calls run `<parent>/<n>` with the parent attached.
+- **Added:** eight opt-in hooks worlds, each declared in the manifest:
+  `hooks-message` (`message_end` replace), `hooks-tool-call`
+  (composable mutation/block), `hooks-tool-result` (composable
+  results), `hooks-stream` (normalized observation, replayed in
+  order), `hooks-settle` (`turn_end` / `agent_before_settle` with
+  append-and-continue-once), `hooks-compaction` (veto + failure),
+  `hooks-cache` (warming votes), `hooks-trust` (trust votes) (gh #45).
+  The six-point `hooks` world is untouched.
+- **Changed (compatible):** the `tool` world imports `lca:host/tools`.
+  Imports are host-satisfied whether the guest uses them or not, so
+  single-tool guests built before it keep linking (gh #77).
+
+**Migration (cycle 4):** suites declare `tool-catalog` (and keep or
+drop the single-tool world); orchestrators declare
+`[capabilities.tools]` and call through the import; hooks declare the
+worlds they handle. No migration for single-tool or six-hook guests:
+they rebuild with no source change.
 
 The train's first real interface break: the `ui` world redesign plus the
 `ui-dialogs` host import. `lca:ext@0.6.0` / `lca:host@0.6.0`; the host

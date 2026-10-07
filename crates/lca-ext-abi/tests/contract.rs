@@ -208,7 +208,7 @@ fn the_optional_seams_default_to_no_ops() {
 }
 
 // The world list is the handle's own declaration; `World` is `Copy` so a
-// registry can hold it, and the seven variants are distinct.
+// registry can hold it, and the sixteen variants are distinct.
 #[test]
 fn every_world_is_distinct_and_copyable() {
     let worlds = [
@@ -219,6 +219,15 @@ fn every_world_is_distinct_and_copyable() {
         World::Compaction,
         World::ContextTransform,
         World::Ui,
+        World::ToolCatalog,
+        World::HooksMessage,
+        World::HooksToolCall,
+        World::HooksToolResult,
+        World::HooksStream,
+        World::HooksSettle,
+        World::HooksCompaction,
+        World::HooksCache,
+        World::HooksTrust,
     ];
     for (index, left) in worlds.iter().enumerate() {
         for right in &worlds[index + 1..] {

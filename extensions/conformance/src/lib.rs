@@ -47,6 +47,10 @@ pub trait Cap {
     /// crosses the `ui-dialogs` import, the native twin answers through
     /// its own injected prompter, and both report the same verdict.
     fn dialog_confirm(&self, title: &str, message: &str) -> Result<bool, String>;
+    /// Call another tool through the host (gh #77): the WASM twin
+    /// crosses the `tools` import, the native twin sends to the turn's
+    /// slot. Both report the nested outcome as data, never a rejection.
+    fn tools_execute(&self, parent_call_id: &str, name: &str, args: &str) -> ModeOutcome;
     /// Spawn a program in a granted scope.
     fn process_spawn(
         &self,
@@ -154,6 +158,114 @@ pub fn schema_json() -> (String, String, String) {
     )
 }
 
+/// The suite both modes register (gh #77, EFG-035's three tools):
+/// the legacy `conformance` tool stays `direct` with no namespace, and
+/// two namespaced tools exercise discovery (`deferred`) and
+/// registration-time callability (`codemode`). All three dispatch
+/// through the same shared modes.
+pub fn catalog_specs() -> Vec<lca_protocol::ToolSpec> {
+    let parameters = serde_json::json!({"type":"object","properties":{"mode":{"type":"string"}}});
+    vec![
+        lca_protocol::ToolSpec {
+            name: "conformance".to_string(),
+            description: "ABI conformance probe: dispatches on the mode argument.".to_string(),
+            parameters: parameters.clone(),
+            exposure: lca_protocol::ToolExposure::Direct,
+            namespace: None,
+            annotations: None,
+            extras: Default::default(),
+        },
+        lca_protocol::ToolSpec {
+            name: "conformance-deferred".to_string(),
+            description: "ABI conformance probe (deferred discovery).".to_string(),
+            parameters: parameters.clone(),
+            exposure: lca_protocol::ToolExposure::Deferred,
+            namespace: Some(lca_protocol::ToolNamespace {
+                name: "demo".to_string(),
+                description: "Deferred demonstration tools.".to_string(),
+                instructions: Some("Search for these, then call them nested.".to_string()),
+            }),
+            annotations: None,
+            extras: Default::default(),
+        },
+        lca_protocol::ToolSpec {
+            name: "conformance-code".to_string(),
+            description: "ABI conformance probe (codemode callability).".to_string(),
+            parameters,
+            exposure: lca_protocol::ToolExposure::Codemode,
+            namespace: Some(lca_protocol::ToolNamespace {
+                name: "demo".to_string(),
+                description: "Deferred demonstration tools.".to_string(),
+                instructions: None,
+            }),
+            annotations: None,
+            extras: Default::default(),
+        },
+    ]
+}
+
+/// The redaction token (gh #45): message and result hooks rewrite
+/// exactly this, so journeys asserting the rewritten text prove
+/// composition ran. Absent everywhere else by construction.
+pub fn redact_text(text: &str) -> Option<String> {
+    text.contains("conformance-secret")
+        .then(|| text.replace("conformance-secret", "conformance-redacted"))
+}
+
+/// The mutation markers (gh #45): `tag-mutate` rewrites in place,
+/// `tag-block` vetoes with a reason. Both inert unless asked.
+pub fn mutate_args(arguments: &str) -> lca_protocol::ToolCallPatch {
+    if arguments.contains("tag-block") {
+        lca_protocol::ToolCallPatch {
+            arguments: None,
+            block: Some("conformance blocked this call".to_string()),
+        }
+    } else if arguments.contains("tag-mutate") {
+        lca_protocol::ToolCallPatch {
+            arguments: Some(arguments.replace("tag-mutate", "tag-mutated")),
+            block: None,
+        }
+    } else {
+        lca_protocol::ToolCallPatch::default()
+    }
+}
+
+/// The guest-side dispatch both tool worlds share (gh #77): the
+/// divergent modes (`trap`, `loop`) live here so the catalog serves
+/// exactly what the single-tool world serves, trap for trap.
+#[allow(clippy::panic)] // the trap probe traps by design (NFR-25's trap row).
+pub fn run_tool_mode(
+    cap: &dyn Cap,
+    parent_call_id: &str,
+    mode: &str,
+    args: &serde_json::Value,
+) -> ModeOutcome {
+    match mode {
+        "trap" => panic!("conformance trap requested"),
+        "loop" => loop {
+            std::hint::spin_loop();
+        },
+        "log" => ModeOutcome {
+            ok: true,
+            text: "logged".to_string(),
+        },
+        "alloc" => {
+            let mut hog: Vec<Vec<u8>> = Vec::new();
+            for i in 0..64u64 {
+                let mut block = vec![0u8; 4 * 1024 * 1024];
+                block[0] = i as u8;
+                hog.push(block);
+            }
+            let _ = hog;
+            ModeOutcome {
+                ok: true,
+                text: "allocated".to_string(),
+            }
+        }
+        _ => run_shared(cap, parent_call_id, mode, args),
+    }
+}
+
 /// Parse the `mode` argument; anything absent means `ok`.
 pub fn mode_and_args(arguments: &str) -> (String, serde_json::Value) {
     let value = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
@@ -180,7 +292,12 @@ fn string_list(value: Option<&serde_json::Value>) -> Vec<String> {
 /// The delivery-independent probe logic. `ok`/`fs-read`/`fs-list`/
 /// `spawn`/`pty` run here in both modes; anything else is the caller's
 /// to handle (guest-only modes).
-pub fn run_shared(cap: &dyn Cap, mode: &str, args: &serde_json::Value) -> ModeOutcome {
+pub fn run_shared(
+    cap: &dyn Cap,
+    parent_call_id: &str,
+    mode: &str,
+    args: &serde_json::Value,
+) -> ModeOutcome {
     match mode {
         "ok" => ModeOutcome {
             ok: true,
@@ -206,6 +323,30 @@ pub fn run_shared(cap: &dyn Cap, mode: &str, args: &serde_json::Value) -> ModeOu
                 Err(err) => fail(CapabilityError::Invalid(err)),
             }
         }
+        // Gh #77's nested path: call the sibling tool through the
+        // host and report what came back, id included.
+        "nested" => {
+            let target = args
+                .get("target")
+                .and_then(|v| v.as_str())
+                .unwrap_or("conformance-deferred");
+            let nested_args = args
+                .get("nested-args")
+                .and_then(|v| v.as_str())
+                .unwrap_or(r#"{"mode":"ok"}"#);
+            let outcome = cap.tools_execute(parent_call_id, target, nested_args);
+            ModeOutcome {
+                ok: outcome.ok,
+                text: format!("nested: {}", outcome.text),
+            }
+        }
+        // Gh #45's redaction marker: the tool-result hook rewrites
+        // exactly this token, so a journey asserting the redacted
+        // text proves composition ran live.
+        "spill-secret" => ModeOutcome {
+            ok: true,
+            text: "the token is conformance-secret, handle with care".to_string(),
+        },
         "fs-read" => {
             let (Some(scope), Some(path)) = (
                 args.get("scope").and_then(|v| v.as_str()),
@@ -522,6 +663,7 @@ pub fn outcome_to_result(call_id: &str, outcome: ModeOutcome) -> ToolResult {
         extras: Default::default(),
         exit_code: None,
         full_output_path: None,
+        nested: Vec::new(),
     }
 }
 
@@ -971,6 +1113,14 @@ pub use native::{NativeCap, NativeConformance};
 #[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
 mod tool_world;
 
+// ---------------------------------------------------------------------------
+// WASM delivery mode: the tool-catalog world (gh #77)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod catalog_world;
+
 #[cfg(target_arch = "wasm32")]
 #[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
 mod command_world;
@@ -978,6 +1128,41 @@ mod command_world;
 #[cfg(target_arch = "wasm32")]
 #[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
 mod hooks_world;
+// ---------------------------------------------------------------------------
+// WASM delivery mode: the new hooks worlds (gh #45)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod hooks_message;
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod hooks_tool_call;
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod hooks_tool_result;
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod hooks_stream;
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod hooks_settle;
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod hooks_compaction;
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod hooks_cache;
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims (see crate docs)
+mod hooks_trust;
 
 // ---------------------------------------------------------------------------
 // WASM delivery mode: the provider world

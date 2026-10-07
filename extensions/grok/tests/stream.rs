@@ -53,6 +53,9 @@ fn a_turn_streams_typed_events_over_the_grok_shape() {
             name: "read".to_string(),
             description: "read".to_string(),
             parameters: serde_json::json!({"type": "object"}),
+            exposure: lca_protocol::ToolExposure::Direct,
+            namespace: None,
+            annotations: None,
             extras: Default::default(),
         }],
     );

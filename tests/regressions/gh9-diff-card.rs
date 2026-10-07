@@ -66,6 +66,7 @@ fn call() -> ToolCall {
         call_id: "c1".to_string(),
         name: "edit".to_string(),
         arguments: r#"{"path":"src/main.rs"}"#.to_string(),
+        parent_call_id: None,
     }
 }
 

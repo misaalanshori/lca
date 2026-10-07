@@ -1,0 +1,29 @@
+package lca:ext@0.6.0;
+
+/// The `hooks-tool-call` world: composable `tool_call` mutation and
+/// block (gh #45, pi's `tool_call`). Every registered handler runs in
+/// order and each sees the previous handler's arguments; the existing
+/// `pre-tool-use` verdict then runs on whatever the chain produced
+/// (FR-CORE-10 keeps its hook-before-permission place). Opt-in by
+/// declaring it in the manifest; the six-point `hooks` world is
+/// unchanged.
+world hooks-tool-call {
+  import lca:host/log@0.6.0;
+  export hook-tool-call;
+}
+
+interface hook-tool-call {
+  use types.{tool-call};
+
+  /// What one handler does to the call: `arguments` replaces the
+  /// argument string (later handlers see the replacement); `block`
+  /// vetoes the call with the reason the model sees. Both absent is
+  /// an observation. The host validates the final arguments against
+  /// the schema the model saw before the tool runs.
+  record tool-call-patch {
+    arguments: option<string>,
+    block: option<string>,
+  }
+
+  on-tool-call: func(call: tool-call) -> tool-call-patch;
+}

@@ -60,6 +60,7 @@ fn arb_record(n: u32) -> impl Strategy<Value = Record> {
             attachment: None,
             truncated,
             exit_code: None,
+            nested: Vec::new(),
             full_output_path: None,
         }),
         arb_text().prop_map(move |detail| Record::ExtensionEvent {

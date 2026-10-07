@@ -137,11 +137,74 @@ Constrain the parameters. An enum with three values produces better calls than a
 
 The host validates arguments against this schema before it calls `execute`. An argument that fails validation never reaches the extension.
 
+## Tool suites, exposure, and namespaces
+
+One component may register a whole suite: declare the `tool-catalog`
+world and return every spec from `get-tools`, each dispatched by name
+through `run-tool`. A guest declaring both worlds serves everything
+through the catalog; a guest exporting only `get-schema`/`run` keeps
+loading exactly as before, wrapped as one `direct` tool with no
+namespace.
+
+`exposure` controls how the model reaches a tool. Only `direct`
+tools are declared to the model. `model-only` tools never are and
+never run nested either: host-side tools the model neither sees nor
+calls. `codemode` tools are callable whenever registered and listed
+for codemode-style callers. `deferred` tools are found through
+discovery instead: the model calls the built-in `tool_search` with a
+keyword, the hits activate, and the next request declares the newly
+active `direct` ones. `hidden` tools are registered but unreachable:
+not declared, not callable, not searchable. Re-register `hidden` to
+withdraw a tool. An unknown exposure refuses the whole registration,
+naming the value.
+
+`namespace` (`name`, `description`, `instructions`) groups related
+tools the way MCP servers do: discovery lists a namespace under one
+heading with its description, and `instructions` holds the longer
+guidance discovery surfaces but declarations never carry.
+`annotations` (the four MCP hints) travel on the spec for the model;
+the host's permission layer never decides on them — a hint is not a
+bypass.
+
+The active set is dynamic: `setActiveTools`-style replacement takes
+only registered names (unknown names are ignored and reported), and
+the host records the change in the transcript before the next model
+request. Orchestrator tools call other tools through the `tools`
+import (`execute-tool`, `list-tools`), declared via
+`[capabilities.tools]` with a reason. The host assigns `<parent
+id>/<n>` call ids, so events carry the linkage without the guest
+threading it; the parent's result keeps a bounded record of the
+nested calls (the first entries win). Nested calls run the same
+validation, hooks, and permission checks as model-issued calls, at
+most eight levels deep, and never reject: unknown tools, blocks, and
+failures all arrive as error results.
+
 ## Other worlds
 
 The `command` world adds a slash command. The spec function returns a name, an argument hint, and a completion mode. The invoke function takes the argument string and returns an effect: insert text into the input, submit a prompt, show a widget, or do nothing.
 
-The `hooks` world observes and intercepts the agent loop, one function per hook point: `pre-turn`, `pre-tool-use`, `post-tool-use`, `post-turn-end`, `attention-required`, and `session-close`. The pre-tool hook is the one with power: it returns allow, deny with a reason, or replace the call. A replaced call passes through the permission layer like any other call and is not fed back through the hooks. A hook that denies a call returns a reason the model sees, which is how a policy extension teaches a model what not to do.
+The `hooks` world observes and intercepts the agent loop, one function per hook point: `pre-turn`, `pre-tool-use`, `post-tool-use`, `post-turn-end`, `attention-required`, and `session-close`. The pre-tool hook is the one with power: it returns allow, deny with a reason, or replace the call. A replaced call passes through the permission layer like any other call and is not fed back through the hooks. A hook that denies a call returns a reason the model sees, which is how a policy extension teaches a model what not to do. These six points are frozen: they keep their shapes.
+
+Eight more worlds opt in per point, each declared in the manifest:
+`hooks-message` observes finalized assistant and tool-result messages
+and may replace their text (the host writes an append-only edit, so
+a redaction hook's whole job is returning the rewritten text);
+`hooks-tool-call` mutates calls compositionally in registration order
+(each handler sees the previous arguments; a block vetoes with its
+reason) before the `pre-tool-use` verdict runs; `hooks-tool-result`
+composes results the same way before the log keeps them;
+`hooks-stream` observes normalized provider events in order after the
+stream closes (observation never steers a live stream);
+`hooks-settle` (`turn_end`, then `agent_before_settle`) may append
+context entries and continue exactly one more provider request per
+turn; `hooks-compaction` vetoes a compaction with its reason and
+observes failures; `hooks-cache` votes on prompt-cache warming
+(any decline skips it); `hooks-trust` votes yes/no/undecided on
+project trust before the operator is asked. A broken hook is skipped
+with a warning, never a silent veto — except `pre-tool-use`, whose
+deny is the verdict. The `context` and `context_with_system` points
+are the `context-transform` world, which already sees the full
+transcript including the system prompt: no second surface.
 
 The `ui` world renders. It returns a widget tree for a named region: text spans, styled text (independent foreground/background as a role or `#RRGGBB`, plus bold/dim/italic/underline), markdown (the host's own engine, highlighted fences included), buttons (an id plus a label), tables (headers plus rows, auto-aligned), scroll containers (a viewport height over child nodes, with a scrollbar thumb), images with a media type and bytes, boxes (an optional title plus a border role and background tint), rows, columns, a spinner, a progress bar, and a key-value list. See the capability catalog for the regions and the rendering model. An extension cannot write terminal escape sequences; text spans carry data only.
 

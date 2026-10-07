@@ -1,0 +1,59 @@
+/// The `tools` capability's import: one tool calling another through
+/// the host (pi's `ctx.executeTool`, gh #77). The host assigns the
+/// nested call `<parent id>/<n>`, so `tool_call`, `tool_result`, and
+/// stream events carry `parentToolCallId` without the guest threading
+/// it. Never rejects for tool failures: unknown tools, validation
+/// errors, blocked calls, and thrown errors come back as `isError`
+/// results, exactly like a model-issued call that failed.
+///
+/// Records mirror `lca:ext/types` case for case (that package's own
+/// rule: no use across the two packages, so the host maps at the
+/// boundary like every other crossing).
+///
+/// A tool that orchestrates other tools declares `[capabilities.tools]`
+/// with a reason; without the grant the import answers `not-granted`
+/// and the refusal is recorded (FR-EXT-9), like every other capability.
+interface tools {
+  /// Run another tool now, through the same validation, hooks, and
+  /// permission checks as a model-issued call. Callable tools only;
+  /// anything else is an `isError` result naming the reason. At most
+  /// `max-nested-depth` levels deep; deeper nests fail the same way
+  /// instead of recursing.
+  execute-tool: func(name: string, arguments: string) -> nested-result;
+
+  /// The callable tools, for orchestrators deciding what to call.
+  list-tools: func() -> list<tool-name>;
+
+  /// Replace the session's active tool set (pi's `setActiveTools`):
+  /// only registered names take effect, unknown names are ignored and
+  /// reported. The host records the change in the transcript before
+  /// the next model request.
+  set-active-tools: func(names: list<string>) -> active-tools-result;
+
+  /// The active tool set: the names a declaration request would carry
+  /// (direct tools) plus every other active tool.
+  get-active-tools: func() -> list<string>;
+
+  /// One callable tool the host knows: direct tools while active,
+  /// codemode and deferred tools whenever registered. Never hidden
+  /// or model-only tools, and never unregistered names.
+  record tool-name {
+    name: string,
+    description: string,
+  }
+
+  /// What `set-active-tools` did.
+  record active-tools-result {
+    applied: list<string>,
+    ignored: list<string>,
+  }
+
+  /// The nested call's outcome. `is-error` mirrors the host's own
+  /// result status: unknown tools, validation errors, blocked calls,
+  /// and thrown errors all arrive here, never as a host error.
+  record nested-result {
+    call-id: string,
+    is-error: bool,
+    content: string,
+  }
+}

@@ -41,9 +41,9 @@ and fields may be added, never removed or retyped (release policy).
 | `text-delta` | `delta` | An assistant text chunk; concatenate to rebuild. |
 | `thinking-delta` | `delta` | A reasoning chunk. |
 | `text` | `content` | Assistant text, streamed as it completes or emitted whole. |
-| `tool-call` | `id`, `call_id`, `name`, `arguments` | The model requested a tool call. |
+| `tool-call` | `id`, `call_id`, `name`, `arguments`, `parent_call_id` | The model requested a tool call. `parent_call_id` is the calling tool's id for nested calls (gh #77), null for model-issued calls. |
 | `tool-update` | `call_id`, `chunk` | Live output from a running tool call. |
-| `tool-result` | `id`, `call_id`, `status`, `content`, `truncated`, `exit_code`, `full_output_path` | A tool call finished. `status` is `ok`, `error`, `denied`, or `timeout`; the last two fields ride only shell results that spilled (gh #40). |
+| `tool-result` | `id`, `call_id`, `status`, `content`, `truncated`, `exit_code`, `full_output_path`, `nested` | A tool call finished. `status` is `ok`, `error`, `denied`, or `timeout`; the last two fields ride only shell results that spilled (gh #40). |
 | `usage` | `input`, `output`, `cache_read`, `cache_write`, `cache_write_1h`, `cost` | The turn's usage, cache counts present when the provider reports them. |
 | `extension-event` | `extension`, `event`, `detail` | A load, disable, trap, capability denial, or cache divergence. |
 | `queue-queued` | `mode` | A `steer`/`follow_up` message was accepted into the queue. |

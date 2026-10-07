@@ -1395,6 +1395,7 @@ name = "lca-ext-abi"
 version = "0.5.4"
 dependencies = [
  "lca-protocol",
+ "tokio",
  "wasmtime",
 ]
 
@@ -2653,6 +2654,13 @@ name = "toml_write"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
+
+[[package]]
+name = "tool-legacy"
+version = "0.5.4"
+dependencies = [
+ "wit-bindgen 0.41.0",
+]
 
 [[package]]
 name = "topological-sort"

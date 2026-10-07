@@ -623,6 +623,7 @@ fn from_host_message(
                 call_id: call.call_id.clone(),
                 name: call.name.clone(),
                 arguments: call.arguments.clone(),
+                parent_call_id: None,
             })
             .collect(),
         tool_call_id: message.tool_call_id,
@@ -745,5 +746,128 @@ impl lca_ext_abi::host::tool::lca::host::ui_dialogs::Host for HostState {
             return;
         }
         self.dialogs.notify(&message, &level);
+    }
+}
+
+/// Shared `tools` import logic (gh #77): one tool calling another
+/// through the host. Both the `tool` and `tool-catalog` worlds import
+/// the identical interface, so the two impls below share these
+/// helpers and map one answer onto each world's generated types.
+use lca_ext_abi::host::tool::lca::host::tools::{ActiveToolsResult, NestedResult, ToolName};
+use lca_ext_abi::host::tool_catalog::lca::host::tools::{
+    ActiveToolsResult as CatalogActiveToolsResult, NestedResult as CatalogNestedResult,
+    ToolName as CatalogToolName,
+};
+
+impl HostState {
+    /// The grant gate every `tools` function passes first: without
+    /// the manifest grant the import refuses and records (FR-PERM-3),
+    /// and without a loaded registry there is nothing to call through.
+    fn tools_gate(&self) -> Result<std::sync::Arc<dyn lca_ext_abi::ToolsRegistryView>, String> {
+        if let Err(err) = self.cap.check_tools() {
+            return Err(err.to_string());
+        }
+        self.tools_view
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+            .ok_or_else(|| "no turn is running to serve tools".to_string())
+    }
+
+    fn tools_execute_answer(&mut self, name: &str, arguments: &str) -> (String, bool, String) {
+        let fail = |content: String| (String::new(), true, content);
+        let view = match self.tools_gate() {
+            Ok(view) => view,
+            Err(content) => return fail(content),
+        };
+        let Some(parent) = self.executing_call.clone() else {
+            return fail("no tool call is executing on this store".to_string());
+        };
+        let Some(slot) = view.nested_slot() else {
+            return fail("no turn is running to serve the nested call".to_string());
+        };
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        let request = lca_ext_abi::NestedCall {
+            parent_call_id: parent,
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+            reply: reply_tx,
+        };
+        // The turn serves on its own task while this thread waits; a
+        // dead turn drops the reply, which reads as a failure, never
+        // a hang of the host itself (the guest still burns fuel).
+        if slot.send(request).is_err() {
+            return fail("the turn is gone; the nested call was dropped".to_string());
+        }
+        match reply_rx.recv() {
+            Ok(result) => (
+                result.call_id,
+                result.status != lca_protocol::ToolResultStatus::Ok,
+                result.content,
+            ),
+            Err(_) => fail("the turn dropped the nested call".to_string()),
+        }
+    }
+}
+
+impl lca_ext_abi::host::tool::lca::host::tools::Host for HostState {
+    fn execute_tool(&mut self, name: String, arguments: String) -> NestedResult {
+        let (call_id, is_error, content) = self.tools_execute_answer(&name, &arguments);
+        NestedResult {
+            call_id,
+            is_error,
+            content,
+        }
+    }
+    fn list_tools(&mut self) -> Vec<ToolName> {
+        self.tools_gate()
+            .map(|view| view.callable_names())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, description)| ToolName { name, description })
+            .collect()
+    }
+    fn set_active_tools(&mut self, names: Vec<String>) -> ActiveToolsResult {
+        let (applied, ignored) = self
+            .tools_gate()
+            .map(|view| view.set_active_tools(&names))
+            .unwrap_or_default();
+        ActiveToolsResult { applied, ignored }
+    }
+    fn get_active_tools(&mut self) -> Vec<String> {
+        self.tools_gate()
+            .map(|view| view.active_tools())
+            .unwrap_or_default()
+    }
+}
+
+impl lca_ext_abi::host::tool_catalog::lca::host::tools::Host for HostState {
+    fn execute_tool(&mut self, name: String, arguments: String) -> CatalogNestedResult {
+        let (call_id, is_error, content) = self.tools_execute_answer(&name, &arguments);
+        CatalogNestedResult {
+            call_id,
+            is_error,
+            content,
+        }
+    }
+    fn list_tools(&mut self) -> Vec<CatalogToolName> {
+        self.tools_gate()
+            .map(|view| view.callable_names())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, description)| CatalogToolName { name, description })
+            .collect()
+    }
+    fn set_active_tools(&mut self, names: Vec<String>) -> CatalogActiveToolsResult {
+        let (applied, ignored) = self
+            .tools_gate()
+            .map(|view| view.set_active_tools(&names))
+            .unwrap_or_default();
+        CatalogActiveToolsResult { applied, ignored }
+    }
+    fn get_active_tools(&mut self) -> Vec<String> {
+        self.tools_gate()
+            .map(|view| view.active_tools())
+            .unwrap_or_default()
     }
 }

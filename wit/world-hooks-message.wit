@@ -1,0 +1,26 @@
+package lca:ext@0.6.0;
+
+/// The `hooks-message` world: message-lifecycle observation with a
+/// `message_end` replace (gh #45, pi's `message_end`). Opt-in by
+/// declaring it in the manifest; the six-point `hooks` world is
+/// unchanged. The replacement keeps the original role: the guest
+/// returns text, never a role.
+world hooks-message {
+  import lca:host/log@0.6.0;
+  export hook-message-end;
+}
+
+interface hook-message-end {
+  /// Observe a finalized message; `replacement` swaps its text
+  /// (a redaction hook's whole job). The host writes the swap as an
+  /// append-only edit keeping role and tool linkage, exactly like a
+  /// later reader finding the same record.
+  record message-end-result {
+    replacement: option<string>,
+  }
+
+  /// `role` is `user`, `assistant`, or `tool-result`; `text` is the
+  /// message's concatenated text. Called for messages the turn
+  /// finalized, in turn order.
+  on-message-end: func(role: string, text: string) -> message-end-result;
+}

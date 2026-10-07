@@ -586,6 +586,7 @@ mod cut_tests {
             attachment: None,
             truncated: false,
             exit_code: None,
+            nested: Vec::new(),
             full_output_path: None,
         }
     }

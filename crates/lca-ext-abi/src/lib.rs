@@ -41,6 +41,70 @@ pub enum World {
     /// Draw in the four regions as a widget tree (`ui` world,
     /// ADR-0003, FR-UI-1/2/6).
     Ui,
+    /// Register a suite of tools with exposure and namespaces
+    /// (`tool-catalog` world, gh #77).
+    ToolCatalog,
+    /// Observe and replace finalized messages (`hooks-message`
+    /// world, gh #45).
+    HooksMessage,
+    /// Mutate or block tool calls compositionally (`hooks-tool-call`
+    /// world, gh #45).
+    HooksToolCall,
+    /// Mutate tool results compositionally (`hooks-tool-result`
+    /// world, gh #45).
+    HooksToolResult,
+    /// Observe normalized provider stream events (`hooks-stream`
+    /// world, gh #45).
+    HooksStream,
+    /// Append entries and continue once before settling
+    /// (`hooks-settle` world, gh #45).
+    HooksSettle,
+    /// Veto compaction and observe its failure (`hooks-compaction`
+    /// world, gh #45).
+    HooksCompaction,
+    /// Vote on prompt-cache warming (`hooks-cache` world, gh #45).
+    HooksCache,
+    /// Vote on project trust (`hooks-trust` world, gh #45).
+    HooksTrust,
+}
+
+/// One nested tool request (gh #77): a tool calling another through
+/// the host. The turn serves these on its own task while the parent
+/// tool's thread waits; the reply carries a result, never a
+/// rejection (unknown tools, validation errors, and blocks all
+/// arrive as error results, pi's `isError`).
+#[derive(Debug)]
+pub struct NestedCall {
+    /// The calling tool's call id; the child id becomes
+    /// `<parent>/<n>`.
+    pub parent_call_id: String,
+    /// The tool to run.
+    pub name: String,
+    /// Argument string (JSON object text).
+    pub arguments: String,
+    /// Where the outcome goes.
+    pub reply: std::sync::mpsc::Sender<lca_protocol::ToolResult>,
+}
+
+/// The registry surface the `tools` host import needs (gh #77):
+/// listing, activation, callability, and the per-turn nested slot.
+/// Implemented by the core registry; the host holds it behind this
+/// trait so neither crate depends on the other.
+pub trait ToolsRegistryView: Send + Sync {
+    /// Callable tools as name plus description, sorted.
+    fn callable_names(&self) -> Vec<(String, String)>;
+    /// Whether the host may run a tool by name right now.
+    fn is_callable(&self, name: &str) -> bool;
+    /// The active tool names, sorted.
+    fn active_tools(&self) -> Vec<String>;
+    /// Replace the active set; returns `(applied, ignored)`.
+    fn set_active_tools(&self, names: &[String]) -> (Vec<String>, Vec<String>);
+    /// Install the turn's nested-call server.
+    fn install_nested(&self, tx: tokio::sync::mpsc::UnboundedSender<NestedCall>);
+    /// Remove the turn's nested-call server.
+    fn clear_nested(&self);
+    /// The installed server, if a turn is running.
+    fn nested_slot(&self) -> Option<tokio::sync::mpsc::UnboundedSender<NestedCall>>;
 }
 
 /// Whether this handle runs sandboxed (WASM) or in-process (native); the
@@ -80,9 +144,10 @@ pub mod dispatch {
 
     use crate::{DeliveryMode, World};
     use lca_protocol::{
-        ChatMessage, CommandEffect, CommandSpec, CompletionRequest, DispatchError, EventSink,
-        HookAction, IdentityOutcome, LoginAnswer, LoginOption, ModelInfo, PostToolObservation,
-        Record, ToolCall, ToolResult, ToolSpec, Usage,
+        ChatMessage, CommandEffect, CommandSpec, CompactVerdict, CompletionRequest, DispatchError,
+        EventSink, HookAction, IdentityOutcome, LoginAnswer, LoginOption, ModelInfo,
+        PostToolObservation, Record, SettleDecision, ToolCall, ToolCallPatch, ToolResult,
+        ToolResultPatch, ToolSpec, TrustVote, Usage,
     };
 
     /// Boxed future bound for dispatch calls, tied to the handle's life.
@@ -173,6 +238,12 @@ pub mod dispatch {
             None
         }
 
+        /// Install the tool registry surface (gh #77): the running
+        /// turn calls this per handle so the `tools` import serves
+        /// through it. The default ignores (handles without tool
+        /// worlds never need it).
+        fn set_tools_view(&self, _view: std::sync::Arc<dyn crate::ToolsRegistryView>) {}
+
         /// A pre-parse markdown transform (gh #12): pi's
         /// `registerMarkdownTransformer`, Rust-side only. The host runs
         /// it in registration order over the raw markdown source before
@@ -212,6 +283,108 @@ pub mod dispatch {
 
         /// `session-close`: observe.
         fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>>;
+
+        /// `message_end` replacement text (`hooks-message` world, gh
+        /// #45). `None` observes. The default implements nothing.
+        fn on_message_end<'a>(
+            &'a self,
+            _role: &'a str,
+            _text: &'a str,
+        ) -> DispatchFuture<'a, Result<Option<String>, DispatchError>> {
+            Box::pin(std::future::ready(Ok(None)))
+        }
+
+        /// Composable `tool_call` mutation (`hooks-tool-call` world, gh
+        /// #45). The default is the identity patch (observation).
+        fn on_tool_call<'a>(
+            &'a self,
+            _call: &'a ToolCall,
+        ) -> DispatchFuture<'a, Result<ToolCallPatch, DispatchError>> {
+            Box::pin(std::future::ready(Ok(ToolCallPatch::default())))
+        }
+
+        /// Composable `tool_result` mutation (`hooks-tool-result`
+        /// world, gh #45). The default is the identity patch.
+        fn on_tool_result<'a>(
+            &'a self,
+            _call: &'a ToolCall,
+            _result: &'a ToolResult,
+        ) -> DispatchFuture<'a, Result<ToolResultPatch, DispatchError>> {
+            Box::pin(std::future::ready(Ok(ToolResultPatch::default())))
+        }
+
+        /// Normalized provider stream observation (`hooks-stream`
+        /// world, gh #45). The default ignores.
+        fn on_stream_event<'a>(
+            &'a self,
+            _provider: &'a str,
+            _model: &'a str,
+            _kind: &'a str,
+            _data: &'a str,
+        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
+
+        /// Actionable turn end (`hooks-settle` world, gh #45). The
+        /// default settles.
+        fn on_turn_end<'a>(
+            &'a self,
+            _rounds: u32,
+            _tool_calls: u32,
+            _status: &'a str,
+        ) -> DispatchFuture<'a, Result<SettleDecision, DispatchError>> {
+            Box::pin(std::future::ready(Ok(SettleDecision::default())))
+        }
+
+        /// The last word before settlement (`hooks-settle` world, gh
+        /// #45). The default settles.
+        fn on_agent_before_settle<'a>(
+            &'a self,
+            _rounds: u32,
+            _tool_calls: u32,
+            _status: &'a str,
+        ) -> DispatchFuture<'a, Result<SettleDecision, DispatchError>> {
+            Box::pin(std::future::ready(Ok(SettleDecision::default())))
+        }
+
+        /// Compaction veto (`hooks-compaction` world, gh #45). The
+        /// default allows.
+        fn on_session_before_compact<'a>(
+            &'a self,
+            _reason: &'a str,
+        ) -> DispatchFuture<'a, Result<CompactVerdict, DispatchError>> {
+            Box::pin(std::future::ready(Ok(CompactVerdict::Allow)))
+        }
+
+        /// Compaction failure observation (`hooks-compaction` world, gh
+        /// #45). The default ignores.
+        fn on_session_compact_failed<'a>(
+            &'a self,
+            _reason: &'a str,
+            _error: Option<&'a str>,
+        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
+
+        /// Cache-warming vote (`hooks-cache` world, gh #45). The
+        /// default warms.
+        fn on_cache_warming_decision<'a>(
+            &'a self,
+            _provider: &'a str,
+            _model: &'a str,
+        ) -> DispatchFuture<'a, Result<bool, DispatchError>> {
+            Box::pin(std::future::ready(Ok(true)))
+        }
+
+        /// Project-trust vote (`hooks-trust` world, gh #45). Returns
+        /// the vote and whether to remember it. The default is
+        /// undecided (the operator decides).
+        fn on_project_trust<'a>(
+            &'a self,
+            _cwd: &'a str,
+        ) -> DispatchFuture<'a, Result<(TrustVote, bool), DispatchError>> {
+            Box::pin(std::future::ready(Ok((TrustVote::Undecided, false))))
+        }
 
         /// Models this provider offers (`provider` world, FR-PROV-2).
         /// Synchronous like `tool_specs`: the picker reads it at
@@ -423,5 +596,51 @@ pub mod host {
     /// The `ui` world.
     pub mod ui {
         wasmtime::component::bindgen!({ path: "../../wit", world: "ui" });
+    }
+
+    /// The `tool-catalog` world (gh #77): multi-tool registration.
+    /// The `tool` module above stays the single-tool world.
+    pub mod tool_catalog {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "tool-catalog" });
+    }
+
+    /// The `hooks-message` world (gh #45): `message_end` replace.
+    pub mod hooks_message {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "hooks-message" });
+    }
+
+    /// The `hooks-tool-call` world (gh #45): composable mutation.
+    pub mod hooks_tool_call {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "hooks-tool-call" });
+    }
+
+    /// The `hooks-tool-result` world (gh #45): composable results.
+    pub mod hooks_tool_result {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "hooks-tool-result" });
+    }
+
+    /// The `hooks-stream` world (gh #45): stream observation.
+    pub mod hooks_stream {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "hooks-stream" });
+    }
+
+    /// The `hooks-settle` world (gh #45): actionable settle.
+    pub mod hooks_settle {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "hooks-settle" });
+    }
+
+    /// The `hooks-compaction` world (gh #45): compact veto.
+    pub mod hooks_compaction {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "hooks-compaction" });
+    }
+
+    /// The `hooks-cache` world (gh #45): cache-warming votes.
+    pub mod hooks_cache {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "hooks-cache" });
+    }
+
+    /// The `hooks-trust` world (gh #45): project-trust votes.
+    pub mod hooks_trust {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "hooks-trust" });
     }
 }

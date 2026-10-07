@@ -668,6 +668,7 @@ fn export_lists_attachment_hashes_that_exist() {
                     attachment: Some(hash.clone()),
                     truncated: true,
                     exit_code: None,
+                    nested: Vec::new(),
                     full_output_path: None,
                 },
             )
@@ -788,6 +789,7 @@ fn attachment_record(id: &str, hash: &str) -> Record {
         attachment: Some(hash.to_string()),
         truncated: true,
         exit_code: None,
+        nested: Vec::new(),
         full_output_path: None,
     }
 }

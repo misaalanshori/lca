@@ -1,7 +1,7 @@
 name = "conformance"
 version = "0.1.0"
 abi = "0.6"
-worlds = ["tool", "command", "hooks", "provider", "compaction", "context-transform", "ui"]
+worlds = ["tool", "tool-catalog", "command", "hooks", "hooks-message", "hooks-tool-call", "hooks-tool-result", "hooks-stream", "hooks-settle", "hooks-compaction", "hooks-cache", "hooks-trust", "provider", "compaction", "context-transform", "ui"]
 description = "ABI conformance probe covering every world, import, and denied path."
 license = "Apache-2.0"
 
@@ -29,3 +29,6 @@ namespace = "conformance"
 
 [capabilities.ui]
 regions = ["status-line", "footer", "panel", "modal"]
+
+[capabilities.tools]
+reason = "Calls its own suite tools through the host for nested-call conformance."

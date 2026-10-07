@@ -14,6 +14,19 @@ use crate::usage::Usage;
 /// Record schema version written by this build.
 pub const FORMAT_VERSION: u32 = 1;
 
+/// One nested call's bounded record (gh #77): the name, whether it
+/// worked, and the content's head. The full nested transcript never
+/// persists; the first `MAX_NESTED_RECORDS` entries win.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NestedCallRecord {
+    /// The nested tool's name.
+    pub name: String,
+    /// Whether it worked.
+    pub status: ToolResultStatus,
+    /// The content's head (at most `NESTED_CONTENT_HEAD` chars).
+    pub content_head: String,
+}
+
 /// One line of a session log.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "kebab-case")]
@@ -117,6 +130,12 @@ pub enum Record {
         /// Full-output spill path, when the output spilled (gh #40).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         full_output_path: Option<String>,
+        /// Bounded nested-call record (gh #77, pi's `nestedCalls`):
+        /// nested calls never appear as their own records, so the
+        /// calling tool's result keeps the first entries (each a
+        /// content head, never the full text). Absent before gh #77.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        nested: Vec<NestedCallRecord>,
     },
     /// A grant decision made during the session.
     Permission {

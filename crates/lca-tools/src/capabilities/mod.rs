@@ -91,6 +91,9 @@ pub struct CapabilityGrants {
     /// The `completion` capability, when declared (ADR-0015): ask the
     /// host for a response from the active provider.
     pub completion: bool,
+    /// The `tools` capability, when declared (gh #77): call other
+    /// tools through the host.
+    pub tools: bool,
 }
 
 type HttpClient =
@@ -598,6 +601,17 @@ impl Capabilities {
         {
             use std::io::Write as _;
             let _ = file.write_all(line.as_bytes());
+        }
+    }
+
+    /// The `tools` gate (gh #77): one tool calling another needs the
+    /// manifest grant; undeclared means refused and recorded
+    /// (FR-PERM-3), like every other capability.
+    pub fn check_tools(&self) -> Result<(), CapabilityError> {
+        if self.grants.tools {
+            Ok(())
+        } else {
+            Err(self.undeclared("tools"))
         }
     }
 

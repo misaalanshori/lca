@@ -275,6 +275,7 @@ pub fn assemble_with(
                         call_id: call_id.clone(),
                         name: name.clone(),
                         arguments: arguments.clone(),
+                        parent_call_id: None,
                     });
                 }
             }
@@ -542,6 +543,7 @@ mod vocabulary_tests {
             call_id: "call_1".into(),
             name: "shell".into(),
             arguments: "{}".into(),
+            parent_call_id: None,
         };
         let records = vec![
             assistant("a1", "working"),
@@ -564,6 +566,7 @@ mod vocabulary_tests {
                 attachment: None,
                 truncated: false,
                 exit_code: None,
+                nested: Vec::new(),
                 full_output_path: None,
             },
             Record::ContextEdit {
@@ -679,6 +682,7 @@ mod healing_tests {
             call_id: call_id.to_string(),
             name: "shell".to_string(),
             arguments: "{}".to_string(),
+            parent_call_id: None,
         });
         message.content.push(ContentBlock::ToolCall {
             call_id: call_id.to_string(),
@@ -740,6 +744,7 @@ mod healing_tests {
             call_id: "call_2".to_string(),
             name: "shell".to_string(),
             arguments: "{}".to_string(),
+            parent_call_id: None,
         });
         heal_dangling_tool_calls(&mut messages);
         let ids: Vec<Option<&str>> = messages

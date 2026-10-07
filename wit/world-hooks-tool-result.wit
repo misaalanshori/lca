@@ -1,0 +1,25 @@
+package lca:ext@0.6.0;
+
+/// The `hooks-tool-result` world: composable `tool_result` mutation
+/// (gh #45, pi's `tool_result`). Every registered handler runs in
+/// order over the same result; omitted fields stay as they are. The
+/// composed result is what the session log keeps and the model sees.
+/// Opt-in by declaring it in the manifest; the six-point `hooks`
+/// world's observe-only `post-tool-use` is unchanged.
+world hooks-tool-result {
+  import lca:host/log@0.6.0;
+  export hook-tool-result;
+}
+
+interface hook-tool-result {
+  use types.{tool-call, tool-result};
+
+  /// What one handler changes: `content` swaps the text handed back,
+  /// `is-error` flips the outcome. Everything omitted stays.
+  record tool-result-patch {
+    content: option<string>,
+    is-error: option<bool>,
+  }
+
+  on-tool-result: func(call: tool-call, outcome: tool-result) -> tool-result-patch;
+}

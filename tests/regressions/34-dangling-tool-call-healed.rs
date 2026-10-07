@@ -116,6 +116,7 @@ fn a_complete_turn_is_unchanged() {
             attachment: None,
             truncated: false,
             exit_code: None,
+            nested: Vec::new(),
             full_output_path: None,
         },
     ];

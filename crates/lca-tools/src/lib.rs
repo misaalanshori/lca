@@ -15,6 +15,7 @@ mod edit;
 mod image;
 mod open;
 mod ops;
+mod paths;
 mod process;
 mod pty;
 pub mod shell;
@@ -30,12 +31,13 @@ pub use capabilities::{
 };
 pub use open::{UrlLauncher, open_url, url_launchers, windows_url_launcher};
 pub use ops::{Entry, ExecOutcome, NativeOps, Stat, ToolOps};
+pub use paths::{is_inside, resolve_target, sha256_hex};
 pub use process::{TreeChild, read_up_to, spawn_direct, write_all};
 pub use pty::PtyChild;
 pub use shell::{Kind as ShellKind, Os as ShellOs, Probe as ShellProbe, Shell, Transport};
 
 use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -266,6 +268,7 @@ impl ToolExecutor {
             extras: Default::default(),
             exit_code,
             full_output_path,
+            nested: Vec::new(),
         };
         if let Some(hash) = attachment {
             result.extras.insert("attachment".to_string(), hash);
@@ -293,6 +296,9 @@ impl ToolExecutor {
                         "properties": properties,
                         "required": required,
                     }),
+                    exposure: lca_protocol::ToolExposure::Direct,
+                    namespace: None,
+                    annotations: None,
                     extras: Default::default(),
                 }
             };
@@ -992,65 +998,6 @@ fn shell_description(shell: Option<&Shell>) -> String {
 /// the deepest existing ancestor so `..` and symlinks are both honoured
 /// before any inside-workspace check (FR-TOOL-3, threat model's traversal
 /// scenarios).
-pub fn resolve_target(cwd: &Path, path: &Path) -> PathBuf {
-    let joined = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        cwd.join(path)
-    };
-    let mut existing = joined.clone();
-    let mut remainder: Vec<std::ffi::OsString> = Vec::new();
-    loop {
-        if let Ok(canonical) = std::fs::canonicalize(&existing) {
-            let mut out = canonical;
-            for part in remainder.iter().rev() {
-                out.push(part);
-            }
-            return normalize(&out);
-        }
-        match (existing.file_name(), existing.parent()) {
-            (Some(name), Some(parent)) => {
-                remainder.push(name.to_os_string());
-                existing = parent.to_path_buf();
-            }
-            _ => return normalize(&joined),
-        }
-    }
-}
-
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
-
-/// Whether a resolved path sits inside the workspace root.
-pub fn is_inside(path: &Path, root: &Path) -> bool {
-    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    path.starts_with(&root)
-}
-
-/// Lowercase hex SHA-256 of `bytes`: the attachment content address. Public
-/// so the core's attach path can address a file by the same function the
-/// spill path uses (one hash, no second implementation).
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
-}
-
 /// Truncate at a line boundary, keeping the head (FR-TOOL-7).
 /// The offset window with line numbers, as the model sees it.
 fn numbered_window(lines: &[&str], offset: usize, end: usize) -> String {

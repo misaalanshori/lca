@@ -134,6 +134,9 @@ impl TurnSink for HeadlessSink {
                     "call_id": call.call_id,
                     "name": call.name,
                     "arguments": call.arguments,
+                    // Gh #77's nesting: the calling tool's id, null
+                    // for model-issued calls.
+                    "parent_call_id": call.parent_call_id,
                 }));
             }
             TurnEvent::ToolOutputChunk { call_id, chunk } if self.json => {
@@ -153,6 +156,14 @@ impl TurnSink for HeadlessSink {
                     "truncated": result.truncated,
                     "exit_code": result.exit_code,
                     "full_output_path": result.full_output_path,
+                    // Gh #77's bounded record rides the envelope the
+                    // session log keeps (empty for calls that nested
+                    // nothing).
+                    "nested": result.nested.iter().map(|entry| serde_json::json!({
+                        "name": entry.name,
+                        "status": entry.status,
+                        "content_head": entry.content_head,
+                    })).collect::<Vec<_>>(),
                 }));
             }
             TurnEvent::Usage(usage) if self.json => {
@@ -814,6 +825,7 @@ mod sink_tests {
             call_id: "call-1".to_string(),
             name: "shell".to_string(),
             arguments: "{}".to_string(),
+            parent_call_id: None,
         }
     }
 

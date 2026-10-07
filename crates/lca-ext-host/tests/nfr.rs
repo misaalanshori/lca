@@ -120,6 +120,7 @@ fn hook_calls_stay_within_one_millisecond_of_overhead() {
         call_id: "c1".to_string(),
         name: "read".to_string(),
         arguments: "{}".to_string(),
+        parent_call_id: None,
     };
     futures_executor_block_on(extension.on_pre_tool_use(&call)).expect("warmup");
     let rounds = 30;
@@ -257,5 +258,6 @@ fn call_loop() -> ToolCall {
         call_id: "spin".to_string(),
         name: "conformance".to_string(),
         arguments: r#"{"mode":"loop"}"#.to_string(),
+        parent_call_id: None,
     }
 }

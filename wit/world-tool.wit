@@ -13,6 +13,11 @@ world tool {
   import lca:host/process@0.6.0;
   import lca:host/pty@0.6.0;
   import lca:host/ui-dialogs@0.6.0;
+  // Added pre-freeze (gh #77): an import is satisfied by the host
+  // whether the guest uses it or not, so single-tool guests built
+  // before it keep linking - only the exports below are the
+  // byte-compatibility promise.
+  import lca:host/tools@0.6.0;
   export tool-schema;
   export execute;
 }
@@ -39,4 +44,86 @@ interface execute {
 
   /// Run one call. The host validates arguments against the schema first.
   run: func(call: tool-call) -> tool-result;
+}
+
+/// The `tool-catalog` world: a suite of tools from one extension
+/// (pi's `registerTool` called any number of times, gh #77). The
+/// single-tool `tool` world above is unchanged: a guest exporting
+/// only `get-schema`/`run` keeps loading and dispatching exactly as
+/// before, and its one tool is `direct` with no namespace.
+world tool-catalog {
+  import lca:host/log@0.6.0;
+  import lca:host/resources@0.6.0;
+  import lca:host/state@0.6.0;
+  // Capability interfaces for tool-catalog components: the same
+  // denied-until-granted table as the `tool` world, plus `tools`
+  // for orchestrator suites that call their own (or another
+  // extension's) tools through the host.
+  import lca:host/fs@0.6.0;
+  import lca:host/process@0.6.0;
+  import lca:host/pty@0.6.0;
+  import lca:host/ui-dialogs@0.6.0;
+  import lca:host/tools@0.6.0;
+  export catalog;
+  export catalog-run;
+}
+
+interface catalog {
+  use types.{extra-pair};
+
+  /// How the model reaches the tool (pi's `ToolExposure`, 0.99).
+  /// Only `direct` tools are declared to the model; `model-only`
+  /// tools never are (host-side tools the model neither sees nor
+  /// calls); `codemode` tools are callable whenever registered and
+  /// listed for codemode-style callers; `deferred` tools are found
+  /// through discovery instead; `hidden` tools are registered but
+  /// unreachable (re-register `hidden` to withdraw a tool). Unknown
+  /// exposure refuses the whole registration, naming the value.
+  /// A string, not an enum: new values stay additive (the
+  /// abi-versioning table's string-vocabulary row).
+
+  /// What namespace a tool belongs to (pi's `ToolNamespace`, MCP
+  /// grouping): related tools list under one heading with the
+  /// namespace's description; `instructions` holds the longer usage
+  /// guidance discovery surfaces, never the declaration.
+  record tool-namespace {
+    name: string,
+    description: string,
+    instructions: option<string>,
+  }
+
+  /// Hints about what a tool does (MCP tool annotations): the model
+  /// sees them; the host's permission layer never decides on them
+  /// (a hint is not a bypass, PG-050).
+  record tool-annotations {
+    read-only-hint: option<bool>,
+    destructive-hint: option<bool>,
+    idempotent-hint: option<bool>,
+    open-world-hint: option<bool>,
+  }
+
+  /// One tool in the suite.
+  record tool-spec {
+    name: string,
+    description: string,
+    /// JSON Schema for the arguments, as JSON text.
+    parameters: string,
+    exposure: string,
+    namespace: option<tool-namespace>,
+    annotations: option<tool-annotations>,
+    extras: list<extra-pair>,
+  }
+
+  /// Every tool this extension registers. Names share one namespace
+  /// with the built-ins and every other extension; a collision
+  /// disables the later registration (FR-EXT-11).
+  get-tools: func() -> list<tool-spec>;
+}
+
+interface catalog-run {
+  use types.{tool-call, tool-result};
+
+  /// Run one call by name. The host validates arguments against the
+  /// named tool's schema first, exactly like the single-tool world.
+  run-tool: func(name: string, call: tool-call) -> tool-result;
 }

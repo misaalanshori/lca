@@ -9,6 +9,9 @@ repository.workspace = true
 
 [dependencies]
 lca-protocol = { path = "../lca-protocol" }
+# `sync` only: the nested-call channel types (gh #77). The contract
+# stays runtime-free; hosts bridge onto their own runtimes.
+tokio = { version = "1", features = ["sync"] }
 wasmtime = { workspace = true, optional = true, features = ["cranelift"] }
 
 [features]

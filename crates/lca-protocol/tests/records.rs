@@ -135,6 +135,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 attachment: None,
                 truncated: false,
                 exit_code: None,
+                nested: Vec::new(),
                 full_output_path: None,
             },
             "tool-result",
@@ -310,6 +311,9 @@ fn abi_crossing_types_round_trip_their_extras() {
         name: "t".into(),
         description: "d".into(),
         parameters: serde_json::json!({"type": "object"}),
+        exposure: lca_protocol::ToolExposure::Direct,
+        namespace: None,
+        annotations: None,
         extras: Default::default(),
     };
     spec.extras.insert("key".into(), "value".into());
@@ -321,6 +325,7 @@ fn abi_crossing_types_round_trip_their_extras() {
         call_id: "c".into(),
         name: "t".into(),
         arguments: "{}".into(),
+        parent_call_id: None,
     };
     assert_eq!(round_trip::<ToolCall>(&call), call);
 
@@ -501,6 +506,7 @@ fn chat_messages_carry_tool_calls_and_results() {
             call_id: "c1".into(),
             name: "read".into(),
             arguments: r#"{"path":"a"}"#.into(),
+            parent_call_id: None,
         }],
         tool_call_id: None,
         usage: None,

@@ -1,0 +1,30 @@
+package lca:ext@0.6.0;
+
+/// The `hooks-compaction` world: `session_before_compact` with a veto
+/// and `session_compact_failed` observation (gh #45, pi's pair).
+/// Supplying the summary stays in the `compaction` world; this world
+/// watches and may refuse. Opt-in by declaring it in the manifest.
+world hooks-compaction {
+  import lca:host/log@0.6.0;
+  export hook-session-before-compact;
+  export hook-session-compact-failed;
+}
+
+interface hook-session-before-compact {
+  /// The veto: `allow` compacts as planned, `deny` cancels this
+  /// compaction with the reason the operator sees. `reason` is
+  /// `manual`, `threshold`, or `overflow` - what triggered it.
+  variant compact-verdict {
+    allow,
+    deny(string),
+  }
+
+  on-session-before-compact: func(reason: string) -> compact-verdict;
+}
+
+interface hook-session-compact-failed {
+  /// Fired after a compaction fails or is vetoed: `error` carries the
+  /// failure text when compaction failed for a non-veto reason.
+  /// `reason` is the same `manual`/`threshold`/`overflow` vocabulary.
+  on-session-compact-failed: func(reason: string, error: option<string>);
+}

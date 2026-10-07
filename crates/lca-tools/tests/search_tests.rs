@@ -27,6 +27,7 @@ fn call(name: &str, args: serde_json::Value) -> lca_protocol::ToolCall {
         call_id: "c1".to_string(),
         name: name.to_string(),
         arguments: args.to_string(),
+        parent_call_id: None,
     }
 }
 

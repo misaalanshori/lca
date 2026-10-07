@@ -216,6 +216,7 @@ impl ToolCallAccumulator {
                             call_id: call.call_id,
                             name: call.name,
                             arguments: call.arguments,
+                            parent_call_id: None,
                         });
                     }
                     None => self.errors.push(ProtocolError::EndWithoutStart { call_id }),

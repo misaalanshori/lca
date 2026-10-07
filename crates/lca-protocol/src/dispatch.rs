@@ -67,6 +67,74 @@ pub struct PostToolObservation {
     pub result: ToolResult,
 }
 
+/// One `hooks-tool-call` handler's patch (gh #45, pi's `tool_call`):
+/// `arguments` replaces the argument string (later handlers see the
+/// replacement); `block` vetoes the call with the reason the model
+/// sees. Both `None` is an observation.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ToolCallPatch {
+    /// Replacement argument string.
+    pub arguments: Option<String>,
+    /// Veto reason.
+    pub block: Option<String>,
+}
+
+/// One `hooks-tool-result` handler's patch (gh #45, pi's
+/// `tool_result`): omitted fields stay as they are.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ToolResultPatch {
+    /// Replacement result text.
+    pub content: Option<String>,
+    /// Flipped outcome.
+    pub is_error: Option<bool>,
+}
+
+/// A settle handler's answer (gh #45, pi's `turn_end` /
+/// `agent_before_settle`): append entries and continue one more
+/// request, or settle. Both absent settles.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SettleDecision {
+    /// Text injected as a context message the next request sees.
+    pub append: Option<String>,
+    /// Run exactly one more provider request before settling.
+    pub continue_once: bool,
+}
+
+/// A `session_before_compact` handler's veto (gh #45): allow compacts
+/// as planned, deny cancels this compaction with the reason.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompactVerdict {
+    /// Compact as planned.
+    Allow,
+    /// Cancel this compaction.
+    Deny(String),
+}
+
+/// A `project_trust` handler's vote (gh #45, pi's `project_trust`):
+/// the first yes/no decides, undecided falls through to the next
+/// handler and finally to the operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustVote {
+    /// Trust the project.
+    Yes,
+    /// Do not trust the project.
+    No,
+    /// No opinion; ask the next handler or the operator.
+    Undecided,
+}
+
+impl TrustVote {
+    /// Parse the wire string case-insensitively; anything else reads
+    /// as `undecided` (a typo must not veto a trust flow).
+    pub fn parse(value: &str) -> TrustVote {
+        match value.to_ascii_lowercase().as_str() {
+            "yes" => TrustVote::Yes,
+            "no" => TrustVote::No,
+            _ => TrustVote::Undecided,
+        }
+    }
+}
+
 /// A dispatch-level failure: which answers the caller, which disables.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum DispatchError {

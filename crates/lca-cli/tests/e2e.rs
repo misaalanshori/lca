@@ -463,3 +463,95 @@ fn headless_answers_a_tool_dialog_with_the_denied_value() {
         "the denied verdict crossed: {result}"
     );
 }
+
+// Verifies: gh #77 (the headless nested-call turn, mock orchestrator) -
+// a tool calling another tool through the host carries `<parent>/<n>`
+// ids with `parent_call_id` on every event, and the parent's result
+// keeps the bounded nested record.
+#[test]
+fn headless_nested_calls_carry_parent_ids_and_bounded_records() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_tool_call(
+            "conformance",
+            r#"{"mode":"nested","target":"conformance-deferred"}"#,
+        )),
+        Reply::Sse(sse_text("nested done")),
+    ]));
+    let box_ = sandbox("headless-nested");
+    box_.install_component(
+        "conformance",
+        include_str!("../../../extensions/conformance/extension.toml"),
+        include_bytes!("../../../extensions/conformance/fixtures/tool-world.wasm"),
+    );
+    let output = box_.run(Some(&mock), &["-p", "nest once", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let lines = json_lines(&output);
+    let calls: Vec<&serde_json::Value> =
+        lines.iter().filter(|l| l["type"] == "tool-call").collect();
+    assert_eq!(calls.len(), 2, "parent plus one nested: {calls:?}");
+    assert_eq!(calls[0]["name"], "conformance");
+    assert_eq!(calls[0]["parent_call_id"], serde_json::Value::Null);
+    assert_eq!(calls[1]["call_id"], "call-e2e/1");
+    assert_eq!(calls[1]["parent_call_id"], "call-e2e");
+    let results: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|l| l["type"] == "tool-result")
+        .collect();
+    assert_eq!(results.len(), 2);
+    let parent = results
+        .iter()
+        .find(|r| r["call_id"] == "call-e2e")
+        .expect("parent result");
+    assert_eq!(parent["status"], "ok");
+    let nested = parent["nested"].as_array().expect("bounded record");
+    assert_eq!(nested.len(), 1, "one nested entry: {nested:?}");
+    assert_eq!(nested[0]["name"], "conformance-deferred");
+    assert!(
+        nested[0]["content_head"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("conformance ok"),
+        "the nested outcome recorded: {nested:?}"
+    );
+    // The session log agrees with the envelopes.
+    let log_path = find_session_log(&box_.state_dir()).expect("session log");
+    let log = std::fs::read_to_string(&log_path).expect("read log");
+    assert!(
+        log.contains("conformance-deferred") && log.contains("nested"),
+        "the bounded record persisted"
+    );
+}
+
+// Verifies: gh #45 (the hook-veto journey) - a redaction hook mutates
+// a result live: the model sees the rewritten text, never the token.
+#[test]
+fn headless_redaction_hook_mutates_the_result_live() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_tool_call("conformance", r#"{"mode":"spill-secret"}"#)),
+        Reply::Sse(sse_text("noted")),
+    ]));
+    let box_ = sandbox("headless-redact");
+    box_.install_component(
+        "conformance",
+        include_str!("../../../extensions/conformance/extension.toml"),
+        include_bytes!("../../../extensions/conformance/fixtures/tool-world.wasm"),
+    );
+    let output = box_.run(Some(&mock), &["-p", "spill it", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let lines = json_lines(&output);
+    let result = lines
+        .iter()
+        .find(|l| l["type"] == "tool-result")
+        .expect("tool-result envelope");
+    let content = result["content"].as_str().unwrap_or_default();
+    assert!(
+        content.contains("conformance-redacted"),
+        "the hook rewrote the token: {content}"
+    );
+    assert!(
+        !content.contains("conformance-secret"),
+        "the raw token never reached the model: {content}"
+    );
+}

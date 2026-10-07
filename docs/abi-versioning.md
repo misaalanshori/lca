@@ -28,6 +28,26 @@ During 0.x, the minor position is normally the breaking position. **Amended 2026
 
 **Annotated 2026-10-05 (owner):** the label-tracks-minor rule above is superseded - the label now bumps only on a real breaking change. `lca 0.5.x` ships `abi 0.5` for the whole line: no `wit/`, manifest-schema, or `ABI_VERSION` change rides a patch, and `v0.5.4` verifies it (empty `wit/`+`schemas/` diff against `v0.5.3`, `ABI_VERSION` still `"0.5"`). A train that needs a new line says so in its own annotation.
 
+**Annotated 2026-10-08 (0.6 train, cycle 4, final: #77 + #45):** the
+train's last break, in place on the 0.6 line: the `tool-catalog` world
+(multi-tool suites with exposure and namespaces), the `lca:host/tools`
+import (nested calls, active-set control, callable listing; the `tool`
+world newly imports it, which old single-tool guests survive because
+imports are host-satisfied), and eight opt-in hooks worlds
+(`hooks-message`, `hooks-tool-call`, `hooks-tool-result`,
+`hooks-stream`, `hooks-settle`, `hooks-compaction`, `hooks-cache`,
+`hooks-trust`). The `tool` world's exports and the six-point `hooks`
+world are byte-identical: single-tool and old-hook guests rebuild with
+no source change.
+
+**Frozen 2026-10-08 (0.6 line):** after cycle 4, `wit/` + `schemas/`
+freeze for the 0.6 line. No WIT addition, removal, rename, or
+shape change rides a 0.6 patch; no manifest-schema key is added or
+redefined. The next interface change opens the 0.7 line with its own
+annotation. The freeze gate is the empty `wit/`+`schemas/` diff
+against this cycle's merge plus the per-change discipline this
+document already requires (conformance in-commit, changelog entry,
+ADR for interface decisions).
 **Annotated 2026-10-07 (0.6 train, cycle 3: #172 + #124):** label bump to 0.6 - the train's first real interface break (`ui` world redesign + `ui-dialogs` import). `lca 0.6.x` ships `abi 0.6`; the window is `0.5..=0.6` plus the 1.0 freeze line.
 **Annotated 2026-10-07 (0.6 train, cycle 1: #188 + #157):** no label bump.
 **Annotated 2026-10-07 (0.6 train, cycle 2a: #189):** still no label bump.

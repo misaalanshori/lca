@@ -19,7 +19,10 @@ pub mod ui;
 pub mod usage;
 
 pub use capability::CapabilityError;
-pub use dispatch::{CommandEffect, CommandSpec, DispatchError, HookAction, PostToolObservation};
+pub use dispatch::{
+    CommandEffect, CommandSpec, CompactVerdict, DispatchError, HookAction, PostToolObservation,
+    SettleDecision, ToolCallPatch, ToolResultPatch, TrustVote,
+};
 pub use login::{LoginAnswer, LoginOption};
 pub use message::{ChatMessage, ContentBlock, MessageRole, base64_encode, sniff_image_media_type};
 pub use provider::{
@@ -27,11 +30,14 @@ pub use provider::{
     ImageResize, ModelInfo, OauthCap, PROMPT_CACHE_EXTRA, ProviderCap,
 };
 pub use record::{
-    FORMAT_VERSION, PREVIOUS_SUMMARY_TYPE, PermissionDecision, Record, ToolSource,
-    is_previous_summary,
+    FORMAT_VERSION, NestedCallRecord, PREVIOUS_SUMMARY_TYPE, PermissionDecision, Record,
+    ToolSource, is_previous_summary,
 };
 pub use stream::StreamEvent;
-pub use tool::{ImageContent, ToolCall, ToolResult, ToolResultStatus, ToolSpec};
+pub use tool::{
+    ImageContent, ToolAnnotations, ToolCall, ToolExposure, ToolNamespace, ToolResult,
+    ToolResultStatus, ToolSpec,
+};
 pub use turn::{
     QueuedMessage, SteerQueue, StopReason, SubmitMode, TurnEvent, TurnOutcome, TurnStatus,
     steer_queue,

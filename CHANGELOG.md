@@ -7,6 +7,16 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Tool suites, exposure, nested calls + the additive hooks expansion (gh #77, #45 — train cycle 4, final).**
+  The `tool-catalog` world (multi-tool suites with `exposure` and
+  `namespace`; only `direct` tools declare, `tool_search` discovers
+  the rest) and the `tools` capability import (nested calls with
+  `<parent>/<n>` ids and bounded records, active-set control with
+  transcript entries). Eight opt-in hooks worlds (`message_end`
+  replace, composable `tool_call`/`tool_result`, stream observation,
+  actionable settle, compact veto, cache and trust votes); the `tool`
+  world and the six-point `hooks` world are byte-identical.
+  `wit/` + `schemas/` freeze for the 0.6 line after this cycle.
 - **Rich extension UI: `ui@0.6.0` world + host dialogs (gh #172, #124).**
   The ABI train's first real interface break (`lca:ext@0.6.0` / `lca:host@0.6.0`,
   window `0.5..=0.6`): dual-channel styled text (roles or `#RRGGBB`, independent
