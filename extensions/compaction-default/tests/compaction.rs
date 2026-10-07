@@ -137,3 +137,72 @@ fn the_manifest_declares_only_completion_with_its_reason() {
     assert!(grants.completion);
     assert!(!grants.credentials && grants.fs.is_empty() && grants.net.is_empty());
 }
+
+// Verifies: gh #36 phase 2 - the host's previous-summary marker renders
+// as the summary text (not a placeholder), so the second compaction
+// refines instead of restarting.
+#[test]
+fn a_previous_summary_marker_renders_its_text() {
+    let body = r#"{"v":1,"t":"custom","id":"previous-summary","custom_type":"previous-summary","data":{"text":"Goal met: parser done."}}"#;
+    assert_eq!(record_text("custom", body), "Goal met: parser done.");
+    assert_eq!(
+        record_text("custom", r#"{"custom_type":"other","data":{}}"#),
+        "[custom]"
+    );
+}
+
+// Verifies: gh #36 phase 2 - the prompt wraps the previous summary in
+// its tags with an iteration instruction, and caps it: a 9000-char
+// old summary arrives truncated, head kept.
+#[test]
+fn the_prompt_iterates_a_capped_previous_summary() {
+    let long = "s".repeat(9000);
+    let body = format!(
+        r#"{{"v":1,"t":"custom","id":"previous-summary","custom_type":"previous-summary","data":{{"text":"{long}"}}}}"#
+    );
+    let prompt = std::cell::RefCell::new(String::new());
+    run_compact(
+        &[
+            ("custom".to_string(), body),
+            (
+                "user".to_string(),
+                r#"{"v":1,"t":"user","id":"01","content":"keep going"}"#.to_string(),
+            ),
+        ],
+        Some(&|seen: &str| {
+            prompt.borrow_mut().push_str(seen);
+            Ok("MODEL SUMMARY".to_string())
+        }),
+    );
+    let prompt = prompt.into_inner();
+    assert!(
+        prompt.contains("<previous-summary>"),
+        "the old summary is tagged: {prompt}",
+    );
+    assert!(
+        prompt.contains("incorporate into the existing summary")
+            || prompt.contains("existing summary"),
+        "the model is told to refine: {prompt}",
+    );
+    let tagged: String = prompt
+        .split("<previous-summary>")
+        .nth(1)
+        .unwrap_or_default()
+        .split("</previous-summary>")
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    let text = tagged
+        .strip_prefix('\n')
+        .unwrap_or(&tagged)
+        .strip_prefix("custom: ")
+        .unwrap_or(&tagged);
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    assert!(
+        text.len() <= 4000,
+        "the summary text is capped: {}",
+        text.len()
+    );
+    let tagged = text;
+    assert!(tagged.starts_with("ssss"), "head kept, tail cut");
+}

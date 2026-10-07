@@ -67,6 +67,20 @@ Keep each section concise and the whole summary under 300 words. Reply with the 
 /// its raw JSON body (both modes hand over the same shape).
 pub type Excerpt = (String, String);
 
+/// Whether a JSON body is the host's previous-summary marker
+/// ([`lca_protocol::PREVIOUS_SUMMARY_TYPE`], gh #36 phase 2).
+pub fn is_previous_summary_body(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("custom_type")
+                .and_then(|t| t.as_str())
+                .map(str::to_string)
+        })
+        .is_some_and(|t| t == lca_protocol::PREVIOUS_SUMMARY_TYPE)
+}
+
 /// The text a record contributes, read out of its JSON body by kind so
 /// both delivery modes render identically.
 pub fn record_text(kind: &str, body: &str) -> String {
@@ -115,23 +129,66 @@ pub fn record_text(kind: &str, body: &str) -> String {
             .and_then(|s| s.as_str())
             .unwrap_or_default()
             .to_string(),
+        // The host's previous-summary marker (gh #36 phase 2): the
+        // latest summary rides in-band so the strategy refines it.
+        // Any other custom record stays a placeholder.
+        "custom" => {
+            let is_previous = value
+                .get("custom_type")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| t == lca_protocol::PREVIOUS_SUMMARY_TYPE);
+            if is_previous {
+                value
+                    .get("data")
+                    .and_then(|d| d.get("text"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or_default()
+                    .to_string()
+            } else {
+                "[custom]".to_string()
+            }
+        }
         other => format!("[{other}]"),
     }
 }
+
+/// The iteration instruction appended when a previous summary rides
+/// along (gh #36 phase 2, pi's update shape compressed): merge the new
+/// messages into it instead of restarting.
+const UPDATE_PARAGRAPH: &str = "The <previous-summary> block above holds the existing checkpoint. \
+Incorporate the new messages below into the existing summary: preserve its goals, constraints, \
+decisions, and critical context unless contradicted or completed, mark finished items done, and \
+update next steps. Use the same structured format.";
 
 /// The model-facing prompt: every excerpt's text, each capped so one
 /// enormous tool result cannot crowd out the rest. One call over the
 /// whole range: the range is the resolved view, bounded by the window
 /// itself, so a single call carries it (gh #169 lead 3 - chunk into
 /// bounded passes only if an endpoint ever proves one call cannot).
+/// A previous summary rides tagged (gh #36 phase 2) with the iteration
+/// instruction appended; the pinned SUMMARY_PROMPT sections stay first.
 fn build_prompt(excerpts: &[Excerpt]) -> String {
     let mut prompt = String::from(SUMMARY_PROMPT);
     prompt.push_str("\n\n");
+    let mut iterating = false;
     for (kind, body) in excerpts {
         let text = record_text(kind, body);
+        let tagged = kind == "custom" && is_previous_summary_body(body);
+        iterating = iterating || tagged;
+        if tagged {
+            prompt.push_str("<previous-summary>\n");
+        }
         prompt.push_str(kind);
         prompt.push_str(": ");
         prompt.push_str(&text.chars().take(4000).collect::<String>());
+        if tagged {
+            prompt.push_str("\n</previous-summary>");
+        }
+        prompt.push('\n');
+    }
+    if iterating {
+        prompt.push('\n');
+        prompt.push_str(UPDATE_PARAGRAPH);
         prompt.push('\n');
     }
     prompt
@@ -161,10 +218,13 @@ pub fn mechanical_summary(excerpts: &[Excerpt]) -> String {
         )
     });
     // Carry forward anything an earlier summary already distilled: a
-    // re-compaction's range covers the previous compaction record.
+    // re-compaction's range covers the previous compaction record,
+    // and the host's marker rides in-band (gh #36 phase 2).
     let earlier: Vec<String> = excerpts
         .iter()
-        .filter(|(kind, _)| kind == "compaction")
+        .filter(|(kind, body)| {
+            kind == "compaction" || (kind == "custom" && is_previous_summary_body(body))
+        })
         .map(|(_, body)| {
             record_text("compaction", body)
                 .chars()

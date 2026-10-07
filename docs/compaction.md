@@ -41,12 +41,31 @@ summarized call rejoins its kept result. A call and its results never
 split across the cut. The record anchors the boundary in `first_kept_id`,
 so the next compaction starts there.
 
+## Split spans (phase 2)
+
+Records are atomic, so a span straddling the cut splits at record
+granularity: the span head and prefix summarize with the range, the
+tail stays verbatim from the window head, and the tool-pair rule
+still holds across the split. (Divergence, documented: pi splits
+inside one turn with a dedicated prefix prompt and a merged second
+summary; LCA's single summary covers prefix and history together.)
+
+## Iterative summaries (phase 2)
+
+The latest summary rides in-band as the candidate's first record — a
+`custom` record with `custom_type: "previous-summary"` — so the
+strategy refines instead of restarting, with no WIT change. The range
+computation skips it; a first compaction is unchanged. The marker text
+is capped at 4000 characters (and the strategy caps every excerpt at
+4000 characters as a backstop); the prompt wraps it in
+`<previous-summary>` tags with an iteration instruction, and the
+mechanical fallback carries it as "Earlier summary".
+
 ## Later phases (explicitly not this cycle)
 
-Split user-message spans, iterative previous-summary context,
-cumulative file tracking, the system-message checkpoint, overflow/length
-recovery ordering, retain-none. The trigger, the cut planner
-(`crates/lca-core/src/compact.rs`), and the record field carry
+Cumulative file tracking, the system-message checkpoint,
+overflow/length recovery ordering, retain-none. The trigger, the cut
+planner (`crates/lca-core/src/compact.rs`), and the record field carry
 extension-point comments naming each one; none is built here. The
 symmetrical head-preservation proposal (`keep_initial_tokens`, raised
 in review) is out of scope: it is not pi behavior.

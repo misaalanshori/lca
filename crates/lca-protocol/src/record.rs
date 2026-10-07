@@ -503,6 +503,18 @@ pub fn session_info_record(ts: u64, id: impl Into<String>, name: &str) -> Record
     }
 }
 
+/// The marker kind the host uses for the in-band previous summary
+/// (gh #36 phase 2): the latest summary rides as one `custom` record
+/// at the candidate's head so the strategy refines instead of
+/// restarting, with no WIT change. Single source: the host builds it,
+/// the compaction strategy reads it.
+pub const PREVIOUS_SUMMARY_TYPE: &str = "previous-summary";
+
+/// Whether a record is the host's in-band previous-summary marker.
+pub fn is_previous_summary(record: &Record) -> bool {
+    matches!(record, Record::Custom { custom_type, .. } if custom_type == PREVIOUS_SUMMARY_TYPE)
+}
+
 /// Convenience constructor for a `custom` record: extension state the
 /// host appends on the extension's behalf. Extensions never touch the
 /// log file; the host calls this under the capability model.

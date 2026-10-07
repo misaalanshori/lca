@@ -26,7 +26,10 @@ pub use provider::{
     CompletionRequest, EventSink, IMAGE_RESIZE_EXTRA, IMAGE_VISION_EXTRA, IdentityOutcome,
     ImageResize, ModelInfo, OauthCap, PROMPT_CACHE_EXTRA, ProviderCap,
 };
-pub use record::{FORMAT_VERSION, PermissionDecision, Record, ToolSource};
+pub use record::{
+    FORMAT_VERSION, PREVIOUS_SUMMARY_TYPE, PermissionDecision, Record, ToolSource,
+    is_previous_summary,
+};
 pub use stream::StreamEvent;
 pub use tool::{ImageContent, ToolCall, ToolResult, ToolResultStatus, ToolSpec};
 pub use turn::{

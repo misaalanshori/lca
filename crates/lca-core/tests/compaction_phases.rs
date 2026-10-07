@@ -1,0 +1,305 @@
+//! Compaction epic journeys (gh #36 phases 1-2): the phase-1 budget
+//! trigger under scripted usage eras and the phase-2 two-compaction
+//! iteration. Split from `loop_phases.rs` at the file-size ceiling
+//! (gate 11); the doubles here are compaction-only.
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
+mod common;
+
+use common::*;
+use lca_core::ExtensionRegistry;
+use lca_protocol::{CommandEffect, Record};
+use lca_session::ViewMode;
+use lca_testkit::{FakeProvider, fake_usage};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use lca_ext_abi::{DeliveryMode, DispatchFuture, ExtensionDispatch, World};
+use lca_protocol::DispatchError;
+use lca_tools::CompletionBackend as _;
+
+/// A compaction-only double: counts calls, records whether each call
+/// saw the host's previous-summary marker, and names the range it saw.
+struct SeeingDouble {
+    calls: Arc<AtomicUsize>,
+    saw_previous: Arc<Mutex<Vec<bool>>>,
+}
+
+impl ExtensionDispatch for SeeingDouble {
+    fn name(&self) -> &str {
+        "seeing-double"
+    }
+
+    fn delivery(&self) -> DeliveryMode {
+        DeliveryMode::Native
+    }
+
+    fn worlds(&self) -> Vec<World> {
+        vec![World::Compaction]
+    }
+
+    fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, DispatchError> {
+        Ok(Vec::new())
+    }
+
+    fn execute_tool<'a>(
+        &'a self,
+        _call: &'a lca_protocol::ToolCall,
+    ) -> DispatchFuture<'a, Result<lca_protocol::ToolResult, DispatchError>> {
+        Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
+            extension: self.name().to_string(),
+            world: "tool",
+        })))
+    }
+
+    fn command_specs(&self) -> Result<Vec<lca_protocol::CommandSpec>, DispatchError> {
+        Ok(Vec::new())
+    }
+
+    fn invoke_command(&self, _name: &str, _argument: &str) -> Result<CommandEffect, DispatchError> {
+        Ok(CommandEffect::None)
+    }
+
+    fn compact(
+        &self,
+        records: &[lca_protocol::Record],
+    ) -> DispatchFuture<'static, Result<String, DispatchError>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.saw_previous
+            .lock()
+            .expect("saw_previous")
+            .push(records.iter().any(lca_protocol::is_previous_summary));
+        let summary = format!("compacted {} records", records.len());
+        Box::pin(std::future::ready(Ok(summary)))
+    }
+
+    fn transform_messages(
+        &self,
+        messages: Vec<lca_protocol::ChatMessage>,
+    ) -> DispatchFuture<
+        'static,
+        Result<Result<Vec<lca_protocol::ChatMessage>, String>, DispatchError>,
+    > {
+        Box::pin(std::future::ready(Ok(Ok(messages))))
+    }
+
+    fn on_pre_turn(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    fn on_pre_tool_use<'a>(
+        &'a self,
+        _call: &'a lca_protocol::ToolCall,
+    ) -> DispatchFuture<'a, Result<lca_protocol::HookAction, DispatchError>> {
+        Box::pin(std::future::ready(Ok(lca_protocol::HookAction::Allow)))
+    }
+
+    fn on_post_tool_use<'a>(
+        &'a self,
+        _observation: &'a lca_protocol::PostToolObservation,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    fn on_post_turn_end<'a>(
+        &'a self,
+        _status: &'a str,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    fn on_attention_required<'a>(
+        &'a self,
+        _reason: &'a str,
+    ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+}
+
+fn seeing_registry(double: SeeingDouble) -> ExtensionRegistry {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(double));
+    registry
+}
+
+fn budget_config(
+    registry: ExtensionRegistry,
+    window: u32,
+    threshold: f64,
+) -> lca_core::AgentConfig {
+    let mut config = default_config();
+    config.extensions = Arc::new(registry);
+    config.model_context_window = window;
+    config.compaction_threshold = threshold;
+    // The threshold path in isolation: no keep-recent window, so the
+    // candidate is the whole pre-turn range.
+    config.compaction_keep_recent_tokens = 0;
+    config
+}
+
+fn prompt() -> Prompt {
+    Prompt {
+        answers: Vec::new(),
+        asked: Vec::new(),
+    }
+}
+
+// Verifies: gh #36 phase 1 - the summarization budget derives from
+// the reserve (`0.8 × reserve`, pi's shape): 16384 reserves a 13107
+// budget, and an unset budget keeps the stopgap constant.
+#[test]
+fn the_summarization_budget_derives_from_the_reserve() {
+    use lca_core::ext_provider::{SUMMARIZATION_MAX_TOKENS, summarization_max_tokens};
+    assert_eq!(summarization_max_tokens(16_384), 13_107);
+    assert_eq!(summarization_max_tokens(0), SUMMARIZATION_MAX_TOKENS);
+
+    let fake = Arc::new(
+        FakeProvider::builder()
+            .turn(|t| t.text("hi").usage(fake_usage(10, 2, 0, 0)))
+            .build(),
+    );
+    let backend = lca_core::ext_provider::ProviderBackend::new(fake.clone(), "m", "sess-1");
+    let messages = vec![lca_protocol::ChatMessage::text(
+        lca_protocol::MessageRole::User,
+        "hello",
+    )];
+    backend.set_summarization_budget(summarization_max_tokens(16_384));
+    backend.complete(&messages).expect("answers");
+    assert_eq!(
+        fake.last_request()
+            .expect("request")
+            .extras
+            .get("max-tokens")
+            .map(String::as_str),
+        Some("13107"),
+        "the derived budget rides the request"
+    );
+}
+
+// Verifies: gh #36 phase 1 - an absolute reserve replaces the
+// fraction: usage far below `threshold × window` still compacts when
+// it clears `window − reserve`.
+#[tokio::test]
+async fn an_absolute_reserve_replaces_the_fraction() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("ok").usage(fake_usage(1500, 10, 0, 0)))
+        .turn(|t| t.text("ok").usage(fake_usage(50, 10, 0, 0)))
+        .build();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let double = SeeingDouble {
+        calls: calls.clone(),
+        saw_previous: Arc::new(Mutex::new(Vec::new())),
+    };
+    let registry = seeing_registry(double);
+    let mut config = budget_config(registry, 10_000, 0.8);
+    // 1500 never crosses 0.8 × 10000, but clears 10000 − 9000.
+    config.compaction_reserve_tokens = 9000;
+    let mut h = harness("absolute-reserve", provider, config);
+    let mut sink = CollectingSink::default();
+    let mut prompt = prompt();
+    turn(&mut h, "first", &mut sink, &mut prompt).await;
+    turn(&mut h, "second", &mut sink, &mut prompt).await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the absolute reserve fired where the fraction would not"
+    );
+}
+
+// Verifies: gh #36 phase 1 - disabled means no compaction and no
+// error: the turn runs clean over a crossing usage.
+#[tokio::test]
+async fn disabled_compaction_never_fires() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("ok").usage(fake_usage(9000, 10, 0, 0)))
+        .turn(|t| t.text("ok").usage(fake_usage(9000, 10, 0, 0)))
+        .build();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let double = SeeingDouble {
+        calls: calls.clone(),
+        saw_previous: Arc::new(Mutex::new(Vec::new())),
+    };
+    let registry = seeing_registry(double);
+    let mut config = budget_config(registry, 10_000, 0.5);
+    config.compaction_enabled = false;
+    let mut h = harness("disabled-compaction", provider, config);
+    let mut sink = CollectingSink::default();
+    let mut prompt = prompt();
+    for index in 0..2 {
+        let outcome = turn(&mut h, &format!("turn {index}"), &mut sink, &mut prompt).await;
+        assert_eq!(outcome.status, lca_core::TurnStatus::Ok, "turn {index}");
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "never fired, never errored"
+    );
+}
+
+// Verifies: gh #36 phase 2 - the two-compaction journey: the second
+// compaction receives the first summary in-band (refine, not restart)
+// while its replaced range starts past the first one.
+#[tokio::test]
+async fn the_second_compaction_iterates_the_first_summary() {
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("ok").usage(fake_usage(9000, 10, 0, 0)))
+        .turn(|t| t.text("ok").usage(fake_usage(50, 10, 0, 0)))
+        .turn(|t| t.text("ok").usage(fake_usage(9000, 10, 0, 0)))
+        .turn(|t| t.text("ok").usage(fake_usage(50, 10, 0, 0)))
+        .build();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let double = SeeingDouble {
+        calls: calls.clone(),
+        saw_previous: Arc::new(Mutex::new(Vec::new())),
+    };
+    let seen = double.saw_previous.clone();
+    let registry = seeing_registry(double);
+    let mut h = harness(
+        "iterate-summary",
+        provider,
+        budget_config(registry, 10_000, 0.5),
+    );
+    let mut sink = CollectingSink::default();
+    let mut prompt = prompt();
+    for index in 0..4 {
+        turn(&mut h, &format!("turn {index}"), &mut sink, &mut prompt).await;
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "compacted twice");
+    assert_eq!(
+        *seen.lock().expect("seen"),
+        vec![false, true],
+        "the first had nothing to iterate; the second refined the first"
+    );
+    // The audit view: the second range nests the first, so Display
+    // shows one coherent record while the log holds two.
+    let records = h
+        .store
+        .read_with(&h.session, ViewMode::Audit)
+        .expect("records")
+        .records;
+    let ranges: Vec<(String, String, String)> = records
+        .iter()
+        .filter_map(|record| match record {
+            Record::Compaction {
+                replaced_from,
+                replaced_to,
+                first_kept_id,
+                ..
+            } => Some((
+                replaced_from.clone(),
+                replaced_to.clone(),
+                first_kept_id.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ranges.len(), 2, "two durable records");
+    assert!(
+        !ranges[1].2.is_empty(),
+        "the second anchors its kept boundary"
+    );
+}

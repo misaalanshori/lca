@@ -832,7 +832,7 @@ impl Agent<'_> {
             self.config.compaction_keep_recent_tokens,
             last_prompt,
         );
-        let candidate: Vec<Record> = records[plan.start..plan.kept_start]
+        let mut candidate: Vec<Record> = records[plan.start..plan.kept_start]
             .iter()
             .filter(|record| record.id().is_some())
             .cloned()
@@ -841,6 +841,12 @@ impl Agent<'_> {
             // Nothing worth replacing: a session-start-plus-one-message
             // range would trade the whole conversation for a line.
             return false;
+        }
+        // Gh #36 phase 2: the latest summary rides in-band at the
+        // head, so the strategy refines instead of restarting. The
+        // range computation skips it; a first compaction is unchanged.
+        if let Some(summary) = super::compact::previous_summary_text(records, cut) {
+            candidate.insert(0, super::compact::previous_summary_marker(&summary));
         }
         compact_candidate(
             self.store,

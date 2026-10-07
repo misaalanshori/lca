@@ -68,8 +68,20 @@ pub(super) async fn compact_candidate(
         }
     };
     let usage = completion_backend.and_then(|backend| backend.take_usage());
-    let replaced_from = candidate.first().and_then(Record::id).unwrap_or_default();
-    let replaced_to = candidate.last().and_then(Record::id).unwrap_or_default();
+    // The in-band previous-summary marker is strategy context, not
+    // replaced range: the range names real log records only.
+    let replaced_from = candidate
+        .iter()
+        .filter(|record| !is_previous_summary_marker(record))
+        .filter_map(Record::id)
+        .next()
+        .unwrap_or_default();
+    let replaced_to = candidate
+        .iter()
+        .filter(|record| !is_previous_summary_marker(record))
+        .filter_map(Record::id)
+        .next_back()
+        .unwrap_or_default();
     if let Err(err) = store.append(
         session,
         Record::Compaction {
@@ -248,6 +260,49 @@ fn tool_result_in(call: &Record, kept: &[Record]) -> bool {
     })
 }
 
+/// The previous summary for the next compaction (gh #36 phase 2): the
+/// latest compaction record before the turn with a non-empty summary.
+/// Searched before `cut` (not the range start): the kept boundary
+/// sorts before its own compaction record once the replaced range is
+/// suppressed from the view. `None` means a first compaction -
+/// unchanged behavior.
+pub(crate) fn previous_summary_text(records: &[Record], cut: usize) -> Option<String> {
+    records[..cut.min(records.len())]
+        .iter()
+        .rev()
+        .find_map(|record| match record {
+            Record::Compaction { summary, .. } if !summary.is_empty() => Some(summary.clone()),
+            _ => None,
+        })
+}
+
+/// The in-band previous-summary marker (gh #36 phase 2): the latest
+/// summary rides as the candidate's first record, capped at
+/// [`PREVIOUS_SUMMARY_MAX_CHARS`], so the strategy refines it with no
+/// WIT change. The strategy never persists it; the range computation
+/// skips it. Later phases (file tracking, checkpoints) extend the
+/// marker's data, not the plumbing.
+pub(crate) const PREVIOUS_SUMMARY_MAX_CHARS: usize = 4000;
+
+/// Whether a record is the in-band previous-summary marker.
+pub(crate) fn is_previous_summary_marker(record: &Record) -> bool {
+    match record {
+        Record::Custom { custom_type, .. } => custom_type == lca_protocol::PREVIOUS_SUMMARY_TYPE,
+        _ => false,
+    }
+}
+
+pub(crate) fn previous_summary_marker(summary: &str) -> Record {
+    let text: String = summary.chars().take(PREVIOUS_SUMMARY_MAX_CHARS).collect();
+    Record::Custom {
+        v: FORMAT_VERSION,
+        ts: lca_session::now_ms(),
+        id: "previous-summary".to_string(),
+        custom_type: lca_protocol::PREVIOUS_SUMMARY_TYPE.to_string(),
+        data: serde_json::json!({ "text": text }),
+    }
+}
+
 /// The manual trigger behind the `/compact` built-in: compact now,
 /// every compactable record, no threshold involved - still through the
 /// compaction world only (FR-SESS-5). Synchronous by contract: the
@@ -406,6 +461,77 @@ mod cut_tests {
             !(kept.contains(&"c1") && !kept.contains(&"r1")),
             "no stranded call: {kept:?}"
         );
+    }
+
+    // Verifies: gh #36 phase 2 - the previous summary is found for the
+    // next compaction (latest compaction record before the range with a
+    // non-empty summary), or absent when there is nothing to iterate.
+    #[test]
+    fn the_previous_summary_is_found_or_absent() {
+        let records = vec![
+            user("u1"),
+            assistant("a1", 30_000),
+            Record::Compaction {
+                v: FORMAT_VERSION,
+                ts: 1,
+                id: "cmp1".to_string(),
+                replaced_from: "u1".to_string(),
+                replaced_to: "a1".to_string(),
+                first_kept_id: "u2".to_string(),
+                summary: "S1".to_string(),
+                strategy: "x".to_string(),
+                usage: None,
+            },
+            user("u2"),
+            assistant("a2", 100_000),
+        ];
+        assert_eq!(previous_summary_text(&records, 5), Some("S1".to_string()));
+        assert_eq!(previous_summary_text(&records, 0), None, "nothing before");
+        let mut empty = records.clone();
+        if let Record::Compaction { summary, .. } = &mut empty[2] {
+            summary.clear();
+        }
+        assert_eq!(
+            previous_summary_text(&empty, 5),
+            None,
+            "an empty summary is nothing to iterate"
+        );
+    }
+
+    // Verifies: gh #36 phase 2 - a span straddling the cut splits at
+    // the documented point: the span head and prefix summarize, the
+    // tail stays verbatim, and no tool pair splits across the cut.
+    #[test]
+    fn a_straddling_span_splits_at_the_documented_point() {
+        // One span [u1..a2] exceeding the budget; the walk stops mid-span.
+        let records = vec![
+            user("u1"),
+            assistant("a1", 30_000),
+            call("c1", "k1"),
+            result("r1", "k1"),
+            assistant("a2", 100_000),
+        ];
+        let plan = plan_cut(&records, 5, 20_000, 100_000);
+        assert_eq!(plan.start, 0, "no previous compaction");
+        assert_eq!(plan.kept_start, 2, "the tail stays verbatim");
+        let summarized: Vec<&str> = records[plan.start..plan.kept_start]
+            .iter()
+            .filter_map(Record::id)
+            .collect();
+        assert_eq!(
+            summarized,
+            vec!["u1", "a1"],
+            "the span head and prefix summarize"
+        );
+        let kept: Vec<&str> = records[plan.kept_start..5]
+            .iter()
+            .filter_map(Record::id)
+            .collect();
+        assert!(
+            kept.contains(&"c1") == kept.contains(&"r1"),
+            "no orphan: {kept:?}"
+        );
+        assert_eq!(plan.first_kept_id, "c1");
     }
 
     // Verifies: gh #36 phase 1 - the next compaction starts at the

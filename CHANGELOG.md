@@ -18,6 +18,10 @@ Dates are UTC.
   next demand votes get counted against.
 
 ### Added
+- **Compaction split spans + iterative summaries, phase 2 (gh #36).**
+  A straddling span splits at record granularity (prefix summarizes,
+  tail stays); the latest summary rides in-band (capped, tagged) so
+  the strategy refines instead of restarting.
 - **Compaction trigger + budget, phase 1 (gh #36).** The trigger is
   `context_tokens > context_window − reserve` with
   `compaction.enabled/reserve_tokens/keep_recent_tokens` (reserve 0
