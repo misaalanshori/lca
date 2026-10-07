@@ -217,6 +217,8 @@ regions = ["status-line", "panel"]
 
 Import interface: `lca:host/ui`. Functions to request a redraw and to close a modal the extension opened. Rendering itself is an export on the extension, not an import.
 
+Host dialogs (`lca:host/ui-dialogs`: `confirm`, `select`, `input`, `notify`) need no `ui` grant: every question is its own consent on host chrome. The widget vocabulary is `text`, `styled-text`, `markdown`, `button`, `table`, `scroll-container`, `image`, `boxed` (title, border role, background tint), `row`, `column`, `spinner`, `progress`, `keyvalue`. Clicks map on the modal and panel regions; footer and status-line stay display-only.
+
 | Region | Constraint |
 |---|---|
 | `status-line` | One segment, single line, width-limited |

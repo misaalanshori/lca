@@ -7,6 +7,15 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Rich extension UI: `ui@0.6.0` world + host dialogs (gh #172, #124).**
+  The ABI train's first real interface break (`lca:ext@0.6.0` / `lca:host@0.6.0`,
+  window `0.5..=0.6`): dual-channel styled text (roles or `#RRGGBB`, independent
+  `39`/`49` resets, no-color and 16-color degradation), the `markdown` / `button` /
+  `table` / `scroll-container` widgets, `boxed` with border role and background
+  tint, mouse (`click-widget`, relative `click`, `scroll` over modal and panel),
+  and the `lca:host/ui-dialogs` import (`confirm`/`select`/`input`/`notify` on
+  native chrome, denied values headless). `ui-example` demonstrates the button;
+  the conformance extension probes every new shape in both modes.
 - **Two subscription providers + the parity table (gh #63, #180, #181, #182).**
   `extensions/codex` (ChatGPT subscription OAuth + Codex responses
   gateway) and `extensions/grok` (SuperGrok OAuth + Grok responses

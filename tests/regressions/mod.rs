@@ -274,3 +274,7 @@ mod gh95_drift_net_selftest;
 // last_execution_id, schema normalization, fallback routing).
 #[path = "gh179-antigravity-realigns.rs"]
 mod gh179_antigravity_realigns;
+// GitHub #212: an open extension panel ate its own toggle, trapping
+// `/exit` behind it.
+#[path = "gh212-panel-toggle-traps-exit.rs"]
+mod gh212_panel_toggle_traps_exit;
