@@ -199,6 +199,15 @@ The completion call carries a cache-boundary hint alongside the message list: a 
 
 For authentication with an API key, read it from the `credentials` capability, and fall back to an environment variable the user can set. For a subscription login, use the `oauth` capability. The extension builds the authorization URL and the code challenge, calls begin to get a redirect URL, waits for the callback, and exchanges the code over the `net` capability. The extension never binds a port.
 
+Declare the environment override your endpoint reads (gh #157) so the host's ad hoc `net` grant path consults it without provider-specific code:
+
+```toml
+[login]
+env_base_url = "OPENAI_BASE_URL"
+```
+
+With no `[login]` table the host skips the environment and reads stored credentials only. The key is optional and additive: old manifests parse on new hosts, and new manifests parse on old hosts, which ignore the table.
+
 A provider may also export `provider-login` (ADR-0033): `login-options` returns the picker choices the host renders (load them from your own `resources/provider-presets.toml` through `lca:host/resources`), and `login-submit` consumes the chosen id and the field values, stores the secret in your `credentials` namespace, and returns opaque `setting: value` pairs for the host to persist. The host never parses provider-shaped data; it renders the picker, masks the secret, persists the settings, and runs the ad hoc `net` grant when the chosen host is outside the manifest's vocabulary. A provider whose login is self-contained (an OAuth flow) exports `provider-login` returning no options and keeps its flow in `login`.
 
 To offer a custom endpoint of your own (gh #188), declare it as a preset with no `base_url` and explicit `fields`, `kind`, and `default_profile`:

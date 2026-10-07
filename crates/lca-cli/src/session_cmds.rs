@@ -451,20 +451,23 @@ pub(super) fn list_models_command(
             return exit::USAGE;
         }
     }
-    if let Some(host) = crate::net_consent::env_configured_host(&data)
-        && crate::ungranted_host(&grants, cwd, Some(host.clone())).is_some()
-    {
-        eprintln!("{}", crate::net_consent::denied_message(&host));
-        return exit::PERMISSION;
-    }
     let provider_name = config.provider().to_string();
     // No session exists to hang a stats source on: the native set's stats
-    // source answers empty, because a listing is not a turn.
+    // source answers empty, because a listing is not a turn. Assembled
+    // before the consent check (gh #157) so the provider's manifest -
+    // not a host literal - drives the env-var lookup.
     let stats: lca_ext_native::StatsSource = Arc::new(String::new);
     let prompt = crate::HeadlessPrompt::default();
     let shared_prompt = lca_permissions::SharedPrompt::default();
     shared_prompt.set(std::sync::Arc::new(std::sync::Mutex::new(prompt.clone())));
     let registry = crate::registry::assemble(cwd, &config, shared_prompt, &grants, stats);
+    if let Some(host) =
+        crate::net_consent::env_configured_host(&data, &provider_name, Some(&registry))
+        && crate::ungranted_host(&grants, cwd, Some(host.clone())).is_some()
+    {
+        eprintln!("{}", crate::net_consent::denied_message(&host));
+        return exit::PERMISSION;
+    }
     let provider: Arc<dyn lca_provider::Provider> = match registry.provider(&provider_name) {
         Some(handle) => Arc::new(lca_core::ExtensionProvider::new(handle.clone())),
         None => {

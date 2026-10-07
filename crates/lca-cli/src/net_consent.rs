@@ -1,8 +1,9 @@
 //! The request-path consent for an endpoint host the provider's manifest
 //! does not cover (gh #29, QA-004).
 //!
-//! `OPENAI_BASE_URL` pointed at a host outside the manifest's fixed hosts
-//! used to dead-end: every request came back `matches no granted pattern`
+//! A manifest-declared env override (gh #157's `[login] env_base_url`)
+//! pointed at a host outside the manifest's declared hosts used to
+//! dead-end: every request came back `matches no granted pattern`
 //! until an interactive `/login` happened to attach the ad hoc grant, so a
 //! scripted run could not configure an endpoint at all. The pieces already
 //! existed - the grant store's `net_patterns` (ADR-0022), the login-time
@@ -180,32 +181,47 @@ fn record(
 /// prompt for one decision - and `env` matching a stored host is precisely
 /// that case. An environment host the stored endpoint does *not* match has
 /// never been offered, so it is consented to here.
-pub fn env_configured_host(data: &Path) -> Option<String> {
-    let base = std::env::var("OPENAI_BASE_URL")
-        .ok()
-        .filter(|value| !value.is_empty())?;
-    let host = host_from_base(&base)?;
-    match stored_endpoint_host(data) {
+pub fn env_configured_host(
+    data: &Path,
+    provider: &str,
+    registry: Option<&lca_core::ExtensionRegistry>,
+) -> Option<String> {
+    // Gh #157: the variable is the provider's manifest-declared `[login]
+    // env_base_url`, never a host literal.
+    let needs = crate::provider_needs::resolve_needs(registry, data, provider);
+    let var = needs
+        .as_ref()
+        .and_then(|needs| needs.env_base_url.as_deref())?;
+    let base = std::env::var(var).ok().filter(|value| !value.is_empty())?;
+    let host = host_from_base(&base, needs.as_ref())?;
+    match stored_endpoint_host(data, provider, needs.as_ref()) {
         Some(stored) if stored == host => None,
         _ => Some(host),
     }
 }
 
 /// The host of a base URL (`https://host/v1`): lowercased, port stripped,
-/// `None` for the manifest's own default endpoint.
-fn host_from_base(base: &str) -> Option<String> {
+/// `None` for one of the provider's manifest-declared default endpoints.
+fn host_from_base(
+    base: &str,
+    needs: Option<&crate::provider_needs::ProviderNeeds>,
+) -> Option<String> {
     let rest = base.split("://").nth(1).unwrap_or(base);
-    crate::ad_hoc_host_from_authority(rest)
+    crate::ad_hoc_host_from_authority(rest, needs)
 }
 
 /// The base URL stored in the provider's credential namespace - what
-/// `/login` wrote.
-fn stored_endpoint_host(data: &Path) -> Option<String> {
-    let path = data.join("credentials").join("openai-compatible.json");
+/// `/login` wrote (gh #157: the `<provider>.json` file, FR-PERM-6).
+fn stored_endpoint_host(
+    data: &Path,
+    provider: &str,
+    needs: Option<&crate::provider_needs::ProviderNeeds>,
+) -> Option<String> {
+    let path = data.join("credentials").join(format!("{provider}.json"));
     let text = std::fs::read_to_string(path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
     let base = value.get("base_url")?.as_str()?.to_string();
-    host_from_base(&base)
+    host_from_base(&base, needs)
 }
 
 /// The flag parser for `--allow-host`: the same `net` vocabulary the

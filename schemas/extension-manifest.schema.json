@@ -69,6 +69,17 @@
         "completion": { "$ref": "#/$defs/completionCapability" }
       }
     },
+    "login": {
+      "type": "object",
+      "description": "Optional login hints the host reads without provider-specific code. Unknown keys are ignored by older hosts, so additions here are additive.",
+      "additionalProperties": false,
+      "properties": {
+        "env_base_url": {
+          "type": "string",
+          "description": "Environment variable carrying a base-URL override, consulted before stored credentials when computing the ad hoc net grant."
+        }
+      }
+    },
     "limits": {
       "type": "object",
       "description": "Optional resource hints. The host clamps each value to its own maximum and may ignore a request that exceeds it.",

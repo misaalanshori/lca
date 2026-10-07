@@ -34,6 +34,10 @@ impl ExtensionDispatch for OpenAiCompat {
         "openai-compatible"
     }
 
+    fn manifest_text(&self) -> Option<String> {
+        Some(super::MANIFEST.to_string())
+    }
+
     fn delivery(&self) -> DeliveryMode {
         DeliveryMode::Native
     }

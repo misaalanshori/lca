@@ -10,3 +10,8 @@ hosts = ["api.openai.com"]
 
 [capabilities.credentials]
 namespace = "openai-compatible"
+
+# Gh #157: the environment override the host consults before stored
+# credentials when computing the ad hoc `net` grant.
+[login]
+env_base_url = "OPENAI_BASE_URL"

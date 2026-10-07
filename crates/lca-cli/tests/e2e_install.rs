@@ -132,8 +132,21 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
     let output = sandbox.run_with_stdin(Some(&model), &["ext", "install", &reference], "y\n");
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     let text = stdout(&output);
+    // The consent names the manifest's own declared host, whatever it
+    // is (gh #157): read it off the extension's manifest, never a
+    // host literal.
+    let manifest = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../extensions/openai-compatible/extension.toml"),
+    )
+    .expect("the openai-compatible manifest reads");
+    let host = manifest
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("hosts = "))
+        .and_then(|list| list.split('"').nth(1))
+        .expect("the manifest declares a net host");
     assert!(
-        text.contains("Connect to api.openai.com"),
+        text.contains(&format!("Connect to {host}")),
         "the net consent sentence, verbatim: {text}"
     );
     assert!(
@@ -246,8 +259,8 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
     // The installed WASM provider cannot read the host environment
     // (sandboxing is the point), so its endpoint and key live in its own
     // credential namespace - exactly what `/login` writes for a real
-    // install. Without this the WASM provider would default to
-    // api.openai.com and the turn would fail with a connect error.
+    // install. Without this the WASM provider would default to the
+    // manifest's default host and the turn would fail with a connect error.
     sandbox.write_credentials(
         "openai-compatible",
         serde_json::json!({ "api_key": "test-key", "base_url": model.url() }),

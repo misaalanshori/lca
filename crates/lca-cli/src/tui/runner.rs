@@ -119,8 +119,11 @@ fn turn_worker(
         // hosts is consented to here, on the request path, through the
         // same prompt the model's tool commands ask through - before the
         // stream starts, so the modal lands while the turn is running.
-        if let Some(host) = crate::net_consent::env_configured_host(&ui.data)
-            && crate::provider_ready(&ui.provider_name, &ui.data)
+        if let Some(host) = crate::net_consent::env_configured_host(
+            &ui.data,
+            &ui.provider_name,
+            Some(ui.registry.as_ref()),
+        ) && crate::provider_ready(&ui.provider_name, &ui.data)
             && crate::net_consent::endpoint_consent(
                 &host,
                 &ui.grants,

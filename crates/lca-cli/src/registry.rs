@@ -40,9 +40,23 @@ pub(crate) fn assemble(
     // The WASM guest has no user-file channel, so it honors a
     // `models.toml` pair the host does not send yet (documented
     // divergence; the conformance suite guards identical answers).
+    // gh #157: the bundled manifest is the grant source (parsed here,
+    // read generically downstream). It is valid by construction; the
+    // extension's own step-test keeps its grants in step with it.
+    #[cfg(feature = "bundled-openai-compat")]
+    #[allow(clippy::expect_used)]
+    let manifest = lca_ext_host::Manifest::parse(openai_compatible::MANIFEST)
+        .expect("the bundled openai-compatible manifest parses");
     #[cfg(feature = "bundled-openai-compat")]
     registry.register(Arc::new(openai_compatible::OpenAiCompat::with_settings(
-        crate::openai_capabilities(cwd, shared_prompt, grants.clone()),
+        crate::provider_capabilities(
+            cwd,
+            "openai-compatible",
+            &manifest,
+            openai_compatible::resources(),
+            shared_prompt,
+            grants.clone(),
+        ),
         openai_compatible::Settings {
             model_overrides: std::fs::read_to_string(crate::data_dir().join("models.toml"))
                 .unwrap_or_default(),

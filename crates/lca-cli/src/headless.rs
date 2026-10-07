@@ -397,7 +397,22 @@ pub(crate) async fn setup(
         eprintln!("error: {err}");
         return Err(exit::USAGE);
     }
-    if let Some(host) = crate::net_consent::env_configured_host(&data)
+    // The one registry assembly, shared with the interface and with
+    // `--list-models` (gh #8); the stats source is this session's
+    // (ADR-0013). Assembled before the consent check (gh #157) so the
+    // provider's manifest - not a host literal - drives the env-var
+    // lookup.
+    let stats_store = store.clone();
+    let stats_session = session.clone();
+    let registry = crate::registry::assemble(
+        cwd,
+        &config,
+        shared_prompt.clone(),
+        &grants,
+        Arc::new(move || crate::tui::session_stats(&stats_store, &stats_session)),
+    );
+    if let Some(host) =
+        crate::net_consent::env_configured_host(&data, &provider_name, Some(&registry))
         && crate::provider_ready(&provider_name, &data)
         && crate::net_consent::endpoint_consent(
             &host,
@@ -418,10 +433,10 @@ pub(crate) async fn setup(
         flags.provider.as_deref(),
         &grants,
         &shared_prompt,
-        &store,
         &session,
         &provider_name,
         flags,
+        registry,
     ) {
         Ok(wired) => wired,
         Err(code) => return Err(code),
@@ -591,22 +606,15 @@ fn wire(
     provider_scope: Option<&str>,
     grants: &std::sync::Arc<std::sync::Mutex<GrantStore>>,
     shared_prompt: &lca_permissions::SharedPrompt,
-    store: &SessionStore,
     session: &lca_session::Session,
     provider_name: &str,
     flags: &crate::CliFlags,
+    mut registry: lca_core::ExtensionRegistry,
 ) -> Result<(AgentConfig, std::sync::Arc<dyn lca_provider::Provider>), i32> {
-    // The one registry assembly, shared with the interface and with
-    // `--list-models` (gh #8); the stats source is this session's (ADR-0013).
-    let stats_store = store.clone();
-    let stats_session = session.clone();
-    let mut registry = crate::registry::assemble(
-        cwd,
-        config,
-        shared_prompt.clone(),
-        grants,
-        Arc::new(move || crate::tui::session_stats(&stats_store, &stats_session)),
-    );
+    // Without the compaction strategy neither the prompt nor the session
+    // feeds anything downstream; the bindings stay for the default build.
+    #[cfg(not(feature = "bundled-compaction-default"))]
+    let _ = (&shared_prompt, &session);
     // The grant store's disable wins before the provider resolves
     // (FR-PROV-9/FR-PERM-19); applied again after the two
     // completion-dependent handles register below.

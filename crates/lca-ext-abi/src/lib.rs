@@ -163,6 +163,16 @@ pub mod dispatch {
             Vec::new()
         }
 
+        /// The handle's `extension.toml` text (gh #157): the host reads
+        /// manifest-declared provider needs (default hosts, the login
+        /// env override) off whichever handle answers. `None` (the
+        /// default) means the host falls back to the installed package's
+        /// manifest file, if any. Native handles return their compiled
+        /// manifest; WASM handles return the text they loaded with.
+        fn manifest_text(&self) -> Option<String> {
+            None
+        }
+
         /// A pre-parse markdown transform (gh #12): pi's
         /// `registerMarkdownTransformer`, Rust-side only. The host runs
         /// it in registration order over the raw markdown source before

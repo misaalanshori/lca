@@ -99,6 +99,10 @@ mod headless;
 mod models;
 mod persist;
 pub(crate) mod prompt;
+/// Manifest-declared provider needs (gh #157): default hosts, the
+/// credential namespace, and the login env override, with no host
+/// literals about any provider.
+pub(crate) mod provider_needs;
 mod rpc;
 
 pub use persist::persist_setting;
@@ -254,27 +258,6 @@ fn secret_capabilities(
     )
 }
 
-/// The endpoint host an openai-compatible login would need an ad hoc `net`
-/// grant for: the configured base URL's host when it is not the manifest's
-/// fixed `api.openai.com` (FR-PERM-16, ADR-0022). `None` when the default
-/// endpoint is in use.
-pub(crate) fn openai_ad_hoc_host(data: &Path) -> Option<String> {
-    let base = std::env::var("OPENAI_BASE_URL")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            let path = data.join("credentials").join("openai-compatible.json");
-            let text = std::fs::read_to_string(path).ok()?;
-            let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-            value
-                .get("base_url")
-                .and_then(|url| url.as_str())
-                .map(str::to_string)
-        })?;
-    let rest = base.split("://").nth(1).unwrap_or(&base);
-    ad_hoc_host_from_authority(rest)
-}
-
 /// The preset id a provider's login last stored (E5), so the footer names
 /// `opencode-go` rather than the extension. `None` for a provider set up
 /// directly (env vars, a custom endpoint) that never chose a preset.
@@ -289,18 +272,15 @@ pub(crate) fn stored_provider_preset(data: &Path, provider: &str) -> Option<Stri
         .map(str::to_string)
 }
 
-/// The host in a URL authority, or `None` when it is the default endpoint.
-pub(crate) fn ad_hoc_host_from_authority(rest: &str) -> Option<String> {
-    let authority = rest.split('/').next().unwrap_or("");
-    let host = authority
-        .rsplit('@')
-        .next()
-        .unwrap_or(authority)
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    (!host.is_empty() && host != "api.openai.com").then_some(host)
+/// The host in a URL authority, or `None` when it is one of the
+/// provider's manifest-declared default endpoints (gh #157): the seven
+/// lines of provider knowledge this used to hardcode now arrive as
+/// [`provider_needs::ProviderNeeds`].
+pub(crate) fn ad_hoc_host_from_authority(
+    rest: &str,
+    needs: Option<&provider_needs::ProviderNeeds>,
+) -> Option<String> {
+    provider_needs::ad_hoc_host_from_authority(rest, needs)
 }
 
 /// The endpoint host that still needs an ad hoc `net` grant for this project
@@ -403,13 +383,25 @@ pub(crate) fn extension_capabilities(
     Arc::new(engine)
 }
 
+/// The capability engine for one bundled provider (gh #157): the
+/// `net` hosts and the credential namespace come from the provider's
+/// own manifest, so every provider wires through this one function.
+/// The caller supplies the extension's own pieces (its manifest and
+/// its resource source); the host adds the session's ad hoc grants.
 #[cfg(feature = "bundled-openai-compat")]
-pub(crate) fn openai_capabilities(
+pub(crate) fn provider_capabilities(
     cwd: &Path,
+    provider: &str,
+    manifest: &lca_ext_host::Manifest,
+    resources: lca_tools::ResourceSource,
     prompt: lca_permissions::SharedPrompt,
     store: std::sync::Arc<std::sync::Mutex<GrantStore>>,
 ) -> std::sync::Arc<lca_tools::Capabilities> {
-    let mut grants = openai_compatible::manifest_grants();
+    let mut grants = lca_tools::CapabilityGrants {
+        net: manifest.net.clone(),
+        credentials: manifest.credentials,
+        ..Default::default()
+    };
     grants.adhoc_net = store
         .lock()
         .map(|store| {
@@ -420,14 +412,7 @@ pub(crate) fn openai_capabilities(
                 .collect()
         })
         .unwrap_or_default();
-    extension_capabilities(
-        cwd,
-        "openai-compatible",
-        grants,
-        prompt,
-        store,
-        openai_compatible::resources(),
-    )
+    extension_capabilities(cwd, provider, grants, prompt, store, resources)
 }
 
 /// The host-side skill sources (FR-CTX-2, ADR-0030): the workspace's
@@ -944,20 +929,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // The ad hoc host is the base URL's host, unless it is the manifest's
-    // fixed default (FR-PERM-16: only a non-default endpoint needs the grant).
+    // The ad hoc host is the base URL's host, unless it is a
+    // manifest-declared default (gh #157, FR-PERM-16: only a
+    // non-default endpoint needs the grant). The old literal cases run
+    // as manifest rows.
     #[test]
     fn the_ad_hoc_host_is_the_non_default_endpoint_host() {
+        let needs = provider_needs::test_needs();
         assert_eq!(
-            ad_hoc_host_from_authority("llm.example.com:8443/v1"),
+            ad_hoc_host_from_authority("llm.example.com:8443/v1", Some(&needs)),
             Some("llm.example.com".to_string())
         );
         assert_eq!(
-            ad_hoc_host_from_authority("user@internal.local/v1"),
+            ad_hoc_host_from_authority("user@internal.local/v1", Some(&needs)),
             Some("internal.local".to_string())
         );
-        assert_eq!(ad_hoc_host_from_authority("api.openai.com/v1"), None);
-        assert_eq!(ad_hoc_host_from_authority(""), None);
+        assert_eq!(
+            ad_hoc_host_from_authority("api.acme.test/v1", Some(&needs)),
+            None,
+            "the manifest's declared default needs no grant"
+        );
+        assert_eq!(ad_hoc_host_from_authority("", Some(&needs)), None);
+        assert_eq!(
+            ad_hoc_host_from_authority("api.acme.test/v1", None),
+            Some("api.acme.test".to_string()),
+            "unknown needs never count as default: consent is the safe direction"
+        );
+    }
+
+    // Verifies: gh #157 - the manifest drives the ad hoc grant: the
+    // declared env override and stored base URL resolve through
+    // `provider_ad_hoc_host` with no host literals.
+    #[test]
+    fn the_manifest_drives_the_ad_hoc_grant() {
+        let needs = provider_needs::test_needs();
+        assert_eq!(
+            needs.env_base_url.as_deref(),
+            Some("ACME_BASE_URL"),
+            "the env override is declared, not hardcoded"
+        );
+        assert!(
+            provider_needs::is_default_host(Some(&needs), "api.acme.test"),
+            "the declared default is covered"
+        );
+        assert!(
+            !provider_needs::is_default_host(Some(&needs), "llm.example.com"),
+            "anything else needs consent"
+        );
+        assert!(
+            !provider_needs::is_default_host(None, "api.acme.test"),
+            "unknown needs consent too"
+        );
     }
 
     // The approved grant is persisted for this project, so the next run's

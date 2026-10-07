@@ -402,7 +402,11 @@ mod tests {
 ///
 /// A malformed file yields no entries rather than an error: a typo in an
 /// optional convenience file must not stop the user signing in.
-pub fn override_presets(text: &str, provider: &str) -> Vec<(String, LoginOption)> {
+pub(crate) fn override_presets(
+    text: &str,
+    provider: &str,
+    needs: Option<&crate::provider_needs::ProviderNeeds>,
+) -> Vec<(String, LoginOption)> {
     #[derive(serde::Deserialize)]
     struct File {
         #[serde(default)]
@@ -439,6 +443,7 @@ pub fn override_presets(text: &str, provider: &str) -> Vec<(String, LoginOption)
                     .split("://")
                     .nth(1)
                     .unwrap_or(&entry.base_url),
+                needs,
             )
             .unwrap_or_default();
             // `auth = "none"` has no key step; anything else asks for one.
@@ -527,6 +532,23 @@ mod callback_tests {
 mod override_tests {
     use super::*;
 
+    /// Manifest-driven needs for the override tests (gh #157): the
+    /// openai-compatible declaration, as TOML text, so the old literal
+    /// cases run as manifest rows.
+    fn test_needs() -> crate::provider_needs::ProviderNeeds {
+        let manifest = lca_ext_host::Manifest::parse(
+            "name = \"acme\"\nversion = \"1.0.0\"\nabi = \"0.5\"\n\
+             worlds = [\"provider\"]\n[capabilities.net]\nhosts = [\"api.acme.test\"]\n\
+             [capabilities.credentials]\nnamespace = \"acme\"\n\
+             [login]\nenv_base_url = \"ACME_BASE_URL\"\n",
+        )
+        .expect("the test manifest parses");
+        crate::provider_needs::ProviderNeeds {
+            defaults: manifest.net,
+            env_base_url: manifest.login_env_base_url,
+        }
+    }
+
     // D1's override layer: named custom endpoints, merged with the
     // extension's own presets.
     #[test]
@@ -536,6 +558,7 @@ mod override_tests {
              base_url = \"https://llm.example.com/v1\"\nauth = \"bearer\"\n\
              models = [\"a\", \"b\"]\n",
             "openai-compatible",
+            Some(&test_needs()),
         );
         assert_eq!(entries.len(), 1);
         let (provider, option) = &entries[0];
@@ -555,16 +578,18 @@ mod override_tests {
         let entries = override_presets(
             "[[preset]]\nid = \"box\"\nbase_url = \"http://localhost:1234/v1\"\nauth = \"none\"\n",
             "openai-compatible",
+            Some(&test_needs()),
         );
         assert_eq!(entries[0].1.fields, Vec::<String>::new());
     }
 
     #[test]
     fn a_malformed_override_file_yields_nothing_rather_than_an_error() {
-        assert!(override_presets("not toml [[[", "openai-compatible").is_empty());
-        assert!(override_presets("", "openai-compatible").is_empty());
+        assert!(override_presets("not toml [[[", "openai-compatible", None).is_empty());
+        assert!(override_presets("", "openai-compatible", None).is_empty());
         assert!(
-            override_presets("[[preset]]\nname = \"no id\"\n", "openai-compatible").is_empty(),
+            override_presets("[[preset]]\nname = \"no id\"\n", "openai-compatible", None)
+                .is_empty(),
             "an entry with no id is dropped"
         );
     }

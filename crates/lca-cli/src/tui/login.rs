@@ -47,9 +47,16 @@ impl Ui {
                 Err(err) => tracing::warn!("{name} login options: {err}"),
             }
         }
+        // D1's override layer keeps the openai-compatible attribution:
+        // the file's own grammar (base_url/auth/models) is that
+        // extension's preset shape. The default-host filter below it is
+        // manifest-driven, never a literal.
+        let needs =
+            crate::provider_needs::provider_needs(&self.registry, &self.data, "openai-compatible");
         out.extend(crate::login::override_presets(
             &self.preset_overrides,
             "openai-compatible",
+            needs.as_ref(),
         ));
         out
     }
@@ -195,7 +202,12 @@ impl Ui {
         // under its profile, which the default-profile store read below
         // never sees, so a local preset never got its offer and every
         // later turn failed with no recourse.
-        if let Some(host) = login_endpoint_hosts(&settings)
+        // Gh #157: the target's manifest declares the defaults; the
+        // submit's own pairs come first (a preset login stores its base
+        // URL under its profile, which the default-profile read below
+        // never sees - gh #21), then the configured default endpoint.
+        let needs = crate::provider_needs::provider_needs(&self.registry, &self.data, &target);
+        if let Some(host) = login_endpoint_hosts(&settings, needs.as_ref())
             .into_iter()
             .find(|host| {
                 crate::ungranted_host(&self.grants, &self.cwd, Some(host.clone())).is_some()
@@ -204,7 +216,11 @@ impl Ui {
                 crate::ungranted_host(
                     &self.grants,
                     &self.cwd,
-                    crate::openai_ad_hoc_host(&self.data),
+                    crate::provider_needs::provider_ad_hoc_host(
+                        &self.data,
+                        &target,
+                        needs.as_ref(),
+                    ),
                 )
             })
         {
@@ -640,16 +656,19 @@ impl Ui {
 }
 
 /// Endpoint hosts this login configured (gh #21): the submit's own
-/// `*.base_url` pairs in order, deduplicated. The default host
-/// (`api.openai.com`) never needs a grant, so it never appears here.
-fn login_endpoint_hosts(settings: &[(String, String)]) -> Vec<String> {
+/// `*.base_url` pairs in order, deduplicated. A manifest-declared
+/// default host never needs a grant, so it never appears here.
+fn login_endpoint_hosts(
+    settings: &[(String, String)],
+    needs: Option<&crate::provider_needs::ProviderNeeds>,
+) -> Vec<String> {
     let mut hosts = Vec::new();
     for (key, value) in settings {
         if !key.ends_with("base_url") {
             continue;
         }
         let authority = value.split("://").nth(1).unwrap_or(value);
-        if let Some(host) = crate::ad_hoc_host_from_authority(authority)
+        if let Some(host) = crate::ad_hoc_host_from_authority(authority, needs)
             && !hosts.contains(&host)
         {
             hosts.push(host);
@@ -734,10 +753,13 @@ mod tests {
     #[test]
     fn a_preset_login_names_its_own_endpoint_host() {
         assert_eq!(
-            super::login_endpoint_hosts(&[(
-                "profile.ollama.base_url".to_string(),
-                "http://localhost:11434/v1".to_string()
-            )]),
+            super::login_endpoint_hosts(
+                &[(
+                    "profile.ollama.base_url".to_string(),
+                    "http://localhost:11434/v1".to_string()
+                )],
+                None
+            ),
             vec!["localhost".to_string()]
         );
     }
@@ -746,22 +768,35 @@ mod tests {
     // names its host the same way, and the default host needs no grant.
     #[test]
     fn a_bare_base_url_names_its_host_and_the_default_needs_none() {
+        // Gh #157: the default-host filter is a manifest row, not a
+        // literal - the same declaration the host reads at runtime.
+        let needs = crate::provider_needs::test_needs();
         assert_eq!(
-            super::login_endpoint_hosts(&[(
-                "base_url".to_string(),
-                "https://llm.example.com/v1".to_string()
-            )]),
+            super::login_endpoint_hosts(
+                &[(
+                    "base_url".to_string(),
+                    "https://llm.example.com/v1".to_string()
+                )],
+                Some(&needs)
+            ),
             vec!["llm.example.com".to_string()]
         );
         assert!(
-            super::login_endpoint_hosts(&[(
-                "base_url".to_string(),
-                "https://api.openai.com/v1".to_string()
-            )])
+            super::login_endpoint_hosts(
+                &[(
+                    "base_url".to_string(),
+                    "https://api.acme.test/v1".to_string()
+                )],
+                Some(&needs)
+            )
             .is_empty()
         );
         assert!(
-            super::login_endpoint_hosts(&[("api_key".to_string(), "sk-x".to_string())]).is_empty()
+            super::login_endpoint_hosts(
+                &[("api_key".to_string(), "sk-x".to_string())],
+                Some(&needs)
+            )
+            .is_empty()
         );
     }
 }

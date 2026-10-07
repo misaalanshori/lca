@@ -41,6 +41,11 @@ pub struct Manifest {
     /// load (schema `limits`: memory64MB/fuel10M defaults,512MB/1B
     /// maximums; absent means the host's own values apply).
     pub limits: Option<ExtensionLimits>,
+    /// The env var carrying a base-URL override for this provider's
+    /// login (gh #157: `[login] env_base_url`, e.g.
+    /// `OPENAI_BASE_URL`). Absent means the provider has no
+    /// environment override the host should consult.
+    pub login_env_base_url: Option<String>,
 }
 
 fn reason_of(value: &toml::Value, key: &str) -> Result<String, LoadError> {
@@ -295,6 +300,16 @@ impl Manifest {
             parsed_limits = manifest_limits(&value)?;
         }
 
+        // Gh #157: the optional `[login]` table declares the
+        // environment override the host consults before stored
+        // credentials. Unknown keys stay ignored (old hosts already do
+        // this with the whole table), so the key is purely additive.
+        let login_env_base_url = value
+            .get("login")
+            .and_then(|login| login.get("env_base_url"))
+            .and_then(|var| var.as_str())
+            .filter(|var| !var.is_empty())
+            .map(str::to_string);
         Ok(Manifest {
             name,
             version,
@@ -311,6 +326,7 @@ impl Manifest {
             completion: parsed_completion,
             ui_regions: parsed_ui_regions,
             limits: parsed_limits,
+            login_env_base_url,
         })
     }
 

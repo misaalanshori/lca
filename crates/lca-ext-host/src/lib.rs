@@ -343,6 +343,7 @@ impl ExtHost {
                 context_transform,
                 ui,
                 ui_regions: manifest.ui_regions.clone(),
+                manifest_text: manifest_text.to_string(),
                 limits: effective_limits,
                 enabled: Arc::new(AtomicBool::new(true)),
                 in_flight: AtomicU64::new(0),
@@ -371,6 +372,9 @@ struct Inner {
     ui: Option<UiPre<HostState>>,
     /// The manifest's granted ui regions (the host only asks these).
     ui_regions: Vec<String>,
+    /// The `extension.toml` text this handle loaded with (gh #157):
+    /// the host reads manifest-declared provider needs off it.
+    manifest_text: String,
     limits: ExtensionLimits,
     enabled: Arc<AtomicBool>,
     logs: Arc<Mutex<Vec<String>>>,
@@ -591,6 +595,10 @@ fn to_dispatch(call_err: CallError, extension: &str) -> DispatchError {
 impl lca_ext_abi::ExtensionDispatch for WasmExtension {
     fn name(&self) -> &str {
         &self.inner.name
+    }
+
+    fn manifest_text(&self) -> Option<String> {
+        Some(self.inner.manifest_text.clone())
     }
 
     fn delivery(&self) -> DeliveryMode {

@@ -19,7 +19,7 @@ fn an_ungranted_endpoint_host_exits_4_and_names_the_host_and_the_fix() {
     let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("never"))]));
     let box_ = sandbox("gh29-headless-ungranted");
     // A grant store with no net pattern: the loopback mock's host is
-    // outside the manifest's fixed `api.openai.com`, so it is ungranted.
+    // outside the manifest's declared default hosts, so it is ungranted.
     box_.write_grants(false);
 
     let output = box_.run(Some(&mock), &["-p", "hi"]);

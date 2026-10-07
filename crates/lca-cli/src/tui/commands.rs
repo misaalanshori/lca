@@ -447,7 +447,12 @@ impl Ui {
         // opens then; until then this says what is happening instead of
         // the misleading "no models".
         if models.is_empty() && argument.trim().is_empty() && self.start_model_consent() {
-            let host = crate::net_consent::env_configured_host(&self.data).unwrap_or_default();
+            let host = crate::net_consent::env_configured_host(
+                &self.data,
+                &self.provider_name,
+                Some(self.registry.as_ref()),
+            )
+            .unwrap_or_default();
             return CommandEffect::ShowWidget(format!(
                 "{host} is not granted yet - approve the prompt to list its models"
             ));
@@ -592,7 +597,11 @@ impl Ui {
     /// is not answered on the loop's thread. A granted host never gets
     /// here: `endpoint_consent` itself costs one grant-store read.
     fn start_model_consent(self: &Arc<Self>) -> bool {
-        let Some(host) = crate::net_consent::env_configured_host(&self.data) else {
+        let Some(host) = crate::net_consent::env_configured_host(
+            &self.data,
+            &self.provider_name,
+            Some(self.registry.as_ref()),
+        ) else {
             return false;
         };
         if crate::ungranted_host(&self.grants, &self.cwd, Some(host.clone())).is_none() {

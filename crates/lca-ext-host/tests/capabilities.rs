@@ -400,3 +400,27 @@ worlds = [\"ui\"]\ndescription = \"x\"\n\
     let manifest = Manifest::parse(manifest_text).expect("parses");
     assert_eq!(manifest.ui_regions, vec!["status-line"]);
 }
+
+// Verifies: gh #157 - the optional `[login] env_base_url` declares the
+// environment override the host consults; absent means none, and the
+// key never affects capability parsing.
+#[test]
+fn manifest_parses_the_login_env_override() {
+    let manifest = Manifest::parse(&manifest_with(
+        "[login]\nenv_base_url = \"OPENAI_BASE_URL\"\n",
+    ))
+    .expect("parses");
+    assert_eq!(
+        manifest.login_env_base_url.as_deref(),
+        Some("OPENAI_BASE_URL")
+    );
+    let manifest = Manifest::parse(&manifest_with("")).expect("parses");
+    assert_eq!(manifest.login_env_base_url, None);
+    // Unknown login keys stay ignored: old hosts already ignore the
+    // whole table, so the key is purely additive.
+    let manifest = Manifest::parse(&manifest_with(
+        "[login]\nenv_base_url = \"X\"\nwhatever = 1\n",
+    ))
+    .expect("parses");
+    assert_eq!(manifest.login_env_base_url.as_deref(), Some("X"));
+}

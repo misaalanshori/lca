@@ -107,6 +107,16 @@ for cap in $(grep -oE '^\[capabilities\.[a-z-]+\]' "$caps_doc" | sed 's/^\[capab
   fi
 done
 
+# Provider decoupling (gh #157): the host crate embeds no provider
+# literals. `api.openai.com` in `crates/lca-cli/src` is the QA-018
+# smell verbatim - the manifest owns default hosts now. Test fixtures
+# use fictional providers, so the whole crate tree must read clean.
+if grep -rn 'api\.openai\.com' crates/lca-cli/ | grep -q .; then
+  echo "docs-consistency: provider literal leaks into lca-cli:"
+  grep -rn 'api\.openai\.com' crates/lca-cli/
+  fail=1
+fi
+
 if [ "$fail" = 0 ]; then
   echo "docs-consistency: one gate list, two pointers, no copies"
   echo "docs-consistency: preset table and capability sections match their data"

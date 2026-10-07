@@ -476,6 +476,31 @@ impl Ui {
         }
 
         let provider_is_ready = crate::provider_ready(&provider_name, &data);
+        // The configured endpoint can be outside the provider's manifest
+        // hosts (gh #29, gh #157): computed here, where the registry
+        // exists to read the manifest off, not in `initial_view`, which
+        // runs before it. Say so up front and name what actually happens
+        // next: the first request raises the consent prompt naming that
+        // host, and a scripted run has `--allow-host`. This is the
+        // env-var path, which never runs `/login` on its own.
+        let endpoint_needs =
+            crate::provider_needs::provider_needs(&registry, &data, &provider_name);
+        if provider_is_ready
+            && let Some(host) = crate::ungranted_host(
+                &grants,
+                cwd,
+                crate::provider_needs::provider_ad_hoc_host(
+                    &data,
+                    &provider_name,
+                    endpoint_needs.as_ref(),
+                ),
+            )
+        {
+            initial_head.push(format!(
+                "note: the endpoint {host} is not granted for this project - the first \
+                 request will ask you to approve it; a script passes --allow-host {host}"
+            ));
+        }
         // `--model <pattern>[:thinking]` resolves against the provider's
         // list the way pi's resolver does (EFG-041), inside `--provider`'s
         // scope when a profile is named; the `:thinking` suffix becomes
@@ -683,8 +708,7 @@ fn open(
     let session = resolve_session(&store, cwd, resume)?;
     let current_session = Arc::new(Mutex::new(session.clone()));
     let provider_name = config.provider().to_string();
-    let (mut initial_head, initial_records) =
-        initial_view(&store, &session, &grants, cwd, &data, &provider_name);
+    let (mut initial_head, initial_records) = initial_view(&store, &session);
     // ADR-0042: the mode applies to the shared grant store, so the model's
     // tool calls and an extension's `process` calls answer alike. The banner
     // leads the transcript: hands-free must never mean invisible.
@@ -735,10 +759,6 @@ fn resolve_session(
 fn initial_view(
     store: &SessionStore,
     session: &Session,
-    grants: &Arc<Mutex<GrantStore>>,
-    cwd: &Path,
-    data: &Path,
-    provider_name: &str,
 ) -> (Vec<String>, Vec<lca_protocol::Record>) {
     let read = match store.read_with(session, lca_session::ViewMode::Display) {
         Ok(read) => read,
@@ -750,19 +770,6 @@ fn initial_view(
         }
     };
     let mut head: Vec<String> = Vec::new();
-    // The configured endpoint can be outside the provider's manifest hosts.
-    // Say so up front and name what actually happens next (gh #29): the
-    // first request raises the consent prompt naming that host, and a
-    // scripted run has `--allow-host`. This is the env-var path, which
-    // never runs `/login` on its own.
-    if crate::provider_ready(provider_name, data)
-        && let Some(host) = crate::ungranted_host(grants, cwd, crate::openai_ad_hoc_host(data))
-    {
-        head.push(format!(
-            "note: the endpoint {host} is not granted for this project - the first \
-             request will ask you to approve it; a script passes --allow-host {host}"
-        ));
-    }
     // A session that loaded with a truncation or a skipped line must say so:
     // a short or empty transcript with no explanation reads as data loss.
     if read.truncated {
