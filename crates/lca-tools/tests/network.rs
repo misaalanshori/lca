@@ -825,6 +825,9 @@ impl ProxyEnv {
         }
         // A proxy test must not inherit a developer's real proxy (or a
         // previous test's): clear every proxy variable not set above.
+        // The comparison is case-insensitive because the Windows
+        // environment is: clearing `http_proxy` there deletes the
+        // just-set `HTTP_PROXY` (one slot), and the suite bypasses.
         for key in [
             "HTTP_PROXY",
             "http_proxy",
@@ -835,7 +838,10 @@ impl ProxyEnv {
             "NO_PROXY",
             "no_proxy",
         ] {
-            if vars.iter().all(|(set, _)| *set != key) {
+            if vars
+                .iter()
+                .all(|(set, _)| !set.eq_ignore_ascii_case(key))
+            {
                 saved.push((key.to_string(), std::env::var_os(key)));
                 unsafe { std::env::remove_var(key) };
             }
