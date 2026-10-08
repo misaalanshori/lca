@@ -287,7 +287,20 @@ fn error_code(err: &lca_registry::Error) -> i32 {
 }
 
 /// Dispatch one `lca ext ...` invocation; returns the exit code.
-pub async fn run(cmd: ExtCmd) -> i32 {
+pub async fn run(cmd: ExtCmd, offline: bool) -> i32 {
+    // gh #71: `--offline` refuses installs and updates that need the
+    // network, before any request; an existing local path stays usable.
+    if offline {
+        let remote = match &cmd {
+            ExtCmd::Install { reference, .. } => !std::path::Path::new(reference).exists(),
+            ExtCmd::Update { .. } => true,
+            _ => false,
+        };
+        if remote {
+            eprintln!("error: --offline refuses remote extension installs and updates");
+            return crate::exit::USAGE;
+        }
+    }
     let tree = install_tree();
     match cmd {
         ExtCmd::Install {

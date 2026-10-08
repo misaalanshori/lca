@@ -114,6 +114,12 @@ pub struct Cli {
     // `-n` or `--no-context-files`.
     #[arg(short = 'n', long = "no-context-files")]
     pub no_context_files: bool,
+    // gh #71 (pi's `--offline`): no automatic network activity for this
+    // run - update checks, catalog refreshes, remote installs. Model
+    // requests still go out (that is the run); `LCA_OFFLINE=1` agrees.
+    /// Disable automatic network activity for this run.
+    #[arg(long)]
+    pub offline: bool,
     // Deliberate divergence from pi (gh #8's DNA box): pi also has
     // `--api-key <key>`, and LCA will not add one. argv is world-readable
     // in the process list (`ps`), and the standing rule is that secrets
@@ -298,6 +304,10 @@ pub struct CliFlags {
     pub append_system_prompt: Option<std::path::PathBuf>,
     /// `-n`/`--no-context-files`: skip context-file discovery (gh #74).
     pub no_context_files: bool,
+    /// `--offline` (gh #71): no automatic network activity. Not a config
+    /// key: it joins the flag, the `LCA_OFFLINE` env var, or nothing -
+    /// never the files (an air gap is per-invocation, not stored).
+    pub offline: bool,
 }
 
 impl CliFlags {
@@ -310,6 +320,7 @@ impl CliFlags {
             system_prompt: cli.system_prompt.clone(),
             append_system_prompt: cli.append_system_prompt.clone(),
             no_context_files: cli.no_context_files,
+            offline: cli.offline || crate::invoke::offline_env(),
         }
     }
 

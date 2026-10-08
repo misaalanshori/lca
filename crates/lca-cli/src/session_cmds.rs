@@ -42,6 +42,25 @@ pub fn output_mode(cli: &Cli) -> Result<OutputMode, String> {
     }
 }
 
+/// What `run` assembled before routing (gh #71): piped stdin already
+/// read, `@file` text already expanded, `@file` images returned
+/// separately for attach staging, and which streams are redirected
+/// (pi's print-mode rule).
+#[derive(Debug, Clone, Default)]
+pub struct Invocation {
+    /// Trimmed piped stdin (`None` on a terminal, when empty, or in RPC
+    /// mode, which owns stdin).
+    pub stdin_text: Option<String>,
+    /// Expanded `@file` text, pi's `<file name>` shape (`""` when none).
+    pub file_text: String,
+    /// `@file` images for attach staging (headless and TUI alike).
+    pub file_images: Vec<std::path::PathBuf>,
+    /// Standard input is not a terminal.
+    pub stdin_piped: bool,
+    /// Standard output is not a terminal.
+    pub stdout_piped: bool,
+}
+
 /// What a parsed command line asks for. Split out so the dispatch rule
 /// itself is testable without a terminal.
 #[derive(Debug, PartialEq, Eq)]
@@ -156,6 +175,15 @@ pub fn check_flag_contradictions(cli: &Cli) -> Option<String> {
                 .to_string(),
         );
     }
+    // gh #71 (pi's shape): RPC mode owns stdin for commands, so `@file`
+    // arguments have nowhere to expand.
+    if cli.mode.as_deref() == Some("rpc")
+        && cli.messages.iter().any(|message| message.starts_with('@'))
+    {
+        return Some(
+            "--mode rpc takes no @file arguments; send prompt commands on stdin".to_string(),
+        );
+    }
     // gh #56: `--mode rpc` is a command loop, not a turn runner.
     if cli.mode.as_deref() == Some("rpc") {
         if cli.command.is_some() {
@@ -217,21 +245,35 @@ pub(super) fn open_store() -> Result<(SessionStore, PathBuf), i32> {
 
 /// Resolve a parsed command line to a route.
 pub fn route(cli: &Cli) -> Route {
-    // #109: every typed message becomes a positional, in one stable
-    // order: the legacy `--prompt` value, then the `-p` value (a bare
-    // `-p` contributes none — see the `default_missing_value` edge in
-    // `Cli`), then the positionals.
+    route_with(cli, &Invocation::default())
+}
+
+/// Resolve a parsed command line with its invocation (gh #71): piped
+/// stdin and `@file` text prepend the first message in pi's order, and
+/// a redirected stream without JSON/RPC mode means print mode.
+pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
+    // #109 + gh #71: every typed message becomes a positional, in one
+    // stable order (the legacy `--prompt` value, then `-p`, then
+    // positionals), with piped stdin and `@file` text prepended to the
+    // first in pi's order. `@path` tokens split out of the positionals
+    // here (a bare `-p` contributes none - see the
+    // `default_missing_value` edge in `Cli`).
+    let planned = crate::invoke::plan_messages(
+        cli.prompt.as_deref(),
+        cli.print.as_deref(),
+        &cli.messages,
+        inv.stdin_text.as_deref(),
+        &inv.file_text,
+    );
     let mut messages = Vec::new();
-    if let Some(legacy) = &cli.prompt {
-        messages.push(legacy.clone());
-    }
-    if let Some(first) = cli.print.as_deref()
-        && !first.is_empty()
-    {
-        messages.push(first.to_string());
-    }
-    messages.extend(cli.messages.iter().cloned());
-    let print_mode = cli.print.is_some() || cli.prompt.is_some();
+    messages.extend(planned.first);
+    messages.extend(planned.rest);
+    // Pi's redirect rule: with terminal streams the interface opens
+    // unless `-p` says otherwise; a redirected stream without JSON/RPC
+    // mode means print mode instead.
+    let redirect = inv.stdin_piped || inv.stdout_piped;
+    let structured = cli.mode.as_deref() == Some("json") || cli.mode.as_deref() == Some("rpc");
+    let print_mode = cli.print.is_some() || cli.prompt.is_some() || (redirect && !structured);
 
     // #111: the headless session selector. A `-c`/`-r` contradiction is
     // rejected in `run` before routing (route owns no exit code). A
@@ -673,5 +715,88 @@ mod tests {
             }
             other => panic!("-c opens the interface, not {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod invocation_tests {
+    use super::*;
+    use clap::Parser;
+
+    fn invocation() -> Invocation {
+        Invocation::default()
+    }
+
+    // Verifies: gh #71 - piped stdin and `@file` text prepend the first
+    // message in pi's order; the rest ride behind.
+    #[test]
+    fn stdin_and_files_prepend_the_first_message() {
+        let cli = Cli::parse_from(["lca", "-p", "review", "@a.txt", "second"]);
+        let inv = Invocation {
+            stdin_text: Some("DIFF".to_string()),
+            file_text: "<file>\n".to_string(),
+            ..invocation()
+        };
+        assert_eq!(
+            route_with(&cli, &inv),
+            Route::Headless {
+                messages: vec!["DIFF<file>\nreview".to_string(), "second".to_string()],
+                model: None,
+                session: SessionSelector::New,
+                mode: OutputMode::Text,
+            }
+        );
+    }
+
+    // Verifies: gh #71 - `--` stops option parsing, so a prompt can
+    // begin with `-` (clap carries the rest as positionals).
+    #[test]
+    fn double_dash_stops_option_parsing() {
+        let cli = Cli::parse_from(["lca", "--", "-p"]);
+        assert_eq!(
+            route_with(&cli, &invocation()),
+            Route::Interactive {
+                resume: None,
+                resume_picker: false,
+                model: None,
+                initial: vec!["-p".to_string()],
+            }
+        );
+    }
+
+    // Verifies: gh #71 - a redirected stream without JSON/RPC mode means
+    // print mode, even with no `-p` (pi's redirect rule).
+    #[test]
+    fn redirected_streams_imply_print_mode() {
+        let cli = Cli::parse_from(["lca", "review"]);
+        let inv = Invocation {
+            stdout_piped: true,
+            ..invocation()
+        };
+        assert_eq!(
+            route_with(&cli, &inv),
+            Route::Headless {
+                messages: vec!["review".to_string()],
+                model: None,
+                session: SessionSelector::New,
+                mode: OutputMode::Text,
+            }
+        );
+        // Terminal streams keep the interface.
+        assert!(matches!(
+            route_with(&cli, &invocation()),
+            Route::Interactive { .. }
+        ));
+    }
+
+    // Verifies: gh #71 - RPC mode owns stdin for commands, so `@file`
+    // arguments are refused up front (pi's shape).
+    #[test]
+    fn rpc_mode_refuses_at_files() {
+        let cli = Cli::parse_from(["lca", "--mode", "rpc", "@a.txt"]);
+        assert_eq!(
+            check_flag_contradictions(&cli),
+            Some("--mode rpc takes no @file arguments; send prompt commands on stdin".to_string())
+        );
     }
 }

@@ -329,7 +329,11 @@ pub(crate) async fn setup(
     // Headless makes no request unless the option was switched on
     // (the config default is off); when it was, there is no status
     // line to report through, so stderr carries the notice.
-    crate::update::spawn(config.update_check(true), None);
+    // gh #71: `--offline` silences automatic network activity; the
+    // model request itself still goes out (that is the run).
+    if !flags.offline {
+        crate::update::spawn(config.update_check(true), None);
+    }
     // #96: installed here too, so headless restores the terminal even
     // when reached without `main`. Idempotent.
     lca_tui::install_panic_hook();

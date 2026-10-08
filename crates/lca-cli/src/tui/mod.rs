@@ -224,6 +224,7 @@ pub fn run(
     yolo: bool,
     model: Option<&str>,
     initial: &[String],
+    initial_attachments: &[std::path::PathBuf],
     allow_host: &[String],
     flags: &crate::CliFlags,
 ) -> anyhow::Result<i32> {
@@ -247,6 +248,7 @@ pub fn run(
         yolo,
         model,
         initial,
+        initial_attachments,
         allow_host,
         flags,
     )?);
@@ -495,6 +497,27 @@ struct LiveTarget {
     agent_config: AgentConfig,
 }
 
+/// Stage opener `@file` images into the pending attachments (gh
+/// #71): they ride with the first submission exactly like `/attach`
+/// does. A file that will not stage warns and drops - the interface
+/// stays usable, and the warning names the path.
+fn stage_initial_attachments(
+    session: &Arc<Mutex<Session>>,
+    paths: &[std::path::PathBuf],
+) -> Vec<lca_core::StagedAttachment> {
+    let Ok(session) = session.lock() else {
+        return Vec::new();
+    };
+    let mut staged = Vec::new();
+    for path in paths {
+        match lca_core::stage_image(&session, path) {
+            Ok(attachment) => staged.push(attachment),
+            Err(err) => eprintln!("warning: @{}: {err}", path.display()),
+        }
+    }
+    staged
+}
+
 impl Ui {
     /// The active provider extension name.
     fn live_name(&self) -> String {
@@ -521,6 +544,7 @@ impl Ui {
         yolo: bool,
         model_override: Option<&str>,
         initial: &[String],
+        initial_attachments: &[std::path::PathBuf],
         allow_host: &[String],
         flags: &crate::CliFlags,
     ) -> anyhow::Result<Ui> {
@@ -776,6 +800,10 @@ impl Ui {
         let flow = Arc::new(Mutex::new(crate::login::LoginFlow::new()));
         let theme_setting = config.ui_theme().unwrap_or("auto").to_string();
 
+        // gh #71: opener `@file` images stage before construction
+        // (the struct moves the session, so the clone happens here).
+        let staged_attachments =
+            stage_initial_attachments(&Arc::clone(&current_session), initial_attachments);
         Ok(Ui {
             cwd: cwd.to_path_buf(),
             data,
@@ -800,7 +828,7 @@ impl Ui {
             thinking_cell: cells.thinking,
             theme_cell: Arc::new(Mutex::new(theme_setting)),
             provider_backend,
-            pending_attachments: Arc::new(Mutex::new(Vec::new())),
+            pending_attachments: Arc::new(Mutex::new(staged_attachments)),
             flow,
             login_answer: Arc::new(Mutex::new(None)),
             preset_overrides,
@@ -889,7 +917,11 @@ fn open(
     // startup path never waits on it (FR-CFG-6), and the status line picks
     // the finding up from the shared cell once it lands.
     let update_notice = Arc::new(std::sync::OnceLock::new());
-    crate::update::spawn(config.update_check(false), Some(update_notice.clone()));
+    // gh #71: `--offline` silences automatic network activity; the
+    // model request itself still goes out (that is the run).
+    if !flags.offline {
+        crate::update::spawn(config.update_check(false), Some(update_notice.clone()));
+    }
     let session = resolve_session(&store, cwd, resume)?;
     let current_session = Arc::new(Mutex::new(session.clone()));
     let provider_name = config.provider().to_string();

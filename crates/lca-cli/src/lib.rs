@@ -117,6 +117,7 @@ pub mod diagnostics;
 pub use diagnostics::{init_diagnostics, init_diagnostics_with_dir, rotate_log_if_oversized};
 pub mod ext;
 mod headless;
+mod invoke;
 mod models;
 mod persist;
 pub(crate) mod prompt;
@@ -680,12 +681,22 @@ pub async fn run(cli: Cli) -> i32 {
         return exit::USAGE;
     }
     let flags = CliFlags::from_cli(&cli);
+    let rpc_mode = cli.mode.as_deref() == Some("rpc");
+    // gh #71: stdin, `@file`s, and the redirect rule ride into routing.
+    let (invocation, file_images) = match invoke::prepare_invocation(&cli, &cwd, rpc_mode) {
+        Ok(prepared) => prepared,
+        Err(code) => return code,
+    };
     // `--list-models` lists and exits: it outranks the session routes,
     // pi's "lists, then exits".
     if let Some(search) = cli.list_models.as_deref() {
         return list_models_command(&cwd, search, &flags, &cli.allow_host);
     }
-    match route(&cli) {
+    // `@file` images stage with `--attach` (gh #71): headless merges
+    // them here; the interface threads them to its pending attachments.
+    let mut attach = cli.attach.clone();
+    attach.extend(file_images);
+    match route_with(&cli, &invocation) {
         Route::Headless {
             messages,
             model,
@@ -717,7 +728,7 @@ pub async fn run(cli: Cli) -> i32 {
                         &session,
                         mode == OutputMode::Json,
                         &cwd,
-                        &cli.attach,
+                        &attach,
                         cli.yolo,
                         &cli.allow_host,
                         &flags,
@@ -731,13 +742,14 @@ pub async fn run(cli: Cli) -> i32 {
             resume_picker,
             model,
             initial,
-        } => interactive(
+        } => invoke::interactive(
             &cwd,
             resume.as_deref(),
             resume_picker,
             cli.yolo,
             model.as_deref(),
             &initial,
+            &invocation.file_images,
             &cli.allow_host,
             &flags,
         ),
@@ -748,39 +760,8 @@ pub async fn run(cli: Cli) -> i32 {
         Route::Rename { session, title } => rename_command(&cwd, &session, &title),
         Route::Export { session, audit } => export_command(&cwd, &session, audit),
         Route::Gc { session } => gc_command(&cwd, &session),
-        Route::Ext(cmd) => ext::run(cmd).await,
+        Route::Ext(cmd) => ext::run(cmd, flags.offline).await,
         Route::Auth(cmd) => auth::run(&cmd, &cli.allow_host),
-    }
-}
-
-#[allow(clippy::too_many_arguments)] // thin entry seam: every arg is used once, at one call site.
-fn interactive(
-    cwd: &Path,
-    resume: Option<&str>,
-    resume_picker: bool,
-    yolo: bool,
-    model: Option<&str>,
-    initial: &[String],
-    allow_host: &[String],
-    flags: &CliFlags,
-) -> i32 {
-    // Wired to `lca-tui` in this phase; kept as one seam so the headless
-    // contract stays independently testable.
-    match crate::tui::run(
-        cwd,
-        resume,
-        resume_picker,
-        yolo,
-        model,
-        initial,
-        allow_host,
-        flags,
-    ) {
-        Ok(code) => code,
-        Err(err) => {
-            eprintln!("error: {err:#}");
-            exit::INTERNAL
-        }
     }
 }
 
