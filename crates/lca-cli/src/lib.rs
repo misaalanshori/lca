@@ -698,24 +698,24 @@ pub async fn run(cli: Cli) -> i32 {
         return exit::USAGE;
     }
     let mut flags = CliFlags::from_cli(&cli);
-    // gh #71: stdin, `@file`s, and the redirect rule ride into routing.
-    let (invocation, file_images) = match invoke::prepare_invocation(&cli, &cwd) {
+    // gh #71: stdin belongs to turn routes only. Subcommands (`ext
+    // install` consent, `auth login` callbacks) and RPC own theirs, so
+    // a probe routes first and input reads only when a turn consumes
+    // it - otherwise `echo y | lca ext install` would eat the answer.
+    // gh #71: turn input reads only when a turn consumes it.
+    let (invocation, attach) = match invoke::prepare_turn_input(&cli, &cwd) {
         Ok(prepared) => prepared,
         Err(code) => return code,
     };
     // gh #70: skill packs merge, bad paths refuse.
-    if invoke::prepare_resources(&cli, &cwd, &mut flags).is_err() {
-        return exit::USAGE;
+    if let Err(code) = invoke::prepare_resources(&cli, &cwd, &mut flags) {
+        return code;
     }
     // `--list-models` lists and exits: it outranks the session routes,
     // pi's "lists, then exits".
     if let Some(search) = cli.list_models.as_deref() {
         return list_models_command(&cwd, search, &flags, &cli.allow_host);
     }
-    // `@file` images stage with `--attach` (gh #71): headless merges
-    // them here; the interface threads them to its pending attachments.
-    let mut attach = cli.attach.clone();
-    attach.extend(file_images);
     match route_with(&cli, &invocation) {
         Route::Headless {
             messages,

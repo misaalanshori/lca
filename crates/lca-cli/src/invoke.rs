@@ -173,6 +173,43 @@ pub fn select_tools(
 /// I/O half of invocation prep. Returns the routing struct plus the
 /// `@file` images for attach staging; a missing `@path` is a usage
 /// error. Never called in RPC mode (which owns stdin).
+/// Probe the route with piping bools only (gh #71 follow-up): stdin
+/// belongs to turn routes, so a probe decides before anything reads.
+/// Returns whether a text/json turn or the interface consumes input.
+pub fn turn_route_probe(cli: &crate::Cli) -> (bool, super::session_cmds::Invocation) {
+    use std::io::IsTerminal as _;
+    let piping = super::session_cmds::Invocation {
+        stdin_piped: !std::io::stdin().is_terminal(),
+        stdout_piped: !std::io::stdout().is_terminal(),
+        ..Default::default()
+    };
+    let probe = super::session_cmds::route_with(cli, &piping);
+    let turn = matches!(
+        probe,
+        super::session_cmds::Route::Headless {
+            mode: crate::session_cmds::OutputMode::Text | crate::session_cmds::OutputMode::Json,
+            ..
+        } | super::session_cmds::Route::Interactive { .. }
+    );
+    (turn, piping)
+}
+
+/// Probe the route and read turn input only when consumed (gh #71
+/// follow-up): subcommands and RPC keep their stdin (consent answers,
+/// login callbacks, command loops); turns read piped stdin and `@file`s.
+/// Returns the routing struct plus the merged attach list.
+pub fn prepare_turn_input(
+    cli: &crate::Cli,
+    cwd: &Path,
+) -> Result<(super::session_cmds::Invocation, Vec<PathBuf>), i32> {
+    let (turn_route, piped) = turn_route_probe(cli);
+    if turn_route {
+        prepare_invocation(cli, cwd)
+    } else {
+        Ok((piped, cli.attach.clone()))
+    }
+}
+
 pub fn prepare_invocation(
     cli: &crate::Cli,
     cwd: &Path,
@@ -199,15 +236,17 @@ pub fn prepare_invocation(
             return Err(crate::exit::USAGE);
         }
     };
+    let mut attach = cli.attach.clone();
+    attach.extend(file_images.iter().cloned());
     Ok((
         super::session_cmds::Invocation {
             stdin_text,
             file_text,
-            file_images: file_images.clone(),
+            file_images,
             stdin_piped,
             stdout_piped,
         },
-        file_images,
+        attach,
     ))
 }
 
