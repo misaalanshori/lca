@@ -131,7 +131,7 @@ fn chat_with_models() -> Chat {
             context_window: Arc::new(std::sync::Mutex::new(0)),
             thinking: Arc::new(Mutex::new(None)),
             theme: "auto".to_string(),
-            theme_dir: std::path::PathBuf::new(),
+            theme_extra_dirs: Vec::new(),
             themes: lca_ui::theme::THEMES
                 .iter()
                 .map(|s| s.to_string())

@@ -16,6 +16,20 @@ use crate::chat_pickers::{
 };
 use crate::state::{Action, UiOptions};
 
+/// Commands that must wait for the turn boundary (composer-polish
+/// fold-in): they touch the session while a running turn may be appending
+/// to it, so they queue as pending commands and run when the turn ends
+/// instead of racing it. Everything else dispatches at once, even mid-turn.
+pub(super) fn is_turn_boundary_command(line: &str) -> bool {
+    let name = line
+        .strip_prefix('/')
+        .unwrap_or(line)
+        .split([' ', '\t'])
+        .next()
+        .unwrap_or("");
+    matches!(name, "compact")
+}
+
 impl Chat {
     /// Open the theme picker on the current theme (the `/theme` command
     /// and the `/settings` selector's `ui.theme` row both land here).

@@ -443,18 +443,34 @@ pub(crate) fn provider_capabilities(
 
 /// The host-side skill sources (FR-CTX-2, ADR-0030): the workspace's
 /// `.lca/skills`, the user skills dir, and the extension install tree.
-pub(crate) fn skills_roots(cwd: &Path) -> lca_tools::skills::SkillsRoots {
+pub(crate) fn skills_roots(cwd: &Path, flags: &CliFlags) -> lca_tools::skills::SkillsRoots {
     // A package disabled for this project contributes no skills (FR-PROV-9):
     // the merge reads the install tree directly, so it must apply the same
     // enablement filter the registry does.
     let disabled = lca_permissions::GrantStore::open(&data_dir().join("grants.json"))
         .map(|store| store.disabled_extensions(cwd))
         .unwrap_or_default();
+    // gh #70: `--no-skills` empties discovery (explicit `--skill` paths
+    // still load - pi's shape).
+    let empty = std::path::PathBuf::new();
     lca_tools::skills::SkillsRoots {
-        project: cwd.to_path_buf(),
-        user: data_dir().join("skills"),
-        extensions: data_dir().join("extensions"),
+        project: if flags.no_skills {
+            empty.clone()
+        } else {
+            cwd.to_path_buf()
+        },
+        user: if flags.no_skills {
+            empty.clone()
+        } else {
+            data_dir().join("skills")
+        },
+        extensions: if flags.no_skills {
+            empty
+        } else {
+            data_dir().join("extensions")
+        },
         disabled,
+        extra: flags.skill.clone(),
     }
 }
 
@@ -681,13 +697,16 @@ pub async fn run(cli: Cli) -> i32 {
         eprintln!("error: {err}");
         return exit::USAGE;
     }
-    let flags = CliFlags::from_cli(&cli);
-    let rpc_mode = cli.mode.as_deref() == Some("rpc");
+    let mut flags = CliFlags::from_cli(&cli);
     // gh #71: stdin, `@file`s, and the redirect rule ride into routing.
-    let (invocation, file_images) = match invoke::prepare_invocation(&cli, &cwd, rpc_mode) {
+    let (invocation, file_images) = match invoke::prepare_invocation(&cli, &cwd) {
         Ok(prepared) => prepared,
         Err(code) => return code,
     };
+    // gh #70: skill packs merge, bad paths refuse.
+    if invoke::prepare_resources(&cli, &cwd, &mut flags).is_err() {
+        return exit::USAGE;
+    }
     // `--list-models` lists and exits: it outranks the session routes,
     // pi's "lists, then exits".
     if let Some(search) = cli.list_models.as_deref() {

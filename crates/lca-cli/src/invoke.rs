@@ -176,9 +176,9 @@ pub fn select_tools(
 pub fn prepare_invocation(
     cli: &crate::Cli,
     cwd: &Path,
-    rpc_mode: bool,
 ) -> Result<(super::session_cmds::Invocation, Vec<PathBuf>), i32> {
     use std::io::IsTerminal as _;
+    let rpc_mode = cli.mode.as_deref() == Some("rpc");
     let stdin_piped = !std::io::stdin().is_terminal();
     let stdout_piped = !std::io::stdout().is_terminal();
     let stdin_text = read_piped_stdin(rpc_mode);
@@ -394,6 +394,95 @@ impl Drop for VolatileStore {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }
+}
+
+/// Fold `-e` directory skill packs into `--skill` and refuse bad
+/// resource paths (gh #70): `-e` directories are data-only packages
+/// (ADR-0030), so their skill packs join the run; a `--skill` must
+/// name a directory or a `.md` file, a `--theme` a directory or a
+/// `.toml` file. Anything else is a usage error, never a silent skip
+/// (`-e` files refuse at load, where consent lives).
+pub fn prepare_resources(
+    cli: &crate::Cli,
+    cwd: &std::path::Path,
+    flags: &mut crate::CliFlags,
+) -> Result<(), i32> {
+    for path in cli.extension.iter() {
+        let full = if path.is_absolute() {
+            path.clone()
+        } else {
+            cwd.join(path)
+        };
+        let pack = full.join("resources").join("skills");
+        if full.is_dir() && pack.is_dir() && !flags.skill.contains(&pack) {
+            flags.skill.push(pack);
+        }
+    }
+    if let Err(err) = check_resource_paths("--skill", &flags.skill, "md").and(check_resource_paths(
+        "--theme",
+        &flags.theme,
+        "toml",
+    )) {
+        eprintln!("{err}");
+        return Err(crate::exit::USAGE);
+    }
+    Ok(())
+}
+
+/// Refuse bad resource paths up front (gh #70): a `--skill` must
+/// name a directory or a `.md` file, a `--theme` a directory or a
+/// `.toml` file. Anything else is a usage error, never a silent skip.
+pub fn check_resource_paths(
+    flag: &str,
+    paths: &[std::path::PathBuf],
+    ext: &str,
+) -> Result<(), String> {
+    for path in paths {
+        if path.is_dir() {
+            continue;
+        }
+        if path.is_file() && path.extension().is_some_and(|found| found == ext) {
+            continue;
+        }
+        if !path.exists() {
+            return Err(format!("error: {flag} {}: no such file", path.display()));
+        }
+        return Err(format!(
+            "error: {flag} {}: not a skill file or directory",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// The theme search dirs for a run (gh #70): explicit `--theme`
+/// paths first (directories directly, files by their parent - both
+/// validated up front), then the configured themes dir unless
+/// `--no-themes` skipped it.
+pub fn theme_extra_dirs(
+    flags: &crate::CliFlags,
+    cwd: &std::path::Path,
+    data_dir: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    for path in &flags.theme {
+        if path.is_dir() {
+            dirs.push(path.clone());
+            continue;
+        }
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty());
+        dirs.push(
+            parent
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| cwd.to_path_buf()),
+        );
+    }
+    if !flags.no_themes {
+        dirs.push(lca_ui::theme::themes_dir(data_dir));
+    }
+    dirs
 }
 
 /// Read piped stdin (gh #71, pi's `readPipedStdin`): `None` on a

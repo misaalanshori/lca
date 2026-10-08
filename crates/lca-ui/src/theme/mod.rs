@@ -688,6 +688,17 @@ pub fn load(
     scheme: Option<lca_tui::engine::colors::ColorScheme>,
     dir: &Path,
 ) -> (Theme, Option<String>) {
+    load_all(setting, scheme, std::slice::from_ref(&dir.to_path_buf()))
+}
+
+/// Resolve the theme across dirs (gh #70): explicit `--theme` dirs
+/// first, then the configured one. The first readable file wins (an
+/// invalid file keeps the base and says why, like `load`).
+pub fn load_all(
+    setting: &str,
+    scheme: Option<lca_tui::engine::colors::ColorScheme>,
+    dirs: &[std::path::PathBuf],
+) -> (Theme, Option<String>) {
     // A built-in name resolves directly; only an unknown name is a custom
     // theme file to look up. F2: these arms used to fall through to the
     // file lookup, so `ui.theme = "dark"` printed a spurious "not found".
@@ -710,10 +721,11 @@ pub fn load(
         Some(lca_tui::engine::colors::ColorScheme::Light) => "light",
         _ => "dark",
     };
-    let candidates = [
-        dir.join(format!("{setting}.{side}.toml")),
-        dir.join(format!("{setting}.toml")),
-    ];
+    let mut candidates = Vec::new();
+    for dir in dirs {
+        candidates.push(dir.join(format!("{setting}.{side}.toml")));
+        candidates.push(dir.join(format!("{setting}.toml")));
+    }
     for path in candidates {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
@@ -735,11 +747,20 @@ pub fn load(
     }
     // A custom name with no file: say so rather than silently showing the
     // scheme default under the user's chosen name.
+    let searched = dirs
+        .iter()
+        .map(|dir| dir.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
     (
         base,
         Some(format!(
-            "theme `{setting}` not found in {}; using the {default_name} default",
-            dir.display(),
+            "theme `{setting}` not found in {searched}; using the {default_name} default",
+            searched = if searched.is_empty() {
+                "(no theme dirs)"
+            } else {
+                &searched
+            },
         )),
     )
 }
@@ -781,6 +802,21 @@ pub fn theme_names(dir: &Path) -> Vec<String> {
 /// The directory custom theme files live in.
 pub fn themes_dir(config_dir: &Path) -> std::path::PathBuf {
     config_dir.join("themes")
+}
+
+/// The built-in names plus every custom file across dirs (gh #70):
+/// explicit `--theme` dirs first, so an explicit file wins a shared
+/// name, then the configured dir unless `--no-themes` skipped it.
+pub fn theme_names_all(dirs: &[std::path::PathBuf]) -> Vec<String> {
+    let mut names: Vec<String> = THEMES.iter().map(|name| name.to_string()).collect();
+    for dir in dirs {
+        for name in theme_names(dir) {
+            if !names.iter().any(|existing| existing == &name) {
+                names.push(name);
+            }
+        }
+    }
+    names
 }
 
 /// Detect the terminal's color scheme from `COLORFGBG` (the OSC 11 / DEC
@@ -1041,5 +1077,59 @@ mod styled_text_tests {
             out.starts_with("\x1b[3") && out.ends_with("x\x1b[39m"),
             "a role rides the same ladder: {out:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod extra_dir_tests {
+    use super::*;
+
+    // Verifies: gh #70 - explicit dirs join the picker's pool first, so
+    // an explicit file wins a shared name.
+    #[test]
+    fn explicit_dirs_join_the_pool_first() {
+        let root = std::env::temp_dir().join(format!(
+            "lca-theme-pool-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&root).expect("mkdir");
+        std::fs::write(root.join("custom.toml"), "[roles]\n").expect("write");
+        let names = theme_names_all(&[root.clone(), std::path::PathBuf::new()]);
+        assert!(
+            names.contains(&"custom".to_string()),
+            "pool lists it: {names:?}"
+        );
+        assert!(names.contains(&"dark".to_string()), "built-ins stay");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: gh #70 - the loader falls back across dirs in order.
+    #[test]
+    fn loader_falls_back_across_dirs() {
+        let root = std::env::temp_dir().join(format!(
+            "lca-theme-load-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&root).expect("mkdir");
+        std::fs::write(root.join("custom.toml"), "[roles]\n").expect("write");
+        let (theme, notice) = load_all("custom", None, std::slice::from_ref(&root));
+        assert_eq!(theme.name, "custom", "loads from the extra dir");
+        assert!(notice.is_some_and(|notice| notice.contains("role(s) applied")));
+        let (_, missing) = load_all(
+            "nope",
+            None,
+            &[
+                root.clone(),
+                std::path::PathBuf::from("/nonexistent-lca-dir"),
+            ],
+        );
+        assert!(missing.is_some_and(|notice| notice.contains("not found")));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

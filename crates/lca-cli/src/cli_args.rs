@@ -160,6 +160,39 @@ pub struct Cli {
     /// Fork a session at its tip and run the fork.
     #[arg(long = "fork", value_name = "ID")]
     pub fork: Option<String>,
+    // gh #70 (pi's `-e`): repeatable one-run extension paths (WASM
+    // components; directories contribute their skills, like data-only
+    // packages). Installed extensions still load unless
+    // `--no-extensions`.
+    /// Load an extension file for this run (repeatable).
+    #[arg(short = 'e', long = "extension", value_name = "PATH")]
+    pub extension: Vec<std::path::PathBuf>,
+    // gh #70 (pi's `--no-extensions`): installed, configured, and
+    // built-in extensions stay unloaded - but the providers must still
+    // resolve, or the run cannot start at all (LCA providers ARE
+    // extensions, documented divergence). Explicit `-e` still loads.
+    /// Skip installed and built-in extensions for this run.
+    #[arg(long = "no-extensions")]
+    pub no_extensions: bool,
+    // gh #70 (pi's `--skill`): repeatable skill files or directories.
+    /// Load a skill file or directory for this run (repeatable).
+    #[arg(long = "skill", value_name = "PATH")]
+    pub skill: Vec<std::path::PathBuf>,
+    // gh #70 (pi's `--no-skills`, long-only: `-n` already skips
+    // context files, so pi's `-ns` cluster has no single-char home).
+    /// Skip discovered and configured skills for this run.
+    #[arg(long = "no-skills")]
+    pub no_skills: bool,
+    // gh #70 (pi's `--theme`): repeatable theme files or directories -
+    // they join the picker's pool for this run.
+    /// Load a theme file or directory for this run (repeatable).
+    #[arg(long = "theme", value_name = "PATH")]
+    pub theme: Vec<std::path::PathBuf>,
+    // gh #70 (pi's `--no-themes`): the pool is built-ins plus explicit
+    // `--theme` paths.
+    /// Skip discovered and configured themes for this run.
+    #[arg(long = "no-themes")]
+    pub no_themes: bool,
     // Deliberate divergence from pi (gh #8's DNA box): pi also has
     // `--api-key <key>`, and LCA will not add one. argv is world-readable
     // in the process list (`ps`), and the standing rule is that secrets
@@ -363,6 +396,18 @@ pub struct CliFlags {
     pub name: Option<String>,
     /// `--no-session` (gh #69): volatile sessions. Run-scoped.
     pub no_session: bool,
+    /// `--extension` (gh #70): one-run extension paths. Run-scoped.
+    pub extension: Vec<std::path::PathBuf>,
+    /// `--no-extensions` (gh #70): skip installed extensions. Run-scoped.
+    pub no_extensions: bool,
+    /// `--skill` (gh #70): one-run skill paths. Run-scoped.
+    pub skill: Vec<std::path::PathBuf>,
+    /// `--no-skills` (gh #70): skip discovered skills. Run-scoped.
+    pub no_skills: bool,
+    /// `--theme` (gh #70): one-run theme paths. Run-scoped.
+    pub theme: Vec<std::path::PathBuf>,
+    /// `--no-themes` (gh #70): skip discovered themes. Run-scoped.
+    pub no_themes: bool,
 }
 
 impl CliFlags {
@@ -382,6 +427,12 @@ impl CliFlags {
             no_tools: cli.no_tools,
             name: cli.name.clone(),
             no_session: cli.no_session,
+            extension: cli.extension.clone(),
+            no_extensions: cli.no_extensions,
+            skill: cli.skill.clone(),
+            no_skills: cli.no_skills,
+            theme: cli.theme.clone(),
+            no_themes: cli.no_themes,
         }
     }
 

@@ -105,9 +105,18 @@ impl Ui {
             context_window: self.context_window_cell.clone(),
             thinking: self.thinking_cell.clone(),
             theme: config.ui_theme().unwrap_or("auto").to_string(),
-            // R7: themes live with the rest of the agent's data.
-            theme_dir: lca_ui::theme::themes_dir(&crate::data_dir()),
-            themes: lca_ui::theme::theme_names(&lca_ui::theme::themes_dir(&crate::data_dir())),
+            // R7: themes live with the rest of the agent's data;
+            // gh #70 runs add their explicit `--theme` dirs first.
+            theme_extra_dirs: crate::invoke::theme_extra_dirs(
+                &self.flags,
+                &self.cwd,
+                &crate::data_dir(),
+            ),
+            themes: {
+                let dirs =
+                    crate::invoke::theme_extra_dirs(&self.flags, &self.cwd, &crate::data_dir());
+                lca_ui::theme::theme_names_all(&dirs)
+            },
             initial_lines: self.initial_head.clone(),
             initial_records: self.initial_records.clone(),
             initial_tail_lines: self.initial_tail.clone(),
@@ -196,7 +205,7 @@ impl Ui {
         // gh #43: the skill command plus one entry per skill, so
         // `/skill:name` completes and forwards to the host.
         names.push("/skill".to_string());
-        for skill in lca_tools::skills::collect(&crate::skills_roots(&self.cwd)) {
+        for skill in lca_tools::skills::collect(&crate::skills_roots(&self.cwd, &self.flags)) {
             names.push(format!("/skill:{}", skill.name));
         }
         names.extend(
@@ -420,7 +429,7 @@ impl Ui {
     /// trailing args appended as the user request - one user-visible
     /// block that submits as a turn (pi's `/skill:name` shape).
     fn command_skill(&self, name: &str, argument: &str) -> CommandEffect {
-        let roots = crate::skills_roots(&self.cwd);
+        let roots = crate::skills_roots(&self.cwd, &self.flags);
         let mut rest = name
             .strip_prefix("skill")
             .unwrap_or("")

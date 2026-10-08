@@ -203,7 +203,7 @@ pub fn agent_system_prompt(
         flags.system_prompt.as_deref(),
         flags.append_system_prompt.as_deref(),
     )?;
-    let roots = crate::skills_roots(cwd);
+    let roots = crate::skills_roots(cwd, flags);
     let collected = lca_tools::skills::collect(&roots);
     let advertised = collected.iter().any(|skill| skill.model_invocable);
     let catalog = advertised.then(|| lca_tools::skills::catalog(&collected));

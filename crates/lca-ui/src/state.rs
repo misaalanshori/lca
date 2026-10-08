@@ -625,8 +625,10 @@ pub struct UiOptions {
     /// The configured theme setting (`ui.theme`, S5): a built-in name, a
     /// custom theme's name, or `auto` for the detected terminal scheme.
     pub theme: String,
-    /// Where custom theme files live (`<config>/themes`).
-    pub theme_dir: PathBuf,
+    /// Where custom theme files resolve, in order (gh #70):
+    /// explicit `--theme` dirs first, then `<config>/themes` unless
+    /// `--no-themes` skipped it.
+    pub theme_extra_dirs: Vec<PathBuf>,
     /// The `/theme` picker's names (built-ins plus custom files).
     pub themes: Vec<String>,
     /// Conversation lines already resolved for display: warnings and
@@ -976,7 +978,7 @@ mod tests {
             context_window: Arc::new(std::sync::Mutex::new(0)),
             thinking: Arc::new(std::sync::Mutex::new(None)),
             theme: "auto".to_string(),
-            theme_dir: std::path::PathBuf::new(),
+            theme_extra_dirs: Vec::new(),
             themes: crate::theme::THEMES.iter().map(|s| s.to_string()).collect(),
             initial_lines: Vec::new(),
             initial_records: Vec::new(),

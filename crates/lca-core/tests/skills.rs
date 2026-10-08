@@ -27,6 +27,7 @@ fn roots(name: &str) -> (std::path::PathBuf, SkillsRoots) {
             user,
             extensions,
             disabled: Vec::new(),
+            extra: Vec::new(),
         },
     )
 }

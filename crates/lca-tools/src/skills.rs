@@ -34,6 +34,9 @@ pub struct SkillsRoots {
     /// package contributes no skills, per the threat model's promise that
     /// disabling removes its skill pack.
     pub disabled: Vec<String>,
+    /// One-run `--skill` paths (gh #70): files or directories, highest
+    /// precedence (explicit beats discovered).
+    pub extra: Vec<PathBuf>,
 }
 
 /// Where a skill came from, for attribution.
@@ -45,6 +48,8 @@ pub enum SkillSource {
     User,
     /// A package's `resources/skills`, named.
     Extension(String),
+    /// A `--skill` path (gh #70).
+    Cli,
 }
 
 impl SkillSource {
@@ -54,6 +59,7 @@ impl SkillSource {
             SkillSource::Project => "project".to_string(),
             SkillSource::User => "user".to_string(),
             SkillSource::Extension(name) => format!("extension `{name}`"),
+            SkillSource::Cli => "command line".to_string(),
         }
     }
 }
@@ -145,8 +151,48 @@ fn skills_in(dir: &Path, source: impl Fn(&str) -> SkillSource) -> Vec<Skill> {
         .collect()
 }
 
-/// Collect the three sources with precedence (project > user > extension),
-/// first name wins, sorted by name within a source for determinism.
+/// One `--skill` path as skills (gh #70): a directory reads like
+/// any skill dir; a `.md` file reads as one skill named by its stem
+/// (`SKILL.md` takes its parent's name). Anything else contributes
+/// nothing (bad paths refuse up front, in `run`).
+fn skills_at(path: &Path) -> Vec<Skill> {
+    if path.is_dir() {
+        // The directory is usually the skill itself (`SKILL.md`
+        // inside, named by the directory); otherwise it reads as a
+        // container of skills, like every discovery dir.
+        if let Ok(text) = std::fs::read_to_string(path.join("SKILL.md"))
+            && let Some(name) = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .filter(|name| !name.is_empty())
+        {
+            return vec![parse_skill(&name, SkillSource::Cli, &text)];
+        }
+        return skills_in(path, |_| SkillSource::Cli);
+    }
+    if !path.is_file() || !path.extension().is_some_and(|ext| ext == "md") {
+        return Vec::new();
+    }
+    let name = if path.file_name().is_some_and(|name| name == "SKILL.md") {
+        path.parent()
+            .and_then(|parent| parent.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+    } else {
+        path.file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+    };
+    let (Some(name), Ok(text)) = (name, std::fs::read_to_string(path)) else {
+        return Vec::new();
+    };
+    if name.is_empty() {
+        return Vec::new();
+    }
+    vec![parse_skill(&name, SkillSource::Cli, &text)]
+}
+
+/// Collect the sources with precedence (gh #70: command line first,
+/// then project > user > extension), first name wins, sorted by name
+/// within a source for determinism.
 pub fn collect(roots: &SkillsRoots) -> Vec<Skill> {
     let mut skills: Vec<Skill> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -158,6 +204,13 @@ pub fn collect(roots: &SkillsRoots) -> Vec<Skill> {
             }
         }
     };
+    // gh #70: explicit `--skill` paths win over everything
+    // discovered. Bad paths never reach here (`run` refuses them up
+    // front), so a file that vanished mid-run reads like any other
+    // unreadable skill: skipped, like `skills_in` skips.
+    for path in &roots.extra {
+        add(skills_at(path), &mut seen);
+    }
 
     if !roots.project.as_os_str().is_empty() {
         add(

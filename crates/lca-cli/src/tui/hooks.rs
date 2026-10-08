@@ -686,6 +686,7 @@ impl Ui {
             &self.store,
             &self.current_session,
             &self.temp_dir,
+            &self.flags,
         );
         let live = crate::lock(&self.live);
         let model_id = crate::lock(&self.model_cell).id.clone();
@@ -731,7 +732,11 @@ impl Ui {
             notice: format!(
                 "reloaded: {extensions} extensions, settings, prompts, themes, keybindings"
             ),
-            themes: lca_ui::theme::theme_names(&lca_ui::theme::themes_dir(&self.data)),
+            themes: lca_ui::theme::theme_names_all(&crate::invoke::theme_extra_dirs(
+                &self.flags,
+                &self.cwd,
+                &self.data,
+            )),
             key_bindings: bindings,
             keybinding_error: bindings_error,
         }

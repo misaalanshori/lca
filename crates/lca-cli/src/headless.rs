@@ -539,6 +539,7 @@ pub(crate) async fn setup(
         &grants,
         Arc::new(move || crate::tui::session_stats(&stats_store, &stats_session)),
         &temp_dir,
+        flags,
     );
     // gh #67: the run's tool selection lands before consent, so the
     // provider resolves against the tools it will actually offer.
@@ -890,7 +891,7 @@ fn wire(
                 return Err(exit::USAGE);
             }
         },
-        skills_roots: skills_roots(cwd),
+        skills_roots: skills_roots(cwd, flags),
         skills_inject_matched: config.skills_inject_matched(),
         edit_requires_read: config.tool_edit_requires_read(),
         auto_resize_images: config.images_auto_resize(),

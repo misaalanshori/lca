@@ -148,3 +148,55 @@ fn no_tools_empties_and_no_flags_touch_nothing() {
     assert!(sel.builtin.is_none());
     assert!(unknown.is_empty());
 }
+
+// Verifies: gh #70 - resource flags parse (repeatable paths, no-*
+// switches, `-e` short).
+#[test]
+fn resource_flags_parse() {
+    use clap::Parser;
+    let cli = crate::Cli::parse_from([
+        "lca",
+        "-e",
+        "a.wasm",
+        "-e",
+        "b.wasm",
+        "--skill",
+        "s/SKILL.md",
+        "--theme",
+        "t.toml",
+        "--no-extensions",
+        "--no-skills",
+        "--no-themes",
+    ]);
+    assert_eq!(cli.extension.len(), 2);
+    assert_eq!(cli.skill, vec!["s/SKILL.md".to_string()]);
+    assert_eq!(cli.theme, vec!["t.toml".to_string()]);
+    assert!(cli.no_extensions && cli.no_skills && cli.no_themes);
+}
+
+// Verifies: gh #70 - skill files, skill dirs, and theme files load
+// with CLI precedence; bad paths refuse up front.
+#[test]
+fn skills_collect_extra_and_validate_paths() {
+    let root = lca_testkit::scratch_path("lca-skills-extra");
+    std::fs::create_dir_all(root.join("my-skill")).expect("mkdir");
+    std::fs::write(root.join("my-skill/SKILL.md"), "# my skill\n").expect("write");
+    std::fs::write(root.join("solo.md"), "# solo\n").expect("write");
+    let roots = lca_tools::skills::SkillsRoots {
+        project: std::path::PathBuf::new(),
+        user: std::path::PathBuf::new(),
+        extensions: std::path::PathBuf::new(),
+        disabled: Vec::new(),
+        extra: vec![root.join("my-skill"), root.join("solo.md")],
+    };
+    let skills = lca_tools::skills::collect(&roots);
+    let names: Vec<_> = skills.iter().map(|skill| skill.name.as_str()).collect();
+    assert!(names.contains(&"my-skill"), "dir loads: {names:?}");
+    assert!(names.contains(&"solo"), "file loads: {names:?}");
+    assert!(
+        check_resource_paths("--skill", &[root.join("nope")], "md").is_err(),
+        "missing refuses"
+    );
+    assert!(check_resource_paths("--skill", &[root.join("my-skill")], "md").is_ok());
+    let _ = std::fs::remove_dir_all(&root);
+}

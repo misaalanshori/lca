@@ -533,6 +533,7 @@ fn skilled_executor(ws: &Path) -> ToolExecutor {
         user: ws.join("skills"),
         extensions: ws.join("extensions"),
         disabled: Vec::new(),
+        extra: Vec::new(),
     }));
     exec
 }

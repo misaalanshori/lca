@@ -241,6 +241,7 @@ pub(super) fn run(cmd: &AuthCmd, allow_host: &[String]) -> i32 {
         &grants,
         stats,
         &std::env::temp_dir(),
+        &flags,
     );
     match cmd {
         AuthCmd::Check {

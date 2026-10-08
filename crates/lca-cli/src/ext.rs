@@ -173,6 +173,78 @@ pub fn load_installed(
     }
 }
 
+/// One WASM host for one-run loads (gh #70): the same limits and
+/// environment installed extensions get, so consent answers come from
+/// the same prompt and grant store (normal consent, preserved).
+fn guest_host(
+    cwd: &std::path::Path,
+    log_limit_bytes: usize,
+    prompt: lca_permissions::SharedPrompt,
+    dialogs: lca_permissions::SharedDialogs,
+    grants: &std::sync::Arc<std::sync::Mutex<lca_permissions::GrantStore>>,
+) -> lca_ext_host::ExtHost {
+    let env = installed_environment(cwd, prompt, dialogs, grants);
+    lca_ext_host::ExtHost::new(
+        lca_ext_host::ExtensionLimits {
+            memory_bytes: 64 * 1024 * 1024,
+            fuel_per_call: 10_000_000,
+            log_limit_bytes,
+        },
+        env,
+    )
+}
+
+/// Load one-run `-e` components (gh #70): local `.wasm` files resolve
+/// beside their manifests and register like installed extensions (same
+/// host, same consent). Directories are data-only packages (their
+/// skills ride `--skill`, resolved in `run`); anything else refuses
+/// out loud - remote references belong to `lca ext install`.
+pub fn load_extra(
+    registry: &mut lca_core::ExtensionRegistry,
+    cwd: &std::path::Path,
+    log_limit_bytes: usize,
+    prompt: lca_permissions::SharedPrompt,
+    dialogs: lca_permissions::SharedDialogs,
+    grants: &std::sync::Arc<std::sync::Mutex<lca_permissions::GrantStore>>,
+    paths: &[std::path::PathBuf],
+) {
+    if paths.is_empty() {
+        return;
+    }
+    let mut host = guest_host(cwd, log_limit_bytes, prompt, dialogs, grants);
+    for path in paths {
+        // Resolve from the working directory, like `@file` does.
+        let full = if path.is_absolute() {
+            path.clone()
+        } else {
+            cwd.join(path)
+        };
+        if full.is_dir() {
+            // Data-only by design (ADR-0030): no component to link.
+            // Skills already merged via `--skill` in `run`.
+            continue;
+        }
+        if !full.is_file() {
+            eprintln!(
+                "warning: -e {}: no such file (remote references belong to `lca ext install`)",
+                path.display()
+            );
+            continue;
+        }
+        let resolved = match lca_registry::resolve_local(&full, None) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                eprintln!("warning: -e {}: {err}", path.display());
+                continue;
+            }
+        };
+        match host.load(&resolved.component, &resolved.manifest) {
+            Ok(handle) => registry.register(std::sync::Arc::new(handle)),
+            Err(err) => eprintln!("warning: -e {}: {err}", path.display()),
+        }
+    }
+}
+
 /// The consent answer, read from standard input: one line, then Enter.
 ///
 /// This is the seam [`confirm_with`] is tested through - both callers share

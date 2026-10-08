@@ -18,6 +18,7 @@ use lca_provider::Provider;
 
 /// Build the registry: installed extensions, the native first-party set,
 /// the bundled provider, then this project's enablement rules.
+#[allow(clippy::too_many_arguments)] // one more explicit than a regroup: every arg is used once, at one call site.
 pub(crate) fn assemble(
     cwd: &Path,
     config: &Config,
@@ -26,19 +27,36 @@ pub(crate) fn assemble(
     grants: &Arc<Mutex<GrantStore>>,
     stats: StatsSource,
     temp: &Path,
+    flags: &crate::CliFlags,
 ) -> ExtensionRegistry {
     let mut registry = ExtensionRegistry::new();
-    crate::ext::load_installed(
+    // gh #70: `--no-extensions` skips installed and built-in
+    // extensions (providers still resolve, or the run cannot start).
+    // Explicit `-e` paths load after everything, consent and all.
+    if !flags.no_extensions {
+        crate::ext::load_installed(
+            &mut registry,
+            cwd,
+            config.extensions_log_limit_bytes() as usize,
+            shared_prompt.clone(),
+            shared_dialogs.clone(),
+            grants,
+        );
+        for handle in lca_ext_native::default_native_extensions(stats) {
+            registry.register(handle);
+        }
+    } else {
+        let _ = stats;
+    }
+    crate::ext::load_extra(
         &mut registry,
         cwd,
         config.extensions_log_limit_bytes() as usize,
         shared_prompt.clone(),
         shared_dialogs,
         grants,
+        &flags.extension,
     );
-    for handle in lca_ext_native::default_native_extensions(stats) {
-        registry.register(handle);
-    }
     // gh #64: the user's model-metadata overrides ride the provider's
     // settings into native mode (an absent file parses to nothing).
     // The WASM guest has no user-file channel, so it honors a

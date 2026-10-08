@@ -16,7 +16,7 @@ use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::keys;
 use lca_tui::widgets::editor::{Editor, EditorEvent};
 
-use crate::chat_commands::{paste_text, printable, provider_for};
+use crate::chat_commands::{is_turn_boundary_command, paste_text, printable, provider_for};
 use crate::chat_pickers::{
     GrantPicker, ModelPicker, ShellRun, ThemePicker, ThinkingPicker, TreePicker, TrustPicker,
 };
@@ -40,20 +40,6 @@ pub struct PendingMessage {
     /// A slash command queued mid-turn: it dispatches as a command at
     /// turn end (the composer-polish fold-in), never as model text.
     pub is_command: bool,
-}
-
-/// Commands that must wait for the turn boundary (composer-polish
-/// fold-in): they touch the session while a running turn may be appending
-/// to it, so they queue as pending commands and run when the turn ends
-/// instead of racing it. Everything else dispatches at once, even mid-turn.
-fn is_turn_boundary_command(line: &str) -> bool {
-    let name = line
-        .strip_prefix('/')
-        .unwrap_or(line)
-        .split([' ', '\t'])
-        .next()
-        .unwrap_or("");
-    matches!(name, "compact")
 }
 
 /// The startup key-hint line (gh #23): pi prints
@@ -155,8 +141,8 @@ pub struct Chat {
     pub theme_name: String,
     /// The configured theme setting (`ui.theme`, S5).
     theme_setting: String,
-    /// Where custom theme files live.
-    theme_dir: std::path::PathBuf,
+    /// Where custom theme files resolve, in order (gh #70).
+    theme_extra_dirs: Vec<std::path::PathBuf>,
     /// The picker's theme names (built-ins plus custom files).
     pub theme_names: Vec<String>,
     /// Whether the theme still follows the detected terminal scheme (R10);
@@ -212,7 +198,7 @@ impl Chat {
         } else {
             world.options.theme.clone()
         };
-        let theme_dir = world.options.theme_dir.clone();
+        let theme_extra_dirs = world.options.theme_extra_dirs.clone();
         let theme_names = if world.options.themes.is_empty() {
             crate::theme::THEMES
                 .iter()
@@ -221,8 +207,11 @@ impl Chat {
         } else {
             world.options.themes.clone()
         };
-        let (theme, theme_notice) =
-            crate::theme::load(&theme_setting, crate::theme::detect_scheme(), &theme_dir);
+        let (theme, theme_notice) = crate::theme::load_all(
+            &theme_setting,
+            crate::theme::detect_scheme(),
+            &theme_extra_dirs,
+        );
         let theme_name = theme.name.clone();
         let theme_auto =
             !world.options.plain && matches!(theme_setting.as_str(), "" | "auto" | "system");
@@ -298,7 +287,7 @@ impl Chat {
             meter: Default::default(),
             theme_name,
             theme_setting,
-            theme_dir,
+            theme_extra_dirs,
             theme_names,
             theme_auto,
             terminal_bg: None,
@@ -688,7 +677,7 @@ impl Chat {
     /// explicit pick clears it.
     pub(super) fn set_theme(&mut self, name: &str) {
         let (theme, notice) =
-            crate::theme::load(name, crate::theme::detect_scheme(), &self.theme_dir);
+            crate::theme::load_all(name, crate::theme::detect_scheme(), &self.theme_extra_dirs);
         self.theme = theme;
         // The transcript caches styled lines per entry: a new palette
         // invalidates every one of them, or the bands keep the old colors.
@@ -716,7 +705,7 @@ impl Chat {
                 None,
             )
         } else {
-            crate::theme::load(&self.theme_setting, Some(scheme), &self.theme_dir)
+            crate::theme::load_all(&self.theme_setting, Some(scheme), &self.theme_extra_dirs)
         };
         self.theme_name = theme.name.clone();
         self.theme = theme;
@@ -741,8 +730,11 @@ impl Chat {
     /// Preview a theme without committing it (FR-UI-17).
     pub(super) fn preview_theme(&mut self, index: usize) {
         if let Some(name) = self.theme_names.get(index).cloned() {
-            let (theme, _) =
-                crate::theme::load(&name, crate::theme::detect_scheme(), &self.theme_dir);
+            let (theme, _) = crate::theme::load_all(
+                &name,
+                crate::theme::detect_scheme(),
+                &self.theme_extra_dirs,
+            );
             self.theme = theme;
             self.transcript.invalidate();
         }

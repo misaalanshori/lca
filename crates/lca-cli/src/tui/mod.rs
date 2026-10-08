@@ -485,7 +485,7 @@ fn agent_config_for(
         model_context_window: context_window,
         completion_backend,
         system_prompt,
-        skills_roots: crate::skills_roots(cwd),
+        skills_roots: crate::skills_roots(cwd, flags),
         skills_inject_matched: config.skills_inject_matched(),
         edit_requires_read: config.tool_edit_requires_read(),
         auto_resize_images: config.images_auto_resize(),
@@ -625,6 +625,7 @@ impl Ui {
             &store,
             &current_session,
             &temp_dir,
+            flags,
         );
         // gh #67: the run's tool selection, warned into the startup head.
         for warning in crate::invoke::apply_tool_selection(&registry, flags) {
@@ -700,7 +701,7 @@ impl Ui {
             config.ui_quiet_startup(),
             &crate::prompt::context_sources(&data, cwd, trusted, flags.no_context_files),
             registry.registered_names().len(),
-            lca_tools::skills::collect(&crate::skills_roots(cwd)).len(),
+            lca_tools::skills::collect(&crate::skills_roots(cwd, flags)).len(),
             lca_tools::prompts::collect(&crate::prompt_roots(cwd)).len(),
         ));
         // `--model <pattern>[:thinking]` resolves against the provider's
@@ -1018,6 +1019,7 @@ fn load_registry(
     store: &Arc<SessionStore>,
     session_cell: &Arc<Mutex<Session>>,
     temp: &Path,
+    flags: &crate::CliFlags,
 ) -> ExtensionRegistry {
     // The one assembly, shared with headless mode and `--list-models`
     // (gh #8): only the stats source differs, and a session's own reads
@@ -1038,6 +1040,7 @@ fn load_registry(
             session_stats(&stats_store, &session)
         }),
         temp,
+        flags,
     )
 }
 

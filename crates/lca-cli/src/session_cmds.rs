@@ -701,6 +701,7 @@ pub(super) fn list_models_command(
         &grants,
         stats,
         &std::env::temp_dir(),
+        cli,
     );
     if let Some(host) =
         crate::net_consent::env_configured_host(&data, &provider_name, Some(&registry))
