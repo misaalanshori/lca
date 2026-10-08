@@ -67,6 +67,13 @@ impl Ui {
     /// interface calls for every slash command.
     pub(super) fn options(self: &Arc<Self>) -> UiOptions {
         let ui = self.clone();
+        // Snapshot the cells up front: a `crate::lock` temporary inside
+        // the literal below would live until the whole struct builds,
+        // deadlocking the first later field that locks the same cell
+        // (std Mutex is not reentrant).
+        let config = crate::lock(&self.config).clone();
+        let yolo = crate::lock(&self.grants).permission_mode()
+            == lca_permissions::PermissionMode::Yolo;
         let (keybinding_overrides, keybinding_error) =
             crate::load_user_keybindings(&crate::data_dir());
         let invoke_command: lca_ui::CommandInvoker =
@@ -75,10 +82,7 @@ impl Ui {
             model_label: self.label_cell.clone(),
             context_window: self.context_window_cell.clone(),
             thinking: self.thinking_cell.clone(),
-            theme: crate::lock(&self.config)
-                .ui_theme()
-                .unwrap_or("auto")
-                .to_string(),
+            theme: config.ui_theme().unwrap_or("auto").to_string(),
             // R7: themes live with the rest of the agent's data.
             theme_dir: lca_ui::theme::themes_dir(&crate::data_dir()),
             themes: lca_ui::theme::theme_names(&lca_ui::theme::themes_dir(&crate::data_dir())),
@@ -95,16 +99,15 @@ impl Ui {
                 let ui = self.clone();
                 Arc::new(move || ui.take_pending_models())
             }),
-            plain: crate::lock(&self.config).ui_color() == ColorMode::Never,
-            yolo: crate::lock(&self.grants).permission_mode()
-                == lca_permissions::PermissionMode::Yolo,
-            thinking_visibility: crate::lock(&self.config)
+            plain: config.ui_color() == ColorMode::Never,
+            yolo,
+            thinking_visibility: config
                 .thinking_visibility()
                 .and_then(lca_ui::transcript::ThinkingVisibility::parse)
                 .unwrap_or_default(),
             // gh #32: the configured shape, with the shipped frame as
             // the answer to anything the config layer already refused.
-            codeblock_border: crate::lock(&self.config)
+            codeblock_border: config
                 .markdown_codeblock_border()
                 .parse()
                 .unwrap_or_default(),
@@ -125,10 +128,7 @@ impl Ui {
             // alt-screen renderer and persists in `ui.json`, which wins
             // over the config file's `ui.fullscreen` when present (gh
             // #112; the malformed warning rides the transcript head).
-            fullscreen: super::hooks::initial_screen_mode(
-                &crate::data_dir(),
-                crate::lock(&self.config).ui_fullscreen(),
-            )
+            fullscreen: super::hooks::initial_screen_mode(&crate::data_dir(), config.ui_fullscreen())
             .0,
             slash_commands: self.slash_commands(),
             workspace: self.cwd.clone(),
@@ -160,13 +160,13 @@ impl Ui {
         names.insert(6, "/fork".to_string());
         names.insert(7, "/clone".to_string());
         names.insert(8, "/reload".to_string());
-        names.insert(9, "/scoped-models".to_string());
         names.insert(7, "/thinking".to_string());
         names.insert(8, "/resume".to_string());
         names.insert(9, "/settings".to_string());
         names.insert(10, "/grants".to_string());
         names.insert(11, "/trust".to_string());
         names.insert(12, "/permissions".to_string());
+        names.insert(13, "/scoped-models".to_string());
         // gh #43: the skill command plus one entry per skill, so
         // `/skill:name` completes and forwards to the host.
         names.push("/skill".to_string());
