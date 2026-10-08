@@ -582,7 +582,9 @@ fn ctrl_x_copies_the_oauth_url_with_the_named_notice() {
     let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
     let url = "https://accounts.example.test/auth?code=42";
     chat.apply_login_next(crate::state::LoginNext::Waiting {
-        label: format!("waiting for browser sign-in… (esc cancels)\n\n\x1b]8;;{url}\x07{url}\x1b]8;;\x07"),
+        label: format!(
+            "waiting for browser sign-in… (esc cancels)\n\n\x1b]8;;{url}\x07{url}\x1b]8;;\x07"
+        ),
     });
     let (input_tx, _input_rx) = std::sync::mpsc::channel();
     let (resize_tx, _resize_rx) = std::sync::mpsc::channel();
