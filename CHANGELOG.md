@@ -37,6 +37,25 @@ Dates are UTC.
 - **Wheel velocity (gh #206).** Pi's acceleration curve in `auto`
   (one line isolated, toward six on a fast spin) with Alt ×5; numeric
   settings stay fixed.
+- **Invocation: `@file`, stdin, `--`, `--offline` (gh #71).**
+  `@path` positionals inline text (`<file name>` shape, 1 MiB bound)
+  or stage images; piped stdin prepends the first prompt; `--` stops
+  parsing; redirected streams mean print mode; `--offline`/`LCA_OFFLINE`
+  silences automatic network (model traffic still flows).
+- **Tool selection flags (gh #67).** `-t/--tools` (allowlist or
+  `+`/`-` deltas, `*` globs), `--exclude-tools`, `--no-builtin-tools`,
+  `--no-tools`; unknowns warn; `tool_search` pins with the flags.
+  `defaultTools` stays a follow-up.
+- **Session flags (gh #69).** `--session-id` (exact or created,
+  pi charset), `--no-session` (volatile, grants stay real),
+  `--name` (titles fresh, renames opened), `--fork` (tip clone,
+  `--session-id` chooses its id); pi exclusivity refused up front.
+  `--session-dir` stays a follow-up.
+- **Resource flags (gh #70).** `-e` files register per-run (same
+  consent; dirs contribute skills), `--skill`/`--theme` load per-run
+  (CLI precedence; explicit theme dirs first), `--no-extensions`
+  (providers still resolve), `--no-skills`, `--no-themes`; bad paths
+  refuse. `--prompt-template` stays a follow-up.
 - **Startup header + `ui.quiet_startup` + `/changelog` (gh #131).**
   The transcript head names the version plus the loaded resources
   (context paths that exist, extension/skill/template counts).
