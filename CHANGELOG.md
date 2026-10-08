@@ -7,6 +7,31 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Startup header + `ui.quiet_startup` + `/changelog` (gh #131).**
+  The transcript head names the version plus the loaded resources
+  (context paths that exist, extension/skill/template counts).
+  `ui.quiet_startup` (`false` | `true` | `"header"`, pi naming)
+  hides in layers. `/changelog` shows the embedded changelog's
+  latest released section; the update notice points at it.
+- **Double-escape action (gh #132).** Esc Esc with an empty editor
+  opens the branch tree or the fork picker per
+  `ui.double_escape_action` (`tree` | `fork` | `none`, pi default
+  `tree`); `ui.tree_filter_mode` parses but stays inert by
+  documentation (LCA's tree lists sessions, nothing to filter).
+- **Display settings inventory (gh #82).** Nineteen typed keys in
+  LCA naming (`ui.*`, `terminal.*`, `images.*`, `markdown.*`) with
+  pi's domains; the thirteen that bite apply live through
+  `/settings`, six stay inert by documentation (see the key table
+  for which and why).
+- **Prompt templates (gh #58).** Markdown files become `/`
+  commands: user (`~/.lca/prompts`) + project (`.lca/prompts`)
+  dirs, frontmatter description + argument-hint in completion,
+  `$1`/`$@`/`${1:-default}`/`${@:N:L}` over shell-like args.
+  Invoking fills the editor (never auto-submits).
+- **`tool.edit_requires_read` toggle (gh #117).** Off is pi parity
+  (blind edits allowed, the default); on keeps LCA's read-before-edit
+  staleness guard. Documented as a settled divergence (kept,
+  default-off).
 - **`/fork` picker + in-process switch (gh #203).** Bare `/fork`
   opens the transcript's user messages (latest selected, pi's
   `UserMessageSelector` shape); choosing forks AND switches in
