@@ -24,6 +24,7 @@ pub(crate) fn assemble(
     shared_dialogs: lca_permissions::SharedDialogs,
     grants: &Arc<Mutex<GrantStore>>,
     stats: StatsSource,
+    temp: &Path,
 ) -> ExtensionRegistry {
     let mut registry = ExtensionRegistry::new();
     crate::ext::load_installed(
@@ -58,6 +59,7 @@ pub(crate) fn assemble(
             openai_compatible::resources(),
             shared_prompt,
             grants.clone(),
+            temp,
         ),
         openai_compatible::Settings {
             model_overrides: std::fs::read_to_string(crate::data_dir().join("models.toml"))
@@ -97,6 +99,7 @@ mod tests {
             lca_permissions::SharedDialogs::default(),
             &grants,
             std::sync::Arc::new(|| String::new()),
+            &root.join("tmp"),
         );
         assert!(
             registry.provider("openai-compatible").is_none(),

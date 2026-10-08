@@ -648,3 +648,51 @@ fn compaction_budget_keys_load_and_a_bad_value_names_its_key() {
         "{err}"
     );
 }
+
+// Verifies: gh #112 - `ui.fullscreen` is a typed config key: TOML
+// true/false is honored, and a malformed value fails loud at load.
+#[test]
+fn ui_fullscreen_is_a_typed_bool_key() {
+    let dir = scratch("fullscreen-key");
+    write(&dir.join("user.toml"), "[ui]\nfullscreen = true\n");
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.ui_fullscreen(), Some(true));
+
+    write(&dir.join("user.toml"), "[ui]\nfullscreen = false\n");
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.ui_fullscreen(), Some(false));
+
+    write(&dir.join("user.toml"), "[ui]\nfullscreen = \"yes\"\n");
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("a non-bool fullscreen is refused at load");
+    assert!(err.to_string().contains("ui.fullscreen"), "{err}");
+}
+
+// Verifies: gh #133 - `shell.command_prefix` is a typed config key,
+// honored from TOML.
+#[test]
+fn shell_command_prefix_is_a_typed_key() {
+    let dir = scratch("command-prefix-key");
+    write(
+        &dir.join("user.toml"),
+        "[shell]\ncommand_prefix = \"export LCA_PROBE=1\"\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.shell_command_prefix(), Some("export LCA_PROBE=1"));
+    assert_eq!(Config::defaults().shell_command_prefix(), None);
+}

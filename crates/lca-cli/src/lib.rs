@@ -43,8 +43,14 @@ pub fn resolve_shell(config: &Config) -> Result<lca_tools::Shell, String> {
 pub fn native_ops(config: &Config) -> NativeOps {
     use lca_tools::ShellProbe as _;
     let fallback = || lca_tools::Shell::fallback(lca_tools::shell::Real.os());
+    // Gh #133: the prefix rides the resolved shell, so every command
+    // the backend runs carries it, whichever transport applies.
+    let prefix = config.shell_command_prefix().map(str::to_string);
     match resolve_shell(config) {
-        Ok(shell) => NativeOps::new(shell),
+        Ok(mut shell) => {
+            shell.command_prefix = prefix;
+            NativeOps::new(shell)
+        }
         Err(err) => NativeOps::broken(fallback(), err),
     }
 }
@@ -250,11 +256,13 @@ fn secret_capabilities(
     provider: &str,
     grants: &std::sync::Arc<std::sync::Mutex<GrantStore>>,
 ) -> lca_tools::Capabilities {
+    // No session here (a credential write precedes or outlives any
+    // session): the system temp dir, explicitly, never a global.
     let roots = lca_permissions::ScopeRoots {
         workspace: cwd.to_path_buf(),
         private: data.join("private"),
         home_config: config_dir(),
-        temp: session_temp(),
+        temp: std::env::temp_dir(),
         state_dir: data.to_path_buf(),
     };
     lca_tools::Capabilities::new(
@@ -364,6 +372,7 @@ pub(crate) fn extension_capabilities(
     prompt: lca_permissions::SharedPrompt,
     store: std::sync::Arc<std::sync::Mutex<GrantStore>>,
     resources: lca_tools::ResourceSource,
+    temp: &Path,
 ) -> std::sync::Arc<lca_tools::Capabilities> {
     use std::sync::{Arc, Mutex};
 
@@ -372,7 +381,7 @@ pub(crate) fn extension_capabilities(
         workspace: cwd.to_path_buf(),
         private: data.join("private"),
         home_config: config_dir(),
-        temp: session_temp(),
+        temp: temp.to_path_buf(),
         state_dir: data.clone(),
     };
     let mut engine = lca_tools::Capabilities::new(
@@ -411,6 +420,7 @@ pub(crate) fn provider_capabilities(
     resources: lca_tools::ResourceSource,
     prompt: lca_permissions::SharedPrompt,
     store: std::sync::Arc<std::sync::Mutex<GrantStore>>,
+    temp: &Path,
 ) -> std::sync::Arc<lca_tools::Capabilities> {
     let mut grants = lca_tools::CapabilityGrants {
         net: manifest.net.clone(),
@@ -427,7 +437,7 @@ pub(crate) fn provider_capabilities(
                 .collect()
         })
         .unwrap_or_default();
-    extension_capabilities(cwd, provider, grants, prompt, store, resources)
+    extension_capabilities(cwd, provider, grants, prompt, store, resources, temp)
 }
 
 /// The host-side skill sources (FR-CTX-2, ADR-0030): the workspace's
@@ -472,41 +482,31 @@ pub fn load_user_keybindings(
     }
 }
 
-/// The per-session temporary directory the `temp` scope resolves to (FR-PERM
-/// via the capability catalog: a per-session dir, removed at exit). Set once
-/// when the session starts.
-static SESSION_TEMP: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-
-/// The current session's temp root, or the system temp dir before one is set.
-pub(crate) fn session_temp() -> PathBuf {
-    SESSION_TEMP
-        .get()
-        .cloned()
-        .unwrap_or_else(std::env::temp_dir)
+/// Resolve and create one session's temporary directory (`<data>/tmp/<id>`),
+/// gh #160: a passed-through value, never a process global, so in-process
+/// session switching resolves a fresh dir per session. Creation failures
+/// propagate to the caller (`?`, never a silent `let _`); contexts with
+/// no session (extension install, pre-session login) pass the system
+/// temp dir explicitly instead.
+pub fn ensure_session_temp(data_dir: &Path, session_id: &str) -> std::io::Result<PathBuf> {
+    let path = data_dir.join("tmp").join(session_id);
+    std::fs::create_dir_all(&path)?;
+    Ok(path)
 }
 
-/// Create and remember the session's temp directory (`<data>/tmp/<id>`).
-pub(crate) fn init_session_temp(session_id: &str) -> PathBuf {
-    let path = data_dir().join("tmp").join(session_id);
-    let _ = std::fs::create_dir_all(&path);
-    let _ = SESSION_TEMP.set(path.clone());
-    path
+/// Remove one session temp directory, best-effort: exit-time cleanup,
+/// not a fallible operation the exit path reports.
+pub(crate) fn cleanup_session_temp(path: &Path) {
+    let _ = std::fs::remove_dir_all(path);
 }
 
-/// Remove the session's temp directory at a clean exit.
-pub(crate) fn cleanup_session_temp() {
-    if let Some(path) = SESSION_TEMP.get() {
-        let _ = std::fs::remove_dir_all(path);
-    }
-}
-
-/// Removes the session temp directory on drop, so every exit path after the
-/// session starts cleans up.
-pub(crate) struct SessionTempGuard;
+/// Removes its session temp directory on drop, so every exit path after
+/// the session starts cleans up.
+pub(crate) struct SessionTempGuard(pub PathBuf);
 
 impl Drop for SessionTempGuard {
     fn drop(&mut self) {
-        cleanup_session_temp();
+        cleanup_session_temp(&self.0);
     }
 }
 
@@ -1071,6 +1071,7 @@ mod tests {
             lca_permissions::SharedPrompt::default(),
             store.clone(),
             openai_compatible::resources(),
+            &root.join("tmp"),
         );
         store_ad_hoc_grant(&store, &project, "127.0.0.1").expect("grant");
         // Reaching the socket layer (and failing to connect) proves the grant

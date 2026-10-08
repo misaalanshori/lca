@@ -7,6 +7,26 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **`shell.command_prefix` (gh #133).** A prefix prepended to every
+  shell command (pi's `shellCommandPrefix`), joined with a newline so
+  `export`/`source` lines take effect; applies to both transports.
+- **Typed `ui.fullscreen` (gh #112).** The key joins the config
+  schema (TOML honored, malformed loud); `ui.json` parses typed (an
+  unrelated `true` no longer enables) with precedence persisted >
+  config > scrollback, and malformed persistence falls back with a
+  transcript-head warning.
+
+### Fixed
+- **Session temp without the global (gh #160).** `SESSION_TEMP`
+  OnceLock is gone: the temp dir resolves per session from the
+  session id (creation failures propagate), process-long contexts
+  use the system temp dir explicitly.
+- **Tool calls record their real source (gh #128).**
+  Extension-handled calls log `ToolSource::Extension` (plain
+  variant, not `Extension { id }`: no log-shape change); built-ins
+  stay `Builtin`.
+
+### Added
 - **Instant `/clone [name]` (gh #205).** Duplicates the live session
   at its tip and switches in one step (no picker): `clone_session`
   forks at the latest record and titles (`Clone of <parent>` by

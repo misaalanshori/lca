@@ -88,7 +88,9 @@ fn host_roots(cwd: &std::path::Path) -> lca_permissions::ScopeRoots {
         workspace: cwd.to_path_buf(),
         private: data.join("private"),
         home_config: crate::config_dir(),
-        temp: crate::session_temp(),
+        // Install context: no session exists, so the system temp dir,
+        // explicitly (gh #160) - never a process-global.
+        temp: std::env::temp_dir(),
         state_dir: data,
     }
 }

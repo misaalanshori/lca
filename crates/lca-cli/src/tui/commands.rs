@@ -109,8 +109,14 @@ impl Ui {
             hooks: self.hooks(),
             // FR-UI-21/R2: a fresh session starts on the main screen (the
             // terminal's own selection); `/fullscreen` opts into the
-            // alt-screen renderer and persists in `ui.json`.
-            fullscreen: super::hooks::initial_screen_mode(&crate::data_dir()),
+            // alt-screen renderer and persists in `ui.json`, which wins
+            // over the config file's `ui.fullscreen` when present (gh
+            // #112; the malformed warning rides the transcript head).
+            fullscreen: super::hooks::initial_screen_mode(
+                &crate::data_dir(),
+                self.config.ui_fullscreen(),
+            )
+            .0,
             slash_commands: self.slash_commands(),
             workspace: self.cwd.clone(),
             // gh #66: the user key file sits beside the config (the
@@ -947,12 +953,22 @@ pub(crate) fn settings_text(
         (Some(shell), None) => text.push_str(&format!("  shell.resolved = {shell}\n")),
         (None, None) => text.push_str("  shell.resolved = <host-delegated>\n"),
     }
-    // S1: the active screen renderer mode from ui.json / session default
-    let is_fullscreen = super::hooks::initial_screen_mode(&crate::data_dir());
-    let mode_desc = if is_fullscreen {
-        "app-owned screen (fullscreen) [ui.json]"
+    // S1: the active screen renderer mode - persisted ui.json wins
+    // when present (gh #112), else the config file's ui.fullscreen.
+    // The source names the layer that won, not a constant.
+    let (is_fullscreen, _) =
+        super::hooks::initial_screen_mode(&crate::data_dir(), config.ui_fullscreen());
+    let source = if crate::data_dir().join("ui.json").exists() {
+        "ui.json"
+    } else if config.ui_fullscreen().is_some() {
+        "config"
     } else {
-        "terminal scrollback [default]"
+        "default"
+    };
+    let mode_desc = if is_fullscreen {
+        format!("app-owned screen (fullscreen) [{source}]")
+    } else {
+        format!("terminal scrollback [{source}]")
     };
     text.push_str(&format!("  ui.screen = {mode_desc}\n"));
     text

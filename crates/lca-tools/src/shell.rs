@@ -118,6 +118,9 @@ pub struct Shell {
     pub explicit: bool,
     /// How the command reaches it.
     pub transport: Transport,
+    /// A prefix prepended to every command (`shell.command_prefix`,
+    /// gh #133); `None` runs commands as written.
+    pub command_prefix: Option<String>,
 }
 
 impl Shell {
@@ -131,12 +134,14 @@ impl Shell {
                 kind: Kind::Cmd,
                 explicit: false,
                 transport: Transport::ScriptFile,
+                command_prefix: None,
             },
             Os::Unix => Shell {
                 program: "sh".to_string(),
                 kind: Kind::Sh,
                 explicit: false,
                 transport: Transport::Argv,
+                command_prefix: None,
             },
         }
     }
@@ -151,6 +156,17 @@ impl Shell {
             self.program,
             self.kind.dialect()
         )
+    }
+
+    /// The command as the child sees it: the configured prefix joined
+    /// with a newline first (gh #133, pi's `${commandPrefix}\n${command}`
+    /// shape, so `export`/`source` lines take effect for the command),
+    /// else the command untouched.
+    pub fn command_text(&self, command: &str) -> String {
+        match &self.command_prefix {
+            Some(prefix) => format!("{prefix}\n{command}"),
+            None => command.to_string(),
+        }
     }
 
     /// The script file's extension for this dialect.
@@ -471,6 +487,7 @@ fn build(_os: Os, program: String, kind: Kind, explicit: bool) -> Shell {
         kind,
         explicit,
         transport,
+        command_prefix: None,
     }
 }
 
@@ -672,6 +689,17 @@ mod tests {
             "echo one\r\necho two\r\n"
         );
         assert_eq!(cmd.script_text("echo one\r\n"), "echo one\r\n");
+    }
+
+    // Verifies: gh #133 - a configured prefix joins the command
+    // with a newline (pi's `${commandPrefix}\\n${command}` shape);
+    // absent, the command passes through untouched.
+    #[test]
+    fn the_command_prefix_joins_with_a_newline() {
+        let mut shell = build(Os::Unix, "/bin/bash".into(), Kind::Bash, false);
+        assert_eq!(shell.command_text("echo hi"), "echo hi");
+        shell.command_prefix = Some("export LCA_PROBE=1".to_string());
+        assert_eq!(shell.command_text("echo hi"), "export LCA_PROBE=1\necho hi");
     }
 
     #[test]

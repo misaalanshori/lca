@@ -295,10 +295,12 @@ async fn platform_exec(
         )));
     }
     // The POSIX path is unchanged (ADR-0041): `-c` receives the command as
-    // one argv element, which `execve` carries byte for byte.
+    // one argv element, which `execve` carries byte for byte. The
+    // configured prefix joins first (gh #133), so profile lines take
+    // effect for the command.
     let mut cmd = tokio::process::Command::new(&shell.program);
     cmd.arg("-c")
-        .arg(command)
+        .arg(shell.command_text(command))
         .current_dir(&cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -611,8 +613,9 @@ async fn platform_exec(
     // ADR-0041's fidelity rule: the command travels in a file, never as one
     // argv element through CreateProcess quoting into a shell that then
     // re-parses its command line. That transport is where `"double"` became
-    // `\"double\"` and a second line vanished.
-    let script = TempScript::write(shell, command)?;
+    // `\"double\"` and a second line vanished. The configured prefix
+    // joins before the dialect normalization (gh #133).
+    let script = TempScript::write(shell, &shell.command_text(command))?;
     let mut cmd = tokio::process::Command::new(&shell.program);
     cmd.args(shell.script_args(&script.path()))
         .current_dir(&cwd)
@@ -703,6 +706,7 @@ mod script_transport_tests {
                 kind,
                 explicit: false,
                 transport: Transport::ScriptFile,
+                command_prefix: None,
             };
             let script = TempScript::write(&shell, command).expect("write");
             let path = std::path::PathBuf::from(script.path());
@@ -735,6 +739,7 @@ mod script_transport_tests {
             kind: Kind::Sh,
             explicit: false,
             transport: Transport::Argv,
+            command_prefix: None,
         };
         assert_eq!(sh.script_text("a\nb"), "a\nb");
         let _ = Os::Unix;

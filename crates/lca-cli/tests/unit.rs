@@ -317,3 +317,58 @@ fn clone_routes_to_the_clone_command() {
         }
     );
 }
+
+// Verifies: gh #160 (session temp without the global) - distinct,
+// validated per-session dirs; creation failures error.
+// Verifies: gh #160 - two sessions resolve distinct, existing dirs
+// under the data dir (no process-global involved).
+#[test]
+fn two_sessions_resolve_distinct_existing_dirs() {
+    let base = std::env::temp_dir().join(format!("lca-temp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let first = lca_cli::ensure_session_temp(&base, "session-a").expect("create a");
+    let second = lca_cli::ensure_session_temp(&base, "session-b").expect("create b");
+    assert_ne!(first, second);
+    assert!(first.is_dir() && second.is_dir());
+    assert!(first.starts_with(base.join("tmp")));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// Verifies: gh #160 - a creation failure errors instead of the old
+// silent `let _`.
+#[test]
+fn a_creation_failure_errors() {
+    let base = std::env::temp_dir().join(format!("lca-temp-file-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::write(&base, "not a directory").expect("write");
+    lca_cli::ensure_session_temp(&base, "session-a").expect_err("must fail");
+    let _ = std::fs::remove_file(&base);
+}
+
+// Verifies: gh #133 receipt - the configured prefix rides the resolved
+// shell the backend runs, so every command carries it.
+#[test]
+fn the_configured_prefix_rides_the_resolved_shell() {
+    use std::collections::BTreeMap;
+    let mut flags = BTreeMap::new();
+    flags.insert(
+        "shell.command_prefix".to_string(),
+        "export LCA_PROBE=1".to_string(),
+    );
+    let config = lca_config::Config::load(&lca_config::LoadInput {
+        flags,
+        ..Default::default()
+    })
+    .expect("load");
+    let ops = lca_cli::native_ops(&config);
+    assert_eq!(
+        ops.shell().command_prefix.as_deref(),
+        Some("export LCA_PROBE=1")
+    );
+    assert_eq!(
+        lca_cli::native_ops(&lca_config::Config::defaults())
+            .shell()
+            .command_prefix,
+        None
+    );
+}

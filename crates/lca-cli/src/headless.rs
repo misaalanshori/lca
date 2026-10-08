@@ -365,8 +365,16 @@ pub(crate) async fn setup(
             }
         },
     };
-    let temp_guard = crate::SessionTempGuard;
-    crate::init_session_temp(session.id());
+    // Gh #160: the run's temp dir resolves here, from this session,
+    // with creation failures fatal (never the old silent `let _`).
+    let temp_dir = match crate::ensure_session_temp(&data, session.id()) {
+        Ok(dir) => dir,
+        Err(err) => {
+            eprintln!("error: cannot create the session temp dir: {err}");
+            return Err(exit::INTERNAL);
+        }
+    };
+    let temp_guard = crate::SessionTempGuard(temp_dir.clone());
 
     // ADR-0042: the same mode application as the interface, surfaced on
     // stderr because headless has no transcript to put a banner in.
@@ -422,6 +430,7 @@ pub(crate) async fn setup(
         lca_permissions::SharedDialogs::default(),
         &grants,
         Arc::new(move || crate::tui::session_stats(&stats_store, &stats_session)),
+        &temp_dir,
     );
     if let Some(host) =
         crate::net_consent::env_configured_host(&data, &provider_name, Some(&registry))
@@ -449,6 +458,7 @@ pub(crate) async fn setup(
         &provider_name,
         flags,
         registry,
+        &temp_dir,
     ) {
         Ok(wired) => wired,
         Err(code) => return Err(code),
@@ -622,6 +632,7 @@ fn wire(
     provider_name: &str,
     flags: &crate::CliFlags,
     mut registry: lca_core::ExtensionRegistry,
+    temp: &Path,
 ) -> Result<(AgentConfig, std::sync::Arc<dyn lca_provider::Provider>), i32> {
     // Without the compaction strategy neither the prompt nor the session
     // feeds anything downstream; the bindings stay for the default build.
@@ -707,6 +718,7 @@ fn wire(
             grants.clone(),
             // No `resources/` bag: a compaction strategy carries code.
             lca_tools::ResourceSource::None,
+            temp,
         );
         cap.set_completion(backend.clone());
         registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));

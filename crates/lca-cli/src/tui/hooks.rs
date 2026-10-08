@@ -147,14 +147,23 @@ impl Ui {
                         .collect();
                     let row = |key: &str, values: &[&str]| {
                         let (value, source) = match key {
-                            // The one setting that lives outside the
-                            // config file: `ui.json` (FR-UI-21) says so
-                            // in the source column rather than lying
-                            // about a layer that never wrote it.
-                            "ui.fullscreen" => (
-                                initial_screen_mode(&data).to_string(),
-                                "ui.json".to_string(),
-                            ),
+                            // The one setting with two homes (gh #112):
+                            // a persisted `ui.json` wins when present
+                            // (FR-UI-21) and says so in the source
+                            // column; else the config file's
+                            // `ui.fullscreen` (or the default) shows
+                            // with the layer that won it.
+                            "ui.fullscreen" => match read_ui_json(&data) {
+                                UiJson::Fullscreen(persisted) => {
+                                    (persisted.to_string(), "ui.json".to_string())
+                                }
+                                UiJson::Absent | UiJson::Malformed(_) => resolved
+                                    .get(key)
+                                    .map(|(value, source)| (value.clone(), source.to_string()))
+                                    .unwrap_or_else(|| {
+                                        ("<unset>".to_string(), "default".to_string())
+                                    }),
+                            },
                             _ => resolved
                                 .get(key)
                                 .map(|(value, source)| (value.clone(), source.to_string()))
@@ -612,14 +621,22 @@ impl Ui {
     /// Switch the live session in place (`/tree`, `/resume`; R3). Returns
     /// the reopened session's records - the interface replays them with the
     /// live rendering (FR-UI-7) - or `None` when the id cannot open.
+    /// Gh #160: the new session's temp dir resolves here too (distinct
+    /// per session, validated) - a creation failure fails the switch
+    /// loudly instead of stranding the next turn in the old session's
+    /// dir the way the silent global did.
     fn switch_session(&self) -> lca_ui::state::SwitchSession {
         let store = self.store.clone();
         let cwd = self.cwd.clone();
+        let data = self.data.clone();
         let session_cell = self.current_session.clone();
         Arc::new(move |id: &str| -> Option<Vec<lca_protocol::Record>> {
             let session = store.session(&cwd, id).ok()?;
             let read = store.read_with(&session, ViewMode::Display).ok()?;
-            crate::init_session_temp(session.id());
+            if let Err(err) = crate::ensure_session_temp(&data, session.id()) {
+                eprintln!("error: cannot create the session temp dir: {err}");
+                return None;
+            }
             *session_cell.lock().unwrap_or_else(|p| p.into_inner()) = session;
             Some(read.records)
         })
@@ -790,13 +807,53 @@ fn persist_screen_mode(fullscreen: bool) {
 /// selection and scrollbar just work. The alt screen is the app-owned-selection
 /// opt-in (`ui.fullscreen = true` or `/fullscreen`).
 ///
-/// A persisted `ui.json` still wins over the default, so an explicit
-/// `/fullscreen` choice survives either way. ADR-0037 carries the dated
+/// Precedence (gh #112): a persisted `ui.json` wins when present, so an
+/// explicit `/fullscreen` choice survives either way; else the config
+/// file's `ui.fullscreen`; else scrollback. ADR-0037 carries the dated
 /// annotations.
-pub(super) fn initial_screen_mode(config_dir: &std::path::Path) -> bool {
-    std::fs::read_to_string(config_dir.join("ui.json"))
-        .map(|text| text.contains("true"))
-        .unwrap_or(false)
+///
+/// What `ui.json` says, if anything: typed, so `{"fullscreen": false,
+/// "other": true}` stays scrollback instead of matching a substring.
+enum UiJson {
+    /// No file: nothing persisted.
+    Absent,
+    /// The persisted choice.
+    Fullscreen(bool),
+    /// Unparseable or non-boolean: the message names the problem.
+    Malformed(String),
+}
+
+fn read_ui_json(config_dir: &std::path::Path) -> UiJson {
+    let text = match std::fs::read_to_string(config_dir.join("ui.json")) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return UiJson::Absent,
+        Err(err) => return UiJson::Malformed(format!("cannot read ui.json: {err}")),
+    };
+    let value: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(err) => return UiJson::Malformed(format!("ui.json is not JSON: {err}")),
+    };
+    match value.get("fullscreen").and_then(|flag| flag.as_bool()) {
+        Some(fullscreen) => UiJson::Fullscreen(fullscreen),
+        None => UiJson::Malformed("ui.json has no boolean \"fullscreen\"".to_string()),
+    }
+}
+
+/// The startup renderer plus an optional warning for the transcript
+/// head: `(fullscreen, warning)`. Malformed persistence falls back to
+/// the config file (then scrollback) and says so loudly.
+pub(super) fn initial_screen_mode(
+    config_dir: &std::path::Path,
+    config_fullscreen: Option<bool>,
+) -> (bool, Option<String>) {
+    match read_ui_json(config_dir) {
+        UiJson::Absent => (config_fullscreen.unwrap_or(false), None),
+        UiJson::Fullscreen(fullscreen) => (fullscreen, None),
+        UiJson::Malformed(problem) => (
+            config_fullscreen.unwrap_or(false),
+            Some(format!("warning: {problem}; using the config default")),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -812,12 +869,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("mkdir");
         // No ui.json: scrollback (main screen, false) is the default.
-        assert!(!initial_screen_mode(&root));
+        assert_eq!(initial_screen_mode(&root, None), (false, None));
         // A persisted fullscreen pick is honored.
         std::fs::write(root.join("ui.json"), "{\"fullscreen\":true}").expect("write");
-        assert!(initial_screen_mode(&root));
+        assert_eq!(initial_screen_mode(&root, None), (true, None));
         std::fs::write(root.join("ui.json"), "{\"fullscreen\":false}").expect("write");
-        assert!(!initial_screen_mode(&root));
+        assert_eq!(initial_screen_mode(&root, None), (false, None));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: gh #112 - an unrelated `true` in ui.json does not
+    // enable fullscreen (the old substring parse did); the config
+    // file fills in only when nothing persisted.
+    #[test]
+    fn an_unrelated_true_does_not_enable_fullscreen() {
+        let root = lca_testkit::scratch_path("lca-screen-mode-112");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        std::fs::write(
+            root.join("ui.json"),
+            "{\"fullscreen\": false, \"other\": true}",
+        )
+        .expect("write");
+        assert_eq!(initial_screen_mode(&root, Some(true)), (false, None));
+        std::fs::remove_file(root.join("ui.json")).expect("remove");
+        assert_eq!(initial_screen_mode(&root, Some(true)), (true, None));
+        assert_eq!(initial_screen_mode(&root, Some(false)), (false, None));
+        assert_eq!(initial_screen_mode(&root, None), (false, None));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: gh #112 - malformed persistence falls back and says so
+    // loudly instead of substring-matching its way fullscreen.
+    #[test]
+    fn malformed_persistence_falls_back_with_a_warning() {
+        let root = lca_testkit::scratch_path("lca-screen-mode-bad");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        for body in ["not json", "{\"fullscreen\": \"yes\"}", "{}"] {
+            std::fs::write(root.join("ui.json"), body).expect("write");
+            let (mode, warning) = initial_screen_mode(&root, None);
+            assert!(!mode, "scrollback fallback: {body}");
+            assert!(
+                warning.as_deref().unwrap_or_default().contains("ui.json"),
+                "loud: {body}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

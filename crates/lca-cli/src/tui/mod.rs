@@ -90,6 +90,8 @@ pub(crate) struct Ui {
     cwd: PathBuf,
     /// The data directory (grant store, credentials, sessions).
     data: PathBuf,
+    /// This session's temp dir (gh #160).
+    temp_dir: PathBuf,
     /// The command line's flag layer (gh #30): re-read with the config
     /// whenever the `/settings` selector asks for rows, so a flag-set
     /// value keeps its `flag` source after a write.
@@ -223,11 +225,12 @@ pub fn run(
         );
         return Ok(crate::exit::USAGE);
     }
-    let _temp_guard = crate::SessionTempGuard;
     let ui = Arc::new(Ui::new(
         cwd, resume, yolo, model, initial, allow_host, flags,
     )?);
-    crate::init_session_temp(&ui.session_id());
+    // Gh #160: the guard owns this session's temp dir (resolved and
+    // validated inside `Ui::new`); a switch resolves the next one.
+    let _temp_guard = crate::SessionTempGuard(ui.temp_dir().to_path_buf());
     let options = ui.options();
     let runner = ui.turn_runner();
     let result = lca_ui::run(options, runner);
@@ -554,6 +557,9 @@ impl Ui {
             slot: dialog_slot.clone(),
         })));
 
+        // Gh #160: this session's temp dir resolves here, from this
+        // session - creation failures fail startup, never silently.
+        let temp_dir = crate::ensure_session_temp(&data, &session_id)?;
         let mut registry = load_registry(
             cwd,
             &config,
@@ -562,6 +568,7 @@ impl Ui {
             &grants,
             &store,
             &current_session,
+            &temp_dir,
         );
 
         // FR-PROV-6: the configured provider resolves to an enabled handle,
@@ -618,6 +625,13 @@ impl Ui {
                  request will ask you to approve it; a script passes --allow-host {host}"
             ));
         }
+        // Gh #112: malformed screen-mode persistence falls back and
+        // says so on the transcript head (never a silent substring).
+        if let (_, Some(warning)) =
+            crate::tui::hooks::initial_screen_mode(&data, config.ui_fullscreen())
+        {
+            initial_head.push(warning);
+        }
         // `--model <pattern>[:thinking]` resolves against the provider's
         // list the way pi's resolver does (EFG-041), inside `--provider`'s
         // scope when a profile is named; the `:thinking` suffix becomes
@@ -654,6 +668,7 @@ impl Ui {
             cwd,
             shared_prompt.clone(),
             &grants,
+            &temp_dir,
         );
         let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = provider_backend
             .clone()
@@ -715,6 +730,7 @@ impl Ui {
         Ok(Ui {
             cwd: cwd.to_path_buf(),
             data,
+            temp_dir: temp_dir.clone(),
             flags: flags.clone(),
             store,
             config,
@@ -764,13 +780,10 @@ impl Ui {
         })
     }
 
-    /// The session the interface is showing, for the temp-dir setup.
-    fn session_id(&self) -> String {
-        self.current_session
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .id()
-            .to_string()
+    /// This session's temp dir (gh #160), resolved and validated at
+    /// construction; the guard in `run` owns it.
+    fn temp_dir(&self) -> &std::path::Path {
+        &self.temp_dir
     }
 
     /// The close-out: let hooks flush state, then close the session.
@@ -909,6 +922,7 @@ fn initial_view(
 /// Load every extension: installed first (an installed copy shadows the
 /// bundled one), then the native-linked first-party set, then the bundled
 /// provider (ADR-0013).
+#[allow(clippy::too_many_arguments)] // one more explicit than a regroup: every arg is used once, at one call site.
 fn load_registry(
     cwd: &Path,
     config: &Config,
@@ -917,6 +931,7 @@ fn load_registry(
     grants: &Arc<Mutex<GrantStore>>,
     store: &Arc<SessionStore>,
     session_cell: &Arc<Mutex<Session>>,
+    temp: &Path,
 ) -> ExtensionRegistry {
     // The one assembly, shared with headless mode and `--list-models`
     // (gh #8): only the stats source differs, and a session's own reads
@@ -936,11 +951,13 @@ fn load_registry(
                 .clone();
             session_stats(&stats_store, &session)
         }),
+        temp,
     )
 }
 
 /// Register the bundled compaction strategy and return its backend.
 #[cfg(feature = "bundled-compaction-default")]
+#[allow(clippy::too_many_arguments)] // one more explicit than a regroup: every arg is used once, at one call site.
 fn register_compaction(
     registry: &mut ExtensionRegistry,
     provider: &Arc<dyn Provider>,
@@ -949,6 +966,7 @@ fn register_compaction(
     cwd: &Path,
     shared_prompt: SharedPrompt,
     grants: &Arc<Mutex<GrantStore>>,
+    temp: &Path,
 ) -> Option<Arc<lca_core::ext_provider::ProviderBackend>> {
     let backend = Arc::new(lca_core::ext_provider::ProviderBackend::new(
         provider.clone(),
@@ -963,6 +981,7 @@ fn register_compaction(
         grants.clone(),
         // No `resources/` bag: a compaction strategy carries code.
         lca_tools::ResourceSource::None,
+        temp,
     );
     cap.set_completion(backend.clone());
     registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
@@ -979,6 +998,7 @@ fn register_compaction(
     _cwd: &Path,
     _shared_prompt: SharedPrompt,
     _grants: &Arc<Mutex<GrantStore>>,
+    _temp: &Path,
 ) -> Option<Arc<lca_core::ext_provider::ProviderBackend>> {
     None
 }

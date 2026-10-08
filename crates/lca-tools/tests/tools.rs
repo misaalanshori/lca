@@ -64,6 +64,7 @@ fn the_shell_description_names_the_resolved_interpreter() {
         kind: lca_tools::ShellKind::Bash,
         explicit: false,
         transport: lca_tools::Transport::Argv,
+        command_prefix: None,
     };
     let spec = ToolExecutor::specs(Some(&shell))
         .into_iter()
@@ -1105,6 +1106,7 @@ fn the_shell_description_has_no_multi_space_runs() {
             kind: lca_tools::ShellKind::Bash,
             explicit: false,
             transport: lca_tools::Transport::Argv,
+            command_prefix: None,
         }),
     ] {
         let description = ToolExecutor::specs(shell)

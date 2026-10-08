@@ -358,6 +358,7 @@ fn the_posix_corpus_runs_byte_exact_through_sh() {
         kind: Kind::Sh,
         explicit: false,
         transport: lca_tools::Transport::Argv,
+        command_prefix: None,
     };
     run_family(&shell, Family::Posix, "sh");
 }
@@ -375,6 +376,7 @@ fn the_posix_corpus_runs_byte_exact_through_bash_when_present() {
         kind: Kind::Bash,
         explicit: true,
         transport: lca_tools::Transport::Argv,
+        command_prefix: None,
     };
     run_family(&shell, Family::Posix, "bash");
 }
@@ -404,4 +406,31 @@ fn the_corpus_runs_byte_exact_on_every_windows_shell() {
         }
     }
     assert!(ran > 0, "no shell was available to run the corpus");
+}
+
+// Verifies: gh #133 - a configured prefix exporting a variable is
+// visible to the command, through the real executor.
+#[cfg(unix)]
+#[test]
+fn a_command_prefix_export_is_visible_to_the_command() {
+    use lca_tools::shell::Kind;
+    let shell = lca_tools::shell::Shell {
+        program: "sh".to_string(),
+        kind: Kind::Sh,
+        explicit: false,
+        transport: lca_tools::Transport::Argv,
+        command_prefix: Some("export LCA_PREFIX_PROBE=visible".to_string()),
+    };
+    let dir = scratch("prefix-probe");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let (outcome, output) = run(&shell, &dir, "echo $LCA_PREFIX_PROBE");
+    assert!(
+        matches!(outcome, ExecOutcome::Exit { code: 0 }),
+        "prefix + command run: {outcome:?}"
+    );
+    let text = String::from_utf8_lossy(&output).into_owned();
+    assert!(
+        text.contains("visible"),
+        "the prefix export reached the command: {text:?}"
+    );
 }

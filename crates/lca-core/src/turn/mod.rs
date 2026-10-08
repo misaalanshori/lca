@@ -684,6 +684,14 @@ impl Agent<'_> {
             ));
         }
         for (index, call) in response.calls.iter().enumerate() {
+            // Gh #128: the record names who owns the tool - an
+            // extension-registered name records `Extension`, the same
+            // `tool_owner` question dispatch asks below.
+            let source = if self.config.extensions.tool_owner(&call.name).is_some() {
+                ToolSource::Extension
+            } else {
+                ToolSource::Builtin
+            };
             if let Err(err) = self.store.append(
                 self.session,
                 Record::ToolCall {
@@ -693,7 +701,7 @@ impl Agent<'_> {
                     call_id: call.call_id.clone(),
                     name: call.name.clone(),
                     arguments: call.arguments.clone(),
-                    source: ToolSource::Builtin,
+                    source,
                 },
             ) {
                 return Err(self.fail(

@@ -231,6 +231,8 @@ pub(super) fn run(cmd: &AuthCmd, allow_host: &[String]) -> i32 {
     let shared_prompt = lca_permissions::SharedPrompt::default();
     shared_prompt.set(Arc::new(std::sync::Mutex::new(prompt.clone())));
     let stats: lca_ext_native::StatsSource = Arc::new(String::new);
+    // No session here (a credential check precedes any session): the
+    // system temp dir, explicitly (gh #160).
     let registry = crate::registry::assemble(
         &cwd,
         &config,
@@ -238,6 +240,7 @@ pub(super) fn run(cmd: &AuthCmd, allow_host: &[String]) -> i32 {
         lca_permissions::SharedDialogs::default(),
         &grants,
         stats,
+        &std::env::temp_dir(),
     );
     match cmd {
         AuthCmd::Check {

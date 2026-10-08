@@ -11,6 +11,15 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+mod keys;
+
+pub use keys::{
+    CODEBLOCK_BORDERS, KNOWN_KEYS, PERMISSION_MODES, SHELL_TOOLS, THINKING_LEVELS,
+    THINKING_VISIBILITIES,
+};
+
+use keys::{TypedValue, csv, parse_typed};
+
 mod keybindings;
 
 pub use keybindings::load_keybindings_file;
@@ -50,26 +59,6 @@ pub enum ColorMode {
     /// Never emit color (FR-UI-5).
     Never,
 }
-
-/// The thinking levels a model can be asked for (`thinking`), matching pi's
-/// `ThinkingLevel` vocabulary (`packages/agent/src/types.ts`). `off` disables
-/// reasoning; the rest scale it. An unknown value is refused at load.
-pub const THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-/// The `shell.tool` vocabulary (ADR-0041): `auto` plus each interpreter the
-/// ladder knows how to resolve exactly.
-pub const SHELL_TOOLS: &[&str] = &["auto", "bash", "pwsh", "powershell", "cmd"];
-
-/// The `permissions.mode` vocabulary (ADR-0042).
-pub const PERMISSION_MODES: &[&str] = &["ask", "yolo"];
-
-/// The shapes `markdown.codeblock_border` accepts (gh #32).
-pub const CODEBLOCK_BORDERS: &[&str] = &["full", "horizontal", "none"];
-
-/// The `ui.thinking` vocabulary (R6): how much of a reasoning run
-/// the transcript shows, separate from `thinking`'s effort level.
-pub const THINKING_VISIBILITIES: &[&str] = &["snippet", "full", "hidden"];
-
 impl std::str::FromStr for ColorMode {
     type Err = String;
 
@@ -153,11 +142,13 @@ pub struct Config {
     cache_noise_floor_tokens: u64,
     extensions_log_limit_bytes: u64,
     update_check: Option<bool>,
+    ui_fullscreen: Option<bool>,
     ui_color: ColorMode,
     ui_theme: Option<String>,
     thinking: Option<String>,
     shell_tool: Option<String>,
     shell_path: Option<String>,
+    shell_command_prefix: Option<String>,
     permissions_mode: Option<String>,
     thinking_visibility: Option<String>,
     // gh #43: matched skill-text injection is opt-in (default OFF);
@@ -206,11 +197,13 @@ impl Default for Config {
             cache_noise_floor_tokens: 1024,
             extensions_log_limit_bytes: 4096,
             update_check: None,
+            ui_fullscreen: None,
             ui_color: ColorMode::Auto,
             ui_theme: None,
             thinking: None,
             shell_tool: None,
             shell_path: None,
+            shell_command_prefix: None,
             permissions_mode: None,
             thinking_visibility: None,
             skills_inject_matched: false,
@@ -236,36 +229,6 @@ fn label_for(source: MergeSource) -> &'static str {
 fn dotted_to_env_key(dotted: &str) -> String {
     format!("LCA_{}", dotted.to_ascii_uppercase().replace('.', "_"))
 }
-
-/// Every configuration key an `LCA_` environment variable can set.
-/// `docs/configuration.md` documents two more that have no environment
-/// form because they are tables, not single values: `models.thinking_levels`
-/// (per-model lists) and `permissions.proposals`.
-pub const KNOWN_KEYS: &[&str] = &[
-    "provider",
-    "model",
-    "models.enabled",
-    "compaction.threshold",
-    "compaction.enabled",
-    "compaction.reserve_tokens",
-    "compaction.keep_recent_tokens",
-    "provider.retry_limit",
-    "tool.timeout_seconds",
-    "tool.result_limit_bytes",
-    "tool.max_iterations",
-    "cache.noise_floor_tokens",
-    "extensions.log_limit_bytes",
-    "update.check",
-    "ui.color",
-    "ui.theme",
-    "thinking",
-    "shell.tool",
-    "shell.path",
-    "permissions.mode",
-    "ui.thinking",
-    "markdown.codeblock_border",
-];
-
 /// Look a dotted key up in a TOML table: literal keys (`"tool.timeout_seconds"`)
 /// first, then section form (`[tool] timeout_seconds = ...`). A key path that
 /// hits a non-table midway does not exist in section form.
@@ -287,14 +250,6 @@ fn table_value<'a>(table: &'a toml::Table, dotted: &str) -> Option<&'a toml::Val
 
 /// Split a flag/environment comma list into patterns: trimmed, empties
 /// dropped, so `a, b` and `a,b` are one scope.
-fn csv(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
 fn type_name(value: &toml::Value) -> &'static str {
     match value {
         toml::Value::String(..) => "a string",
@@ -319,122 +274,6 @@ fn read_table(path: &Path, label: &'static str) -> Result<toml::Table, ConfigErr
             path: path.to_path_buf(),
             source: Box::new(source),
         })
-}
-
-fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigError> {
-    let invalid = |reason: String| ConfigError::InvalidValue {
-        key: key.to_string(),
-        label: label.to_string(),
-        reason,
-    };
-    match key {
-        "provider" | "model" => Ok(TypedValue::Text(raw.to_string())),
-        // The flag/environment form of a list key is a comma list.
-        "models.enabled" => Ok(TypedValue::List(csv(raw))),
-        "update.check" => raw
-            .parse::<bool>()
-            .map(TypedValue::Bool)
-            .map_err(|_| invalid(format!("expected a boolean, got `{raw}`"))),
-        "compaction.threshold" => {
-            let value: f64 = raw
-                .parse()
-                .map_err(|_| invalid(format!("expected a number, got `{raw}`")))?;
-            if !(0.0..=1.0).contains(&value) {
-                return Err(invalid(format!(
-                    "expected a fraction in 0.0..=1.0, got {value}"
-                )));
-            }
-            Ok(TypedValue::Number(value))
-        }
-        "ui.color" => Ok(TypedValue::Color(
-            raw.parse::<ColorMode>().map_err(invalid)?,
-        )),
-        "ui.theme" => Ok(TypedValue::Text(raw.to_string())),
-        "shell.path" => Ok(TypedValue::Text(raw.to_string())),
-        "markdown.codeblock_border" => {
-            if CODEBLOCK_BORDERS.contains(&raw) {
-                Ok(TypedValue::Text(raw.to_string()))
-            } else {
-                Err(invalid(format!(
-                    "expected one of {}, got `{raw}`",
-                    CODEBLOCK_BORDERS.join(", ")
-                )))
-            }
-        }
-        "ui.thinking" => {
-            if THINKING_VISIBILITIES.contains(&raw) {
-                Ok(TypedValue::Text(raw.to_string()))
-            } else {
-                Err(invalid(format!(
-                    "expected one of {}, got `{raw}`",
-                    THINKING_VISIBILITIES.join(", ")
-                )))
-            }
-        }
-        "skills.inject_matched" => raw
-            .parse::<bool>()
-            .map(TypedValue::Bool)
-            .map_err(|_| invalid(format!("expected a boolean, got `{raw}`"))),
-        "compaction.enabled" => raw
-            .parse::<bool>()
-            .map(TypedValue::Bool)
-            .map_err(|_| invalid(format!("expected a boolean, got `{raw}`"))),
-        "permissions.mode" => {
-            if PERMISSION_MODES.contains(&raw) {
-                Ok(TypedValue::Text(raw.to_string()))
-            } else {
-                Err(invalid(format!(
-                    "expected one of {}, got `{raw}`",
-                    PERMISSION_MODES.join(", ")
-                )))
-            }
-        }
-        "shell.tool" => {
-            if SHELL_TOOLS.contains(&raw) {
-                Ok(TypedValue::Text(raw.to_string()))
-            } else {
-                Err(invalid(format!(
-                    "expected one of {}, got `{raw}`",
-                    SHELL_TOOLS.join(", ")
-                )))
-            }
-        }
-        "thinking" => {
-            if THINKING_LEVELS.contains(&raw) {
-                Ok(TypedValue::Text(raw.to_string()))
-            } else {
-                Err(invalid(format!(
-                    "expected one of {}, got `{raw}`",
-                    THINKING_LEVELS.join(", ")
-                )))
-            }
-        }
-        "provider.retry_limit"
-        | "tool.timeout_seconds"
-        | "tool.result_limit_bytes"
-        | "tool.max_iterations"
-        | "cache.noise_floor_tokens"
-        | "extensions.log_limit_bytes"
-        | "compaction.reserve_tokens"
-        | "compaction.keep_recent_tokens" => raw
-            .parse::<u64>()
-            .map(TypedValue::Count)
-            .map_err(|_| invalid(format!("expected a non-negative integer, got `{raw}`"))),
-        other => Err(invalid(format!("unknown configuration key `{other}`"))),
-    }
-}
-
-enum TypedValue {
-    Text(String),
-    /// A list of strings (`models.enabled`), whose flag/environment form
-    /// is a comma list.
-    List(Vec<String>),
-    /// Per-model allowed thinking levels (`models.thinking_levels`).
-    ThinkingLevels(BTreeMap<String, Vec<String>>),
-    Count(u64),
-    Number(f64),
-    Bool(bool),
-    Color(ColorMode),
 }
 
 impl Config {
@@ -462,11 +301,13 @@ impl Config {
             "cache.noise_floor_tokens",
             "extensions.log_limit_bytes",
             "update.check",
+            "ui.fullscreen",
             "ui.color",
             "ui.theme",
             "thinking",
             "shell.tool",
             "shell.path",
+            "shell.command_prefix",
             "permissions.mode",
             "ui.thinking",
             "skills.inject_matched",
@@ -600,7 +441,7 @@ impl Config {
                     };
                     this.apply(key.to_string(), TypedValue::List(list), source)?;
                 }
-                "update.check" | "compaction.enabled" => {
+                "update.check" | "compaction.enabled" | "ui.fullscreen" => {
                     let flag = value.as_bool().ok_or_else(|| {
                         invalid(format!("expected a boolean, got {}", type_name(&value)))
                     })?;
@@ -627,7 +468,7 @@ impl Config {
                     let color: ColorMode = text.parse().map_err(invalid)?;
                     this.apply(key.to_string(), TypedValue::Color(color), source)?;
                 }
-                "ui.theme" | "shell.path" => {
+                "ui.theme" | "shell.path" | "shell.command_prefix" => {
                     let text = value.as_str().ok_or_else(|| {
                         invalid(format!("expected a string, got {}", type_name(&value)))
                     })?;
@@ -744,11 +585,13 @@ impl Config {
             "cache.noise_floor_tokens",
             "extensions.log_limit_bytes",
             "update.check",
+            "ui.fullscreen",
             "ui.color",
             "ui.theme",
             "thinking",
             "shell.tool",
             "shell.path",
+            "shell.command_prefix",
             "permissions.mode",
             "ui.thinking",
             "skills.inject_matched",
@@ -802,10 +645,12 @@ impl Config {
                 self.extensions_log_limit_bytes = v
             }
             ("update.check", TypedValue::Bool(v)) => self.update_check = Some(v),
+            ("ui.fullscreen", TypedValue::Bool(v)) => self.ui_fullscreen = Some(v),
             ("ui.color", TypedValue::Color(v)) => self.ui_color = v,
             ("ui.theme", TypedValue::Text(v)) => self.ui_theme = Some(v),
             ("shell.tool", TypedValue::Text(v)) => self.shell_tool = Some(v),
             ("shell.path", TypedValue::Text(v)) => self.shell_path = Some(v),
+            ("shell.command_prefix", TypedValue::Text(v)) => self.shell_command_prefix = Some(v),
             ("permissions.mode", TypedValue::Text(v)) => self.permissions_mode = Some(v),
             ("ui.thinking", TypedValue::Text(v)) => self.thinking_visibility = Some(v),
             ("skills.inject_matched", TypedValue::Bool(v)) => self.skills_inject_matched = v,
@@ -937,6 +782,12 @@ impl Config {
         self.extensions_log_limit_bytes
     }
 
+    /// Fullscreen (alt-screen) renderer (`ui.fullscreen`), or `None` when
+    /// neither the config nor the caller names one (gh #112).
+    pub fn ui_fullscreen(&self) -> Option<bool> {
+        self.ui_fullscreen
+    }
+
     /// Daily version check on or off (FR-CFG-6); the default follows the mode.
     pub fn update_check(&self, headless: bool) -> bool {
         self.update_check.unwrap_or(!headless)
@@ -968,6 +819,12 @@ impl Config {
     /// An exact interpreter path (`shell.path`), when set (ADR-0041).
     pub fn shell_path(&self) -> Option<&str> {
         self.shell_path.as_deref()
+    }
+
+    /// A prefix prepended to every shell command (`shell.command_prefix`),
+    /// when set (gh #133, pi's `shellCommandPrefix`).
+    pub fn shell_command_prefix(&self) -> Option<&str> {
+        self.shell_command_prefix.as_deref()
     }
 
     /// `markdown.codeblock_border` (gh #32): `full` (the shipped
@@ -1080,6 +937,12 @@ impl Config {
                     .unwrap_or_else(|| "<mode default>".to_string()),
             ),
             (
+                "ui.fullscreen",
+                self.ui_fullscreen
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "<unset>".to_string()),
+            ),
+            (
                 "ui.color",
                 match self.ui_color {
                     ColorMode::Auto => "auto",
@@ -1108,6 +971,12 @@ impl Config {
                 self.shell_path
                     .clone()
                     .unwrap_or_else(|| "<ladder>".to_string()),
+            ),
+            (
+                "shell.command_prefix",
+                self.shell_command_prefix
+                    .clone()
+                    .unwrap_or_else(|| "<unset>".to_string()),
             ),
             (
                 "permissions.mode",
