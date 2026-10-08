@@ -135,6 +135,9 @@ pub struct Chat {
     pending_ctrl_x: bool,
     /// A pending prompt-jump target (a document line index).
     pub(crate) jump_target: Option<usize>,
+    /// When the last lone Escape landed (gh #132): a second one within
+    /// pi's 500 ms window acts (tree/fork/none), anything else re-arms.
+    pub(crate) last_escape: Option<std::time::Instant>,
     /// The transcript's line count at the last frame (gh #35): scroll is
     /// measured from the live bottom, so growth is what tells a new line
     /// from a re-wrap when holding the reader's place.
@@ -279,6 +282,7 @@ impl Chat {
             screen_mode,
             pending_ctrl_x: false,
             jump_target: None,
+            last_escape: None,
             last_transcript_len: None,
             last_render_width: 0,
             search: None,
@@ -755,6 +759,21 @@ impl Chat {
                 self.world.ctrl_c_armed = true;
                 Action::Continue
             };
+        }
+        // Gh #132: pi's double-escape sits ahead of the interrupt arm:
+        // a lone Escape with an empty editor re-arms the 500 ms window
+        // (the editor consumed its own Escapes on the way here: popup,
+        // search, non-empty buffer). A running turn keeps its cancel
+        // semantics, and a non-empty editor keeps the disarm below, so
+        // this never fires mid-turn or off a clearing key.
+        if !self.turn_running
+            && keys::parse_key(data).as_deref() == Some("escape")
+            && self.editor.text().trim().is_empty()
+        {
+            // The interrupt arm's disarm rides along: every Escape
+            // still stands down an armed Ctrl+C.
+            self.world.ctrl_c_armed = false;
+            return self.double_escape();
         }
         if self.keybindings.matches(data, "app.interrupt") {
             return if self.turn_running {

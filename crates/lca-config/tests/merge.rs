@@ -753,3 +753,33 @@ fn quiet_startup_defaults_to_show_and_parses_three_ways() {
     .expect_err("anything else is refused at load");
     assert!(err.to_string().contains("ui.quiet_startup"), "{err}");
 }
+
+// Verifies: gh #132 - double-escape and tree-filter keys default to
+// pi's values, parse their domains, and refuse anything else.
+#[test]
+fn double_escape_and_tree_filter_parse() {
+    assert_eq!(Config::defaults().ui_double_escape_action(), "tree");
+    assert_eq!(Config::defaults().ui_tree_filter_mode(), "default");
+    let dir = scratch("double-escape");
+    write(
+        &dir.join("user.toml"),
+        "ui.double_escape_action = \"fork\"\nui.tree_filter_mode = \"user-only\"\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.ui_double_escape_action(), "fork");
+    assert_eq!(config.ui_tree_filter_mode(), "user-only");
+    write(
+        &dir.join("user.toml"),
+        "ui.double_escape_action = \"sometimes\"\n",
+    );
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("outside the domain is refused");
+    assert!(err.to_string().contains("ui.double_escape_action"), "{err}");
+}

@@ -125,22 +125,7 @@ impl Chat {
                 return Action::Continue;
             }
             "tree" => {
-                let entries = self
-                    .world
-                    .options
-                    .hooks
-                    .session_tree
-                    .as_ref()
-                    .map(|tree| tree())
-                    .unwrap_or_default();
-                if entries.is_empty() {
-                    self.world.notice = Some("no branches yet".to_string());
-                } else {
-                    self.tree_picker = Some(TreePicker {
-                        entries,
-                        selected: 0,
-                    });
-                }
+                self.open_tree_picker();
                 return Action::Continue;
             }
             "resume" => {
@@ -326,6 +311,59 @@ impl Chat {
         Some(crate::state::sanitize_block(&lca_tools::prompts::expand(
             &template, argument,
         )))
+    }
+
+    /// Open the `/tree` branch picker (FR-UI-16, gh #132): an empty
+    /// list names it instead of opening.
+    pub fn open_tree_picker(&mut self) {
+        let entries = self
+            .world
+            .options
+            .hooks
+            .session_tree
+            .as_ref()
+            .map(|tree| tree())
+            .unwrap_or_default();
+        if entries.is_empty() {
+            self.world.notice = Some("no branches yet".to_string());
+        } else {
+            self.tree_picker = Some(TreePicker {
+                entries,
+                selected: 0,
+            });
+        }
+    }
+
+    /// Pi's double-escape window in milliseconds.
+    pub(crate) const DOUBLE_ESCAPE_MS: u64 = 500;
+
+    /// Act on a lone Escape with an empty editor (gh #132): the second
+    /// one inside the window opens the tree or the fork picker per the
+    /// host's action (`tree` when the host says nothing, pi's default);
+    /// `none` never acts. Either way the window re-arms.
+    pub(crate) fn double_escape(&mut self) -> Action {
+        let armed = self
+            .last_escape
+            .is_some_and(|at| at.elapsed().as_millis() < Self::DOUBLE_ESCAPE_MS as u128);
+        self.last_escape = Some(std::time::Instant::now());
+        if !armed {
+            return Action::Continue;
+        }
+        self.last_escape = None;
+        let action = self
+            .world
+            .options
+            .hooks
+            .double_escape_action
+            .as_ref()
+            .map(|get| get())
+            .unwrap_or_else(|| "tree".to_string());
+        match action.as_str() {
+            "fork" => self.open_fork_picker(),
+            "none" => {}
+            _ => self.open_tree_picker(),
+        }
+        Action::Continue
     }
 
     /// Open the session picker over the current session (gh #110:

@@ -342,6 +342,11 @@ pub type SaveScopedModels = Arc<dyn Fn(Vec<String>) -> String + Send + Sync>;
 /// A hook rather than a snapshot, so a file added mid-session works.
 pub type PromptTemplates = Arc<dyn Fn() -> Vec<lca_tools::prompts::PromptTemplate> + Send + Sync>;
 
+/// The double-escape action (gh #132, pi's `doubleEscapeAction`): what
+/// Esc Esc with an empty editor does. A hook so a `/settings` cycle
+/// applies without a restart; absent means pi's default (`tree`).
+pub type DoubleEscapeAction = Arc<dyn Fn() -> String + Send + Sync>;
+
 /// The models the `/model` picker should offer *now*. A hook rather than the
 /// startup snapshot, so a login's model discovery (which can only succeed
 /// after the endpoint's ad-hoc grant) reaches the picker without a restart.
@@ -476,6 +481,8 @@ pub struct UiHooks {
     /// live, so a new file works without a restart. Absent keeps the
     /// unknown-command refusal.
     pub prompt_templates: Option<PromptTemplates>,
+    /// What Esc Esc does with an empty editor (gh #132).
+    pub double_escape_action: Option<DoubleEscapeAction>,
     /// One step of the model cycle for the cycle keys (`true` = forward).
     pub cycle_model: Option<ModelCycle>,
     /// `Ctrl+S` in the model picker: persist the highlighted model as the

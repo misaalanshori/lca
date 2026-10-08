@@ -458,3 +458,45 @@ fn changelog_shows_the_latest_released_section() {
         "the latest release, not the work in progress: {notice:.200}"
     );
 }
+
+// Verifies: gh #132 - Esc Esc with an empty editor opens the tree
+// (pi's double-escape, 500 ms window); one Esc only arms.
+#[test]
+fn double_escape_opens_the_tree() {
+    let mut opts = options();
+    opts.hooks.session_tree = Some(Arc::new(|| {
+        vec![("root".to_string(), "root (session)".to_string())]
+    }));
+    opts.hooks.double_escape_action = Some(Arc::new(|| "tree".to_string()));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    chat.handle_key("\x1b");
+    assert!(chat.tree_picker.is_none(), "the first escape only arms");
+    chat.handle_key("\x1b");
+    assert!(chat.tree_picker.is_some(), "the second escape acts");
+}
+
+// Verifies: gh #132 - the fork action opens the fork picker instead,
+// and none does nothing at all.
+#[test]
+fn double_escape_fork_and_none() {
+    let mut opts = options();
+    opts.hooks.double_escape_action = Some(Arc::new(|| "fork".to_string()));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    chat.transcript.push_user("branch me");
+    chat.handle_key("\x1b");
+    chat.handle_key("\x1b");
+    assert!(chat.fork_picker.is_some(), "fork opens the message picker");
+
+    let mut opts = options();
+    opts.hooks.session_tree = Some(Arc::new(|| {
+        vec![("root".to_string(), "root (session)".to_string())]
+    }));
+    opts.hooks.double_escape_action = Some(Arc::new(|| "none".to_string()));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    chat.handle_key("\x1b");
+    chat.handle_key("\x1b");
+    assert!(
+        chat.tree_picker.is_none() && chat.fork_picker.is_none(),
+        "none opens nothing"
+    );
+}

@@ -225,6 +225,11 @@ impl Ui {
                             "tool.edit_requires_read",
                             &["false", "true"],
                         ),
+                        row(
+                            "Terminal & Execution",
+                            "ui.double_escape_action",
+                            lca_config::DOUBLE_ESCAPE_ACTIONS,
+                        ),
                         row("Data & Updates", "cache.noise_floor_tokens", &[]),
                         row("Data & Updates", "extensions.log_limit_bytes", &[]),
                         row("Data & Updates", "update.check", &["false", "true"]),
@@ -304,6 +309,16 @@ impl Ui {
                 let cwd = self.cwd.clone();
                 Some(Arc::new(move || {
                     lca_tools::prompts::collect(&crate::prompt_roots(&cwd))
+                }))
+            },
+            double_escape_action: {
+                let ui = self.clone();
+                // Reads the live cell: a `/settings` cycle applies to
+                // the next Esc Esc without a restart.
+                Some(Arc::new(move || {
+                    crate::lock(&ui.config)
+                        .ui_double_escape_action()
+                        .to_string()
                 }))
             },
             scoped_models: {

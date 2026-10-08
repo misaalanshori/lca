@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 mod keys;
 
 pub use keys::{
-    CODEBLOCK_BORDERS, KNOWN_KEYS, PERMISSION_MODES, SHELL_TOOLS, THINKING_LEVELS,
-    THINKING_VISIBILITIES,
+    CODEBLOCK_BORDERS, DOUBLE_ESCAPE_ACTIONS, KNOWN_KEYS, PERMISSION_MODES, SHELL_TOOLS,
+    THINKING_LEVELS, THINKING_VISIBILITIES, TREE_FILTER_MODES,
 };
 
 use keys::{TypedValue, csv, parse_typed};
@@ -145,6 +145,8 @@ pub struct Config {
     update_check: Option<bool>,
     ui_fullscreen: Option<bool>,
     ui_quiet_startup: String,
+    ui_double_escape_action: String,
+    ui_tree_filter_mode: String,
     ui_color: ColorMode,
     ui_theme: Option<String>,
     thinking: Option<String>,
@@ -204,6 +206,10 @@ impl Default for Config {
             update_check: None,
             ui_fullscreen: None,
             ui_quiet_startup: "false".to_string(),
+            // gh #132: pi's defaults; the filter documents its no-op
+            // (LCA's tree lists sessions, nothing to filter).
+            ui_double_escape_action: "tree".to_string(),
+            ui_tree_filter_mode: "default".to_string(),
             ui_color: ColorMode::Auto,
             ui_theme: None,
             thinking: None,
@@ -310,6 +316,8 @@ impl Config {
             "update.check",
             "ui.fullscreen",
             "ui.quiet_startup",
+            "ui.double_escape_action",
+            "ui.tree_filter_mode",
             "ui.color",
             "ui.theme",
             "thinking",
@@ -448,6 +456,21 @@ impl Config {
                         }
                     };
                     this.apply(key.to_string(), TypedValue::List(list), source)?;
+                }
+                "ui.double_escape_action" | "ui.tree_filter_mode" => {
+                    // The domain lives here too, not just in the
+                    // flag/env parser: a file value skips that path.
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    let ok = match key {
+                        "ui.double_escape_action" => DOUBLE_ESCAPE_ACTIONS.contains(&text),
+                        _ => TREE_FILTER_MODES.contains(&text),
+                    };
+                    if !ok {
+                        return Err(invalid(format!("unexpected {key} value `{text}`")));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
                 }
                 "ui.quiet_startup" => {
                     // bool | "header": TOML true/false or the string.
@@ -613,6 +636,8 @@ impl Config {
             "update.check",
             "ui.fullscreen",
             "ui.quiet_startup",
+            "ui.double_escape_action",
+            "ui.tree_filter_mode",
             "ui.color",
             "ui.theme",
             "thinking",
@@ -675,6 +700,8 @@ impl Config {
             ("tool.edit_requires_read", TypedValue::Bool(v)) => self.tool_edit_requires_read = v,
             ("ui.fullscreen", TypedValue::Bool(v)) => self.ui_fullscreen = Some(v),
             ("ui.quiet_startup", TypedValue::Text(v)) => self.ui_quiet_startup = v,
+            ("ui.double_escape_action", TypedValue::Text(v)) => self.ui_double_escape_action = v,
+            ("ui.tree_filter_mode", TypedValue::Text(v)) => self.ui_tree_filter_mode = v,
             ("ui.color", TypedValue::Color(v)) => self.ui_color = v,
             ("ui.theme", TypedValue::Text(v)) => self.ui_theme = Some(v),
             ("shell.tool", TypedValue::Text(v)) => self.shell_tool = Some(v),
@@ -838,6 +865,20 @@ impl Config {
         &self.ui_quiet_startup
     }
 
+    /// What Esc Esc with an empty editor does (gh #132, pi's
+    /// `doubleEscapeAction`): `tree`, `fork`, or `none`.
+    pub fn ui_double_escape_action(&self) -> &str {
+        &self.ui_double_escape_action
+    }
+
+    /// Pi's `treeFilterMode` domain, accepted config-error-free (gh
+    /// #132): currently inert by documentation - LCA's `/tree` lists
+    /// sessions, not messages, so there is nothing to filter. Known
+    /// but dead is honest; silently dropping the key would not be.
+    pub fn ui_tree_filter_mode(&self) -> &str {
+        &self.ui_tree_filter_mode
+    }
+
     /// Daily version check on or off (FR-CFG-6); the default follows the mode.
     pub fn update_check(&self, headless: bool) -> bool {
         self.update_check.unwrap_or(!headless)
@@ -997,6 +1038,11 @@ impl Config {
                     .unwrap_or_else(|| "<unset>".to_string()),
             ),
             ("ui.quiet_startup", self.ui_quiet_startup.clone()),
+            (
+                "ui.double_escape_action",
+                self.ui_double_escape_action.clone(),
+            ),
+            ("ui.tree_filter_mode", self.ui_tree_filter_mode.clone()),
             (
                 "ui.color",
                 match self.ui_color {

@@ -25,6 +25,15 @@ pub const CODEBLOCK_BORDERS: &[&str] = &["full", "horizontal", "none"];
 /// the transcript shows, separate from `thinking`'s effort level.
 pub const THINKING_VISIBILITIES: &[&str] = &["snippet", "full", "hidden"];
 
+/// The `ui.double_escape_action` vocabulary (gh #132, pi's
+/// `doubleEscapeAction`).
+pub const DOUBLE_ESCAPE_ACTIONS: &[&str] = &["tree", "fork", "none"];
+
+/// Pi's `treeFilterMode` vocabulary (gh #132): accepted
+/// config-error-free, currently inert (the no-op documents itself in
+/// `docs/configuration.md`).
+pub const TREE_FILTER_MODES: &[&str] = &["default", "no-tools", "user-only", "labeled-only", "all"];
+
 /// Every configuration key an `LCA_` environment variable can set.
 /// `docs/configuration.md` documents two more that have no environment
 /// form because they are tables, not single values: `models.thinking_levels`
@@ -74,6 +83,20 @@ pub(crate) fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValu
         "provider" | "model" => Ok(TypedValue::Text(raw.to_string())),
         // The flag/environment form of a list key is a comma list.
         "models.enabled" => Ok(TypedValue::List(csv(raw))),
+        "ui.double_escape_action" => match raw {
+            _ if DOUBLE_ESCAPE_ACTIONS.contains(&raw) => Ok(TypedValue::Text(raw.to_string())),
+            _ => Err(invalid(format!(
+                "expected {}, got `{raw}`",
+                DOUBLE_ESCAPE_ACTIONS.join(", ")
+            ))),
+        },
+        "ui.tree_filter_mode" => match raw {
+            _ if TREE_FILTER_MODES.contains(&raw) => Ok(TypedValue::Text(raw.to_string())),
+            _ => Err(invalid(format!(
+                "expected {}, got `{raw}`",
+                TREE_FILTER_MODES.join(", ")
+            ))),
+        },
         "ui.quiet_startup" => match raw {
             "true" | "false" | "header" => Ok(TypedValue::Text(raw.to_string())),
             _ => Err(invalid(format!(
