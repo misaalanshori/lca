@@ -1109,3 +1109,23 @@ fn an_unnamed_clone_titles_itself_after_the_parent() {
     let child = store.clone_session(&parent, None).expect("clone");
     assert_eq!(store.meta(&child).expect("meta").title, "Clone of parent");
 }
+
+// Verifies: gh #110 - a session reference opens by path (a directory
+// holding meta.json) as well as by id.
+#[test]
+fn a_session_reference_opens_by_path_or_id() {
+    let store = store("session-ref");
+    let project = scratch("session-ref-project");
+    let session = store.create_session(&project, "ref").expect("create");
+    let by_id = store.session_ref(&project, session.id()).expect("by id");
+    assert_eq!(by_id.id(), session.id());
+    let dir = session
+        .log_path()
+        .parent()
+        .expect("session dir")
+        .to_string_lossy()
+        .into_owned();
+    let by_path = store.session_ref(&project, &dir).expect("by path");
+    assert_eq!(by_path.id(), session.id());
+    assert!(store.session_ref(&project, "nope").is_err(), "unknown");
+}

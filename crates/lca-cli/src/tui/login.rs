@@ -40,7 +40,7 @@ impl Ui {
     fn gather(&self, scope: &[String]) -> Vec<(String, lca_protocol::LoginOption)> {
         let mut out: Vec<(String, lca_protocol::LoginOption)> = Vec::new();
         for name in scope {
-            let Some(handle) = self.registry.provider(name).cloned() else {
+            let Some(handle) = self.registry().provider(name).cloned() else {
                 continue;
             };
             let name = name.clone();
@@ -54,8 +54,11 @@ impl Ui {
         // the file's own grammar (base_url/auth/models) is that
         // extension's preset shape. The default-host filter below it is
         // manifest-driven, never a literal.
-        let needs =
-            crate::provider_needs::provider_needs(&self.registry, &self.data, "openai-compatible");
+        let needs = crate::provider_needs::provider_needs(
+            &self.registry(),
+            &self.data,
+            "openai-compatible",
+        );
         out.extend(crate::login::override_presets(
             &self.preset_overrides,
             "openai-compatible",
@@ -119,7 +122,7 @@ impl Ui {
             .login_wait_since
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
-        let handle = self.registry.provider(target).cloned();
+        let handle = self.registry().provider(target).cloned();
         *self.login_handle.lock().unwrap_or_else(|p| p.into_inner()) = handle;
     }
 
@@ -150,7 +153,7 @@ impl Ui {
         // renders the declared fields and submits the answers, and the
         // extension stores the key and returns its own settings - the
         // custom endpoint included, through its declared preset.
-        let Some(handle) = self.registry.provider(&target).cloned() else {
+        let Some(handle) = self.registry().provider(&target).cloned() else {
             return LoginNext::Message(format!("`{target}` cannot log in"));
         };
         let answer = lca_protocol::LoginAnswer {
@@ -221,7 +224,7 @@ impl Ui {
         // submit's own pairs come first (a preset login stores its base
         // URL under its profile, which the default-profile read below
         // never sees - gh #21), then the configured default endpoint.
-        let needs = crate::provider_needs::provider_needs(&self.registry, &self.data, &target);
+        let needs = crate::provider_needs::provider_needs(&self.registry(), &self.data, &target);
         if let Some(host) = login_endpoint_hosts(&settings, needs.as_ref())
             .into_iter()
             .find(|host| {
@@ -459,7 +462,7 @@ impl Ui {
             // opens, with the host's universal entry attributed to the
             // configured provider. Refusing here would lock the interface
             // out of its own settings surface.
-            let names = ui.registry.provider_names();
+            let names = ui.registry().provider_names();
             // `/login <provider>` scopes the picker to that provider. A
             // bare `/login`, or an argument naming an option id, needs the
             // full list (an id may belong to any enabled provider).
@@ -505,7 +508,7 @@ impl Ui {
                     .iter()
                     .filter(|(owner, _)| owner.as_str() == argument)
                     .count(),
-            ) && let Some(handle) = ui.registry.provider(argument).cloned()
+            ) && let Some(handle) = ui.registry().provider(argument).cloned()
             {
                 ui.spawn_identity_login(handle);
                 return LoginNext::Message(WAIT_LABEL.to_string());
@@ -640,7 +643,7 @@ impl Ui {
         if target != provider {
             return;
         }
-        let Some(handle) = self.registry.provider(provider).cloned() else {
+        let Some(handle) = self.registry().provider(provider).cloned() else {
             return;
         };
         let answer = lca_protocol::LoginAnswer { choice, values };

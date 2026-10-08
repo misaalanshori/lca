@@ -7,6 +7,21 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Bare `-r` picker + `--session` (gh #110).** `lca -r` opens the
+  session picker over a fresh session (pi parity); `--session
+  <id|path>` resumes direct, resolving session-directory paths too;
+  `-r <id>` keeps working. A picker next to a prompt is a usage
+  error, as are the contradictory pairs.
+- **Token-derived cost (gh #125).** A curated `pricing.toml` (verified
+  entries only) fills a zero reported cost at the turn, so `/session`
+  and the footer show running cost for listed models; unlisted models
+  stay tokens-only, and a reported cost is never overwritten.
+- **`/reload` without restart (gh #130).** Re-runs discovery for
+  settings, extensions, prompts, themes, and keybindings (the registry
+  swaps under a lock turns never disturb); skills and context were
+  already live per turn. Does not reload: the provider/model
+  generation, credentials, the shell backend, markdown transformers,
+  and applied interface chrome.
 - **`shell.command_prefix` (gh #133).** A prefix prepended to every
   shell command (pi's `shellCommandPrefix`), joined with a newline so
   `export`/`source` lines take effect; applies to both transports.

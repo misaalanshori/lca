@@ -476,6 +476,68 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    // Verifies: gh #125 - a reported cost prints with four decimals;
+    // a zero cost stays hidden (tokens-only, never a made-up number).
+    #[test]
+    fn stats_print_reported_cost_and_hide_zero() {
+        let root = lca_testkit::scratch_path("lca-stats-cost");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let store = SessionStore::new(root.join("data"));
+        let session = store.create_session(&project, "test").expect("session");
+        let assistant =
+            |id: &str, model: &str, usage: lca_protocol::Usage| lca_protocol::Record::Assistant {
+                v: lca_protocol::FORMAT_VERSION,
+                ts: 1,
+                id: id.to_string(),
+                content: Vec::new(),
+                reasoning: None,
+                model: Some(model.to_string()),
+                provider: Some("test".to_string()),
+                usage: Some(usage),
+            };
+        store
+            .append(
+                &session,
+                assistant(
+                    "a1",
+                    "gpt-4o",
+                    lca_protocol::Usage {
+                        input: 1_000_000,
+                        output: 1_000_000,
+                        cost: 12.50,
+                        ..Default::default()
+                    },
+                ),
+            )
+            .expect("append");
+        let text = session_stats(&store, &session);
+        assert!(
+            text.contains("$12.5000"),
+            "the reported cost prints: {text}"
+        );
+        store
+            .append(
+                &session,
+                assistant(
+                    "a2",
+                    "gpt-5",
+                    lca_protocol::Usage {
+                        input: 1,
+                        ..Default::default()
+                    },
+                ),
+            )
+            .expect("append");
+        let text = session_stats(&store, &session);
+        assert!(
+            text.contains("$12.5000") && !text.contains("$12.5001"),
+            "the unpriced record adds tokens, not cost: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn ages_read_like_pis_session_rows() {
         assert_eq!(age_label(1_000_000, 1_000_000), "now");

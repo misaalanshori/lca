@@ -19,6 +19,7 @@ mod registry;
 mod turn;
 
 pub mod ext_provider;
+pub mod pricing;
 pub use assemble::{Assembled, Attachment, StagedAttachment, assemble, assemble_with, stage_image};
 pub use compact::{MAX_TRACKED_FILES, SYSTEM_PROMPT_CHANGE_TYPE, compact_now, compaction_reserve};
 pub use ext_provider::ExtensionProvider;

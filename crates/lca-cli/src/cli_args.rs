@@ -73,10 +73,16 @@ pub struct Cli {
     /// Continue previous session.
     #[arg(short = 'c', long = "continue")]
     pub r#continue: bool,
-    // RC-G (issue #6): alias to resume session by id.
-    /// Resume session by ID.
-    #[arg(short = 'r', long = "resume", value_name = "ID")]
-    pub resume_id: Option<String>,
+    // RC-G (issue #6): alias to resume session by id; gh #110 adopts
+    // pi's shape (bare `-r` browses, `-r <id>` resumes): `None` is
+    // absent, `Some(None)` is the bare picker, `Some(Some(_))` an id.
+    /// Browse sessions in a picker, or resume one by ID.
+    #[arg(short = 'r', long = "resume", value_name = "ID", num_args = 0..=1)]
+    pub resume_id: Option<Option<String>>,
+    // gh #110: pi's `--session <path|id>` for a direct resume.
+    /// Resume a session directly, by ID or by session-directory path.
+    #[arg(long = "session", value_name = "ID|PATH")]
+    pub session: Option<String>,
     // RC-G (issue #6) + gh #8 (EFG-041): pi's `--model <pattern>[:thinking]`.
     /// Model id or fuzzy pattern (`profile/id` also works), with an
     /// optional `:thinking` suffix such as `sonnet:high`.

@@ -380,6 +380,22 @@ pub type ForkAt = Arc<dyn Fn(usize) -> String + Send + Sync>;
 /// switches through [`SwitchSession`]; this hook only duplicates.
 pub type CloneSession =
     Arc<dyn Fn(Option<String>) -> Result<(String, String), String> + Send + Sync>;
+/// What a `/reload` refreshed (gh #130): the notice names it, the
+/// themes and keybindings apply interface-side (the host owns the
+/// files, the interface owns its state).
+#[derive(Debug, Clone, Default)]
+pub struct ReloadReport {
+    /// One line for the transcript notice.
+    pub notice: String,
+    /// Fresh theme names for the `/theme` picker.
+    pub themes: Vec<String>,
+    /// Fresh key bindings for the key manager.
+    pub key_bindings: std::collections::BTreeMap<String, Vec<String>>,
+    /// A key file problem, when the file failed (defaults hold).
+    pub keybinding_error: Option<String>,
+}
+/// Re-runs discovery without restarting (gh #130).
+pub type Reload = Arc<dyn Fn() -> ReloadReport + Send + Sync>;
 /// Lists the project's sessions, newest first (`/resume`, R2).
 pub type SessionList = Arc<dyn Fn() -> Vec<crate::resume::SessionEntry> + Send + Sync>;
 /// Switches the live session to `id` and returns its records (R3); `None`
@@ -434,6 +450,8 @@ pub struct UiHooks {
     pub fork_at: Option<ForkAt>,
     /// Clone the live session at its tip under an optional name (gh #205).
     pub clone_session: Option<CloneSession>,
+    /// Re-run discovery without restarting (gh #130).
+    pub reload: Option<Reload>,
     /// List the project's sessions for `/resume` (R2).
     pub session_list: Option<SessionList>,
     /// Switch the live session in place, returning its records (R3).
@@ -494,6 +512,9 @@ pub struct UiOptions {
     /// Positional CLI messages (#109): the first is submitted when the
     /// interface opens, the rest queue as follow-ups in order.
     pub initial_messages: Vec<String>,
+    /// Open the session picker when the interface opens (gh #110:
+    /// bare `-r`), instead of starting on a fresh session.
+    pub open_resume_picker: bool,
     /// Plain-text rendering (FR-UI-5).
     pub plain: bool,
     /// Permission prompts are auto-approved this session (ADR-0042); the
@@ -833,6 +854,7 @@ mod tests {
             initial_records: Vec::new(),
             initial_tail_lines: Vec::new(),
             initial_messages: Vec::new(),
+            open_resume_picker: false,
             yolo: false,
             thinking_visibility: Default::default(),
             codeblock_border: Default::default(),

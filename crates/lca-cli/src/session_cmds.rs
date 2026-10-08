@@ -62,6 +62,9 @@ pub enum Route {
     Interactive {
         /// The session to resume, when the subcommand names one.
         resume: Option<String>,
+        /// Open the session picker instead of a fresh session (gh #110:
+        /// bare `-r`).
+        resume_picker: bool,
         /// Model override if provided.
         model: Option<String>,
         /// Positional messages: the first is submitted on open (#109).
@@ -117,6 +120,32 @@ pub fn check_flag_contradictions(cli: &Cli) -> Option<String> {
     if cli.r#continue && cli.resume_id.is_some() {
         return Some(
             "-c/--continue and -r/--resume select different sessions; pass exactly one".to_string(),
+        );
+    }
+    if cli.r#continue && cli.session.is_some() {
+        return Some(
+            "-c/--continue and --session select different sessions; pass exactly one".to_string(),
+        );
+    }
+    if cli.resume_id.is_some() && cli.session.is_some() {
+        return Some(
+            "-r/--resume and --session select different sessions; pass exactly one".to_string(),
+        );
+    }
+    // Gh #110: the picker needs the interface; next to a prompt it has
+    // nowhere to render, so say so instead of starting fresh silently.
+    if cli.resume_id == Some(None)
+        && (cli.print.is_some() || cli.prompt.is_some() || !cli.messages.is_empty())
+    {
+        return Some(
+            "bare -r opens the session picker, which needs the interface; drop the prompt or name a session".to_string(),
+        );
+    }
+    // Gh #110: the picker/session flags route before subcommands, so
+    // naming both is refused up front instead of hijacking the command.
+    if cli.command.is_some() && (cli.resume_id == Some(None) || cli.session.is_some()) {
+        return Some(
+            "a subcommand takes its own arguments; pass -r/--session without one".to_string(),
         );
     }
     if cli.command.is_some()
@@ -205,11 +234,17 @@ pub fn route(cli: &Cli) -> Route {
     let print_mode = cli.print.is_some() || cli.prompt.is_some();
 
     // #111: the headless session selector. A `-c`/`-r` contradiction is
-    // rejected in `run` before routing (route owns no exit code).
+    // rejected in `run` before routing (route owns no exit code). A
+    // bare `-r` (the picker, gh #110) never reaches here: the
+    // contradiction check refuses it next to headless flags first.
     let headless_session = if cli.r#continue {
         SessionSelector::Continue
-    } else if let Some(id) = &cli.resume_id {
-        SessionSelector::Resume(id.clone())
+    } else if let Some(id) = cli
+        .session
+        .clone()
+        .or_else(|| cli.resume_id.clone().flatten())
+    {
+        SessionSelector::Resume(id)
     } else {
         SessionSelector::New
     };
@@ -231,9 +266,24 @@ pub fn route(cli: &Cli) -> Route {
             },
         };
     }
-    if let Some(id) = &cli.resume_id {
+    // Gh #110: bare `-r` opens the picker; `--session` and `-r <id>`
+    // resume direct (the reference may be a path, resolved at open).
+    if cli.resume_id == Some(None) {
         return Route::Interactive {
-            resume: Some(id.clone()),
+            resume: None,
+            resume_picker: true,
+            model: cli.model.clone(),
+            initial: messages,
+        };
+    }
+    if let Some(id) = cli
+        .session
+        .clone()
+        .or_else(|| cli.resume_id.clone().flatten())
+    {
+        return Route::Interactive {
+            resume: Some(id),
+            resume_picker: false,
             model: cli.model.clone(),
             initial: messages,
         };
@@ -251,12 +301,14 @@ pub fn route(cli: &Cli) -> Route {
                     .map(|s| s.id);
                 Route::Interactive {
                     resume: latest,
+                    resume_picker: false,
                     model: cli.model.clone(),
                     initial: messages,
                 }
             } else {
                 Route::Interactive {
                     resume: None,
+                    resume_picker: false,
                     model: cli.model.clone(),
                     initial: messages,
                 }
@@ -267,6 +319,7 @@ pub fn route(cli: &Cli) -> Route {
             None => Route::ResumeList,
             Some(id) => Route::Interactive {
                 resume: Some(id.clone()),
+                resume_picker: false,
                 model: cli.model.clone(),
                 initial: messages,
             },
@@ -575,6 +628,7 @@ mod tests {
             route_of(&["lca", "-r", "abc", "--model", "m"]),
             Route::Interactive {
                 resume: Some("abc".to_string()),
+                resume_picker: false,
                 model: Some("m".to_string()),
                 initial: Vec::new(),
             }
@@ -583,6 +637,7 @@ mod tests {
             route_of(&["lca", "resume", "abc"]),
             Route::Interactive {
                 resume: Some("abc".to_string()),
+                resume_picker: false,
                 model: None,
                 initial: Vec::new(),
             }
@@ -591,6 +646,7 @@ mod tests {
             route_of(&["lca"]),
             Route::Interactive {
                 resume: None,
+                resume_picker: false,
                 model: None,
                 initial: Vec::new(),
             }

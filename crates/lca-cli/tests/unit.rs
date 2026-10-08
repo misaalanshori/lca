@@ -19,6 +19,7 @@ fn no_arguments_route_to_the_interactive_interface() {
         route(&parse(&[])),
         Route::Interactive {
             resume: None,
+            resume_picker: false,
             model: None,
             initial: Vec::new(),
         }
@@ -103,6 +104,7 @@ fn resume_without_id_lists_sessions() {
         route(&parse(&["resume", "01ABC"])),
         Route::Interactive {
             resume: Some("01ABC".to_string()),
+            resume_picker: false,
             model: None,
             initial: Vec::new(),
         }
@@ -370,5 +372,51 @@ fn the_configured_prefix_rides_the_resolved_shell() {
             .shell()
             .command_prefix,
         None
+    );
+}
+
+// Verifies: gh #110 - bare `-r` opens the session picker (pi parity),
+// `--session` resumes direct, `-r <id>` keeps working.
+#[test]
+fn bare_r_opens_the_picker_and_session_resumes_direct() {
+    assert!(matches!(
+        route(&parse(&["-r"])),
+        Route::Interactive {
+            resume: None,
+            resume_picker: true,
+            ..
+        }
+    ));
+    assert_eq!(
+        route(&parse(&["-r", "abc"])),
+        Route::Interactive {
+            resume: Some("abc".to_string()),
+            resume_picker: false,
+            model: None,
+            initial: Vec::new(),
+        }
+    );
+    assert_eq!(
+        route(&parse(&["--session", "abc"])),
+        Route::Interactive {
+            resume: Some("abc".to_string()),
+            resume_picker: false,
+            model: None,
+            initial: Vec::new(),
+        }
+    );
+}
+
+// Verifies: gh #110 - a picker cannot render headless, so bare `-r`
+// with a prompt is a usage error, not a silent new session.
+#[test]
+fn bare_r_with_a_prompt_is_a_contradiction() {
+    assert!(
+        check_flag_contradictions(&parse(&["-r", "-p", "hi"])).is_some(),
+        "picker + headless prompt contradict"
+    );
+    assert!(
+        check_flag_contradictions(&parse(&["--session", "abc", "-c"])).is_some(),
+        "--session + -c contradict like -r + -c"
     );
 }

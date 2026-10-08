@@ -357,7 +357,8 @@ pub(crate) async fn setup(
                 return Err(exit::SESSION);
             }
         },
-        crate::SessionSelector::Resume(id) => match store.session(cwd, id) {
+        // Gh #110: the reference may be a session-directory path.
+        crate::SessionSelector::Resume(id) => match store.session_ref(cwd, id) {
             Ok(session) => session,
             Err(err) => {
                 eprintln!("error: cannot resume session `{id}`: {err}");

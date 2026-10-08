@@ -104,14 +104,19 @@ pub(crate) struct Ui {
     grants: Arc<Mutex<GrantStore>>,
     /// The session the interface is showing; swappable (`/tree`, `/resume`).
     current_session: Arc<Mutex<Session>>,
+    /// Open the session picker instead of a fresh session (gh #110:
+    /// bare `-r`), carried into `UiOptions` for the run loop.
+    resume_picker: bool,
     /// The live provider generation (gh #177): the name, the resolved
     /// provider, and the agent config built for them, under one lock so
     /// a `/model` switch or a `/login` move never mixes generations.
     /// A turn clones this whole; the compaction backend is stable (its
     /// own `set_provider` follows the switch in place).
     live: Arc<Mutex<LiveTarget>>,
-    /// The loaded extension registry.
-    registry: Arc<ExtensionRegistry>,
+    /// The loaded extension registry, behind a lock so `/reload` (gh
+    /// #130) can swap in a fresh discovery while turns hold their own
+    /// clone - a swap never disturbs a running turn.
+    registry: Mutex<Arc<ExtensionRegistry>>,
     /// The adapter's settings cell (ADR-0035).
     settings_cell: Arc<Mutex<Vec<(String, String)>>>,
     /// The live model (`/model`).
@@ -154,6 +159,11 @@ pub(crate) struct Ui {
     proposals: Option<Proposals>,
     /// The swappable prompt slot capability engines share.
     shared_prompt: SharedPrompt,
+    /// The dialog router extensions ask through (gh #124), kept so
+    /// `/reload` reuses it instead of orphaning the slot.
+    shared_dialogs: lca_permissions::SharedDialogs,
+    /// The CLI `--yolo` flag, re-applied when settings reload.
+    yolo: bool,
     /// The interface's session-lifetime prompt sender: published into
     /// `UiOptions` for `run` to fill, read by [`SessionPrompt`] so the
     /// host's own consent can ask outside a turn (gh #31 review).
@@ -203,9 +213,11 @@ pub(crate) struct Ui {
 }
 
 /// Enter the interactive interface for `cwd`, optionally resuming `resume`.
+#[allow(clippy::too_many_arguments)] // thin entry seam: every arg is used once, at one call site.
 pub fn run(
     cwd: &Path,
     resume: Option<&str>,
+    resume_picker: bool,
     yolo: bool,
     model: Option<&str>,
     initial: &[String],
@@ -226,7 +238,14 @@ pub fn run(
         return Ok(crate::exit::USAGE);
     }
     let ui = Arc::new(Ui::new(
-        cwd, resume, yolo, model, initial, allow_host, flags,
+        cwd,
+        resume,
+        resume_picker,
+        yolo,
+        model,
+        initial,
+        allow_host,
+        flags,
     )?);
     // Gh #160: the guard owns this session's temp dir (resolved and
     // validated inside `Ui::new`); a switch resolves the next one.
@@ -470,6 +489,11 @@ impl Ui {
         crate::lock(&self.live).name.clone()
     }
 
+    /// The current extension registry (gh #130).
+    fn registry(&self) -> Arc<ExtensionRegistry> {
+        crate::lock(&self.registry).clone()
+    }
+
     /// The resolved provider this generation runs on.
     fn live_provider(&self) -> Arc<dyn Provider> {
         crate::lock(&self.live).provider.clone()
@@ -477,9 +501,11 @@ impl Ui {
 
     /// Build the wiring state (S1): resolve the session, provider, and
     /// tools, then assemble the extension registry and the live cells.
+    #[allow(clippy::too_many_arguments)] // one call site; a params struct for nine scalars is theater.
     fn new(
         cwd: &Path,
         resume: Option<&str>,
+        resume_picker: bool,
         yolo: bool,
         model_override: Option<&str>,
         initial: &[String],
@@ -736,12 +762,13 @@ impl Ui {
             config,
             grants,
             current_session,
+            resume_picker,
             live: Arc::new(Mutex::new(LiveTarget {
                 name: provider_name,
                 provider,
                 agent_config,
             })),
-            registry,
+            registry: Mutex::new(registry),
             settings_cell,
             model_cell: cells.model,
             label_cell: cells.label,
@@ -759,6 +786,8 @@ impl Ui {
             resolved_shell_error,
             proposals,
             shared_prompt,
+            shared_dialogs: shared_dialogs.clone(),
+            yolo,
             prompt_slot,
             dialog_slot,
             pending_models: Arc::new(Mutex::new(None)),
@@ -788,7 +817,7 @@ impl Ui {
 
     /// The close-out: let hooks flush state, then close the session.
     fn close(&self) {
-        let registry = self.registry.clone();
+        let registry = self.registry();
         lca_core::drive_blocking(async move {
             registry.on_session_close().await;
         });
@@ -875,8 +904,9 @@ fn resolve_session(
     resume: Option<&str>,
 ) -> anyhow::Result<Session> {
     match resume {
+        // Gh #110: the reference may be a session-directory path.
         Some(id) => Ok(store
-            .session(cwd, id)
+            .session_ref(cwd, id)
             .map_err(|err| anyhow::anyhow!("{err}"))?),
         None => store
             .create_session(cwd, lca_session::DEFAULT_TITLE)

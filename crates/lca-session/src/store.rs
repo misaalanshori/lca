@@ -497,6 +497,27 @@ impl SessionStore {
         Ok(Session::new(id.to_string(), dir))
     }
 
+    /// Open a session by id or by session-directory path (gh #110:
+    /// `--session <id|path>`). A reference naming an existing directory
+    /// holding `meta.json` opens by path (its directory name is the
+    /// id); anything else opens by id, with the usual unknown error.
+    pub fn session_ref(&self, project_dir: &Path, reference: &str) -> Result<Session> {
+        let path = PathBuf::from(reference);
+        if path.is_absolute() || reference.contains('/') || reference.contains('\\') {
+            if path.join("meta.json").is_file() {
+                let id = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(reference);
+                return Ok(Session::new(id.to_string(), path));
+            }
+            return Err(crate::Error::UnknownSession {
+                id: reference.to_string(),
+            });
+        }
+        self.session(project_dir, reference)
+    }
+
     /// Rename a session: `meta.json` atomically, then the index cache.
     pub fn rename(&self, session: &Session, title: &str) -> Result<()> {
         let mut meta = self.meta(session)?;

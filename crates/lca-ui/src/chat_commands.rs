@@ -133,19 +133,7 @@ impl Chat {
                 return Action::Continue;
             }
             "resume" => {
-                let entries = self
-                    .world
-                    .options
-                    .hooks
-                    .session_list
-                    .as_ref()
-                    .map(|list| list())
-                    .unwrap_or_default();
-                if entries.is_empty() {
-                    self.world.notice = Some("no sessions yet".to_string());
-                } else {
-                    self.resume_picker = Some(crate::resume::ResumePicker::new(entries));
-                }
+                self.open_resume_picker();
                 return Action::Continue;
             }
             "grants" => {
@@ -162,6 +150,29 @@ impl Chat {
                         selected: 0,
                     });
                 }
+                return Action::Continue;
+            }
+            // Gh #130: re-run discovery without restarting. Refused
+            // mid-turn like a session switch: a reload must not land
+            // between a turn's declare and its dispatch.
+            "reload" => {
+                if self.turn_running {
+                    self.world.notice =
+                        Some("a turn is running; finish or cancel it before reloading".to_string());
+                    return Action::Continue;
+                }
+                let Some(reload) = self.world.options.hooks.reload.clone() else {
+                    self.world.notice = Some("reloading is not available in this host".to_string());
+                    return Action::Continue;
+                };
+                let report = reload();
+                // Interface-owned state refreshes here; the host did
+                // the files, the registry, and the agent config.
+                self.world.options.themes = report.themes;
+                self.keybindings =
+                    Arc::new(KeybindingsManager::with_user_bindings(report.key_bindings));
+                self.world.options.keybinding_error = report.keybinding_error;
+                self.world.notice = Some(report.notice);
                 return Action::Continue;
             }
             "fork" => {
@@ -254,6 +265,24 @@ impl Chat {
             "unknown command /{name}"
         )));
         Action::Continue
+    }
+
+    /// Open the session picker over the current session (gh #110:
+    /// bare `-r` opens here at startup; `/resume` opens here on demand).
+    pub fn open_resume_picker(&mut self) {
+        let entries = self
+            .world
+            .options
+            .hooks
+            .session_list
+            .as_ref()
+            .map(|list| list())
+            .unwrap_or_default();
+        if entries.is_empty() {
+            self.world.notice = Some("no sessions yet".to_string());
+        } else {
+            self.resume_picker = Some(crate::resume::ResumePicker::new(entries));
+        }
     }
 
     /// Switch to a session in place when the host supports it (R3), else
@@ -377,6 +406,9 @@ fn command_help(command: &str) -> &'static str {
         "/resume" => "search and reopen a session",
         "/fork" => "fork a branch at a message (usage: /fork <n>)",
         "/clone" => "duplicate this session at its tip and switch (usage: /clone [name])",
+        "/reload" => {
+            "re-run discovery without restarting (settings, extensions, prompts, themes, keys)"
+        }
         "/exit" => "leave the interface",
         "/login" => "sign in to a provider",
         "/logout" => "clear the provider's stored key",

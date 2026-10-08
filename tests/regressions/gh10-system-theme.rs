@@ -35,6 +35,7 @@ fn chat_with_theme(theme: &str) -> Chat {
             initial_records: Vec::new(),
             initial_tail_lines: Vec::new(),
             initial_messages: Vec::new(),
+            open_resume_picker: false,
             yolo: false,
             thinking_visibility: Default::default(),
             codeblock_border: Default::default(),

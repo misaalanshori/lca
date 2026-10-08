@@ -134,7 +134,7 @@ impl Agent<'_> {
                 Err(outcome) => return outcome,
             };
 
-            let response = match self.provider_call(request, sink, cancel).await {
+            let mut response = match self.provider_call(request, sink, cancel).await {
                 Ok(response) => response,
                 Err(CallFail::Cancelled) => return self.cancelled(turn_usage, sink),
                 Err(CallFail::Provider {
@@ -197,6 +197,15 @@ impl Agent<'_> {
                 }
             };
 
+            // Gh #125: a provider that reports no cost gets the curated
+            // table's math for listed models; a reported cost is never
+            // overwritten, and unlisted models stay tokens-only.
+            if response.usage.cost == 0.0
+                && let Some(priced) =
+                    super::pricing::table_cost(&self.config.model, &response.usage)
+            {
+                response.usage.cost = priced;
+            }
             accumulate_usage(&mut turn_usage, &response.usage);
             if let Err(outcome) = self.reject_incomplete(&response, sink, &turn_usage) {
                 return outcome;

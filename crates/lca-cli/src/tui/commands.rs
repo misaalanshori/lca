@@ -26,12 +26,12 @@ impl Ui {
     /// reach; an empty scope is no restriction.
     pub(super) fn offered_models(&self) -> Vec<lca_protocol::ModelInfo> {
         let mut catalog = Vec::new();
-        for handle in self.registry.enabled() {
+        for handle in self.registry().enabled() {
             if !handle.worlds().contains(&lca_ext_abi::World::Provider) {
                 continue;
             }
             let name = handle.name().to_string();
-            if crate::auth::check_status(&self.registry, &name) != crate::auth::Status::Ready {
+            if crate::auth::check_status(&self.registry(), &name) != crate::auth::Status::Ready {
                 continue;
             }
             // The active provider lists through its own adapter: the
@@ -107,6 +107,8 @@ impl Ui {
             confirm_login_grant: Some(self.login_confirm()),
             confirm_switch: Some(self.switch_confirm()),
             hooks: self.hooks(),
+            // Gh #110: bare `-r` opens the picker over the fresh session.
+            open_resume_picker: self.resume_picker,
             // FR-UI-21/R2: a fresh session starts on the main screen (the
             // terminal's own selection); `/fullscreen` opts into the
             // alt-screen renderer and persists in `ui.json`, which wins
@@ -146,6 +148,7 @@ impl Ui {
         names.insert(5, "/tree".to_string());
         names.insert(6, "/fork".to_string());
         names.insert(7, "/clone".to_string());
+        names.insert(8, "/reload".to_string());
         names.insert(7, "/thinking".to_string());
         names.insert(8, "/resume".to_string());
         names.insert(9, "/settings".to_string());
@@ -159,7 +162,7 @@ impl Ui {
             names.push(format!("/skill:{}", skill.name));
         }
         names.extend(
-            self.registry
+            self.registry()
                 .command_names()
                 .into_iter()
                 .map(|name| format!("/{}", lca_ui::sanitize_text(&name))),
@@ -264,7 +267,7 @@ impl Ui {
             // providers first (FR-PROV-11); with zero enabled providers
             // FR-PROV-6's report shows instead.
             "login" | "logout" | "usage" => self
-                .registry
+                .registry()
                 .invoke_generic(name, argument, &self.live_name())
                 .unwrap_or_else(|| {
                     CommandEffect::ShowWidget(crate::no_model_message(&self.live_name()))
@@ -274,7 +277,7 @@ impl Ui {
             // background thread; the interface polls the result.
             name if name.ends_with(".login") => {
                 let provider = name.trim_end_matches(".login");
-                match self.registry.provider(provider).cloned() {
+                match self.registry().provider(provider).cloned() {
                     Some(handle) => {
                         self.spawn_identity_login(handle);
                         CommandEffect::ShowWidget(
@@ -282,13 +285,13 @@ impl Ui {
                         )
                     }
                     None => self
-                        .registry
+                        .registry()
                         .invoke_command(name, argument)
                         .unwrap_or(CommandEffect::None),
                 }
             }
             _ => self
-                .registry
+                .registry()
                 .invoke_command(name, argument)
                 .unwrap_or(CommandEffect::None),
         }
@@ -488,10 +491,11 @@ impl Ui {
         // opens then; until then this says what is happening instead of
         // the misleading "no models".
         if models.is_empty() && argument.trim().is_empty() && self.start_model_consent() {
+            let registry = self.registry();
             let host = crate::net_consent::env_configured_host(
                 &self.data,
                 &self.live_name(),
-                Some(self.registry.as_ref()),
+                Some(registry.as_ref()),
             )
             .unwrap_or_default();
             return CommandEffect::ShowWidget(format!(
@@ -641,7 +645,7 @@ impl Ui {
         profile: Option<String>,
         suffix_level: Option<&str>,
     ) -> Result<String, String> {
-        let Some(handle) = self.registry.provider(target).cloned() else {
+        let Some(handle) = self.registry().provider(target).cloned() else {
             return Err(format!("no provider named `{target}`"));
         };
         let previous = self
@@ -731,7 +735,7 @@ impl Ui {
     pub(super) fn switch_confirm(self: &Arc<Self>) -> lca_ui::SwitchConfirm {
         let ui = self.clone();
         Arc::new(move |provider: &str| -> String {
-            let Some(handle) = ui.registry.provider(provider).cloned() else {
+            let Some(handle) = ui.registry().provider(provider).cloned() else {
                 return format!("no provider named `{provider}`");
             };
             let adapter =
@@ -812,10 +816,11 @@ impl Ui {
     /// is not answered on the loop's thread. A granted host never gets
     /// here: `endpoint_consent` itself costs one grant-store read.
     fn start_model_consent(self: &Arc<Self>) -> bool {
+        let registry = self.registry();
         let Some(host) = crate::net_consent::env_configured_host(
             &self.data,
             &self.live_name(),
-            Some(self.registry.as_ref()),
+            Some(registry.as_ref()),
         ) else {
             return false;
         };

@@ -718,11 +718,13 @@ pub async fn run(cli: Cli) -> i32 {
         }
         Route::Interactive {
             resume,
+            resume_picker,
             model,
             initial,
         } => interactive(
             &cwd,
             resume.as_deref(),
+            resume_picker,
             cli.yolo,
             model.as_deref(),
             &initial,
@@ -741,9 +743,11 @@ pub async fn run(cli: Cli) -> i32 {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // thin entry seam: every arg is used once, at one call site.
 fn interactive(
     cwd: &Path,
     resume: Option<&str>,
+    resume_picker: bool,
     yolo: bool,
     model: Option<&str>,
     initial: &[String],
@@ -752,7 +756,16 @@ fn interactive(
 ) -> i32 {
     // Wired to `lca-tui` in this phase; kept as one seam so the headless
     // contract stays independently testable.
-    match lca_tui_entry(cwd, resume, yolo, model, initial, allow_host, flags) {
+    match crate::tui::run(
+        cwd,
+        resume,
+        resume_picker,
+        yolo,
+        model,
+        initial,
+        allow_host,
+        flags,
+    ) {
         Ok(code) => code,
         Err(err) => {
             eprintln!("error: {err:#}");
@@ -766,18 +779,6 @@ fn interactive(
 // in the zero-provider state (FR-PROV-9) with the `/login` recovery path,
 // never a compile-time refusal. A provider-specific feature flag must not
 // decide whether the interface exists.
-fn lca_tui_entry(
-    cwd: &Path,
-    resume: Option<&str>,
-    yolo: bool,
-    model: Option<&str>,
-    initial: &[String],
-    allow_host: &[String],
-    flags: &CliFlags,
-) -> anyhow::Result<i32> {
-    crate::tui::run(cwd, resume, yolo, model, initial, allow_host, flags)
-}
-
 #[cfg(test)]
 mod tests {
 

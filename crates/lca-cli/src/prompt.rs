@@ -507,6 +507,28 @@ mod loader_tests {
         assert!(files.context_files[0].source.ends_with("AGENTS.md"));
         assert_eq!(files.context_files[1].body, "Override wins.");
     }
+
+    // Verifies: gh #130 acceptance - an edited skill description appears
+    // the next time the system prompt builds (what `/reload` triggers):
+    // collection reads disk every time, nothing caches it.
+    #[test]
+    fn an_edited_skill_description_appears_on_rebuild() {
+        let (data, cwd) = tree("prompt-reload-skill");
+        std::fs::create_dir_all(&data).expect("mkdir");
+        let dir = cwd.join(".lca/skills/demo");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let skill = dir.join("SKILL.md");
+        std::fs::write(&skill, "description: first words\n---\nBody.\n").expect("write");
+        let flags = crate::CliFlags::default();
+        let before = agent_system_prompt(&cwd, "m", &flags, true).expect("build");
+        assert!(before.contains("first words"), "v1 catalogued:\n{before}");
+        std::fs::write(&skill, "description: second thoughts\n---\nBody.\n").expect("edit");
+        let after = agent_system_prompt(&cwd, "m", &flags, true).expect("rebuild");
+        assert!(
+            after.contains("second thoughts") && !after.contains("first words"),
+            "v2 replaces v1:\n{after}"
+        );
+    }
 }
 
 #[cfg(test)]

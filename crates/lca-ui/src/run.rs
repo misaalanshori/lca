@@ -479,6 +479,11 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     // appear at flush, with the marker, like any queued message).
     let mut initial_messages = std::mem::take(&mut options.initial_messages);
     let mut chat = Chat::new(options, keybindings);
+    // Gh #110: bare `-r` opens the session picker over the fresh
+    // session instead of starting on it.
+    if chat.world.options.open_resume_picker {
+        chat.open_resume_picker();
+    }
     // gh #66: a bad keybindings file is loud from the first frame.
     if let Some(notice) = keybinding_notice {
         chat.world.notice = Some(notice);

@@ -261,7 +261,7 @@ impl Ui {
             trust_needed: {
                 let grants = self.grants.clone();
                 let cwd = self.cwd.clone();
-                let registry = self.registry.clone();
+                let registry = self.registry().clone();
                 Some(Arc::new(move || {
                     // Gh #45's vote runs before the operator is asked:
                     // the first yes/no decides (remembered or not),
@@ -329,6 +329,7 @@ impl Ui {
             open_url: Some(Arc::new(open_url)),
             fork_at: Some(self.fork_at()),
             clone_session: Some(self.clone_session()),
+            reload: Some(self.reload_hook()),
             grants: Some(self.grants()),
             revoke_grant: Some(self.revoke_grant()),
             // R4: a background login/identity step reports back through the
@@ -365,7 +366,7 @@ impl Ui {
             },
             // gh #12: the transcript's pre-parse markdown pipeline rides
             // whatever native extensions provide, in registration order.
-            markdown_transformers: collect_markdown_transformers(&self.registry.handles()),
+            markdown_transformers: collect_markdown_transformers(&self.registry().handles()),
         }
     }
 
@@ -616,6 +617,98 @@ impl Ui {
                 })
                 .collect()
         })
+    }
+
+    /// Re-run discovery without restarting (gh #130): settings files,
+    /// extensions, prompts (via the rebuilt agent config), plus the
+    /// themes and keybindings the report carries for the interface.
+    /// Turns hold their own registry clone, so the swap never disturbs
+    /// a running turn - but the command itself is refused mid-turn, so
+    /// a reload cannot land between a turn's declare and its dispatch.
+    /// What does NOT reload: the provider/model generation (use `/model`
+    /// and `/login`), credentials, the shell backend, markdown
+    /// transformers, and interface chrome already applied (colors,
+    /// visibility) - those follow after restart.
+    /// The `/reload` hook: a fresh discovery over the live session.
+    fn reload_hook(self: &std::sync::Arc<Self>) -> lca_ui::state::Reload {
+        let ui = self.clone();
+        std::sync::Arc::new(move || ui.reload())
+    }
+
+    fn reload(&self) -> lca_ui::state::ReloadReport {
+        use lca_ui::state::ReloadReport;
+        let fail = |reason: String| ReloadReport {
+            notice: format!("reload failed: {reason}"),
+            themes: Vec::new(),
+            key_bindings: Default::default(),
+            keybinding_error: None,
+        };
+        let config = match crate::load_config_flags(
+            &self.cwd,
+            &crate::lock(&self.grants),
+            false,
+            self.yolo,
+            &self.flags,
+        ) {
+            Ok(config) => config,
+            Err(err) => return fail(err.to_string()),
+        };
+        let trusted = crate::lock(&self.grants).is_trusted(&self.cwd);
+        let mut fresh = super::load_registry(
+            &self.cwd,
+            &config,
+            self.shared_prompt.clone(),
+            self.shared_dialogs.clone(),
+            &self.grants,
+            &self.store,
+            &self.current_session,
+            &self.temp_dir,
+        );
+        let live = crate::lock(&self.live);
+        let model_id = crate::lock(&self.model_cell).id.clone();
+        let window = super::model_context_window(live.provider.as_ref(), &model_id);
+        let image_policy = crate::models::image_policy_for(&live.provider.list_models(), &model_id);
+        let session_id = crate::lock(&self.current_session).id().to_string();
+        let backend = super::register_compaction(
+            &mut fresh,
+            &live.provider,
+            &model_id,
+            &session_id,
+            &self.cwd,
+            self.shared_prompt.clone(),
+            &self.grants,
+            &self.temp_dir,
+        );
+        let fresh = std::sync::Arc::new(fresh);
+        let agent_config = match super::agent_config_for(
+            &config,
+            &live.name,
+            &model_id,
+            window,
+            image_policy,
+            &fresh,
+            backend.map(|backend| backend as std::sync::Arc<dyn lca_tools::CompletionBackend>),
+            &self.cwd,
+            &self.flags,
+            trusted,
+        ) {
+            Ok(agent_config) => agent_config,
+            Err(err) => return fail(err),
+        };
+        let extensions = fresh.registered_names().len();
+        drop(live);
+        let mut live = crate::lock(&self.live);
+        live.agent_config = agent_config;
+        *crate::lock(&self.registry) = fresh;
+        let (bindings, bindings_error) = crate::load_user_keybindings(&self.data);
+        ReloadReport {
+            notice: format!(
+                "reloaded: {extensions} extensions, settings, prompts, themes, keybindings"
+            ),
+            themes: lca_ui::theme::theme_names(&lca_ui::theme::themes_dir(&self.data)),
+            key_bindings: bindings,
+            keybinding_error: bindings_error,
+        }
     }
 
     /// Switch the live session in place (`/tree`, `/resume`; R3). Returns
