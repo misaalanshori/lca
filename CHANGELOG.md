@@ -23,6 +23,20 @@ Dates are UTC.
 - **Tabs widget (gh #208).** A horizontal bar / vertical rail
   primitive (plain markers + host spans, keyboard + mouse) for future
   session tabs and panel sections. No product surface yet.
+- **Transcript clicks (gh #166).** Thinking clicks cycle snippet →
+  full → hidden (Ctrl+T shares the cycle); tool-card headers expand
+  that card only (bare running cards ignore the click); the jump
+  indicator was already clickable and stays pinned.
+- **Drawer tab (gh #207).** A one-cell ◀/▶ handle toggles the
+  extension panel: margin when closed (only with a registered panel),
+  panel edge when open, accent on hover, hovering names it (see below).
+- **Hover tooltips (gh #210).** A stationary pointer names drawer,
+  steppers, jump, tool cards (Expand/Collapse follows state), and
+  thinking runs: borderless blocks, quadrant-flipped inside the frame,
+  250 ms to show, gone on any move, press, wheel, key, or resize.
+- **Wheel velocity (gh #206).** Pi's acceleration curve in `auto`
+  (one line isolated, toward six on a fast spin) with Alt ×5; numeric
+  settings stay fixed.
 - **Startup header + `ui.quiet_startup` + `/changelog` (gh #131).**
   The transcript head names the version plus the loaded resources
   (context paths that exist, extension/skill/template counts).
