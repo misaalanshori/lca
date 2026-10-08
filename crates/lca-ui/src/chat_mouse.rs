@@ -379,3 +379,30 @@ impl Chat {
         u16::try_from(max.saturating_sub(top as usize)).ok()
     }
 }
+
+impl Chat {
+    /// Click-to-focus the composer (gh #165, pi's click-to-focus
+    /// routing): a click inside the editor rows dismisses any open
+    /// picker and places the caret under the pointer for immediate
+    /// typing. Returns false outside the editor rows.
+    pub fn place_editor_caret(&mut self, col: u16, row: u16, width: u16, height: u16) -> bool {
+        let Some((top, len)) = self.editor_rect(width, height) else {
+            return false;
+        };
+        if row < top || row >= top.saturating_add(len) {
+            return false;
+        }
+        if self.picker_open() {
+            // Pi's click-to-focus: the click belongs to the composer,
+            // so the picker takes the Escape path (a theme preview
+            // restores, like a keyboard cancel).
+            let _ = self.handle_picker_key("", Some("escape"));
+        }
+        // The dock paints the `> `/continuation marker in two columns
+        // before the editor text (gh #27a); the editor maps the rest.
+        let local_col = col.saturating_sub(2) as usize;
+        let local_row = row.saturating_sub(top) as usize;
+        self.editor.handle_click(local_col, local_row);
+        true
+    }
+}

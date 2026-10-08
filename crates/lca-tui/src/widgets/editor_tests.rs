@@ -857,3 +857,34 @@ fn editor_padding_prefixes_rows() {
     let rows = e.render(10);
     assert!(rows[0].starts_with("  hi"), "two cells pad: {rows:?}");
 }
+
+// Verifies: gh #165 - clicking a character places the caret on it.
+#[test]
+fn clicking_places_the_caret_on_the_character() {
+    let mut editor = Editor::new();
+    editor.set_text("hello");
+    let _ = editor.render(20);
+    assert_eq!(editor.handle_click(1, 0), Some((0, 1)));
+    assert_eq!(editor.handle_click(4, 0), Some((0, 4)));
+}
+
+// Verifies: gh #165 - a click past the line end clamps, and a click
+// below the buffer focuses without placing.
+#[test]
+fn clicks_clamp_and_miss_cleanly() {
+    let mut editor = Editor::new();
+    editor.set_text("hi");
+    let _ = editor.render(20);
+    assert_eq!(editor.handle_click(50, 0), Some((0, 2)));
+    assert_eq!(editor.handle_click(0, 5), None);
+}
+
+// Verifies: gh #165 - a click on a wrapped row maps into the same
+// logical line, past the first row's end.
+#[test]
+fn clicking_a_wrapped_row_maps_into_the_line() {
+    let mut editor = Editor::new();
+    editor.set_text("abcdefghij");
+    let _ = editor.render(6);
+    assert_eq!(editor.handle_click(2, 1), Some((0, 8)));
+}

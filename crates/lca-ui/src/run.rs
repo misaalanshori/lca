@@ -481,22 +481,29 @@ fn handle_input(
         // behind the chrome with it.
         if let Some((col, row)) = screen.take_clicked_cell() {
             let (width, height) = chat.world.size;
-            match chat.click_extension(col, row, width, height) {
-                Some(_) => {
-                    let _ = screen.take_clicked_link();
-                }
-                None => match chat.click_at(col, row, screen.scroll(), width, height) {
-                    ClickOutcome::ThinkingToggled => {
+            // Gh #165: the composer owns its rows - a click there
+            // focuses the editor (dismissing any picker) instead of
+            // hit-testing the transcript behind it.
+            if chat.place_editor_caret(col, row, width, height) {
+                let _ = screen.take_clicked_link();
+            } else {
+                match chat.click_extension(col, row, width, height) {
+                    Some(_) => {
                         let _ = screen.take_clicked_link();
                     }
-                    ClickOutcome::JumpBottom => screen.set_scroll(0),
-                    // Gh #173: stepper clicks only set the target; the
-                    // loop pins it on the next frame like a key jump.
-                    ClickOutcome::PreviousPrompt => chat.jump_prompt(-1),
-                    ClickOutcome::NextPrompt => chat.jump_prompt(1),
-                    ClickOutcome::SuggestionAccepted => {}
-                    ClickOutcome::Ignored => {}
-                },
+                    None => match chat.click_at(col, row, screen.scroll(), width, height) {
+                        ClickOutcome::ThinkingToggled => {
+                            let _ = screen.take_clicked_link();
+                        }
+                        ClickOutcome::JumpBottom => screen.set_scroll(0),
+                        // Gh #173: stepper clicks only set the target; the
+                        // loop pins it on the next frame like a key jump.
+                        ClickOutcome::PreviousPrompt => chat.jump_prompt(-1),
+                        ClickOutcome::NextPrompt => chat.jump_prompt(1),
+                        ClickOutcome::SuggestionAccepted => {}
+                        ClickOutcome::Ignored => {}
+                    },
+                }
             }
         }
         // A click on an OSC-8 link opens it (R6).

@@ -238,6 +238,19 @@ impl Chat {
         Some((top as u16, (rows + hint) as u16))
     }
 
+    /// The editor's viewport rows (gh #165): `(top, len)` covering the
+    /// editor rows above the footer. Alt-screen only: the main screen
+    /// never captures the mouse, so there is nothing to hit-test.
+    pub fn editor_rect(&self, width: u16, height: u16) -> Option<(u16, u16)> {
+        if !self.screen_mode {
+            return None;
+        }
+        let editor = self.editor.render(width.saturating_sub(2)).len().max(1);
+        let footer = self.footer_lines(width).len().max(1);
+        let top = (height as usize).saturating_sub(footer + editor);
+        Some((top as u16, editor as u16))
+    }
+
     /// Handle a click at viewport cell `(col, row)` (gh #11): the
     /// viewport row maps to a transcript content row through the same
     /// window math [`Self::viewport`] slices by. A reasoning-run row

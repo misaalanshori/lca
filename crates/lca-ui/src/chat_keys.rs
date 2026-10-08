@@ -21,6 +21,10 @@ impl Chat {
             || self.grants_picker.is_some()
             || self.fork_picker.is_some()
             || self.scoped_models_picker.is_some()
+            // Gh #165: the settings selector is a keyboard-owning
+            // overlay like the rest (it draws through the same
+            // composer), so the click and key gates count it.
+            || self.settings_picker.is_some()
     }
 
     /// Whether this key is pi's message-copy key with the editor owning

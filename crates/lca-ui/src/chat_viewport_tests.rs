@@ -671,3 +671,100 @@ fn hover_clears_when_the_pointer_leaves_the_track() {
     chat.refresh_scrollbar_hover(5, 5, w, h, 0);
     assert!(!chat.scrollbar_hover, "off the track clears");
 }
+
+// Verifies: gh #165 - the editor owns the rows above the footer, full
+// width, so clicks there focus the composer.
+#[test]
+fn editor_rect_pins_the_composer_rows() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.editor.set_text("hello");
+    let (w, h) = (80u16, 24u16);
+    let (top, len) = chat.editor_rect(w, h).expect("the editor is on screen");
+    let frame = chat.viewport(w, h, 0);
+    let plain: Vec<String> = frame
+        .iter()
+        .map(|row| lca_tui::engine::text::strip_terminal_sequences(row))
+        .collect();
+    assert!(
+        plain[top as usize].trim_start().starts_with("> hello"),
+        "the rect opens on the prompt row: {plain:?}"
+    );
+    assert_eq!(len, 1, "one buffer row paints as one editor row");
+    assert!(!chat.editor_rect(w, h).is_none());
+}
+
+// Verifies: gh #165 - clicking the editor rows places the caret under
+// the pointer (the zero-width cursor marker names the column).
+#[test]
+fn clicking_the_editor_places_the_caret() {
+    use lca_tui::engine::core::CURSOR_MARKER;
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.editor.set_text("hello world");
+    let (w, h) = (80u16, 24u16);
+    let (top, _) = chat.editor_rect(w, h).expect("the editor is on screen");
+    assert!(chat.place_editor_caret(2 + 5, top, w, h), "the click lands");
+    let rows = chat.editor.render(w - 2);
+    let marked = rows
+        .iter()
+        .find(|row| row.contains(CURSOR_MARKER))
+        .expect("the caret paints");
+    let column = marked.find(CURSOR_MARKER).expect("marker present");
+    assert_eq!(column, 5, "the caret sits under the click: {marked:?}");
+}
+
+// Verifies: gh #165 - clicking the editor while a picker owns the
+// keyboard dismisses the picker and still places the caret.
+#[test]
+fn clicking_the_editor_dismisses_an_open_picker() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.editor.set_text("hello");
+    chat.tree_picker = Some(crate::chat_pickers::TreePicker {
+        entries: vec![("a".to_string(), "first".to_string())],
+        selected: 0,
+    });
+    let (w, h) = (80u16, 24u16);
+    let (top, _) = chat.editor_rect(w, h).expect("the editor is on screen");
+    assert!(chat.place_editor_caret(2, top, w, h), "the click lands");
+    assert!(chat.tree_picker.is_none(), "the picker dismissed");
+}
+
+// Verifies: gh #165 - a click below the editor (footer rows) is not an
+// editor click: the picker stays open for its own backdrop path.
+#[test]
+fn footer_clicks_are_not_editor_clicks() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.editor.set_text("hello");
+    chat.tree_picker = Some(crate::chat_pickers::TreePicker {
+        entries: vec![("a".to_string(), "first".to_string())],
+        selected: 0,
+    });
+    let (w, h) = (80u16, 24u16);
+    assert!(
+        !chat.place_editor_caret(2, h - 1, w, h),
+        "the footer row misses"
+    );
+    assert!(chat.tree_picker.is_some(), "the picker stays open");
+}
+
+// Verifies: gh #165 - the settings selector counts as an open picker,
+// so an editor click dismisses it too.
+#[test]
+fn clicking_the_editor_dismisses_settings() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.editor.set_text("hello");
+    chat.settings_picker = Some(crate::chat_pickers::SettingsPicker {
+        rows: vec![],
+        selected: 0,
+        editing: None,
+    });
+    assert!(chat.picker_open(), "settings owns the keyboard");
+    let (w, h) = (80u16, 24u16);
+    let (top, _) = chat.editor_rect(w, h).expect("the editor is on screen");
+    assert!(chat.place_editor_caret(2, top, w, h), "the click lands");
+    assert!(chat.settings_picker.is_none(), "settings dismissed");
+}

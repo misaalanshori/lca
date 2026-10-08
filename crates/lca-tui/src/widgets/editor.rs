@@ -577,6 +577,43 @@ impl Editor {
         self.current()[..byte].to_string()
     }
 
+    /// Place the caret from a mouse click at editor-local `(col, row)`
+    /// (gh #165, pi's editor click-to-place): the row walks the visual
+    /// rows the last render laid out (wrap-aware, so a click on a
+    /// continuation row lands inside the same logical line), and the
+    /// column walks character cells past the padding, snapping into a
+    /// wide glyph's start and clamping to the row's end. Returns where
+    /// the caret landed, or `None` when the click falls outside the
+    /// buffer - the caller still focuses the editor then (pi focuses on
+    /// clicks above and below the text too).
+    pub fn handle_click(&mut self, col: usize, row: usize) -> Option<(usize, usize)> {
+        let rows = self.visual_rows();
+        let visual = rows.get(row)?;
+        let line = self.lines.get(visual.line)?;
+        let chars: Vec<char> = line.chars().collect();
+        let target = col.saturating_sub(self.padding_x.min(3));
+        let mut width = 0usize;
+        let mut consumed = 0usize;
+        for (index, char) in chars
+            .iter()
+            .enumerate()
+            .skip(visual.start)
+            .take(visual.end.saturating_sub(visual.start))
+        {
+            let cell = visible_width(&char.to_string());
+            if target < width + cell {
+                break;
+            }
+            width += cell;
+            consumed = index + 1;
+        }
+        self.cursor_line = visual.line;
+        // A click is a horizontal move: the sticky column clears.
+        self.preferred_col = None;
+        self.cursor_col = consumed.min(chars.len());
+        Some((self.cursor_line, self.cursor_col))
+    }
+
     /// Refresh autocomplete suggestions.
     pub fn refresh_suggestions(&mut self, force: bool) {
         let Some(provider) = &self.provider else {
