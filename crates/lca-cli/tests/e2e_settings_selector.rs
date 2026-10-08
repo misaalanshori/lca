@@ -57,6 +57,9 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     let session = Tmux::new("settings-selector");
     session.spawn(&sandbox, Some(&mock), true, &[], &[]);
     session.wait_for("[session in", std::time::Duration::from_secs(20));
+    // The inventoried box is taller than a default pane: size up so every
+    // section paints (the box clips to the viewport, gh #82).
+    session.resize(120, 55);
 
     // 1. The selector opens: key, current value, winning source. The
     // needle is a curated key, never a bare word: `wait_for("thinking")`
@@ -105,7 +108,10 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
         session.wait_for(&format!("> {level}"), std::time::Duration::from_secs(10));
     }
     session.send(&["Enter"]);
-    session.wait_for("thinking: high", std::time::Duration::from_secs(10));
+    // The notice row sits under the tall box (it wins over the dock),
+    // so wait for the durable outcome - the re-read row - never the
+    // transient notice.
+    session.wait_for("thinking = high", std::time::Duration::from_secs(10));
 
     // 3. The selector is back on screen after its sub-picker closed
     //    (pi's submenu shape - the list is never lost), and it answers
