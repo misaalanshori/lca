@@ -190,6 +190,11 @@ impl Ui {
                         row("Display & Appearance", "ui.fullscreen", &["false", "true"]),
                         row(
                             "Display & Appearance",
+                            "ui.quiet_startup",
+                            &["false", "true", "header"],
+                        ),
+                        row(
+                            "Display & Appearance",
                             "markdown.codeblock_border",
                             CODEBLOCK_BORDERS,
                         ),

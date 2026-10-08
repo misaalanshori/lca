@@ -74,6 +74,12 @@ pub(crate) fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValu
         "provider" | "model" => Ok(TypedValue::Text(raw.to_string())),
         // The flag/environment form of a list key is a comma list.
         "models.enabled" => Ok(TypedValue::List(csv(raw))),
+        "ui.quiet_startup" => match raw {
+            "true" | "false" | "header" => Ok(TypedValue::Text(raw.to_string())),
+            _ => Err(invalid(format!(
+                "expected true, false, or \"header\", got `{raw}`"
+            ))),
+        },
         "update.check" | "ui.fullscreen" | "tool.edit_requires_read" => raw
             .parse::<bool>()
             .map(TypedValue::Bool)

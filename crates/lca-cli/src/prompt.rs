@@ -123,6 +123,32 @@ pub fn load_prompt_files(
 /// dedupe by canonical path: on a case-insensitive filesystem
 /// `AGENTS.md` and `AGENTS.MD` are one file, and loading it twice
 /// would steer the prompt twice.
+/// The context file paths one directory contributes (gh #131): the
+/// same walk [`read_context_dir`] performs, sources only, so the
+/// startup header lists exactly what the prompt loads.
+pub(crate) fn context_sources(
+    data_dir: &std::path::Path,
+    cwd: &std::path::Path,
+    trusted: bool,
+    no_context_files: bool,
+) -> Vec<std::path::PathBuf> {
+    if no_context_files {
+        return Vec::new();
+    }
+    let mut out: Vec<std::path::PathBuf> = read_context_dir(data_dir)
+        .into_iter()
+        .map(|file| std::path::PathBuf::from(file.source))
+        .collect();
+    if trusted {
+        out.extend(
+            read_context_dir(cwd)
+                .into_iter()
+                .map(|file| std::path::PathBuf::from(file.source)),
+        );
+    }
+    out
+}
+
 fn read_context_dir(dir: &std::path::Path) -> Vec<ContextFile> {
     let present = |name: &str| {
         let path = dir.join(name);

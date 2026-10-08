@@ -442,3 +442,19 @@ fn a_prompt_template_completes_and_unknown_names_refuse() {
         "no template, no command"
     );
 }
+
+// Verifies: gh #131 - `/changelog` shows the latest released section,
+// never the Unreleased block.
+#[test]
+fn changelog_shows_the_latest_released_section() {
+    let mut chat = chat();
+    for c in "/changelog".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    let notice = chat.world.notice.as_deref().expect("a notice shows");
+    assert!(
+        notice.contains("0.6.0") && !notice.contains("[Unreleased]"),
+        "the latest release, not the work in progress: {notice:.200}"
+    );
+}

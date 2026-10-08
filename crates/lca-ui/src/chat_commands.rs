@@ -244,6 +244,16 @@ impl Chat {
                 }
                 return Action::Continue;
             }
+            // Gh #131: the embedded changelog's latest released section.
+            "changelog" => {
+                let section = latest_changelog_section();
+                self.world.notice = Some(if section.is_empty() {
+                    "no released changes yet".to_string()
+                } else {
+                    section
+                });
+                return Action::Continue;
+            }
             "quit" | "exit" => return Action::Exit,
             _ => {}
         }
@@ -515,6 +525,33 @@ pub(crate) fn provider_for(options: &UiOptions) -> CombinedAutocompleteProvider 
     CombinedAutocompleteProvider::new(commands, options.workspace.clone())
 }
 
+/// The product changelog, baked in at build time (gh #131): `/changelog`
+/// reads it without reaching the network or the filesystem.
+const CHANGELOG_TEXT: &str = include_str!("../../../CHANGELOG.md");
+
+/// The latest released section: the first `## [` block that is not
+/// `[Unreleased]`, through the next `## [` or the end.
+fn latest_changelog_section() -> String {
+    let mut out = Vec::new();
+    let mut in_section = false;
+    for line in CHANGELOG_TEXT.lines() {
+        if line.starts_with("## [") {
+            if in_section {
+                break;
+            }
+            in_section = !line.contains("[Unreleased]");
+            if in_section {
+                out.push(line);
+            }
+            continue;
+        }
+        if in_section {
+            out.push(line);
+        }
+    }
+    out.join("\n").trim().to_string()
+}
+
 /// One-line descriptions for the interface's own commands.
 fn command_help(command: &str) -> &'static str {
     match command {
@@ -528,6 +565,7 @@ fn command_help(command: &str) -> &'static str {
         "/fork" => "fork a branch at a message (picker, or /fork <n>)",
         "/clone" => "duplicate this session at its tip and switch (usage: /clone [name])",
         "/scoped-models" => "choose the quick-cycle rotation (Ctrl+P)",
+        "/changelog" => "show the latest released changes",
         "/reload" => {
             "re-run discovery without restarting (settings, extensions, prompts, themes, keys)"
         }

@@ -70,6 +70,7 @@ convention: `LCA_LOG`, then `RUST_LOG`, then `warn` by default
 | `tool.result_limit_bytes` | integer | `65536` | Tool results above this are truncated and marked (FR-TOOL-7). |
 | `tool.max_iterations` | integer | `0` (unlimited) | Maximum tool calls within one turn; `0` disables the cap (FR-CORE-9, amended 2026-10-02: long-horizon tasks need the room, and pi caps nothing). A positive value re-enables the runaway guard and the notice names that number. History: `50`, then `100` - both were work caps in disguise. |
 | `tool.edit_requires_read` | boolean | `false` | Whether `edit` demands a prior fresh `read` (gh #117). Off is pi parity (the model edits right after `grep`); on keeps LCA's staleness guard (never read, or changed since, refuses with a re-read prompt). Cycled in `/settings`; applies to the next turn. |
+| `ui.quiet_startup` | boolean \| `"header"` | `false` | The startup header level (gh #131, pi's `quietStartup`): `false` shows the version line plus the loaded resources (context paths, extension/skill/template counts); `"header"` keeps the version line only; `true` hides the header entirely. Cycled in `/settings`. |
 | `cache.noise_floor_tokens` | integer | `1024` | Cache misses below this are not counted (FR-CACHE-3). |
 | `extensions.log_limit_bytes` | integer | `4096` | Extension log messages above this are truncated (FR-EXT-10). |
 | `update.check` | boolean | `true` interactive, `false` headless | Daily background version check (FR-CFG-6). |

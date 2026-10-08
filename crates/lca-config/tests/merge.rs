@@ -724,3 +724,32 @@ fn edit_requires_read_defaults_off_and_loads() {
     .expect_err("a non-boolean is refused at load");
     assert!(err.to_string().contains("tool.edit_requires_read"), "{err}");
 }
+
+// Verifies: gh #131 - `ui.quiet_startup` defaults to showing the
+// header, accepts true/false/"header", and refuses anything else.
+#[test]
+fn quiet_startup_defaults_to_show_and_parses_three_ways() {
+    assert_eq!(Config::defaults().ui_quiet_startup(), "false");
+    for (toml, want) in [
+        ("ui.quiet_startup = true", "true"),
+        ("ui.quiet_startup = false", "false"),
+        ("ui.quiet_startup = \"header\"", "header"),
+    ] {
+        let dir = scratch("quiet-startup");
+        write(&dir.join("user.toml"), &format!("{toml}\n"));
+        let config = Config::load(&lca_config::LoadInput {
+            user_file: Some(dir.join("user.toml")),
+            ..Default::default()
+        })
+        .expect("load");
+        assert_eq!(config.ui_quiet_startup(), want, "{toml}");
+    }
+    let dir = scratch("quiet-startup-bad");
+    write(&dir.join("user.toml"), "ui.quiet_startup = \"sometimes\"\n");
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("anything else is refused at load");
+    assert!(err.to_string().contains("ui.quiet_startup"), "{err}");
+}

@@ -170,6 +170,7 @@ impl Ui {
         names.insert(11, "/trust".to_string());
         names.insert(12, "/permissions".to_string());
         names.insert(13, "/scoped-models".to_string());
+        names.insert(14, "/changelog".to_string());
         // gh #43: the skill command plus one entry per skill, so
         // `/skill:name` completes and forwards to the host.
         names.push("/skill".to_string());

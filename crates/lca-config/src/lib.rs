@@ -144,6 +144,7 @@ pub struct Config {
     extensions_log_limit_bytes: u64,
     update_check: Option<bool>,
     ui_fullscreen: Option<bool>,
+    ui_quiet_startup: String,
     ui_color: ColorMode,
     ui_theme: Option<String>,
     thinking: Option<String>,
@@ -202,6 +203,7 @@ impl Default for Config {
             extensions_log_limit_bytes: 4096,
             update_check: None,
             ui_fullscreen: None,
+            ui_quiet_startup: "false".to_string(),
             ui_color: ColorMode::Auto,
             ui_theme: None,
             thinking: None,
@@ -307,6 +309,7 @@ impl Config {
             "extensions.log_limit_bytes",
             "update.check",
             "ui.fullscreen",
+            "ui.quiet_startup",
             "ui.color",
             "ui.theme",
             "thinking",
@@ -445,6 +448,20 @@ impl Config {
                         }
                     };
                     this.apply(key.to_string(), TypedValue::List(list), source)?;
+                }
+                "ui.quiet_startup" => {
+                    // bool | "header": TOML true/false or the string.
+                    let text = match &value {
+                        toml::Value::Boolean(flag) => flag.to_string(),
+                        toml::Value::String(text) if text == "header" => text.clone(),
+                        _ => {
+                            return Err(invalid(format!(
+                                "expected true, false, or \"header\", got {}",
+                                type_name(&value)
+                            )));
+                        }
+                    };
+                    this.apply(key.to_string(), TypedValue::Text(text), source)?;
                 }
                 "update.check"
                 | "compaction.enabled"
@@ -595,6 +612,7 @@ impl Config {
             "extensions.log_limit_bytes",
             "update.check",
             "ui.fullscreen",
+            "ui.quiet_startup",
             "ui.color",
             "ui.theme",
             "thinking",
@@ -656,6 +674,7 @@ impl Config {
             ("update.check", TypedValue::Bool(v)) => self.update_check = Some(v),
             ("tool.edit_requires_read", TypedValue::Bool(v)) => self.tool_edit_requires_read = v,
             ("ui.fullscreen", TypedValue::Bool(v)) => self.ui_fullscreen = Some(v),
+            ("ui.quiet_startup", TypedValue::Text(v)) => self.ui_quiet_startup = v,
             ("ui.color", TypedValue::Color(v)) => self.ui_color = v,
             ("ui.theme", TypedValue::Text(v)) => self.ui_theme = Some(v),
             ("shell.tool", TypedValue::Text(v)) => self.shell_tool = Some(v),
@@ -810,6 +829,13 @@ impl Config {
     /// neither the config nor the caller names one (gh #112).
     pub fn ui_fullscreen(&self) -> Option<bool> {
         self.ui_fullscreen
+    }
+
+    /// The startup header level (gh #131): `"false"` shows version +
+    /// resources, `"header"` keeps the version line only (pi's value),
+    /// `"true"` hides the header entirely.
+    pub fn ui_quiet_startup(&self) -> &str {
+        &self.ui_quiet_startup
     }
 
     /// Daily version check on or off (FR-CFG-6); the default follows the mode.
@@ -970,6 +996,7 @@ impl Config {
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "<unset>".to_string()),
             ),
+            ("ui.quiet_startup", self.ui_quiet_startup.clone()),
             (
                 "ui.color",
                 match self.ui_color {

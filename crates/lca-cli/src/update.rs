@@ -118,7 +118,9 @@ pub fn spawn(enabled: bool, notify: Option<Arc<OnceLock<String>>>) {
         // status line has one row to spend.
         let tag = lca_ui::sanitize_text(&tag);
         let tag: String = tag.chars().take(48).collect();
-        let notice = format!("update available: lca {tag}");
+        // Gh #131: point at the changelog with the news in it - after
+        // the update, `/changelog` in the new binary tells the story.
+        let notice = format!("update available: lca {tag} (see /changelog after updating)");
         match notify {
             Some(cell) => {
                 cell.set(notice).ok();
