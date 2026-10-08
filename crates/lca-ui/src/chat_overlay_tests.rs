@@ -1009,3 +1009,155 @@ fn wheel_over_a_scroll_container_moves_the_viewport() {
     assert!(chat.wheel_extension(79, 0, 80, 24, -1));
     assert_eq!(chat.world.ext_scroll.get("panel"), Some(&0));
 }
+
+// Verifies: gh #167 - a hover over a `/model` row highlights it, and a
+// click on it confirms (the picker closes like Enter did).
+#[test]
+fn model_picker_hover_highlights_and_click_confirms() {
+    use crate::chat_mouse::PickerHit;
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.model_picker = Some(crate::chat_pickers::ModelPicker::new(vec![
+        ("a".to_string(), "a".to_string()),
+        ("b".to_string(), "b".to_string()),
+    ]));
+    let (w, h) = (80u16, 24u16);
+    let (rect, _) = chat.picker_layout(w, h).expect("the box maps");
+    let col = rect.col + 4;
+    let row = rect.row + 1 + 2 + 1;
+    assert_eq!(
+        chat.picker_hit(col, row, w, h),
+        Some(PickerHit::Item(1)),
+        "the second row maps to the second model"
+    );
+    chat.hover_picker_item(1);
+    assert_eq!(
+        chat.model_picker.as_ref().unwrap().selected,
+        1,
+        "hover highlights"
+    );
+    chat.confirm_picker_item();
+    assert!(chat.model_picker.is_none(), "click confirms and closes");
+}
+
+// Verifies: gh #167 - a click outside the picker box dismisses it
+// without confirming (the model choice is unchanged).
+#[test]
+fn picker_backdrop_dismisses_without_confirming() {
+    use crate::chat_mouse::PickerHit;
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.model_picker = Some(crate::chat_pickers::ModelPicker::new(vec![
+        ("a".to_string(), "a".to_string()),
+        ("b".to_string(), "b".to_string()),
+    ]));
+    let (w, h) = (80u16, 24u16);
+    assert_eq!(
+        chat.picker_hit(0, 0, w, h),
+        Some(PickerHit::Backdrop),
+        "the top-left cell is outside the box"
+    );
+    let _ = chat.handle_picker_key("", Some("escape"));
+    assert!(chat.model_picker.is_none(), "backdrop dismisses");
+}
+
+// Verifies: gh #167 - divider rows are chrome, not items: hovering one
+// highlights nothing.
+#[test]
+fn settings_dividers_are_chrome() {
+    use crate::chat_mouse::PickerHit;
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.settings_picker = Some(crate::chat_pickers::SettingsPicker {
+        rows: vec![
+            crate::state::SettingRow {
+                key: "a".to_string(),
+                value: "1".to_string(),
+                source: "default".to_string(),
+                section: "One".to_string(),
+                values: vec![],
+            },
+            crate::state::SettingRow {
+                key: "b".to_string(),
+                value: "2".to_string(),
+                source: "default".to_string(),
+                section: "Two".to_string(),
+                values: vec![],
+            },
+        ],
+        selected: 0,
+        editing: None,
+    });
+    let (w, h) = (80u16, 24u16);
+    let (rect, _) = chat.picker_layout(w, h).expect("the box maps");
+    // Two section dividers sit in the body: neither maps to an item.
+    let mut chrome = 0;
+    for offset in 0..6u16 {
+        if chat.picker_hit(rect.col + 4, rect.row + 1 + offset, w, h) == Some(PickerHit::Chrome) {
+            chrome += 1;
+        }
+    }
+    assert!(chrome >= 2, "both dividers read as chrome: {chrome}");
+}
+
+// Verifies: gh #167 - the row map stays in step with the painted box:
+// every item row of a three-branch tree highlights its own branch.
+// (If the compose arm gains a header row, this fails loudly.)
+#[test]
+fn tree_rows_map_one_to_one_with_branches() {
+    use crate::chat_mouse::PickerHit;
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.tree_picker = Some(crate::chat_pickers::TreePicker {
+        entries: vec![
+            ("a".to_string(), "first".to_string()),
+            ("b".to_string(), "second".to_string()),
+            ("c".to_string(), "third".to_string()),
+        ],
+        selected: 0,
+    });
+    let (w, h) = (80u16, 24u16);
+    let (rect, _) = chat.picker_layout(w, h).expect("the box maps");
+    for item in 0..3usize {
+        // Two header rows open the body, then one row per branch.
+        let row = rect.row + 1 + 2 + item as u16;
+        assert_eq!(
+            chat.picker_hit(rect.col + 4, row, w, h),
+            Some(PickerHit::Item(item)),
+            "body row {item} maps to branch {item}"
+        );
+        chat.hover_picker_item(item);
+        assert_eq!(chat.tree_picker.as_ref().unwrap().selected, item);
+    }
+}
+
+// Verifies: gh #167 - the scoped-models checklist toggles on confirm
+// (space), never saving: a click flips the row, Enter still saves.
+#[test]
+fn scoped_models_click_toggles_instead_of_saving() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.scoped_models_picker = Some(crate::chat_pickers::ScopedModelsPicker {
+        rows: vec![crate::state::ScopedModelRow {
+            id: "a".to_string(),
+            label: "a".to_string(),
+            context: 0,
+            enabled: true,
+        }],
+        checked: vec!["a".to_string()],
+        selected: 0,
+    });
+    chat.confirm_picker_item();
+    assert!(
+        chat.scoped_models_picker.is_some(),
+        "a click toggles, it does not save-and-close"
+    );
+    assert!(
+        chat.scoped_models_picker
+            .as_ref()
+            .unwrap()
+            .checked
+            .is_empty(),
+        "the row unchecked"
+    );
+}

@@ -56,26 +56,6 @@ fn is_turn_boundary_command(line: &str) -> bool {
     matches!(name, "compact")
 }
 
-/// What a viewport click did (gh #11): clicking a reasoning-run row
-/// toggles that run, like Ctrl+T; the jump indicator's row asks for the
-/// live bottom. Alt-screen only - the main screen never captures the
-/// mouse (gh35/gh33 contract), so it refuses every click.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClickOutcome {
-    /// No clickable region under the cursor.
-    Ignored,
-    /// A popup offer was clicked and applied.
-    SuggestionAccepted,
-    /// A reasoning run toggled its visibility.
-    ThinkingToggled,
-    /// The jump-to-bottom indicator was hit: return to the live bottom.
-    JumpBottom,
-    /// The scrollbar's ▲ stepper was hit: jump to the previous prompt.
-    PreviousPrompt,
-    /// The scrollbar's ▼ stepper was hit: jump to the next prompt.
-    NextPrompt,
-}
-
 /// The startup key-hint line (gh #23): pi prints
 /// `escape interrupt · ctrl+c/ctrl+d clear/exit · / commands …` at
 /// startup; this is our wording on pi's shape. One dim line on the
@@ -147,6 +127,10 @@ pub struct Chat {
     /// (gh #164, pi's `grabOffset`): motion maps pointer Y to scroll
     /// while set, and text selection stays off.
     pub scroll_drag: Option<u16>,
+    /// An in-progress picker press (gh #167, pi's `mousePressedIndex`):
+    /// a release on the same item confirms it, anywhere else just moves
+    /// the highlight. `None` means no press owns the gesture.
+    pub(crate) picker_press: Option<usize>,
     /// The transcript's line count at the last frame (gh #35): scroll is
     /// measured from the live bottom, so growth is what tells a new line
     /// from a re-wrap when holding the reader's place.
@@ -294,6 +278,7 @@ impl Chat {
             last_escape: None,
             scrollbar_hover: false,
             scroll_drag: None,
+            picker_press: None,
             last_transcript_len: None,
             last_render_width: 0,
             search: None,

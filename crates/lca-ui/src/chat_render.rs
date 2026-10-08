@@ -8,9 +8,32 @@
 //! the whole document bottom-anchored and lets the terminal's scrollback
 //! own scrolling - only the fullscreen path splits.
 
+//! The click outcome moved here from `chat.rs` (the 1,200-line ceiling):
+//! `click_at` lives here, and so does its answer.
+
+/// What a viewport click did (gh #11): clicking a reasoning-run row
+/// toggles that run, like Ctrl+T; the jump indicator's row asks for the
+/// live bottom. Alt-screen only - the main screen never captures the
+/// mouse (gh35/gh33 contract), so it refuses every click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickOutcome {
+    /// No clickable region under the cursor.
+    Ignored,
+    /// A popup offer was clicked and applied.
+    SuggestionAccepted,
+    /// A reasoning run toggled its visibility.
+    ThinkingToggled,
+    /// The jump-to-bottom indicator was hit: return to the live bottom.
+    JumpBottom,
+    /// The scrollbar's ▲ stepper was hit: jump to the previous prompt.
+    PreviousPrompt,
+    /// The scrollbar's ▼ stepper was hit: jump to the next prompt.
+    NextPrompt,
+}
+
 use lca_tui::engine::text::{slice_by_column, truncate_to_width, visible_width};
 
-use super::chat::{Chat, ClickOutcome};
+use super::chat::Chat;
 use crate::theme::Role;
 use crate::widget_lines;
 

@@ -311,6 +311,12 @@ impl AltScreenRenderer {
         self.scrollbar_drag = false;
     }
 
+    /// Drop any selection (gh #167): a press the picker eats must not
+    /// leave a stale highlight behind for the release to copy.
+    pub fn clear_selection(&mut self) {
+        self.selection.clear();
+    }
+
     /// Handle one mouse event against the current rendered lines.
     pub fn handle_mouse(&mut self, mouse: SgrMouse) -> bool {
         // A scrollbar drag owns motion and release outright (gh #164):

@@ -385,8 +385,9 @@ fn the_selected_popup_row_is_highlighted() {
 // Verifies: gh #175 - clicking a popup row applies that completion.
 #[test]
 fn clicking_a_popup_row_applies_it() {
+    use super::Chat;
     use super::options;
-    use super::{Chat, ClickOutcome};
+    use crate::chat_render::ClickOutcome;
     use std::sync::Arc;
     let mut opts = options();
     opts.slash_commands = (0..30).map(|i| format!("/cmd{i:02}")).collect();
@@ -477,7 +478,7 @@ fn scrollbar_end_cells_are_steppers() {
 // (the bottom stepper wins its cell over the jump indicator).
 #[test]
 fn stepper_clicks_jump_between_prompts() {
-    use super::ClickOutcome;
+    use crate::chat_render::ClickOutcome;
     let mut chat = chat();
     chat.screen_mode = true;
     for i in 0..40 {

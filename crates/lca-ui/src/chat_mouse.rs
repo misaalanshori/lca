@@ -8,8 +8,9 @@
 //! extension statuses together, so a cell cannot name one owner.
 
 use super::chat::Chat;
+use super::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
 use super::ext_widgets::{ButtonHit, widget_render};
-use lca_tui::engine::core::{OverlayOptions, SizeValue};
+use lca_tui::engine::core::{Anchor, OverlayOptions, Rect, SizeValue, resolve_overlay_layout};
 
 /// What a click did: swallowed by chrome with no owner, or an input for
 /// the region's extension.
@@ -404,5 +405,178 @@ impl Chat {
         let local_row = row.saturating_sub(top) as usize;
         self.editor.handle_click(local_col, local_row);
         true
+    }
+}
+
+// Gh #167: the picker half of pointer routing. Every picker draws
+// through `picker_overlay` (bottom-anchored above the composer), so one
+// layout rule maps them all: the box rect from the picker's body length,
+// then body rows to items. Complex bodies (grants groups, settings
+// sections) come from the picker's own `mouse_rows` walk, which mirrors
+// its compose arm.
+
+/// What a pointer cell means against the open picker (gh #167).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerHit {
+    /// An item row, in the picker's item space: highlight on hover,
+    /// confirm on click.
+    Item(usize),
+    /// Box chrome (frame, headers, hints, dividers, position rows):
+    /// eats presses, selects nothing.
+    Chrome,
+    /// Outside the box: dismiss without confirming.
+    Backdrop,
+}
+
+impl Chat {
+    /// The open picker's painted box and per-body-row item map (gh
+    /// #167): `Some(index)` rows highlight and confirm, `None` rows are
+    /// chrome. `None` when no picker is open. Body rows are assumed
+    /// unwrapped - a picker row past ~90 cells wraps, and its
+    /// continuation hits as the next row.
+    pub(crate) fn picker_layout(
+        &self,
+        width: u16,
+        height: u16,
+    ) -> Option<(Rect, Vec<Option<usize>>)> {
+        if !self.screen_mode {
+            return None;
+        }
+        let map: Vec<Option<usize>> = if let Some(picker) = &self.tree_picker {
+            std::iter::repeat_n(None, 2)
+                .chain((0..picker.entries.len()).map(Some))
+                .collect()
+        } else if let Some(picker) = &self.resume_picker {
+            let mut map = vec![None, None];
+            if picker.matches.is_empty() {
+                map.push(None);
+            } else {
+                map.extend((0..picker.matches.len()).map(Some));
+            }
+            map
+        } else if let Some(picker) = &self.fork_picker {
+            std::iter::repeat_n(None, 2)
+                .chain((0..picker.messages.len()).flat_map(|index| [Some(index); 3]))
+                .collect()
+        } else if let Some(picker) = &self.scoped_models_picker {
+            std::iter::repeat_n(None, 2)
+                .chain((0..picker.rows.len()).map(Some))
+                .collect()
+        } else if let Some(picker) = &self.grants_picker {
+            picker.mouse_rows()
+        } else if let Some(picker) = &self.theme_picker {
+            let _ = picker;
+            std::iter::repeat_n(None, 2)
+                .chain((0..self.theme_names.len()).map(Some))
+                .collect()
+        } else if let Some(picker) = &self.trust_picker {
+            let _ = picker;
+            std::iter::repeat_n(None, 4)
+                .chain((0..TRUST_OPTIONS.len()).map(Some))
+                .collect()
+        } else if let Some(picker) = &self.thinking_picker {
+            let _ = picker;
+            std::iter::repeat_n(None, 2)
+                .chain((0..THINKING_LEVELS.len() + 1).map(Some))
+                .collect()
+        } else if let Some(picker) = &self.settings_picker {
+            picker.mouse_rows()
+        } else if let Some(picker) = &self.model_picker {
+            let mut map = vec![None, None];
+            if picker.matches.is_empty() {
+                map.push(None);
+            } else {
+                map.extend((0..picker.matches.len()).map(Some));
+                // Pi's `(1/126)` position row rides under the items.
+                map.push(None);
+            }
+            map
+        } else {
+            return None;
+        };
+        // The same options `overlay_box_picker` paints with, so the
+        // hit box and the painted box are one rule.
+        let above = self.composer_height(width);
+        let options = OverlayOptions {
+            width: Some(SizeValue::Percent(80)),
+            min_width: Some(24),
+            max_height: Some(SizeValue::Abs(height)),
+            margin: 2,
+            anchor: Some(Anchor::BottomCenter),
+            offset_y: -i32::try_from(above).unwrap_or(i32::MAX),
+            ..Default::default()
+        };
+        let content = u16::try_from(map.len().saturating_add(4)).unwrap_or(u16::MAX);
+        let rect = resolve_overlay_layout(&options, width, height, content);
+        Some((rect, map))
+    }
+
+    /// Map a viewport cell to the open picker (gh #167): items
+    /// highlight and confirm, chrome eats the gesture, the backdrop
+    /// dismisses. `None` when no picker is open.
+    pub fn picker_hit(&self, col: u16, row: u16, width: u16, height: u16) -> Option<PickerHit> {
+        let (rect, map) = self.picker_layout(width, height)?;
+        // The painted rows: title + body + bottom frame, clipped to the
+        // viewport exactly like `overlay_box_placed` clips them.
+        let painted = (map.len().saturating_add(4)).min(height as usize);
+        let bottom = (rect.row as usize).saturating_add(painted);
+        if col < rect.col
+            || col >= rect.col.saturating_add(rect.width)
+            || row < rect.row
+            || (row as usize) >= bottom
+        {
+            return Some(PickerHit::Backdrop);
+        }
+        if row == rect.row {
+            return Some(PickerHit::Chrome);
+        }
+        match map.get((row - rect.row - 1) as usize) {
+            Some(Some(item)) => Some(PickerHit::Item(*item)),
+            _ => Some(PickerHit::Chrome),
+        }
+    }
+
+    /// Highlight one item row (gh #167, pi's press-to-highlight): the
+    /// theme picker live-previews like its keyboard path does.
+    pub fn hover_picker_item(&mut self, item: usize) {
+        if let Some(picker) = self.tree_picker.as_mut() {
+            picker.selected = item.min(picker.entries.len().saturating_sub(1));
+        } else if let Some(picker) = self.resume_picker.as_mut() {
+            picker.selected = item.min(picker.matches.len().saturating_sub(1));
+        } else if let Some(picker) = self.fork_picker.as_mut() {
+            picker.selected = item.min(picker.messages.len().saturating_sub(1));
+        } else if let Some(picker) = self.scoped_models_picker.as_mut() {
+            picker.selected = item.min(picker.rows.len().saturating_sub(1));
+        } else if let Some(picker) = self.grants_picker.as_mut() {
+            picker.selected = item.min(picker.entries.len().saturating_sub(1));
+        } else if self.theme_picker.is_some() {
+            let selected = item.min(self.theme_names.len().saturating_sub(1));
+            if let Some(picker) = self.theme_picker.as_mut() {
+                picker.selected = selected;
+            }
+            self.preview_theme(selected);
+        } else if let Some(picker) = self.trust_picker.as_mut() {
+            picker.selected = item.min(TRUST_OPTIONS.len().saturating_sub(1));
+        } else if let Some(picker) = self.thinking_picker.as_mut() {
+            picker.selected = item.min(THINKING_LEVELS.len());
+        } else if let Some(picker) = self.settings_picker.as_mut() {
+            picker.selected = item.min(picker.rows.len().saturating_sub(1));
+        } else if let Some(picker) = self.model_picker.as_mut() {
+            picker.selected = item.min(picker.matches.len().saturating_sub(1));
+        }
+    }
+
+    /// Confirm the highlighted item (gh #167): every picker's Enter
+    /// path, except the checklist toggles its row (space) instead of
+    /// saving. Silent when no picker is open.
+    pub fn confirm_picker_item(&mut self) {
+        if !self.picker_open() {
+            return;
+        }
+        if self.scoped_models_picker.is_some() {
+            let _ = self.handle_scoped_models_key("", Some("space"));
+        } else {
+            let _ = self.handle_picker_key("", Some("enter"));
+        }
     }
 }

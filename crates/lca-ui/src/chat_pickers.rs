@@ -21,6 +21,31 @@ pub struct TreePicker {
     pub selected: usize,
 }
 
+impl GrantPicker {
+    /// The body-row map for mouse hit-testing (gh #167): `Some(index)`
+    /// for entry rows, `None` for the header, blanks, and group
+    /// dividers. Mirrors the grants arm of `compose_pickers` one row at
+    /// a time - the click-each-row guards fail if they drift apart.
+    pub fn mouse_rows(&self) -> Vec<Option<usize>> {
+        let mut rows = vec![None, None];
+        let mut group: Option<bool> = None;
+        // The body opens with a header plus a blank line.
+        let mut last_blank = true;
+        for (index, entry) in self.entries.iter().enumerate() {
+            if group != Some(entry.install_consent) {
+                group = Some(entry.install_consent);
+                if !last_blank {
+                    rows.push(None);
+                }
+                rows.push(None);
+            }
+            rows.push(Some(index));
+            last_blank = false;
+        }
+        rows
+    }
+}
+
 /// The `/grants` picker (S8): the project's grants in two groups.
 pub struct GrantPicker {
     /// The rows, install-consent first.
@@ -189,6 +214,25 @@ impl ScopedModelsPicker {
 /// The `/settings` selector (gh #30, EFG-030): pi's interactive list of
 /// configurable keys, each row showing key, value, and the winning
 /// source (our FR-CFG-2 column, which pi's list does not carry).
+impl SettingsPicker {
+    /// The body-row map for mouse hit-testing (gh #167): `Some(index)`
+    /// for setting rows, `None` for the header, blanks, and section
+    /// dividers. Mirrors the settings arm of `compose_pickers` - the
+    /// click-each-row guards fail if they drift apart.
+    pub fn mouse_rows(&self) -> Vec<Option<usize>> {
+        let mut rows = vec![None, None];
+        let mut section = "";
+        for (index, row) in self.rows.iter().enumerate() {
+            if !row.section.is_empty() && row.section != section {
+                section = row.section.as_str();
+                rows.push(None);
+            }
+            rows.push(Some(index));
+        }
+        rows
+    }
+}
+
 pub struct SettingsPicker {
     /// The rows: key, current value, winning source, cycle values.
     pub rows: Vec<crate::state::SettingRow>,

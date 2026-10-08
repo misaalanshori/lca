@@ -18,8 +18,9 @@ use lca_tui::engine::main_screen::MainScreenRenderer;
 use lca_tui::engine::terminal::{InputHandler, ProcessTerminal, ResizeHandler, Terminal};
 
 use crate::ModelPicker;
-use crate::chat::{Chat, ClickOutcome};
-use crate::chat_mouse::ScrollbarHit;
+use crate::chat::Chat;
+use crate::chat_mouse::{PickerHit, ScrollbarHit};
+use crate::chat_render::ClickOutcome;
 use crate::state::{
     Action, DialogExchange, PermissionModal, PromptRequest, TurnChannels, TurnRunner, UiOptions,
 };
@@ -148,6 +149,13 @@ impl Screen {
     fn end_scrollbar_drag(&mut self) {
         if let Screen::Alt(r) = self {
             r.end_scrollbar_drag();
+        }
+    }
+
+    /// Drop any selection (gh #167).
+    fn clear_selection(&mut self) {
+        if let Screen::Alt(r) = self {
+            r.clear_selection();
         }
     }
 
@@ -326,17 +334,99 @@ fn keybinding_problems(
 /// clicks), everything else falls through to the renderer's selection
 /// and the click paths below. Returns whether the gesture is consumed.
 /// Wheels never land here - the wheel arm in [`handle_input`] owns them.
+/// Route one normalized mouse event with a picker open (gh #167):
+/// items highlight and confirm, chrome eats the gesture, the backdrop
+/// dismisses and falls through (the picker is gone, so the transcript
+/// is clickable again). Returns whether the gesture is consumed.
+fn handle_picker_mouse(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) -> bool {
+    let (width, height) = chat.world.size;
+    match event {
+        MouseEvent::Down {
+            col,
+            row,
+            button: MouseButton::Left,
+            ..
+        } => {
+            // The composer's Up-side path (gh #165) owns editor rows:
+            // the Down falls through so the click can still focus.
+            if let Some((top, len)) = chat.editor_rect(width, height)
+                && row >= top
+                && row < top.saturating_add(len)
+            {
+                return false;
+            }
+            match chat.picker_hit(col, row, width, height) {
+                Some(PickerHit::Item(item)) => {
+                    chat.hover_picker_item(item);
+                    chat.picker_press = Some(item);
+                    screen.clear_selection();
+                    true
+                }
+                Some(PickerHit::Chrome) => {
+                    screen.clear_selection();
+                    true
+                }
+                _ => {
+                    let _ = chat.handle_picker_key("", Some("escape"));
+                    chat.picker_press = None;
+                    false
+                }
+            }
+        }
+        MouseEvent::Move {
+            col,
+            row,
+            button: None,
+            ..
+        } => {
+            if let Some(PickerHit::Item(item)) = chat.picker_hit(col, row, width, height) {
+                chat.hover_picker_item(item);
+            }
+            // The autocomplete popup highlights under hover (gh #167).
+            if let Some((top, len)) = chat.popup_rect(width, height)
+                && row >= top
+                && row < top.saturating_add(len)
+                && let Some((start, _)) = chat.editor.popup_window()
+            {
+                chat.editor
+                    .select_suggestion(start.saturating_add((row - top) as usize));
+            }
+            false
+        }
+        MouseEvent::Move {
+            button: Some(_), ..
+        } => chat.picker_press.is_some(),
+        MouseEvent::Up { col, row, .. } => match chat.picker_press.take() {
+            Some(pressed) => {
+                match chat.picker_hit(col, row, width, height) {
+                    Some(PickerHit::Item(hit)) if hit == pressed => chat.confirm_picker_item(),
+                    Some(PickerHit::Item(other)) => chat.hover_picker_item(other),
+                    _ => {}
+                }
+                true
+            }
+            None => false,
+        },
+        _ => false,
+    }
+}
+
 fn handle_mouse_event(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) -> bool {
     if !chat.screen_mode {
         return false;
     }
-    let (width, height) = chat.world.size;
     // Pi stops scrollbar hover while an overlay owns the viewport.
-    if chat.picker_open() || chat.world.modal_active() {
+    if chat.picker_open() {
+        chat.scrollbar_hover = false;
+        screen.set_scrollbar_hover(false);
+        return handle_picker_mouse(event, chat, screen);
+    }
+    if chat.world.modal_active() {
         chat.scrollbar_hover = false;
         screen.set_scrollbar_hover(false);
         return false;
     }
+    let (width, height) = chat.world.size;
     match event {
         MouseEvent::Down {
             col,
@@ -460,6 +550,15 @@ fn handle_input(
             // scroll containers glide, dialog selects move, and the
             // gesture never reaches the transcript behind a modal.
             if chat.wheel_extension(col, row, width, height, delta) {
+                return InputResult::Continue;
+            }
+            // Gh #167: a wheel inside the picker box walks the
+            // selection (pi's select-list wheel path), never the
+            // transcript behind it.
+            if let Some(hit) = chat.picker_hit(col, row, width, height)
+                && !matches!(hit, PickerHit::Backdrop)
+            {
+                let _ = chat.handle_picker_key("", Some(if delta < 0 { "up" } else { "down" }));
                 return InputResult::Continue;
             }
             let row = mouse.y.saturating_sub(1);

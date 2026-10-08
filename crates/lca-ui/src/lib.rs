@@ -28,8 +28,9 @@ pub mod theme;
 pub mod transcript;
 mod turn_metrics;
 
-pub use chat::{Chat, ClickOutcome, PendingMessage};
+pub use chat::{Chat, PendingMessage};
 pub use chat_pickers::ModelPicker;
+pub use chat_render::ClickOutcome;
 pub use ext_widgets::widget_lines;
 pub use footer::Footer;
 pub use lca_protocol::{QueuedMessage, SubmitMode, steer_queue};
