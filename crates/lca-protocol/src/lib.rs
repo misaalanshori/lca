@@ -33,7 +33,7 @@ pub use record::{
     FORMAT_VERSION, NestedCallRecord, PREVIOUS_SUMMARY_TYPE, PermissionDecision, Record,
     ToolSource, is_previous_summary,
 };
-pub use stream::StreamEvent;
+pub use stream::{StreamEvent, THINKING_SIGNATURE_KIND};
 pub use tool::{
     ImageContent, ToolAnnotations, ToolCall, ToolExposure, ToolNamespace, ToolResult,
     ToolResultStatus, ToolSpec,

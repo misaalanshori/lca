@@ -12,7 +12,8 @@ use lca_tui::widgets::autocomplete::{
 
 use super::chat::Chat;
 use crate::chat_pickers::{
-    ModelPicker, SettingsPicker, ThemePicker, ThinkingPicker, TreePicker, TrustPicker, thinking_row,
+    ModelPicker, SettingsPicker, ThemePicker, ThinkingPicker, TreePicker, TrustPicker,
+    thinking_offered_all,
 };
 use crate::state::{Action, UiOptions};
 
@@ -45,12 +46,27 @@ impl Chat {
     }
 
     /// Open the thinking picker on the current level (`/thinking` and
-    /// the `/settings` selector's `thinking` row).
+    /// the `/settings` selector's `thinking` row): the host's offered
+    /// set for the current model, every level without one (gh #41).
     pub(super) fn open_thinking_picker(&mut self) {
         let current = self.thinking_level();
-        self.thinking_picker = Some(ThinkingPicker {
-            selected: thinking_row(current.as_deref()),
-        });
+        let offered = self
+            .world
+            .options
+            .hooks
+            .thinking_offered
+            .as_ref()
+            .map(|offer| offer())
+            .filter(|offered| !offered.is_empty())
+            .unwrap_or_else(thinking_offered_all);
+        let selected = match current.as_deref() {
+            None => 0,
+            Some(level) => offered
+                .iter()
+                .position(|name| name == level)
+                .map_or(0, |index| index + 1),
+        };
+        self.thinking_picker = Some(ThinkingPicker { selected, offered });
     }
 
     /// Dispatch a slash command line.

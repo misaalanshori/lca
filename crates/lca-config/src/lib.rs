@@ -190,6 +190,10 @@ pub struct Config {
     // gh #8 phase 4 (pi's `modelThinkingLevels`): per-model sets of the
     // thinking levels that model accepts; the first entry is its default.
     models_thinking_levels: BTreeMap<String, Vec<String>>,
+    // gh #41 (pi's `thinkingBudgets`): per-level token-budget
+    // overrides; empty means pi's built-in budgets (see
+    // `DEFAULT_THINKING_BUDGETS`).
+    thinking_budgets: BTreeMap<String, u64>,
     sources: BTreeMap<String, MergeSource>,
 }
 
@@ -201,6 +205,16 @@ pub struct Config {
 /// 0 from 2026-10-02. `lca-core::AgentConfig::default` must agree with
 /// this value; the consistency test in `lca-cli` enforces it.
 pub const DEFAULT_TOOL_MAX_ITERATIONS: u64 = 0;
+
+/// The built-in per-level thinking token budgets (gh #41, pi's
+/// `DEFAULT_THINKING_BUDGETS` verbatim): `[thinking.budgets]`
+/// overrides per level.
+pub const DEFAULT_THINKING_BUDGETS: [(&str, u64); 4] = [
+    ("minimal", 1024),
+    ("low", 2048),
+    ("medium", 8192),
+    ("high", 16384),
+];
 
 impl Default for Config {
     fn default() -> Self {
@@ -268,6 +282,7 @@ impl Default for Config {
             permissions_proposals: BTreeMap::new(),
             models_enabled: Vec::new(),
             models_thinking_levels: BTreeMap::new(),
+            thinking_budgets: BTreeMap::new(),
             sources: BTreeMap::new(),
         }
     }
@@ -347,6 +362,7 @@ impl Config {
             "model",
             "models.enabled",
             "models.thinking_levels",
+            "thinking.budgets",
             "compaction.threshold",
             "compaction.enabled",
             "compaction.reserve_tokens",
@@ -493,6 +509,33 @@ impl Config {
                         map.insert(model.clone(), parsed);
                     }
                     this.apply(key.to_string(), TypedValue::ThinkingLevels(map), source)?;
+                }
+                "thinking.budgets" => {
+                    let table = value.as_table().ok_or_else(|| {
+                        invalid(format!(
+                            "expected a table of level = tokens, got {}",
+                            type_name(&value)
+                        ))
+                    })?;
+                    let mut map = BTreeMap::new();
+                    for (level, tokens) in table {
+                        if !["minimal", "low", "medium", "high"].contains(&level.as_str()) {
+                            return Err(invalid(format!(
+                                "expected one of minimal, low, medium, high, got `{level}`"
+                            )));
+                        }
+                        let tokens = tokens
+                            .as_integer()
+                            .and_then(|i| u64::try_from(i).ok())
+                            .ok_or_else(|| {
+                                invalid(format!(
+                                    "`{level}` must be a non-negative token count, got {}",
+                                    type_name(tokens)
+                                ))
+                            })?;
+                        map.insert(level.clone(), tokens);
+                    }
+                    this.apply(key.to_string(), TypedValue::Budgets(map), source)?;
                 }
                 "models.enabled" => {
                     let list = match &value {
@@ -861,6 +904,7 @@ impl Config {
             "model",
             "models.enabled",
             "models.thinking_levels",
+            "thinking.budgets",
             "compaction.threshold",
             "compaction.enabled",
             "compaction.reserve_tokens",
@@ -912,7 +956,8 @@ impl Config {
                 // `provider` doubles as a section: `[provider] retry_limit = N`
                 // cannot coexist with the `provider = "name"` leaf in one TOML
                 // document, so a table form carries only its children.
-                if key == "provider" && value.is_table() {
+                // `thinking` doubles the same way for `[thinking.budgets]`.
+                if (key == "provider" || key == "thinking") && value.is_table() {
                     continue;
                 }
                 apply(self, key, value.clone())?;
@@ -942,6 +987,7 @@ impl Config {
             ("models.thinking_levels", TypedValue::ThinkingLevels(v)) => {
                 self.models_thinking_levels = v
             }
+            ("thinking.budgets", TypedValue::Budgets(v)) => self.thinking_budgets = v,
             ("compaction.threshold", TypedValue::Number(v)) => self.compaction_threshold = v,
             ("compaction.enabled", TypedValue::Bool(v)) => self.compaction_enabled = v,
             ("compaction.reserve_tokens", TypedValue::Count(v)) => {

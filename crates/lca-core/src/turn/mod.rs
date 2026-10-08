@@ -25,6 +25,8 @@ use super::{Agent, TurnSink};
 pub(super) struct CallResponse {
     pub(super) text: String,
     pub(super) reasoning: Option<String>,
+    /// The latest thinking signature the stream carried (gh #41).
+    pub(super) signature: Option<String>,
     pub(super) calls: Vec<ToolCall>,
     pub(super) protocol_errors: Vec<ProtocolError>,
     pub(super) usage: Usage,
@@ -575,6 +577,11 @@ impl Agent<'_> {
         // where meaningful (ADR-0035's settings shape; no ABI change).
         if let Some(effort) = &self.config.reasoning_effort {
             extras.insert("reasoning-effort".to_string(), effort.clone());
+            // gh #41: budget-taking vendors (Anthropic-style) get the
+            // turn's token budget alongside the level; others ignore it.
+            if let Some(budget) = self.config.thinking_budget {
+                extras.insert("thinking-budget-tokens".to_string(), budget.to_string());
+            }
         }
         CompletionRequest {
             messages,
@@ -659,6 +666,11 @@ impl Agent<'_> {
                 id: assistant_id.clone(),
                 content: blocks,
                 reasoning: response.reasoning.clone(),
+                // gh #41: the signature the model issued (if any) and
+                // the level it ran at persist for replay; compaction
+                // carries both (append-only markers never rewrite).
+                reasoning_signature: response.signature.clone(),
+                provider_thinking_level: self.config.reasoning_effort.clone(),
                 model: Some(self.config.model.clone()),
                 provider: Some(self.config.provider.clone()),
                 usage: Some(response.usage.clone()),

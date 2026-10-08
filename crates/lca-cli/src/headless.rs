@@ -865,6 +865,12 @@ fn wire(
         summarization_backend.map(|backend| backend as Arc<dyn lca_tools::CompletionBackend>);
     #[cfg(not(feature = "bundled-compaction-default"))]
     let completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>> = None;
+    // gh #41: the turn's budget follows its resolved level.
+    let reasoning_effort = match override_thinking {
+        Some(level) => config.clamp_thinking(Some(&level), &model_id),
+        None => config.switch_thinking(config.thinking().map(str::to_string).as_deref(), &model_id),
+    };
+    let thinking_budget = config.budget_for_level(reasoning_effort.as_deref());
     let agent_config = AgentConfig {
         provider: provider_name.to_string(),
         model: model_id.clone(),
@@ -902,12 +908,8 @@ fn wire(
         // `--model` suffix is explicit (gh #8 phase 4); otherwise the
         // model's configured default wins over the configured `thinking`,
         // clamped into what this model accepts.
-        reasoning_effort: match override_thinking {
-            Some(level) => config.clamp_thinking(Some(&level), &model_id),
-            None => {
-                config.switch_thinking(config.thinking().map(str::to_string).as_deref(), &model_id)
-            }
-        },
+        reasoning_effort,
+        thinking_budget,
         ..AgentConfig::default()
     };
     Ok((agent_config, provider))

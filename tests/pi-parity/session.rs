@@ -37,6 +37,8 @@ fn assistant(id: &str) -> Record {
             text: "done".to_string(),
         }],
         reasoning: None,
+        reasoning_signature: None,
+        provider_thinking_level: None,
         model: Some("m".to_string()),
         provider: Some("p".to_string()),
         usage: Some(Usage::default()),

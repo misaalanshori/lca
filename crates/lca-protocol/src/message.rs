@@ -34,6 +34,11 @@ pub enum ContentBlock {
     Reasoning {
         /// The reasoning text.
         reasoning: String,
+        /// The provider's replay signature, when it issued one (gh
+        /// #41): opaque bytes the next request must resend verbatim.
+        /// Absent for vendors without signatures and on old records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
     /// A tool call the model requested.
     ToolCall {

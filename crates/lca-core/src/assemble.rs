@@ -215,6 +215,7 @@ pub fn assemble_with(
                 id,
                 content,
                 reasoning,
+                reasoning_signature,
                 ..
             } => {
                 if matches!(edits.get(id.as_str()), Some(None)) {
@@ -248,6 +249,11 @@ pub fn assemble_with(
                         0,
                         ContentBlock::Reasoning {
                             reasoning: reasoning.clone(),
+                            // gh #41: the signature rides the block so
+                            // replay resends it verbatim (vendors that
+                            // require signatures reject transcripts that
+                            // drop them).
+                            signature: reasoning_signature.clone(),
                         },
                     );
                 }
@@ -391,7 +397,7 @@ pub(super) fn message_text(message: &ChatMessage) -> String {
         .iter()
         .filter_map(|block| match block {
             ContentBlock::Text { text } => Some(text.as_str()),
-            ContentBlock::Reasoning { reasoning } => Some(reasoning.as_str()),
+            ContentBlock::Reasoning { reasoning, .. } => Some(reasoning.as_str()),
             ContentBlock::ToolCall { .. } => None,
             // The image's stub text is already in the message content.
             ContentBlock::Image { .. } => None,
@@ -407,7 +413,7 @@ pub(super) fn stable_fingerprint(message: &ChatMessage) -> String {
         .iter()
         .filter_map(|block| match block {
             ContentBlock::Text { text } => Some(text.clone()),
-            ContentBlock::Reasoning { reasoning } => Some(reasoning.clone()),
+            ContentBlock::Reasoning { reasoning, .. } => Some(reasoning.clone()),
             // An image changes the wire bytes, so its content hash belongs in
             // the fingerprint (a length-only key would miss a same-size swap).
             ContentBlock::Image { media_type, bytes } => Some(format!(
@@ -451,6 +457,8 @@ mod vocabulary_tests {
                 text: text.to_string(),
             }],
             reasoning: None,
+            reasoning_signature: None,
+            provider_thinking_level: None,
             model: None,
             provider: None,
             usage: None,

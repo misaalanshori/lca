@@ -891,3 +891,45 @@ fn retry_base_delay_merges_and_proxy_url_is_refused() {
         "no such key: nothing reads it, env stays the interface"
     );
 }
+
+// Verifies: gh #41 (pi's `thinkingBudgets` row) — per-level token
+// budgets default to pi's built-ins, a file overrides per level, and
+// an unknown budget name is refused rather than silently kept.
+#[test]
+fn thinking_budgets_default_override_and_refuse_unknown() {
+    let dir = scratch("thinking-budgets");
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: None,
+        ..Default::default()
+    })
+    .expect("load");
+    for (level, budget) in [
+        ("minimal", 1024),
+        ("low", 2048),
+        ("medium", 8192),
+        ("high", 16384),
+    ] {
+        assert_eq!(config.budget_for_level(Some(level)), Some(budget));
+    }
+    assert_eq!(config.budget_for_level(Some("xhigh")), Some(16384));
+    assert_eq!(config.budget_for_level(Some("max")), Some(16384));
+    assert_eq!(config.budget_for_level(None), None);
+    assert_eq!(config.budget_for_level(Some("off")), None);
+
+    write(&dir.join("user.toml"), "[thinking.budgets]\nlow = 3000\n");
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.budget_for_level(Some("low")), Some(3000));
+    assert_eq!(config.budget_for_level(Some("high")), Some(16384));
+
+    write(&dir.join("user.toml"), "[thinking.budgets]\nenormous = 1\n");
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("an unknown budget name is refused at load");
+    assert!(err.to_string().contains("enormous"), "{err}");
+}

@@ -554,6 +554,8 @@ mod cut_tests {
             id: id.to_string(),
             content: Vec::new(),
             reasoning: None,
+            reasoning_signature: None,
+            provider_thinking_level: None,
             model: None,
             provider: None,
             usage: Some(Usage {

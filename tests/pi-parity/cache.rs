@@ -29,6 +29,8 @@ fn assistant(id: &str, ts: u64, model: &str, usage: Usage) -> Record {
         id: id.to_string(),
         content: vec![],
         reasoning: None,
+        reasoning_signature: None,
+        provider_thinking_level: None,
         model: Some(model.to_string()),
         provider: Some("p".to_string()),
         usage: Some(usage),

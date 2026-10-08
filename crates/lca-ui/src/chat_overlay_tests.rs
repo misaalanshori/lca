@@ -407,6 +407,8 @@ fn a_replayed_session_renders_like_the_live_one() {
                     .into(),
             }],
             reasoning: Some("needs a table".into()),
+            reasoning_signature: None,
+            provider_thinking_level: None,
             model: Some("m".into()),
             provider: Some("p".into()),
             usage: Some(lca_protocol::Usage {

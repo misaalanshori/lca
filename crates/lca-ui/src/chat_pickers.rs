@@ -84,6 +84,27 @@ pub const TRUST_OPTIONS: &[&str] = &[
 pub struct ThinkingPicker {
     /// The highlighted row (0 = unset).
     pub selected: usize,
+    /// The offered level names in canonical order (gh #41): a model
+    /// without `high` never shows it. Every level when the host names
+    /// no set.
+    pub offered: Vec<String>,
+}
+
+/// The canonical level names in picker order.
+pub fn thinking_offered_all() -> Vec<String> {
+    THINKING_LEVELS
+        .iter()
+        .map(|(name, _)| (*name).to_string())
+        .collect()
+}
+
+/// The description for one level name, for the picker's rows.
+pub fn thinking_description(name: &str) -> &'static str {
+    THINKING_LEVELS
+        .iter()
+        .find(|(candidate, _)| *candidate == name)
+        .map(|(_, description)| *description)
+        .unwrap_or("")
 }
 
 /// The `/model` picker (R9): a searchable list of the provider's models,
@@ -255,10 +276,3 @@ pub const THINKING_LEVELS: &[(&str, &str)] = &[
     ("max", "Maximum reasoning"),
 ];
 
-/// The row index a level occupies in the `/thinking` picker (0 = unset).
-pub fn thinking_row(level: Option<&str>) -> usize {
-    level
-        .and_then(|level| THINKING_LEVELS.iter().position(|(name, _)| *name == level))
-        .map(|index| index + 1)
-        .unwrap_or(0)
-}

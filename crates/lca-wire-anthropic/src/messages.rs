@@ -15,8 +15,9 @@
 use lca_protocol::{CompletionRequest, ContentBlock, MessageRole, StreamEvent, ToolSpec, Usage};
 
 /// A thinking signature preserved for multi-turn continuity (#41): the
-/// decoder emits it when the thinking block closes.
-pub const THINKING_SIGNATURE_KIND: &str = "thinking-signature";
+/// decoder emits it when the thinking block closes. Re-exported from
+/// the protocol crate, where the host matches it.
+pub use lca_protocol::THINKING_SIGNATURE_KIND;
 
 /// Prompt-cache breakpoint both kits understand: Anthropic's ephemeral
 /// marker, attached to the system prompt, the last message block, and
@@ -111,6 +112,22 @@ pub fn build_messages_body(
     if !tools.is_empty() {
         body["tools"] = serde_json::Value::Array(tools);
     }
+    // gh #41: the host resolves the turn's level to a token budget
+    // (`thinking-budget-tokens` extra); budget-taking vendors send it
+    // as `thinking.enabled`, clamped so at least 1024 tokens remain
+    // for the answer under the shared ceiling (pi's `MIN_ANSWER_TOKENS`
+    // rule). No budget extra means no `thinking` key.
+    if let Some(budget) = request
+        .extras
+        .get("thinking-budget-tokens")
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        let room = max_tokens.saturating_sub(1024);
+        body["thinking"] = serde_json::json!({
+            "type": "enabled",
+            "budget_tokens": budget.min(u64::from(room)),
+        });
+    }
     body
 }
 
@@ -128,15 +145,46 @@ fn content_blocks(content: &[ContentBlock]) -> Vec<serde_json::Value> {
         blocks.push(serde_json::json!({"type": "text", "text": text}));
     }
     for block in content {
-        if let ContentBlock::Image { media_type, bytes } = block {
-            blocks.push(serde_json::json!({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": lca_protocol::base64_encode(bytes),
-                },
-            }));
+        match block {
+            ContentBlock::Reasoning {
+                reasoning,
+                signature,
+            } => {
+                // gh #41: replay resends the thinking verbatim with its
+                // signature; a signature over redacted (empty) text
+                // travels as `redacted_thinking`, pi's shape, so the
+                // vendor accepts the transcript.
+                match signature {
+                    Some(signature) if reasoning.is_empty() => {
+                        blocks.push(serde_json::json!({
+                            "type": "redacted_thinking",
+                            "data": signature,
+                        }));
+                    }
+                    Some(signature) => {
+                        blocks.push(serde_json::json!({
+                            "type": "thinking",
+                            "thinking": reasoning,
+                            "signature": signature,
+                        }));
+                    }
+                    // Unsigned reasoning never goes back on the wire:
+                    // resending thinking without its signature is what
+                    // signature-requiring vendors reject.
+                    None => {}
+                }
+            }
+            ContentBlock::Image { media_type, bytes } => {
+                blocks.push(serde_json::json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": lca_protocol::base64_encode(bytes),
+                    },
+                }));
+            }
+            _ => {}
         }
     }
     blocks
@@ -148,6 +196,61 @@ fn tool_declaration(tool: &ToolSpec) -> serde_json::Value {
         "name": tool.name,
         "description": tool.description,
         "input_schema": tool.parameters,
+    })
+}
+
+/// The beta enabling cache-preserving mid-conversation tool changes
+/// (gh #201, pi's port of Anthropic's `inline-tools-2026-09-15`): the
+/// extension (#183) sends it as the `anthropic-beta` header when the
+/// frozen list below is in play.
+pub const INLINE_TOOLS_BETA: &str = "inline-tools-2026-09-15";
+
+/// The stable placeholder freezing the top-level tool list (gh #201):
+/// pi's name verbatim (wire-visible), so the cached prefix survives
+/// tools that arrive later.
+pub const DEFERRED_PLACEHOLDER: &str = "__pi_deferred_placeholder__";
+
+/// The frozen top-level tool list (gh #201): the turn-one
+/// declarations plus the deferred placeholder, byte-stable across
+/// every later turn. Tools introduced later never touch this list —
+/// they travel as system `tool_addition` blocks, and removals as
+/// `tool_removal` blocks, so the prompt-cache prefix never
+/// invalidates. The extension (#183) snapshots this once and sends
+/// the `INLINE_TOOLS_BETA` header with it.
+pub fn frozen_tools(tools: &[ToolSpec]) -> Vec<serde_json::Value> {
+    let mut frozen: Vec<serde_json::Value> = tools.iter().map(tool_declaration).collect();
+    frozen.push(serde_json::json!({
+        "name": DEFERRED_PLACEHOLDER,
+        "defer_loading": true,
+    }));
+    frozen
+}
+
+/// A mid-conversation tool definition for a system message (gh #201):
+/// the full definition by value at the exact turn it arrives.
+pub fn tool_addition_block(tool: &ToolSpec) -> serde_json::Value {
+    serde_json::json!({
+        "type": "tool_addition",
+        "tool": {
+            "type": "tool_definition",
+            "definition": {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.parameters,
+            },
+        },
+    })
+}
+
+/// A mid-conversation tool removal for a system message (gh #201): a
+/// reference by name, leaving the frozen list untouched.
+pub fn tool_removal_block(name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "tool_removal",
+        "tool": {
+            "type": "tool_reference",
+            "name": name,
+        },
     })
 }
 

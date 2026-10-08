@@ -76,6 +76,17 @@ pub enum Record {
         /// Reasoning text, when the model produced one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reasoning: Option<String>,
+        /// The thinking signature the model issued with its reasoning
+        /// (gh #41, pi's `thinkingSignature`): resent verbatim on
+        /// replay, preserved across compaction. Absent for vendors
+        /// without signatures and on old records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_signature: Option<String>,
+        /// The thinking level the provider ran at (gh #41, pi's
+        /// `providerThinkingLevel`). Absent when unset and on old
+        /// records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_thinking_level: Option<String>,
         /// Model identifier used.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,

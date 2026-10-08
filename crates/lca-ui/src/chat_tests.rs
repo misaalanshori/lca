@@ -1115,3 +1115,33 @@ mod overlay_tests;
 #[cfg(test)]
 #[path = "chat_viewport_tests.rs"]
 mod viewport_tests;
+
+// Verifies: gh #41 (a model without `high` thinking does not offer
+// it): the picker hides unsupported levels instead of merely
+// clamping after the fact.
+#[test]
+fn a_model_without_high_thinking_does_not_offer_it() {
+    let mut chat = chat();
+    chat.world.options.hooks.thinking_offered = Some(std::sync::Arc::new(|| {
+        vec!["off".to_string(), "low".to_string()]
+    }));
+    chat.open_thinking_picker();
+    let picker = chat.thinking_picker.expect("the picker opens");
+    assert_eq!(picker.offered, vec!["off".to_string(), "low".to_string()]);
+    assert!(
+        !picker.offered.iter().any(|level| level == "high"),
+        "high is hidden, not offered: {:?}",
+        picker.offered
+    );
+}
+
+// Verifies: gh #41 (no offered set means every level, the historical
+// behavior for models without a configured set).
+#[test]
+fn a_model_without_a_set_offers_every_level() {
+    let mut chat = chat();
+    chat.open_thinking_picker();
+    let picker = chat.thinking_picker.expect("the picker opens");
+    assert_eq!(picker.offered.len(), 7, "unset + six levels");
+    assert!(picker.offered.contains(&"high".to_string()));
+}

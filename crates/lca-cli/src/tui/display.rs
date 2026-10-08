@@ -654,6 +654,8 @@ mod tests {
                 id: id.to_string(),
                 content: Vec::new(),
                 reasoning: None,
+                reasoning_signature: None,
+                provider_thinking_level: None,
                 model: Some(model.to_string()),
                 provider: Some("test".to_string()),
                 usage: Some(usage),

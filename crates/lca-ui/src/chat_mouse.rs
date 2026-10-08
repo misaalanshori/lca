@@ -8,7 +8,7 @@
 //! extension statuses together, so a cell cannot name one owner.
 
 use super::chat::Chat;
-use super::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
+use super::chat_pickers::TRUST_OPTIONS;
 use super::ext_widgets::{ButtonHit, widget_render};
 use super::render::{TOOLTIP_MAX_WIDTH, paint_tooltip, tooltip_lines, tooltip_place};
 use crate::transcript::EntryHit;
@@ -525,9 +525,8 @@ impl Chat {
                 .chain((0..TRUST_OPTIONS.len()).map(Some))
                 .collect()
         } else if let Some(picker) = &self.thinking_picker {
-            let _ = picker;
             std::iter::repeat_n(None, 2)
-                .chain((0..THINKING_LEVELS.len() + 1).map(Some))
+                .chain((0..picker.offered.len() + 1).map(Some))
                 .collect()
         } else if let Some(picker) = &self.settings_picker {
             picker.mouse_rows()
@@ -608,7 +607,7 @@ impl Chat {
         } else if let Some(picker) = self.trust_picker.as_mut() {
             picker.selected = item.min(TRUST_OPTIONS.len().saturating_sub(1));
         } else if let Some(picker) = self.thinking_picker.as_mut() {
-            picker.selected = item.min(THINKING_LEVELS.len());
+            picker.selected = item.min(picker.offered.len());
         } else if let Some(picker) = self.settings_picker.as_mut() {
             picker.selected = item.min(picker.rows.len().saturating_sub(1));
         } else if let Some(picker) = self.model_picker.as_mut() {

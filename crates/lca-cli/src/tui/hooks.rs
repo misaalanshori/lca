@@ -124,6 +124,31 @@ impl Ui {
                 let ui = self.clone();
                 Some(Arc::new(move |forward: bool| ui.cycle_model(forward)))
             },
+            thinking_offered: {
+                let ui = self.clone();
+                // gh #41: the picker offers the current model's allowed
+                // set in canonical order (a model without `high` never
+                // shows it); models without a set offer everything.
+                Some(Arc::new(move || {
+                    let model = ui
+                        .model_cell
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .id
+                        .clone();
+                    let config = crate::lock(&ui.config);
+                    const ORDER: &[&str] =
+                        &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+                    match config.allowed_thinking_levels(&model) {
+                        Some(allowed) => ORDER
+                            .iter()
+                            .filter(|level| allowed.iter().any(|name| name == *level))
+                            .map(|level| (*level).to_string())
+                            .collect(),
+                        None => ORDER.iter().map(|level| (*level).to_string()).collect(),
+                    }
+                }))
+            },
             set_thinking: {
                 let ui = self.clone();
                 Some(Arc::new(move |level: Option<&str>| {

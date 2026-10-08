@@ -371,6 +371,8 @@ async fn compaction_and_transform_agree_across_modes_with_completion_denied() {
                     text: "reply".to_string(),
                 }],
                 reasoning: None,
+                reasoning_signature: None,
+                provider_thinking_level: None,
                 usage: None,
                 provider: Some("fake".to_string()),
                 model: Some("faux-1".to_string()),

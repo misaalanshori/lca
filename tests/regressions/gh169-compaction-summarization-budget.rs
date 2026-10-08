@@ -133,6 +133,8 @@ fn seed(f: &Fixture, exchanges: usize) {
                         text: filler.clone(),
                     }],
                     reasoning: None,
+                    reasoning_signature: None,
+                    provider_thinking_level: None,
                     model: Some("faux-1".to_string()),
                     provider: Some("faux".to_string()),
                     usage: None,

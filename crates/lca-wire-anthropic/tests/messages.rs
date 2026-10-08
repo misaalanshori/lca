@@ -312,3 +312,165 @@ fn an_overloaded_error_event_is_retryable() {
     );
     assert!(retryable, "overload clears itself on retry");
 }
+
+// Verifies: gh #41 (replay resends thinking verbatim with its
+// signature); unsigned reasoning never returns to the wire.
+#[test]
+fn replay_resends_thinking_with_its_signature() {
+    let mut request = user_request();
+    request.messages.push(lca_protocol::ChatMessage {
+        role: MessageRole::Assistant,
+        content: vec![
+            ContentBlock::Reasoning {
+                reasoning: "because".to_string(),
+                signature: Some("sig-bytes".to_string()),
+            },
+            ContentBlock::Text {
+                text: "done".to_string(),
+            },
+        ],
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        usage: None,
+        extras: Default::default(),
+    });
+    let body = build_messages_body(&request, "", "m", 1024, false);
+    let blocks = body["messages"][1]["content"].as_array().expect("blocks");
+    let thinking = blocks
+        .iter()
+        .find(|block| block["type"] == "thinking")
+        .expect("the thinking block is replayed");
+    assert_eq!(thinking["thinking"], "because");
+    assert_eq!(thinking["signature"], "sig-bytes");
+}
+
+// Verifies: gh #41 (a signature over redacted text travels as
+// `redacted_thinking`, pi's shape).
+#[test]
+fn redacted_thinking_keeps_its_signature() {
+    let mut request = user_request();
+    request.messages.push(lca_protocol::ChatMessage {
+        role: MessageRole::Assistant,
+        content: vec![ContentBlock::Reasoning {
+            reasoning: String::new(),
+            signature: Some("sig-bytes".to_string()),
+        }],
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        usage: None,
+        extras: Default::default(),
+    });
+    let body = build_messages_body(&request, "", "m", 1024, false);
+    let blocks = body["messages"][1]["content"].as_array().expect("blocks");
+    assert_eq!(blocks.len(), 1, "only the redacted block: {blocks:?}");
+    assert_eq!(blocks[0]["type"], "redacted_thinking");
+    assert_eq!(blocks[0]["data"], "sig-bytes");
+}
+
+// Verifies: gh #41 (the host's budget extra becomes the wire's
+// `thinking.enabled`; the budget never eats the answer's room).
+#[test]
+fn the_budget_extra_becomes_thinking_enabled() {
+    let mut request = user_request();
+    request
+        .extras
+        .insert("thinking-budget-tokens".to_string(), "8192".to_string());
+    let body = build_messages_body(&request, "", "m", 16384, false);
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert_eq!(body["thinking"]["budget_tokens"], 8192);
+
+    // A small ceiling clamps the budget to its room (pi's reserve).
+    let body = build_messages_body(&request, "", "m", 2048, false);
+    assert_eq!(body["thinking"]["budget_tokens"], 1024);
+
+    // No extra, no thinking key.
+    let body = build_messages_body(&user_request(), "", "m", 16384, false);
+    assert!(body.get("thinking").is_none());
+}
+
+// Verifies: gh #201 (the frozen list carries the placeholder and
+// never changes when tools arrive mid-conversation).
+#[test]
+fn the_frozen_tool_list_survives_mid_conversation_changes() {
+    let initial = vec![lca_protocol::ToolSpec {
+        name: "read".to_string(),
+        description: "read".to_string(),
+        parameters: serde_json::json!({"type": "object"}),
+        exposure: lca_protocol::ToolExposure::Direct,
+        namespace: None,
+        annotations: None,
+        extras: Default::default(),
+    }];
+    let frozen = lca_wire_anthropic::frozen_tools(&initial);
+    assert_eq!(
+        frozen.last().expect("placeholder")["name"],
+        "__pi_deferred_placeholder__"
+    );
+    assert_eq!(frozen.last().expect("placeholder")["defer_loading"], true);
+    let snapshot = serde_json::to_string(&frozen).expect("snapshot");
+
+    // Turn two: a tool arrives as a system block; the frozen list is
+    // byte-for-byte the snapshot.
+    let late = lca_protocol::ToolSpec {
+        name: "mcp_jira_lookup".to_string(),
+        description: "lookup".to_string(),
+        parameters: serde_json::json!({"type": "object"}),
+        exposure: lca_protocol::ToolExposure::Direct,
+        namespace: None,
+        annotations: None,
+        extras: Default::default(),
+    };
+    let addition = lca_wire_anthropic::tool_addition_block(&late);
+    assert_eq!(addition["type"], "tool_addition");
+    assert_eq!(addition["tool"]["definition"]["name"], "mcp_jira_lookup");
+    let removal = lca_wire_anthropic::tool_removal_block("mcp_jira_lookup");
+    assert_eq!(removal["type"], "tool_removal");
+    assert_eq!(removal["tool"]["name"], "mcp_jira_lookup");
+    assert_eq!(
+        serde_json::to_string(&frozen).expect("resnapshot"),
+        snapshot,
+        "the top-level list never moves"
+    );
+    assert_eq!(
+        lca_wire_anthropic::INLINE_TOOLS_BETA,
+        "inline-tools-2026-09-15"
+    );
+}
+
+// Verifies: gh #201 riding gh #41 (a mid-conversation turn resends
+// thinking signatures beside frozen tools: cache prefix and replay
+// continuity together).
+#[test]
+fn signatures_replay_beside_frozen_tools() {
+    let mut request = user_request();
+    request.tools = vec![lca_protocol::ToolSpec {
+        name: "read".to_string(),
+        description: "read".to_string(),
+        parameters: serde_json::json!({"type": "object"}),
+        exposure: lca_protocol::ToolExposure::Direct,
+        namespace: None,
+        annotations: None,
+        extras: Default::default(),
+    }];
+    // The extension (#183) sends the frozen list once; the kit pins
+    // that freezing the list keeps every declaration verbatim.
+    let frozen = lca_wire_anthropic::frozen_tools(&request.tools);
+    assert_eq!(frozen[0]["name"], "read");
+    request.messages.push(lca_protocol::ChatMessage {
+        role: MessageRole::Assistant,
+        content: vec![ContentBlock::Reasoning {
+            reasoning: "because".to_string(),
+            signature: Some("sig-bytes".to_string()),
+        }],
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        usage: None,
+        extras: Default::default(),
+    });
+    let body = build_messages_body(&request, "", "m", 16384, false);
+    let blocks = body["messages"][1]["content"].as_array().expect("blocks");
+    assert!(
+        blocks.iter().any(|block| block["signature"] == "sig-bytes"),
+        "the signature replays: {blocks:?}"
+    );
+}

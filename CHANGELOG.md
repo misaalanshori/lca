@@ -126,6 +126,19 @@ Dates are UTC.
 - **`builtin:` disable syntax (gh #139).** `lca ext disable
   builtin:compaction-default` writes the same per-project flag the
   loader reads for the plain name (pi's spelling); no second record.
+- **Thinking budgets, signatures, picker hiding (gh #41).**
+  `[thinking.budgets]` tunes per-level token budgets (pi's
+  built-ins) onto the Anthropic wire as `thinking.enabled`; the
+  assistant record persists `reasoning_signature` +
+  `provider_thinking_level` and replay resends signatures verbatim
+  (redacted blocks keep theirs); the `/thinking` picker hides
+  levels the model does not offer. Deferred responses stay a
+  documented deferral (no producer yet).
+- **Anthropic inline-tools beta kit (gh #201).** `frozen_tools` +
+  `__pi_deferred_placeholder__`, `tool_addition`/`tool_removal`
+  system blocks, and the `inline-tools-2026-09-15` beta constant
+  land in `lca-wire-anthropic`; the header and turn state ride
+  with `extensions/anthropic` (#183).
 - **Retry inventory (gh #83).** `provider.retry_base_delay_ms`
   tunes the backoff base (pi's `retry.baseDelayMs`); `retry_limit = 0`
   is pi's `retry.enabled = false`. No transport switch, no max-delay

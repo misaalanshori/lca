@@ -46,7 +46,8 @@ pub const TREE_FILTER_MODES: &[&str] = &["default", "no-tools", "user-only", "la
 /// Every configuration key an `LCA_` environment variable can set.
 /// `docs/configuration.md` documents two more that have no environment
 /// form because they are tables, not single values: `models.thinking_levels`
-/// (per-model lists) and `permissions.proposals`.
+/// (per-model lists), `thinking.budgets` (per-level token counts), and
+/// `permissions.proposals`.
 pub const KNOWN_KEYS: &[&str] = &[
     "provider",
     "model",
@@ -318,6 +319,8 @@ pub enum TypedValue {
     List(Vec<String>),
     /// Per-model allowed thinking levels (`models.thinking_levels`).
     ThinkingLevels(BTreeMap<String, Vec<String>>),
+    /// Per-level token-budget overrides (`thinking.budgets`).
+    Budgets(BTreeMap<String, u64>),
     /// A validated non-negative integer.
     Count(u64),
     /// A validated floating-point number.

@@ -11,6 +11,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::usage::Usage;
 
+/// A thinking signature preserved for multi-turn continuity (gh #41):
+/// the Anthropic kit emits it as a [`StreamEvent::VendorEvent`] when a
+/// thinking block closes, and the host resends it on replay — vendors
+/// that require signatures reject transcripts that drop them. The kind
+/// lives here (not in the kit) so the host matches it without
+/// depending on any wire crate.
+pub const THINKING_SIGNATURE_KIND: &str = "thinking-signature";
+
 /// One event from a streaming completion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]

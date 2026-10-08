@@ -3,7 +3,7 @@
 
 use super::chat::Chat;
 use super::chat_commands::{paste_text, printable};
-use super::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
+use super::chat_pickers::TRUST_OPTIONS;
 use super::state::{Action, TrustChoice};
 
 impl Chat {
@@ -228,7 +228,7 @@ impl Chat {
                     let level = if picker.selected == 0 {
                         None
                     } else {
-                        Some(THINKING_LEVELS[picker.selected - 1].0.to_string())
+                        picker.offered.get(picker.selected - 1).cloned()
                     };
                     match &self.world.options.hooks.set_thinking {
                         // gh #8 phase 4: the host clamps the pick to the
@@ -268,7 +268,7 @@ impl Chat {
                     self.thinking_picker = Some(picker);
                 }
                 Some("down") | Some("j") => {
-                    picker.selected = (picker.selected + 1).min(THINKING_LEVELS.len());
+                    picker.selected = (picker.selected + 1).min(picker.offered.len());
                     self.thinking_picker = Some(picker);
                 }
                 _ => self.thinking_picker = Some(picker),

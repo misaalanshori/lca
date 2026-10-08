@@ -106,6 +106,8 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 id: "a".into(),
                 content: vec![],
                 reasoning: None,
+                reasoning_signature: None,
+                provider_thinking_level: None,
                 model: None,
                 provider: None,
                 usage: None,
@@ -519,4 +521,62 @@ fn chat_messages_carry_tool_calls_and_results() {
     assert_eq!(result.tool_call_id.as_deref(), Some("c1"));
     assert_eq!(result.role, MessageRole::Tool);
     assert_eq!(result.plain_text(), "contents");
+}
+
+// Verifies: gh #41 (pi's `thinkingSignature`/`providerThinkingLevel`
+// row) — the assistant record persists both, and a log written before
+// the fields existed still loads (the session-log unknown-fields
+// rule: additive `Option` fields under `default` + `skip`).
+#[test]
+fn assistant_thinking_fields_round_trip_and_old_logs_load() {
+    let record = Record::Assistant {
+        v: 1,
+        ts: 1,
+        id: "a".into(),
+        content: vec![ContentBlock::Reasoning {
+            reasoning: "because".into(),
+            signature: Some("sig-bytes".into()),
+        }],
+        reasoning: Some("because".into()),
+        reasoning_signature: Some("sig-bytes".into()),
+        provider_thinking_level: Some("high".into()),
+        model: None,
+        provider: None,
+        usage: None,
+    };
+    let json = serde_json::to_string(&record).expect("serialize");
+    for field in [
+        "\"reasoning_signature\":\"sig-bytes\"",
+        "\"provider_thinking_level\":\"high\"",
+        "\"signature\":\"sig-bytes\"",
+    ] {
+        assert!(json.contains(field), "the field persists: {json}");
+    }
+    let back: Record = serde_json::from_str(&json).expect("round trip");
+    assert!(
+        matches!(
+            back,
+            Record::Assistant {
+                reasoning_signature: Some(_),
+                provider_thinking_level: Some(_),
+                ..
+            }
+        ),
+        "the fields survive: {json}"
+    );
+
+    // A 0.5-era assistant line without the fields loads with `None`s.
+    let old = r#"{"t":"assistant","v":1,"ts":1,"id":"a","content":[],"model":"m"}"#;
+    let back: Record = serde_json::from_str(old).expect("old logs load");
+    assert!(
+        matches!(
+            back,
+            Record::Assistant {
+                reasoning_signature: None,
+                provider_thinking_level: None,
+                ..
+            }
+        ),
+        "absent fields default: {old}"
+    );
 }

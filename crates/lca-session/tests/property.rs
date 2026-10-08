@@ -37,6 +37,8 @@ fn arb_record(n: u32) -> impl Strategy<Value = Record> {
             id: arb_id(n),
             content: vec![ContentBlock::Text { text }],
             reasoning: Some(reasoning),
+            reasoning_signature: None,
+            provider_thinking_level: None,
             model: Some("model".into()),
             provider: Some("provider".into()),
             usage: None,

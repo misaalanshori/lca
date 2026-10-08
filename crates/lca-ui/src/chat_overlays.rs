@@ -4,7 +4,7 @@
 use super::chat::{Chat, highlight_matches};
 use super::ext_widgets::widget_lines;
 use super::render::{overlay_box, overlay_box_picker, side_panel};
-use crate::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
+use crate::chat_pickers::TRUST_OPTIONS;
 
 // E3: a picker owns the keyboard while open, so a slash command typed into
 // one lands in its search box. The shared hint row says what the keys do,
@@ -337,15 +337,18 @@ impl Chat {
             let unset = if picker.selected == 0 { '>' } else { ' ' };
             let unset_current = if current.is_none() { "  ✓" } else { "" };
             body.push(format!(" {unset} unset (provider default){unset_current}"));
-            for (index, (name, description)) in THINKING_LEVELS.iter().enumerate() {
+            for (index, name) in picker.offered.iter().enumerate() {
                 let row = index + 1;
                 let mark = if picker.selected == row { '>' } else { ' ' };
-                let current_mark = if current.as_deref() == Some(*name) {
+                let current_mark = if current.as_deref() == Some(name.as_str()) {
                     "  ✓"
                 } else {
                     ""
                 };
-                body.push(format!(" {mark} {name:<8} {description}{current_mark}"));
+                body.push(format!(
+                    " {mark} {name:<8} {}{current_mark}",
+                    super::chat_pickers::thinking_description(name)
+                ));
             }
             self.picker_overlay(
                 viewport,

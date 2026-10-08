@@ -106,6 +106,20 @@ impl Config {
         self.provider_retry_limit
     }
 
+    /// Token budget for one thinking level (gh #41, pi's
+    /// `thinkingBudgets` with its built-ins): the override wins, an
+    /// unset level or `off` budgets nothing, and `xhigh`/`max` spend
+    /// `high`'s budget (pi clamps extended levels the same way).
+    pub fn budget_for_level(&self, level: Option<&str>) -> Option<u64> {
+        budget_for_level_in(&self.thinking_budgets, level)
+    }
+
+    /// The override map itself (the agent loop carries it; the
+    /// request builder resolves per request).
+    pub fn thinking_budgets(&self) -> &std::collections::BTreeMap<String, u64> {
+        &self.thinking_budgets
+    }
+
     /// First retry delay in milliseconds (gh #83, pi's
     /// `retry.baseDelayMs`); doubles per attempt (FR-CORE-6).
     pub fn provider_retry_base_delay_ms(&self) -> u64 {
@@ -573,4 +587,28 @@ impl Config {
             (key, value, source)
         })
     }
+}
+
+/// Token budget for one thinking level over an explicit override map
+/// (gh #41): the pure core of [`Config::budget_for_level`], so the
+/// agent loop (which carries only the map) resolves per request
+/// without reimplementing the table.
+pub fn budget_for_level_in(
+    overrides: &std::collections::BTreeMap<String, u64>,
+    level: Option<&str>,
+) -> Option<u64> {
+    let level = match level {
+        None | Some("off") => return None,
+        Some("xhigh") | Some("max") => "high",
+        Some(level) => level,
+    };
+    if !["minimal", "low", "medium", "high"].contains(&level) {
+        return None;
+    }
+    let builtin = super::DEFAULT_THINKING_BUDGETS
+        .iter()
+        .find(|(name, _)| *name == level)
+        .map(|(_, budget)| *budget)
+        .unwrap_or(0);
+    Some(overrides.get(level).copied().unwrap_or(builtin))
 }

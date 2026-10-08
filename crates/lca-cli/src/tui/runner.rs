@@ -106,6 +106,9 @@ fn turn_worker(
                 .clone();
             crate::lock(&ui.config).clamp_thinking(level.as_deref(), &turn_config.model)
         };
+        // gh #41: the turn's budget follows its resolved level.
+        turn_config.thinking_budget =
+            crate::lock(&ui.config).budget_for_level(turn_config.reasoning_effort.as_deref());
         turn_config.steer = steer;
         // R3: read the session the interface is showing *now*, so a `/tree`
         // or `/resume` switch takes effect on the next turn.

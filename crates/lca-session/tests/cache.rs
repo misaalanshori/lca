@@ -14,6 +14,8 @@ fn assistant(id: &str, ts: u64, usage: Usage) -> Record {
         id: id.to_string(),
         content: vec![ContentBlock::Text { text: "ok".into() }],
         reasoning: None,
+        reasoning_signature: None,
+        provider_thinking_level: None,
         model: Some("model-a".into()),
         provider: Some("fake".into()),
         usage: Some(usage),
@@ -129,6 +131,8 @@ fn compaction_resets_the_baseline_but_model_switches_do_not() {
             id: "t3".into(),
             content: vec![ContentBlock::Text { text: "ok".into() }],
             reasoning: None,
+            reasoning_signature: None,
+            provider_thinking_level: None,
             model: Some("model-b".into()),
             provider: Some("fake".into()),
             usage: Some(Usage {
@@ -209,6 +213,8 @@ fn zero_cache_turn(id: &str, ts: u64, prompt: u64) -> Record {
         id: id.to_string(),
         content: vec![ContentBlock::Text { text: "ok".into() }],
         reasoning: None,
+        reasoning_signature: None,
+        provider_thinking_level: None,
         model: Some("model-a".into()),
         provider: Some("fake".into()),
         usage: Some(Usage {

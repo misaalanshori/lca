@@ -441,6 +441,9 @@ pub type ModelSave = Arc<dyn Fn(&str) -> String + Send + Sync>;
 /// allowed levels, so it clamps, writes the cell, persists the effective
 /// value, and says what actually landed.
 pub type ThinkingSetter = Arc<dyn Fn(Option<&str>) -> String + Send + Sync>;
+/// The `/thinking` picker's offered levels, resolved for the current
+/// model by the host.
+pub type ThinkingOffered = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 
 /// One row of the `/settings` selector (gh #30): the key, its current
 /// value, the layer that value won on (FR-CFG-2's column, kept from the
@@ -558,6 +561,11 @@ pub struct UiHooks {
     /// `/thinking`'s Enter: clamp the chosen level to the current model's
     /// set, store it, and return the notice.
     pub set_thinking: Option<ThinkingSetter>,
+    /// The levels the `/thinking` picker offers (gh #41): the current
+    /// model's allowed set in canonical order. Absent means every
+    /// level (a host without per-model sets); unsupported levels are
+    /// hidden, never merely clamped after the fact.
+    pub thinking_offered: Option<ThinkingOffered>,
     /// The `/scoped-models` checklist rows with scope flags (gh #204).
     pub scoped_models: Option<ScopedModels>,
     /// The checklist's Enter: persist the checked ids and update the

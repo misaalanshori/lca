@@ -51,7 +51,7 @@ The `v` field is per record, not per file. A file written across a format upgrad
 
 `user` holds one user message. Fields: `id`, `content`, and optional `attachments` as a list of hashes. An optional `queue` field marks a message submitted while a turn was running (ADR-0038): `"steer"` joins the turn's input at the next model-call boundary, `"follow-up"` runs when the turn ends. Its position in the log is its injection point; absent for an ordinary message. Assembly copies the marker into the message's `extras["queue"]`, which is how a context-transform extension sees it.
 
-`assistant` holds one model message. Fields: `id`, `content`, optional `reasoning`, `model`, `provider`, and `usage` with input tokens, output tokens, cache-read, cache-write, and extended-cache-write tokens, and cost.
+`assistant` holds one model message. Fields: `id`, `content`, optional `reasoning`, optional `reasoning_signature` (the thinking signature resent verbatim on replay, gh #41), optional `provider_thinking_level` (the level the provider ran at), `model`, `provider`, and `usage` with input tokens, output tokens, cache-read, cache-write, and extended-cache-write tokens, and cost. Reasoning content blocks may carry `signature` beside `reasoning`; old lines without the new fields load with absent values (unknown-fields rule).
 
 `tool-call` holds one call the model requested. Fields: `id`, `call_id`, `name`, `arguments` as a JSON string, and `source` naming whether the tool is built in or comes from an extension.
 

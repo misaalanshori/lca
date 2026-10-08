@@ -127,6 +127,10 @@ impl Agent<'_> {
 
         let mut text = String::new();
         let mut reasoning = String::new();
+        // gh #41: the latest thinking signature (one reasoning run
+        // carries one; a later block replaces an earlier one, matching
+        // the transcript order replay resends).
+        let mut signature: Option<String> = None;
         let mut acc = ToolCallAccumulator::default();
         let mut usage = Usage::default();
         let mut failure: Option<(String, &'static str, bool)> = None;
@@ -156,6 +160,15 @@ impl Agent<'_> {
                     | StreamEvent::ToolCallEnd { .. })) => {
                         stream_log.push(event.clone());
                         acc.handle(event)
+                    }
+                    Some(StreamEvent::VendorEvent { kind, payload })
+                        if kind == lca_protocol::THINKING_SIGNATURE_KIND =>
+                    {
+                        stream_log.push(StreamEvent::VendorEvent {
+                            kind: kind.clone(),
+                            payload: payload.clone(),
+                        });
+                        note_signature(&mut signature, &payload);
                     }
                     Some(StreamEvent::Usage { usage: reported }) => {
                         stream_log.push(StreamEvent::Usage { usage: reported.clone() });
@@ -205,6 +218,9 @@ impl Agent<'_> {
                             }
                             StreamEvent::VendorEvent { kind, payload } => {
                                 stream_log.push(StreamEvent::VendorEvent { kind: kind.clone(), payload: payload.clone() });
+                                if kind == lca_protocol::THINKING_SIGNATURE_KIND {
+                                    note_signature(&mut signature, &payload);
+                                }
                                 tracing::debug!(%kind, %payload, "vendor event");
                             }
                         }
@@ -236,9 +252,19 @@ impl Agent<'_> {
             } else {
                 Some(reasoning)
             },
+            signature,
             calls,
             protocol_errors,
             usage,
         })
+    }
+}
+
+// gh #41: the latest thinking signature (one reasoning run carries
+// one; a later block replaces an earlier one, matching the transcript
+// order replay resends).
+fn note_signature(signature: &mut Option<String>, payload: &serde_json::Value) {
+    if let Some(bytes) = payload.get("signature").and_then(|value| value.as_str()) {
+        *signature = Some(bytes.to_string());
     }
 }

@@ -170,6 +170,16 @@ impl TurnBuilder {
         self
     }
 
+    /// A thinking signature for the reasoning so far (gh #41): the
+    /// shape the Anthropic kit emits when a thinking block closes.
+    pub fn thinking_signature(mut self, signature: &str) -> Self {
+        self.events.push(Step::Event(StreamEvent::VendorEvent {
+            kind: lca_protocol::THINKING_SIGNATURE_KIND.to_string(),
+            payload: serde_json::json!({"signature": signature}),
+        }));
+        self
+    }
+
     /// A complete tool call: start, one argument fragment, end.
     pub fn tool_call(mut self, name: &str, arguments: &str) -> Self {
         let call_id = format!("call-{}", self.events.len());

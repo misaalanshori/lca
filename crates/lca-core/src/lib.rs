@@ -119,6 +119,10 @@ pub struct AgentConfig {
     /// The data home (`~/.lca`): the agent hands it to the tool
     /// executor as `LCA_DATA_DIR` (gh #129).
     pub data_dir: std::path::PathBuf,
+    /// The turn's thinking token budget (gh #41): resolved by the host
+    /// from the effective level and `thinking.budgets` once per turn.
+    /// `None` budgets nothing (level unset, `off`, or unknown).
+    pub thinking_budget: Option<u64>,
     /// Messages the interface queued while the turn runs; drained at each
     /// model-call boundary (ADR-0038).
     pub steer: lca_protocol::SteerQueue,
@@ -199,6 +203,7 @@ impl Default for AgentConfig {
             edit_requires_read: false,
             auto_resize_images: true,
             data_dir: std::path::PathBuf::new(),
+            thinking_budget: None,
             steer: lca_protocol::steer_queue(),
         }
     }
