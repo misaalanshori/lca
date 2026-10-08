@@ -70,6 +70,85 @@ pub fn mouse_enable_sequences() -> &'static str {
 /// The mouse-disable sequences.
 pub const MOUSE_DISABLE: &str = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l";
 
+/// Wheel velocity acceleration (gh #206, pi's `WheelScrollAccelerator`
+/// from `wheel-scroll.ts` with LCA's fixed three-line `auto` replaced
+/// by pi's own velocity curve): an isolated notch moves one line, while
+/// a fast spin scales toward six lines per event. Sub-notch bursts
+/// (under 5 ms apart - one physical notch, or a high-resolution
+/// source) move one line each without accelerating; a pause past
+/// 200 ms ends the gesture. Fractional lines carry over, so slow spins
+/// stay smooth instead of stepping in whole lines.
+#[derive(Debug, Clone)]
+pub struct WheelAccel {
+    last_ms: Option<u64>,
+    last_dir: i8,
+    average_gap: Option<f64>,
+    carry: f64,
+}
+
+impl WheelAccel {
+    /// A fresh accelerator.
+    pub fn new() -> Self {
+        Self {
+            last_ms: None,
+            last_dir: 0,
+            average_gap: None,
+            carry: 0.0,
+        }
+    }
+
+    /// Forget any gesture (gh #206): the host resets when the setting
+    /// changes, so a stale velocity never leaks across modes.
+    pub fn reset(&mut self) {
+        self.last_ms = None;
+        self.last_dir = 0;
+        self.average_gap = None;
+        self.carry = 0.0;
+    }
+
+    /// Lines for a wheel event in `direction` (-1 up, +1 down) at
+    /// `now_ms` (gh #206): pi's gap math, one line for an isolated
+    /// notch up to six for a fast spin.
+    pub fn next(&mut self, direction: i8, now_ms: u64) -> u16 {
+        // Several events closer than this belong to one physical notch
+        // (pi's Ghostty note: ~4 ms apart) or a high-resolution source.
+        const BURST_GAP_MS: u64 = 5;
+        // A pause longer than this ends a scroll gesture.
+        const GESTURE_GAP_MS: u64 = 200;
+        // The event gap that maps to one line per event; faster events
+        // scale up proportionally.
+        const REFERENCE_GAP_MS: f64 = 100.0;
+        const MAX_AUTO_LINES: f64 = 6.0;
+        let gap = now_ms.saturating_sub(self.last_ms.unwrap_or(now_ms));
+        let same = direction == self.last_dir && self.last_ms.is_some() && gap <= GESTURE_GAP_MS;
+        self.last_ms = Some(now_ms);
+        self.last_dir = direction;
+        if !same {
+            self.average_gap = None;
+            self.carry = 0.0;
+            return 1;
+        }
+        if gap < BURST_GAP_MS {
+            return 1;
+        }
+        self.average_gap = Some(match self.average_gap {
+            Some(average) => (average + gap as f64) / 2.0,
+            None => gap as f64,
+        });
+        let average = self.average_gap.unwrap_or(REFERENCE_GAP_MS).max(1.0);
+        let lines = MAX_AUTO_LINES.min(REFERENCE_GAP_MS / average).max(1.0) + self.carry;
+        let whole = lines.floor() as u16;
+        self.carry = lines - f64::from(whole);
+        whole.max(1)
+    }
+}
+
+impl Default for WheelAccel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// How a copy completed, for honest reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyOutcome {
@@ -95,9 +174,19 @@ pub struct AltScreenRenderer {
     /// Whether to copy on release.
     pub copy_on_select: bool,
     /// Fullscreen wheel lines per event (gh #82, pi's
-    /// `fullscreenWheelScrollLines` without the platform sniff: the
-    /// host syncs `auto` as 3). The floor keeps a zero away.
+    /// `fullscreenWheelScrollLines` without the platform sniff): the
+    /// fixed step for a numeric setting. The floor keeps a zero away.
     pub wheel_lines: u8,
+    /// Whether the wheel accelerates with velocity (gh #206, pi's
+    /// `"auto"`): an isolated notch moves one line, a fast spin up to
+    /// six. The host syncs this from the setting and resets the
+    /// accelerator whenever it changes.
+    pub wheel_auto: bool,
+    /// The velocity state for `wheel_auto` (gh #206).
+    wheel_accel: WheelAccel,
+    /// The clock `wheel_auto` measures gaps against (gh #206): the
+    /// first wheel event starts it.
+    wheel_epoch: Option<std::time::Instant>,
     last_click: Option<(std::time::Instant, u16, u16)>,
     click_count: u8,
     /// While dragging, the edge the pointer sits on: `-1` top, `1` bottom
@@ -140,6 +229,9 @@ impl AltScreenRenderer {
             scroll: 0,
             copy_on_select: true,
             wheel_lines: 1,
+            wheel_auto: false,
+            wheel_accel: WheelAccel::new(),
+            wheel_epoch: None,
             last_click: None,
             click_count: 0,
             drag_edge: None,
@@ -317,6 +409,31 @@ impl AltScreenRenderer {
         self.selection.clear();
     }
 
+    /// Lines one wheel event moves (gh #206): the fixed setting, or
+    /// the velocity curve in `auto` mode - with Alt multiplying by
+    /// five either way (pi's `ALT_WHEEL_SCROLL_MULTIPLIER`). `now_ms`
+    /// rides a parameter so tests fake time.
+    pub(crate) fn wheel_step(&mut self, direction: i8, alt: bool, now_ms: u64) -> u16 {
+        const ALT_WHEEL_SCROLL_MULTIPLIER: u16 = 5;
+        let base = if self.wheel_auto {
+            self.wheel_accel.next(direction, now_ms)
+        } else {
+            u16::from(self.wheel_lines.max(1))
+        };
+        if alt {
+            base.saturating_mul(ALT_WHEEL_SCROLL_MULTIPLIER)
+        } else {
+            base
+        }
+    }
+
+    /// Reset the wheel gesture (gh #206): the host calls this when the
+    /// wheel setting changes.
+    pub fn reset_wheel(&mut self) {
+        self.wheel_accel.reset();
+        self.wheel_epoch = None;
+    }
+
     /// Handle one mouse event against the current rendered lines.
     pub fn handle_mouse(&mut self, mouse: SgrMouse) -> bool {
         // A scrollbar drag owns motion and release outright (gh #164):
@@ -332,8 +449,17 @@ impl AltScreenRenderer {
         let point = SelectionPoint { row, col };
 
         if wheel {
-            let lines = self.wheel_lines.max(1) as u16;
-            self.scroll = if button == 0 {
+            let direction = if button == 0 { -1 } else { 1 };
+            // SGR bit 3 (value 8) is the Alt modifier (pi's note).
+            let alt = mouse.bits & 8 != 0;
+            let now = self
+                .wheel_epoch
+                .get_or_insert_with(std::time::Instant::now)
+                .elapsed()
+                .as_millis()
+                .min(u64::MAX as u128) as u64;
+            let lines = self.wheel_step(direction, alt, now);
+            self.scroll = if direction < 0 {
                 self.scroll.saturating_add(lines)
             } else {
                 self.scroll.saturating_sub(lines)
@@ -755,5 +881,59 @@ mod scrollbar_tests {
         assert!(renderer.scrollbar_hovered());
         renderer.set_scrollbar_hover(false);
         assert!(!renderer.scrollbar_hovered());
+    }
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::*;
+
+    // Verifies: gh #206 - an isolated notch moves one line in auto
+    // mode, and sub-notch bursts (under 5 ms apart) never accelerate.
+    #[test]
+    fn auto_isolated_and_burst_notches_move_one_line() {
+        let mut accel = WheelAccel::new();
+        assert_eq!(accel.next(-1, 1000), 1);
+        assert_eq!(accel.next(-1, 1004), 1, "4 ms later: the same notch");
+        assert_eq!(accel.next(-1, 1300), 1, "the pause ended the gesture");
+    }
+
+    // Verifies: gh #206 - fast spins scale toward the six-line cap; a
+    // direction flip or a long pause resets to one line.
+    #[test]
+    fn auto_velocity_scales_and_resets() {
+        let mut accel = WheelAccel::new();
+        assert_eq!(accel.next(-1, 0), 1);
+        assert_eq!(accel.next(-1, 50), 2, "50 ms gaps double");
+        assert_eq!(accel.next(-1, 100), 2, "steady gaps hold");
+        assert_eq!(accel.next(-1, 110), 3, "10 ms gaps climb");
+        assert_eq!(accel.next(-1, 120), 5, "the average keeps falling");
+        assert_eq!(accel.next(-1, 130), 6, "the six-line cap holds");
+        assert_eq!(accel.next(1, 140), 1, "a flip resets");
+        assert_eq!(accel.next(1, 500), 1, "a pause resets");
+    }
+
+    // Verifies: gh #206 - a numeric setting ignores velocity, and Alt
+    // multiplies by five either way.
+    #[test]
+    fn fixed_lines_ignore_velocity_and_alt_multiplies() {
+        let mut renderer = AltScreenRenderer::new();
+        renderer.wheel_lines = 2;
+        renderer.wheel_auto = false;
+        assert_eq!(renderer.wheel_step(-1, false, 1000), 2);
+        assert_eq!(
+            renderer.wheel_step(-1, false, 1050),
+            2,
+            "no accel when fixed"
+        );
+        assert_eq!(renderer.wheel_step(-1, true, 1050), 10, "Alt ×5");
+        renderer.wheel_auto = true;
+        assert_eq!(
+            renderer.wheel_step(-1, false, 2000),
+            1,
+            "auto starts at one"
+        );
+        assert_eq!(renderer.wheel_step(-1, false, 2050), 2, "auto accelerates");
+        assert_eq!(renderer.wheel_step(-1, true, 2100), 10, "auto Alt ×5");
     }
 }

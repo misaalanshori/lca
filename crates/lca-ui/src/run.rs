@@ -177,12 +177,13 @@ fn shift_wheel_jump(mouse: &lca_tui::engine::alt_screen::SgrMouse) -> Option<i32
     Some(if mouse.bits & 3 == 0 { -1 } else { 1 })
 }
 
-/// Wheel lines for `auto` (gh #82): pi sniffs the platform; LCA
-/// moves three lines, documented on the key.
+/// Wheel lines for a numeric setting (gh #82, gh #206): `auto` resolves
+/// to pi's own one-line baseline - the velocity curve scales it from
+/// there, so no platform sniff is needed.
 fn wheel_lines_for(tuning: &crate::state::DisplayTuning) -> u8 {
     match tuning.fullscreen_wheel_lines.as_str() {
-        "auto" => 3,
-        text => text.parse().unwrap_or(3),
+        "auto" => 1,
+        text => text.parse().unwrap_or(1),
     }
 }
 
@@ -193,6 +194,13 @@ fn apply_screen_tuning(screen: &mut Screen, tuning: &crate::state::DisplayTuning
     if let Screen::Alt(alt) = screen {
         alt.copy_on_select = tuning.fullscreen_copy_on_select;
         alt.wheel_lines = wheel_lines_for(tuning);
+        // Gh #206: `auto` is the velocity curve now (pi's shape), so a
+        // mode flip restarts the gesture.
+        let auto = tuning.fullscreen_wheel_lines.as_str() == "auto";
+        if alt.wheel_auto != auto {
+            alt.wheel_auto = auto;
+            alt.reset_wheel();
+        }
     }
 }
 
