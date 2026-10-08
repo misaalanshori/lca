@@ -139,6 +139,7 @@ pub struct Config {
     tool_timeout_seconds: u64,
     tool_result_limit_bytes: u64,
     tool_max_iterations: u64,
+    tool_edit_requires_read: bool,
     cache_noise_floor_tokens: u64,
     extensions_log_limit_bytes: u64,
     update_check: Option<bool>,
@@ -194,6 +195,9 @@ impl Default for Config {
             // 0 = unlimited (see `DEFAULT_TOOL_MAX_ITERATIONS`): the
             // runaway guard is opt-in via `tool.max_iterations`.
             tool_max_iterations: DEFAULT_TOOL_MAX_ITERATIONS,
+            // gh #117: off is pi parity (blind edits allowed); on keeps
+            // the historical read-before-edit staleness guard.
+            tool_edit_requires_read: false,
             cache_noise_floor_tokens: 1024,
             extensions_log_limit_bytes: 4096,
             update_check: None,
@@ -298,6 +302,7 @@ impl Config {
             "tool.timeout_seconds",
             "tool.result_limit_bytes",
             "tool.max_iterations",
+            "tool.edit_requires_read",
             "cache.noise_floor_tokens",
             "extensions.log_limit_bytes",
             "update.check",
@@ -441,7 +446,10 @@ impl Config {
                     };
                     this.apply(key.to_string(), TypedValue::List(list), source)?;
                 }
-                "update.check" | "compaction.enabled" | "ui.fullscreen" => {
+                "update.check"
+                | "compaction.enabled"
+                | "ui.fullscreen"
+                | "tool.edit_requires_read" => {
                     let flag = value.as_bool().ok_or_else(|| {
                         invalid(format!("expected a boolean, got {}", type_name(&value)))
                     })?;
@@ -582,6 +590,7 @@ impl Config {
             "tool.timeout_seconds",
             "tool.result_limit_bytes",
             "tool.max_iterations",
+            "tool.edit_requires_read",
             "cache.noise_floor_tokens",
             "extensions.log_limit_bytes",
             "update.check",
@@ -645,6 +654,7 @@ impl Config {
                 self.extensions_log_limit_bytes = v
             }
             ("update.check", TypedValue::Bool(v)) => self.update_check = Some(v),
+            ("tool.edit_requires_read", TypedValue::Bool(v)) => self.tool_edit_requires_read = v,
             ("ui.fullscreen", TypedValue::Bool(v)) => self.ui_fullscreen = Some(v),
             ("ui.color", TypedValue::Color(v)) => self.ui_color = v,
             ("ui.theme", TypedValue::Text(v)) => self.ui_theme = Some(v),
@@ -746,6 +756,13 @@ impl Config {
     /// Whether automatic compaction runs (gh #36 phase 1).
     pub fn compaction_enabled(&self) -> bool {
         self.compaction_enabled
+    }
+
+    /// Whether `edit` demands a prior fresh `read` (gh #117): off is
+    /// pi parity (the model edits right after `grep`), on keeps LCA's
+    /// staleness guard. The `/settings` row cycles it live.
+    pub fn tool_edit_requires_read(&self) -> bool {
+        self.tool_edit_requires_read
     }
 
     /// Absolute token reserve (gh #36 phase 1): 0 derives it from the
@@ -929,6 +946,10 @@ impl Config {
                 self.tool_result_limit_bytes.to_string(),
             ),
             ("tool.max_iterations", self.tool_max_iterations.to_string()),
+            (
+                "tool.edit_requires_read",
+                self.tool_edit_requires_read.to_string(),
+            ),
             (
                 "cache.noise_floor_tokens",
                 self.cache_noise_floor_tokens.to_string(),

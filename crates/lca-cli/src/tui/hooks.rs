@@ -215,6 +215,11 @@ impl Ui {
                         row("Terminal & Execution", "tool.result_limit_bytes", &[]),
                         row("Terminal & Execution", "tool.max_iterations", &[]),
                         row("Terminal & Execution", "provider.retry_limit", &[]),
+                        row(
+                            "Terminal & Execution",
+                            "tool.edit_requires_read",
+                            &["false", "true"],
+                        ),
                         row("Data & Updates", "cache.noise_floor_tokens", &[]),
                         row("Data & Updates", "extensions.log_limit_bytes", &[]),
                         row("Data & Updates", "update.check", &["false", "true"]),

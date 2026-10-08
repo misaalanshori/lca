@@ -478,6 +478,7 @@ fn agent_config_for(
         system_prompt,
         skills_roots: crate::skills_roots(cwd),
         skills_inject_matched: config.skills_inject_matched(),
+        edit_requires_read: config.tool_edit_requires_read(),
         ..AgentConfig::default()
     })
 }

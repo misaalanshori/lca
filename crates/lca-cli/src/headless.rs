@@ -778,6 +778,7 @@ fn wire(
         },
         skills_roots: skills_roots(cwd),
         skills_inject_matched: config.skills_inject_matched(),
+        edit_requires_read: config.tool_edit_requires_read(),
         // `--thinking` and the `thinking` key reach headless mode too: a
         // flag that works in one front end only is a flag that lies. A
         // `--model` suffix is explicit (gh #8 phase 4); otherwise the

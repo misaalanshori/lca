@@ -557,3 +557,56 @@ async fn edits_match_against_the_original_uniquely() {
         "fn aa() {}\nfn bb() {}\n"
     );
 }
+
+// Verifies: gh #117 - with `tool.edit_requires_read` off (the pi-parity
+// default), an edit without a prior read succeeds.
+#[tokio::test]
+async fn edit_without_a_prior_read_succeeds_when_the_gate_is_off() {
+    let ws = scratch("edit-blind-ok");
+    std::fs::write(ws.join("a.txt"), "original").expect("write");
+    let mut exec = executor(&ws);
+    exec.set_edit_requires_read(false);
+    let result = run(
+        &mut exec,
+        &call(
+            "edit",
+            serde_json::json!({
+                "path": "a.txt",
+                "edits": [{"oldText": "original", "newText": "edited"}]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(result.status, ToolResultStatus::Ok, "{}", result.content);
+    assert_eq!(
+        std::fs::read_to_string(ws.join("a.txt")).expect("read back"),
+        "edited"
+    );
+}
+
+// Verifies: gh #117 - with the gate on, the current behavior holds: an
+// edit without a prior read fails naming the read.
+#[tokio::test]
+async fn edit_without_a_prior_read_fails_when_the_gate_is_on() {
+    let ws = scratch("edit-blind-no");
+    std::fs::write(ws.join("a.txt"), "original").expect("write");
+    let mut exec = executor(&ws);
+    exec.set_edit_requires_read(true);
+    let result = run(
+        &mut exec,
+        &call(
+            "edit",
+            serde_json::json!({
+                "path": "a.txt",
+                "edits": [{"oldText": "original", "newText": "edited"}]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(result.status, ToolResultStatus::Error);
+    assert!(
+        result.content.contains("Read it again"),
+        "the refusal names the read: {}",
+        result.content
+    );
+}

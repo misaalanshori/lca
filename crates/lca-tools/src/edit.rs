@@ -60,8 +60,9 @@ impl crate::ToolExecutor {
             }
         };
         // FR-TOOL-2: reject when the file changed since this session last
-        // read it (or was never read at all).
-        if !self.tracker.fresh_read(&target, &original) {
+        // read it (or was never read at all) - unless the host turned
+        // the gate off for pi parity (gh #117).
+        if self.edit_requires_read && !self.tracker.fresh_read(&target, &original) {
             return ToolResult::error(
                 call.call_id.clone(),
                 format!(

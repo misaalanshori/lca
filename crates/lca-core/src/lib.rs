@@ -108,6 +108,10 @@ pub struct AgentConfig {
     /// Whether matched skill text injects into the prompt (gh #43).
     /// Default off: the catalog advertises either way.
     pub skills_inject_matched: bool,
+    /// Whether `edit` demands a prior fresh `read` (gh #117): off is
+    /// pi parity, on keeps the staleness guard. The agent hands it to
+    /// the tool executor with the other per-turn settings.
+    pub edit_requires_read: bool,
     /// Messages the interface queued while the turn runs; drained at each
     /// model-call boundary (ADR-0038).
     pub steer: lca_protocol::SteerQueue,
@@ -185,6 +189,7 @@ impl Default for AgentConfig {
             sent_stable: Arc::new(std::sync::Mutex::new(None)),
             skills_roots: SkillsRoots::default(),
             skills_inject_matched: false,
+            edit_requires_read: false,
             steer: lca_protocol::steer_queue(),
         }
     }
@@ -263,6 +268,9 @@ impl<'a> Agent<'a> {
         // gh #43: the `skill` tool loads through the same roots the
         // merge reads.
         tools.set_skills_roots(Some(config.skills_roots.clone()));
+        // gh #117: the product default is off (pi parity); the config
+        // carries the operator's choice.
+        tools.set_edit_requires_read(config.edit_requires_read);
         Agent {
             store,
             session,

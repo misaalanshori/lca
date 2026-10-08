@@ -74,7 +74,7 @@ pub(crate) fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValu
         "provider" | "model" => Ok(TypedValue::Text(raw.to_string())),
         // The flag/environment form of a list key is a comma list.
         "models.enabled" => Ok(TypedValue::List(csv(raw))),
-        "update.check" | "ui.fullscreen" => raw
+        "update.check" | "ui.fullscreen" | "tool.edit_requires_read" => raw
             .parse::<bool>()
             .map(TypedValue::Bool)
             .map_err(|_| invalid(format!("expected a boolean, got `{raw}`"))),

@@ -696,3 +696,31 @@ fn shell_command_prefix_is_a_typed_key() {
     assert_eq!(config.shell_command_prefix(), Some("export LCA_PROBE=1"));
     assert_eq!(Config::defaults().shell_command_prefix(), None);
 }
+
+// Verifies: gh #117 - `tool.edit_requires_read` defaults off (pi
+// parity), loads true from the file, and refuses non-booleans.
+#[test]
+fn edit_requires_read_defaults_off_and_loads() {
+    assert!(
+        !Config::defaults().tool_edit_requires_read(),
+        "off by default: pi parity"
+    );
+    let dir = scratch("edit-requires-read");
+    write(&dir.join("user.toml"), "tool.edit_requires_read = true\n");
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert!(config.tool_edit_requires_read(), "on when set");
+    write(
+        &dir.join("user.toml"),
+        "tool.edit_requires_read = \"yes\"\n",
+    );
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("a non-boolean is refused at load");
+    assert!(err.to_string().contains("tool.edit_requires_read"), "{err}");
+}

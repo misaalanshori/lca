@@ -43,7 +43,10 @@ Two deliberate measurement differences (match here / differ here):
 Yolo-over-no-prompts, provider profiles over one-provider, theme roles over
 raw colors, fork-directories over in-file branching (until #37 lands),
 `session-start` record shape over pi's header shape, LCA's headless event
-vocabulary over pi's `agent_start/message_start/...` stream. A parity case
+vocabulary over pi's `agent_start/message_start/...` stream, and the
+read-before-edit staleness guard over pi's blind edits (gh #117: kept,
+but off by default behind `tool.edit_requires_read`, so the default
+behavior is pi parity). A parity case
 that fails because of one of these is a wrong case, not a failing product.
 
 ## Red witnesses (4, `#[ignore]`-gated)

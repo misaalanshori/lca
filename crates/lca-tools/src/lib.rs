@@ -145,6 +145,10 @@ pub struct ToolExecutor {
     /// default); `Some` keeps a backstop where nobody can cancel.
     default_timeout: Option<Duration>,
     image_policy: ImagePolicy,
+    /// Whether `edit` demands a prior fresh `read` (gh #117): on keeps
+    /// the historical staleness guard, off is pi parity (blind edits
+    /// allowed). The host sets it from `tool.edit_requires_read`.
+    edit_requires_read: bool,
     tracker: ReadTracker,
     /// Where over-limit output is spilled, content-addressed, when a
     /// session is attached (`<session>/attachments`); `None` keeps
@@ -182,6 +186,7 @@ impl ToolExecutor {
             result_limit_bytes,
             default_timeout,
             image_policy: ImagePolicy::unknown(),
+            edit_requires_read: true,
             tracker: ReadTracker::default(),
             spill_dir: None,
             skills_roots: None,
@@ -206,6 +211,14 @@ impl ToolExecutor {
     /// agent loop per turn (the session owns the directory).
     pub fn set_spill_dir(&mut self, dir: Option<PathBuf>) {
         self.spill_dir = dir;
+    }
+
+    /// Set the read-before-edit gate (gh #117). `ToolExecutor::new`
+    /// keeps it on (the historical behavior every existing row pins);
+    /// the product default is off (pi parity) and arrives here through
+    /// the host's config.
+    pub fn set_edit_requires_read(&mut self, required: bool) {
+        self.edit_requires_read = required;
     }
 
     /// Write `full` under the spill dir by content hash, returning the hash.
