@@ -114,10 +114,7 @@ fn the_scrollbar_marks_the_window_and_hides_when_it_fits() {
     for row in rows.iter().take(geometry.rows as usize) {
         let row = strip(row);
         assert!(
-            row.ends_with('│')
-                || row.ends_with('┃')
-                || row.ends_with('▲')
-                || row.ends_with('▼'),
+            row.ends_with('│') || row.ends_with('┃') || row.ends_with('▲') || row.ends_with('▼'),
             "{row:?}"
         );
     }
@@ -182,8 +179,7 @@ fn selecting_a_scrollbar_row_copies_exactly_the_text() {
             let row = strip(row);
             // Content beyond the bar itself (gh #173: the ▲/▼ stepper
             // cells are not content rows either).
-            row.trim().len() > 4
-                && (row.ends_with('│') || row.ends_with('┃'))
+            row.trim().len() > 4 && (row.ends_with('│') || row.ends_with('┃'))
         })
         .expect("a content row that carries the bar");
 
