@@ -113,11 +113,23 @@ fn the_scrollbar_marks_the_window_and_hides_when_it_fits() {
     let rows = frame.viewport(W, H, 0);
     for row in rows.iter().take(geometry.rows as usize) {
         let row = strip(row);
-        assert!(row.ends_with('│') || row.ends_with('┃'), "{row:?}");
+        assert!(
+            row.ends_with('│')
+                || row.ends_with('┃')
+                || row.ends_with('▲')
+                || row.ends_with('▼'),
+            "{row:?}"
+        );
     }
     for row in rows.iter().skip(geometry.rows as usize) {
         let row = strip(row);
-        assert!(!row.ends_with('│') && !row.ends_with('┃'), "{row:?}");
+        assert!(
+            !row.ends_with('│')
+                && !row.ends_with('┃')
+                && !row.ends_with('▲')
+                && !row.ends_with('▼'),
+            "{row:?}"
+        );
     }
 
     let mut short = chat();
@@ -168,7 +180,10 @@ fn selecting_a_scrollbar_row_copies_exactly_the_text() {
         .take(geometry.rows as usize)
         .position(|row| {
             let row = strip(row);
-            row.trim().len() > 1 && (row.ends_with('│') || row.ends_with('┃'))
+            // Content beyond the bar itself (gh #173: the ▲/▼ stepper
+            // cells are not content rows either).
+            row.trim().len() > 4
+                && (row.ends_with('│') || row.ends_with('┃'))
         })
         .expect("a content row that carries the bar");
 
@@ -196,7 +211,10 @@ fn selecting_a_scrollbar_row_copies_exactly_the_text() {
     let text = selection.active_text(&rows);
     assert!(!text.is_empty(), "there was text to select");
     assert!(
-        !text.ends_with('│') && !text.ends_with('┃'),
+        !text.ends_with('│')
+            && !text.ends_with('┃')
+            && !text.ends_with('▲')
+            && !text.ends_with('▼'),
         "the scrollbar never reaches the copy: {text:?}"
     );
     let painted = strip(&rows[row]);

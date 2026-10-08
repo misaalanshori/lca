@@ -76,13 +76,21 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     // loudly, instead of silently retargeting.
     session.wait_for("> ui.theme", std::time::Duration::from_secs(10));
 
-    // 2. The `thinking` row opens the existing thinking sub-picker (the
-    // third row of the curated list), and choosing a level persists it.
+    // 2. The `thinking` row opens the existing thinking sub-picker
+    // (the fifth row of the sectioned list: Display carries four rows
+    // before Model starts), and choosing a level persists it.
     // Each Down is followed by its frame: the selected-row marker
     // moves before the next key is sent, so a slow frame never eats
     // a step.
     session.send(&["Down"]);
-    session.wait_for("> ui.thinking", std::time::Duration::from_secs(10));
+    session.wait_for("> ui.color", std::time::Duration::from_secs(10));
+    session.send(&["Down"]);
+    session.wait_for("> ui.fullscreen", std::time::Duration::from_secs(10));
+    session.send(&["Down"]);
+    session.wait_for(
+        "> markdown.codeblock_border",
+        std::time::Duration::from_secs(10),
+    );
     session.send(&["Down"]);
     session.wait_for("> thinking", std::time::Duration::from_secs(10));
     session.send(&["Enter"]);
@@ -98,17 +106,7 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     session.send(&["Enter"]);
     session.wait_for("thinking: high", std::time::Duration::from_secs(10));
 
-    // 3. The running UI reflects it: wait for the footer outcome (the
-    // `thinking: high` notice above is transient - the footer wears
-    // the level durably), then assert the same rows as before.
-    let pane = session.wait_for("\u{2022} high", std::time::Duration::from_secs(10));
-    assert!(
-        pane.lines()
-            .any(|row| row.contains("high") && row.contains("ctx")),
-        "the footer shows the new level:\n{pane}"
-    );
-
-    // 4. The selector is back on screen after its sub-picker closed
+    // 3. The selector is back on screen after its sub-picker closed
     //    (pi's submenu shape - the list is never lost), and it answers
     //    with the new value and its new source. The notice fades; the
     //    restored selector persists - so wait for the durable outcome,
@@ -118,11 +116,22 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
         pane.contains("thinking = high"),
         "...and the new value:\n{pane}"
     );
+
+    // 4. The running UI reflects it: the `thinking: high` notice above
+    // is transient - the footer wears the level durably. The sectioned
+    // box is tall enough to cover the footer row while open (the box
+    // wins over the dock), so close it first, then read the footer.
     session.send(&["Escape"]);
     wait_for_gone(
         &session,
         SETTINGS_HEADER,
         std::time::Duration::from_secs(10),
+    );
+    let pane = session.wait_for("\u{2022} high", std::time::Duration::from_secs(10));
+    assert!(
+        pane.lines()
+            .any(|row| row.contains("high") && row.contains("ctx")),
+        "the footer shows the new level:\n{pane}"
     );
 
     // A fresh open reads the same answer (the write is on disk).
