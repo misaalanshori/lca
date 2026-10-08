@@ -502,18 +502,19 @@ fn a_thinking_suffix_outside_the_models_set_is_clamped_to_it() {
         "`:high` is clamped into this model's set (low is its default):\n{footer}"
     );
 
-    // The picker's own answer is clamped too, and the notice says what
-    // landed: two rows down from `low` is `high` (unset, off, minimal,
-    // low ...), and this model refuses it.
+    // The picker hides what the model refuses (gh #41): `high` is
+    // not offered at all, so one row down from unset is `low` and the
+    // notice names what landed with no clamp detour.
     session.send(&["/thinking", "Enter"]);
-    session.wait_for("No reasoning", std::time::Duration::from_secs(10));
-    session.send(&["Down"]);
+    let text = session.wait_for("unset (provider default)", std::time::Duration::from_secs(10));
+    assert!(text.contains("low"), "the offered level shows: {text}");
+    assert!(
+        !text.contains("high"),
+        "the refused level is hidden, not offered: {text}"
+    );
     session.send(&["Down"]);
     session.send(&["Enter"]);
-    session.wait_for(
-        "thinking: low (high is not offered by second-model)",
-        std::time::Duration::from_secs(10),
-    );
+    session.wait_for("thinking: low", std::time::Duration::from_secs(10));
 
     session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));

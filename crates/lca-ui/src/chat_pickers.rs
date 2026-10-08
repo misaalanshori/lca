@@ -275,4 +275,3 @@ pub const THINKING_LEVELS: &[(&str, &str)] = &[
     ("xhigh", "Extra-high reasoning (~32k tokens)"),
     ("max", "Maximum reasoning"),
 ];
-
