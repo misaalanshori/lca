@@ -37,6 +37,38 @@ pub struct MarkdownOptions {
     /// `registerMarkdownTransformer`. Empty by default - no consumer,
     /// no rewriting.
     pub transformers: Vec<MarkdownTransformer>,
+    /// Mermaid rendering (gh #82, pi's `markdown.mermaid`): `off`
+    /// keeps fences raw, `final` renders settled messages, `streaming`
+    /// renders mid-stream too.
+    pub mermaid: MermaidMode,
+    /// Code block content indent (gh #82, pi's
+    /// `markdown.codeBlockIndent`): prefixed to every rendered block
+    /// line.
+    pub code_indent: String,
+}
+
+/// When mermaid fences become Unicode art (gh #82).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum MermaidMode {
+    /// Never render: fences stay raw code.
+    Off,
+    /// Render settled messages only.
+    Final,
+    /// Render mid-stream too (pi's default).
+    #[default]
+    Streaming,
+}
+
+impl MermaidMode {
+    /// Parse the config value; anything unrecognized streams (the
+    /// config layer refuses those first, so this is unreachable).
+    pub fn parse(text: &str) -> MermaidMode {
+        match text {
+            "off" => MermaidMode::Off,
+            "final" => MermaidMode::Final,
+            _ => MermaidMode::Streaming,
+        }
+    }
 }
 
 impl Default for MarkdownOptions {
@@ -52,6 +84,10 @@ impl Default for MarkdownOptions {
             codeblock_border: CodeBlockBorder::Full,
             message_type: MarkdownMessageType::Assistant,
             transformers: Vec::new(),
+            mermaid: MermaidMode::Streaming,
+            // Empty keeps every existing caller byte-identical; the
+            // transcript passes the configured indent explicitly.
+            code_indent: String::new(),
         }
     }
 }

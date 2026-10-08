@@ -811,3 +811,49 @@ proptest! {
         );
     }
 }
+
+struct TenCandidates;
+impl AutocompleteProvider for TenCandidates {
+    fn get_suggestions(&self, _prefix: &str, _force: bool) -> Option<Suggestions> {
+        Some(Suggestions {
+            items: (0..10)
+                .map(|i| crate::widgets::autocomplete::AutocompleteItem {
+                    value: format!("item{i}"),
+                    label: format!("item{i}"),
+                    description: None,
+                })
+                .collect(),
+            prefix: String::new(),
+        })
+    }
+}
+
+// Verifies: gh #82 - the popup cap follows `max_visible` (pi's
+// `autocompleteMaxVisible`), floored at one row.
+#[test]
+fn popup_cap_follows_max_visible() {
+    let mut e = Editor::new();
+    e.set_autocomplete(Arc::new(TenCandidates));
+    e.insert_str("x ");
+    e.refresh_suggestions(true);
+    e.max_visible = 3;
+    let (start, end) = e.popup_window().expect("open");
+    assert_eq!(end - start, 3, "three rows, not five");
+    e.max_visible = 0;
+    let (start, end) = e.popup_window().expect("open");
+    assert_eq!(end - start, 1, "zero floors at one row");
+}
+
+// Verifies: gh #82 - `padding_x` prefixes every rendered row (pi's
+// `editorPaddingX`); zero keeps the byte-identical rows.
+#[test]
+fn editor_padding_prefixes_rows() {
+    use crate::engine::core::CURSOR_MARKER;
+    let mut e = Editor::new();
+    e.insert_str("hi");
+    let plain = e.render(10)[0].replace(CURSOR_MARKER, "");
+    assert!(!plain.starts_with(' '), "no padding by default: {plain:?}");
+    e.padding_x = 2;
+    let rows = e.render(10);
+    assert!(rows[0].starts_with("  hi"), "two cells pad: {rows:?}");
+}

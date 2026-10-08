@@ -1077,3 +1077,67 @@ fn the_golden_document_carries_tasks_and_a_diagram() {
     assert!(GOLDEN.contains("- [x] shipped"), "task row");
     assert!(GOLDEN.contains("```mermaid"), "diagram row");
 }
+
+// Verifies: gh #82 - the mermaid mode gates the art: off keeps the
+// fence raw, final waits for the settled message, streaming renders
+// mid-stream too (pi's `markdown.mermaid`).
+#[test]
+fn mermaid_mode_gates_the_art() {
+    let fence = "```mermaid\nflowchart TD\n  A[One] --> B[Two]\n```";
+    let render = |mode: MermaidMode, streaming: bool| {
+        let options = MarkdownOptions {
+            mermaid: mode,
+            streaming,
+            ..MarkdownOptions::default()
+        };
+        strip(&render_markdown(fence, 60, &plain(), &options))
+    };
+    let out = render(MermaidMode::Off, false);
+    assert!(
+        out.iter().any(|l| l.starts_with('╭')),
+        "off keeps the frame: {out:?}"
+    );
+    let out = render(MermaidMode::Final, true);
+    assert!(
+        out.iter().any(|l| l.starts_with('╭')),
+        "final waits out streaming: {out:?}"
+    );
+    let out = render(MermaidMode::Final, false);
+    assert!(
+        out.iter().any(|l| l.contains('┌')),
+        "final renders settled: {out:?}"
+    );
+    let out = render(MermaidMode::Streaming, true);
+    assert!(
+        out.iter().any(|l| l.contains('┌')),
+        "streaming renders mid-stream: {out:?}"
+    );
+}
+
+// Verifies: gh #82 - the code indent prefixes every block line (pi's
+// `markdown.codeBlockIndent`); empty keeps the shipped rows.
+#[test]
+fn code_indent_prefixes_block_lines() {
+    let fence = "```rust\nlet x = 1;\n```";
+    let render = |indent: &str| {
+        let options = MarkdownOptions {
+            code_indent: indent.to_string(),
+            ..MarkdownOptions::default()
+        };
+        strip(&render_markdown(fence, 60, &plain(), &options))
+    };
+    let plain_out = render("");
+    assert!(
+        plain_out.iter().any(|l| l.starts_with('╭')),
+        "unindented frame: {plain_out:?}"
+    );
+    let out = render(">>");
+    assert!(
+        out.iter().any(|l| l.starts_with(">>╭")),
+        "the frame indents too: {out:?}"
+    );
+    assert!(
+        out.iter().any(|l| l.starts_with(">>│")),
+        "content indents: {out:?}"
+    );
+}

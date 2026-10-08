@@ -387,3 +387,24 @@ mod tests {
         assert!(lines[0].contains("image/png"));
     }
 }
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+
+    // Verifies: gh #82 - the caller width caps the cells (pi's
+    // `terminal.imageWidthCells` rides this parameter): a 640px image
+    // in 30 columns renders 30 wide, uncapped past its nature.
+    #[test]
+    fn caller_width_caps_the_cells() {
+        let info = ImageInfo {
+            media_type: "image/png".into(),
+            bytes: 2048,
+            width: Some(640),
+            height: Some(480),
+            alt: None,
+        };
+        assert_eq!(image_cell_size(&info, 30).0, 30);
+        assert_eq!(image_cell_size(&info, 200).0, 72, "natural 640/9 ceiling");
+    }
+}

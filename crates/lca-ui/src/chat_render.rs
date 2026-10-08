@@ -66,6 +66,32 @@ pub fn scrollbar_geometry(
     })
 }
 
+/// The scrollbar with pi's display modes (gh #82): `hidden` paints
+/// nothing, `always` paints a full-track bar even when the transcript
+/// fits, anything else is pi's auto geometry. One rule for the paint
+/// side and the hit-test side, so they can never disagree.
+pub fn scrollbar_geometry_mode(
+    content: usize,
+    window: usize,
+    from_bottom: usize,
+    width: u16,
+    mode: &str,
+) -> Option<ScrollbarGeometry> {
+    if mode == "hidden" {
+        return None;
+    }
+    match scrollbar_geometry(content, window, from_bottom, width) {
+        Some(geometry) => Some(geometry),
+        None if mode == "always" && window > 0 && width > 0 => Some(ScrollbarGeometry {
+            column: width - 1,
+            rows: window as u16,
+            thumb_top: 0,
+            thumb_height: window as u16,
+        }),
+        None => None,
+    }
+}
+
 impl Chat {
     /// The document in two sections (gh #35): what scrolls - the
     /// transcript plus the extension status rows above the dock - and
@@ -340,8 +366,15 @@ impl Chat {
 
         // The scrollbar (pi's geometry) on the window's right margin: it
         // takes a column from the window's width, thumb over track,
-        // with stepper cells capping the track (gh #173).
-        let geometry = scrollbar_geometry(content, window, from_bottom, width);
+        // with stepper cells capping the track (gh #173). The mode
+        // shares one rule with the hit-test side (gh #82).
+        let geometry = scrollbar_geometry_mode(
+            content,
+            window,
+            from_bottom,
+            width,
+            self.display_tuning().fullscreen_scrollbar.as_str(),
+        );
         if let Some(geometry) = geometry {
             let content_width = geometry.column as usize;
             for (row, line) in lines.iter_mut().take(window).enumerate() {
@@ -408,11 +441,19 @@ impl Chat {
         if !self.screen_mode {
             return None;
         }
+        // Gh #82: `hidden` paints nothing; `always` paints a full-track
+        // bar even when the transcript fits; `auto` is pi's geometry.
         let (transcript, dock) = self.sections(width);
         let window = height.saturating_sub(dock.len() as u16) as usize;
         let content = transcript.len();
         let from_bottom = (scroll as usize).min(content.saturating_sub(window));
-        scrollbar_geometry(content, window, from_bottom, width)
+        scrollbar_geometry_mode(
+            content,
+            window,
+            from_bottom,
+            width,
+            self.display_tuning().fullscreen_scrollbar.as_str(),
+        )
     }
 
     /// One frame's scroll adjustment (gh #35): clamp to what the

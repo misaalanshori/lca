@@ -150,6 +150,10 @@ pub struct ToolExecutor {
     /// the historical staleness guard, off is pi parity (blind edits
     /// allowed). The host sets it from `tool.edit_requires_read`.
     edit_requires_read: bool,
+    /// Whether image reads downscale before sending (gh #82, pi's
+    /// `images.autoResize`): off passes the original bytes through.
+    /// The host sets it from the config.
+    auto_resize_images: bool,
     tracker: ReadTracker,
     /// Where over-limit output is spilled, content-addressed, when a
     /// session is attached (`<session>/attachments`); `None` keeps
@@ -188,6 +192,7 @@ impl ToolExecutor {
             default_timeout,
             image_policy: ImagePolicy::unknown(),
             edit_requires_read: true,
+            auto_resize_images: true,
             tracker: ReadTracker::default(),
             spill_dir: None,
             skills_roots: None,
@@ -220,6 +225,12 @@ impl ToolExecutor {
     /// the host's config.
     pub fn set_edit_requires_read(&mut self, required: bool) {
         self.edit_requires_read = required;
+    }
+
+    /// Set image downscaling (gh #82). `ToolExecutor::new` resizes
+    /// (pi's default); off passes originals through.
+    pub fn set_auto_resize_images(&mut self, resize: bool) {
+        self.auto_resize_images = resize;
     }
 
     /// Write `full` under the spill dir by content hash, returning the hash.
@@ -533,6 +544,7 @@ impl ToolExecutor {
         if let Some(media_type) = lca_protocol::sniff_image_media_type(&bytes) {
             return crate::image::read_image_result(
                 &self.image_policy,
+                self.auto_resize_images,
                 &call.call_id,
                 media_type,
                 bytes,

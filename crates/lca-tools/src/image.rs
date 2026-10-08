@@ -118,6 +118,7 @@ fn downscale_image(bytes: &[u8], profile: &ImageResize) -> Option<(Vec<u8>, u32,
 /// size — and undecodable bytes pass through rather than failing the read.
 pub(crate) fn read_image_result(
     policy: &ImagePolicy,
+    auto_resize: bool,
     call_id: &str,
     media_type: &str,
     bytes: Vec<u8>,
@@ -125,7 +126,9 @@ pub(crate) fn read_image_result(
     if policy.vision == ImageVision::NoVision {
         return ToolResult::ok(call_id.to_string(), NO_VISION_NOTE.to_string());
     }
-    let profile = (policy.vision == ImageVision::Vision).then(|| policy.resize.unwrap_or_default());
+    // Gh #82: without auto-resize the original bytes ride through.
+    let profile = (auto_resize && policy.vision == ImageVision::Vision)
+        .then(|| policy.resize.unwrap_or_default());
     let passthrough = |bytes: Vec<u8>| {
         let mut result = ToolResult::ok(
             call_id.to_string(),

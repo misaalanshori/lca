@@ -347,6 +347,69 @@ pub type PromptTemplates = Arc<dyn Fn() -> Vec<lca_tools::prompts::PromptTemplat
 /// applies without a restart; absent means pi's default (`tree`).
 pub type DoubleEscapeAction = Arc<dyn Fn() -> String + Send + Sync>;
 
+/// The live display tunables (gh #82, pi's "Terminal and display"
+/// inventory): plain values a hook refreshes from the config cell, so
+/// a `/settings` cycle applies without a restart. Absent means the
+/// product defaults (each mirroring its `lca-config` default).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayTuning {
+    /// Autocomplete popup rows, 3-20.
+    pub autocomplete_max_visible: u8,
+    /// Editor horizontal padding cells, 0-3.
+    pub editor_padding_x: u8,
+    /// Transcript left margin, 0|1.
+    pub output_pad: u8,
+    /// Fullscreen scrollbar: `auto`, `always`, or `hidden`.
+    pub fullscreen_scrollbar: String,
+    /// Copy on text selection in fullscreen.
+    pub fullscreen_copy_on_select: bool,
+    /// Fullscreen wheel lines: `auto` (three) or 1-100.
+    pub fullscreen_wheel_lines: String,
+    /// Fullscreen exit output: `transcript` or `resume-hint`.
+    pub fullscreen_exit_output: String,
+    /// Display inline images.
+    pub show_images: bool,
+    /// Inline image width cap in cells.
+    pub image_width_cells: u16,
+    /// OSC 9;4 taskbar progress around turns.
+    pub show_progress: bool,
+    /// Downscale images before sending.
+    pub auto_resize_images: bool,
+    /// Code block content indent.
+    pub code_block_indent: String,
+    /// Mermaid rendering: `off`, `final`, or `streaming`.
+    pub mermaid: String,
+}
+
+impl Default for DisplayTuning {
+    /// Pi-matching defaults (each mirrors its config default).
+    fn default() -> Self {
+        DisplayTuning {
+            autocomplete_max_visible: 5,
+            editor_padding_x: 0,
+            output_pad: 1,
+            fullscreen_scrollbar: "auto".to_string(),
+            fullscreen_copy_on_select: true,
+            fullscreen_wheel_lines: "auto".to_string(),
+            fullscreen_exit_output: "transcript".to_string(),
+            show_images: true,
+            image_width_cells: 60,
+            show_progress: true,
+            auto_resize_images: true,
+            code_block_indent: "  ".to_string(),
+            mermaid: "streaming".to_string(),
+        }
+    }
+}
+
+/// The live display tunables; absent keeps the product defaults.
+pub type DisplayTuningHook = Arc<dyn Fn() -> DisplayTuning + Send + Sync>;
+
+/// The current session's id for the fullscreen resume hint (gh #82).
+/// A hook so a `/tree` or `/resume` switch is honored live; absent
+/// keeps the plain transcript exit.
+pub type CurrentSessionId = Arc<dyn Fn() -> String + Send + Sync>;
+
 /// The models the `/model` picker should offer *now*. A hook rather than the
 /// startup snapshot, so a login's model discovery (which can only succeed
 /// after the endpoint's ad-hoc grant) reaches the picker without a restart.
@@ -483,6 +546,10 @@ pub struct UiHooks {
     pub prompt_templates: Option<PromptTemplates>,
     /// What Esc Esc does with an empty editor (gh #132).
     pub double_escape_action: Option<DoubleEscapeAction>,
+    /// The live display tunables (gh #82).
+    pub display_tuning: Option<DisplayTuningHook>,
+    /// The current session's id (gh #82's resume hint).
+    pub current_session_id: Option<CurrentSessionId>,
     /// One step of the model cycle for the cycle keys (`true` = forward).
     pub cycle_model: Option<ModelCycle>,
     /// `Ctrl+S` in the model picker: persist the highlighted model as the
@@ -1016,6 +1083,26 @@ mod tests {
         ));
         assert!(matches!(key_input("escape"), lca_protocol::UiInput::Cancel));
         assert!(matches!(key_input("up"), lca_protocol::UiInput::Key { .. }));
+    }
+
+    // Verifies: gh #82 - the tuning defaults mirror the config
+    // defaults (the hook only overrides what the file sets).
+    #[test]
+    fn display_tuning_defaults_mirror_config() {
+        let tuning = DisplayTuning::default();
+        assert_eq!(tuning.autocomplete_max_visible, 5);
+        assert_eq!(tuning.editor_padding_x, 0);
+        assert_eq!(tuning.output_pad, 1);
+        assert_eq!(tuning.fullscreen_scrollbar, "auto");
+        assert!(tuning.fullscreen_copy_on_select);
+        assert_eq!(tuning.fullscreen_wheel_lines, "auto");
+        assert_eq!(tuning.fullscreen_exit_output, "transcript");
+        assert!(tuning.show_images);
+        assert_eq!(tuning.image_width_cells, 60);
+        assert!(tuning.show_progress);
+        assert!(tuning.auto_resize_images);
+        assert_eq!(tuning.code_block_indent, "  ");
+        assert_eq!(tuning.mermaid, "streaming");
     }
 
     #[test]

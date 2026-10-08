@@ -145,6 +145,38 @@ fn shift_wheel_jump(mouse: &lca_tui::engine::alt_screen::SgrMouse) -> Option<i32
     Some(if mouse.bits & 3 == 0 { -1 } else { 1 })
 }
 
+/// Wheel lines for `auto` (gh #82): pi sniffs the platform; LCA
+/// moves three lines, documented on the key.
+fn wheel_lines_for(tuning: &crate::state::DisplayTuning) -> u8 {
+    match tuning.fullscreen_wheel_lines.as_str() {
+        "auto" => 3,
+        text => text.parse().unwrap_or(3),
+    }
+}
+
+/// Sync the fullscreen tunables onto a screen (gh #82): copy and
+/// wheel behavior follow config, so a `/settings` cycle applies on
+/// the next switch.
+fn apply_screen_tuning(screen: &mut Screen, tuning: &crate::state::DisplayTuning) {
+    if let Screen::Alt(alt) = screen {
+        alt.copy_on_select = tuning.fullscreen_copy_on_select;
+        alt.wheel_lines = wheel_lines_for(tuning);
+    }
+}
+
+/// The fullscreen-exit notice (gh #82): the resume hint names the
+/// live session; anything else (or no id) stays quiet. Pure for the
+/// row that pins it.
+fn exit_hint(tuning: &crate::state::DisplayTuning, session_id: &str) -> Option<String> {
+    if tuning.fullscreen_exit_output.as_str() == "resume-hint" && !session_id.is_empty() {
+        Some(format!(
+            "session continues in scrollback - resume with: lca --resume {session_id}"
+        ))
+    } else {
+        None
+    }
+}
+
 fn switch_screen(screen: &mut Screen, fullscreen: bool, term: &mut dyn Terminal) {
     match (screen.is_fullscreen(), fullscreen) {
         (true, false) => {
@@ -536,6 +568,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     } else {
         Screen::Main(MainScreenRenderer::new())
     };
+    apply_screen_tuning(&mut screen, &chat.display_tuning());
     terminal.set_title(&format!(
         "lca — {}",
         chat.world.options.workspace.to_string_lossy()
@@ -586,7 +619,24 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
 
         // The screen mode can change at runtime (FR-UI-21).
         if screen.is_fullscreen() != chat.screen_mode {
+            let was_fullscreen = screen.is_fullscreen();
             switch_screen(&mut screen, chat.screen_mode, &mut terminal);
+            apply_screen_tuning(&mut screen, &chat.display_tuning());
+            // Gh #82: leaving fullscreen can name the resume command.
+            if was_fullscreen && !chat.screen_mode {
+                let tuning = chat.display_tuning();
+                let id = chat
+                    .world
+                    .options
+                    .hooks
+                    .current_session_id
+                    .as_ref()
+                    .map(|session| session())
+                    .unwrap_or_default();
+                if let Some(hint) = exit_hint(&tuning, &id) {
+                    chat.world.notice = Some(hint);
+                }
+            }
             dirty = true;
         }
 
@@ -717,7 +767,11 @@ impl TurnState {
         chat.usage.cost += outcome.usage.cost;
         chat.turn_running = false;
         chat.current_steer = None;
-        terminal.set_progress(false);
+        // Gh #82: OSC 9;4 progress is current behavior; the key
+        // switches it off.
+        if chat.display_tuning().show_progress {
+            terminal.set_progress(false);
+        }
         // Steering lifecycle (ADR-0038): an aborted turn returns its queue
         // to the editor; a completed turn runs the queued messages in order.
         if self.aborted {
@@ -750,7 +804,9 @@ impl TurnState {
             queue,
         };
         chat.begin_turn(steer);
-        terminal.set_progress(true);
+        if chat.display_tuning().show_progress {
+            terminal.set_progress(true);
+        }
         self.turn_rx = Some(event_rx);
         self.active = Some(runner(text, channels, cancel));
         true

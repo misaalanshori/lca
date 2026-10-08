@@ -117,6 +117,12 @@ pub struct Editor {
     /// `render(&self)` is what records it, the way pi's editor remembers
     /// `lastWidth` (`editor.md` §4).
     last_width: Cell<u16>,
+    /// Autocomplete popup rows (gh #82, pi's `autocompleteMaxVisible`):
+    /// the host syncs it from config.
+    pub max_visible: usize,
+    /// Editor horizontal padding cells, 0-3 (gh #82, pi's
+    /// `editorPaddingX`): the host syncs it from config.
+    pub padding_x: usize,
 }
 
 impl Default for Editor {
@@ -149,6 +155,8 @@ impl Editor {
             preferred_col: None,
             jump_pending: None,
             last_width: Cell::new(0),
+            max_visible: AUTOCOMPLETE_MAX_VISIBLE,
+            padding_x: 0,
         }
     }
 
@@ -890,8 +898,14 @@ impl Editor {
     pub fn render(&self, width: u16) -> Vec<String> {
         // gh #28: the rows drawn here are the rows Up/Down walk, so the
         // geometry is recorded once, here, for both.
-        self.last_width.set(width);
-        let rows = editor_rows::visual_rows(&self.lines, width as usize);
+        // Gh #82: the padding spends width first (so wraps agree with
+        // the walk), then prefixes every row; the marker rides inside,
+        // so the hardware cursor follows it.
+        let pad = self.padding_x.min(3);
+        let inner = width.saturating_sub(pad as u16);
+        self.last_width.set(inner);
+        let rows = editor_rows::visual_rows(&self.lines, inner as usize);
+        let prefix = " ".repeat(pad);
         let mut out: Vec<String> = Vec::with_capacity(rows.len());
         let mut cursor_placed = false;
         for (position, row) in rows.iter().enumerate() {
@@ -922,7 +936,7 @@ impl Editor {
                 };
                 cursor_placed = true;
             }
-            out.push(rendered);
+            out.push(format!("{prefix}{rendered}"));
         }
         if !cursor_placed
             && let Some(index) = rows.iter().rposition(|row| row.line == self.cursor_line)
@@ -1028,7 +1042,9 @@ impl Editor {
         if total == 0 {
             return None;
         }
-        let max = AUTOCOMPLETE_MAX_VISIBLE.min(total);
+        // Gh #82: the host syncs the cap from config; the floor
+        // keeps a zero (or a hostile value) away from the popup.
+        let max = self.max_visible.max(1).min(total);
         let start = self
             .suggestion_index
             .saturating_sub(max / 2)

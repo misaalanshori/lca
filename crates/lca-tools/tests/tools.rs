@@ -1120,3 +1120,39 @@ fn the_shell_description_has_no_multi_space_runs() {
         );
     }
 }
+
+// Verifies: gh #82 - without auto-resize the original bytes ride
+// through; with it (the default) the profile re-encodes.
+#[tokio::test]
+async fn auto_resize_off_passes_original_bytes() {
+    use lca_tools::{ImagePolicy, ImageVision};
+    // The canonical 1x1 transparent GIF: decodable by hand, no encoder.
+    let gif: Vec<u8> = vec![
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0xFF, 0xFF,
+        0xFF, 0x00, 0x00, 0x00, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
+    ];
+    let ws = scratch("read-resize");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("pixel.gif"), &gif).unwrap();
+    let mut exec = executor(&ws);
+    exec.set_image_policy(ImagePolicy {
+        vision: ImageVision::Vision,
+        resize: None,
+    });
+    let read = || call("read", serde_json::json!({"path": "pixel.gif"}));
+    let on = run(&mut exec, &read()).await;
+    assert_eq!(on.status, ToolResultStatus::Ok);
+    assert_eq!(on.images.len(), 1);
+    assert_ne!(
+        on.images[0].bytes, gif,
+        "the default profile re-encodes through JPEG"
+    );
+    exec.set_auto_resize_images(false);
+    let off = run(&mut exec, &read()).await;
+    assert_eq!(off.status, ToolResultStatus::Ok);
+    assert_eq!(
+        off.images[0].bytes, gif,
+        "off passes the original bytes through"
+    );
+}

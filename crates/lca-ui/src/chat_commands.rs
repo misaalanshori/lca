@@ -819,3 +819,28 @@ impl Chat {
         notice
     }
 }
+
+/// Display tunables (gh #82), split from `chat.rs` (the 1,200-line ceiling).
+impl Chat {
+    /// The live display tunables (gh #82): the host's hook, or the
+    /// product defaults when it says nothing.
+    pub(crate) fn display_tuning(&self) -> crate::state::DisplayTuning {
+        self.world
+            .options
+            .hooks
+            .display_tuning
+            .as_ref()
+            .map(|tuning| tuning())
+            .unwrap_or_default()
+    }
+
+    /// Sync the tunables into the editor and transcript (gh #82): the
+    /// tick calls this every frame, so a `/settings` cycle applies
+    /// without a restart.
+    pub(super) fn sync_display_tuning(&mut self) {
+        let tuning = self.display_tuning();
+        self.editor.max_visible = tuning.autocomplete_max_visible.clamp(3, 20) as usize;
+        self.editor.padding_x = tuning.editor_padding_x.min(3) as usize;
+        self.transcript.apply_display(&tuning);
+    }
+}

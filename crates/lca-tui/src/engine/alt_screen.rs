@@ -94,6 +94,10 @@ pub struct AltScreenRenderer {
     pub scroll: u16,
     /// Whether to copy on release.
     pub copy_on_select: bool,
+    /// Fullscreen wheel lines per event (gh #82, pi's
+    /// `fullscreenWheelScrollLines` without the platform sniff: the
+    /// host syncs `auto` as 3). The floor keeps a zero away.
+    pub wheel_lines: u8,
     last_click: Option<(std::time::Instant, u16, u16)>,
     click_count: u8,
     /// While dragging, the edge the pointer sits on: `-1` top, `1` bottom
@@ -127,6 +131,7 @@ impl AltScreenRenderer {
             selection: Selection::new(),
             scroll: 0,
             copy_on_select: true,
+            wheel_lines: 1,
             last_click: None,
             click_count: 0,
             drag_edge: None,
@@ -277,10 +282,11 @@ impl AltScreenRenderer {
         let point = SelectionPoint { row, col };
 
         if wheel {
+            let lines = self.wheel_lines.max(1) as u16;
             self.scroll = if button == 0 {
-                self.scroll.saturating_add(1)
+                self.scroll.saturating_add(lines)
             } else {
-                self.scroll.saturating_sub(1)
+                self.scroll.saturating_sub(lines)
             };
             return true;
         }
@@ -558,6 +564,29 @@ mod tests {
             press: true,
         });
         assert_eq!(r.scroll, 1);
+    }
+
+    // Verifies: gh #82 - the wheel moves `wheel_lines` rows per event
+    // (pi's `fullscreenWheelScrollLines` without the platform sniff).
+    #[test]
+    fn wheel_moves_configured_lines() {
+        let mut r = AltScreenRenderer::new();
+        r.wheel_lines = 6;
+        r.handle_mouse(SgrMouse {
+            bits: 64,
+            x: 1,
+            y: 1,
+            press: true,
+        });
+        assert_eq!(r.scroll, 6);
+        // Down (bit 0 set) walks back.
+        r.handle_mouse(SgrMouse {
+            bits: 65,
+            x: 1,
+            y: 1,
+            press: true,
+        });
+        assert_eq!(r.scroll, 0);
     }
 
     #[test]

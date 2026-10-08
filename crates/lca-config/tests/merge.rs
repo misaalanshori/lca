@@ -783,3 +783,70 @@ fn double_escape_and_tree_filter_parse() {
     .expect_err("outside the domain is refused");
     assert!(err.to_string().contains("ui.double_escape_action"), "{err}");
 }
+
+// Verifies: gh #82 - the display inventory loads with pi-matching
+// defaults, and out-of-domain values refuse at load.
+#[test]
+fn display_inventory_loads_with_documented_defaults() {
+    let defaults = Config::defaults();
+    assert_eq!(defaults.ui_autocomplete_max_visible(), 5);
+    assert_eq!(defaults.ui_editor_padding_x(), 0);
+    assert_eq!(defaults.ui_output_pad(), 1);
+    assert_eq!(defaults.ui_fullscreen_scrollbar(), "auto");
+    assert!(defaults.ui_fullscreen_copy_on_select());
+    assert_eq!(defaults.ui_fullscreen_wheel_lines(), "auto");
+    assert_eq!(defaults.ui_fullscreen_exit_output(), "transcript");
+    assert!(!defaults.ui_show_hardware_cursor());
+    assert!(defaults.terminal_show_images());
+    assert_eq!(defaults.terminal_image_width_cells(), 60);
+    assert!(!defaults.terminal_clear_on_shrink());
+    assert!(defaults.terminal_show_progress(), "on: current behavior");
+    assert_eq!(defaults.terminal_hyperlinks(), "auto");
+    assert_eq!(defaults.terminal_images(), "auto");
+    assert_eq!(defaults.terminal_true_color(), "auto");
+    assert!(defaults.images_auto_resize());
+    assert!(!defaults.images_block_images());
+    assert_eq!(defaults.markdown_code_block_indent(), "  ");
+    assert_eq!(defaults.markdown_mermaid(), "streaming");
+
+    let dir = scratch("display-inventory");
+    write(
+        &dir.join("user.toml"),
+        "ui.autocomplete_max_visible = 8\nui.editor_padding_x = 2\nui.output_pad = 0\nui.fullscreen_scrollbar = \"hidden\"\nui.fullscreen_copy_on_select = false\nui.fullscreen_wheel_lines = \"6\"\nui.fullscreen_exit_output = \"resume-hint\"\nui.show_hardware_cursor = true\nterminal.show_images = false\nterminal.image_width_cells = 80\nterminal.clear_on_shrink = true\nterminal.show_progress = false\nterminal.hyperlinks = false\nterminal.images = \"kitty\"\nterminal.true_color = false\nimages.auto_resize = false\nimages.block_images = true\nmarkdown.code_block_indent = \">>\"\nmarkdown.mermaid = \"off\"\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.ui_autocomplete_max_visible(), 8);
+    assert_eq!(config.ui_editor_padding_x(), 2);
+    assert_eq!(config.ui_output_pad(), 0);
+    assert_eq!(config.ui_fullscreen_scrollbar(), "hidden");
+    assert!(!config.ui_fullscreen_copy_on_select());
+    assert_eq!(config.ui_fullscreen_wheel_lines(), "6");
+    assert_eq!(config.ui_fullscreen_exit_output(), "resume-hint");
+    assert!(config.ui_show_hardware_cursor());
+    assert!(!config.terminal_show_images());
+    assert_eq!(config.terminal_image_width_cells(), 80);
+    assert!(config.terminal_clear_on_shrink());
+    assert!(!config.terminal_show_progress());
+    assert_eq!(config.terminal_hyperlinks(), "false");
+    assert_eq!(config.terminal_images(), "kitty");
+    assert_eq!(config.terminal_true_color(), "false");
+    assert!(!config.images_auto_resize());
+    assert!(config.images_block_images());
+    assert_eq!(config.markdown_code_block_indent(), ">>");
+    assert_eq!(config.markdown_mermaid(), "off");
+
+    write(&dir.join("user.toml"), "ui.autocomplete_max_visible = 99\n");
+    let err = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("out of range refuses");
+    assert!(
+        err.to_string().contains("ui.autocomplete_max_visible"),
+        "{err}"
+    );
+}

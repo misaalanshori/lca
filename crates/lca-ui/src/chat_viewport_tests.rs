@@ -525,3 +525,49 @@ fn shift_up_and_down_jump_between_prompts() {
     assert_eq!(chat.handle_key("\x1b[1;2B"), Action::Continue); // Shift+Down
     assert!(chat.jump_target.is_some(), "shift+down steps forward");
 }
+
+// Verifies: gh #82 - the scrollbar mode bites: hidden paints nothing,
+// always paints a full bar even when the transcript fits.
+#[test]
+fn scrollbar_mode_hides_or_forces_the_bar() {
+    use super::Chat;
+    use super::options;
+    use super::strip;
+    use crate::state::DisplayTuning;
+    use lca_tui::engine::keybindings::KeybindingsManager;
+    use std::sync::Arc;
+    let tuned = |scrollbar: &str| {
+        let mut opts = options();
+        let mode = scrollbar.to_string();
+        opts.hooks.display_tuning = Some(Arc::new(move || DisplayTuning {
+            fullscreen_scrollbar: mode.clone(),
+            ..DisplayTuning::default()
+        }));
+        let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+        chat.screen_mode = true;
+        chat.transcript.push_user("one line");
+        chat
+    };
+    let (w, h) = (80u16, 24u16);
+    let plain = tuned("auto");
+    assert!(
+        plain.scrollbar_for_frame(w, h, 0).is_none(),
+        "a fitting transcript hides the auto bar"
+    );
+    let hidden = tuned("hidden");
+    assert!(
+        hidden.scrollbar_for_frame(w, h, 0).is_none(),
+        "hidden paints nothing"
+    );
+    let mut forced = tuned("always");
+    forced.transcript.push_user("one line");
+    let frame = strip(&forced.viewport(w, h, 0));
+    assert!(
+        frame.iter().any(|line| line.trim_end().ends_with('▲')),
+        "always paints the steppers: {frame:?}"
+    );
+    assert!(
+        frame.iter().any(|line| line.trim_end().ends_with('▼')),
+        "always paints both ends: {frame:?}"
+    );
+}

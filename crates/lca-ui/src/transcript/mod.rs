@@ -150,6 +150,9 @@ pub struct Transcript {
     /// pi's `registerMarkdownTransformer`. Empty by default - no
     /// consumer, no rewriting.
     markdown_transformers: Vec<lca_tui::widgets::markdown::MarkdownTransformer>,
+    /// The live display tunables (gh #82): margin, image display,
+    /// mermaid mode, and code indent, synced from the config hook.
+    tuning: crate::state::DisplayTuning,
     /// Per-entry render cache (R15): `None` means the entry must be
     /// rendered; a streaming append invalidates only the last entry, so a
     /// long transcript is not re-rendered from scratch on every delta.
@@ -182,6 +185,17 @@ impl Transcript {
     /// options when the chat is built, like the thinking visibility.
     pub fn set_codeblock_border(&mut self, border: lca_tui::widgets::markdown::CodeBlockBorder) {
         self.codeblock_border = border;
+    }
+
+    /// Sync the display tunables from the config hook (gh #82) and drop
+    /// the render cache they key: a margin or mode change re-renders.
+    pub fn apply_display(&mut self, tuning: &crate::state::DisplayTuning) {
+        // The tick syncs every frame: only a real change drops the
+        // render cache (R15), or scrolling would re-render always.
+        if self.tuning != *tuning {
+            self.tuning = tuning.clone();
+            self.invalidate();
+        }
     }
 
     /// Set the default for thinking runs (R6's `ui.thinking`).
@@ -622,6 +636,7 @@ impl Transcript {
                 self.thinking,
                 self.codeblock_border,
                 &self.markdown_transformers,
+                &self.tuning,
                 &mut lines,
             );
             out.extend(lines.iter().cloned());
@@ -677,6 +692,7 @@ impl Transcript {
                 self.thinking,
                 self.codeblock_border,
                 &self.markdown_transformers,
+                &self.tuning,
                 &mut tmp,
             );
             line += tmp.len();

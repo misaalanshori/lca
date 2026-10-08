@@ -119,123 +119,7 @@ impl Ui {
             external_editor: Some(Arc::new(external_editor)),
             persist_screen_mode: Some(Arc::new(persist_screen_mode)),
             persist_setting: Some(persist_setting),
-            settings_rows: {
-                let ui = self.clone();
-                let data = self.data.clone();
-                Some(Arc::new(move || {
-                    use lca_config::{PERMISSION_MODES, SHELL_TOOLS, THINKING_VISIBILITIES};
-                    use lca_ui::SettingRow;
-                    // The winning layer per key (FR-CFG-2's column) -
-                    // re-read now, not from the startup snapshot: the
-                    // selector's own last write has to show up as the
-                    // layer that won. `Chat::settings_rows` mirrors the
-                    // three keys whose session value can outrun the file.
-                    let config = crate::load_config_flags(
-                        &ui.cwd,
-                        &crate::lock(&ui.grants),
-                        false,
-                        false,
-                        &ui.flags,
-                    )
-                    .unwrap_or_else(|_| crate::lock(&ui.config).clone());
-                    let resolved: std::collections::BTreeMap<
-                        String,
-                        (String, lca_config::MergeSource),
-                    > = config
-                        .resolved()
-                        .map(|(key, value, source)| (key.to_string(), (value, source)))
-                        .collect();
-                    let row = |section: &str, key: &str, values: &[&str]| {
-                        let (value, source) = match key {
-                            // The one setting with two homes (gh #112):
-                            // a persisted `ui.json` wins when present
-                            // (FR-UI-21) and says so in the source
-                            // column; else the config file's
-                            // `ui.fullscreen` (or the default) shows
-                            // with the layer that won it.
-                            "ui.fullscreen" => match read_ui_json(&data) {
-                                UiJson::Fullscreen(persisted) => {
-                                    (persisted.to_string(), "ui.json".to_string())
-                                }
-                                UiJson::Absent | UiJson::Malformed(_) => resolved
-                                    .get(key)
-                                    .map(|(value, source)| (value.clone(), source.to_string()))
-                                    .unwrap_or_else(|| {
-                                        ("<unset>".to_string(), "default".to_string())
-                                    }),
-                            },
-                            _ => resolved
-                                .get(key)
-                                .map(|(value, source)| (value.clone(), source.to_string()))
-                                .unwrap_or_else(|| ("<unset>".to_string(), "default".to_string())),
-                        };
-                        SettingRow {
-                            section: section.to_string(),
-                            key: key.to_string(),
-                            value,
-                            source,
-                            values: values.iter().map(|value| value.to_string()).collect(),
-                        }
-                    };
-                    // The categorized inventory (gh #174): every scalar
-                    // key `lca config` owns, grouped under dividers -
-                    // pi's list is flat, ours is sectioned. `provider`,
-                    // `model`, and `models.enabled` keep their own
-                    // pickers; table keys (`models.thinking_levels`,
-                    // `permissions.proposals`) have no row shape.
-                    use lca_config::CODEBLOCK_BORDERS;
-                    vec![
-                        row("Display & Appearance", "ui.theme", &[]),
-                        row("Display & Appearance", "ui.color", &["auto", "never"]),
-                        row("Display & Appearance", "ui.fullscreen", &["false", "true"]),
-                        row(
-                            "Display & Appearance",
-                            "ui.quiet_startup",
-                            &["false", "true", "header"],
-                        ),
-                        row(
-                            "Display & Appearance",
-                            "markdown.codeblock_border",
-                            CODEBLOCK_BORDERS,
-                        ),
-                        row("Model & Reasoning", "thinking", &[]),
-                        row("Model & Reasoning", "ui.thinking", THINKING_VISIBILITIES),
-                        row(
-                            "Permissions & Security",
-                            "permissions.mode",
-                            PERMISSION_MODES,
-                        ),
-                        row(
-                            "Context & Compaction",
-                            "compaction.enabled",
-                            &["false", "true"],
-                        ),
-                        row("Context & Compaction", "compaction.threshold", &[]),
-                        row("Context & Compaction", "compaction.reserve_tokens", &[]),
-                        row("Context & Compaction", "compaction.keep_recent_tokens", &[]),
-                        row("Terminal & Execution", "shell.tool", SHELL_TOOLS),
-                        row("Terminal & Execution", "shell.path", &[]),
-                        row("Terminal & Execution", "shell.command_prefix", &[]),
-                        row("Terminal & Execution", "tool.timeout_seconds", &[]),
-                        row("Terminal & Execution", "tool.result_limit_bytes", &[]),
-                        row("Terminal & Execution", "tool.max_iterations", &[]),
-                        row("Terminal & Execution", "provider.retry_limit", &[]),
-                        row(
-                            "Terminal & Execution",
-                            "tool.edit_requires_read",
-                            &["false", "true"],
-                        ),
-                        row(
-                            "Terminal & Execution",
-                            "ui.double_escape_action",
-                            lca_config::DOUBLE_ESCAPE_ACTIONS,
-                        ),
-                        row("Data & Updates", "cache.noise_floor_tokens", &[]),
-                        row("Data & Updates", "extensions.log_limit_bytes", &[]),
-                        row("Data & Updates", "update.check", &["false", "true"]),
-                    ]
-                }))
-            },
+            settings_rows: super::display::settings_rows(self, self.data.clone()),
             cycle_model: {
                 let ui = self.clone();
                 Some(Arc::new(move |forward: bool| ui.cycle_model(forward)))
@@ -319,6 +203,36 @@ impl Ui {
                     crate::lock(&ui.config)
                         .ui_double_escape_action()
                         .to_string()
+                }))
+            },
+            display_tuning: {
+                let ui = self.clone();
+                // Reads the live cell every frame: a `/settings`
+                // cycle applies without a restart.
+                Some(Arc::new(move || {
+                    let config = crate::lock(&ui.config);
+                    lca_ui::state::DisplayTuning {
+                        autocomplete_max_visible: config.ui_autocomplete_max_visible().clamp(3, 20)
+                            as u8,
+                        editor_padding_x: config.ui_editor_padding_x().min(3) as u8,
+                        output_pad: config.ui_output_pad().min(1) as u8,
+                        fullscreen_scrollbar: config.ui_fullscreen_scrollbar().to_string(),
+                        fullscreen_copy_on_select: config.ui_fullscreen_copy_on_select(),
+                        fullscreen_wheel_lines: config.ui_fullscreen_wheel_lines().to_string(),
+                        fullscreen_exit_output: config.ui_fullscreen_exit_output().to_string(),
+                        show_images: config.terminal_show_images(),
+                        image_width_cells: config.terminal_image_width_cells().max(1) as u16,
+                        show_progress: config.terminal_show_progress(),
+                        auto_resize_images: config.images_auto_resize(),
+                        code_block_indent: config.markdown_code_block_indent().to_string(),
+                        mermaid: config.markdown_mermaid().to_string(),
+                    }
+                }))
+            },
+            current_session_id: {
+                let ui = self.clone();
+                Some(Arc::new(move || {
+                    crate::lock(&ui.current_session).id().to_string()
                 }))
             },
             scoped_models: {
@@ -1031,7 +945,7 @@ fn persist_screen_mode(fullscreen: bool) {
 ///
 /// What `ui.json` says, if anything: typed, so `{"fullscreen": false,
 /// "other": true}` stays scrollback instead of matching a substring.
-enum UiJson {
+pub(super) enum UiJson {
     /// No file: nothing persisted.
     Absent,
     /// The persisted choice.
@@ -1040,7 +954,7 @@ enum UiJson {
     Malformed(String),
 }
 
-fn read_ui_json(config_dir: &std::path::Path) -> UiJson {
+pub(super) fn read_ui_json(config_dir: &std::path::Path) -> UiJson {
     let text = match std::fs::read_to_string(config_dir.join("ui.json")) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return UiJson::Absent,

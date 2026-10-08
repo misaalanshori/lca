@@ -29,6 +29,15 @@ pub const THINKING_VISIBILITIES: &[&str] = &["snippet", "full", "hidden"];
 /// `doubleEscapeAction`).
 pub const DOUBLE_ESCAPE_ACTIONS: &[&str] = &["tree", "fork", "none"];
 
+/// Fullscreen scrollbar behavior (gh #82, pi's `fullscreenScrollbar`).
+pub const FULLSCREEN_SCROLLBARS: &[&str] = &["auto", "always", "hidden"];
+
+/// Fullscreen exit behavior (gh #82, pi's `fullscreenExitOutput`).
+pub const FULLSCREEN_EXIT_OUTPUTS: &[&str] = &["transcript", "resume-hint"];
+
+/// Mermaid rendering modes (gh #82, pi's `markdown.mermaid`).
+pub const MERMAID_MODES: &[&str] = &["off", "final", "streaming"];
+
 /// Pi's `treeFilterMode` vocabulary (gh #132): accepted
 /// config-error-free, currently inert (the no-op documents itself in
 /// `docs/configuration.md`).
@@ -50,10 +59,33 @@ pub const KNOWN_KEYS: &[&str] = &[
     "tool.timeout_seconds",
     "tool.result_limit_bytes",
     "tool.max_iterations",
+    "tool.edit_requires_read",
     "cache.noise_floor_tokens",
     "extensions.log_limit_bytes",
     "update.check",
     "ui.fullscreen",
+    "ui.quiet_startup",
+    "ui.double_escape_action",
+    "ui.tree_filter_mode",
+    "ui.autocomplete_max_visible",
+    "ui.editor_padding_x",
+    "ui.output_pad",
+    "ui.fullscreen_scrollbar",
+    "ui.fullscreen_copy_on_select",
+    "ui.fullscreen_wheel_lines",
+    "ui.fullscreen_exit_output",
+    "ui.show_hardware_cursor",
+    "terminal.show_images",
+    "terminal.image_width_cells",
+    "terminal.clear_on_shrink",
+    "terminal.show_progress",
+    "terminal.hyperlinks",
+    "terminal.images",
+    "terminal.true_color",
+    "images.auto_resize",
+    "images.block_images",
+    "markdown.code_block_indent",
+    "markdown.mermaid",
     "ui.color",
     "ui.theme",
     "thinking",
@@ -97,6 +129,79 @@ pub(crate) fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValu
                 TREE_FILTER_MODES.join(", ")
             ))),
         },
+        "ui.autocomplete_max_visible" => match raw.parse::<u64>() {
+            Ok(n) if (3..=20).contains(&n) => Ok(TypedValue::Count(n)),
+            _ => Err(invalid(format!("expected an integer 3-20, got `{raw}`"))),
+        },
+        "ui.editor_padding_x" => match raw.parse::<u64>() {
+            Ok(n) if n <= 3 => Ok(TypedValue::Count(n)),
+            _ => Err(invalid(format!("expected an integer 0-3, got `{raw}`"))),
+        },
+        "ui.output_pad" => match raw {
+            "0" => Ok(TypedValue::Count(0)),
+            "1" => Ok(TypedValue::Count(1)),
+            _ => Err(invalid(format!("expected 0 or 1, got `{raw}`"))),
+        },
+        "ui.fullscreen_scrollbar" => match raw {
+            _ if FULLSCREEN_SCROLLBARS.contains(&raw) => Ok(TypedValue::Text(raw.to_string())),
+            _ => Err(invalid(format!(
+                "expected {}, got `{raw}`",
+                FULLSCREEN_SCROLLBARS.join(", ")
+            ))),
+        },
+        "ui.fullscreen_wheel_lines" => match raw {
+            "auto" => Ok(TypedValue::Text(raw.to_string())),
+            _ => match raw.parse::<u64>() {
+                Ok(n) if (1..=100).contains(&n) => Ok(TypedValue::Text(raw.to_string())),
+                _ => Err(invalid(format!(
+                    "expected auto or an integer 1-100, got `{raw}`"
+                ))),
+            },
+        },
+        "ui.fullscreen_exit_output" => match raw {
+            _ if FULLSCREEN_EXIT_OUTPUTS.contains(&raw) => Ok(TypedValue::Text(raw.to_string())),
+            _ => Err(invalid(format!(
+                "expected {}, got `{raw}`",
+                FULLSCREEN_EXIT_OUTPUTS.join(", ")
+            ))),
+        },
+        "terminal.image_width_cells" => match raw.parse::<u64>() {
+            Ok(n) if n >= 1 => Ok(TypedValue::Count(n)),
+            _ => Err(invalid(format!("expected a positive integer, got `{raw}`"))),
+        },
+        "terminal.hyperlinks" | "terminal.true_color" => match raw {
+            "true" | "false" | "auto" => Ok(TypedValue::Text(raw.to_string())),
+            _ => Err(invalid(format!(
+                "expected true, false, or auto, got `{raw}`"
+            ))),
+        },
+        "terminal.images" => match raw {
+            "kitty" | "iterm2" | "auto" | "false" => Ok(TypedValue::Text(raw.to_string())),
+            _ => Err(invalid(format!(
+                "expected kitty, iterm2, auto, or false, got `{raw}`"
+            ))),
+        },
+        "markdown.code_block_indent" => match raw {
+            _ if !raw.contains('\n') && raw.len() <= 8 => Ok(TypedValue::Text(raw.to_string())),
+            _ => Err(invalid("expected a short single-line indent".to_string())),
+        },
+        "markdown.mermaid" => match raw {
+            _ if MERMAID_MODES.contains(&raw) => Ok(TypedValue::Text(raw.to_string())),
+            _ => Err(invalid(format!(
+                "expected {}, got `{raw}`",
+                MERMAID_MODES.join(", ")
+            ))),
+        },
+        "ui.fullscreen_copy_on_select"
+        | "ui.show_hardware_cursor"
+        | "terminal.show_images"
+        | "terminal.clear_on_shrink"
+        | "terminal.show_progress"
+        | "images.auto_resize"
+        | "images.block_images" => raw
+            .parse::<bool>()
+            .map(TypedValue::Bool)
+            .map_err(|_| invalid(format!("expected a boolean, got `{raw}`"))),
         "ui.quiet_startup" => match raw {
             "true" | "false" | "header" => Ok(TypedValue::Text(raw.to_string())),
             _ => Err(invalid(format!(

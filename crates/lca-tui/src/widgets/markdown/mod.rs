@@ -45,7 +45,7 @@ pub type HighlightFn = Arc<dyn Fn(&str, &str) -> Option<Vec<String>> + Send + Sy
 mod options;
 mod transform;
 
-pub use options::MarkdownOptions;
+pub use options::{MarkdownOptions, MermaidMode};
 pub use transform::{
     MarkdownMessageType, MarkdownTransformContext, MarkdownTransformer, apply_transformers,
 };
@@ -278,8 +278,15 @@ fn render_blocks(
             // directly, so the fence-length trick that protects diagram
             // rows from markdown has nothing to do here. The fence scan
             // above has already consumed the block, so `i` is past it.
+            // Gh #82: the mode gates the art - off keeps the fence
+            // raw, final waits for the settled message.
+            let mermaid_art = match options.mermaid {
+                MermaidMode::Off => None,
+                MermaidMode::Final if options.streaming => None,
+                _ => crate::widgets::mermaid::render(&body.join("\n")),
+            };
             if lang.eq_ignore_ascii_case("mermaid")
-                && let Some(art) = crate::widgets::mermaid::render(&body.join("\n"))
+                && let Some(art) = mermaid_art
                 && art.width <= inner_width
             {
                 if !art.warnings.is_empty() && !options.streaming {
@@ -291,6 +298,7 @@ fn render_blocks(
                         inner_width,
                         theme,
                         options.codeblock_border,
+                        &options.code_indent,
                         out,
                     );
                     out.push((theme.warning)(&format!(
@@ -319,6 +327,7 @@ fn render_blocks(
                 inner_width,
                 theme,
                 options.codeblock_border,
+                &options.code_indent,
                 out,
             );
             continue;
@@ -622,8 +631,19 @@ fn render_code_block(
     width: usize,
     theme: &MarkdownTheme,
     border: CodeBlockBorder,
+    indent: &str,
     out: &mut Vec<String>,
 ) {
+    // Gh #82: the indent spends terminal width first, then prefixes
+    // every rendered line.
+    let width = width.saturating_sub(visible_width(indent));
+    let mut indented = |line: String| {
+        if indent.is_empty() {
+            line
+        } else {
+            format!("{indent}{line}")
+        }
+    };
     // D10: the border caps at the content width, not the terminal width.
     let content_width = body.iter().map(|l| visible_width(l)).max().unwrap_or(0);
     // A full frame: 2 border + 2 padding around the content, capped at the
@@ -636,34 +656,34 @@ fn render_code_block(
         format!(" {lang} ")
     };
     if border == CodeBlockBorder::None {
-        out.extend(rendered(body, lang, theme));
+        out.extend(rendered(body, lang, theme).into_iter().map(&mut indented));
         return;
     }
     if border == CodeBlockBorder::Horizontal {
         // gh #32: bars top and bottom, code lines bare - a terminal
         // selection copies exactly what the fence wrote.
         let top_fill = frame.saturating_sub(visible_width(&title) + 2);
-        out.push((theme.code_block_border)(&format!(
+        out.push(indented((theme.code_block_border)(&format!(
             "──{title}{}",
             "─".repeat(top_fill)
-        )));
-        out.extend(rendered(body, lang, theme));
-        out.push((theme.code_block_border)(&"─".repeat(frame)));
+        ))));
+        out.extend(rendered(body, lang, theme).into_iter().map(&mut indented));
+        out.push(indented((theme.code_block_border)(&"─".repeat(frame))));
         return;
     }
     let top_fill = frame.saturating_sub(visible_width(&title) + 3);
-    out.push((theme.code_block_border)(&format!(
+    out.push(indented((theme.code_block_border)(&format!(
         "╭─{title}{}╮",
         "─".repeat(top_fill)
-    )));
+    ))));
     for line in rendered(body, lang, theme) {
         let pad = inner.saturating_sub(visible_width(&line));
-        out.push(format!("│ {line}{} │", " ".repeat(pad)));
+        out.push(indented(format!("│ {line}{} │", " ".repeat(pad))));
     }
-    out.push((theme.code_block_border)(&format!(
+    out.push(indented((theme.code_block_border)(&format!(
         "╰{}╯",
         "─".repeat(frame.saturating_sub(2))
-    )));
+    ))));
 }
 
 /// The code block's lines, styled: pi's order - highlight when the theme

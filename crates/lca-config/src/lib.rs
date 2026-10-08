@@ -12,10 +12,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 mod keys;
+mod values;
 
 pub use keys::{
-    CODEBLOCK_BORDERS, DOUBLE_ESCAPE_ACTIONS, KNOWN_KEYS, PERMISSION_MODES, SHELL_TOOLS,
-    THINKING_LEVELS, THINKING_VISIBILITIES, TREE_FILTER_MODES,
+    CODEBLOCK_BORDERS, DOUBLE_ESCAPE_ACTIONS, FULLSCREEN_EXIT_OUTPUTS, FULLSCREEN_SCROLLBARS,
+    KNOWN_KEYS, MERMAID_MODES, PERMISSION_MODES, SHELL_TOOLS, THINKING_LEVELS,
+    THINKING_VISIBILITIES, TREE_FILTER_MODES,
 };
 
 use keys::{TypedValue, csv, parse_typed};
@@ -147,6 +149,25 @@ pub struct Config {
     ui_quiet_startup: String,
     ui_double_escape_action: String,
     ui_tree_filter_mode: String,
+    ui_autocomplete_max_visible: u64,
+    ui_editor_padding_x: u64,
+    ui_output_pad: u64,
+    ui_fullscreen_scrollbar: String,
+    ui_fullscreen_copy_on_select: bool,
+    ui_fullscreen_wheel_lines: String,
+    ui_fullscreen_exit_output: String,
+    ui_show_hardware_cursor: bool,
+    terminal_show_images: bool,
+    terminal_image_width_cells: u64,
+    terminal_clear_on_shrink: bool,
+    terminal_show_progress: bool,
+    terminal_hyperlinks: String,
+    terminal_images: String,
+    terminal_true_color: String,
+    images_auto_resize: bool,
+    images_block_images: bool,
+    markdown_code_block_indent: String,
+    markdown_mermaid: String,
     ui_color: ColorMode,
     ui_theme: Option<String>,
     thinking: Option<String>,
@@ -210,6 +231,28 @@ impl Default for Config {
             // (LCA's tree lists sessions, nothing to filter).
             ui_double_escape_action: "tree".to_string(),
             ui_tree_filter_mode: "default".to_string(),
+            // gh #82: pi's display inventory in LCA naming. Defaults
+            // match pi except where noted (show_progress stays on:
+            // current behavior).
+            ui_autocomplete_max_visible: 5,
+            ui_editor_padding_x: 0,
+            ui_output_pad: 1,
+            ui_fullscreen_scrollbar: "auto".to_string(),
+            ui_fullscreen_copy_on_select: true,
+            ui_fullscreen_wheel_lines: "auto".to_string(),
+            ui_fullscreen_exit_output: "transcript".to_string(),
+            ui_show_hardware_cursor: false,
+            terminal_show_images: true,
+            terminal_image_width_cells: 60,
+            terminal_clear_on_shrink: false,
+            terminal_show_progress: true,
+            terminal_hyperlinks: "auto".to_string(),
+            terminal_images: "auto".to_string(),
+            terminal_true_color: "auto".to_string(),
+            images_auto_resize: true,
+            images_block_images: false,
+            markdown_code_block_indent: "  ".to_string(),
+            markdown_mermaid: "streaming".to_string(),
             ui_color: ColorMode::Auto,
             ui_theme: None,
             thinking: None,
@@ -318,6 +361,25 @@ impl Config {
             "ui.quiet_startup",
             "ui.double_escape_action",
             "ui.tree_filter_mode",
+            "ui.autocomplete_max_visible",
+            "ui.editor_padding_x",
+            "ui.output_pad",
+            "ui.fullscreen_scrollbar",
+            "ui.fullscreen_copy_on_select",
+            "ui.fullscreen_wheel_lines",
+            "ui.fullscreen_exit_output",
+            "ui.show_hardware_cursor",
+            "terminal.show_images",
+            "terminal.image_width_cells",
+            "terminal.clear_on_shrink",
+            "terminal.show_progress",
+            "terminal.hyperlinks",
+            "terminal.images",
+            "terminal.true_color",
+            "images.auto_resize",
+            "images.block_images",
+            "markdown.code_block_indent",
+            "markdown.mermaid",
             "ui.color",
             "ui.theme",
             "thinking",
@@ -471,6 +533,179 @@ impl Config {
                         return Err(invalid(format!("unexpected {key} value `{text}`")));
                     }
                     this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
+                "ui.autocomplete_max_visible" => {
+                    let count = value.as_integer().and_then(|i| u64::try_from(i).ok());
+                    match count {
+                        Some(n) if (3..=20).contains(&n) => {
+                            this.apply(key.to_string(), TypedValue::Count(n), source)?;
+                        }
+                        _ => {
+                            return Err(invalid(format!(
+                                "expected an integer 3-20, got {}",
+                                type_name(&value)
+                            )));
+                        }
+                    }
+                }
+                "ui.editor_padding_x" => {
+                    let count = value.as_integer().and_then(|i| u64::try_from(i).ok());
+                    match count {
+                        Some(n) if n <= 3 => {
+                            this.apply(key.to_string(), TypedValue::Count(n), source)?;
+                        }
+                        _ => {
+                            return Err(invalid(format!(
+                                "expected an integer 0-3, got {}",
+                                type_name(&value)
+                            )));
+                        }
+                    }
+                }
+                "ui.output_pad" => {
+                    let count = value.as_integer().and_then(|i| u64::try_from(i).ok());
+                    match count {
+                        Some(0) | Some(1) => {
+                            this.apply(
+                                key.to_string(),
+                                TypedValue::Count(count.unwrap_or(1)),
+                                source,
+                            )?;
+                        }
+                        _ => {
+                            return Err(invalid(format!(
+                                "expected 0 or 1, got {}",
+                                type_name(&value)
+                            )));
+                        }
+                    }
+                }
+                "ui.fullscreen_scrollbar" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    if !FULLSCREEN_SCROLLBARS.contains(&text) {
+                        return Err(invalid(format!(
+                            "expected {}, got `{text}`",
+                            FULLSCREEN_SCROLLBARS.join(", ")
+                        )));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
+                "ui.fullscreen_wheel_lines" => {
+                    let text = match &value {
+                        toml::Value::String(text) => text.clone(),
+                        toml::Value::Integer(n) => n.to_string(),
+                        _ => {
+                            return Err(invalid(format!(
+                                "expected auto or an integer 1-100, got {}",
+                                type_name(&value)
+                            )));
+                        }
+                    };
+                    let ok =
+                        text == "auto" || text.parse::<u64>().is_ok_and(|n| (1..=100).contains(&n));
+                    if !ok {
+                        return Err(invalid(format!(
+                            "expected auto or an integer 1-100, got `{text}`"
+                        )));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text), source)?;
+                }
+                "ui.fullscreen_exit_output" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    if !FULLSCREEN_EXIT_OUTPUTS.contains(&text) {
+                        return Err(invalid(format!(
+                            "expected {}, got `{text}`",
+                            FULLSCREEN_EXIT_OUTPUTS.join(", ")
+                        )));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
+                "terminal.image_width_cells" => {
+                    let count = value.as_integer().and_then(|i| u64::try_from(i).ok());
+                    match count {
+                        Some(n) if n >= 1 => {
+                            this.apply(key.to_string(), TypedValue::Count(n), source)?;
+                        }
+                        _ => {
+                            return Err(invalid(format!(
+                                "expected a positive integer, got {}",
+                                type_name(&value)
+                            )));
+                        }
+                    }
+                }
+                "terminal.hyperlinks" | "terminal.true_color" => {
+                    let text = match &value {
+                        toml::Value::Boolean(flag) => flag.to_string(),
+                        toml::Value::String(text) => text.clone(),
+                        _ => {
+                            return Err(invalid(format!(
+                                "expected true, false, or auto, got {}",
+                                type_name(&value)
+                            )));
+                        }
+                    };
+                    if !["true", "false", "auto"].contains(&text.as_str()) {
+                        return Err(invalid(format!(
+                            "expected true, false, or auto, got `{text}`"
+                        )));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text), source)?;
+                }
+                "terminal.images" => {
+                    let text = match &value {
+                        toml::Value::Boolean(false) => "false".to_string(),
+                        toml::Value::String(text) => text.clone(),
+                        _ => {
+                            return Err(invalid(format!(
+                                "expected kitty, iterm2, auto, or false, got {}",
+                                type_name(&value)
+                            )));
+                        }
+                    };
+                    if !["kitty", "iterm2", "auto", "false"].contains(&text.as_str()) {
+                        return Err(invalid(format!(
+                            "expected kitty, iterm2, auto, or false, got `{text}`"
+                        )));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text), source)?;
+                }
+                "markdown.code_block_indent" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    if text.contains('\n') || text.len() > 8 {
+                        return Err(invalid("expected a short single-line indent".to_string()));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
+                "markdown.mermaid" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    if !MERMAID_MODES.contains(&text) {
+                        return Err(invalid(format!(
+                            "expected {}, got `{text}`",
+                            MERMAID_MODES.join(", ")
+                        )));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
+                "ui.fullscreen_copy_on_select"
+                | "ui.show_hardware_cursor"
+                | "terminal.show_images"
+                | "terminal.clear_on_shrink"
+                | "terminal.show_progress"
+                | "images.auto_resize"
+                | "images.block_images" => {
+                    let flag = value.as_bool().ok_or_else(|| {
+                        invalid(format!("expected a boolean, got {}", type_name(&value)))
+                    })?;
+                    this.apply(key.to_string(), TypedValue::Bool(flag), source)?;
                 }
                 "ui.quiet_startup" => {
                     // bool | "header": TOML true/false or the string.
@@ -638,6 +873,25 @@ impl Config {
             "ui.quiet_startup",
             "ui.double_escape_action",
             "ui.tree_filter_mode",
+            "ui.autocomplete_max_visible",
+            "ui.editor_padding_x",
+            "ui.output_pad",
+            "ui.fullscreen_scrollbar",
+            "ui.fullscreen_copy_on_select",
+            "ui.fullscreen_wheel_lines",
+            "ui.fullscreen_exit_output",
+            "ui.show_hardware_cursor",
+            "terminal.show_images",
+            "terminal.image_width_cells",
+            "terminal.clear_on_shrink",
+            "terminal.show_progress",
+            "terminal.hyperlinks",
+            "terminal.images",
+            "terminal.true_color",
+            "images.auto_resize",
+            "images.block_images",
+            "markdown.code_block_indent",
+            "markdown.mermaid",
             "ui.color",
             "ui.theme",
             "thinking",
@@ -702,6 +956,37 @@ impl Config {
             ("ui.quiet_startup", TypedValue::Text(v)) => self.ui_quiet_startup = v,
             ("ui.double_escape_action", TypedValue::Text(v)) => self.ui_double_escape_action = v,
             ("ui.tree_filter_mode", TypedValue::Text(v)) => self.ui_tree_filter_mode = v,
+            ("ui.autocomplete_max_visible", TypedValue::Count(v)) => {
+                self.ui_autocomplete_max_visible = v
+            }
+            ("ui.editor_padding_x", TypedValue::Count(v)) => self.ui_editor_padding_x = v,
+            ("ui.output_pad", TypedValue::Count(v)) => self.ui_output_pad = v,
+            ("ui.fullscreen_scrollbar", TypedValue::Text(v)) => self.ui_fullscreen_scrollbar = v,
+            ("ui.fullscreen_copy_on_select", TypedValue::Bool(v)) => {
+                self.ui_fullscreen_copy_on_select = v
+            }
+            ("ui.fullscreen_wheel_lines", TypedValue::Text(v)) => {
+                self.ui_fullscreen_wheel_lines = v
+            }
+            ("ui.fullscreen_exit_output", TypedValue::Text(v)) => {
+                self.ui_fullscreen_exit_output = v
+            }
+            ("ui.show_hardware_cursor", TypedValue::Bool(v)) => self.ui_show_hardware_cursor = v,
+            ("terminal.show_images", TypedValue::Bool(v)) => self.terminal_show_images = v,
+            ("terminal.image_width_cells", TypedValue::Count(v)) => {
+                self.terminal_image_width_cells = v
+            }
+            ("terminal.clear_on_shrink", TypedValue::Bool(v)) => self.terminal_clear_on_shrink = v,
+            ("terminal.show_progress", TypedValue::Bool(v)) => self.terminal_show_progress = v,
+            ("terminal.hyperlinks", TypedValue::Text(v)) => self.terminal_hyperlinks = v,
+            ("terminal.images", TypedValue::Text(v)) => self.terminal_images = v,
+            ("terminal.true_color", TypedValue::Text(v)) => self.terminal_true_color = v,
+            ("images.auto_resize", TypedValue::Bool(v)) => self.images_auto_resize = v,
+            ("images.block_images", TypedValue::Bool(v)) => self.images_block_images = v,
+            ("markdown.code_block_indent", TypedValue::Text(v)) => {
+                self.markdown_code_block_indent = v
+            }
+            ("markdown.mermaid", TypedValue::Text(v)) => self.markdown_mermaid = v,
             ("ui.color", TypedValue::Color(v)) => self.ui_color = v,
             ("ui.theme", TypedValue::Text(v)) => self.ui_theme = Some(v),
             ("shell.tool", TypedValue::Text(v)) => self.shell_tool = Some(v),
@@ -724,399 +1009,6 @@ impl Config {
         }
         self.sources.insert(key, source);
         Ok(())
-    }
-
-    /// The active provider extension's name.
-    pub fn provider(&self) -> &str {
-        &self.provider
-    }
-
-    /// The active model identifier, or `None` for the provider's default.
-    pub fn model(&self) -> Option<&str> {
-        self.model.as_deref()
-    }
-
-    /// The enabled-model scope (`models.enabled`): id patterns the
-    /// picker's listing and the model cycle are cut to (gh #8, pi's
-    /// `enabledModels`). Empty means no restriction - everything the
-    /// provider offers is in scope.
-    pub fn models_enabled(&self) -> &[String] {
-        &self.models_enabled
-    }
-
-    /// Replace the enabled-model scope at runtime (gh #204): the
-    /// checklist swaps this cell so the cycle reads the live scope.
-    /// Empty means no restriction.
-    pub fn set_models_enabled(&mut self, ids: Vec<String>) {
-        self.models_enabled = ids;
-    }
-
-    /// The levels `model` accepts (`models.thinking_levels`), or `None`
-    /// when the map does not name it - which means no restriction.
-    pub fn allowed_thinking_levels(&self, model: &str) -> Option<&[String]> {
-        self.models_thinking_levels.get(model).map(Vec::as_slice)
-    }
-
-    /// The first allowed level of `model`: its default, the entry a
-    /// switch to it applies (gh #8 phase 4; pi's per-model default
-    /// beating the global one).
-    pub fn default_thinking_for(&self, model: &str) -> Option<&str> {
-        self.allowed_thinking_levels(model)
-            .and_then(|levels| levels.first())
-            .map(String::as_str)
-    }
-
-    /// The level `model` may run on: `requested` clamped into its set -
-    /// outside it becomes the model's default (the first allowed level) -
-    /// with no set meaning no restriction. `None` is not a level: unset
-    /// is the provider's choice, and it stays unset.
-    pub fn clamp_thinking(&self, requested: Option<&str>, model: &str) -> Option<String> {
-        let requested = requested?;
-        let Some(allowed) = self.allowed_thinking_levels(model) else {
-            return Some(requested.to_string());
-        };
-        if allowed.is_empty() {
-            return Some(requested.to_string());
-        }
-        if allowed.iter().any(|level| level == requested) {
-            return Some(requested.to_string());
-        }
-        allowed.first().cloned()
-    }
-
-    /// What a switch to `model` runs on: the model's configured default
-    /// when it has one (pi's precedence), else the current level clamped
-    /// into what the new model accepts.
-    pub fn switch_thinking(&self, current: Option<&str>, model: &str) -> Option<String> {
-        if let Some(default) = self.default_thinking_for(model) {
-            return Some(default.to_string());
-        }
-        self.clamp_thinking(current, model)
-    }
-
-    /// Context-window fraction that triggers compaction (FR-SESS-4).
-    pub fn compaction_threshold(&self) -> f64 {
-        self.compaction_threshold
-    }
-
-    /// Whether automatic compaction runs (gh #36 phase 1).
-    pub fn compaction_enabled(&self) -> bool {
-        self.compaction_enabled
-    }
-
-    /// Whether `edit` demands a prior fresh `read` (gh #117): off is
-    /// pi parity (the model edits right after `grep`), on keeps LCA's
-    /// staleness guard. The `/settings` row cycles it live.
-    pub fn tool_edit_requires_read(&self) -> bool {
-        self.tool_edit_requires_read
-    }
-
-    /// Absolute token reserve (gh #36 phase 1): 0 derives it from the
-    /// threshold fraction, matching the stopgap's default behavior.
-    pub fn compaction_reserve_tokens(&self) -> u64 {
-        self.compaction_reserve_tokens
-    }
-
-    /// Recent tokens kept verbatim past the cut point (gh #36 phase 1).
-    pub fn compaction_keep_recent_tokens(&self) -> u64 {
-        self.compaction_keep_recent_tokens
-    }
-
-    /// Retry attempts for retryable transport errors (FR-CORE-6).
-    pub fn provider_retry_limit(&self) -> u64 {
-        self.provider_retry_limit
-    }
-
-    /// Shell command timeout in seconds (FR-TOOL-5).
-    pub fn tool_timeout_seconds(&self) -> u64 {
-        self.tool_timeout_seconds
-    }
-
-    /// Tool results above this many bytes are truncated (FR-TOOL-7).
-    pub fn tool_result_limit_bytes(&self) -> u64 {
-        self.tool_result_limit_bytes
-    }
-
-    /// Maximum tool calls within one turn (FR-CORE-9).
-    pub fn tool_max_iterations(&self) -> u64 {
-        self.tool_max_iterations
-    }
-
-    /// Cache misses below this token count are not counted (FR-CACHE-3).
-    pub fn cache_noise_floor_tokens(&self) -> u64 {
-        self.cache_noise_floor_tokens
-    }
-
-    /// Extension log messages above this many bytes are truncated (FR-EXT-10).
-    pub fn extensions_log_limit_bytes(&self) -> u64 {
-        self.extensions_log_limit_bytes
-    }
-
-    /// Fullscreen (alt-screen) renderer (`ui.fullscreen`), or `None` when
-    /// neither the config nor the caller names one (gh #112).
-    pub fn ui_fullscreen(&self) -> Option<bool> {
-        self.ui_fullscreen
-    }
-
-    /// The startup header level (gh #131): `"false"` shows version +
-    /// resources, `"header"` keeps the version line only (pi's value),
-    /// `"true"` hides the header entirely.
-    pub fn ui_quiet_startup(&self) -> &str {
-        &self.ui_quiet_startup
-    }
-
-    /// What Esc Esc with an empty editor does (gh #132, pi's
-    /// `doubleEscapeAction`): `tree`, `fork`, or `none`.
-    pub fn ui_double_escape_action(&self) -> &str {
-        &self.ui_double_escape_action
-    }
-
-    /// Pi's `treeFilterMode` domain, accepted config-error-free (gh
-    /// #132): currently inert by documentation - LCA's `/tree` lists
-    /// sessions, not messages, so there is nothing to filter. Known
-    /// but dead is honest; silently dropping the key would not be.
-    pub fn ui_tree_filter_mode(&self) -> &str {
-        &self.ui_tree_filter_mode
-    }
-
-    /// Daily version check on or off (FR-CFG-6); the default follows the mode.
-    pub fn update_check(&self, headless: bool) -> bool {
-        self.update_check.unwrap_or(!headless)
-    }
-
-    /// Terminal color policy (FR-UI-5).
-    pub fn ui_color(&self) -> ColorMode {
-        self.ui_color
-    }
-
-    /// The configured theme (S5): a built-in name, a custom theme's name, or
-    /// `auto` for the detected terminal scheme. `None` is `auto`.
-    pub fn ui_theme(&self) -> Option<&str> {
-        self.ui_theme.as_deref()
-    }
-
-    /// The configured thinking level (`thinking`), or `None` for the
-    /// provider's own default (pi's "unset").
-    pub fn thinking(&self) -> Option<&str> {
-        self.thinking.as_deref()
-    }
-
-    /// The configured shell tool (`shell.tool`), or `None` for `auto`
-    /// (ADR-0041).
-    pub fn shell_tool(&self) -> Option<&str> {
-        self.shell_tool.as_deref()
-    }
-
-    /// An exact interpreter path (`shell.path`), when set (ADR-0041).
-    pub fn shell_path(&self) -> Option<&str> {
-        self.shell_path.as_deref()
-    }
-
-    /// A prefix prepended to every shell command (`shell.command_prefix`),
-    /// when set (gh #133, pi's `shellCommandPrefix`).
-    pub fn shell_command_prefix(&self) -> Option<&str> {
-        self.shell_command_prefix.as_deref()
-    }
-
-    /// `markdown.codeblock_border` (gh #32): `full` (the shipped
-    /// four-sided frame), `horizontal` (bars only, so a terminal copy
-    /// has no side pipes), or `none` (bare lines). Validated at load;
-    /// the renderer owns the shapes themselves (`lca-tui`'s
-    /// `CodeBlockBorder`).
-    pub fn markdown_codeblock_border(&self) -> &str {
-        &self.markdown_codeblock_border
-    }
-
-    /// `permissions.mode`: `ask` (default) or `yolo` (ADR-0042).
-    pub fn permissions_mode(&self) -> Option<&str> {
-        self.permissions_mode.as_deref()
-    }
-
-    /// `ui.thinking`: `snippet` (default), `full`, or `hidden` (R6).
-    /// Distinct from [`Config::thinking`], which is the effort level; a
-    /// dotted `thinking.*` key cannot exist beside a `thinking = "..."`
-    /// string in TOML, which is why this one lives under `ui`.
-    pub fn thinking_visibility(&self) -> Option<&str> {
-        self.thinking_visibility.as_deref()
-    }
-
-    /// Whether matched skill text injects into the prompt (gh #43).
-    /// Default off: the catalog advertises either way.
-    pub fn skills_inject_matched(&self) -> bool {
-        self.skills_inject_matched
-    }
-
-    /// Permission proposals read from a trusted project file (ADR-0006).
-    pub fn permissions_proposals(&self) -> &BTreeMap<String, String> {
-        &self.permissions_proposals
-    }
-
-    /// Where one key's value came from: anything but `Default` means the
-    /// user set it (flag, env, or file). Callers that change behavior on
-    /// "explicitly configured" use this rather than comparing values.
-    pub fn source_of(&self, key: &str) -> MergeSource {
-        self.sources
-            .get(key)
-            .copied()
-            .unwrap_or(MergeSource::Default)
-    }
-
-    /// Every resolved key with its display value and source (FR-CFG-2).
-    pub fn resolved(&self) -> impl Iterator<Item = (&str, String, MergeSource)> + '_ {
-        let values: BTreeMap<&str, String> = [
-            ("provider", self.provider.clone()),
-            (
-                "model",
-                self.model
-                    .clone()
-                    .unwrap_or_else(|| "<provider default>".to_string()),
-            ),
-            (
-                "models.enabled",
-                if self.models_enabled.is_empty() {
-                    "<all>".to_string()
-                } else {
-                    self.models_enabled.join(", ")
-                },
-            ),
-            (
-                "models.thinking_levels",
-                if self.models_thinking_levels.is_empty() {
-                    "<unset>".to_string()
-                } else {
-                    format!("{} model(s)", self.models_thinking_levels.len())
-                },
-            ),
-            (
-                "compaction.threshold",
-                self.compaction_threshold.to_string(),
-            ),
-            ("compaction.enabled", self.compaction_enabled.to_string()),
-            (
-                "compaction.reserve_tokens",
-                self.compaction_reserve_tokens.to_string(),
-            ),
-            (
-                "compaction.keep_recent_tokens",
-                self.compaction_keep_recent_tokens.to_string(),
-            ),
-            (
-                "provider.retry_limit",
-                self.provider_retry_limit.to_string(),
-            ),
-            (
-                "tool.timeout_seconds",
-                self.tool_timeout_seconds.to_string(),
-            ),
-            (
-                "tool.result_limit_bytes",
-                self.tool_result_limit_bytes.to_string(),
-            ),
-            ("tool.max_iterations", self.tool_max_iterations.to_string()),
-            (
-                "tool.edit_requires_read",
-                self.tool_edit_requires_read.to_string(),
-            ),
-            (
-                "cache.noise_floor_tokens",
-                self.cache_noise_floor_tokens.to_string(),
-            ),
-            (
-                "extensions.log_limit_bytes",
-                self.extensions_log_limit_bytes.to_string(),
-            ),
-            (
-                "update.check",
-                self.update_check
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "<mode default>".to_string()),
-            ),
-            (
-                "ui.fullscreen",
-                self.ui_fullscreen
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "<unset>".to_string()),
-            ),
-            ("ui.quiet_startup", self.ui_quiet_startup.clone()),
-            (
-                "ui.double_escape_action",
-                self.ui_double_escape_action.clone(),
-            ),
-            ("ui.tree_filter_mode", self.ui_tree_filter_mode.clone()),
-            (
-                "ui.color",
-                match self.ui_color {
-                    ColorMode::Auto => "auto",
-                    ColorMode::Never => "never",
-                }
-                .to_string(),
-            ),
-            (
-                "thinking",
-                self.thinking
-                    .clone()
-                    .unwrap_or_else(|| "<provider default>".to_string()),
-            ),
-            (
-                "ui.theme",
-                self.ui_theme.clone().unwrap_or_else(|| "auto".to_string()),
-            ),
-            (
-                "shell.tool",
-                self.shell_tool
-                    .clone()
-                    .unwrap_or_else(|| "auto".to_string()),
-            ),
-            (
-                "shell.path",
-                self.shell_path
-                    .clone()
-                    .unwrap_or_else(|| "<ladder>".to_string()),
-            ),
-            (
-                "shell.command_prefix",
-                self.shell_command_prefix
-                    .clone()
-                    .unwrap_or_else(|| "<unset>".to_string()),
-            ),
-            (
-                "permissions.mode",
-                self.permissions_mode
-                    .clone()
-                    .unwrap_or_else(|| "ask".to_string()),
-            ),
-            (
-                "markdown.codeblock_border",
-                self.markdown_codeblock_border.clone(),
-            ),
-            (
-                "ui.thinking",
-                self.thinking_visibility
-                    .clone()
-                    .unwrap_or_else(|| "snippet".to_string()),
-            ),
-            (
-                "skills.inject_matched",
-                self.skills_inject_matched.to_string(),
-            ),
-            (
-                "permissions.proposals",
-                if self.permissions_proposals.is_empty() {
-                    "<empty>".to_string()
-                } else {
-                    format!("{} proposal(s)", self.permissions_proposals.len())
-                },
-            ),
-        ]
-        .into();
-        values.into_iter().map(move |(key, value)| {
-            let source = self
-                .sources
-                .get(key)
-                .copied()
-                .unwrap_or(MergeSource::Default);
-            (key, value, source)
-        })
     }
 }
 

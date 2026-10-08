@@ -768,3 +768,56 @@ fn a_mermaid_diagram_paints_through_the_theme() {
     assert!(joined.contains("38;2;"), "colored: {joined}");
     assert!(!joined.contains('╭'), "not the code frame: {joined}");
 }
+
+// Verifies: gh #82 - `output_pad` margins assistant rows (pi's
+// `outputPad`); zero keeps them flush.
+#[test]
+fn output_pad_margins_assistant_rows() {
+    use crate::state::DisplayTuning;
+    let mut t = Transcript::new();
+    t.begin_assistant();
+    t.append_text("hello");
+    t.finish_assistant();
+    let row = |t: &Transcript| {
+        strip(&t.render(40, &plain()))
+            .into_iter()
+            .find(|l| l.contains("hello"))
+            .expect("the answer row")
+    };
+    assert!(row(&t).starts_with(' '), "padded by default: {:?}", row(&t));
+    let bare = DisplayTuning {
+        output_pad: 0,
+        ..DisplayTuning::default()
+    };
+    t.apply_display(&bare);
+    assert_eq!(row(&t), "hello", "flush at zero: {:?}", row(&t));
+}
+
+// Verifies: gh #82 - `show_images = false` drops image rows (pi's
+// `terminal.showImages`); the record stays, the pixels do not.
+#[test]
+fn hidden_images_drop_their_rows() {
+    use crate::state::DisplayTuning;
+    use lca_tui::widgets::image::ImageInfo;
+    let mut t = Transcript::new();
+    t.push_user("see this");
+    // An image entry beside text, as an attach replays it.
+    let info = ImageInfo::new("image/png", &[]);
+    t.push_image(info, Vec::new());
+    let rows = strip(&t.render(40, &plain()));
+    assert!(rows.iter().any(|l| l.contains("image")), "shown: {rows:?}");
+    let blind = DisplayTuning {
+        show_images: false,
+        ..DisplayTuning::default()
+    };
+    t.apply_display(&blind);
+    let rows = strip(&t.render(40, &plain()));
+    assert!(
+        !rows.iter().any(|l| l.contains("image")),
+        "hidden: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|l| l.contains("see this")),
+        "text survives: {rows:?}"
+    );
+}

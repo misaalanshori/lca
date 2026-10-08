@@ -112,6 +112,9 @@ pub struct AgentConfig {
     /// pi parity, on keeps the staleness guard. The agent hands it to
     /// the tool executor with the other per-turn settings.
     pub edit_requires_read: bool,
+    /// Whether image reads downscale (gh #82, pi's
+    /// `images.autoResize`). The agent hands it to the executor.
+    pub auto_resize_images: bool,
     /// Messages the interface queued while the turn runs; drained at each
     /// model-call boundary (ADR-0038).
     pub steer: lca_protocol::SteerQueue,
@@ -190,6 +193,7 @@ impl Default for AgentConfig {
             skills_roots: SkillsRoots::default(),
             skills_inject_matched: false,
             edit_requires_read: false,
+            auto_resize_images: true,
             steer: lca_protocol::steer_queue(),
         }
     }
@@ -271,6 +275,7 @@ impl<'a> Agent<'a> {
         // gh #117: the product default is off (pi parity); the config
         // carries the operator's choice.
         tools.set_edit_requires_read(config.edit_requires_read);
+        tools.set_auto_resize_images(config.auto_resize_images);
         Agent {
             store,
             session,

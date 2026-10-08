@@ -500,3 +500,20 @@ fn double_escape_fork_and_none() {
         "none opens nothing"
     );
 }
+
+// Verifies: gh #82 - the tick syncs tunables live: a hook change
+// reaches the editor and transcript without a restart.
+#[test]
+fn tick_syncs_display_tuning_live() {
+    let mut opts = options();
+    opts.hooks.display_tuning = Some(Arc::new(|| crate::state::DisplayTuning {
+        autocomplete_max_visible: 8,
+        editor_padding_x: 2,
+        ..crate::state::DisplayTuning::default()
+    }));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    assert_eq!(chat.editor.max_visible, 5, "defaults before the tick");
+    chat.tick();
+    assert_eq!(chat.editor.max_visible, 8, "the hook wins");
+    assert_eq!(chat.editor.padding_x, 2, "padding follows");
+}

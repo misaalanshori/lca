@@ -631,3 +631,46 @@ fn shift_wheel_gestures_step_and_plain_ones_do_not() {
     assert_eq!(super::shift_wheel_jump(&gesture(4)), None);
     assert_eq!(super::shift_wheel_jump(&gesture(0)), None);
 }
+
+// Verifies: gh #82 - the exit hint names the live session for
+// resume-hint mode, and stays quiet otherwise.
+#[test]
+fn exit_hint_names_the_session_only_for_resume_hint() {
+    let tuning = crate::state::DisplayTuning {
+        fullscreen_exit_output: "resume-hint".to_string(),
+        ..crate::state::DisplayTuning::default()
+    };
+    assert_eq!(
+        super::exit_hint(&tuning, "abc123"),
+        Some("session continues in scrollback - resume with: lca --resume abc123".to_string())
+    );
+    assert_eq!(super::exit_hint(&tuning, ""), None, "no id, no hint");
+    let tuning = crate::state::DisplayTuning::default();
+    assert_eq!(
+        super::exit_hint(&tuning, "abc123"),
+        None,
+        "transcript exits quietly"
+    );
+}
+
+// Verifies: gh #82 - the screen carries the tunables on switch.
+#[test]
+fn screen_switch_applies_copy_and_wheel_tuning() {
+    let tuning = crate::state::DisplayTuning {
+        fullscreen_copy_on_select: false,
+        ..crate::state::DisplayTuning::default()
+    };
+    let mut screen = Screen::Main(MainScreenRenderer::new());
+    switch_screen(&mut screen, true, &mut FakeTerminal::new(80, 24));
+    match &screen {
+        Screen::Alt(alt) => assert!(alt.copy_on_select, "on by default"),
+        Screen::Main(_) => panic!("should be fullscreen"),
+    }
+    super::apply_screen_tuning(&mut screen, &tuning);
+    match &screen {
+        Screen::Alt(alt) => {
+            assert!(!alt.copy_on_select, "config wins over the default");
+        }
+        Screen::Main(_) => panic!("should be fullscreen"),
+    }
+}

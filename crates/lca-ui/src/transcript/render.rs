@@ -24,12 +24,14 @@ fn markdown_options(
     codeblock_border: CodeBlockBorder,
     message_type: MarkdownMessageType,
     transformers: Vec<MarkdownTransformer>,
+    pad: usize,
+    mermaid: lca_tui::widgets::markdown::MermaidMode,
+    indent: &str,
 ) -> MarkdownOptions {
     MarkdownOptions {
-        // pi renders assistant markdown with `outputPad = 1`
-        // (`assistant-message.ts`), so every line carries a one-space left
-        // margin and the text block is inset from the transcript edge.
-        padding_x: 1,
+        // Gh #82: pi's `outputPad` (assistant margin); the user bubble
+        // keeps its own zero below.
+        padding_x: pad,
         link_mode: if lca_tui::engine::terminal::supports_hyperlinks() {
             LinkMode::Hyperlink
         } else {
@@ -41,6 +43,8 @@ fn markdown_options(
         codeblock_border,
         message_type,
         transformers,
+        mermaid,
+        code_indent: indent.to_string(),
         ..Default::default()
     }
 }
@@ -56,11 +60,20 @@ pub(super) fn render_entry(
     thinking: ThinkingVisibility,
     codeblock_border: CodeBlockBorder,
     transformers: &[MarkdownTransformer],
+    tuning: &crate::state::DisplayTuning,
     out: &mut Vec<String>,
 ) -> usize {
     match entry {
         Entry::User(text) => {
-            render_user(text, width, theme, codeblock_border, transformers, out);
+            render_user(
+                text,
+                width,
+                theme,
+                codeblock_border,
+                transformers,
+                tuning,
+                out,
+            );
             0
         }
         Entry::Assistant {
@@ -82,6 +95,7 @@ pub(super) fn render_entry(
             theme,
             codeblock_border,
             transformers,
+            tuning,
             out,
         ),
         Entry::Tool { .. } => {
@@ -108,12 +122,16 @@ pub(super) fn render_entry(
             0
         }
         Entry::Image { info, bytes } => {
-            out.extend(render_image(
-                info,
-                bytes,
-                lca_tui::widgets::image::detect_image_protocol(),
-                width as usize,
-            ));
+            // Gh #82: `terminal.show_images` gates display; the width
+            // cap (`terminal.image_width_cells`) rides the caller width.
+            if tuning.show_images {
+                out.extend(render_image(
+                    info,
+                    bytes,
+                    lca_tui::widgets::image::detect_image_protocol(),
+                    (width as usize).min(tuning.image_width_cells.max(1) as usize),
+                ));
+            }
             0
         }
     }
@@ -162,6 +180,7 @@ fn render_user(
     theme: &Theme,
     codeblock_border: CodeBlockBorder,
     transformers: &[MarkdownTransformer],
+    tuning: &crate::state::DisplayTuning,
     out: &mut Vec<String>,
 ) {
     // pi's user bubble: `Box(outputPad = 1, 1, theme.bg("userMessageBg"))`
@@ -189,6 +208,8 @@ fn render_user(
         codeblock_border,
         message_type: MarkdownMessageType::User,
         transformers: transformers.to_vec(),
+        mermaid: lca_tui::widgets::markdown::MermaidMode::parse(&tuning.mermaid),
+        code_indent: tuning.code_block_indent.clone(),
     };
     let wrapped = render_markdown(text, content, &theme.markdown(), &options);
     out.push(band_row("", width, &bg));
@@ -216,6 +237,7 @@ fn render_assistant(
     theme: &Theme,
     codeblock_border: CodeBlockBorder,
     transformers: &[MarkdownTransformer],
+    tuning: &crate::state::DisplayTuning,
     out: &mut Vec<String>,
 ) -> usize {
     let start = out.len();
@@ -304,6 +326,9 @@ fn render_assistant(
                 codeblock_border,
                 MarkdownMessageType::Assistant,
                 transformers.to_vec(),
+                tuning.output_pad as usize,
+                lca_tui::widgets::markdown::MermaidMode::parse(&tuning.mermaid),
+                &tuning.code_block_indent,
             ),
         );
         out.extend(md);
