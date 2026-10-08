@@ -1058,3 +1058,54 @@ fn meta_records_the_model_and_provider_last_used() {
         Some("m2")
     );
 }
+
+// Verifies: gh #205 - `/clone` duplicates the session at its tip: the
+// fork-point names the last record, the title defaults to
+// "Clone of <parent>", and the parent's log is untouched.
+#[test]
+fn clone_duplicates_the_session_at_its_tip() {
+    let store = store("clone");
+    let project = scratch("clone-project");
+    let parent = store.create_session(&project, "parent").expect("create");
+    store
+        .append(&parent, user_record("r1", "one"))
+        .expect("append");
+    store
+        .append(&parent, user_record("r2", "two"))
+        .expect("append");
+
+    let child = store
+        .clone_session(&parent, Some("experimental"))
+        .expect("clone");
+    assert_ne!(child.id(), parent.id());
+    let child_meta = store.meta(&child).expect("meta");
+    assert_eq!(child_meta.parent_session.as_deref(), Some(parent.id()));
+    assert_eq!(child_meta.parent_record.as_deref(), Some("r2"));
+    assert_eq!(store.meta(&child).expect("meta").title, "experimental");
+
+    let ReadOutcome { records, .. } = store.read(&child).expect("read child");
+    assert_eq!(records.len(), 2, "session-start and fork-point only");
+    match &records[1] {
+        Record::ForkPoint { record_id, .. } => assert_eq!(record_id, "r2"),
+        other => panic!("expected fork-point, got {other:?}"),
+    }
+    let parent_log = std::fs::read_to_string(parent.log_path()).expect("parent log");
+    assert_eq!(
+        parent_log.lines().count(),
+        3,
+        "parent untouched by the clone"
+    );
+}
+
+// Verifies: gh #205 - an unnamed clone titles itself after the parent.
+#[test]
+fn an_unnamed_clone_titles_itself_after_the_parent() {
+    let store = store("clone-default");
+    let project = scratch("clone-default-project");
+    let parent = store.create_session(&project, "parent").expect("create");
+    store
+        .append(&parent, user_record("r1", "one"))
+        .expect("append");
+    let child = store.clone_session(&parent, None).expect("clone");
+    assert_eq!(store.meta(&child).expect("meta").title, "Clone of parent");
+}

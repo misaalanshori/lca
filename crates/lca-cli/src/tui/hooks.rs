@@ -319,6 +319,7 @@ impl Ui {
             copy_to_clipboard: Some(Arc::new(|text: &str| native_clipboard(text))),
             open_url: Some(Arc::new(open_url)),
             fork_at: Some(self.fork_at()),
+            clone_session: Some(self.clone_session()),
             grants: Some(self.grants()),
             revoke_grant: Some(self.revoke_grant()),
             // R4: a background login/identity step reports back through the
@@ -673,6 +674,32 @@ impl Ui {
                 Err(err) => format!("fork failed: {err}"),
             }
         })
+    }
+
+    /// Clone the live session at its tip under an optional name (gh
+    /// #205). The interface switches through `switch_session`; this
+    /// hook only duplicates and names the new session.
+    fn clone_session(&self) -> lca_ui::state::CloneSession {
+        let store = self.store.clone();
+        let session_cell = self.current_session.clone();
+        Arc::new(
+            move |name: Option<String>| -> Result<(String, String), String> {
+                let session = session_cell
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                match store.clone_session(&session, name.as_deref()) {
+                    Ok(child) => {
+                        let title = store
+                            .meta(&child)
+                            .map(|meta| meta.title)
+                            .unwrap_or_default();
+                        Ok((child.id().to_string(), title))
+                    }
+                    Err(err) => Err(format!("clone failed: {err}")),
+                }
+            },
+        )
     }
 }
 

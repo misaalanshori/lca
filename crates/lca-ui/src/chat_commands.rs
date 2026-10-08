@@ -175,6 +175,30 @@ impl Chat {
                 }
                 return Action::Continue;
             }
+            // Gh #205: duplicate the tip and switch in one step (no
+            // picker). The hook duplicates; the switch path replays.
+            "clone" => {
+                let Some(clone) = self.world.options.hooks.clone_session.clone() else {
+                    self.world.notice = Some("cloning is not available in this host".to_string());
+                    return Action::Continue;
+                };
+                let name = argument.trim();
+                let name = (!name.is_empty()).then(|| name.to_string());
+                match clone(name) {
+                    Ok((id, title)) => {
+                        // A running turn refuses the switch inside
+                        // `switch_or_announce` (its notice stands); the
+                        // clone itself still landed.
+                        let running = self.turn_running;
+                        self.switch_or_announce(&id);
+                        if !running {
+                            self.world.notice = Some(format!("cloned session as '{title}' ({id})"));
+                        }
+                    }
+                    Err(err) => self.world.notice = Some(err),
+                }
+                return Action::Continue;
+            }
             "quit" | "exit" => return Action::Exit,
             _ => {}
         }
@@ -352,6 +376,7 @@ fn command_help(command: &str) -> &'static str {
         "/tree" => "browse session branches",
         "/resume" => "search and reopen a session",
         "/fork" => "fork a branch at a message (usage: /fork <n>)",
+        "/clone" => "duplicate this session at its tip and switch (usage: /clone [name])",
         "/exit" => "leave the interface",
         "/login" => "sign in to a provider",
         "/logout" => "clear the provider's stored key",

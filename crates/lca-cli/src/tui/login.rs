@@ -9,7 +9,10 @@ use lca_ui::LoginNext;
 use super::Ui;
 
 /// What the waiting modal shows while a background login step runs (R4).
-const WAIT_LABEL: &str = "waiting for browser sign-in… (esc cancels)";
+/// Gh #200: the waiting screen names the copy key, because over SSH
+/// there is no browser to open and no URL to click - Ctrl+X through
+/// the copy ladder (native clipboard, else OSC 52) is the way out.
+const WAIT_LABEL: &str = "waiting for browser sign-in… (esc cancels, ctrl+x copies the link)";
 
 /// How long the interface waits before offering the manual
 /// "paste the callback URL" fallback (R4(c)).

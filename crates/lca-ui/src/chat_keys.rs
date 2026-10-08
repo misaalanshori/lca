@@ -23,10 +23,15 @@ impl Chat {
 
     /// Whether this key is pi's message-copy key with the editor owning
     /// the keyboard (gh #9, pi 1.0.0's `app.message.copy`): while a
-    /// modal, a picker, or the transcript search has the keyboard, the
-    /// key is theirs, not a copy request.
+    /// picker or the transcript search has the keyboard, the key is
+    /// theirs, not a copy request. Modals keep the keyboard - except
+    /// the OAuth wait (gh #200): a waiting screen is not a question,
+    /// and the copy target there is the sign-in URL itself.
     pub fn message_copy_key(&self, data: &str) -> bool {
-        if self.world.modal_active() || self.picker_open() || self.search.is_some() {
+        if self.picker_open() || self.search.is_some() {
+            return false;
+        }
+        if self.world.modal_active() && self.world.login_waiting.is_none() {
             return false;
         }
         self.keybindings.matches(data, "app.message.copy")
@@ -68,12 +73,18 @@ impl Chat {
 
     /// The first `http(s)://` URL in a block of text: the waiting login
     /// screen carries the sign-in URL inside a sentence, and that URL is
-    /// what the copy key copies there (gh #9).
+    /// what the copy key copies there (gh #9). The stored label passed
+    /// through `sanitize_block`, which escapes the real OSC 8 wrapper
+    /// (gh #178) into literal `\x1b` / `\x07` text - so a backslash
+    /// ends the URL too, else the copy carries wrapper bytes (gh #200).
+    /// Raw ESC/BEL end it as well, for labels that never sanitized.
     fn http_url(text: &str) -> Option<String> {
         let start = text.find("https://").or_else(|| text.find("http://"))?;
         let rest = &text[start..];
         let end = rest
-            .find(|c: char| c.is_whitespace() || c == '`')
+            .find(|c: char| {
+                c.is_whitespace() || c == '`' || c == '\\' || c == '\u{1b}' || c == '\u{7}'
+            })
             .unwrap_or(rest.len());
         let url = rest[..end].trim_end_matches(|c: char| ",.;)]}\"".contains(c));
         (!url.is_empty()).then(|| url.to_string())

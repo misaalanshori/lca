@@ -298,3 +298,22 @@ fn both_product_version_forms_split() {
     let (base, sha) = lca_cli::split_product_version("0.5.3.b194950");
     assert_eq!((base, sha), ("0.5.3", Some("194950")));
 }
+
+// Verifies: gh #205 (`lca clone` names a session and an optional title)
+#[test]
+fn clone_routes_to_the_clone_command() {
+    assert_eq!(
+        route(&parse(&["clone", "s1"])),
+        Route::Clone {
+            session: "s1".into(),
+            title: None,
+        }
+    );
+    assert_eq!(
+        route(&parse(&["clone", "s1", "experimental"])),
+        Route::Clone {
+            session: "s1".into(),
+            title: Some("experimental".into()),
+        }
+    );
+}

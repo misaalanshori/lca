@@ -987,7 +987,9 @@ impl ToolExecutor {
 /// guarantee. `None` when the backend owns no interpreter (the web target's
 /// host-delegated backend).
 fn shell_description(shell: Option<&Shell>) -> String {
-    let base = "Run a command in the workspace directory and return its output (also callable as `bash`).                 Output streams as it runs; the tail is kept when too large.                 Optionally set a timeout in seconds.";
+    let base = "Run a command in the workspace directory and return its output (also callable as `bash`). \
+                Output streams as it runs; the tail is kept when too large. \
+                Optionally set a timeout in seconds.";
     match shell {
         Some(shell) => format!("{base} {}", shell.describe()),
         None => base.to_string(),

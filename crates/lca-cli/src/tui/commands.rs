@@ -139,6 +139,7 @@ impl Ui {
         names.insert(4, "/theme".to_string());
         names.insert(5, "/tree".to_string());
         names.insert(6, "/fork".to_string());
+        names.insert(7, "/clone".to_string());
         names.insert(7, "/thinking".to_string());
         names.insert(8, "/resume".to_string());
         names.insert(9, "/settings".to_string());

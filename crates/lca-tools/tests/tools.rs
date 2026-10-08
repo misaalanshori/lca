@@ -1093,3 +1093,28 @@ async fn a_huge_read_limit_does_not_overflow() {
     assert_eq!(result.status, lca_protocol::ToolResultStatus::Ok);
     assert!(result.content.contains("one"), "{}", result.content);
 }
+
+// Verifies: gh #162 - the shell description carries no multi-space runs
+// (the literal's sentence gaps collapsed to single spaces).
+#[test]
+fn the_shell_description_has_no_multi_space_runs() {
+    for shell in [
+        None,
+        Some(&lca_tools::Shell {
+            program: "/bin/bash".to_string(),
+            kind: lca_tools::ShellKind::Bash,
+            explicit: false,
+            transport: lca_tools::Transport::Argv,
+        }),
+    ] {
+        let description = ToolExecutor::specs(shell)
+            .into_iter()
+            .find(|spec| spec.name == "shell")
+            .expect("shell spec")
+            .description;
+        assert!(
+            !description.contains("  "),
+            "multi-space run in: {description:?}"
+        );
+    }
+}

@@ -1087,3 +1087,62 @@ fn a_rebound_key_fires() {
     chat.handle_key("\x11");
     assert_eq!(chat.editor.text(), "a", "Ctrl+Q deleted backward");
 }
+
+// Verifies: gh #205 - `/clone [name]` duplicates the tip and switches
+// in one step: the clone hook names the new id, the switch path replays
+// its records, and the notice names the clone.
+#[test]
+fn clone_duplicates_the_tip_and_switches() {
+    let mut options = options();
+    options.hooks.clone_session = Some(Arc::new(|name: Option<String>| {
+        assert_eq!(name.as_deref(), Some("experimental"));
+        Ok(("new-id".to_string(), "experimental".to_string()))
+    }));
+    options.hooks.switch_session = Some(Arc::new(|id: &str| {
+        (id == "new-id").then(|| {
+            vec![lca_protocol::Record::User {
+                v: lca_protocol::FORMAT_VERSION,
+                ts: 1,
+                id: "r1".into(),
+                content: "from the clone".into(),
+                attachments: Vec::new(),
+                queue: None,
+            }]
+        })
+    }));
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    for c in "/clone experimental".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    let notice = chat.world.notice.as_deref().unwrap_or("");
+    assert!(
+        notice.contains("new-id") && notice.contains("experimental"),
+        "the notice names the clone: {notice}"
+    );
+    let text = strip(&chat.render(80)).join("\n");
+    assert!(text.contains("from the clone"), "records replayed: {text}");
+}
+
+// Verifies: gh #200 - Ctrl+X is a copy request on the OAuth waiting
+// screen (not swallowed as "modal owns the keyboard"), and the target
+// is the exact sign-in URL out of the real OSC 8 wrapped label.
+#[test]
+fn ctrl_x_copies_the_oauth_url_on_the_waiting_screen() {
+    let mut chat = chat();
+    let url = "https://accounts.example.test/o/oauth2/v2/auth?code=42&state=zz";
+    chat.apply_login_next(LoginNext::Waiting {
+        label: format!(
+            "waiting for browser sign-in… (esc cancels)\n\n\x1b]8;;{url}\x07{url}\x1b]8;;\x07"
+        ),
+    });
+    assert!(
+        chat.message_copy_key("\x18"),
+        "Ctrl+X copies on the waiting screen"
+    );
+    assert_eq!(
+        chat.message_copy_text().as_deref(),
+        Some(url),
+        "the exact URL, no OSC 8 wrapper bytes"
+    );
+}

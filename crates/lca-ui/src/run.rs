@@ -168,24 +168,51 @@ fn link_notice(url: &str, outcome: Option<Result<(), String>>) -> String {
     }
 }
 
-/// The copy ladder (R6, kept ours for gh #9): the host's verified native
-/// clipboard first, then OSC 52 when this screen can send it - and the
-/// notice says exactly which step ran, never claiming a step that did
-/// not. Returns the notice; the caller puts it on screen.
+/// Which copy step ran (R6, kept ours for gh #9): the host's verified
+/// native clipboard first, then OSC 52 when this screen can send it.
+/// [`CopyReport::notice`] says exactly which step ran, never claiming
+/// a step that did not - except a caller that knows its target may
+/// name the success itself, and only on [`CopyReport::Native`].
+#[derive(Debug, PartialEq, Eq)]
+enum CopyReport {
+    /// A native clipboard tool confirmed the write.
+    Native,
+    /// OSC 52 went out unverified (testing plan §14).
+    Osc52,
+    /// No step could run.
+    Failed,
+}
+
+impl CopyReport {
+    fn notice(&self) -> String {
+        match self {
+            CopyReport::Native => "copied to clipboard".to_string(),
+            CopyReport::Osc52 => {
+                "copied (if your terminal blocked the clipboard, nothing was copied)".to_string()
+            }
+            CopyReport::Failed => {
+                "could not copy: no clipboard tool found (try /fullscreen)".to_string()
+            }
+        }
+    }
+}
+
+/// Run the copy ladder over `text`, returning which step ran; the
+/// caller turns the report into the notice it shows.
 fn copy_through_ladder(
     text: &str,
     native: Option<&crate::state::ClipboardWriter>,
     osc52: Option<&mut dyn FnMut(&str)>,
-) -> String {
+) -> CopyReport {
     if native.is_some_and(|write| write(text)) {
-        return "copied to clipboard".to_string();
+        return CopyReport::Native;
     }
     match osc52 {
         Some(send) => {
             send(text);
-            "copied (if your terminal blocked the clipboard, nothing was copied)".to_string()
+            CopyReport::Osc52
         }
-        None => "could not copy: no clipboard tool found (try /fullscreen)".to_string(),
+        None => CopyReport::Failed,
     }
 }
 
@@ -320,7 +347,7 @@ fn handle_input(
         if data.ends_with('m') && screen.copy_on_select() {
             let text = screen.selected_text();
             if !text.is_empty() {
-                let notice = {
+                let report = {
                     let mut send = |chunk: &str| screen.copy_osc52(terminal, chunk);
                     copy_through_ladder(
                         &text,
@@ -328,7 +355,7 @@ fn handle_input(
                         Some(&mut send),
                     )
                 };
-                chat.world.notice = Some(notice);
+                chat.world.notice = Some(report.notice());
             }
         }
         return InputResult::Continue;
@@ -340,13 +367,16 @@ fn handle_input(
     // keeps arming on the same press (FR-UI-15).
     if chat.message_copy_key(data) {
         let selection = screen.selected_text();
+        // Gh #200: on the OAuth waiting screen the target is the
+        // sign-in URL itself, and a verified native copy says so.
+        let from_wait = selection.trim().is_empty() && chat.world.login_waiting.is_some();
         let target = if selection.trim().is_empty() {
             chat.message_copy_text()
         } else {
             Some(selection)
         };
         if let Some(text) = target {
-            let notice = {
+            let report = {
                 let mut send = |chunk: &str| screen.copy_osc52(terminal, chunk);
                 copy_through_ladder(
                     &text,
@@ -354,7 +384,12 @@ fn handle_input(
                     matches!(screen, Screen::Alt(_)).then(|| &mut send as &mut dyn FnMut(&str)),
                 )
             };
-            chat.world.notice = Some(notice);
+            chat.world.notice = Some(match report {
+                CopyReport::Native if from_wait => {
+                    "\u{2713} Copied sign-in URL to clipboard".to_string()
+                }
+                report => report.notice(),
+            });
         }
     }
     // gh #35: pi's `tui.altScreen.bottom` - End returns the fullscreen

@@ -6,7 +6,26 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+- **Instant `/clone [name]` (gh #205).** Duplicates the live session
+  at its tip and switches in one step (no picker): `clone_session`
+  forks at the latest record and titles (`Clone of <parent>` by
+  default, inheriting model/provider meta), the transcript replays
+  through the switch path, and `lca clone <session> [title]` does the
+  same headless.
+- **Ctrl+X copies the OAuth sign-in URL (gh #200).** The message-copy
+  key works on the waiting login screen (a wait is not a question),
+  naming the exact sign-in URL out of the OSC 8 wrapped label through
+  the copy ladder (native clipboard, else OSC 52 reported unverified);
+  a verified native copy confirms `✓ Copied sign-in URL to
+  clipboard`, and the waiting screen names the key. The `[Enter]
+  opens browser` hint is deliberately absent: LCA has no such binding.
+
 ### Fixed
+- **One-shot version string (gh #154).** `version_static` computes at
+  most once behind a `OnceLock`; repeated calls share one address.
+- **Shell description whitespace (gh #162).** The `shell` tool's
+  sentence gaps collapse to single spaces via line continuations.
 - **Capacity failures retry (gh #202).** `Selected model is at capacity`
   and HTTP 529 (plus 503/504 siblings) are retryable: the shared
   `is_capacity_error` predicate classifies mid-stream error payloads

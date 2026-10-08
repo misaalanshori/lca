@@ -82,6 +82,13 @@ pub enum Route {
         /// Record id to fork at.
         message: String,
     },
+    /// Clone a session at its tip (gh #205).
+    Clone {
+        /// Parent session id.
+        session: String,
+        /// Title for the clone (defaults to `Clone of <parent-title>`).
+        title: Option<String>,
+    },
     /// Rename a session.
     Rename {
         /// Session id.
@@ -268,6 +275,10 @@ pub fn route(cli: &Cli) -> Route {
             session: session.clone(),
             message: message.clone(),
         },
+        Some(Command::Clone { session, title }) => Route::Clone {
+            session: session.clone(),
+            title: title.clone(),
+        },
         Some(Command::Rename { session, title }) => Route::Rename {
             session: session.clone(),
             title: title.clone(),
@@ -325,6 +336,29 @@ pub(super) fn fork_command(cwd: &Path, id: &str, message: &str) -> i32 {
         }
     };
     match store.fork(&parent, message) {
+        Ok(child) => {
+            println!("{}", child.id());
+            exit::OK
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            exit::SESSION
+        }
+    }
+}
+
+pub(super) fn clone_command(cwd: &Path, id: &str, title: Option<&str>) -> i32 {
+    let Ok((store, _)) = open_store() else {
+        return exit::INTERNAL;
+    };
+    let parent = match store.session(cwd, id) {
+        Ok(parent) => parent,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return exit::SESSION;
+        }
+    };
+    match store.clone_session(&parent, title) {
         Ok(child) => {
             println!("{}", child.id());
             exit::OK

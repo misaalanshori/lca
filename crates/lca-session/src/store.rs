@@ -582,6 +582,28 @@ impl SessionStore {
         Ok(session)
     }
 
+    /// Clone at the tip (gh #205): fork at the parent's latest record
+    /// and title the child, defaulting to `Clone of <parent-title>`.
+    /// Meta (model, provider) rides the fork, so settings inherit; the
+    /// parent's log is untouched, as with any fork.
+    pub fn clone_session(&self, parent: &Session, title: Option<&str>) -> Result<Session> {
+        let outcome = self.read(parent)?;
+        let Some(tip) = outcome.records.iter().rev().find_map(|record| record.id()) else {
+            return Err(crate::Error::ForkPointMissing {
+                session: parent.id().to_string(),
+                record: "tip".to_string(),
+            });
+        };
+        let tip = tip.to_string();
+        let session = self.fork(parent, &tip)?;
+        let title = match title.map(str::trim).filter(|name| !name.is_empty()) {
+            Some(name) => name.to_string(),
+            None => format!("Clone of {}", self.meta(parent)?.title),
+        };
+        self.rename(&session, &title)?;
+        Ok(session)
+    }
+
     /// List this project's sessions, newest first (FR-SESS-2). Rebuilds
     /// `index.json` when it is missing or unreadable.
     /// List a project's sessions, newest first. Rebuilt from the session

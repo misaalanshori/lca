@@ -50,8 +50,23 @@ pub fn native_ops(config: &Config) -> NativeOps {
 }
 
 /// [`version_text`], leaked to the `'static` lifetime clap's derive wants.
+/// Computed at most once (gh #154): the `OnceLock` holds the one leak,
+/// repeated calls return the same address.
 pub fn version_static() -> &'static str {
-    Box::leak(version_text().into_boxed_str())
+    static CACHED: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    CACHED.get_or_init(|| Box::leak(version_text().into_boxed_str()))
+}
+
+#[cfg(test)]
+mod version_static_tests {
+    // Verifies: gh #154 - repeated calls share one allocation.
+    #[test]
+    fn repeated_calls_return_the_same_address() {
+        let first = super::version_static() as *const str;
+        for _ in 0..100 {
+            assert_eq!(super::version_static() as *const str, first);
+        }
+    }
 }
 
 /// `lca --version`: agent version, ABI version, crate version, build target
@@ -717,6 +732,7 @@ pub async fn run(cli: Cli) -> i32 {
         Route::Config => config_command(&cwd),
         Route::ResumeList => resume_list(&cwd),
         Route::Fork { session, message } => fork_command(&cwd, &session, &message),
+        Route::Clone { session, title } => clone_command(&cwd, &session, title.as_deref()),
         Route::Rename { session, title } => rename_command(&cwd, &session, &title),
         Route::Export { session, audit } => export_command(&cwd, &session, audit),
         Route::Gc { session } => gc_command(&cwd, &session),

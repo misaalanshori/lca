@@ -375,6 +375,11 @@ pub type TrustNeeded = Arc<dyn Fn() -> bool + Send + Sync>;
 pub type SessionTree = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
 /// Forks at the nth user message, returning the new branch's id.
 pub type ForkAt = Arc<dyn Fn(usize) -> String + Send + Sync>;
+/// Clones the live session at its tip under the optional name,
+/// returning the new session's `(id, title)` (gh #205). The host
+/// switches through [`SwitchSession`]; this hook only duplicates.
+pub type CloneSession =
+    Arc<dyn Fn(Option<String>) -> Result<(String, String), String> + Send + Sync>;
 /// Lists the project's sessions, newest first (`/resume`, R2).
 pub type SessionList = Arc<dyn Fn() -> Vec<crate::resume::SessionEntry> + Send + Sync>;
 /// Switches the live session to `id` and returns its records (R3); `None`
@@ -427,6 +432,8 @@ pub struct UiHooks {
     /// Fork at the nth user message (0-based), returning the new branch's id
     /// (FR-UI-16).
     pub fork_at: Option<ForkAt>,
+    /// Clone the live session at its tip under an optional name (gh #205).
+    pub clone_session: Option<CloneSession>,
     /// List the project's sessions for `/resume` (R2).
     pub session_list: Option<SessionList>,
     /// Switch the live session in place, returning its records (R3).

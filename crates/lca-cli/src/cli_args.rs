@@ -161,6 +161,14 @@ pub enum Command {
         /// The record id to fork at.
         message: String,
     },
+    // gh #205.
+    /// Duplicate a session at its tip into a new session.
+    Clone {
+        /// The session to clone from.
+        session: String,
+        /// Title for the clone (defaults to `Clone of <parent-title>`).
+        title: Option<String>,
+    },
     /// Give a session a new title.
     Rename {
         /// The session to rename.

@@ -96,8 +96,9 @@ fn the_copy_ladder_writes_the_text_and_says_which_step_ran() {
             true
         })
     };
-    let notice = copy_through_ladder("hello world", Some(&hook), None);
-    assert_eq!(notice, "copied to clipboard");
+    let report = copy_through_ladder("hello world", Some(&hook), None);
+    assert_eq!(report, super::CopyReport::Native);
+    assert_eq!(report.notice(), "copied to clipboard");
     assert_eq!(
         *seen.lock().unwrap(),
         vec!["hello world".to_string()],
@@ -105,18 +106,19 @@ fn the_copy_ladder_writes_the_text_and_says_which_step_ran() {
     );
 
     let mut sent = Vec::new();
-    let notice = copy_through_ladder(
+    let report = copy_through_ladder(
         "osc",
         None,
         Some(&mut |text: &str| sent.push(text.to_string())),
     );
+    let notice = report.notice();
     assert_eq!(sent, vec!["osc"], "OSC 52 carries the same text");
     assert!(
         notice.contains("nothing was copied"),
         "the unverified notice is honest: {notice}"
     );
 
-    let notice = copy_through_ladder("nowhere", None, None);
+    let notice = copy_through_ladder("nowhere", None, None).notice();
     assert!(
         notice.starts_with("could not copy"),
         "no step ran, so no claim: {notice}"
@@ -560,4 +562,49 @@ fn wheel_over_a_panel_scrolls_through_the_loop() {
     );
     assert!(matches!(outcome, InputResult::Continue));
     assert_eq!(chat.world.ext_scroll.get("panel"), Some(&1));
+}
+
+// Verifies: gh #200 receipt - Ctrl+X on the OAuth waiting screen
+// copies the exact sign-in URL through the native clipboard and the
+// modal confirms with the named notice.
+#[test]
+fn ctrl_x_copies_the_oauth_url_with_the_named_notice() {
+    let mut term = FakeTerminal::new(80, 24);
+    let mut screen = Screen::Main(MainScreenRenderer::new());
+    switch_screen(&mut screen, true, &mut term);
+    let mut opts = options();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen_hook = seen.clone();
+    opts.hooks.copy_to_clipboard = Some(Arc::new(move |text: &str| {
+        seen_hook.lock().unwrap().push(text.to_string());
+        true
+    }));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    let url = "https://accounts.example.test/auth?code=42";
+    chat.apply_login_next(crate::state::LoginNext::Waiting {
+        label: format!("waiting for browser sign-in… (esc cancels)\n\n\x1b]8;;{url}\x07{url}\x1b]8;;\x07"),
+    });
+    let (input_tx, _input_rx) = std::sync::mpsc::channel();
+    let (resize_tx, _resize_rx) = std::sync::mpsc::channel();
+    let outcome = handle_input(
+        "\x18",
+        &mut chat,
+        &mut screen,
+        &mut term,
+        &input_tx,
+        &resize_tx,
+        &None,
+        &mut false,
+    );
+    assert!(matches!(outcome, InputResult::Continue));
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![url.to_string()],
+        "the exact URL reaches the clipboard"
+    );
+    assert_eq!(
+        chat.world.notice.as_deref(),
+        Some("\u{2713} Copied sign-in URL to clipboard"),
+        "the named confirmation"
+    );
 }

@@ -14,6 +14,8 @@ Session and extension state, the user configuration, and every other agent-owned
 
 The loopback OAuth listener binds `127.0.0.1` specifically, not `0.0.0.0` or `::`, and this is worth stating explicitly because it's an easy default to get wrong when a framework's "bind a local server" helper defaults to all interfaces. Binding all interfaces on a machine with no firewall would expose the callback endpoint, briefly, to the local network, which is exactly the class of mistake `net-local`'s own design in ADR-0011 is trying to keep separate from ordinary network access.
 
+Over SSH there is no browser to open and often no URL to click (OSC 8 does not survive every multiplexer), so the OAuth waiting screen names its way out: `ctrl+x` copies the sign-in URL through the copy ladder - a native clipboard tool when one exists (`wl-copy`/`xclip`/`xsel`, `pbcopy`, `clip`), else an OSC 52 write that works over remote SSH and tmux but is reported unverified, because the terminal may silently block it (testing plan §14). Paste the callback URL back when the quiet period offers the manual field, and the flow completes without the loopback listener ever seeing the browser.
+
 Process cancellation, per ADR-0014, kills a shell command's process group, not just the immediate child, since a shell command frequently forks its own children and killing only the parent leaves orphans running. This needs `setsid` or an equivalent at spawn time so the spawned process has its own process group to kill.
 
 ## macOS
