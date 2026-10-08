@@ -838,10 +838,7 @@ impl ProxyEnv {
             "NO_PROXY",
             "no_proxy",
         ] {
-            if vars
-                .iter()
-                .all(|(set, _)| !set.eq_ignore_ascii_case(key))
-            {
+            if vars.iter().all(|(set, _)| !set.eq_ignore_ascii_case(key)) {
                 saved.push((key.to_string(), std::env::var_os(key)));
                 unsafe { std::env::remove_var(key) };
             }
