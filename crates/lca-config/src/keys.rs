@@ -105,7 +105,11 @@ pub(crate) fn csv(raw: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigError> {
+/// Validate and type a single string value for a key (gh #82 fix):
+/// the settings writer runs cycle values through this so bools and
+/// numbers persist typed instead of as quoted strings the loader
+/// would refuse. `label` names the source in refusal errors.
+pub fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, ConfigError> {
     let invalid = |reason: String| ConfigError::InvalidValue {
         key: key.to_string(),
         label: label.to_string(),
@@ -301,16 +305,24 @@ pub(crate) fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValu
     }
 }
 
-/// A config value in transit, before `Config::apply` files it.
-pub(crate) enum TypedValue {
+/// A config value in transit, before `Config::apply` files it. The
+/// settings writer maps these to typed TOML so the file stays
+/// loadable (gh #82 fix).
+#[derive(Debug, Clone)]
+pub enum TypedValue {
+    /// Free text or a validated vocabulary word.
     Text(String),
     /// A list of strings (`models.enabled`), whose flag/environment form
     /// is a comma list.
     List(Vec<String>),
     /// Per-model allowed thinking levels (`models.thinking_levels`).
     ThinkingLevels(BTreeMap<String, Vec<String>>),
+    /// A validated non-negative integer.
     Count(u64),
+    /// A validated floating-point number.
     Number(f64),
+    /// A validated boolean.
     Bool(bool),
+    /// A validated color mode.
     Color(ColorMode),
 }

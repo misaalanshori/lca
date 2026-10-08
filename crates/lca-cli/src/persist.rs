@@ -34,8 +34,21 @@ fn persist_setting_at(
     key: &str,
     value: Option<&str>,
 ) -> std::io::Result<()> {
-    use toml_edit::value as toml_value;
-    persist_item_at(path, key, value.map(toml_value))
+    persist_item_at(path, key, value.map(|value| typed_item(key, value)))
+}
+
+/// Type one string value for a key (gh #82 fix): validated cycle
+/// values persist as their TOML type (bools and numbers unquoted),
+/// so the file reloads. Anything the validator refuses (free-text
+/// rows, unknown keys) persists as a string, exactly as before.
+fn typed_item(key: &str, value: &str) -> toml_edit::Item {
+    use toml_edit::{Item, Value, value as toml_value};
+    match lca_config::parse_typed(key, value, "settings") {
+        Ok(lca_config::TypedValue::Bool(flag)) => Item::Value(Value::from(flag)),
+        Ok(lca_config::TypedValue::Count(count)) => Item::Value(Value::from(count as i64)),
+        Ok(lca_config::TypedValue::Number(number)) => Item::Value(Value::from(number)),
+        _ => toml_value(value),
+    }
 }
 
 /// Write one dotted-key item (the shared half of the scalar and list
@@ -172,11 +185,11 @@ mod tests {
         )
         .expect("seed");
         persist_setting_at(&path, "tool.timeout_seconds", Some("60")).expect("write");
-        // The writer is string-typed by contract, so siblings are
+        // Gh #82 fix: validated values persist typed, so siblings are
         // asserted at the TOML level, not through the typed loader.
         let text = std::fs::read_to_string(&path).expect("read");
         let doc = text.parse::<toml_edit::DocumentMut>().expect("parse");
-        assert_eq!(doc["tool"]["timeout_seconds"].as_str(), Some("60"));
+        assert_eq!(doc["tool"]["timeout_seconds"].as_integer(), Some(60));
         assert_eq!(doc["tool"]["result_limit_bytes"].as_integer(), Some(100));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -260,7 +273,7 @@ mod tests {
             "no quoted flat key beside the table: {text}"
         );
         let doc = text.parse::<toml_edit::DocumentMut>().expect("parse");
-        assert_eq!(doc["cache"]["noise_floor_tokens"].as_str(), Some("9"));
+        assert_eq!(doc["cache"]["noise_floor_tokens"].as_integer(), Some(9));
         let _ = std::fs::remove_dir_all(&root);
     }
 }
@@ -302,6 +315,33 @@ mod list_tests {
         })
         .expect("reload");
         assert!(cleared.models_enabled().is_empty(), "cleared means all");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod typed_tests {
+    use super::*;
+
+    // Verifies: gh #82 fix - a cycled bool persists unquoted, so the
+    // file reloads (quoted bools were refused at load).
+    #[test]
+    fn persisted_bools_reload() {
+        let root = lca_testkit::scratch_path("lca-persist-bool");
+        let path = root.join("config.toml");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        persist_setting_at(&path, "tool.edit_requires_read", Some("true")).expect("write");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            text.contains("edit_requires_read = true") && !text.contains("\"true\""),
+            "unquoted: {text}"
+        );
+        let loaded = lca_config::Config::load(&lca_config::LoadInput {
+            user_file: Some(path.clone()),
+            ..Default::default()
+        })
+        .expect("reload");
+        assert!(loaded.tool_edit_requires_read(), "true reads back");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
