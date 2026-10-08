@@ -135,6 +135,43 @@ fn fingerprint(bytes: &[u8]) -> u64 {
     hasher.finish()
 }
 
+/// The session context a shell child sees in its environment (gh #129,
+/// pi's `PI_SESSION_ID`/`PI_PROVIDER`/`PI_MODEL` row under `LCA_*` names).
+/// Identifiers and directory paths only: nothing here is a secret, so
+/// echoing it into scrollback or logs is safe by construction.
+#[derive(Debug, Clone, Default)]
+pub struct SessionEnv {
+    /// The session id (`echo $LCA_SESSION_ID` prints it, the literal
+    /// acceptance).
+    pub session_id: String,
+    /// The session's storage directory.
+    pub session_dir: PathBuf,
+    /// The active provider extension's name.
+    pub provider: String,
+    /// The active model identifier.
+    pub model: String,
+    /// The effective thinking level, when the session sets one.
+    pub thinking: Option<String>,
+    /// The data home (`~/.lca`).
+    pub data_dir: PathBuf,
+}
+
+impl SessionEnv {
+    /// Export the six variables onto a child command, leaving every
+    /// ambient variable untouched (an ambient `LCA_MODEL` from the
+    /// user's own shell keeps its value — the session's wins here).
+    pub(crate) fn apply(&self, cmd: &mut tokio::process::Command) {
+        cmd.env("LCA_SESSION_ID", &self.session_id)
+            .env("LCA_SESSION_DIR", &self.session_dir)
+            .env("LCA_PROVIDER", &self.provider)
+            .env("LCA_MODEL", &self.model)
+            .env("LCA_DATA_DIR", &self.data_dir);
+        if let Some(thinking) = &self.thinking {
+            cmd.env("LCA_THINKING", thinking);
+        }
+    }
+}
+
 /// The built-in tool executor.
 pub struct ToolExecutor {
     ops: Arc<dyn ToolOps>,
@@ -159,6 +196,10 @@ pub struct ToolExecutor {
     /// session is attached (`<session>/attachments`); `None` keeps
     /// today's truncate-and-drop behavior (tests, one-shot use).
     spill_dir: Option<PathBuf>,
+    /// The session context shell children see (gh #129); `None` spawns
+    /// with the ambient environment only. The agent loop sets it per
+    /// session, like the spill dir.
+    session_env: Option<SessionEnv>,
     /// The host's skill sources for the `skill` tool (gh #43); `None`
     /// answers "no skills" rather than reading somewhere unconfigured.
     skills_roots: Option<crate::skills::SkillsRoots>,
@@ -196,6 +237,7 @@ impl ToolExecutor {
             tracker: ReadTracker::default(),
             spill_dir: None,
             skills_roots: None,
+            session_env: None,
         }
     }
 
@@ -217,6 +259,13 @@ impl ToolExecutor {
     /// agent loop per turn (the session owns the directory).
     pub fn set_spill_dir(&mut self, dir: Option<PathBuf>) {
         self.spill_dir = dir;
+    }
+
+    /// Set the session context shell children see (gh #129, pi's `PI_*`
+    /// row): identifiers and names only, never secrets. Set by the agent
+    /// loop alongside the spill dir; `None` restores ambient-only spawn.
+    pub fn set_session_env(&mut self, env: Option<SessionEnv>) {
+        self.session_env = env;
     }
 
     /// Set the read-before-edit gate (gh #117). `ToolExecutor::new`
@@ -952,7 +1001,14 @@ impl ToolExecutor {
 
         let (outcome, full) = match self
             .ops
-            .exec(command, &self.cwd, timeout, on_output, cancel.clone())
+            .exec(
+                command,
+                &self.cwd,
+                timeout,
+                on_output,
+                cancel.clone(),
+                self.session_env.as_ref(),
+            )
             .await
         {
             Ok(pair) => pair,

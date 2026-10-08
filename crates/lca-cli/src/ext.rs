@@ -47,12 +47,12 @@ pub enum ExtCmd {
     },
     /// Enable an extension for the current project (FR-PROV-9).
     Enable {
-        /// The extension to enable.
+        /// The extension to enable (`builtin:` prefix accepted, gh #139).
         name: String,
     },
     /// Disable an extension for the current project (FR-PROV-9).
     Disable {
-        /// The extension to disable.
+        /// The extension to disable (`builtin:` prefix accepted, gh #139).
         name: String,
     },
     /// Manage an extension's `state` bag (ADR-0030).
@@ -484,6 +484,9 @@ fn set_enabled(name: &str, enabled: bool) -> i32 {
 /// The testable core of [`set_enabled`]: the data dir and project are
 /// injected so a test never touches the real store or the process cwd.
 fn set_enabled_in(data: &std::path::Path, cwd: &std::path::Path, name: &str, enabled: bool) -> i32 {
+    // gh #139: `builtin:` is pi's spelling for a first-party extension,
+    // not a second record — the loader reads the plain name.
+    let name = name.strip_prefix("builtin:").unwrap_or(name);
     let mut store = match lca_permissions::GrantStore::open(&data.join("grants.json")) {
         Ok(store) => store,
         Err(err) => {
@@ -965,6 +968,33 @@ redirect_path = "/callback"
             err.to_string().contains("0.5") && err.to_string().contains("0.6"),
             "the refusal names the accepted lines: {err}"
         );
+    }
+
+    // Verifies: gh #139 (pi's `builtin:<name>` disable syntax). The
+    // prefix is a spelling, not a second record: disabling
+    // `builtin:compaction-default` writes the same flag the loader
+    // reads for `compaction-default`.
+    #[test]
+    fn builtin_prefixed_disable_writes_the_plain_name_flag() {
+        let root = lca_testkit::scratch_path("lca-ext-builtin-prefix");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        assert_eq!(
+            super::set_enabled_in(&root, &project, "builtin:compaction-default", false),
+            crate::exit::OK
+        );
+        let store = lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open");
+        assert_eq!(
+            store.extension_enabled(&project, "compaction-default"),
+            Some(false)
+        );
+        assert_eq!(
+            store.extension_enabled(&project, "builtin:compaction-default"),
+            None,
+            "no second record under the prefixed spelling"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // Verifies: FR-PROV-9 (per-project enable/disable through the CLI). The

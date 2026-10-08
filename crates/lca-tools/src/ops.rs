@@ -67,6 +67,8 @@ pub trait ToolOps: Send + Sync {
     /// Run a command, streaming output chunks to `on_output` as they arrive
     /// (FR-TOOL-4), stopping on timeout or cancellation (FR-TOOL-5).
     /// `None` runs until the command exits or the turn is cancelled.
+    /// The session context (gh #129) reaches the child as `LCA_*`
+    /// variables; `None` spawns with the ambient environment only.
     fn exec<'a>(
         &'a self,
         command: &'a str,
@@ -74,6 +76,7 @@ pub trait ToolOps: Send + Sync {
         timeout: Option<Duration>,
         on_output: &'a mut (dyn FnMut(&[u8]) + Send),
         cancel: CancelFlag,
+        env: Option<&'a crate::SessionEnv>,
     ) -> ExecFuture<'a>;
 
     /// The interpreter this backend runs commands in, when it owns one
@@ -243,13 +246,14 @@ impl ToolOps for NativeOps {
         timeout: Option<Duration>,
         on_output: &'a mut (dyn FnMut(&[u8]) + Send),
         cancel: CancelFlag,
+        env: Option<&'a crate::SessionEnv>,
     ) -> ExecFuture<'a> {
         let error = self.error.clone();
         Box::pin(async move {
             if let Some(error) = error {
                 return Err(std::io::Error::other(error));
             }
-            platform_exec(&self.shell, command, cwd, timeout, on_output, cancel).await
+            platform_exec(&self.shell, command, cwd, timeout, on_output, cancel, env).await
         })
     }
 
@@ -284,6 +288,7 @@ async fn platform_exec(
     timeout: Option<Duration>,
     on_output: &mut (dyn FnMut(&[u8]) + Send),
     cancel: CancelFlag,
+    env: Option<&crate::SessionEnv>,
 ) -> std::io::Result<(ExecOutcome, Vec<u8>)> {
     use tokio::io::AsyncReadExt;
 
@@ -299,6 +304,10 @@ async fn platform_exec(
     // configured prefix joins first (gh #133), so profile lines take
     // effect for the command.
     let mut cmd = tokio::process::Command::new(&shell.program);
+    // gh #129: the session context reaches the child as `LCA_*`.
+    if let Some(env) = env {
+        env.apply(&mut cmd);
+    }
     cmd.arg("-c")
         .arg(shell.command_text(command))
         .current_dir(&cwd)
@@ -598,6 +607,7 @@ async fn platform_exec(
     timeout: Option<Duration>,
     on_output: &mut (dyn FnMut(&[u8]) + Send),
     cancel: CancelFlag,
+    env: Option<&crate::SessionEnv>,
 ) -> std::io::Result<(ExecOutcome, Vec<u8>)> {
     use tokio::io::AsyncReadExt;
 
@@ -617,6 +627,10 @@ async fn platform_exec(
     // joins before the dialect normalization (gh #133).
     let script = TempScript::write(shell, &shell.command_text(command))?;
     let mut cmd = tokio::process::Command::new(&shell.program);
+    // gh #129: the session context reaches the child as `LCA_*`.
+    if let Some(env) = env {
+        env.apply(&mut cmd);
+    }
     cmd.args(shell.script_args(&script.path()))
         .current_dir(&cwd)
         .stdin(std::process::Stdio::null())

@@ -1157,3 +1157,47 @@ async fn auto_resize_off_passes_original_bytes() {
         "off passes the original bytes through"
     );
 }
+
+// Verifies: gh #129 (pi's session-env row) — `echo $LCA_SESSION_ID`
+// prints the id: the executor's session context reaches shell
+// children as `LCA_*` variables, identifiers and names only.
+#[tokio::test]
+async fn shell_children_see_the_session_environment() {
+    let ws = scratch("session-env");
+    let Some(mut exec) = bash_executor(&ws, 65536, Duration::from_secs(120)) else {
+        eprintln!("skip: no bash on this host");
+        return;
+    };
+    exec.set_session_env(Some(lca_tools::SessionEnv {
+        session_id: "sess-123".to_string(),
+        session_dir: ws.join("sessions").join("sess-123"),
+        provider: "zen".to_string(),
+        model: "zen-flash".to_string(),
+        thinking: Some("high".to_string()),
+        data_dir: ws.join("data"),
+    }));
+    let result = run(
+        &mut exec,
+        &call(
+            "shell",
+            serde_json::json!({"command": "echo $LCA_SESSION_ID/$LCA_PROVIDER/$LCA_MODEL/$LCA_THINKING; echo $LCA_SESSION_DIR; echo $LCA_DATA_DIR"}),
+        ),
+    )
+    .await;
+    assert_eq!(result.status, ToolResultStatus::Ok, "{}", result.content);
+    assert!(
+        result.content.contains("sess-123/zen/zen-flash/high"),
+        "literal echo acceptance: {}",
+        result.content
+    );
+    assert!(
+        result.content.contains("sessions"),
+        "the session dir rides along: {}",
+        result.content
+    );
+    assert!(
+        result.content.contains("data"),
+        "the data dir rides along: {}",
+        result.content
+    );
+}

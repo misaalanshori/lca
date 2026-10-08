@@ -204,6 +204,8 @@ provider reads:
 
 Proxy variables are standard, not `LCA_`-prefixed (gh #145): `HTTP_PROXY`/`HTTPS_PROXY` (lowercase honored), `ALL_PROXY` as the fallback, `NO_PROXY` for bypasses (curl's tail match, `:port` qualifiers, `*`). They route the `net` host client's outbound requests (absolute form for http, `CONNECT` tunnels for https); loopback targets need an explicit `NO_PROXY` entry or they route into the proxy too. Read once per client build: changing them needs a restart.
 
+Shell children of a turn see the session context as `LCA_*` (gh #129, pi's `PI_*` row): `LCA_SESSION_ID`, `LCA_SESSION_DIR`, `LCA_PROVIDER`, `LCA_MODEL`, `LCA_THINKING` (unset when the session sets no level), `LCA_DATA_DIR`. Identifiers and paths only — nothing secret, safe to echo.
+
 ## What does not live here
 
 **Credentials.** Tokens and keys go in the credential store, never in configuration and never in the session log (FR-CFG-5).

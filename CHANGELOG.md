@@ -123,6 +123,13 @@ Dates are UTC.
   unrelated `true` no longer enables) with precedence persisted >
   config > scrollback, and malformed persistence falls back with a
   transcript-head warning.
+- **`builtin:` disable syntax (gh #139).** `lca ext disable
+  builtin:compaction-default` writes the same per-project flag the
+  loader reads for the plain name (pi's spelling); no second record.
+- **Session environment for shell children (gh #129).** A turn's
+  shell sees `LCA_SESSION_ID`/`LCA_SESSION_DIR`/`LCA_PROVIDER`/
+  `LCA_MODEL`/`LCA_THINKING`/`LCA_DATA_DIR` (pi's `PI_*` row under
+  `LCA_*` names); identifiers and paths only, never secrets.
 - **Proxy variables honored (gh #145).** The `net` host client
   routes through `HTTP_PROXY`/`HTTPS_PROXY` (`ALL_PROXY` fallback,
   `NO_PROXY` bypass, lowercase honored): absolute form for http,
