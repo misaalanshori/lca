@@ -551,9 +551,19 @@ impl Agent<'_> {
     /// (`tool_search`) joins the list exactly while undisclosed
     /// tools exist, so requests without any carry no new bytes.
     fn build_request(&self, messages: Vec<ChatMessage>, stable_prefix: usize) -> CompletionRequest {
+        // Gh #67: the run's tool selection filters the executor table
+        // through the registry's built-in set (extension tools arrive
+        // pre-filtered from `declared_tool_specs`).
         let mut tools = ToolExecutor::specs(self.tools.resolved_shell());
+        tools.retain(|spec| self.config.extensions.is_builtin_active(&spec.name));
         tools.extend(self.config.extensions.declared_tool_specs());
-        if !self.config.extensions.tool_search("").is_empty() {
+        // Gh #67: a pinned selection offers `tool_search` only when the
+        // flag named it; otherwise the standing rule holds.
+        let offer_search = match self.config.extensions.tool_search_pinned() {
+            Some(show) => show,
+            None => !self.config.extensions.tool_search("").is_empty(),
+        };
+        if offer_search {
             tools.push(tool_search_spec());
         }
         let mut extras = std::collections::BTreeMap::new();

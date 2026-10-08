@@ -120,6 +120,23 @@ pub struct Cli {
     /// Disable automatic network activity for this run.
     #[arg(long)]
     pub offline: bool,
+    // gh #67 (pi's `-t`: allowlist; plain names replace, `+`/`-`
+    // deltas modify, `*` globs).
+    /// Run with exactly these tools (built-in, extension, or custom).
+    #[arg(short = 't', long = "tools", value_name = "LIST")]
+    pub tools: Option<String>,
+    // gh #67 (pi's `-xt`): patterns disabled after everything else.
+    /// Disable these tools, after all other selection.
+    #[arg(long = "exclude-tools", value_name = "LIST", visible_alias = "xt")]
+    pub exclude_tools: Option<String>,
+    // gh #67 (pi's `-nbt`): default built-ins off, extensions stay.
+    /// Disable the built-in tools, keeping extension tools.
+    #[arg(long = "no-builtin-tools", visible_alias = "nbt")]
+    pub no_builtin_tools: bool,
+    // gh #67 (pi's `-nt`): every tool starts disabled.
+    /// Start with every tool disabled.
+    #[arg(long = "no-tools", visible_alias = "nt")]
+    pub no_tools: bool,
     // Deliberate divergence from pi (gh #8's DNA box): pi also has
     // `--api-key <key>`, and LCA will not add one. argv is world-readable
     // in the process list (`ps`), and the standing rule is that secrets
@@ -308,6 +325,16 @@ pub struct CliFlags {
     /// key: it joins the flag, the `LCA_OFFLINE` env var, or nothing -
     /// never the files (an air gap is per-invocation, not stored).
     pub offline: bool,
+    /// `--tools` (gh #67): the run's tool allowlist. Run-scoped like
+    /// `--provider`, never the files.
+    pub tools: Option<String>,
+    /// `--exclude-tools` (gh #67): patterns disabled last. Run-scoped.
+    pub exclude_tools: Option<String>,
+    /// `--no-builtin-tools` (gh #67): executor tools off, extensions
+    /// stay. Run-scoped.
+    pub no_builtin_tools: bool,
+    /// `--no-tools` (gh #67): every tool starts disabled. Run-scoped.
+    pub no_tools: bool,
 }
 
 impl CliFlags {
@@ -321,6 +348,10 @@ impl CliFlags {
             append_system_prompt: cli.append_system_prompt.clone(),
             no_context_files: cli.no_context_files,
             offline: cli.offline || crate::invoke::offline_env(),
+            tools: cli.tools.clone(),
+            exclude_tools: cli.exclude_tools.clone(),
+            no_builtin_tools: cli.no_builtin_tools,
+            no_tools: cli.no_tools,
         }
     }
 

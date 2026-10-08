@@ -437,6 +437,11 @@ pub(crate) async fn setup(
         Arc::new(move || crate::tui::session_stats(&stats_store, &stats_session)),
         &temp_dir,
     );
+    // gh #67: the run's tool selection lands before consent, so the
+    // provider resolves against the tools it will actually offer.
+    for warning in crate::invoke::apply_tool_selection(&registry, flags) {
+        eprintln!("{warning}");
+    }
     if let Some(host) =
         crate::net_consent::env_configured_host(&data, &provider_name, Some(&registry))
         && crate::provider_ready(&provider_name, &data)

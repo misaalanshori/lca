@@ -2,7 +2,8 @@
 //! `/model`/`/attach`/`/compact`/`/settings`/`/session`/identity slots were
 //! one closure capturing `run`'s locals; they are a method on [`Ui`] now.
 
-use std::sync::Arc;
+use lca_session::Session;
+use std::sync::{Arc, Mutex};
 
 use lca_config::ColorMode;
 use lca_protocol::CommandEffect;
@@ -12,6 +13,27 @@ use lca_ui::UiOptions;
 use super::BUILTIN_SLOTS;
 use super::Ui;
 use super::display::model_effect_on;
+
+/// Stage opener `@file` images into the pending attachments (gh
+/// #71): they ride with the first submission exactly like `/attach`
+/// does. A file that will not stage warns and drops - the interface
+/// stays usable, and the warning names the path.
+pub(crate) fn stage_initial_attachments(
+    session: &Arc<Mutex<Session>>,
+    paths: &[std::path::PathBuf],
+) -> Vec<lca_core::StagedAttachment> {
+    let Ok(session) = session.lock() else {
+        return Vec::new();
+    };
+    let mut staged = Vec::new();
+    for path in paths {
+        match lca_core::stage_image(&session, path) {
+            Ok(attachment) => staged.push(attachment),
+            Err(err) => eprintln!("warning: @{}: {err}", path.display()),
+        }
+    }
+    staged
+}
 
 impl Ui {
     /// Every model this session offers: every enabled provider's list

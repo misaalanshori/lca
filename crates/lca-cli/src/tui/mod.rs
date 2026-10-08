@@ -8,7 +8,7 @@
 //! so `run` is orchestration and its helpers stay under the line budget.
 
 mod commands;
-pub(crate) use commands::settings_text;
+pub(crate) use commands::{settings_text, stage_initial_attachments};
 mod display;
 mod hooks;
 mod login;
@@ -497,27 +497,6 @@ struct LiveTarget {
     agent_config: AgentConfig,
 }
 
-/// Stage opener `@file` images into the pending attachments (gh
-/// #71): they ride with the first submission exactly like `/attach`
-/// does. A file that will not stage warns and drops - the interface
-/// stays usable, and the warning names the path.
-fn stage_initial_attachments(
-    session: &Arc<Mutex<Session>>,
-    paths: &[std::path::PathBuf],
-) -> Vec<lca_core::StagedAttachment> {
-    let Ok(session) = session.lock() else {
-        return Vec::new();
-    };
-    let mut staged = Vec::new();
-    for path in paths {
-        match lca_core::stage_image(&session, path) {
-            Ok(attachment) => staged.push(attachment),
-            Err(err) => eprintln!("warning: @{}: {err}", path.display()),
-        }
-    }
-    staged
-}
-
 impl Ui {
     /// The active provider extension name.
     fn live_name(&self) -> String {
@@ -632,6 +611,10 @@ impl Ui {
             &current_session,
             &temp_dir,
         );
+        // gh #67: the run's tool selection, warned into the startup head.
+        for warning in crate::invoke::apply_tool_selection(&registry, flags) {
+            initial_head.push(warning);
+        }
 
         // FR-PROV-6: the configured provider resolves to an enabled handle,
         // or the session opens in the zero-provider state (FR-PROV-9). The

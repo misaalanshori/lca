@@ -9,6 +9,166 @@ use std::path::{Path, PathBuf};
 #[path = "invoke_tests.rs"]
 mod tests;
 
+/// The run's tool selection (gh #67, pi's `-t`/`-xt`/`-nbt`/`-nt`): an
+/// allowlist replaces the default, `+`/`-` deltas modify it, excludes
+/// and `--no-builtin-tools` subtract after everything else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolSelection {
+    /// Names for `set_active_tools` (the registry ignores unknowns,
+    /// reported separately for the warning).
+    pub extension: Vec<String>,
+    /// The built-in allowlist (`None` is every built-in).
+    pub builtin: Option<std::collections::HashSet<String>>,
+    /// Whether the `tool_search` offer shows (gh #67): pinned on when
+    /// the flag names it, off when any selection flag does not.
+    pub tool_search: Option<bool>,
+    /// Whether any selection flag was given (untouched runs skip the
+    /// registry writes, so the turn records no spurious change).
+    pub touched: bool,
+}
+
+/// Match one tool entry (gh #67, pi's shape): `*` patterns glob,
+/// anything else matches the exact name.
+fn tool_entry_matches(entry: &str, name: &str) -> bool {
+    let entry = entry.trim();
+    if entry.contains('*') {
+        lca_permissions::wildcard_match(entry, name)
+    } else {
+        entry == name
+    }
+}
+
+/// Resolve the tool flags against the registered and built-in names
+/// (gh #67). Returns the selection plus unknown entries for the
+/// warning (a typo warns, it does not fail the run).
+#[allow(clippy::too_many_arguments)]
+pub fn select_tools(
+    registered: &[String],
+    default_active: &[String],
+    builtin: &[String],
+    tools: Option<&str>,
+    exclude: Option<&str>,
+    no_builtin: bool,
+    no_tools: bool,
+) -> (ToolSelection, Vec<String>) {
+    let untouched = ToolSelection {
+        extension: Vec::new(),
+        builtin: None,
+        tool_search: None,
+        touched: false,
+    };
+    if tools.is_none() && exclude.is_none() && !no_builtin && !no_tools {
+        return (untouched, Vec::new());
+    }
+    let mut unknown = Vec::new();
+    let mut selected: Vec<String> = if no_tools {
+        Vec::new()
+    } else if let Some(list) = tools {
+        let entries: Vec<&str> = list
+            .split(',')
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .collect();
+        if entries
+            .iter()
+            .all(|e| e.starts_with('+') || e.starts_with('-'))
+        {
+            // Deltas modify the default (pi's shape): exact names only.
+            let mut selected = default_active.to_vec();
+            for entry in entries {
+                if let Some(add) = entry.strip_prefix('+') {
+                    if registered.contains(&add.to_string())
+                        || builtin.contains(&add.to_string())
+                        || add == "tool_search"
+                    {
+                        if !selected.contains(&add.to_string()) {
+                            selected.push(add.to_string());
+                        }
+                    } else {
+                        unknown.push(add.to_string());
+                    }
+                } else if let Some(remove) = entry.strip_prefix('-') {
+                    selected.retain(|name| name != remove);
+                }
+            }
+            selected
+        } else {
+            // An allowlist replaces the default; patterns glob.
+            let mut selected = Vec::new();
+            for entry in entries {
+                let mut hit = false;
+                for name in registered.iter().chain(builtin.iter()) {
+                    if tool_entry_matches(entry, name) {
+                        if !selected.contains(name) {
+                            selected.push(name.clone());
+                        }
+                        hit = true;
+                    }
+                }
+                if entry == "tool_search" {
+                    hit = true;
+                    if !selected.contains(&"tool_search".to_string()) {
+                        selected.push("tool_search".to_string());
+                    }
+                }
+                if !hit {
+                    unknown.push(entry.to_string());
+                }
+            }
+            selected
+        }
+    } else {
+        default_active.to_vec()
+    };
+    if no_builtin {
+        selected.retain(|name| !builtin.contains(name));
+    }
+    if let Some(list) = exclude {
+        let entries: Vec<&str> = list
+            .split(',')
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .collect();
+        selected.retain(|name| !entries.iter().any(|entry| tool_entry_matches(entry, name)));
+    }
+    let builtin_set: std::collections::HashSet<String> = selected
+        .iter()
+        .filter(|name| builtin.contains(name))
+        .cloned()
+        .collect();
+    let tool_search = if no_tools {
+        Some(false)
+    } else if tools.is_some_and(|list| {
+        list.split(',').any(|entry| {
+            let entry = entry.trim().trim_start_matches('+');
+            entry == "tool_search"
+        })
+    }) {
+        Some(true)
+    } else if tools.is_some() || exclude.is_some() || no_builtin {
+        Some(false)
+    } else {
+        None
+    };
+    let mut extension: Vec<String> = selected
+        .iter()
+        .filter(|name| *name != "tool_search")
+        .cloned()
+        .collect();
+    extension.sort();
+    unknown.sort();
+    unknown.dedup();
+    (
+        ToolSelection {
+            extension,
+            builtin: Some(builtin_set),
+            tool_search,
+            touched: true,
+        },
+        unknown,
+    )
+}
+
 /// Read stdin, split `@path` tokens, and expand them (gh #71): the
 /// I/O half of invocation prep. Returns the routing struct plus the
 /// `@file` images for attach staging; a missing `@path` is a usage
@@ -155,6 +315,47 @@ pub fn interactive(
             crate::exit::INTERNAL
         }
     }
+}
+
+/// Apply the run's tool selection to a fresh registry (gh #67):
+/// extension names through `set_active_tools`, built-ins through
+/// their own set, `tool_search` pinned by explicit naming. No flags
+/// means no writes (the turn records no spurious change). Returns
+/// warnings for unknown entries (a typo warns, it does not fail).
+pub fn apply_tool_selection(
+    registry: &lca_core::ExtensionRegistry,
+    flags: &crate::CliFlags,
+) -> Vec<String> {
+    let registered: Vec<String> = registry
+        .tool_specs()
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect();
+    let default_active = registry.active_tools();
+    let builtin: Vec<String> = lca_core::BUILTIN_TOOLS
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+    let (selection, unknown) = select_tools(
+        &registered,
+        &default_active,
+        &builtin,
+        flags.tools.as_deref(),
+        flags.exclude_tools.as_deref(),
+        flags.no_builtin_tools,
+        flags.no_tools,
+    );
+    if !selection.touched {
+        return Vec::new();
+    }
+    let mut warnings = Vec::new();
+    for name in &unknown {
+        warnings.push(format!("warning: --tools: unknown tool `{name}`"));
+    }
+    let _ = registry.set_active_tools(&selection.extension);
+    registry.set_builtin_active(selection.builtin);
+    registry.set_tool_search(selection.tool_search);
+    warnings
 }
 
 /// Read piped stdin (gh #71, pi's `readPipedStdin`): `None` on a

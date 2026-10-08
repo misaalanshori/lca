@@ -13,6 +13,7 @@
 
 #![forbid(unsafe_code)]
 
+mod active_set;
 mod assemble;
 mod compact;
 mod registry;

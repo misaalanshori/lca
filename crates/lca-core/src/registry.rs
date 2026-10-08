@@ -3,6 +3,7 @@
 //! enforcement (FR-EXT-11). Handles are `Arc<dyn ExtensionDispatch>`, so
 //! nothing here branches on the delivery mode (FR-EXT-6).
 
+use crate::active_set::ActiveSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -22,17 +23,6 @@ pub struct NamespaceView {
     pub description: String,
     /// Tool names in the namespace, sorted.
     pub tools: Vec<String>,
-}
-
-/// The session's dynamic tool set (pi's active tools, gh #77): `None`
-/// is the default (every registered tool is active); `Some` is a
-/// `set-active-tools` replacement. Only registered names take
-/// effect; unknown names are ignored at set time, never here.
-#[derive(Debug, Default)]
-struct ActiveSet {
-    names: Option<std::collections::HashSet<String>>,
-    /// Bumped on every set; the turn records the transcript entry.
-    revision: u64,
 }
 
 /// Built-in tool names are reserved (FR-TOOL-1's set; an extension
@@ -111,7 +101,7 @@ struct Registered {
 #[derive(Default)]
 pub struct ExtensionRegistry {
     entries: Vec<Registered>,
-    active: std::sync::Mutex<ActiveSet>,
+    pub(crate) active: std::sync::Mutex<ActiveSet>,
     /// The running turn's nested-call server (gh #77), if any. The
     /// turn installs it around the run and clears it after; the
     /// `tools` import serves through it from blocking threads.
@@ -120,7 +110,7 @@ pub struct ExtensionRegistry {
     tools: HashMap<String, usize>,
     /// The kept spec per registered tool name, so arguments can be validated
     /// against the schema the model saw before `execute` runs.
-    tool_schemas: HashMap<String, ToolSpec>,
+    pub(crate) tool_schemas: HashMap<String, ToolSpec>,
     /// Full command name (`ext.command`, a claimed built-in leaf, or an
     /// auto-namespaced identity export) -> where it leads.
     commands: HashMap<String, Route>,
@@ -542,67 +532,6 @@ impl ExtensionRegistry {
     /// dispatch (extension authoring guide: the host validates, then calls).
     pub fn tool_schema(&self, name: &str) -> Option<&ToolSpec> {
         self.tool_schemas.get(name)
-    }
-
-    /// Whether a tool name is active (gh #77): the default set holds
-    /// every registered non-hidden tool; a `set-active-tools`
-    /// replacement holds exactly its applied names.
-    fn is_active(&self, name: &str, exposure: ToolExposure) -> bool {
-        let active = self
-            .active
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        match &active.names {
-            None => exposure != ToolExposure::Hidden,
-            Some(names) => names.contains(name),
-        }
-    }
-
-    /// Replace the session's active tool set (pi's `setActiveTools`,
-    /// gh #77): only registered names take effect; unknown names are
-    /// ignored and reported, never applied. Returns `(applied,
-    /// ignored)`, both sorted. The turn records the transcript entry
-    /// before the next model request.
-    pub fn set_active_tools(&self, names: &[String]) -> (Vec<String>, Vec<String>) {
-        let mut applied = Vec::new();
-        let mut ignored = Vec::new();
-        for name in names {
-            if self.tool_schemas.contains_key(name) {
-                applied.push(name.clone());
-            } else {
-                ignored.push(name.clone());
-            }
-        }
-        applied.sort();
-        ignored.sort();
-        let mut active = self
-            .active
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        active.names = Some(applied.iter().cloned().collect());
-        active.revision += 1;
-        (applied, ignored)
-    }
-
-    /// The active tool names, sorted (gh #77's `getActiveTools`).
-    pub fn active_tools(&self) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .tool_schemas
-            .iter()
-            .filter(|(name, spec)| self.is_active(name, spec.exposure))
-            .map(|(name, _)| name.clone())
-            .collect();
-        names.sort();
-        names
-    }
-
-    /// The active set's revision: the turn compares it across requests
-    /// to record transcript entries for mid-turn changes (gh #77).
-    pub fn active_revision(&self) -> u64 {
-        self.active
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .revision
     }
 
     /// Whether the host may run a tool by name right now (gh #77's

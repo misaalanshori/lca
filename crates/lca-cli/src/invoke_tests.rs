@@ -73,3 +73,78 @@ fn at_files_expand_text_and_images() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+fn tool_names(words: &[&str]) -> Vec<String> {
+    words.iter().map(|word| word.to_string()).collect()
+}
+
+// Verifies: gh #67 - an allowlist replaces the selection; globs match;
+// unknown names report without failing the run.
+#[test]
+fn tools_allowlist_replaces_and_globs() {
+    let all = tool_names(&["read", "write", "grep", "ext-docs"]);
+    let builtin = tool_names(&["read", "write", "grep"]);
+    let (sel, unknown) = select_tools(&all, &all, &builtin, Some("read,grep"), None, false, false);
+    assert!(sel.touched);
+    assert_eq!(sel.extension, vec!["grep".to_string(), "read".to_string()]);
+    assert!(unknown.is_empty());
+    assert_eq!(sel.builtin.as_ref().unwrap().len(), 2);
+
+    let (sel, _) = select_tools(&all, &all, &builtin, Some("gr*"), None, false, false);
+    assert_eq!(sel.extension, vec!["grep".to_string()]);
+
+    let (_, unknown) = select_tools(&all, &all, &builtin, Some("read,nope"), None, false, false);
+    assert_eq!(unknown, vec!["nope".to_string()]);
+}
+
+// Verifies: gh #67 - `+`/`-` deltas modify the default; `--exclude`
+// and `--no-builtin-tools` subtract after everything else.
+#[test]
+fn tools_deltas_and_excludes_subtract() {
+    let all = tool_names(&["read", "write", "grep", "ext-docs"]);
+    let builtin = tool_names(&["read", "write", "grep"]);
+    let (sel, _) = select_tools(
+        &all,
+        &all,
+        &builtin,
+        Some("+ext-docs,-write"),
+        None,
+        false,
+        false,
+    );
+    assert!(sel.extension.contains(&"ext-docs".to_string()));
+    assert!(!sel.extension.contains(&"write".to_string()));
+    assert!(
+        sel.extension.contains(&"read".to_string()),
+        "the rest stays"
+    );
+
+    let (sel, _) = select_tools(&all, &all, &builtin, None, Some("wr*"), false, false);
+    assert!(!sel.extension.contains(&"write".to_string()));
+    assert!(sel.builtin.as_ref().unwrap().contains("read"));
+
+    let (sel, _) = select_tools(&all, &all, &builtin, None, None, true, false);
+    assert_eq!(
+        sel.extension,
+        vec!["ext-docs".to_string()],
+        "extensions stay"
+    );
+    assert!(sel.builtin.as_ref().unwrap().is_empty());
+}
+
+// Verifies: gh #67 - `--no-tools` empties everything; no flags touch
+// nothing (the turn records no spurious change).
+#[test]
+fn no_tools_empties_and_no_flags_touch_nothing() {
+    let all = tool_names(&["read", "ext-docs"]);
+    let builtin = tool_names(&["read"]);
+    let (sel, _) = select_tools(&all, &all, &builtin, None, None, false, true);
+    assert!(sel.touched);
+    assert!(sel.extension.is_empty());
+    assert!(sel.builtin.as_ref().unwrap().is_empty());
+
+    let (sel, unknown) = select_tools(&all, &all, &builtin, None, None, false, false);
+    assert!(!sel.touched);
+    assert!(sel.builtin.is_none());
+    assert!(unknown.is_empty());
+}

@@ -237,3 +237,57 @@ fn gh40_shell_results_carry_exit_code_on_the_wire_and_in_the_log() {
         .expect("a tool-result record");
     assert_eq!(record["exit_code"], 3, "the record names it: {record}");
 }
+
+// Verifies: gh #67 - `lca -t read -p x` offers the model exactly
+// `read`; without the flag the built-ins ride along.
+#[test]
+fn tools_allowlist_reaches_the_model_request() {
+    fn tool_names(mock: &common::Mock) -> Vec<Vec<String>> {
+        mock.bodies()
+            .iter()
+            .filter_map(|body| serde_json::from_str::<serde_json::Value>(body).ok())
+            .filter(|body| body.get("messages").is_some())
+            .map(|body| {
+                body["tools"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .collect()
+    }
+
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_text("scoped")),
+        Reply::Sse(sse_text("full")),
+    ]));
+    let box_ = sandbox("headless-tools");
+    let scoped = box_.run(
+        Some(&mock),
+        &["--model", "zen-free", "-t", "read", "-p", "hi"],
+    );
+    assert_eq!(
+        scoped.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&scoped.stderr)
+    );
+    let full = box_.run(Some(&mock), &["--model", "zen-free", "-p", "hi"]);
+    assert_eq!(
+        full.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&full.stderr)
+    );
+    let requests = tool_names(&mock);
+    assert_eq!(requests.len(), 2, "one turn each: {requests:?}");
+    assert_eq!(requests[0], vec!["read".to_string()], "allowlisted");
+    assert!(
+        requests[1].contains(&"write".to_string()),
+        "unflagged runs keep the built-ins: {:?}",
+        requests[1]
+    );
+}
