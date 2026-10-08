@@ -421,13 +421,11 @@ fn fork_runs_the_tip_clone() {
     );
     let logs = session_logs(&box_);
     assert_eq!(logs.len(), 1, "one parent session");
-    let parent_id = logs
-        .keys()
-        .next()
-        .expect("a log")
-        .split('/')
-        .rev()
-        .nth(1)
+    let parent_log = logs.keys().next().expect("a log");
+    let parent_id = std::path::Path::new(parent_log)
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
         .expect("the id directory")
         .to_string();
     let fork = box_.run(
