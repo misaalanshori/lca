@@ -264,6 +264,23 @@ impl Transcript {
         true
     }
 
+    /// A tool card's effective expansion (gh #210): `None` for
+    /// anything that is not a showable card.
+    pub fn tool_card_expanded(&self, index: usize) -> Option<bool> {
+        let Entry::Tool {
+            result,
+            diff,
+            expanded,
+            ..
+        } = self.entries.get(index)?
+        else {
+            return None;
+        };
+        let showable = result.as_ref().is_some_and(|text| !text.is_empty())
+            || diff.as_ref().is_some_and(|text| !text.is_empty());
+        showable.then(|| expanded.unwrap_or(self.tools_expanded))
+    }
+
     /// Toggle one tool card's expansion by entry index (gh #166's click
     /// path): the card's own override wins over the global Ctrl+O
     /// default. Only a tool entry with output to show toggles; a bare

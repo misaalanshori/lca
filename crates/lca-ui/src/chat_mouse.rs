@@ -10,7 +10,12 @@
 use super::chat::Chat;
 use super::chat_pickers::{THINKING_LEVELS, TRUST_OPTIONS};
 use super::ext_widgets::{ButtonHit, widget_render};
+use super::render::{TOOLTIP_MAX_WIDTH, paint_tooltip, tooltip_lines, tooltip_place};
+use crate::transcript::EntryHit;
 use lca_tui::engine::core::{Anchor, OverlayOptions, Rect, SizeValue, resolve_overlay_layout};
+use lca_tui::engine::keybindings::key_text;
+use lca_tui::engine::text::visible_width;
+use std::time::Instant;
 
 /// What a click did: swallowed by chrome with no owner, or an input for
 /// the region's extension.
@@ -622,6 +627,156 @@ impl Chat {
             let _ = self.handle_scoped_models_key("", Some("space"));
         } else {
             let _ = self.handle_picker_key("", Some("enter"));
+        }
+    }
+}
+
+// Gh #210: hover tooltips. A stationary pointer names the interactable
+// under it; any motion, press, or key dismisses. The frame paints the
+// stored block last, so tooltips ride over everything.
+
+/// A tooltip waits this long on a stationary hover before showing.
+const TOOLTIP_DEBOUNCE_MS: u128 = 250;
+
+/// A shown tooltip: placed lines over the viewport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tooltip {
+    /// The wrapped lines, for the painter.
+    pub lines: Vec<String>,
+    /// The viewport column.
+    pub col: u16,
+    /// The viewport row.
+    pub row: u16,
+}
+
+impl Chat {
+    /// The tooltip text for a viewport cell (gh #210): drawer, the
+    /// scrollbar steppers, the jump indicator, tool headers, thinking
+    /// runs. `None` for plain rows - and always off fullscreen, where
+    /// no hover exists to name anything.
+    pub fn tooltip_at(
+        &self,
+        col: u16,
+        row: u16,
+        width: u16,
+        height: u16,
+        scroll: u16,
+    ) -> Option<String> {
+        if !self.screen_mode {
+            return None;
+        }
+        if self.drawer_rect(width, height) == Some((col, row)) {
+            return Some("Toggle extension panel\nAlt+X".to_string());
+        }
+        let geometry = self.scrollbar_for_frame(width, height, scroll);
+        if let Some(geometry) = &geometry
+            && col == geometry.column
+            && row < geometry.rows
+        {
+            if row == 0 {
+                return Some(format!(
+                    "Previous prompt · {}",
+                    key_text("app.prompt.previous")
+                ));
+            }
+            if row + 1 >= geometry.rows {
+                return Some(format!("Next prompt · {}", key_text("app.prompt.next")));
+            }
+            return None;
+        }
+        let (content, window) = self.scroll_extent(width, height);
+        if window == 0 || row as usize >= window {
+            return None;
+        }
+        let from_bottom = (scroll as usize).min(content.saturating_sub(window));
+        // The jump indicator stops before the scrollbar (gh #173), so a
+        // tooltip there would lie over the stepper: skip its column.
+        if from_bottom > 0
+            && row as usize + 1 == window
+            && geometry
+                .as_ref()
+                .is_none_or(|geometry| col != geometry.column)
+        {
+            return Some(format!(
+                "Back to latest · {}",
+                key_text("tui.altScreen.bottom")
+            ));
+        }
+        // The same window math `click_at` hit-tests by (gh #35).
+        let end = content.saturating_sub(from_bottom);
+        let start = end.saturating_sub(window);
+        match self
+            .transcript
+            .entry_at_row(width, &self.theme, start + row as usize)
+        {
+            Some(EntryHit::Thinking(_)) => Some(format!(
+                "Cycle thinking · {}",
+                key_text("app.thinking.toggle")
+            )),
+            Some(EntryHit::ToolHeader(index)) => match self.transcript.tool_card_expanded(index) {
+                Some(true) => Some("Collapse output".to_string()),
+                Some(false) => Some("Expand output".to_string()),
+                None => None,
+            },
+            None => None,
+        }
+    }
+
+    /// Record a hover cell (gh #210): a cell with tooltip text holds a
+    /// showing tooltip, anything else dismisses and rearms the clock.
+    pub fn note_hover(&mut self, col: u16, row: u16, width: u16, height: u16, scroll: u16) {
+        let now = self.tooltip_at(col, row, width, height, scroll);
+        let shown = self.tooltip.as_ref().map(|tip| tip.lines.join("\n"));
+        if now.is_some() && shown.as_deref() == now.as_deref() {
+            return;
+        }
+        self.tooltip = None;
+        self.hover_at = now.map(|_| (col, row, Instant::now()));
+    }
+
+    /// Dismiss any tooltip and rearm the hover clock (gh #210): keys,
+    /// presses, wheels, and resizes all clear the air.
+    pub fn dismiss_tooltip(&mut self) {
+        self.tooltip = None;
+        self.hover_at = None;
+    }
+
+    /// Show a due tooltip (gh #210): the pointer sat 250 ms over a
+    /// tipped cell. Returns whether a tooltip newly showed (the loop
+    /// repaints on `true`). `now` rides a parameter so tests fake time.
+    pub fn poll_tooltip(&mut self, width: u16, height: u16, scroll: u16, now: Instant) -> bool {
+        if self.tooltip.is_some() {
+            return false;
+        }
+        let Some((col, row, at)) = self.hover_at else {
+            return false;
+        };
+        if now.duration_since(at).as_millis() < TOOLTIP_DEBOUNCE_MS {
+            return false;
+        }
+        let Some(text) = self.tooltip_at(col, row, width, height, scroll) else {
+            return false;
+        };
+        let lines = tooltip_lines(&text, TOOLTIP_MAX_WIDTH);
+        let wide = lines
+            .iter()
+            .map(|line| visible_width(line))
+            .max()
+            .unwrap_or(0);
+        let (x, y) = tooltip_place(width, height, col, row, wide, lines.len());
+        self.tooltip = Some(Tooltip {
+            lines,
+            col: x,
+            row: y,
+        });
+        true
+    }
+
+    /// Paint a due tooltip over the frame (gh #210): last, so it rides
+    /// over transcript, dock, and overlays alike.
+    pub(super) fn paint_tooltip(&self, lines: &mut [String]) {
+        if let Some(tip) = &self.tooltip {
+            paint_tooltip(lines, tip.col, tip.row, &tip.lines, &self.theme);
         }
     }
 }

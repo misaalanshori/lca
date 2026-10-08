@@ -474,6 +474,8 @@ impl Chat {
             lines.resize(height as usize, String::new());
         }
         self.compose_overlays(&mut lines, width, height);
+        // Gh #210: the tooltip rides over everything, last.
+        self.paint_tooltip(&mut lines);
         lines
     }
 

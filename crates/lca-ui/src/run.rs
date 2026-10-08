@@ -347,6 +347,8 @@ fn handle_picker_mouse(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) 
             button: MouseButton::Left,
             ..
         } => {
+            // Gh #210: a press dismisses any tooltip outright.
+            chat.dismiss_tooltip();
             // The composer's Up-side path (gh #165) owns editor rows:
             // the Down falls through so the click can still focus.
             if let Some((top, len)) = chat.editor_rect(width, height)
@@ -382,6 +384,9 @@ fn handle_picker_mouse(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) 
             if let Some(PickerHit::Item(item)) = chat.picker_hit(col, row, width, height) {
                 chat.hover_picker_item(item);
             }
+            // Gh #210: arm the tooltip clock (picker rows are unlabeled,
+            // so this only ever rearms over plain cells).
+            chat.note_hover(col, row, width, height, screen.scroll());
             // The autocomplete popup highlights under hover (gh #167).
             if let Some((top, len)) = chat.popup_rect(width, height)
                 && row >= top
@@ -436,6 +441,8 @@ fn handle_mouse_event(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) -
             button: MouseButton::Left,
             ..
         } => {
+            // Gh #210: a press dismisses any tooltip outright.
+            chat.dismiss_tooltip();
             if chat.scrollbar_hit(col, row, width, height, screen.scroll()) != ScrollbarHit::Track {
                 return false;
             }
@@ -467,6 +474,8 @@ fn handle_mouse_event(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) -
             screen.set_scrollbar_hover(chat.scrollbar_hover);
             // Gh #207: the drawer tab lifts under hover.
             chat.refresh_drawer_hover(col, row, width, height);
+            // Gh #210: arm the tooltip clock.
+            chat.note_hover(col, row, width, height, screen.scroll());
             false
         }
         MouseEvent::Move {
@@ -541,6 +550,9 @@ fn handle_input(
         if let Some(mouse) = lca_tui::engine::alt_screen::parse_sgr_mouse(data)
             && mouse.bits & 64 != 0
         {
+            // Gh #210: a wheel moves content under a still pointer, so
+            // any tooltip (and its clock) goes.
+            chat.dismiss_tooltip();
             // Gh #173: Shift+wheel steps between prompts (the loop pins
             // the target); a plain wheel scrolls, as before.
             if let Some(delta) = shift_wheel_jump(&mouse) {
@@ -917,7 +929,14 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                 }
                 dirty = true;
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Gh #210: a stationary hover past 250 ms earns its
+                // tooltip on the next frame.
+                let (width, height) = chat.world.size;
+                if chat.poll_tooltip(width, height, screen.scroll(), std::time::Instant::now()) {
+                    dirty = true;
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break 'main Ok(()),
         }
 

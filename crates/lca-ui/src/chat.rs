@@ -134,6 +134,11 @@ pub struct Chat {
     /// Whether the pointer hovers the drawer tab (gh #207): the frame
     /// paints it in accent while set.
     pub drawer_hover: bool,
+    /// A shown tooltip (gh #210): placed lines the frame paints last.
+    pub tooltip: Option<crate::chat_mouse::Tooltip>,
+    /// The last hover cell and when it landed (gh #210): the 250 ms
+    /// debounce clock. Tests set it directly to fake time.
+    pub(crate) hover_at: Option<(u16, u16, std::time::Instant)>,
     /// The transcript's line count at the last frame (gh #35): scroll is
     /// measured from the live bottom, so growth is what tells a new line
     /// from a re-wrap when holding the reader's place.
@@ -283,6 +288,8 @@ impl Chat {
             scroll_drag: None,
             picker_press: None,
             drawer_hover: false,
+            tooltip: None,
+            hover_at: None,
             last_transcript_len: None,
             last_render_width: 0,
             search: None,
@@ -569,6 +576,9 @@ impl Chat {
     /// Handle one keypress: the modal first, then the pickers, the
     /// bindings, and the editor.
     pub fn handle_key(&mut self, data: &str) -> Action {
+        // Gh #210: any key dismisses a showing tooltip with zero
+        // latency (and rearms the hover clock).
+        self.dismiss_tooltip();
         if let Some(action) = self.handle_modal_key(data) {
             return action;
         }

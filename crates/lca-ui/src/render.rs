@@ -195,6 +195,69 @@ pub fn panel_width(width: u16) -> usize {
     40usize.min(width as usize / 2)
 }
 
+/// A tooltip's wrap width (gh #210): past this the text wraps.
+pub const TOOLTIP_MAX_WIDTH: usize = 40;
+
+/// Wrap tooltip text into lines (gh #210): manual newlines split, long
+/// lines wrap at `max` columns.
+pub fn tooltip_lines(text: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for part in text.split('\n') {
+        let wrapped = lca_tui::engine::text::wrap_text_with_ansi(part, max.max(1));
+        if wrapped.is_empty() {
+            out.push(String::new());
+        } else {
+            out.extend(wrapped);
+        }
+    }
+    out
+}
+
+/// Place a tooltip block (gh #210): below-right of the pointer when it
+/// fits, flipping above/left past the edges, always clamped inside the
+/// frame. `(W, H)` frame, `(mx, my)` pointer, `(tw, th)` block.
+pub fn tooltip_place(w: u16, h: u16, mx: u16, my: u16, tw: usize, th: usize) -> (u16, u16) {
+    let (w, h) = (w as usize, h as usize);
+    let x = if (mx as usize) < w.saturating_sub(tw) {
+        mx as usize + 1
+    } else {
+        (mx as usize).saturating_sub(tw)
+    };
+    let y = if (my as usize) < h.saturating_sub(th) {
+        my as usize + 1
+    } else {
+        (my as usize).saturating_sub(th)
+    };
+    let x = x.min(w.saturating_sub(tw)).min(w.saturating_sub(1));
+    let y = y.min(h.saturating_sub(th)).min(h.saturating_sub(1));
+    (x as u16, y as u16)
+}
+
+/// Paint a borderless tooltip block (gh #210): each line hugs its text
+/// in the selected-background role with text-role ink - no frames, no
+/// padding rows.
+pub fn paint_tooltip(base: &mut [String], x: u16, y: u16, lines: &[String], theme: &Theme) {
+    use lca_tui::engine::text::{slice_by_column, visible_width};
+    let bg = theme.bg(crate::theme::Role::SelectedBg);
+    let ink = theme.role(crate::theme::Role::Text);
+    for (offset, line) in lines.iter().enumerate() {
+        let Some(row) = base.get_mut(y as usize + offset) else {
+            continue;
+        };
+        let width = visible_width(line);
+        if width == 0 {
+            continue;
+        }
+        let before = slice_by_column(row, 0, x as usize, false);
+        let before = format!(
+            "{before}{}",
+            " ".repeat((x as usize).saturating_sub(visible_width(&before)))
+        );
+        let after = slice_by_column(row, x as usize + width, 10_000, false);
+        *row = format!("{before}{}{after}", bg(&ink(line)));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
