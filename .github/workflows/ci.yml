@@ -247,8 +247,14 @@ jobs:
           fi
           exit $status
       # Verifies: NFR-16 (dependency license and advisory checks on merge).
+      # The binary runs on the runner (not the action's docker image,
+      # whose rustup default host flipped to musl and stopped resolving
+      # the pinned toolchain (infra change under CI, not a code change).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - name: cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2
+        run: cargo deny --log-level warn --manifest-path ./Cargo.toml --all-features check
       # Verifies: NFR-30 (zero untagged requirements; required from
       # Phase 8, so the advisory flag is gone).
       - name: requirements traceability (NFR-30)
