@@ -7,6 +7,22 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Mouse keystone + scrollbar drag (gh #164).** SGR-1006 normalizes
+  to `MouseEvent` (Down/Up/Move/Wheel + modifiers, 1003 hover) with
+  a `MouseRegion` hit-test table (no component tree). The scrollbar
+  thumb paints solid on hover and drags map pointer Y to scroll;
+  selections never start on the bar, and a drag release never copies.
+- **Editor mouse (gh #165).** Clicking the composer places the caret
+  (wrap/padding/wide-glyph aware) and focuses even with a picker open
+  (the picker takes the Escape path). In-buffer drag-select stays a
+  named follow-up (it needs an editor selection model).
+- **Picker mouse (gh #167).** Hover highlights, press-and-release
+  confirms (the checklist toggles), wheels walk the selection, and
+  the backdrop dismisses without submitting. Host dialogs and native
+  consent modals keep their keys - the backdrop never answers one.
+- **Tabs widget (gh #208).** A horizontal bar / vertical rail
+  primitive (plain markers + host spans, keyboard + mouse) for future
+  session tabs and panel sections. No product surface yet.
 - **Startup header + `ui.quiet_startup` + `/changelog` (gh #131).**
   The transcript head names the version plus the loaded resources
   (context paths that exist, extension/skill/template counts).
