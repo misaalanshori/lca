@@ -77,22 +77,23 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     session.wait_for("> ui.theme", std::time::Duration::from_secs(10));
 
     // 2. The `thinking` row opens the existing thinking sub-picker
-    // (the fifth row of the sectioned list: Display carries four rows
-    // before Model starts), and choosing a level persists it.
-    // Each Down is followed by its frame: the selected-row marker
-    // moves before the next key is sent, so a slow frame never eats
-    // a step.
-    session.send(&["Down"]);
-    session.wait_for("> ui.color", std::time::Duration::from_secs(10));
-    session.send(&["Down"]);
-    session.wait_for("> ui.fullscreen", std::time::Duration::from_secs(10));
-    session.send(&["Down"]);
-    session.wait_for(
+    // (Display carries eight rows before Model starts), and choosing a
+    // level persists it. Each Down is followed by its frame: the
+    // selected-row marker moves before the next key is sent, so a slow
+    // frame never eats a step.
+    for marker in [
+        "> ui.color",
+        "> ui.fullscreen",
+        "> ui.quiet_startup",
+        "> ui.autocomplete_max_visible",
+        "> ui.editor_padding_x",
+        "> ui.output_pad",
         "> markdown.codeblock_border",
-        std::time::Duration::from_secs(10),
-    );
-    session.send(&["Down"]);
-    session.wait_for("> thinking", std::time::Duration::from_secs(10));
+        "> thinking",
+    ] {
+        session.send(&["Down"]);
+        session.wait_for(marker, std::time::Duration::from_secs(10));
+    }
     session.send(&["Enter"]);
     session.wait_for("No reasoning", std::time::Duration::from_secs(10));
     // The sub-picker opens on the current level (unset on a fresh
