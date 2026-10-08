@@ -769,3 +769,32 @@ fn clicking_the_editor_dismisses_settings() {
     assert!(chat.place_editor_caret(2, top, w, h), "the click lands");
     assert!(chat.settings_picker.is_none(), "settings dismissed");
 }
+
+// Verifies: gh #166 - clicking a tool card's header row toggles that
+// card's expansion (the jump indicator and thinking rows keep theirs).
+#[test]
+fn clicking_a_tool_header_expands_that_card() {
+    use crate::chat_render::ClickOutcome;
+    use crate::transcript::ToolStatus;
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.transcript.start_tool("bash", "ls");
+    chat.transcript
+        .finish_tool(ToolStatus::Ok, Some("a\nb\nc\nd\ne\nf".to_string()));
+    let (w, h) = (80u16, 24u16);
+    let frame = chat.viewport(w, h, 0);
+    let strip = |row: &String| lca_tui::engine::text::strip_terminal_sequences(row);
+    let row = frame
+        .iter()
+        .position(|line| strip(line).contains("bash"))
+        .expect("the card header renders") as u16;
+    assert!(matches!(
+        chat.click_at(4, row, 0, w, h),
+        ClickOutcome::ToolToggled
+    ));
+    let expanded = strip(&chat.viewport(w, h, 0).join("\n"));
+    assert!(
+        expanded.lines().any(|line| line.trim() == "f"),
+        "the full result shows: {expanded:?}"
+    );
+}

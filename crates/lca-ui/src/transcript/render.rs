@@ -85,12 +85,8 @@ pub(super) fn render_entry(
             text,
             reasoning,
             *streaming,
-            // R6: the run's own toggle wins over the configured default.
-            match thinking_override {
-                Some(true) => ThinkingVisibility::Full,
-                Some(false) => ThinkingVisibility::Hidden,
-                None => thinking,
-            },
+            // R6: the run's own cycle wins over the configured default.
+            thinking_override.unwrap_or(thinking),
             width,
             theme,
             codeblock_border,
@@ -395,10 +391,12 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
         result,
         diff,
         manual,
+        expanded: card_expanded,
     } = entry
     else {
         return;
     };
+    let expanded = card_expanded.unwrap_or(expanded);
     let width = width as usize;
     let inner = width.saturating_sub(3).max(1);
     let summary = format_tool_args(name, args);

@@ -591,7 +591,7 @@ fn handle_input(
                         let _ = screen.take_clicked_link();
                     }
                     None => match chat.click_at(col, row, screen.scroll(), width, height) {
-                        ClickOutcome::ThinkingToggled => {
+                        ClickOutcome::ThinkingToggled | ClickOutcome::ToolToggled => {
                             let _ = screen.take_clicked_link();
                         }
                         ClickOutcome::JumpBottom => screen.set_scroll(0),

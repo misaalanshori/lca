@@ -51,4 +51,4 @@ pub use state::{
 };
 pub use state::{CompactPoll, CompactState};
 pub use theme::Theme;
-pub use transcript::{Entry, ToolStatus, Transcript, image_label};
+pub use transcript::{Entry, EntryHit, ToolStatus, Transcript, image_label};

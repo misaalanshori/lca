@@ -51,9 +51,10 @@ pub enum Entry {
         reasoning: String,
         /// Whether the message is still streaming.
         streaming: bool,
-        /// This run's thinking visibility, when the user toggled it
-        /// (R6); `None` follows [`Transcript`]'s configured default.
-        thinking_override: Option<bool>,
+        /// This run's thinking visibility, when a click or Ctrl+T
+        /// cycled it (gh #166, R6); `None` follows [`Transcript`]'s
+        /// configured default.
+        thinking_override: Option<ThinkingVisibility>,
     },
     /// A tool call and its result.
     Tool {
@@ -77,6 +78,9 @@ pub enum Entry {
         /// `toolTitle`); LCA has one card, so the flag carries which
         /// pi treatment applies to its title.
         manual: bool,
+        /// This card's expansion, when a click toggled it (gh #166);
+        /// `None` follows the global Ctrl+O default.
+        expanded: Option<bool>,
     },
     /// A transient notice (command output, info).
     Notice(String),
@@ -133,6 +137,16 @@ impl ThinkingVisibility {
             _ => None,
         }
     }
+}
+
+/// What a transcript document row belongs to (gh #166's click and
+/// hover map): thinking rows cycle, tool headers expand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryHit {
+    /// A reasoning row of an assistant entry (by entry index).
+    Thinking(usize),
+    /// The first row of a tool card (by entry index).
+    ToolHeader(usize),
 }
 
 /// The transcript: an ordered list of entries.
@@ -204,7 +218,7 @@ impl Transcript {
         self.invalidate_cache();
     }
 
-    /// Toggle the *most recent* thinking run's visibility (Ctrl+T; pi's
+    /// Cycle the *most recent* thinking run's visibility (Ctrl+T; pi's
     /// per-run `thinkingVisibilityOverrides`, `assistant-message.ts`). Runs
     /// already rendered keep the configured default, so expanding the one
     /// being read does not rewrite the transcript behind it.
@@ -222,12 +236,13 @@ impl Transcript {
         self.toggle_entry_thinking(index);
     }
 
-    /// Toggle one thinking run by entry index (gh #11's click path; the
-    /// keybinding above is `toggle_thinking_expanded`). Only an assistant
-    /// entry carrying reasoning toggles; anything else reports `false`
-    /// and moves nothing.
+    /// Cycle one thinking run by entry index (gh #166's click path; the
+    /// keybinding above is `toggle_thinking_expanded`): snippet → full
+    /// → hidden → snippet, starting from the run's effective state.
+    /// Only an assistant entry carrying reasoning cycles; anything else
+    /// reports `false` and moves nothing.
     pub fn toggle_entry_thinking(&mut self, index: usize) -> bool {
-        let default_expanded = matches!(self.thinking, ThinkingVisibility::Full);
+        let current = self.thinking;
         let Some(Entry::Assistant {
             reasoning,
             thinking_override,
@@ -239,8 +254,38 @@ impl Transcript {
         if reasoning.trim().is_empty() {
             return false;
         }
-        let visible = thinking_override.unwrap_or(default_expanded);
-        *thinking_override = Some(!visible);
+        let effective = thinking_override.unwrap_or(current);
+        *thinking_override = Some(match effective {
+            ThinkingVisibility::Snippet => ThinkingVisibility::Full,
+            ThinkingVisibility::Full => ThinkingVisibility::Hidden,
+            ThinkingVisibility::Hidden => ThinkingVisibility::Snippet,
+        });
+        self.invalidate_cache();
+        true
+    }
+
+    /// Toggle one tool card's expansion by entry index (gh #166's click
+    /// path): the card's own override wins over the global Ctrl+O
+    /// default. Only a tool entry with output to show toggles; a bare
+    /// running card reports `false` and arms nothing.
+    pub fn toggle_entry_tool(&mut self, index: usize) -> bool {
+        let global = self.tools_expanded;
+        let Some(Entry::Tool {
+            result,
+            diff,
+            expanded,
+            ..
+        }) = self.entries.get_mut(index)
+        else {
+            return false;
+        };
+        let showable = result.as_ref().is_some_and(|text| !text.is_empty())
+            || diff.as_ref().is_some_and(|text| !text.is_empty());
+        if !showable {
+            return false;
+        }
+        let effective = expanded.unwrap_or(global);
+        *expanded = Some(!effective);
         self.invalidate_cache();
         true
     }
@@ -361,6 +406,7 @@ impl Transcript {
             result: None,
             diff: None,
             manual: false,
+            expanded: None,
         });
     }
 
@@ -374,6 +420,7 @@ impl Transcript {
             result: None,
             diff: None,
             manual: true,
+            expanded: None,
         });
     }
 
@@ -607,6 +654,7 @@ impl Transcript {
             result: Some(chunk.to_string()),
             diff: None,
             manual: false,
+            expanded: None,
         });
     }
 
@@ -649,7 +697,10 @@ impl Transcript {
     /// belongs to its reasoning run (gh #11's hit map): blank separator
     /// rows belong to no entry. The render cache carries each entry's
     /// line count, so this walks lengths, never re-renders.
-    pub fn entry_at_row(&self, width: u16, theme: &Theme, row: usize) -> Option<(usize, bool)> {
+    /// What a transcript document row belongs to (gh #166): a
+    /// thinking row cycles its run, a tool card's first row toggles its
+    /// expansion, anything else is not clickable.
+    pub fn entry_at_row(&self, width: u16, theme: &Theme, row: usize) -> Option<EntryHit> {
         let _ = self.render(width, theme);
         let cache = self.cache.borrow();
         let mut line = 0usize;
@@ -664,7 +715,16 @@ impl Transcript {
                 continue;
             };
             if row >= line && row < line + lines.len() {
-                return Some((i, row - line < *thinking_rows));
+                if row - line < *thinking_rows {
+                    return Some(EntryHit::Thinking(i));
+                }
+                // A tool card paints as a state band: a blank band row,
+                // then the header, then the output (`render_tool` owns
+                // this shape, so the header is always row 1).
+                if row - line == 1 && matches!(self.entries.get(i), Some(Entry::Tool { .. })) {
+                    return Some(EntryHit::ToolHeader(i));
+                }
+                return None;
             }
             line += lines.len();
         }

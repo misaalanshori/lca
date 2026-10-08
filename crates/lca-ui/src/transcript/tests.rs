@@ -821,3 +821,74 @@ fn hidden_images_drop_their_rows() {
         "text survives: {rows:?}"
     );
 }
+
+// Verifies: gh #166 - a thinking click cycles snippet → full → hidden
+// → snippet (not a boolean flip).
+#[test]
+fn thinking_clicks_cycle_snippet_full_hidden() {
+    let mut t = Transcript::new();
+    t.append_reasoning("one\ntwo\nthree\nfour");
+    t.append_text("the answer");
+    t.finish_assistant();
+    let snippet = strip(&t.render(60, &plain()));
+    assert!(
+        snippet.iter().any(|l| l.contains("+1 lines")),
+        "starts a snippet"
+    );
+    t.toggle_thinking_expanded();
+    let full = strip(&t.render(60, &plain()));
+    assert!(
+        full.iter().any(|l| l.contains("four")),
+        "first click expands"
+    );
+    t.toggle_thinking_expanded();
+    let hidden = strip(&t.render(60, &plain()));
+    assert!(
+        !hidden
+            .iter()
+            .any(|l| l.contains("one") || l.contains("four")),
+        "second click hides: {hidden:?}"
+    );
+    t.toggle_thinking_expanded();
+    let back = strip(&t.render(60, &plain()));
+    assert!(
+        back.iter().any(|l| l.contains("+1 lines")),
+        "third click snippets again: {back:?}"
+    );
+}
+
+// Verifies: gh #166 - a tool-card click expands that card only; the
+// global stays collapsed.
+#[test]
+fn tool_clicks_expand_one_card_only() {
+    let mut t = Transcript::new();
+    t.start_tool("bash", "ls");
+    t.finish_tool(ToolStatus::Ok, Some("a\nb\nc\nd\ne\nf".to_string()));
+    t.start_tool("bash", "pwd");
+    t.finish_tool(ToolStatus::Ok, Some("1\n2\n3\n4\n5\n6".to_string()));
+    let collapsed = strip(&t.render(60, &plain()));
+    assert!(
+        collapsed.iter().any(|l| l.contains("more lines")),
+        "both cards preview: {collapsed:?}"
+    );
+    assert!(t.toggle_entry_tool(0), "the first card expands");
+    let one = strip(&t.render(60, &plain()));
+    assert!(
+        one.iter().any(|l| l.trim() == "f"),
+        "card zero shows all six lines"
+    );
+    assert!(
+        !one.iter().any(|l| l.trim() == "6"),
+        "card one still previews: {one:?}"
+    );
+    assert!(!t.tools_expanded(), "the global stays collapsed");
+}
+
+// Verifies: gh #166 - a bare card (running, no output yet) ignores the
+// click instead of arming a surprise expansion.
+#[test]
+fn bare_tool_cards_ignore_clicks() {
+    let mut t = Transcript::new();
+    t.start_tool("bash", "sleep 60");
+    assert!(!t.toggle_entry_tool(0), "nothing to expand");
+}

@@ -23,6 +23,8 @@ pub enum ClickOutcome {
     SuggestionAccepted,
     /// A reasoning run toggled its visibility.
     ThinkingToggled,
+    /// A tool card toggled its expansion.
+    ToolToggled,
     /// The jump-to-bottom indicator was hit: return to the live bottom.
     JumpBottom,
     /// The scrollbar's ▲ stepper was hit: jump to the previous prompt.
@@ -35,6 +37,7 @@ use lca_tui::engine::text::{slice_by_column, truncate_to_width, visible_width};
 
 use super::chat::Chat;
 use crate::theme::Role;
+use crate::transcript::EntryHit;
 use crate::widget_lines;
 
 /// One frame's virtual scrollbar (gh #35): where its thumb sits on the
@@ -331,16 +334,17 @@ impl Chat {
         }
         let end = content.saturating_sub(from_bottom);
         let start = end.saturating_sub(window);
-        let Some((index, thinking)) =
-            self.transcript
-                .entry_at_row(width, &self.theme, start + row as usize)
-        else {
-            return ClickOutcome::Ignored;
-        };
-        if thinking && self.transcript.toggle_entry_thinking(index) {
-            ClickOutcome::ThinkingToggled
-        } else {
-            ClickOutcome::Ignored
+        match self
+            .transcript
+            .entry_at_row(width, &self.theme, start + row as usize)
+        {
+            Some(EntryHit::Thinking(index)) if self.transcript.toggle_entry_thinking(index) => {
+                ClickOutcome::ThinkingToggled
+            }
+            Some(EntryHit::ToolHeader(index)) if self.transcript.toggle_entry_tool(index) => {
+                ClickOutcome::ToolToggled
+            }
+            _ => ClickOutcome::Ignored,
         }
     }
 
