@@ -295,6 +295,12 @@ impl Ui {
                     super::display::model_rows(&ui.offered_models(), &ui.live_name())
                 }))
             },
+            prompt_templates: {
+                let cwd = self.cwd.clone();
+                Some(Arc::new(move || {
+                    lca_tools::prompts::collect(&crate::prompt_roots(&cwd))
+                }))
+            },
             scoped_models: {
                 let ui = self.clone();
                 Some(Arc::new(move || {

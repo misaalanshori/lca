@@ -338,6 +338,10 @@ pub type ScopedModels = Arc<dyn Fn() -> Vec<ScopedModelRow> + Send + Sync>;
 /// and update the live rotation. Returns the notice to show.
 pub type SaveScopedModels = Arc<dyn Fn(Vec<String>) -> String + Send + Sync>;
 
+/// The prompt templates a `/name` command can expand (gh #58).
+/// A hook rather than a snapshot, so a file added mid-session works.
+pub type PromptTemplates = Arc<dyn Fn() -> Vec<lca_tools::prompts::PromptTemplate> + Send + Sync>;
+
 /// The models the `/model` picker should offer *now*. A hook rather than the
 /// startup snapshot, so a login's model discovery (which can only succeed
 /// after the endpoint's ad-hoc grant) reaches the picker without a restart.
@@ -468,6 +472,10 @@ pub struct UiHooks {
     /// The live model list for `/model` (falls back to the startup
     /// `UiOptions::models` when absent).
     pub models: Option<ModelList>,
+    /// The prompt templates for `/name` commands (gh #58): collected
+    /// live, so a new file works without a restart. Absent keeps the
+    /// unknown-command refusal.
+    pub prompt_templates: Option<PromptTemplates>,
     /// One step of the model cycle for the cycle keys (`true` = forward).
     pub cycle_model: Option<ModelCycle>,
     /// `Ctrl+S` in the model picker: persist the highlighted model as the

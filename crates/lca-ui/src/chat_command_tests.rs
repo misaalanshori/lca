@@ -374,3 +374,71 @@ fn scoped_models_a_flips_the_whole_list() {
         "all off refuses like an empty set"
     );
 }
+
+// Verifies: gh #58 - a template command expands into the editor
+// (reviewable, never auto-submitted) with arguments substituted.
+#[test]
+fn a_prompt_template_expands_into_the_editor() {
+    let mut opts = options();
+    opts.hooks.prompt_templates = Some(Arc::new(|| {
+        vec![lca_tools::prompts::PromptTemplate {
+            name: "review".to_string(),
+            description: "Review staged git changes".to_string(),
+            argument_hint: "[focus]".to_string(),
+            body: "Review. Focus on ${1:-correctness}.".to_string(),
+        }]
+    }));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    for c in "/review concurrency".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert_eq!(
+        chat.editor.text(),
+        "Review. Focus on concurrency.",
+        "the expansion lands in the editor"
+    );
+    assert!(
+        chat.world.notice.is_none(),
+        "no notice, no submit: {:?}",
+        chat.world.notice
+    );
+}
+
+// Verifies: gh #58 - the template completes with its description and
+// hint, and an unknown `/name` still refuses.
+#[test]
+fn a_prompt_template_completes_and_unknown_names_refuse() {
+    let mut opts = options();
+    opts.hooks.prompt_templates = Some(Arc::new(|| {
+        vec![lca_tools::prompts::PromptTemplate {
+            name: "review".to_string(),
+            description: "Review staged git changes".to_string(),
+            argument_hint: "[focus]".to_string(),
+            body: "Review $1.".to_string(),
+        }]
+    }));
+    use lca_tui::widgets::autocomplete::AutocompleteProvider;
+    let provider = super::provider_for(&opts);
+    let suggestions = provider.get_suggestions("/rev", false).expect("offers");
+    let item = suggestions
+        .items
+        .iter()
+        .find(|item| item.label == "/review")
+        .expect("the template completes");
+    let description = item.description.as_deref().unwrap_or("");
+    assert!(
+        description.contains("[focus]") && description.contains("Review staged"),
+        "hint and description show: {description}"
+    );
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    for c in "/nope".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert_eq!(
+        chat.world.notice.as_deref(),
+        Some("unknown command /nope"),
+        "no template, no command"
+    );
+}

@@ -149,6 +149,19 @@ on first open, so this costs one keypress, not the feature. Project
 files load when the project is trusted at startup (trust granted
 mid-session applies from the next session).
 
+## Prompt templates
+
+Markdown files become `/` commands (gh #58, pi's prompt templates):
+`~/.lca/prompts/<name>.md` and `.lca/prompts/<name>.md` load direct
+`.md` children only, project winning ties. Frontmatter carries
+`description` (else the first non-empty line) and `argument-hint`;
+both show in completion. The body substitutes `$1..$9`,
+`$@`/`$ARGUMENTS`, `${1:-default}`, `${@:-default}`, `${@:N}`,
+and `${@:N:L}` over shell-like arguments. Invoking fills the editor
+(reviewable, never auto-submitted); an extension command with the
+same name wins. Packages and explicit paths stay out (user/project
+covers the workflow).
+
 ## Environment
 
 Environment variables are read by the provider extension that speaks the

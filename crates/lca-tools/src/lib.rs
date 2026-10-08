@@ -17,6 +17,7 @@ mod open;
 mod ops;
 mod paths;
 mod process;
+pub mod prompts;
 mod pty;
 pub mod shell;
 pub mod skills;

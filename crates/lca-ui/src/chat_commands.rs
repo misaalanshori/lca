@@ -66,7 +66,14 @@ impl Chat {
 
         match name.as_str() {
             "help" => {
-                self.world.notice = Some(help_notice(&self.world.options.slash_commands));
+                // Gh #58: template commands list with their descriptions.
+                let mut commands = self.world.options.slash_commands.clone();
+                if let Some(templates) = self.world.options.hooks.prompt_templates.as_ref() {
+                    for template in templates() {
+                        commands.push(format!("/{}", template.name));
+                    }
+                }
+                self.world.notice = Some(help_notice(&commands));
                 return Action::Continue;
             }
             "hotkeys" => {
@@ -288,10 +295,27 @@ impl Chat {
             }
             return Action::Continue;
         }
+        // Gh #58: prompt templates fill the editor (reviewable, never
+        // auto-submitted). Extensions keep precedence: their names
+        // resolve through invoke_command above.
+        if let Some(expanded) = self.expand_template(&name, &argument) {
+            self.editor.insert_str(&expanded);
+            return Action::Continue;
+        }
         self.world.notice = Some(crate::state::sanitize_text(&format!(
             "unknown command /{name}"
         )));
         Action::Continue
+    }
+
+    /// Expand a `/name args` prompt template into editor text (gh #58):
+    /// `None` when no template carries the name.
+    pub(crate) fn expand_template(&mut self, name: &str, argument: &str) -> Option<String> {
+        let templates = self.world.options.hooks.prompt_templates.clone()?;
+        let template = templates().into_iter().find(|t| t.name == name)?;
+        Some(crate::state::sanitize_block(&lca_tools::prompts::expand(
+            &template, argument,
+        )))
     }
 
     /// Open the session picker over the current session (gh #110:
@@ -428,7 +452,7 @@ pub(crate) fn provider_for(options: &UiOptions) -> CombinedAutocompleteProvider 
         .filter_map(|c| c.strip_suffix(".login"))
         .map(str::to_string)
         .collect();
-    let commands: Vec<SlashCommand> = options
+    let mut commands: Vec<SlashCommand> = options
         .slash_commands
         .iter()
         .map(|command| {
@@ -474,6 +498,20 @@ pub(crate) fn provider_for(options: &UiOptions) -> CombinedAutocompleteProvider 
             }
         })
         .collect();
+    // Gh #58: templates complete with their description and hint.
+    if let Some(templates) = options.hooks.prompt_templates.as_ref() {
+        for template in templates() {
+            if !commands.iter().any(|c| c.name == template.name) {
+                commands.push(SlashCommand {
+                    name: template.name,
+                    description: (!template.description.is_empty()).then_some(template.description),
+                    argument_hint: (!template.argument_hint.is_empty())
+                        .then_some(template.argument_hint),
+                    argument_completions: None,
+                });
+            }
+        }
+    }
     CombinedAutocompleteProvider::new(commands, options.workspace.clone())
 }
 

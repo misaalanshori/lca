@@ -457,6 +457,16 @@ pub(crate) fn skills_roots(cwd: &Path) -> lca_tools::skills::SkillsRoots {
     }
 }
 
+/// The host-side prompt template sources (gh #58): the workspace's
+/// `.lca/prompts` and the user prompts dir. Packages and explicit
+/// paths stay out (user/project covers the workflow).
+pub(crate) fn prompt_roots(cwd: &Path) -> lca_tools::prompts::PromptRoots {
+    lca_tools::prompts::PromptRoots {
+        user: data_dir().join("prompts"),
+        project: cwd.to_path_buf(),
+    }
+}
+
 /// The user data directory for sessions, grants, and state.
 pub fn data_dir() -> PathBuf {
     lca_session::default_data_dir()
