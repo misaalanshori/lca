@@ -100,6 +100,14 @@ pub(crate) fn assemble(
     crate::apply_enablement(&mut registry, |name| {
         crate::lock(grants).extension_enabled(cwd, name) == Some(false)
     });
+    // gh #81: the crash file names what actually loaded.
+    lca_tui::set_crash_extensions(
+        registry
+            .handles()
+            .iter()
+            .map(|handle| handle.name().to_string())
+            .collect(),
+    );
     registry
 }
 

@@ -126,6 +126,10 @@ Dates are UTC.
 - **`builtin:` disable syntax (gh #139).** `lca ext disable
   builtin:compaction-default` writes the same per-project flag the
   loader reads for the plain name (pi's spelling); no second record.
+- **Crash reports + `lca doctor` (gh #81).** The panic hook writes
+  `~/.lca/crash-*.log` (version, loaded extensions, message,
+  faulting frames; newest ten kept) and `lca doctor` dumps version,
+  paths, extensions, config, sessions, and crashes.
 - **Project-local extensions (gh #138).** `.lca/extensions/<name>/`
   (`extension.toml` + `component.wasm`) loads when the project is
   trusted, grants prompting as usual; untrusted projects ignore it.

@@ -114,6 +114,8 @@ mod auth;
 
 /// `lca ext ...`: resolve, consent, store (FR-DIST-*).
 pub mod diagnostics;
+/// `lca doctor`: the diagnostics dump (gh #81).
+pub mod doctor;
 pub use diagnostics::{init_diagnostics, init_diagnostics_with_dir, rotate_log_if_oversized};
 pub mod ext;
 mod headless;
@@ -677,6 +679,8 @@ pub use session_cmds::{
 
 /// Dispatch a parsed command line; returns the process exit code.
 pub async fn run(cli: Cli) -> i32 {
+    // gh #81: crash context before anything that can panic.
+    diagnostics::init_crash_context();
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,
         Err(err) => {
@@ -691,18 +695,14 @@ pub async fn run(cli: Cli) -> i32 {
         eprintln!("error: --provider scopes the --model lookup; pass --model <pattern> with it");
         return exit::USAGE;
     }
-    // #109/#111: contradictory flags are usage errors, said out loud
-    // before routing (route owns no exit code).
+    // #109/#111: contradictory flags are usage errors before routing.
     if let Some(err) = check_flag_contradictions(&cli) {
         eprintln!("error: {err}");
         return exit::USAGE;
     }
     let mut flags = CliFlags::from_cli(&cli);
-    // gh #71: stdin belongs to turn routes only. Subcommands (`ext
-    // install` consent, `auth login` callbacks) and RPC own theirs, so
-    // a probe routes first and input reads only when a turn consumes
-    // it - otherwise `echo y | lca ext install` would eat the answer.
-    // gh #71: turn input reads only when a turn consumes it.
+    // gh #71: a probe routes first so subcommand stdin (consent,
+    // callbacks) never feeds the draft; turns read when consumed.
     let (invocation, attach) = match invoke::prepare_turn_input(&cli, &cwd) {
         Ok(prepared) => prepared,
         Err(code) => return code,
@@ -711,8 +711,7 @@ pub async fn run(cli: Cli) -> i32 {
     if let Err(code) = invoke::prepare_resources(&cli, &cwd, &mut flags) {
         return code;
     }
-    // `--list-models` lists and exits: it outranks the session routes,
-    // pi's "lists, then exits".
+    // `--list-models` lists and exits (pi's "lists, then exits").
     if let Some(search) = cli.list_models.as_deref() {
         return list_models_command(&cwd, search, &flags, &cli.allow_host);
     }
@@ -786,6 +785,7 @@ pub async fn run(cli: Cli) -> i32 {
         Route::Gc { session } => gc_command(&cwd, &session),
         Route::Ext(cmd) => ext::run(cmd, flags.offline).await,
         Route::Auth(cmd) => auth::run(&cmd, &cli.allow_host),
+        Route::Doctor => doctor::run(&crate::data_dir(), &cwd),
     }
 }
 

@@ -295,6 +295,9 @@ pub enum Command {
         #[command(subcommand)]
         cmd: ext::ExtCmd,
     },
+    // gh #81 (pi's diagnostics row).
+    /// Print version, paths, extensions, config, sessions, crashes.
+    Doctor,
 }
 
 /// `lca auth ...`: pi's credential commands, minus the printers (gh

@@ -36,6 +36,18 @@ pub fn rotate_log_if_oversized(path: &Path) {
     let _ = std::fs::rename(path, &spare);
 }
 
+/// Register the crash file's context (gh #81): version and data
+/// dir now (the earliest point anything can panic), extension names
+/// later at every registry assembly. The hook writes the file; this
+/// only stages what it writes.
+pub fn init_crash_context() {
+    lca_tui::set_crash_context(lca_tui::CrashContext {
+        version: crate::version_static().to_string(),
+        data_dir: crate::data_dir(),
+        extensions: Vec::new(),
+    });
+}
+
 /// Install the subscriber for the real data directory.
 /// `Ok(true)` installed it; `Ok(false)` found one already (idempotent —
 /// tests and re-entry never panic); `Err` names a setup failure the

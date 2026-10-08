@@ -12,5 +12,6 @@ pub mod widgets;
 /// The crash restore (#96): install on every entry path so a panic
 /// leaves a usable terminal on every build profile.
 pub use engine::terminal::{
-    install_panic_hook, install_panic_hook_with, panic_hook_installed, panic_restore_bytes,
+    CrashContext, install_panic_hook, install_panic_hook_with, panic_hook_installed,
+    panic_restore_bytes, set_crash_context, set_crash_extensions,
 };

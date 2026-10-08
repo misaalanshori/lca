@@ -949,7 +949,7 @@ fn not_installed(tree: &InstallTree, query: &str) {
 
 /// The first-party native extensions this build carries (labels only:
 /// they have no lockfile record by design, ADR-0013).
-fn builtin_names() -> Vec<&'static str> {
+pub(crate) fn builtin_names() -> Vec<&'static str> {
     let mut names = vec!["hooks-example"];
     if cfg!(feature = "bundled-openai-compat") {
         names.push("openai-compatible");

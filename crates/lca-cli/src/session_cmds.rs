@@ -108,6 +108,8 @@ pub enum Route {
     },
     /// The merged-configuration printout (FR-CFG-2).
     Config,
+    /// The diagnostics dump (gh #81).
+    Doctor,
     /// An extension-management subcommand (FR-DIST-*).
     Ext(ext::ExtCmd),
     /// A credential subcommand (gh #72, pi's `auth`).
@@ -457,6 +459,7 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
             }
         }
         Some(Command::Config) => Route::Config,
+        Some(Command::Doctor) => Route::Doctor,
         Some(Command::Resume { id }) => match id {
             None => Route::ResumeList,
             Some(id) => Route::Interactive {
