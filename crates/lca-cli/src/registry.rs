@@ -167,6 +167,7 @@ mod tests {
             &grants,
             std::sync::Arc::new(|| String::new()),
             &root.join("tmp"),
+            &crate::CliFlags::default(),
         );
         assert!(
             registry.provider("openai-compatible").is_none(),
