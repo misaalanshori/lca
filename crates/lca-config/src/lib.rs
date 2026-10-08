@@ -138,6 +138,7 @@ pub struct Config {
     compaction_reserve_tokens: u64,
     compaction_keep_recent_tokens: u64,
     provider_retry_limit: u64,
+    provider_retry_base_delay_ms: u64,
     tool_timeout_seconds: u64,
     tool_result_limit_bytes: u64,
     tool_max_iterations: u64,
@@ -214,6 +215,7 @@ impl Default for Config {
             compaction_reserve_tokens: 0,
             compaction_keep_recent_tokens: 20_000,
             provider_retry_limit: 3,
+            provider_retry_base_delay_ms: 250,
             tool_timeout_seconds: 120,
             tool_result_limit_bytes: 65536,
             // 0 = unlimited (see `DEFAULT_TOOL_MAX_ITERATIONS`): the
@@ -350,6 +352,7 @@ impl Config {
             "compaction.reserve_tokens",
             "compaction.keep_recent_tokens",
             "provider.retry_limit",
+            "provider.retry_base_delay_ms",
             "tool.timeout_seconds",
             "tool.result_limit_bytes",
             "tool.max_iterations",
@@ -824,6 +827,7 @@ impl Config {
                     this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
                 }
                 "provider.retry_limit"
+                | "provider.retry_base_delay_ms"
                 | "tool.timeout_seconds"
                 | "tool.result_limit_bytes"
                 | "tool.max_iterations"
@@ -862,6 +866,7 @@ impl Config {
             "compaction.reserve_tokens",
             "compaction.keep_recent_tokens",
             "provider.retry_limit",
+            "provider.retry_base_delay_ms",
             "tool.timeout_seconds",
             "tool.result_limit_bytes",
             "tool.max_iterations",
@@ -913,10 +918,13 @@ impl Config {
                 apply(self, key, value.clone())?;
             }
         }
-        if let Some(table) = table_value(table, "provider").and_then(toml::Value::as_table)
-            && let Some(limit) = table.get("retry_limit")
-        {
-            apply(self, "provider.retry_limit", limit.clone())?;
+        if let Some(table) = table_value(table, "provider").and_then(toml::Value::as_table) {
+            if let Some(limit) = table.get("retry_limit") {
+                apply(self, "provider.retry_limit", limit.clone())?;
+            }
+            if let Some(delay) = table.get("retry_base_delay_ms") {
+                apply(self, "provider.retry_base_delay_ms", delay.clone())?;
+            }
         }
         Ok(())
     }
@@ -943,6 +951,9 @@ impl Config {
                 self.compaction_keep_recent_tokens = v;
             }
             ("provider.retry_limit", TypedValue::Count(v)) => self.provider_retry_limit = v,
+            ("provider.retry_base_delay_ms", TypedValue::Count(v)) => {
+                self.provider_retry_base_delay_ms = v;
+            }
             ("tool.timeout_seconds", TypedValue::Count(v)) => self.tool_timeout_seconds = v,
             ("tool.result_limit_bytes", TypedValue::Count(v)) => self.tool_result_limit_bytes = v,
             ("tool.max_iterations", TypedValue::Count(v)) => self.tool_max_iterations = v,

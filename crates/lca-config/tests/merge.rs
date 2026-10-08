@@ -850,3 +850,44 @@ fn display_inventory_loads_with_documented_defaults() {
         "{err}"
     );
 }
+
+// Verifies: gh #83 (the retry inventory) — `provider.retry_base_delay_ms`
+// merges and defaults to the historical 250ms; `net.proxy_url` is
+// not a key (the proxy is env-only by decision): the file loads and
+// the phantom key has no source, so nothing reads it.
+#[test]
+fn retry_base_delay_merges_and_proxy_url_is_refused() {
+    let dir = scratch("retry-inventory");
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: None,
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.provider_retry_base_delay_ms(), 250);
+
+    write(
+        &dir.join("user.toml"),
+        "provider.retry_base_delay_ms = 100\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.provider_retry_base_delay_ms(), 100);
+
+    write(
+        &dir.join("user.toml"),
+        "net.proxy_url = \"http://proxy:8080\"\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("an unknown key never fails the load");
+    assert_eq!(
+        config.source_of("net.proxy_url"),
+        lca_config::MergeSource::Default,
+        "no such key: nothing reads it, env stays the interface"
+    );
+}

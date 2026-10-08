@@ -476,6 +476,7 @@ fn agent_config_for(
         model: model_id.to_string(),
         image_policy,
         retry_limit: config.provider_retry_limit() as u32,
+        retry_base_delay: std::time::Duration::from_millis(config.provider_retry_base_delay_ms()),
         max_iterations: config.tool_max_iterations() as u32,
         extensions: registry.clone(),
         compaction_threshold: config.compaction_threshold(),

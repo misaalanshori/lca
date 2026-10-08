@@ -106,6 +106,12 @@ impl Config {
         self.provider_retry_limit
     }
 
+    /// First retry delay in milliseconds (gh #83, pi's
+    /// `retry.baseDelayMs`); doubles per attempt (FR-CORE-6).
+    pub fn provider_retry_base_delay_ms(&self) -> u64 {
+        self.provider_retry_base_delay_ms
+    }
+
     /// Shell command timeout in seconds (FR-TOOL-5).
     pub fn tool_timeout_seconds(&self) -> u64 {
         self.tool_timeout_seconds

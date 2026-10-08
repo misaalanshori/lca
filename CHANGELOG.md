@@ -126,6 +126,12 @@ Dates are UTC.
 - **`builtin:` disable syntax (gh #139).** `lca ext disable
   builtin:compaction-default` writes the same per-project flag the
   loader reads for the plain name (pi's spelling); no second record.
+- **Retry inventory (gh #83).** `provider.retry_base_delay_ms`
+  tunes the backoff base (pi's `retry.baseDelayMs`); `retry_limit = 0`
+  is pi's `retry.enabled = false`. No transport switch, no max-delay
+  cap, no per-request timeout — documented divergences. The proxy
+  stays env-only by decision (no `net.proxy_url` key: credentials
+  must not land in files).
 - **Crash reports + `lca doctor` (gh #81).** The panic hook writes
   `~/.lca/crash-*.log` (version, loaded extensions, message,
   faulting frames; newest ten kept) and `lca doctor` dumps version,

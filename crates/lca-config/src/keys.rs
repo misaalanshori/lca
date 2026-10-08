@@ -56,6 +56,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "compaction.reserve_tokens",
     "compaction.keep_recent_tokens",
     "provider.retry_limit",
+    "provider.retry_base_delay_ms",
     "tool.timeout_seconds",
     "tool.result_limit_bytes",
     "tool.max_iterations",
