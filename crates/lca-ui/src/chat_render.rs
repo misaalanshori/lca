@@ -387,7 +387,16 @@ impl Chat {
                 } else {
                     None
                 };
-                let glyph = stepper.unwrap_or(if thumb { "┃" } else { "│" });
+                // Gh #164: a hovered or dragged thumb paints solid
+                // (pi's active `"█"` over the idle `"┃"`).
+                let active = thumb && (self.scrollbar_hover || self.scroll_drag.is_some());
+                let glyph = stepper.unwrap_or(if active {
+                    "█"
+                } else if thumb {
+                    "┃"
+                } else {
+                    "│"
+                });
                 let role = if thumb && stepper.is_none() {
                     Role::ScrollbarThumb
                 } else {
@@ -428,6 +437,16 @@ impl Chat {
         lines
     }
 
+    /// The scroll extent for this frame (gh #164): `(content, window)`
+    /// rows - the transcript length against the rows it paints into.
+    /// The scrollbar geometry, the drag math, and the hit-test all read
+    /// this one rule, so they can never disagree.
+    pub(crate) fn scroll_extent(&self, width: u16, height: u16) -> (usize, usize) {
+        let (transcript, dock) = self.sections(width);
+        let window = height.saturating_sub(dock.len() as u16) as usize;
+        (transcript.len(), window)
+    }
+
     /// The scrollbar `viewport` paints for this frame (gh #35): the same
     /// inputs and the same pure geometry, so the render side paints it
     /// here and the input side can keep it out of a copy - one rule, two
@@ -443,9 +462,7 @@ impl Chat {
         }
         // Gh #82: `hidden` paints nothing; `always` paints a full-track
         // bar even when the transcript fits; `auto` is pi's geometry.
-        let (transcript, dock) = self.sections(width);
-        let window = height.saturating_sub(dock.len() as u16) as usize;
-        let content = transcript.len();
+        let (content, window) = self.scroll_extent(width, height);
         let from_bottom = (scroll as usize).min(content.saturating_sub(window));
         scrollbar_geometry_mode(
             content,

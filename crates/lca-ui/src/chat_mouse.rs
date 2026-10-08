@@ -285,3 +285,97 @@ impl Chat {
 fn wrap_count(line: &str, inner: usize) -> usize {
     lca_tui::engine::text::wrap_text_with_ansi(line, inner.max(1)).len()
 }
+
+// Gh #164: the scrollbar half of pointer routing. The renderer owns
+// text selection, so a drag must never reach it; the geometry lives
+// here with the frame, so the hit-test, the drag math, and the paint
+// share one rule (pi splits the same work between `tui-alt-screen.ts`
+// and `layout.ts` because pi's renderer owns its geometry - LCA's
+// does not, hence the interface side).
+
+/// What a press on the scrollbar column means (gh #164): the stepper
+/// cells keep their prompt-jump clicks (gh #173), a track row starts a
+/// drag, anything else misses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarHit {
+    /// A track row: starts a scrollbar drag.
+    Track,
+    /// A stepper cell (▲/▼): keeps its click.
+    Stepper,
+    /// Not on the scrollbar.
+    Miss,
+}
+
+impl Chat {
+    /// Hit-test the scrollbar column for this frame (gh #164): pure
+    /// over the same geometry the frame paints. Alt-screen only, like
+    /// every other click path.
+    pub fn scrollbar_hit(
+        &self,
+        col: u16,
+        row: u16,
+        width: u16,
+        height: u16,
+        scroll: u16,
+    ) -> ScrollbarHit {
+        if !self.screen_mode {
+            return ScrollbarHit::Miss;
+        }
+        let Some(geometry) = self.scrollbar_for_frame(width, height, scroll) else {
+            return ScrollbarHit::Miss;
+        };
+        if col != geometry.column || row >= geometry.rows {
+            return ScrollbarHit::Miss;
+        }
+        if row == 0 || row + 1 >= geometry.rows {
+            return ScrollbarHit::Stepper;
+        }
+        ScrollbarHit::Track
+    }
+
+    /// Refresh the scrollbar hover flag from a pointer cell (gh #164):
+    /// pi re-evaluates hover on every mouse event, so a drag release
+    /// off the track does not leave a stale solid thumb behind.
+    pub fn refresh_scrollbar_hover(
+        &mut self,
+        col: u16,
+        row: u16,
+        width: u16,
+        height: u16,
+        scroll: u16,
+    ) {
+        self.scrollbar_hover =
+            self.scrollbar_hit(col, row, width, height, scroll) == ScrollbarHit::Track;
+    }
+
+    /// Map a drag pointer row to a scroll offset (gh #164, pi's
+    /// `scrollScrollbarToPointer`): the thumb slides so the grab point
+    /// follows the pointer, clamped to the track, with scroll measured
+    /// from the live bottom. `None` when no scrollbar paints.
+    pub fn scrollbar_drag_scroll(
+        &self,
+        width: u16,
+        height: u16,
+        scroll: u16,
+        pointer_row: u16,
+        grab: u16,
+    ) -> Option<u16> {
+        if !self.screen_mode {
+            return None;
+        }
+        let geometry = self.scrollbar_for_frame(width, height, scroll)?;
+        let (content, window) = self.scroll_extent(width, height);
+        if content <= window || window == 0 {
+            return None;
+        }
+        let max = content.saturating_sub(window);
+        let travel = geometry.rows.saturating_sub(geometry.thumb_height) as f64;
+        let offset = f64::from(pointer_row.saturating_sub(grab)).clamp(0.0, travel);
+        let top = if travel <= 0.0 {
+            0.0
+        } else {
+            (offset / travel * max as f64).round()
+        };
+        u16::try_from(max.saturating_sub(top as usize)).ok()
+    }
+}

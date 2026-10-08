@@ -111,6 +111,14 @@ pub struct AltScreenRenderer {
     clicked_cell: Option<(u16, u16)>,
     /// The OSC-8 URL a completed click landed on, for the loop to open.
     clicked_link: Option<String>,
+    /// Whether the pointer hovers the scrollbar (gh #164): the frame
+    /// paints the thumb solid while set. Cleared whenever an overlay
+    /// covers the viewport (pi's `stopScrollbarHover`).
+    scrollbar_hover: bool,
+    /// Whether a scrollbar drag is active (gh #164): motion and release
+    /// belong to the drag, never to text selection. The grab math lives
+    /// with the geometry in the interface; the renderer only suppresses.
+    scrollbar_drag: bool,
 }
 
 impl Default for AltScreenRenderer {
@@ -138,6 +146,8 @@ impl AltScreenRenderer {
             press_cell: None,
             clicked_cell: None,
             clicked_link: None,
+            scrollbar_hover: false,
+            scrollbar_drag: false,
         }
     }
 
@@ -272,8 +282,42 @@ impl AltScreenRenderer {
         false
     }
 
+    /// Whether the pointer hovers the scrollbar (gh #164).
+    pub fn scrollbar_hovered(&self) -> bool {
+        self.scrollbar_hover
+    }
+
+    /// Set the scrollbar hover flag (gh #164): the interface owns the
+    /// hit-test (it owns the geometry), the renderer only keeps the flag
+    /// the frame reads.
+    pub fn set_scrollbar_hover(&mut self, hover: bool) {
+        self.scrollbar_hover = hover;
+    }
+
+    /// Whether a scrollbar drag owns the gesture (gh #164).
+    pub fn scrollbar_dragging(&self) -> bool {
+        self.scrollbar_drag
+    }
+
+    /// Begin a scrollbar drag (gh #164): pi clears the selection on a
+    /// scrollbar press, so the drag never extends a stale highlight.
+    pub fn begin_scrollbar_drag(&mut self) {
+        self.selection.clear();
+        self.scrollbar_drag = true;
+    }
+
+    /// End a scrollbar drag (gh #164).
+    pub fn end_scrollbar_drag(&mut self) {
+        self.scrollbar_drag = false;
+    }
+
     /// Handle one mouse event against the current rendered lines.
     pub fn handle_mouse(&mut self, mouse: SgrMouse) -> bool {
+        // A scrollbar drag owns motion and release outright (gh #164):
+        // the gesture scrolls, it never selects.
+        if self.scrollbar_drag {
+            return true;
+        }
         let motion = mouse.bits & 32 != 0;
         let wheel = mouse.bits & 64 != 0;
         let button = mouse.bits & 3;
@@ -669,5 +713,41 @@ mod tests {
             press: false,
         });
         assert!(!r.tick_auto_scroll());
+    }
+}
+
+#[cfg(test)]
+mod scrollbar_tests {
+    use super::*;
+
+    // Verifies: gh #164 - while a scrollbar drag is active the renderer
+    // consumes motion without touching the selection.
+    #[test]
+    fn a_scrollbar_drag_suppresses_selection() {
+        let mut renderer = AltScreenRenderer::new();
+        renderer.previous = vec!["line one".to_string()];
+        renderer.begin_scrollbar_drag();
+        assert!(renderer.scrollbar_dragging());
+        assert!(renderer.handle_mouse(SgrMouse {
+            bits: 32,
+            x: 79,
+            y: 2,
+            press: true,
+        }));
+        assert!(!renderer.selection.is_active(), "no selection starts");
+        assert!(renderer.selected_text().is_empty());
+        renderer.end_scrollbar_drag();
+        assert!(!renderer.scrollbar_dragging());
+    }
+
+    // Verifies: gh #164 - hover is a flag round-trip; selection still
+    // starts when no drag is active.
+    #[test]
+    fn hover_reports_without_side_effects() {
+        let mut renderer = AltScreenRenderer::new();
+        renderer.set_scrollbar_hover(true);
+        assert!(renderer.scrollbar_hovered());
+        renderer.set_scrollbar_hover(false);
+        assert!(!renderer.scrollbar_hovered());
     }
 }

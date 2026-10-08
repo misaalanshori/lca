@@ -19,9 +19,11 @@ use lca_tui::engine::terminal::{InputHandler, ProcessTerminal, ResizeHandler, Te
 
 use crate::ModelPicker;
 use crate::chat::{Chat, ClickOutcome};
+use crate::chat_mouse::ScrollbarHit;
 use crate::state::{
     Action, DialogExchange, PermissionModal, PromptRequest, TurnChannels, TurnRunner, UiOptions,
 };
+use lca_tui::engine::core::{MouseButton, MouseEvent};
 
 /// The active screen renderer.
 enum Screen {
@@ -124,6 +126,28 @@ impl Screen {
     fn set_scroll(&mut self, scroll: u16) {
         if let Screen::Alt(r) = self {
             r.scroll = scroll;
+        }
+    }
+
+    /// Mirror the scrollbar hover flag into the renderer (gh #164).
+    fn set_scrollbar_hover(&mut self, hover: bool) {
+        if let Screen::Alt(r) = self {
+            r.set_scrollbar_hover(hover);
+        }
+    }
+
+    /// Begin a scrollbar drag: the renderer drops selection so the
+    /// gesture scrolls instead (gh #164).
+    fn begin_scrollbar_drag(&mut self) {
+        if let Screen::Alt(r) = self {
+            r.begin_scrollbar_drag();
+        }
+    }
+
+    /// End a scrollbar drag (gh #164).
+    fn end_scrollbar_drag(&mut self) {
+        if let Screen::Alt(r) = self {
+            r.end_scrollbar_drag();
         }
     }
 
@@ -297,6 +321,89 @@ fn keybinding_problems(
 }
 
 /// Handle one raw input event (R16): capability replies, mouse, and keys.
+/// Route one normalized mouse event (gh #164, the keystone dispatch):
+/// the scrollbar owns its column (drag scrolls, steppers keep their
+/// clicks), everything else falls through to the renderer's selection
+/// and the click paths below. Returns whether the gesture is consumed.
+/// Wheels never land here - the wheel arm in [`handle_input`] owns them.
+fn handle_mouse_event(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) -> bool {
+    if !chat.screen_mode {
+        return false;
+    }
+    let (width, height) = chat.world.size;
+    // Pi stops scrollbar hover while an overlay owns the viewport.
+    if chat.picker_open() || chat.world.modal_active() {
+        chat.scrollbar_hover = false;
+        screen.set_scrollbar_hover(false);
+        return false;
+    }
+    match event {
+        MouseEvent::Down {
+            col,
+            row,
+            button: MouseButton::Left,
+            ..
+        } => {
+            if chat.scrollbar_hit(col, row, width, height, screen.scroll()) != ScrollbarHit::Track {
+                return false;
+            }
+            // Pi's grab: on the thumb the pointer keeps its offset, off
+            // it the thumb centers under the pointer.
+            let grab = chat
+                .scrollbar_for_frame(width, height, screen.scroll())
+                .map(|geometry| {
+                    if row >= geometry.thumb_top
+                        && row < geometry.thumb_top.saturating_add(geometry.thumb_height)
+                    {
+                        row.saturating_sub(geometry.thumb_top)
+                    } else {
+                        geometry.thumb_height / 2
+                    }
+                })
+                .unwrap_or(0);
+            chat.scroll_drag = Some(grab);
+            screen.begin_scrollbar_drag();
+            true
+        }
+        MouseEvent::Move {
+            col,
+            row,
+            button: None,
+            ..
+        } => {
+            chat.refresh_scrollbar_hover(col, row, width, height, screen.scroll());
+            screen.set_scrollbar_hover(chat.scrollbar_hover);
+            false
+        }
+        MouseEvent::Move {
+            row,
+            button: Some(_),
+            ..
+        } => {
+            let Some(grab) = chat.scroll_drag else {
+                return false;
+            };
+            if let Some(scroll) =
+                chat.scrollbar_drag_scroll(width, height, screen.scroll(), row, grab)
+            {
+                screen.set_scroll(scroll);
+            }
+            true
+        }
+        MouseEvent::Up { col, row, .. } => {
+            chat.refresh_scrollbar_hover(col, row, width, height, screen.scroll());
+            screen.set_scrollbar_hover(chat.scrollbar_hover);
+            if chat.scroll_drag.take().is_some() {
+                screen.end_scrollbar_drag();
+                // A drag release never copies: selection never started.
+                return true;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_input(
     data: &str,
@@ -327,6 +434,16 @@ fn handle_input(
     // pi's select-list wheel path), and motion and clicks over
     // extension regions, which the host maps first (gh #172).
     if data.starts_with("\x1b[<") {
+        // Gh #164: the keystone normalizes first. Press/motion/release
+        // route through the dispatch below; the wheel keeps its existing
+        // path (shift-jump, extension regions, the popup, transcript).
+        if let Some(sgr) = lca_tui::engine::alt_screen::parse_sgr_mouse(data) {
+            let event =
+                lca_tui::engine::core::MouseEvent::from_sgr(sgr.bits, sgr.x, sgr.y, sgr.press);
+            if handle_mouse_event(event, chat, screen) {
+                return InputResult::Continue;
+            }
+        }
         if let Some(mouse) = lca_tui::engine::alt_screen::parse_sgr_mouse(data)
             && mouse.bits & 64 != 0
         {

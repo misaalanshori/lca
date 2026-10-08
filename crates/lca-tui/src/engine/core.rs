@@ -11,12 +11,14 @@
 //! viewport, so viewport-relative overlays are simpler and sufficient;
 //! `ponytail:` revisit if a bottom-anchored main-screen overlay is needed.
 //!
-//! Not ported (R11): pi's `Container` component tree and its normalized
-//! mouse dispatch (`MouseEvent`/`MouseResult`/`Focusable`). The interface
-//! composes line strings directly and the renderer owns selection
+//! Not ported (R11): pi's `Container` component tree and its
+//! `MouseResult`/`Focusable` dispatch. The interface composes line
+//! strings directly and the renderer owns selection
 //! (`engine/alt_screen.rs`), so the tree had no caller; it was deleted
-//! rather than left as dead machinery. The `Component` trait survives
-//! because the primitive widgets implement it.
+//! rather than left as dead machinery. The normalized `MouseEvent` and
+//! the `MouseRegion`/`MouseRegistry` hit-test table returned for gh
+//! #164 (keystone only - no tree, no focus model). The `Component`
+//! trait survives because the primitive widgets implement it.
 
 use super::text::visible_width;
 
@@ -121,6 +123,200 @@ pub struct Rect {
     pub width: u16,
     /// Height.
     pub height: u16,
+}
+
+/// Which mouse button an event names (gh #164, pi's `TuiMouseButton`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    /// SGR button bits 0.
+    Left,
+    /// SGR button bits 1.
+    Middle,
+    /// SGR button bits 2.
+    Right,
+    /// No button: a hover, a release, or an unrecognized bit pattern.
+    None,
+}
+
+impl MouseButton {
+    /// Decode SGR's low two button bits.
+    pub fn from_sgr_bits(bits: u16) -> Self {
+        match bits & 3 {
+            0 => MouseButton::Left,
+            1 => MouseButton::Middle,
+            2 => MouseButton::Right,
+            _ => MouseButton::None,
+        }
+    }
+}
+
+/// The modifier keys riding on a mouse event (gh #164): SGR value 4 is
+/// shift, 8 is alt/meta, 16 is ctrl.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Modifiers {
+    /// Whether shift was held.
+    pub shift: bool,
+    /// Whether alt/meta was held.
+    pub alt: bool,
+    /// Whether ctrl was held.
+    pub ctrl: bool,
+}
+
+impl Modifiers {
+    /// Decode SGR's modifier bits.
+    pub fn from_sgr_bits(bits: u16) -> Self {
+        Modifiers {
+            shift: bits & 4 != 0,
+            alt: bits & 8 != 0,
+            ctrl: bits & 16 != 0,
+        }
+    }
+}
+
+/// A normalized cell-based mouse event (gh #164, pi's `TuiMouseEvent`
+/// without the component tree: R11 deleted the tree as dead machinery,
+/// and only the event half returns). Coordinates are zero-based cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseEvent {
+    /// A button press.
+    Down {
+        /// Zero-based column.
+        col: u16,
+        /// Zero-based row.
+        row: u16,
+        /// The pressed button.
+        button: MouseButton,
+        /// Held modifiers.
+        modifiers: Modifiers,
+    },
+    /// A button release.
+    Up {
+        /// Zero-based column.
+        col: u16,
+        /// Zero-based row.
+        row: u16,
+        /// The released button (`None` when the terminal reports 3).
+        button: MouseButton,
+        /// Held modifiers.
+        modifiers: Modifiers,
+    },
+    /// Pointer motion: a drag when a button is held, a hover (pi's
+    /// 1003 any-motion) when none is.
+    Move {
+        /// Zero-based column.
+        col: u16,
+        /// Zero-based row.
+        row: u16,
+        /// The held button, or `None` for a hover.
+        button: Option<MouseButton>,
+        /// Held modifiers.
+        modifiers: Modifiers,
+    },
+    /// A wheel tick: negative scrolls up, positive scrolls down.
+    Wheel {
+        /// Zero-based column.
+        col: u16,
+        /// Zero-based row.
+        row: u16,
+        /// -1 for up, +1 for down.
+        delta: i8,
+        /// Held modifiers.
+        modifiers: Modifiers,
+    },
+}
+
+impl MouseEvent {
+    /// Normalize one parsed SGR report: SGR coordinates are 1-based,
+    /// bit 64 is the wheel, bit 32 is motion, the `M`/`m` suffix is the
+    /// press/release edge.
+    pub fn from_sgr(bits: u16, x: u16, y: u16, press: bool) -> Self {
+        let col = x.saturating_sub(1);
+        let row = y.saturating_sub(1);
+        let modifiers = Modifiers::from_sgr_bits(bits);
+        if bits & 64 != 0 {
+            let delta = if bits & 3 == 0 { -1 } else { 1 };
+            return MouseEvent::Wheel {
+                col,
+                row,
+                delta,
+                modifiers,
+            };
+        }
+        if bits & 32 != 0 {
+            let held = match MouseButton::from_sgr_bits(bits) {
+                MouseButton::None => None,
+                held => Some(held),
+            };
+            return MouseEvent::Move {
+                col,
+                row,
+                button: held,
+                modifiers,
+            };
+        }
+        let button = MouseButton::from_sgr_bits(bits);
+        if press {
+            MouseEvent::Down {
+                col,
+                row,
+                button,
+                modifiers,
+            }
+        } else {
+            MouseEvent::Up {
+                col,
+                row,
+                button,
+                modifiers,
+            }
+        }
+    }
+}
+
+/// An interactive rectangle a frame registers for hit-testing (gh
+/// #164, pi's `MouseRegion` without the wrapped component: LCA
+/// composes line strings, so regions are values the dispatcher
+/// queries, not wrappers around a tree).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseRegion {
+    /// The viewport rectangle.
+    pub rect: Rect,
+    /// Who owns a hit inside it.
+    pub target: &'static str,
+}
+
+/// The per-dispatch region table (gh #164): frames register their
+/// interactive rectangles, and a hit resolves to the most recently
+/// registered (topmost) region covering the cell.
+#[derive(Debug, Default)]
+pub struct MouseRegistry {
+    regions: Vec<MouseRegion>,
+}
+
+impl MouseRegistry {
+    /// An empty table.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register one interactive rectangle for this dispatch.
+    pub fn register(&mut self, rect: Rect, target: &'static str) {
+        self.regions.push(MouseRegion { rect, target });
+    }
+
+    /// The topmost target covering `(col, row)`, if any.
+    pub fn hit(&self, col: u16, row: u16) -> Option<&'static str> {
+        self.regions
+            .iter()
+            .rev()
+            .find(|region| {
+                col >= region.rect.col
+                    && col < region.rect.col.saturating_add(region.rect.width)
+                    && row >= region.rect.row
+                    && row < region.rect.row.saturating_add(region.rect.height)
+            })
+            .map(|region| region.target)
+    }
 }
 
 /// Resolve an overlay's rectangle from its options and rendered height.
@@ -336,5 +532,102 @@ mod tests {
         let lines = vec!["ok".to_string(), "this is too long".to_string()];
         assert_eq!(width_violation(&lines, 5), Some((1, 16)));
         assert_eq!(width_violation(&lines, 80), None);
+    }
+}
+
+#[cfg(test)]
+mod mouse_tests {
+    use super::*;
+
+    // Verifies: gh #164 - SGR press/release/motion/wheel normalize to
+    // the keystone event, coordinates zero-based, modifiers decoded.
+    #[test]
+    fn sgr_press_becomes_a_left_down() {
+        assert_eq!(
+            MouseEvent::from_sgr(0, 10, 5, true),
+            MouseEvent::Down {
+                col: 9,
+                row: 4,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            }
+        );
+    }
+
+    // Verifies: gh #164 - a release normalizes to Up.
+    #[test]
+    fn sgr_release_becomes_an_up() {
+        assert!(matches!(
+            MouseEvent::from_sgr(0, 10, 5, false),
+            MouseEvent::Up { col: 9, row: 4, .. }
+        ));
+    }
+
+    // Verifies: gh #164 - motion without a button is a hover; motion
+    // with one names it (pi's 1003 any-motion coordinates).
+    #[test]
+    fn motion_with_and_without_buttons() {
+        // A hover reports motion with button bits 3 (xterm's no-button).
+        assert!(matches!(
+            MouseEvent::from_sgr(32 | 3, 3, 3, true),
+            MouseEvent::Move { button: None, .. }
+        ));
+        assert!(matches!(
+            MouseEvent::from_sgr(32 | 1, 3, 3, true),
+            MouseEvent::Move {
+                button: Some(MouseButton::Middle),
+                ..
+            }
+        ));
+    }
+
+    // Verifies: gh #164 - wheel direction maps to a signed delta, with
+    // shift/alt/ctrl riding along.
+    #[test]
+    fn wheel_maps_direction_and_modifiers() {
+        assert!(matches!(
+            MouseEvent::from_sgr(64, 3, 3, true),
+            MouseEvent::Wheel { delta: -1, .. }
+        ));
+        assert!(matches!(
+            MouseEvent::from_sgr(64 | 1 | 4 | 8 | 16, 3, 3, true),
+            MouseEvent::Wheel {
+                delta: 1,
+                modifiers: Modifiers {
+                    shift: true,
+                    alt: true,
+                    ctrl: true,
+                },
+                ..
+            }
+        ));
+    }
+
+    // Verifies: gh #164 - the registry resolves the topmost region,
+    // and misses cleanly.
+    #[test]
+    fn regions_hit_topmost_first() {
+        let mut registry = MouseRegistry::new();
+        registry.register(
+            Rect {
+                row: 0,
+                col: 0,
+                width: 10,
+                height: 10,
+            },
+            "bottom",
+        );
+        registry.register(
+            Rect {
+                row: 2,
+                col: 2,
+                width: 4,
+                height: 4,
+            },
+            "top",
+        );
+        assert_eq!(registry.hit(3, 3), Some("top"));
+        assert_eq!(registry.hit(0, 0), Some("bottom"));
+        assert_eq!(registry.hit(20, 20), None);
     }
 }

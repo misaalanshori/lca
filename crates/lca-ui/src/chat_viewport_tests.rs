@@ -4,6 +4,7 @@
 //! ceiling (gate 11) with these rows in it.
 
 use super::chat;
+use crate::chat_mouse::ScrollbarHit;
 
 // Verifies: gh #35 (the headline) - in fullscreen the dock pins: the
 // editor and footer occupy the same rows whatever the transcript's
@@ -570,4 +571,103 @@ fn scrollbar_mode_hides_or_forces_the_bar() {
         frame.iter().any(|line| line.trim_end().ends_with('▼')),
         "always paints both ends: {frame:?}"
     );
+}
+
+// Verifies: gh #164 - a Down on the scrollbar track (not the stepper
+// cells) starts a drag; the steppers keep their prompt-jump clicks,
+// and other columns miss.
+#[test]
+fn scrollbar_track_and_stepper_hit_test() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    for i in 0..40 {
+        chat.transcript.push_user(format!("question {i}"));
+        chat.transcript.append_text(&format!("answer {i}"));
+        chat.transcript.finish_assistant();
+    }
+    let (w, h) = (80u16, 24u16);
+    assert_eq!(
+        chat.scrollbar_hit(79, 5, w, h, 0),
+        ScrollbarHit::Track,
+        "a track row starts a drag"
+    );
+    assert_eq!(
+        chat.scrollbar_hit(79, 0, w, h, 0),
+        ScrollbarHit::Stepper,
+        "the ▲ cell keeps its jump click"
+    );
+    assert_eq!(
+        chat.scrollbar_hit(5, 5, w, h, 0),
+        ScrollbarHit::Miss,
+        "content columns miss"
+    );
+}
+
+// Verifies: gh #164 - a drag maps pointer Y to scroll (pi's
+// `scrollScrollbarToPointer`): the track top holds the oldest lines,
+// the track bottom returns to live.
+#[test]
+fn scrollbar_drag_maps_pointer_y_to_scroll() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    for i in 0..40 {
+        chat.transcript.push_user(format!("question {i}"));
+        chat.transcript.append_text(&format!("answer {i}"));
+        chat.transcript.finish_assistant();
+    }
+    let (w, h) = (80u16, 24u16);
+    let top = chat
+        .scrollbar_drag_scroll(w, h, 0, 0, 0)
+        .expect("a drag maps");
+    assert!(top > 0, "the track top scrolls away from live");
+    let frame = chat.viewport(w, h, top);
+    let plain: Vec<String> = frame
+        .iter()
+        .map(|row| lca_tui::engine::text::strip_terminal_sequences(row))
+        .collect();
+    assert!(
+        plain.iter().any(|row| row.contains("question 0")),
+        "the oldest exchange is on screen: {plain:?}"
+    );
+    let bottom = chat
+        .scrollbar_drag_scroll(w, h, top, h - 1, 0)
+        .expect("a drag maps");
+    assert_eq!(bottom, 0, "the track bottom returns to live");
+}
+
+// Verifies: gh #164 - a hovered or dragged thumb paints solid (pi's
+// active `"█"` over the idle `"┃"`).
+#[test]
+fn a_hovered_thumb_paints_solid() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    for i in 0..40 {
+        chat.transcript.push_user(format!("question {i}"));
+        chat.transcript.append_text(&format!("answer {i}"));
+        chat.transcript.finish_assistant();
+    }
+    let (w, h) = (80u16, 24u16);
+    let idle: String = chat.viewport(w, h, 0).join("\n");
+    assert!(idle.contains('┃'), "idle thumbs paint thin");
+    chat.scrollbar_hover = true;
+    let hovered: String = chat.viewport(w, h, 0).join("\n");
+    assert!(hovered.contains('█'), "a hovered thumb paints solid");
+}
+
+// Verifies: gh #164 - hover refreshes on every event, so a release off
+// the track clears a stale solid thumb.
+#[test]
+fn hover_clears_when_the_pointer_leaves_the_track() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    for i in 0..40 {
+        chat.transcript.push_user(format!("question {i}"));
+        chat.transcript.append_text(&format!("answer {i}"));
+        chat.transcript.finish_assistant();
+    }
+    let (w, h) = (80u16, 24u16);
+    chat.refresh_scrollbar_hover(79, 5, w, h, 0);
+    assert!(chat.scrollbar_hover, "on the track hovers");
+    chat.refresh_scrollbar_hover(5, 5, w, h, 0);
+    assert!(!chat.scrollbar_hover, "off the track clears");
 }

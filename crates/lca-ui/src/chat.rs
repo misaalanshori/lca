@@ -138,6 +138,15 @@ pub struct Chat {
     /// When the last lone Escape landed (gh #132): a second one within
     /// pi's 500 ms window acts (tree/fork/none), anything else re-arms.
     pub(crate) last_escape: Option<std::time::Instant>,
+    /// Whether the pointer hovers the scrollbar (gh #164): the frame
+    /// paints the thumb solid while set. The loop mirrors it into the
+    /// renderer and clears it whenever an overlay covers the viewport
+    /// (pi's `stopScrollbarHover`).
+    pub scrollbar_hover: bool,
+    /// An active scrollbar drag's grab offset in rows from the thumb top
+    /// (gh #164, pi's `grabOffset`): motion maps pointer Y to scroll
+    /// while set, and text selection stays off.
+    pub scroll_drag: Option<u16>,
     /// The transcript's line count at the last frame (gh #35): scroll is
     /// measured from the live bottom, so growth is what tells a new line
     /// from a re-wrap when holding the reader's place.
@@ -283,6 +292,8 @@ impl Chat {
             pending_ctrl_x: false,
             jump_target: None,
             last_escape: None,
+            scrollbar_hover: false,
+            scroll_drag: None,
             last_transcript_len: None,
             last_render_width: 0,
             search: None,
