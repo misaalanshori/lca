@@ -274,10 +274,54 @@ impl Chat {
 
         // The `/settings` selector owns the keyboard while open (gh #30):
         // up/down move, Enter/→/← act (a sub-picker row opens its picker -
-        // the selector steps aside and comes back when it closes - and
-        // anything else cycles the value through the one persist seam),
-        // q/Escape close.
+        // the selector steps aside and comes back when it closes - a
+        // free-text row edits inline (gh #174), and anything else cycles
+        // the value through the one persist seam), q/Escape close.
+        // While a row edits, keystrokes land in its buffer; navigation
+        // waits for Enter (apply) or Escape (cancel).
         if let Some(mut picker) = self.settings_picker.take() {
+            if picker.editing.is_some() {
+                match key {
+                    Some("escape") => {
+                        picker.editing = None;
+                        self.settings_picker = Some(picker);
+                    }
+                    Some("enter") => {
+                        let buffer = picker.editing.take().unwrap_or_default();
+                        let row = picker.rows.get(picker.selected).cloned();
+                        if let Some(row) = row {
+                            // An untouched buffer writes nothing: the file
+                            // keeps its comments and mtime.
+                            let notice = if buffer.trim() == row.value {
+                                format!("{} = {} (unchanged)", row.key, row.value)
+                            } else {
+                                self.apply_setting(&row.key, buffer.trim())
+                            };
+                            self.world.notice = Some(crate::state::sanitize_block(&notice));
+                        }
+                        // Re-read like the cycle path, so value and
+                        // source show what actually won.
+                        picker.rows = self.settings_rows();
+                        picker.selected = picker.selected.min(picker.rows.len().saturating_sub(1));
+                        self.settings_picker = Some(picker);
+                    }
+                    Some("backspace") => {
+                        if let Some(buffer) = picker.editing.as_mut() {
+                            buffer.pop();
+                        }
+                        self.settings_picker = Some(picker);
+                    }
+                    _ => {
+                        if let Some(text) = printable(data).or_else(|| paste_text(data))
+                            && let Some(buffer) = picker.editing.as_mut()
+                        {
+                            buffer.push_str(&text);
+                        }
+                        self.settings_picker = Some(picker);
+                    }
+                }
+                return Some(Action::Continue);
+            }
             match key {
                 Some("escape") | Some("q") => {}
                 Some("up") => {
@@ -293,21 +337,35 @@ impl Chat {
                     let forward = key != Some("left");
                     // The key is cloned out before the match so the row
                     // borrow ends: one arm re-borrows the picker mutably.
-                    let row = picker.rows.get(picker.selected).map(|row| row.key.clone());
-                    match row.as_deref() {
+                    let row = picker.rows.get(picker.selected).cloned();
+                    match row.as_ref().map(|row| row.key.as_str()) {
                         // A sub-picker row steps aside: the sub-picker's
                         // own key arm sits above this one, so the selector
                         // stays open underneath and is back on screen the
                         // moment it closes (pi's submenu shape - the list
                         // is never lost).
-                        Some("ui.theme") => self.open_theme_picker(),
-                        Some("thinking") => self.open_thinking_picker(),
+                        Some("ui.theme") => {
+                            self.open_theme_picker();
+                            self.settings_picker = Some(picker);
+                        }
+                        Some("thinking") => {
+                            self.open_thinking_picker();
+                            self.settings_picker = Some(picker);
+                        }
                         _ => {
-                            let notice = self.cycle_setting(&mut picker, forward);
-                            self.world.notice = Some(crate::state::sanitize_block(&notice));
+                            // A row with no cycle values and no sub-picker
+                            // edits inline (gh #174): the buffer starts
+                            // as the stored value.
+                            if row.as_ref().is_some_and(|row| row.values.is_empty()) {
+                                picker.editing = Some(row.map(|row| row.value).unwrap_or_default());
+                                self.settings_picker = Some(picker);
+                            } else {
+                                let notice = self.cycle_setting(&mut picker, forward);
+                                self.world.notice = Some(crate::state::sanitize_block(&notice));
+                                self.settings_picker = Some(picker);
+                            }
                         }
                     }
-                    self.settings_picker = Some(picker);
                 }
                 _ => {
                     self.settings_picker = Some(picker);

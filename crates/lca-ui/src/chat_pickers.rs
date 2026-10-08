@@ -194,6 +194,9 @@ pub struct SettingsPicker {
     pub rows: Vec<crate::state::SettingRow>,
     /// The highlighted row.
     pub selected: usize,
+    /// The inline-edit buffer while a free-text row edits (gh #174):
+    /// `Some` means keystrokes land here, not in navigation.
+    pub editing: Option<String>,
 }
 
 /// The thinking levels and their descriptions, from pi's

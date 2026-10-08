@@ -16,6 +16,7 @@ const HINT_TREE: &str = "↑↓ move · enter show · esc close";
 const HINT_GRANTS: &str = "↑↓ move · enter revoke · esc close";
 const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
 const HINT_SETTINGS: &str = "↑↓ move · enter/←→ change · q/esc close";
+const HINT_SETTINGS_EDIT: &str = "type the value · enter apply · esc cancel";
 const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
 const HINT_SCOPED_MODELS: &str = "↑↓ move · space toggle · a all · enter save · esc close";
 
@@ -335,15 +336,35 @@ impl Chat {
             );
             return true;
         }
+        // Gh #174: categorized settings - consecutive rows sharing a
+        // section share one divider; the cursor only ever sits on rows
+        // (selection is row-indexed, so headers skip themselves).
         if let Some(picker) = &self.settings_picker {
             let mut body = vec!["key = value [source]; /grants for permissions".to_string()];
             body.push(String::new());
+            let mut section: &str = "";
+            let mut selected_body = 2 + picker.selected;
             for (index, row) in picker.rows.iter().enumerate() {
+                if !row.section.is_empty() && row.section != section {
+                    section = row.section.as_str();
+                    body.push(format!(" ── {section} ──"));
+                    if index <= picker.selected {
+                        selected_body += 1;
+                    }
+                }
                 let cur = if index == picker.selected { '>' } else { ' ' };
-                body.push(format!(
-                    " {cur} {} = {} [{}]",
-                    row.key, row.value, row.source
-                ));
+                // Gh #174: a row being edited shows its buffer, not its
+                // stored value.
+                if index == picker.selected
+                    && let Some(buffer) = picker.editing.as_ref()
+                {
+                    body.push(format!(" {cur} {} = {}█", row.key, buffer));
+                } else {
+                    body.push(format!(
+                        " {cur} {} = {} [{}]",
+                        row.key, row.value, row.source
+                    ));
+                }
             }
             self.picker_overlay(
                 viewport,
@@ -351,9 +372,13 @@ impl Chat {
                 height,
                 "settings",
                 &body,
-                HINT_SETTINGS,
+                if picker.editing.is_some() {
+                    HINT_SETTINGS_EDIT
+                } else {
+                    HINT_SETTINGS
+                },
                 &self.theme,
-                Some(2 + picker.selected),
+                Some(selected_body),
             );
             return true;
         }

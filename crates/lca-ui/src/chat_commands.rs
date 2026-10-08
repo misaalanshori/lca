@@ -106,7 +106,11 @@ impl Chat {
             // command half).
             "settings" if self.world.options.hooks.settings_rows.is_some() => {
                 let rows = self.settings_rows();
-                self.settings_picker = Some(SettingsPicker { rows, selected: 0 });
+                self.settings_picker = Some(SettingsPicker {
+                    rows,
+                    selected: 0,
+                    editing: None,
+                });
                 return Action::Continue;
             }
             "model" if argument.trim().is_empty() && !live_models.is_empty() => {

@@ -376,6 +376,10 @@ pub type ThinkingSetter = Arc<dyn Fn(Option<&str>) -> String + Send + Sync>;
 /// a sub-picker instead.
 #[derive(Debug, Clone)]
 pub struct SettingRow {
+    /// The section the row renders under (gh #174): consecutive rows
+    /// sharing it share one `── section ──` divider. Empty renders
+    /// unsectioned (the old flat list).
+    pub section: String,
     /// The dotted configuration key.
     pub key: String,
     /// The current value: the live one where the session overrides the file.

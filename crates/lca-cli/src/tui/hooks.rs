@@ -145,7 +145,7 @@ impl Ui {
                         .resolved()
                         .map(|(key, value, source)| (key.to_string(), (value, source)))
                         .collect();
-                    let row = |key: &str, values: &[&str]| {
+                    let row = |section: &str, key: &str, values: &[&str]| {
                         let (value, source) = match key {
                             // The one setting with two homes (gh #112):
                             // a persisted `ui.json` wins when present
@@ -170,22 +170,54 @@ impl Ui {
                                 .unwrap_or_else(|| ("<unset>".to_string(), "default".to_string())),
                         };
                         SettingRow {
+                            section: section.to_string(),
                             key: key.to_string(),
                             value,
                             source,
                             values: values.iter().map(|value| value.to_string()).collect(),
                         }
                     };
-                    // The curated user-facing set (gh #30): raw numeric
-                    // keys stay out - they are `lca config`'s business.
+                    // The categorized inventory (gh #174): every scalar
+                    // key `lca config` owns, grouped under dividers -
+                    // pi's list is flat, ours is sectioned. `provider`,
+                    // `model`, and `models.enabled` keep their own
+                    // pickers; table keys (`models.thinking_levels`,
+                    // `permissions.proposals`) have no row shape.
+                    use lca_config::CODEBLOCK_BORDERS;
                     vec![
-                        row("ui.theme", &[]),
-                        row("ui.thinking", THINKING_VISIBILITIES),
-                        row("thinking", &[]),
-                        row("ui.fullscreen", &["false", "true"]),
-                        row("ui.color", &["auto", "never"]),
-                        row("permissions.mode", PERMISSION_MODES),
-                        row("shell.tool", SHELL_TOOLS),
+                        row("Display & Appearance", "ui.theme", &[]),
+                        row("Display & Appearance", "ui.color", &["auto", "never"]),
+                        row("Display & Appearance", "ui.fullscreen", &["false", "true"]),
+                        row(
+                            "Display & Appearance",
+                            "markdown.codeblock_border",
+                            CODEBLOCK_BORDERS,
+                        ),
+                        row("Model & Reasoning", "thinking", &[]),
+                        row("Model & Reasoning", "ui.thinking", THINKING_VISIBILITIES),
+                        row(
+                            "Permissions & Security",
+                            "permissions.mode",
+                            PERMISSION_MODES,
+                        ),
+                        row(
+                            "Context & Compaction",
+                            "compaction.enabled",
+                            &["false", "true"],
+                        ),
+                        row("Context & Compaction", "compaction.threshold", &[]),
+                        row("Context & Compaction", "compaction.reserve_tokens", &[]),
+                        row("Context & Compaction", "compaction.keep_recent_tokens", &[]),
+                        row("Terminal & Execution", "shell.tool", SHELL_TOOLS),
+                        row("Terminal & Execution", "shell.path", &[]),
+                        row("Terminal & Execution", "shell.command_prefix", &[]),
+                        row("Terminal & Execution", "tool.timeout_seconds", &[]),
+                        row("Terminal & Execution", "tool.result_limit_bytes", &[]),
+                        row("Terminal & Execution", "tool.max_iterations", &[]),
+                        row("Terminal & Execution", "provider.retry_limit", &[]),
+                        row("Data & Updates", "cache.noise_floor_tokens", &[]),
+                        row("Data & Updates", "extensions.log_limit_bytes", &[]),
+                        row("Data & Updates", "update.check", &["false", "true"]),
                     ]
                 }))
             },

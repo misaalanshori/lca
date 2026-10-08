@@ -31,7 +31,8 @@ fn rows_hook(writes: Writes) -> UiHooks {
     let rows_source = written.clone();
     let settings_rows: Option<lca_ui::SettingsRows> = Some(Arc::new(move || {
         let written = rows_source.lock().unwrap();
-        let row = |key: &str, values: &[&str]| SettingRow {
+        let row = |section: &str, key: &str, values: &[&str]| SettingRow {
+            section: section.to_string(),
             key: key.to_string(),
             value: written
                 .get(key)
@@ -45,10 +46,11 @@ fn rows_hook(writes: Writes) -> UiHooks {
             values: values.iter().map(|v| v.to_string()).collect(),
         };
         vec![
-            row("ui.theme", &[]),
-            row("ui.color", &["auto", "never"]),
-            row("thinking", &[]),
-            row("permissions.mode", &["ask", "yolo"]),
+            row("Display", "ui.theme", &[]),
+            row("Display", "ui.color", &["auto", "never"]),
+            row("Model", "thinking", &[]),
+            row("Security", "permissions.mode", &["ask", "yolo"]),
+            row("Terminal", "shell.command_prefix", &[]),
         ]
     }));
     let written_for_persist = written.clone();
@@ -139,7 +141,7 @@ fn the_selector_shows_key_value_and_source_and_q_closes_it() {
         .settings_picker
         .as_ref()
         .expect("the selector opened");
-    assert_eq!(picker.rows.len(), 4, "the curated rows: {:?}", picker.rows);
+    assert_eq!(picker.rows.len(), 5, "the curated rows: {:?}", picker.rows);
     assert_eq!(picker.rows[0].key, "ui.theme");
     assert_eq!(picker.rows[0].source, "default");
     assert_eq!(picker.rows[1].values, vec!["auto", "never"]);
@@ -325,4 +327,98 @@ fn a_running_turn_still_cancels_with_the_selector_open() {
         lca_ui::Action::CancelTurn,
         "Ctrl+C cancels the turn with a picker open"
     );
+}
+
+// Verifies: gh #174 - the selector groups rows under section dividers
+// (LCA's categorized menu; pi's list is flat), and the cursor only ever
+// lands on rows - headers are display, never selection.
+#[test]
+fn sectioned_settings_render_dividers_and_skip_headers() {
+    let writes: Writes = Arc::new(Mutex::new(Vec::new()));
+    let mut selector = chat(rows_hook(writes));
+    open_settings(&mut selector);
+    let rendered = selector
+        .viewport(100, 24, 0)
+        .iter()
+        .map(|row| strip_terminal_sequences(row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("── Display ──"),
+        "section dividers render:\n{rendered}"
+    );
+    // Walk the whole list: every stop is a row, never a header. This
+    // picker caps at the last row (no wrap); headers skip themselves
+    // because selection is row-indexed.
+    let rows = selector.settings_picker.as_ref().expect("open").rows.len();
+    selector.handle_key("\u{1b}[A"); // up at the top stays
+    assert_eq!(
+        selector.settings_picker.as_ref().expect("open").selected,
+        0,
+        "up saturates at the first row"
+    );
+    for _ in 0..rows {
+        selector.handle_key("\u{1b}[B"); // down-arrow
+    }
+    assert_eq!(
+        selector.settings_picker.as_ref().expect("open").selected,
+        rows - 1,
+        "down walks rows only and caps at the last"
+    );
+    let cursor_lines: Vec<String> = selector
+        .viewport(100, 24, 0)
+        .iter()
+        .map(|row| strip_terminal_sequences(row))
+        .filter(|row| row.contains('>') && row.contains('='))
+        .collect();
+    assert!(
+        cursor_lines.iter().all(|line| line.contains('=')),
+        "every cursor sits on a key = value row: {cursor_lines:?}"
+    );
+}
+
+// Verifies: gh #174 - a free-text row (no cycle values, no sub-picker)
+// edits inline: Enter opens the buffer, typing replaces it, Enter
+// applies through the one seam, Escape cancels without writing.
+#[test]
+fn free_text_rows_edit_inline_and_escape_cancels() {
+    let writes: Writes = Arc::new(Mutex::new(Vec::new()));
+    let mut editor = chat(rows_hook(writes.clone()));
+    open_settings(&mut editor);
+    // The stub's rows: ui.theme (sub-picker), ui.color (cycle),
+    // thinking (sub-picker), shell.command_prefix (free text).
+    for _ in 0..4 {
+        editor.handle_key("\u{1b}[B");
+    }
+    assert_eq!(
+        editor.settings_picker.as_ref().expect("open").rows[4].key,
+        "shell.command_prefix"
+    );
+    editor.handle_key("\r"); // start editing (buffer holds the stored value)
+    for _ in 0..4 {
+        editor.handle_key("\u{7f}"); // clear "auto"
+    }
+    type_text(&mut editor, "source ~/x");
+    editor.handle_key("\r"); // apply
+    let written = writes.lock().unwrap();
+    assert!(
+        written
+            .iter()
+            .any(|(key, value)| key == "shell.command_prefix"
+                && value == &Some("source ~/x".to_string())),
+        "the edit persists: {written:?}"
+    );
+    drop(written);
+    // Reopen, type, escape: nothing more lands.
+    // The picker is still open from the apply: close it first, so the
+    // reopen below is a fresh open and not an Enter on the live row.
+    editor.handle_key("q");
+    open_settings(&mut editor);
+    for _ in 0..4 {
+        editor.handle_key("\u{1b}[B");
+    }
+    editor.handle_key("\r");
+    type_text(&mut editor, "junk");
+    editor.handle_key("\u{1b}");
+    assert_eq!(writes.lock().unwrap().len(), 1, "escape cancels the edit");
 }
