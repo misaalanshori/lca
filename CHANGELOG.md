@@ -7,6 +7,25 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **`/fork` picker + in-process switch (gh #203).** Bare `/fork`
+  opens the transcript's user messages (latest selected, pi's
+  `UserMessageSelector` shape); choosing forks AND switches in
+  place with the text restored into the editor. `/fork <n>` skips
+  the picker down the same path.
+- **`/scoped-models` checklist (gh #204).** Toggle the `Ctrl+P`
+  rotation from a checklist modal (pi's `scoped-models-selector`
+  shape): space toggles, `a` flips all, enter persists
+  `models.enabled` and updates the live rotation, escape discards.
+  A set covering every model persists empty (no restriction); an
+  empty set refuses.
+- **Categorized `/settings` (gh #174).** Section dividers over the
+  full scalar inventory (pi's list is flat), with inline editing
+  for free-text and numeric rows (enter applies, escape cancels,
+  untouched buffers write nothing).
+- **Prompt stepper (gh #173).** Jumps pin the prompt to the
+  viewport's top row; the scrollbar gains clickable ▲/▼ steppers;
+  `Shift+Up/Down` step like `Alt+Up/Down`; Shift+wheel steps in
+  fullscreen (plain wheel still scrolls).
 - **Bare `-r` picker + `--session` (gh #110).** `lca -r` opens the
   session picker over a fresh session (pi parity); `--session
   <id|path>` resumes direct, resolving session-directory paths too;

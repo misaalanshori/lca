@@ -184,7 +184,7 @@ lca --thinking low --models "zen/*"   # the session default, the cycle's scope
 
 `/help` lists every command. The ones you reach for first are `/login`,
 `/logout`, `/usage`, `/model`, `/thinking`, `/compact`, `/theme`, `/resume`,
-`/fork`, `/clone`, `/reload`, `/tree`, `/trust`, `/grants`, `/session`, `/attach`, `/fullscreen`,
+`/fork`, `/clone`, `/reload`, `/scoped-models`, `/settings`, `/tree`, `/trust`, `/grants`, `/session`, `/attach`, `/fullscreen`,
 and `/exit`. `!command` runs a shell command inline, `!!` runs one the model
 never sees.
 
