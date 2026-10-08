@@ -611,3 +611,23 @@ fn ctrl_x_copies_the_oauth_url_with_the_named_notice() {
         "the named confirmation"
     );
 }
+
+// Verifies: gh #173 - Shift+wheel steps between prompts (up steps back,
+// down steps forward); a plain wheel or a shifted non-wheel gesture is
+// not a step.
+#[test]
+fn shift_wheel_gestures_step_and_plain_ones_do_not() {
+    use lca_tui::engine::alt_screen::SgrMouse;
+    let gesture = |bits: u16| SgrMouse {
+        bits,
+        x: 1,
+        y: 1,
+        press: true,
+    };
+    assert_eq!(super::shift_wheel_jump(&gesture(64 + 4)), Some(-1));
+    assert_eq!(super::shift_wheel_jump(&gesture(65 + 4)), Some(1));
+    assert_eq!(super::shift_wheel_jump(&gesture(64)), None);
+    assert_eq!(super::shift_wheel_jump(&gesture(65)), None);
+    assert_eq!(super::shift_wheel_jump(&gesture(4)), None);
+    assert_eq!(super::shift_wheel_jump(&gesture(0)), None);
+}

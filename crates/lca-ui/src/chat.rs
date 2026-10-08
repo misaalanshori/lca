@@ -70,6 +70,10 @@ pub enum ClickOutcome {
     ThinkingToggled,
     /// The jump-to-bottom indicator was hit: return to the live bottom.
     JumpBottom,
+    /// The scrollbar's ▲ stepper was hit: jump to the previous prompt.
+    PreviousPrompt,
+    /// The scrollbar's ▼ stepper was hit: jump to the next prompt.
+    NextPrompt,
 }
 
 /// The startup key-hint line (gh #23): pi prints
@@ -1105,7 +1109,7 @@ impl Chat {
 
     /// Move the prompt-jump target to the previous/next user message
     /// (FR-UI-11). The scroll is applied by the loop on the next frame.
-    fn jump_prompt(&mut self, delta: i32) {
+    pub(crate) fn jump_prompt(&mut self, delta: i32) {
         let width = self.world.size.0.max(1);
         let offsets = self.transcript.user_offsets(width, &self.theme);
         if offsets.is_empty() {
@@ -1117,15 +1121,17 @@ impl Chat {
         self.jump_target = Some(offsets[next]);
     }
 
-    /// The scroll value that centers a pending jump target, if any
-    /// (FR-UI-11). Cleared once taken.
+    /// The scroll value that top-pins a pending jump target, if any
+    /// (FR-UI-11, gh #173): the prompt's first line lands on the
+    /// viewport's row 0, its answer starting beneath it. Cleared once
+    /// taken.
     pub fn take_jump_scroll(&mut self, width: u16, height: u16) -> Option<u16> {
         let target = self.jump_target.take()?;
         // gh #35: scroll is a transcript coordinate now - the dock below
         // it is not part of either count.
         let total = self.transcript_len(width);
         let window = self.window_height(width, height);
-        let scroll = total.saturating_sub(target + window / 2);
+        let scroll = total.saturating_sub(target + window);
         Some(scroll.min(u16::MAX as usize) as u16)
     }
 

@@ -200,11 +200,17 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
         ),
         (
             "app.prompt.previous",
-            def!(&["alt+up", "ctrl+up"], "Jump to the previous prompt"),
+            def!(
+                &["shift+up", "alt+up", "ctrl+up"],
+                "Jump to the previous prompt (pinned to top)"
+            ),
         ),
         (
             "app.prompt.next",
-            def!(&["alt+down", "ctrl+down"], "Jump to the next prompt"),
+            def!(
+                &["shift+down", "alt+down", "ctrl+down"],
+                "Jump to the next prompt (pinned to top)"
+            ),
         ),
         ("tui.select.confirm", def!(&["enter"], "Confirm selection")),
         (
@@ -457,6 +463,16 @@ impl KeybindingsManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Verifies: gh #173 - Shift+Up/Down join the prompt-step
+    // bindings (pi's Shift+Scroll ergonomics have a keyboard twin).
+    #[test]
+    fn shift_arrows_step_between_prompts() {
+        let kb = KeybindingsManager::new();
+        assert!(kb.matches("\x1b[1;2A", "app.prompt.previous"));
+        assert!(kb.matches("\x1b[1;2B", "app.prompt.next"));
+        assert!(!kb.matches("\x1b[1;2A", "app.prompt.next"));
+    }
 
     #[test]
     fn defaults_resolve_and_match() {

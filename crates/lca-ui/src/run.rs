@@ -135,6 +135,16 @@ impl Screen {
     }
 }
 
+/// A Shift+wheel gesture's prompt step (gh #173): wheel-up steps back,
+/// wheel-down steps forward. `None` for anything missing either half -
+/// a plain wheel keeps scrolling, an unmodified press keeps selecting.
+fn shift_wheel_jump(mouse: &lca_tui::engine::alt_screen::SgrMouse) -> Option<i32> {
+    if mouse.bits & 64 == 0 || mouse.bits & 4 == 0 {
+        return None;
+    }
+    Some(if mouse.bits & 3 == 0 { -1 } else { 1 })
+}
+
 fn switch_screen(screen: &mut Screen, fullscreen: bool, term: &mut dyn Terminal) {
     match (screen.is_fullscreen(), fullscreen) {
         (true, false) => {
@@ -288,6 +298,12 @@ fn handle_input(
         if let Some(mouse) = lca_tui::engine::alt_screen::parse_sgr_mouse(data)
             && mouse.bits & 64 != 0
         {
+            // Gh #173: Shift+wheel steps between prompts (the loop pins
+            // the target); a plain wheel scrolls, as before.
+            if let Some(delta) = shift_wheel_jump(&mouse) {
+                chat.jump_prompt(delta);
+                return InputResult::Continue;
+            }
             let (width, height) = chat.world.size;
             let delta = if mouse.bits & 3 == 0 { -1 } else { 1 };
             let (col, row) = (mouse.x.saturating_sub(1), mouse.y.saturating_sub(1));
@@ -325,6 +341,10 @@ fn handle_input(
                         let _ = screen.take_clicked_link();
                     }
                     ClickOutcome::JumpBottom => screen.set_scroll(0),
+                    // Gh #173: stepper clicks only set the target; the
+                    // loop pins it on the next frame like a key jump.
+                    ClickOutcome::PreviousPrompt => chat.jump_prompt(-1),
+                    ClickOutcome::NextPrompt => chat.jump_prompt(1),
                     ClickOutcome::SuggestionAccepted => {}
                     ClickOutcome::Ignored => {}
                 },

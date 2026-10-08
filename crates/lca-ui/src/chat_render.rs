@@ -248,17 +248,24 @@ impl Chat {
         }
         let content = transcript.len();
         let from_bottom = (scroll as usize).min(content.saturating_sub(window));
+        // Gh #173: the scrollbar's stepper cells own their hits - ▲/▼
+        // step between prompts, and the bottom stepper wins its cell
+        // over the jump indicator (which stops before the scrollbar).
+        if let Some(geometry) = self.scrollbar_for_frame(width, height, scroll)
+            && col == geometry.column
+        {
+            if row == 0 {
+                return ClickOutcome::PreviousPrompt;
+            }
+            if row as usize + 1 == window {
+                return ClickOutcome::NextPrompt;
+            }
+            return ClickOutcome::Ignored;
+        }
         // The bonus half of gh #11 on the same map: the jump indicator
         // sits on the window's last row while scrolled away from live.
         if from_bottom > 0 && row as usize + 1 == window {
             return ClickOutcome::JumpBottom;
-        }
-        // The scrollbar adornment is not content.
-        if self
-            .scrollbar_for_frame(width, height, scroll)
-            .is_some_and(|geometry| col == geometry.column)
-        {
-            return ClickOutcome::Ignored;
         }
         let end = content.saturating_sub(from_bottom);
         let start = end.saturating_sub(window);
@@ -332,15 +339,23 @@ impl Chat {
         lines.resize(window, String::new());
 
         // The scrollbar (pi's geometry) on the window's right margin: it
-        // takes a column from the window's width, thumb over track.
+        // takes a column from the window's width, thumb over track,
+        // with stepper cells capping the track (gh #173).
         let geometry = scrollbar_geometry(content, window, from_bottom, width);
         if let Some(geometry) = geometry {
             let content_width = geometry.column as usize;
             for (row, line) in lines.iter_mut().take(window).enumerate() {
                 let thumb = (geometry.thumb_top..geometry.thumb_top + geometry.thumb_height)
                     .contains(&(row as u16));
-                let glyph = if thumb { "┃" } else { "│" };
-                let role = if thumb {
+                let stepper = if row == 0 {
+                    Some("▲")
+                } else if row + 1 == window {
+                    Some("▼")
+                } else {
+                    None
+                };
+                let glyph = stepper.unwrap_or(if thumb { "┃" } else { "│" });
+                let role = if thumb && stepper.is_none() {
                     Role::ScrollbarThumb
                 } else {
                     Role::ScrollbarTrack

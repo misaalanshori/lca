@@ -117,14 +117,20 @@ fn the_scrollbar_paints_only_the_transcript_window() {
     for row in rows.iter().take(geometry.rows as usize) {
         let strip = lca_tui::engine::text::strip_terminal_sequences(row);
         assert!(
-            strip.ends_with('│') || strip.ends_with('┃'),
-            "every transcript-window row carries the bar: {strip:?}"
+            strip.ends_with('│')
+                || strip.ends_with('┃')
+                || strip.ends_with('▲')
+                || strip.ends_with('▼'),
+            "every transcript-window row carries the bar or a stepper: {strip:?}"
         );
     }
     for row in rows.iter().skip(geometry.rows as usize) {
         let strip = lca_tui::engine::text::strip_terminal_sequences(row);
         assert!(
-            !strip.ends_with('│') && !strip.ends_with('┃'),
+            !strip.ends_with('│')
+                && !strip.ends_with('┃')
+                && !strip.ends_with('▲')
+                && !strip.ends_with('▼'),
             "no dock row carries it: {strip:?}"
         );
     }
@@ -253,8 +259,8 @@ fn the_prompt_jump_measures_scrolls_against_the_transcript() {
     let window = chat.window_height(w, h) as u16;
     assert_eq!(
         scroll,
-        total.saturating_sub(window / 2),
-        "target 0 centers the window on the transcript's start, in transcript rows"
+        total.saturating_sub(window),
+        "target 0 pins the transcript's start to the top row, in transcript rows"
     );
 }
 
@@ -408,4 +414,114 @@ fn clicking_a_popup_row_applies_it() {
         "the offer applied: {:?}",
         chat.editor.text()
     );
+}
+
+// Verifies: gh #173 - jumping pins the prompt's first line to the
+// viewport's top row (not the middle): scroll leaves exactly
+// `target + window` rows below the cut.
+#[test]
+fn jump_pins_the_prompt_to_the_top_row() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    for i in 0..40 {
+        chat.transcript.push_user(format!("question {i}"));
+        chat.transcript.append_text(&format!("answer {i}"));
+        chat.transcript.finish_assistant();
+    }
+    let (w, h) = (80u16, 24u16);
+    let offsets = chat.transcript.user_offsets(80, &chat.theme);
+    let target = offsets[10];
+    chat.jump_target = Some(target);
+    let scroll = chat
+        .take_jump_scroll(w, h)
+        .expect("a pending jump returns a target");
+    let total = chat.transcript_len(w);
+    let window = chat.window_height(w, h);
+    assert_eq!(
+        scroll as usize,
+        total.saturating_sub(target + window),
+        "the prompt lands on row 0"
+    );
+}
+
+// Verifies: gh #173 - the scrollbar's end cells are steppers (▲ top,
+// ▼ bottom) while it is active.
+#[test]
+fn scrollbar_end_cells_are_steppers() {
+    use super::strip;
+    let mut chat = chat();
+    chat.screen_mode = true;
+    for i in 0..40 {
+        chat.transcript.push_user(format!("question {i}"));
+        chat.transcript.append_text(&format!("answer {i}"));
+        chat.transcript.finish_assistant();
+    }
+    let (w, h) = (80u16, 24u16);
+    let window = chat.window_height(w, h);
+    assert!(window > 2, "a real window to step in");
+    let frame = strip(&chat.viewport(w, h, 0));
+    let top = frame[0].trim_end();
+    assert!(
+        top.ends_with('▲'),
+        "the track opens with a stepper: {top:?}"
+    );
+    let bottom = frame[window - 1].trim_end();
+    assert!(
+        bottom.ends_with('▼'),
+        "the track closes with a stepper: {bottom:?}"
+    );
+}
+
+// Verifies: gh #173 - clicking the steppers jumps between prompts
+// (the bottom stepper wins its cell over the jump indicator).
+#[test]
+fn stepper_clicks_jump_between_prompts() {
+    use super::ClickOutcome;
+    let mut chat = chat();
+    chat.screen_mode = true;
+    for i in 0..40 {
+        chat.transcript.push_user(format!("question {i}"));
+        chat.transcript.append_text(&format!("answer {i}"));
+        chat.transcript.finish_assistant();
+    }
+    let (w, h) = (80u16, 24u16);
+    let window = chat.window_height(w, h) as u16;
+    assert_eq!(
+        chat.click_at(w - 1, 0, 0, w, h),
+        ClickOutcome::PreviousPrompt,
+        "▲ steps back"
+    );
+    assert_eq!(
+        chat.click_at(w - 1, window - 1, 5, w, h),
+        ClickOutcome::NextPrompt,
+        "▼ steps forward, even scrolled"
+    );
+    // Off the steppers, the map is unchanged: mid-track ignores, the
+    // last row off-track still returns to live.
+    assert_eq!(
+        chat.click_at(w - 1, 3, 0, w, h),
+        ClickOutcome::Ignored,
+        "mid-track is not a stepper"
+    );
+    assert_eq!(
+        chat.click_at(0, window - 1, 5, w, h),
+        ClickOutcome::JumpBottom,
+        "the indicator keeps its row"
+    );
+}
+
+// Verifies: gh #173 - Shift+Up/Down step through prompts like Alt+Up/Down.
+#[test]
+fn shift_up_and_down_jump_between_prompts() {
+    use crate::state::Action;
+    let mut chat = chat();
+    chat.world.resize(80, 24);
+    chat.transcript.push_user("first question");
+    chat.transcript.append_text("an answer");
+    chat.transcript.finish_assistant();
+    chat.transcript.push_user("second question");
+    assert_eq!(chat.handle_key("\x1b[1;2A"), Action::Continue); // Shift+Up
+    assert!(chat.jump_target.is_some(), "shift+up steps back");
+    assert_eq!(chat.handle_key("\x1b[1;2B"), Action::Continue); // Shift+Down
+    assert!(chat.jump_target.is_some(), "shift+down steps forward");
 }
