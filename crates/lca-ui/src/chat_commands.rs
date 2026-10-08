@@ -175,14 +175,19 @@ impl Chat {
                 self.world.notice = Some(report.notice);
                 return Action::Continue;
             }
+            // Gh #203: bare `/fork` opens the user-message picker;
+            // `/fork <n>` forks directly. Both switch in-process with
+            // the message text restored into the editor.
             "fork" => {
-                let Some(fork_at) = self.world.options.hooks.fork_at.clone() else {
-                    self.world.notice = Some("forking is not available in this host".to_string());
-                    return Action::Continue;
-                };
-                match argument.trim().parse::<usize>() {
-                    Ok(index) => self.world.notice = Some(fork_at(index)),
-                    Err(_) => self.world.notice = Some("usage: /fork <message-index>".to_string()),
+                if argument.trim().is_empty() {
+                    self.open_fork_picker();
+                } else {
+                    match argument.trim().parse::<usize>() {
+                        Ok(index) => self.fork_and_switch(index),
+                        Err(_) => {
+                            self.world.notice = Some("usage: /fork <message-index>".to_string())
+                        }
+                    }
                 }
                 return Action::Continue;
             }
@@ -207,6 +212,24 @@ impl Chat {
                         }
                     }
                     Err(err) => self.world.notice = Some(err),
+                }
+                return Action::Continue;
+            }
+            // Gh #204: the quick-cycle checklist - toggles flip rows,
+            // enter saves (persists `models.enabled` + live rotation),
+            // escape discards.
+            "scoped-models" => {
+                let Some(list) = self.world.options.hooks.scoped_models.clone() else {
+                    self.world.notice =
+                        Some("scoped models are not available in this host".to_string());
+                    return Action::Continue;
+                };
+                let rows = list();
+                if rows.is_empty() {
+                    self.world.notice = Some("no models to scope".to_string());
+                } else {
+                    self.scoped_models_picker =
+                        Some(crate::chat_pickers::ScopedModelsPicker::new(rows));
                 }
                 return Action::Continue;
             }
@@ -282,6 +305,62 @@ impl Chat {
             self.world.notice = Some("no sessions yet".to_string());
         } else {
             self.resume_picker = Some(crate::resume::ResumePicker::new(entries));
+        }
+    }
+
+    /// Open the `/fork` user-message picker (gh #203): the transcript's
+    /// user messages, latest selected. An empty transcript names it.
+    pub fn open_fork_picker(&mut self) {
+        let messages: Vec<String> = self
+            .transcript
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                crate::transcript::Entry::User(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        if messages.is_empty() {
+            self.world.notice = Some("No messages to fork from".to_string());
+        } else {
+            self.fork_picker = Some(crate::chat_pickers::ForkPicker::new(messages));
+        }
+    }
+
+    /// Fork at the nth user message and switch in-process (gh #203): the
+    /// fork always lands; a running turn refuses the switch inside
+    /// `switch_or_announce` (its notice stands); on a live switch the
+    /// message text restores into the editor for immediate re-prompting.
+    /// The transcript's user order is the fork's index space (the host
+    /// counts the same nth user record); the text is read before the
+    /// switch replays the fork over the transcript.
+    pub(crate) fn fork_and_switch(&mut self, index: usize) {
+        let Some(fork_at) = self.world.options.hooks.fork_at.clone() else {
+            self.world.notice = Some("forking is not available in this host".to_string());
+            return;
+        };
+        let text = self
+            .transcript
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                crate::transcript::Entry::User(text) => Some(text.clone()),
+                _ => None,
+            })
+            .nth(index);
+        let report = fork_at(index);
+        match (&report.id, text) {
+            (Some(id), Some(text)) => {
+                let running = self.turn_running;
+                self.switch_or_announce(id);
+                if !running {
+                    // The host's notice names the fork; the editor
+                    // carries the message for immediate re-prompting.
+                    self.editor.set_text(&text);
+                    self.world.notice = Some(report.notice);
+                }
+            }
+            _ => self.world.notice = Some(report.notice),
         }
     }
 
@@ -404,8 +483,9 @@ fn command_help(command: &str) -> &'static str {
         "/thinking" => "set the reasoning level",
         "/tree" => "browse session branches",
         "/resume" => "search and reopen a session",
-        "/fork" => "fork a branch at a message (usage: /fork <n>)",
+        "/fork" => "fork a branch at a message (picker, or /fork <n>)",
         "/clone" => "duplicate this session at its tip and switch (usage: /clone [name])",
+        "/scoped-models" => "choose the quick-cycle rotation (Ctrl+P)",
         "/reload" => {
             "re-run discovery without restarting (settings, extensions, prompts, themes, keys)"
         }

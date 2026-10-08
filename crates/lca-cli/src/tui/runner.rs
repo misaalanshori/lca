@@ -104,8 +104,7 @@ fn turn_worker(
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .clone();
-            ui.config
-                .clamp_thinking(level.as_deref(), &turn_config.model)
+            crate::lock(&ui.config).clamp_thinking(level.as_deref(), &turn_config.model)
         };
         turn_config.steer = steer;
         // R3: read the session the interface is showing *now*, so a `/tree`

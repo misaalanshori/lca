@@ -113,6 +113,79 @@ impl ModelPicker {
     }
 }
 
+/// The `/fork` user-message picker (gh #203): the transcript's user
+/// messages in order, pi's `UserMessageSelector` shape (one-line preview
+/// + `Message N of M`, latest selected) in our picker chrome.
+pub struct ForkPicker {
+    /// The user message texts, oldest first.
+    pub messages: Vec<String>,
+    /// The highlighted row (defaults to the latest).
+    pub selected: usize,
+}
+
+impl ForkPicker {
+    /// Open over the transcript's user messages, latest selected.
+    pub fn new(messages: Vec<String>) -> ForkPicker {
+        let selected = messages.len().saturating_sub(1);
+        ForkPicker { messages, selected }
+    }
+}
+
+/// The `/scoped-models` checklist (gh #204): every offered model with
+/// its checked state, pi's `scoped-models-selector` shape (checkbox +
+/// label + context) in our picker chrome. Enter saves, escape
+/// discards, `a` flips the whole list.
+pub struct ScopedModelsPicker {
+    /// The rows in catalog order.
+    pub rows: Vec<crate::state::ScopedModelRow>,
+    /// The checked ids (starts as the ids flagged enabled).
+    pub checked: Vec<String>,
+    /// The highlighted row.
+    pub selected: usize,
+}
+
+impl ScopedModelsPicker {
+    /// Open over the catalog rows, current scope checked.
+    pub fn new(rows: Vec<crate::state::ScopedModelRow>) -> ScopedModelsPicker {
+        let checked = rows
+            .iter()
+            .filter(|row| row.enabled)
+            .map(|row| row.id.clone())
+            .collect();
+        ScopedModelsPicker {
+            rows,
+            checked,
+            selected: 0,
+        }
+    }
+
+    /// Whether the row's id is checked.
+    pub fn is_checked(&self, id: &str) -> bool {
+        self.checked.iter().any(|checked| checked == id)
+    }
+
+    /// Flip the highlighted row's checked state.
+    pub fn toggle_selected(&mut self) {
+        let Some(row) = self.rows.get(self.selected) else {
+            return;
+        };
+        if let Some(at) = self.checked.iter().position(|id| id == &row.id) {
+            self.checked.remove(at);
+        } else {
+            self.checked.push(row.id.clone());
+        }
+    }
+
+    /// Check every row, or clear the whole list when all are checked.
+    pub fn toggle_all(&mut self) {
+        if self.checked.len() == self.rows.len() {
+            self.checked.clear();
+        } else {
+            self.checked = self.rows.iter().map(|row| row.id.clone()).collect();
+        }
+    }
+}
+
 /// The `/settings` selector (gh #30, EFG-030): pi's interactive list of
 /// configurable keys, each row showing key, value, and the winning
 /// source (our FR-CFG-2 column, which pi's list does not carry).

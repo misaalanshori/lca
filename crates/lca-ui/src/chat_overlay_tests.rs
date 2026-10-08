@@ -6,8 +6,8 @@
 //! 1,200-line file ceiling. The fixtures (`options`, `chat`, `strip`) stay
 //! in `chat_tests.rs` and are imported from it.
 
-use super::tests::{chat, options, strip};
 use super::*;
+use super::{chat, options, strip};
 use lca_protocol::CommandEffect;
 
 #[test]

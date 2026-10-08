@@ -688,6 +688,13 @@ impl Config {
         &self.models_enabled
     }
 
+    /// Replace the enabled-model scope at runtime (gh #204): the
+    /// checklist swaps this cell so the cycle reads the live scope.
+    /// Empty means no restriction.
+    pub fn set_models_enabled(&mut self, ids: Vec<String>) {
+        self.models_enabled = ids;
+    }
+
     /// The levels `model` accepts (`models.thinking_levels`), or `None`
     /// when the map does not name it - which means no restriction.
     pub fn allowed_thinking_levels(&self, model: &str) -> Option<&[String]> {

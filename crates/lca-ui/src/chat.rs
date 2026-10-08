@@ -178,6 +178,10 @@ pub struct Chat {
     pub shell: Option<ShellRun>,
     /// The open `/resume` session picker (R2).
     pub resume_picker: Option<crate::resume::ResumePicker>,
+    /// The `/fork` user-message picker while open (gh #203).
+    pub fork_picker: Option<crate::chat_pickers::ForkPicker>,
+    /// The `/scoped-models` checklist while open (gh #204).
+    pub scoped_models_picker: Option<crate::chat_pickers::ScopedModelsPicker>,
 }
 impl Chat {
     /// Build the chat: widgets, theme, and the autocomplete chain.
@@ -292,6 +296,8 @@ impl Chat {
             trust_picker: trust_prompt.then_some(TrustPicker { selected: 0 }),
             shell: None,
             resume_picker: None,
+            fork_picker: None,
+            scoped_models_picker: None,
         };
         chat.transcript.set_thinking_visibility(thinking_visibility);
         // gh #12: the host's collected pre-parse transforms ride the
@@ -1183,15 +1189,3 @@ pub(super) fn highlight_matches(line: &str, query: &str) -> String {
 #[cfg(test)]
 #[path = "chat_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "chat_dialog_tests.rs"]
-mod dialog_tests;
-
-#[cfg(test)]
-#[path = "chat_overlay_tests.rs"]
-mod overlay_tests;
-
-#[cfg(test)]
-#[path = "chat_viewport_tests.rs"]
-mod viewport_tests;

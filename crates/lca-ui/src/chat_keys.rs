@@ -19,6 +19,8 @@ impl Chat {
             || self.trust_picker.is_some()
             || self.resume_picker.is_some()
             || self.grants_picker.is_some()
+            || self.fork_picker.is_some()
+            || self.scoped_models_picker.is_some()
     }
 
     /// Whether this key is pi's message-copy key with the editor owning
@@ -320,6 +322,101 @@ impl Chat {
 
         if let Some(action) = self.handle_model_picker_key(data, key) {
             return Some(action);
+        }
+
+        if let Some(action) = self.handle_fork_picker_key(data, key) {
+            return Some(action);
+        }
+
+        if let Some(action) = self.handle_scoped_models_key(data, key) {
+            return Some(action);
+        }
+        None
+    }
+
+    /// The `/scoped-models` checklist keys (gh #204): up/down move,
+    /// space toggles the row, `a` flips the whole list, enter saves
+    /// (an empty save refuses - an empty scope means no restriction),
+    /// escape discards.
+    pub(super) fn handle_scoped_models_key(
+        &mut self,
+        _data: &str,
+        key: Option<&str>,
+    ) -> Option<Action> {
+        if let Some(mut picker) = self.scoped_models_picker.take() {
+            match key {
+                Some("escape") => {}
+                Some("up") => {
+                    picker.selected = picker.selected.saturating_sub(1);
+                    self.scoped_models_picker = Some(picker);
+                }
+                Some("down") => {
+                    if !picker.rows.is_empty() {
+                        picker.selected = (picker.selected + 1).min(picker.rows.len() - 1);
+                    }
+                    self.scoped_models_picker = Some(picker);
+                }
+                Some("space") => {
+                    picker.toggle_selected();
+                    self.scoped_models_picker = Some(picker);
+                }
+                Some("a") => {
+                    picker.toggle_all();
+                    self.scoped_models_picker = Some(picker);
+                }
+                Some("enter") => {
+                    if picker.checked.is_empty() {
+                        self.world.notice = Some("keep at least one model in rotation".to_string());
+                        self.scoped_models_picker = Some(picker);
+                    } else if let Some(save) = self.world.options.hooks.save_scoped_models.clone() {
+                        self.world.notice = Some(save(picker.checked.clone()));
+                    } else {
+                        self.world.notice =
+                            Some("scoped models are not available in this host".to_string());
+                    }
+                }
+                _ => {
+                    self.scoped_models_picker = Some(picker);
+                }
+            }
+            return Some(Action::Continue);
+        }
+        None
+    }
+
+    /// The `/fork` user-message picker's keys (gh #203): up/down move
+    /// (wrapping, pi's shape), enter forks and switches in-process,
+    /// escape closes.
+    pub(super) fn handle_fork_picker_key(
+        &mut self,
+        _data: &str,
+        key: Option<&str>,
+    ) -> Option<Action> {
+        if let Some(mut picker) = self.fork_picker.take() {
+            match key {
+                Some("escape") => {}
+                Some("enter") => {
+                    let index = picker.selected;
+                    self.fork_and_switch(index);
+                }
+                Some("up") => {
+                    picker.selected = picker
+                        .selected
+                        .checked_sub(1)
+                        .unwrap_or_else(|| picker.messages.len().saturating_sub(1));
+                    self.fork_picker = Some(picker);
+                }
+                Some("down") => {
+                    if !picker.messages.is_empty() {
+                        picker.selected = (picker.selected + 1) % picker.messages.len();
+                    }
+                    self.fork_picker = Some(picker);
+                }
+                _ => {
+                    self.fork_picker = Some(picker);
+                }
+            }
+            return Some(Action::Continue);
         }
         None
     }

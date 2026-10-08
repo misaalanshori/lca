@@ -137,7 +137,7 @@ impl Ui {
                         false,
                         &ui.flags,
                     )
-                    .unwrap_or_else(|_| ui.config.clone());
+                    .unwrap_or_else(|_| crate::lock(&ui.config).clone());
                     let resolved: std::collections::BTreeMap<
                         String,
                         (String, lca_config::MergeSource),
@@ -205,7 +205,7 @@ impl Ui {
                     // The clamp is the model's: a level outside its
                     // `models.thinking_levels` set becomes its default,
                     // and unset stays unset (the provider's choice).
-                    let effective = ui.config.clamp_thinking(level, &model);
+                    let effective = crate::lock(&ui.config).clamp_thinking(level, &model);
                     let previous = ui
                         .thinking_cell
                         .lock()
@@ -256,6 +256,52 @@ impl Ui {
                 let ui = self.clone();
                 Some(Arc::new(move || {
                     super::display::model_rows(&ui.offered_models(), &ui.live_name())
+                }))
+            },
+            scoped_models: {
+                let ui = self.clone();
+                Some(Arc::new(move || {
+                    let live = ui.live_name();
+                    let scope = crate::lock(&ui.config).models_enabled().to_vec();
+                    ui.all_models()
+                        .iter()
+                        .filter_map(|model| {
+                            let (id, label) = super::display::model_label(model, &live)?;
+                            Some(lca_ui::state::ScopedModelRow {
+                                id,
+                                label,
+                                context: model.context_window,
+                                enabled: crate::models::in_scope(model, &scope),
+                            })
+                        })
+                        .collect()
+                }))
+            },
+            save_scoped_models: {
+                let ui = self.clone();
+                Some(Arc::new(move |ids: Vec<String>| {
+                    // pi's normalize rule: a set covering every offered
+                    // model is no restriction - persist the empty scope.
+                    let all: Vec<String> =
+                        ui.all_models().into_iter().map(|model| model.id).collect();
+                    let ids = if !all.is_empty() && all.iter().all(|id| ids.contains(id)) {
+                        Vec::new()
+                    } else {
+                        ids
+                    };
+                    if let Err(err) = crate::persist_setting_list("models.enabled", &ids) {
+                        return format!("could not persist models.enabled: {err}");
+                    }
+                    super::apply_models_scope(&ui.config, ids.clone());
+                    if ids.is_empty() {
+                        "rotation covers every model (models.enabled cleared)".to_string()
+                    } else {
+                        format!(
+                            "rotation: {} model{} in scope",
+                            ids.len(),
+                            if ids.len() == 1 { "" } else { "s" }
+                        )
+                    }
                 }))
             },
             trust_needed: {
@@ -700,6 +746,9 @@ impl Ui {
         let mut live = crate::lock(&self.live);
         live.agent_config = agent_config;
         *crate::lock(&self.registry) = fresh;
+        // Gh #204: the re-read settings take effect live too, so a
+        // hand-edited `models.enabled` applies without a restart.
+        *crate::lock(&self.config) = config;
         let (bindings, bindings_error) = crate::load_user_keybindings(&self.data);
         ReloadReport {
             notice: format!(
@@ -753,18 +802,25 @@ impl Ui {
         })
     }
 
-    /// Fork at the nth user message (FR-UI-16).
+    /// Fork at the nth user message (FR-UI-16, gh #203): the report
+    /// carries the new id so the interface switches in-process.
     fn fork_at(&self) -> lca_ui::state::ForkAt {
+        use lca_ui::state::ForkReport;
         let store = self.store.clone();
         let session_cell = self.current_session.clone();
-        Arc::new(move |index: usize| -> String {
+        Arc::new(move |index: usize| -> ForkReport {
             let session = session_cell
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .clone();
             let outcome = match store.read_with(&session, ViewMode::Display) {
                 Ok(outcome) => outcome,
-                Err(err) => return format!("cannot read the session: {err}"),
+                Err(err) => {
+                    return ForkReport {
+                        id: None,
+                        notice: format!("cannot read the session: {err}"),
+                    };
+                }
             };
             let record_id = outcome
                 .records
@@ -773,15 +829,20 @@ impl Ui {
                 .nth(index)
                 .and_then(|record| record.id().map(str::to_string));
             let Some(record_id) = record_id else {
-                return format!("no user message at index {index}");
+                return ForkReport {
+                    id: None,
+                    notice: format!("no user message at index {index}"),
+                };
             };
             match store.fork(&session, &record_id) {
-                Ok(branch) => format!(
-                    "forked at message {index}: {} - resume with `lca --resume {}`",
-                    branch.id(),
-                    branch.id()
-                ),
-                Err(err) => format!("fork failed: {err}"),
+                Ok(branch) => ForkReport {
+                    id: Some(branch.id().to_string()),
+                    notice: format!("✓ Forked from turn {index} (session: {})", branch.id()),
+                },
+                Err(err) => ForkReport {
+                    id: None,
+                    notice: format!("fork failed: {err}"),
+                },
             }
         })
     }

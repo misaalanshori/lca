@@ -126,7 +126,7 @@ pub(crate) mod prompt;
 pub(crate) mod provider_needs;
 mod rpc;
 
-pub use persist::persist_setting;
+pub use persist::{persist_setting, persist_setting_list};
 mod registry;
 mod session_cmds;
 /// Restoring `SIGPIPE`'s default disposition (GitHub issue #19).

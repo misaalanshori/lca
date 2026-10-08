@@ -17,6 +17,7 @@ const HINT_GRANTS: &str = "↑↓ move · enter revoke · esc close";
 const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
 const HINT_SETTINGS: &str = "↑↓ move · enter/←→ change · q/esc close";
 const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
+const HINT_SCOPED_MODELS: &str = "↑↓ move · space toggle · a all · enter save · esc close";
 
 /// The modal's title from one rendered line (gh #172): a bordered box
 /// paints its `[title]` in the border role, so the chrome strips escapes
@@ -158,6 +159,71 @@ impl Chat {
                 HINT_FILTER,
                 &self.theme,
                 (!picker.matches.is_empty()).then_some(2 + picker.selected),
+            );
+            return true;
+        }
+        // Gh #203: the `/fork` user-message picker - pi's
+        // `UserMessageSelector` shape (one-line preview + position) in
+        // our picker chrome.
+        if let Some(picker) = &self.fork_picker {
+            let mut body = vec![
+                "Select a user message to fork into a new session".to_string(),
+                String::new(),
+            ];
+            for (row, text) in picker.messages.iter().enumerate() {
+                let cur = if row == picker.selected { '>' } else { ' ' };
+                let preview = text.replace('\n', " ");
+                let preview = preview.trim();
+                body.push(format!(" {cur} {preview}"));
+                body.push(format!(
+                    "   Message {} of {}",
+                    row + 1,
+                    picker.messages.len()
+                ));
+                body.push(String::new());
+            }
+            self.picker_overlay(
+                viewport,
+                width,
+                height,
+                "fork",
+                &body,
+                HINT_MOVE,
+                &self.theme,
+                (!picker.messages.is_empty()).then_some(2 + picker.selected * 3),
+            );
+            return true;
+        }
+        // Gh #204: the `/scoped-models` checklist - checkbox + label +
+        // context, pi's `scoped-models-selector` rows in our chrome.
+        if let Some(picker) = &self.scoped_models_picker {
+            let mut body = vec![
+                "Toggle the quick-cycle rotation (Ctrl+P):".to_string(),
+                String::new(),
+            ];
+            for (row, item) in picker.rows.iter().enumerate() {
+                let mark = if picker.is_checked(&item.id) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
+                let cur = if row == picker.selected { '>' } else { ' ' };
+                let context = if item.context == 0 {
+                    String::new()
+                } else {
+                    format!(" ({}k ctx)", item.context / 1_000)
+                };
+                body.push(format!(" {cur} {mark} {}{context}", item.label));
+            }
+            self.picker_overlay(
+                viewport,
+                width,
+                height,
+                "scoped-models",
+                &body,
+                HINT_SCOPED_MODELS,
+                &self.theme,
+                (!picker.rows.is_empty()).then_some(2 + picker.selected),
             );
             return true;
         }

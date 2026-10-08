@@ -639,7 +639,10 @@ fn tree_browses_branches_and_fork_creates_one() {
             ("child".into(), "child (session)".into()),
         ]
     }));
-    options.hooks.fork_at = Some(Arc::new(|n: usize| format!("forked at {n}: newbranch")));
+    options.hooks.fork_at = Some(Arc::new(|n: usize| crate::state::ForkReport {
+        id: Some("newbranch".to_string()),
+        notice: format!("forked at {n}: newbranch"),
+    }));
     let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
     for c in "/tree".chars() {
         chat.handle_key(&c.to_string());
@@ -1092,3 +1095,15 @@ fn a_rebound_key_fires() {
 #[cfg(test)]
 #[path = "chat_command_tests.rs"]
 mod command_tests;
+
+#[cfg(test)]
+#[path = "chat_dialog_tests.rs"]
+mod dialog_tests;
+
+#[cfg(test)]
+#[path = "chat_overlay_tests.rs"]
+mod overlay_tests;
+
+#[cfg(test)]
+#[path = "chat_viewport_tests.rs"]
+mod viewport_tests;

@@ -313,6 +313,31 @@ pub type SettingPersist = Arc<dyn Fn(&str, Option<String>) + Send + Sync>;
 /// tested).
 pub type ModelRow = (String, String);
 
+/// One row of the `/scoped-models` checklist (gh #204): the model id,
+/// its display label, its context window (0 when the provider says
+/// nothing), and whether it is in the quick-cycle rotation now.
+#[derive(Debug, Clone)]
+pub struct ScopedModelRow {
+    /// The raw model id (what the scope saves).
+    pub id: String,
+    /// The display label (provider badge included).
+    pub label: String,
+    /// The context window in tokens (0 = unknown).
+    pub context: u32,
+    /// In the rotation now.
+    pub enabled: bool,
+}
+
+/// The full model catalog with current scope flags: the checklist
+/// reads every offered model (not the filtered cycle list) so a
+/// disabled model can be re-enabled. A hook rather than the startup
+/// snapshot, so a login's model discovery shows up.
+pub type ScopedModels = Arc<dyn Fn() -> Vec<ScopedModelRow> + Send + Sync>;
+
+/// Apply a checklist save: persist the checked ids to `models.enabled`
+/// and update the live rotation. Returns the notice to show.
+pub type SaveScopedModels = Arc<dyn Fn(Vec<String>) -> String + Send + Sync>;
+
 /// The models the `/model` picker should offer *now*. A hook rather than the
 /// startup snapshot, so a login's model discovery (which can only succeed
 /// after the endpoint's ad-hoc grant) reaches the picker without a restart.
@@ -374,7 +399,19 @@ pub type TrustNeeded = Arc<dyn Fn() -> bool + Send + Sync>;
 /// Returns the session's branch tree as `(id, label)` entries.
 pub type SessionTree = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
 /// Forks at the nth user message, returning the new branch's id.
-pub type ForkAt = Arc<dyn Fn(usize) -> String + Send + Sync>;
+/// What a fork call reports (gh #203): the new session id when the
+/// fork landed (so the interface can switch in-process), plus the
+/// notice text either way.
+#[derive(Debug, Clone)]
+pub struct ForkReport {
+    /// The forked session's id; `None` when the fork failed.
+    pub id: Option<String>,
+    /// The notice to show (success names the fork, failure the cause).
+    pub notice: String,
+}
+
+/// Fork the live session at the nth user message.
+pub type ForkAt = Arc<dyn Fn(usize) -> ForkReport + Send + Sync>;
 /// Clones the live session at its tip under the optional name,
 /// returning the new session's `(id, title)` (gh #205). The host
 /// switches through [`SwitchSession`]; this hook only duplicates.
@@ -435,6 +472,11 @@ pub struct UiHooks {
     /// `/thinking`'s Enter: clamp the chosen level to the current model's
     /// set, store it, and return the notice.
     pub set_thinking: Option<ThinkingSetter>,
+    /// The `/scoped-models` checklist rows with scope flags (gh #204).
+    pub scoped_models: Option<ScopedModels>,
+    /// The checklist's Enter: persist the checked ids and update the
+    /// live rotation, returning the notice.
+    pub save_scoped_models: Option<SaveScopedModels>,
     /// The `/settings` selector's rows (gh #30); absent keeps the
     /// read-only `settings` command dump.
     pub settings_rows: Option<SettingsRows>,
@@ -445,8 +487,8 @@ pub struct UiHooks {
     /// The session's branch tree: `(session id, display label)` entries, the
     /// current branch included (FR-UI-16).
     pub session_tree: Option<SessionTree>,
-    /// Fork at the nth user message (0-based), returning the new branch's id
-    /// (FR-UI-16).
+    /// Fork at the nth user message (0-based), reporting the new branch
+    /// (FR-UI-16, gh #203).
     pub fork_at: Option<ForkAt>,
     /// Clone the live session at its tip under an optional name (gh #205).
     pub clone_session: Option<CloneSession>,

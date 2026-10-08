@@ -25,6 +25,16 @@ impl Ui {
     /// read this one list, so what a user can see is what the keys can
     /// reach; an empty scope is no restriction.
     pub(super) fn offered_models(&self) -> Vec<lca_protocol::ModelInfo> {
+        crate::models::filter_enabled(
+            self.all_models(),
+            crate::lock(&self.config).models_enabled(),
+        )
+    }
+
+    /// Every model every ready provider offers, unfiltered (gh #204):
+    /// the checklist reads this (a disabled model must stay visible so
+    /// it can be re-enabled); the cycle reads the filtered view above.
+    pub(super) fn all_models(&self) -> Vec<lca_protocol::ModelInfo> {
         let mut catalog = Vec::new();
         for handle in self.registry().enabled() {
             if !handle.worlds().contains(&lca_ext_abi::World::Provider) {
@@ -42,7 +52,7 @@ impl Ui {
             } else {
                 lca_core::ExtensionProvider::new(handle.clone()).list_models()
             };
-            for mut model in crate::models::filter_enabled(listed, self.config.models_enabled()) {
+            for mut model in listed {
                 model
                     .extras
                     .entry("provider".to_string())
@@ -65,7 +75,10 @@ impl Ui {
             model_label: self.label_cell.clone(),
             context_window: self.context_window_cell.clone(),
             thinking: self.thinking_cell.clone(),
-            theme: self.config.ui_theme().unwrap_or("auto").to_string(),
+            theme: crate::lock(&self.config)
+                .ui_theme()
+                .unwrap_or("auto")
+                .to_string(),
             // R7: themes live with the rest of the agent's data.
             theme_dir: lca_ui::theme::themes_dir(&crate::data_dir()),
             themes: lca_ui::theme::theme_names(&lca_ui::theme::themes_dir(&crate::data_dir())),
@@ -82,18 +95,16 @@ impl Ui {
                 let ui = self.clone();
                 Arc::new(move || ui.take_pending_models())
             }),
-            plain: self.config.ui_color() == ColorMode::Never,
+            plain: crate::lock(&self.config).ui_color() == ColorMode::Never,
             yolo: crate::lock(&self.grants).permission_mode()
                 == lca_permissions::PermissionMode::Yolo,
-            thinking_visibility: self
-                .config
+            thinking_visibility: crate::lock(&self.config)
                 .thinking_visibility()
                 .and_then(lca_ui::transcript::ThinkingVisibility::parse)
                 .unwrap_or_default(),
             // gh #32: the configured shape, with the shipped frame as
             // the answer to anything the config layer already refused.
-            codeblock_border: self
-                .config
+            codeblock_border: crate::lock(&self.config)
                 .markdown_codeblock_border()
                 .parse()
                 .unwrap_or_default(),
@@ -116,7 +127,7 @@ impl Ui {
             // #112; the malformed warning rides the transcript head).
             fullscreen: super::hooks::initial_screen_mode(
                 &crate::data_dir(),
-                self.config.ui_fullscreen(),
+                crate::lock(&self.config).ui_fullscreen(),
             )
             .0,
             slash_commands: self.slash_commands(),
@@ -149,6 +160,7 @@ impl Ui {
         names.insert(6, "/fork".to_string());
         names.insert(7, "/clone".to_string());
         names.insert(8, "/reload".to_string());
+        names.insert(9, "/scoped-models".to_string());
         names.insert(7, "/thinking".to_string());
         names.insert(8, "/resume".to_string());
         names.insert(9, "/settings".to_string());
@@ -250,7 +262,7 @@ impl Ui {
                 // runner holds that lock for a whole turn, and this arm
                 // runs on the input thread (frozen UI, Ctrl+C queued).
                 CommandEffect::ShowWidget(settings_text(
-                    &self.config,
+                    &crate::lock(&self.config),
                     live.as_deref(),
                     Some(&theme),
                     self.resolved_shell.as_ref(),
@@ -569,9 +581,9 @@ impl Ui {
                 .unwrap_or_else(|p| p.into_inner())
                 .clone();
             let effective = match suffix_level.as_deref() {
-                Some(level) => self.config.clamp_thinking(Some(level), &chosen.id),
+                Some(level) => crate::lock(&self.config).clamp_thinking(Some(level), &chosen.id),
                 None if chosen.id != previous => {
-                    self.config.switch_thinking(current.as_deref(), &chosen.id)
+                    crate::lock(&self.config).switch_thinking(current.as_deref(), &chosen.id)
                 }
                 None => current,
             };
@@ -699,9 +711,9 @@ impl Ui {
             .unwrap_or_else(|p| p.into_inner())
             .clone();
         let effective = match suffix_level {
-            Some(level) => self.config.clamp_thinking(Some(level), model_id),
+            Some(level) => crate::lock(&self.config).clamp_thinking(Some(level), model_id),
             None if model_id != previous => {
-                self.config.switch_thinking(current.as_deref(), model_id)
+                crate::lock(&self.config).switch_thinking(current.as_deref(), model_id)
             }
             None => current,
         };
@@ -747,7 +759,7 @@ impl Ui {
                 .unwrap_or_else(|p| p.into_inner())
                 .id
                 .clone();
-            let default_id = super::resolve_model_id(&ui.config, true, &adapter);
+            let default_id = super::resolve_model_id(&crate::lock(&ui.config), true, &adapter);
             let pick = listed
                 .iter()
                 .find(|model| model.id == current)
@@ -783,7 +795,7 @@ impl Ui {
             .clone();
         let index = models.iter().position(|model| model.id == current);
         let Some(next) = crate::models::cycle_index(index, models.len(), forward) else {
-            return if self.config.models_enabled().is_empty() {
+            return if crate::lock(&self.config).models_enabled().is_empty() {
                 "only one model available".to_string()
             } else {
                 "only one model in scope".to_string()

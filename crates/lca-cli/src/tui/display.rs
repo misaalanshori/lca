@@ -69,36 +69,44 @@ pub(super) fn model_rows(
 ) -> Vec<lca_ui::ModelRow> {
     models
         .iter()
-        .filter_map(|model| {
-            let id = model.id.trim();
-            if id.is_empty() {
-                return None;
-            }
-            Some(if id.contains('/') {
-                // Already provider-qualified: printing it twice helps nobody.
-                (id.to_string(), id.to_string())
-            } else {
-                // gh #177: a model from another provider names that
-                // provider. gh #31: the row names the service that will
-                // bill the call. The provider says so per model - in
-                // `extras`, the carrier the WIT record already had - and
-                // the caller's provider name is only the fallback for a
-                // provider that carries no per-model identity (a bundled
-                // or fake one).
-                let foreign = model
-                    .extras
-                    .get("provider")
-                    .filter(|origin| *origin != provider);
-                let label = foreign
-                    .map(String::as_str)
-                    .or_else(|| model.extras.get("label").map(String::as_str));
-                match label {
-                    Some(label) => (id.to_string(), format!("{id} ({label})")),
-                    None => (id.to_string(), format!("{id} ({provider})")),
-                }
-            })
-        })
+        .filter_map(|model| model_label(model, provider))
         .collect()
+}
+
+/// The `(id, label)` halves of [`model_rows`] for one model (gh #204):
+/// the checklist reuses the label rule without the list shape. `None`
+/// for a blank id.
+pub(super) fn model_label(
+    model: &lca_protocol::ModelInfo,
+    provider: &str,
+) -> Option<(String, String)> {
+    let id = model.id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(if id.contains('/') {
+        // Already provider-qualified: printing it twice helps nobody.
+        (id.to_string(), id.to_string())
+    } else {
+        // gh #177: a model from another provider names that
+        // provider. gh #31: the row names the service that will
+        // bill the call. The provider says so per model - in
+        // `extras`, the carrier the WIT record already had - and
+        // the caller's provider name is only the fallback for a
+        // provider that carries no per-model identity (a bundled
+        // or fake one).
+        let foreign = model
+            .extras
+            .get("provider")
+            .filter(|origin| *origin != provider);
+        let label = foreign
+            .map(String::as_str)
+            .or_else(|| model.extras.get("label").map(String::as_str));
+        match label {
+            Some(label) => (id.to_string(), format!("{id} ({label})")),
+            None => (id.to_string(), format!("{id} ({provider})")),
+        }
+    })
 }
 
 /// One `/model` invocation: no argument lists (the picker), a known

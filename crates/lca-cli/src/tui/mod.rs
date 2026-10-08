@@ -98,8 +98,10 @@ pub(crate) struct Ui {
     flags: crate::CliFlags,
     /// The session store.
     store: Arc<SessionStore>,
-    /// The merged configuration.
-    config: Config,
+    /// The merged configuration, swappable at runtime (gh #204's
+    /// checklist and gh #130's reload both write through this cell, so
+    /// the cycle always reads the live scope, never a stale copy).
+    config: Mutex<Config>,
     /// The shared grant store (one owner: ADR-0006).
     grants: Arc<Mutex<GrantStore>>,
     /// The session the interface is showing; swappable (`/tree`, `/resume`).
@@ -438,6 +440,13 @@ fn model_context_window(provider: &dyn Provider, model_id: &str) -> u32 {
         .unwrap_or(0)
 }
 
+/// Swap the live configuration scope (gh #204): the `/scoped-models`
+/// checklist writes through this cell, so the model cycle reads the
+/// live scope without a restart. `/reload` swaps the whole cell.
+pub(super) fn apply_models_scope(config: &Mutex<Config>, ids: Vec<String>) {
+    crate::lock(config).set_models_enabled(ids);
+}
+
 /// The agent config for the resolved model and registry.
 #[allow(clippy::too_many_arguments)]
 fn agent_config_for(
@@ -759,7 +768,7 @@ impl Ui {
             temp_dir: temp_dir.clone(),
             flags: flags.clone(),
             store,
-            config,
+            config: Mutex::new(config),
             grants,
             current_session,
             resume_picker,

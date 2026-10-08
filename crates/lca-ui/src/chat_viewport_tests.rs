@@ -3,7 +3,7 @@
 //! Split from `chat_tests.rs`, which crossed the workspace's 1,200-line
 //! ceiling (gate 11) with these rows in it.
 
-use super::tests::chat;
+use super::chat;
 
 // Verifies: gh #35 (the headline) - in fullscreen the dock pins: the
 // editor and footer occupy the same rows whatever the transcript's
@@ -264,7 +264,7 @@ fn the_prompt_jump_measures_scrolls_against_the_transcript() {
 #[test]
 fn the_popup_never_pushes_the_editor_offscreen() {
     use super::Chat;
-    use super::tests::options;
+    use super::options;
     use std::sync::Arc;
     let mut opts = options();
     opts.slash_commands = (0..30).map(|i| format!("/cmd{i:02}")).collect();
@@ -306,7 +306,7 @@ fn the_popup_never_pushes_the_editor_offscreen() {
 #[test]
 fn the_popup_window_follows_the_selection() {
     use super::Chat;
-    use super::tests::options;
+    use super::options;
     use std::sync::Arc;
     let mut opts = options();
     opts.slash_commands = (0..30).map(|i| format!("/cmd{i:02}")).collect();
@@ -337,7 +337,7 @@ fn the_popup_window_follows_the_selection() {
 #[test]
 fn the_selected_popup_row_is_highlighted() {
     use super::Chat;
-    use super::tests::options;
+    use super::options;
     use std::sync::Arc;
     let mut opts = options();
     opts.slash_commands = (0..30).map(|i| format!("/cmd{i:02}")).collect();
@@ -378,7 +378,7 @@ fn the_selected_popup_row_is_highlighted() {
 // Verifies: gh #175 - clicking a popup row applies that completion.
 #[test]
 fn clicking_a_popup_row_applies_it() {
-    use super::tests::options;
+    use super::options;
     use super::{Chat, ClickOutcome};
     use std::sync::Arc;
     let mut opts = options();

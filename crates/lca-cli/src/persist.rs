@@ -11,13 +11,42 @@ pub fn persist_setting(key: &str, value: Option<&str>) -> std::io::Result<()> {
     persist_setting_at(&crate::config_file(), key, value)
 }
 
+/// Persist a string list (gh #204): `models.enabled` is the first list
+/// the interface writes; an empty list removes the key (no restriction).
+pub fn persist_setting_list(key: &str, values: &[String]) -> std::io::Result<()> {
+    persist_setting_list_at(&crate::config_file(), key, values)
+}
+
+/// [`persist_setting_list`] against an explicit path (the testable half).
+fn persist_setting_list_at(
+    path: &std::path::Path,
+    key: &str,
+    values: &[String],
+) -> std::io::Result<()> {
+    let values = (!values.is_empty())
+        .then(|| toml_edit::Item::Value(toml_edit::Value::Array(values.iter().collect())));
+    persist_item_at(path, key, values)
+}
+
 /// [`persist_setting`] against an explicit path (the testable half).
 fn persist_setting_at(
     path: &std::path::Path,
     key: &str,
     value: Option<&str>,
 ) -> std::io::Result<()> {
-    use toml_edit::{DocumentMut, value as toml_value};
+    use toml_edit::value as toml_value;
+    persist_item_at(path, key, value.map(toml_value))
+}
+
+/// Write one dotted-key item (the shared half of the scalar and list
+/// writers): walk-or-create the tables, set or remove the leaf, publish
+/// atomically.
+fn persist_item_at(
+    path: &std::path::Path,
+    key: &str,
+    value: Option<toml_edit::Item>,
+) -> std::io::Result<()> {
+    use toml_edit::DocumentMut;
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let mut doc = text
         .parse::<DocumentMut>()
@@ -44,7 +73,7 @@ fn persist_setting_at(
         }
     }
     match value {
-        Some(value) => table[leaf] = toml_value(value),
+        Some(value) => table[leaf] = value,
         None => {
             table.remove(leaf);
         }
@@ -232,6 +261,47 @@ mod tests {
         );
         let doc = text.parse::<toml_edit::DocumentMut>().expect("parse");
         assert_eq!(doc["cache"]["noise_floor_tokens"].as_str(), Some("9"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+
+    // Verifies: gh #204 - a string list persists as a TOML array the
+    // config loader reads back (round trip through LoadInput), and an
+    // empty list removes the key (no restriction, pi's normalize rule).
+    #[test]
+    fn persist_setting_list_round_trips_and_clears() {
+        let root = lca_testkit::scratch_path("lca-persist-list");
+        let path = root.join("config.toml");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        std::fs::write(&path, "provider = \"x\"\n").expect("seed");
+        persist_setting_list_at(
+            &path,
+            "models.enabled",
+            &["aaa".to_string(), "bbb".to_string()],
+        )
+        .expect("write");
+        let text = std::fs::read_to_string(&path).expect("read");
+        let loaded = lca_config::Config::load(&lca_config::LoadInput {
+            user_file: Some(path.clone()),
+            ..Default::default()
+        })
+        .expect("load");
+        assert_eq!(
+            loaded.models_enabled(),
+            &["aaa".to_string(), "bbb".to_string()],
+            "{text}"
+        );
+        persist_setting_list_at(&path, "models.enabled", &[]).expect("clear");
+        let cleared = lca_config::Config::load(&lca_config::LoadInput {
+            user_file: Some(path.clone()),
+            ..Default::default()
+        })
+        .expect("reload");
+        assert!(cleared.models_enabled().is_empty(), "cleared means all");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

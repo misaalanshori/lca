@@ -2,7 +2,7 @@
 //! for the workspace's 1,200-line file ceiling. The fixtures
 //! (`options`, `chat`) stay in `chat_tests.rs` and are imported from it.
 
-use super::tests::chat;
+use super::chat;
 use crate::state::Action;
 
 // Verifies: gh #124 - a confirm dialog answers on y/n and closes, and
