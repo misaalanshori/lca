@@ -309,12 +309,16 @@ impl Ui {
                         lca_protocol::TrustVote::Undecided => {}
                     }
                     // Prompt only when there is something to gate: a project
-                    // `.lca/config.toml` that is not trusted yet (ADR-0039).
+                    // `.lca/config.toml` that is not trusted yet (ADR-0039),
+                    // or project-local extensions waiting on that same
+                    // trust (gh #138).
                     let trusted = grants
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
                         .is_trusted_here(&cwd);
-                    !trusted && cwd.join(".lca").join("config.toml").is_file()
+                    !trusted
+                        && (cwd.join(".lca").join("config.toml").is_file()
+                            || project_extensions_wait(&cwd))
                 }))
             },
             trust_apply: {
@@ -857,6 +861,16 @@ impl Ui {
 }
 
 /// Open `$EDITOR`/`$VISUAL` on the prompt text (P6).
+/// Whether project-local extensions wait on trust (gh #138): the
+/// directory exists and holds at least one entry, so there is
+/// something for the trust prompt to gate. Empty or absent costs a
+/// stat, never a prompt.
+fn project_extensions_wait(cwd: &std::path::Path) -> bool {
+    std::fs::read_dir(cwd.join(".lca").join("extensions"))
+        .map(|entries| entries.take(1).any(|entry| entry.is_ok()))
+        .unwrap_or(false)
+}
+
 fn external_editor(text: &str) -> Option<String> {
     let editor = std::env::var("VISUAL")
         .ok()

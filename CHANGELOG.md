@@ -126,6 +126,10 @@ Dates are UTC.
 - **`builtin:` disable syntax (gh #139).** `lca ext disable
   builtin:compaction-default` writes the same per-project flag the
   loader reads for the plain name (pi's spelling); no second record.
+- **Project-local extensions (gh #138).** `.lca/extensions/<name>/`
+  (`extension.toml` + `component.wasm`) loads when the project is
+  trusted, grants prompting as usual; untrusted projects ignore it.
+  Most-specific scope wins over installed copies.
 - **Session environment for shell children (gh #129).** A turn's
   shell sees `LCA_SESSION_ID`/`LCA_SESSION_DIR`/`LCA_PROVIDER`/
   `LCA_MODEL`/`LCA_THINKING`/`LCA_DATA_DIR` (pi's `PI_*` row under

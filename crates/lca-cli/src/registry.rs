@@ -1,7 +1,8 @@
-//! The extension registry every front end assembles (ADR-0013): installed
-//! copies first (an installed copy shadows the bundled one of the same
-//! name), the native first-party set, the bundled provider, and enablement
-//! last (FR-DIST-8, FR-PROV-9).
+//! The extension registry every front end assembles (ADR-0013):
+//! project-local copies first (a repo's own tool shadows a same-named
+//! installed one, gh #138), then installed (an installed copy shadows
+//! the bundled one of the same name), the native first-party set, the
+//! bundled provider, and enablement last (FR-DIST-8, FR-PROV-9).
 //!
 //! The interface and headless mode built this inline; `--list-models`
 //! needs the very same registry with no session to hang a stats source on,
@@ -34,6 +35,14 @@ pub(crate) fn assemble(
     // extensions (providers still resolve, or the run cannot start).
     // Explicit `-e` paths load after everything, consent and all.
     if !flags.no_extensions {
+        crate::ext::load_project_local(
+            &mut registry,
+            cwd,
+            config.extensions_log_limit_bytes() as usize,
+            shared_prompt.clone(),
+            shared_dialogs.clone(),
+            grants,
+        );
         crate::ext::load_installed(
             &mut registry,
             cwd,

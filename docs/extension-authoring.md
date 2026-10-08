@@ -367,6 +367,10 @@ lca ext install ghcr.io/yourname/word-count:abi-0.2
 
 An OCI registry is not the only option. Any HTTPS host works: zip the component and `extension.toml` together with nothing else added, publish two URLs the same way, one for the fixed version and one that always points at the current release, and a user installs with `lca ext install https://yourhost.example/word-count-abi-0.2.zip`. The update mechanics are identical either way; see ADR-0010.
 
+## Project-local extensions
+
+A repo can ship its own tools without publishing (gh #138): drop one directory per extension into `.lca/extensions/`, each holding an `extension.toml` and a `component.wasm` — the same two files an install lays down, minus the digest (the repo is the record). They load when the project is trusted (persistent or session trust; an untrusted project ignores the directory, and its presence triggers the trust prompt like a `.lca/config.toml` does). Grants still prompt exactly as installed extensions do, and `lca ext disable <name>` applies. Most-specific scope wins: a project-local extension shadows a same-named installed one. `--no-extensions` skips them with everything else.
+
 ## Versioning
 
 The extension version is yours. The ABI version is not.
