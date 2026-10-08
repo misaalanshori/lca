@@ -442,3 +442,37 @@ fn fork_runs_the_tip_clone() {
     );
     assert_eq!(session_logs(&box_).len(), 2, "parent plus fork");
 }
+
+// Verifies: gh #71 - the canonical pipe idiom end to end: piped stdin
+// prepends the first prompt the faux provider sees.
+#[test]
+fn piped_stdin_prepends_the_first_prompt() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("reviewed"))]));
+    let box_ = sandbox("headless-pipe");
+    let run = box_.run_with_stdin(
+        Some(&mock),
+        &[
+            "--model",
+            "zen-free",
+            "--allow-host",
+            "127.0.0.1",
+            "-p",
+            "review",
+        ],
+        "DIFF-BODY",
+    );
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let logs = session_logs(&box_);
+    assert_eq!(logs.len(), 1);
+    assert_eq!(
+        user_texts(logs.values().next().expect("the session log")),
+        vec!["DIFF-BODYreview".to_string()],
+        "stdin prepends in pi order"
+    );
+}
