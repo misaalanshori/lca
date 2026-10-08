@@ -10,3 +10,4 @@ pub mod latex;
 pub mod markdown;
 pub mod mermaid;
 pub mod paste;
+pub mod tabs;
