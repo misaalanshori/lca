@@ -123,6 +123,12 @@ Dates are UTC.
   unrelated `true` no longer enables) with precedence persisted >
   config > scrollback, and malformed persistence falls back with a
   transcript-head warning.
+- **Proxy variables honored (gh #145).** The `net` host client
+  routes through `HTTP_PROXY`/`HTTPS_PROXY` (`ALL_PROXY` fallback,
+  `NO_PROXY` bypass, lowercase honored): absolute form for http,
+  `CONNECT` tunnels for https (pi's `proxyTunnel` shape). Grant and
+  rebinding checks still run first on direct DNS; loopback needs an
+  explicit `NO_PROXY` entry.
 
 ### Fixed
 - **Session temp without the global (gh #160).** `SESSION_TEMP`

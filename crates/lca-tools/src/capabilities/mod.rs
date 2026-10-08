@@ -31,6 +31,7 @@ mod errors;
 mod net;
 #[cfg(test)]
 mod pinned_tests;
+mod proxy;
 #[cfg(test)]
 mod query_tests;
 mod store;
@@ -96,8 +97,7 @@ pub struct CapabilityGrants {
     pub tools: bool,
 }
 
-type HttpClient =
-    Client<hyper_rustls::HttpsConnector<HttpConnector<PinnedResolver>>, Full<hyper::body::Bytes>>;
+type HttpClient = Client<hyper_rustls::HttpsConnector<proxy::ProxyTcp>, Full<hyper::body::Bytes>>;
 
 /// A resolver that returns the address [`Capabilities::net_request`] already
 /// checked for a hostname, so hyper cannot re-resolve to a different address
@@ -336,11 +336,15 @@ impl Capabilities {
         // default `enforce_http` rejects the scheme before TLS is even
         // considered.
         http.enforce_http(false);
+        // gh #145: the proxy layer sits under rustls, over the pinned
+        // connector, so direct paths keep their exact behavior and
+        // proxied ones inherit the pin/DNS discipline above.
+        let proxied = proxy::ProxyTcp::new(http, proxy::proxies_from_env());
         let https = hyper_rustls::HttpsConnectorBuilder::new()
             .with_webpki_roots()
             .https_or_http()
             .enable_http1()
-            .wrap_connector(http);
+            .wrap_connector(proxied);
         Capabilities {
             name,
             grants,

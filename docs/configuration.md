@@ -202,6 +202,8 @@ provider reads:
 | `OPENAI_PROMPT_CACHE_KEY` | Set to `0` to stop sending `prompt_cache_key`. **Default: on.** The key is the clamped session id, which is OpenAI's native cache-affinity parameter; some strict proxies reject unknown body fields, which is what the opt-out is for. |
 | `OPENAI_SUPPORTS_REASONING` | Set to `0` to stop sending `reasoning_effort` when the session's `thinking` level is set. **Default: on.** Same reason as the cache-key opt-out: a strict proxy that rejects unknown body fields. |
 
+Proxy variables are standard, not `LCA_`-prefixed (gh #145): `HTTP_PROXY`/`HTTPS_PROXY` (lowercase honored), `ALL_PROXY` as the fallback, `NO_PROXY` for bypasses (curl's tail match, `:port` qualifiers, `*`). They route the `net` host client's outbound requests (absolute form for http, `CONNECT` tunnels for https); loopback targets need an explicit `NO_PROXY` entry or they route into the proxy too. Read once per client build: changing them needs a restart.
+
 ## What does not live here
 
 **Credentials.** Tokens and keys go in the credential store, never in configuration and never in the session log (FR-CFG-5).

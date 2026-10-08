@@ -27,6 +27,7 @@ hyper-util.workspace = true
 tower-service.workspace = true
 http-body-util.workspace = true
 hyper-rustls.workspace = true
+
 # Dependency justification (SRDD closed list + review): `regex` powers the
 # built-in grep tool. Writing a correct regex engine is a multi-year project
 # (the same argument ADR-0001 makes for not writing a runtime), and grep

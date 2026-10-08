@@ -662,3 +662,201 @@ fn the_net_gate_sets_a_default_user_agent_and_preserves_a_caller_one() {
     let _ = server.join().expect("server");
     assert_eq!(body, "mine/1", "a caller-set UA is preserved");
 }
+
+// Verifies: gh #145 (pi's `HTTP_PROXY` row) — with `HTTP_PROXY` set, a
+// plain-http request travels through the proxy in absolute form, and
+// the target still answers.
+#[test]
+fn proxy_env_routes_plain_http_through_the_proxy() {
+    let (target, server) = canned_server("via-proxy");
+    let (proxy_addr, seen, proxy) = forward_proxy(1);
+    let _env = ProxyEnv::set(&[("HTTP_PROXY", &format!("http://{proxy_addr}"))]);
+    let sandbox = Sandbox::new("proxy-used");
+    let caps = sandbox.caps(local_grants(&["127.0.0.1"]));
+
+    let handle = caps
+        .net_request("GET", &format!("{target}/proxied"), &[], None)
+        .expect("proxied request reaches the target");
+    assert_eq!(drain_body(&caps, handle), "via-proxy");
+    caps.net_close_response(handle).expect("close");
+    server.join().expect("target server");
+    proxy.join().expect("proxy");
+
+    let seen = seen.lock().expect("log").clone();
+    assert_eq!(seen.len(), 1, "exactly one proxied request: {seen:?}");
+    assert!(
+        seen[0].starts_with("GET http://"),
+        "absolute form at the proxy: {:?}",
+        seen[0]
+    );
+}
+
+// Verifies: gh #145 (pi's `NO_PROXY` row) — a `NO_PROXY` host bypasses
+// the proxy entirely: the target answers and the proxy sees nothing.
+#[test]
+fn no_proxy_bypasses_the_proxy() {
+    let (target, server) = canned_server("direct");
+    let (proxy_addr, seen, proxy) = forward_proxy(0);
+    let _env = ProxyEnv::set(&[
+        ("HTTP_PROXY", &format!("http://{proxy_addr}")),
+        ("NO_PROXY", "127.0.0.1"),
+    ]);
+    let sandbox = Sandbox::new("proxy-bypassed");
+    let caps = sandbox.caps(local_grants(&["127.0.0.1"]));
+
+    let handle = caps
+        .net_request("GET", &format!("{target}/direct"), &[], None)
+        .expect("bypassed request reaches the target");
+    assert_eq!(drain_body(&caps, handle), "direct");
+    caps.net_close_response(handle).expect("close");
+    server.join().expect("target server");
+    proxy.join().expect("proxy");
+
+    assert!(
+        seen.lock().expect("log").is_empty(),
+        "the proxy saw nothing"
+    );
+}
+
+// Verifies: gh #145 — the lowercase `http_proxy` form is honored too
+// (curl convention); only the variable name differs from the row above.
+#[test]
+fn lowercase_proxy_env_is_honored() {
+    let (target, server) = canned_server("via-lowercase-proxy");
+    let (proxy_addr, seen, proxy) = forward_proxy(1);
+    let _env = ProxyEnv::set(&[("http_proxy", &format!("http://{proxy_addr}"))]);
+    let sandbox = Sandbox::new("proxy-lowercase");
+    let caps = sandbox.caps(local_grants(&["127.0.0.1"]));
+
+    let handle = caps
+        .net_request("GET", &format!("{target}/proxied"), &[], None)
+        .expect("proxied request reaches the target");
+    assert_eq!(drain_body(&caps, handle), "via-lowercase-proxy");
+    caps.net_close_response(handle).expect("close");
+    server.join().expect("target server");
+    proxy.join().expect("proxy");
+    assert_eq!(seen.lock().expect("log").len(), 1);
+}
+
+// A minimal forwarding HTTP proxy for the gh #145 rows: accepts up to
+// `max` connections, relays each to its absolute-URI target, and logs
+// every request line it sees. Plain blocking threads, like the canned
+// servers above; `max = 0` accepts nothing (the bypass row).
+fn forward_proxy(max: usize) -> (String, Arc<Mutex<Vec<String>>>, std::thread::JoinHandle<()>) {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_for_thread = seen.clone();
+    let listener = StdTcpListener::bind("127.0.0.1:0").expect("proxy bind");
+    let addr = listener.local_addr().expect("proxy addr");
+    // Nonblocking accept with a deadline: without the gh #145
+    // implementation nothing ever connects, and the test must fail on
+    // its assertions, not hang the suite on `join`.
+    listener.set_nonblocking(true).expect("nonblocking");
+    let handle = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut served = 0usize;
+        while served < max && std::time::Instant::now() < deadline {
+            let stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            served += 1;
+            let mut client = stream;
+            // The listener is nonblocking; the session is not (Linux
+            // and macOS disagree about inheritance, so say it).
+            let _ = client.set_nonblocking(false);
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && head.len() < 65536 {
+                match client.read(&mut byte) {
+                    Ok(1) => head.push(byte[0]),
+                    _ => break,
+                }
+            }
+            let text = String::from_utf8_lossy(&head).into_owned();
+            let request_line = text.lines().next().unwrap_or_default().to_string();
+            seen_for_thread
+                .lock()
+                .expect("log")
+                .push(request_line.clone());
+            let target = request_line
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default()
+                .trim_start_matches("http://")
+                .to_string();
+            let (authority, _) = target.split_once('/').unwrap_or((&target, ""));
+            if let Ok(mut upstream) = std::net::TcpStream::connect(authority) {
+                let _ = upstream.write_all(&head);
+                let mut upstream_read = upstream.try_clone().expect("clone");
+                let mut client_write = client.try_clone().expect("clone");
+                let relay = std::thread::spawn(move || {
+                    let _ = std::io::copy(&mut upstream_read, &mut client_write);
+                });
+                let _ = std::io::copy(&mut client, &mut upstream);
+                let _ = relay.join();
+            }
+        }
+    });
+    (addr.to_string(), seen, handle)
+}
+
+/// Holds the process proxy environment for one test (gh #145): the
+/// `env_lock` discipline serializes environment users, and drop
+/// restores whatever was there before.
+struct ProxyEnv {
+    saved: Vec<(String, Option<std::ffi::OsString>)>,
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl ProxyEnv {
+    fn set(vars: &[(&str, &str)]) -> ProxyEnv {
+        let guard = lca_testkit::fixture::env_lock();
+        // SAFETY: the lock is held for the whole fixture life; see
+        // `TestEnv` for the discipline.
+        let mut saved = Vec::new();
+        for (key, value) in vars {
+            saved.push((key.to_string(), std::env::var_os(key)));
+            unsafe { std::env::set_var(key, value) };
+        }
+        // A proxy test must not inherit a developer's real proxy (or a
+        // previous test's): clear every proxy variable not set above.
+        for key in [
+            "HTTP_PROXY",
+            "http_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
+        ] {
+            if vars.iter().all(|(set, _)| *set != key) {
+                saved.push((key.to_string(), std::env::var_os(key)));
+                unsafe { std::env::remove_var(key) };
+            }
+        }
+        ProxyEnv {
+            saved,
+            _guard: guard,
+        }
+    }
+}
+
+impl Drop for ProxyEnv {
+    fn drop(&mut self) {
+        // SAFETY: same lock discipline as in `set`.
+        for (key, value) in self.saved.drain(..) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(&key, value),
+                    None => std::env::remove_var(&key),
+                }
+            }
+        }
+    }
+}
