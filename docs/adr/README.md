@@ -62,6 +62,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0041 | The `shell` tool's interpreter selection and command transport | Accepted | Real-world driving |
 | 0042 | Yolo mode, and the read-only fatigue cut | Accepted | Real-world driving |
 | 0043 | The unstable release line | Accepted | Unstable line |
+| 0044 | No dynamic CLI flags or shortcuts in the extension ABI | Accepted | Phase-4B |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
 

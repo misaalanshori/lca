@@ -46,7 +46,7 @@ raw colors, fork-directories over in-file branching (until #37 lands),
 vocabulary over pi's `agent_start/message_start/...` stream, and the
 read-before-edit staleness guard over pi's blind edits (gh #117: kept,
 but off by default behind `tool.edit_requires_read`, so the default
-behavior is pi parity). A parity case
+behavior is pi parity). Extension-registered CLI flags and shortcuts over pi's `registerFlag`/`registerShortcut` (gh #79, PG-027/PG-054): refused by ADR-0044 — per-extension knobs are config keys, actions are slash commands and (when it lands) `lca <ext>` delegation. A parity case
 that fails because of one of these is a wrong case, not a failing product.
 
 ## Red witnesses (4, `#[ignore]`-gated)

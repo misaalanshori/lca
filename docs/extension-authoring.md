@@ -383,6 +383,10 @@ The ABI is WIT, so any language with Component Model tooling can implement it. T
 
 The practical constraint in 0.1 is that Rust has the most complete tooling. Go, C, and Python all have generators at varying maturity. An author using another language should expect to hit rough edges in the toolchain rather than in the ABI.
 
+## Per-extension knobs are config keys, not CLI flags
+
+An extension cannot add a `--flag` or a keybinding (ADR-0044, gh #79): the CLI surface and the keymap are static, so `--help`, completions, and startup order never depend on what is installed. A knob the extension needs is a typed config key through the normal settings process — documented in `docs/configuration.md`, visible in `/settings`, file over env over flag. An action it needs is a slash command (the `command` world), and later an `lca <ext>` subcommand (gh #171). Ask for the key, not the flag.
+
 ## Common mistakes
 
 Asking for `read-write` on the workspace when the extension only reads. Reviewers notice.
