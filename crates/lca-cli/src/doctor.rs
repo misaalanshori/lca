@@ -1,8 +1,8 @@
 //! The `lca doctor` diagnostics dump (gh #81, pi's diagnostics row):
 //! version, paths, extensions, config, sessions, crashes. Reads only;
-//! every absent file is a row, never an error. [`report`] is the
-//! testable pure-ish core (it reads the filesystem but changes
-//! nothing); [`run`] prints it.
+//! every absent file is a row, never an error. `report` is the
+//! testable core (it reads the filesystem but changes nothing);
+//! `run` prints it.
 
 use std::path::{Path, PathBuf};
 

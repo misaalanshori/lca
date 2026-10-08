@@ -8,6 +8,7 @@
 pub mod alt_screen;
 pub mod colors;
 pub mod core;
+pub mod crash;
 pub mod keybindings;
 pub mod keys;
 pub mod main_screen;

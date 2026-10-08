@@ -31,7 +31,7 @@ pub use capabilities::{
     STATE_VALUE_MAX_BYTES,
 };
 pub use open::{UrlLauncher, open_url, url_launchers, windows_url_launcher};
-pub use ops::{Entry, ExecOutcome, NativeOps, Stat, ToolOps};
+pub use ops::{Entry, ExecOutcome, NativeOps, SessionEnv, Stat, ToolOps};
 pub use paths::{is_inside, resolve_target, sha256_hex};
 pub use process::{TreeChild, read_up_to, spawn_direct, write_all};
 pub use pty::PtyChild;
@@ -133,43 +133,6 @@ fn fingerprint(bytes: &[u8]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     hasher.finish()
-}
-
-/// The session context a shell child sees in its environment (gh #129,
-/// pi's `PI_SESSION_ID`/`PI_PROVIDER`/`PI_MODEL` row under `LCA_*` names).
-/// Identifiers and directory paths only: nothing here is a secret, so
-/// echoing it into scrollback or logs is safe by construction.
-#[derive(Debug, Clone, Default)]
-pub struct SessionEnv {
-    /// The session id (`echo $LCA_SESSION_ID` prints it, the literal
-    /// acceptance).
-    pub session_id: String,
-    /// The session's storage directory.
-    pub session_dir: PathBuf,
-    /// The active provider extension's name.
-    pub provider: String,
-    /// The active model identifier.
-    pub model: String,
-    /// The effective thinking level, when the session sets one.
-    pub thinking: Option<String>,
-    /// The data home (`~/.lca`).
-    pub data_dir: PathBuf,
-}
-
-impl SessionEnv {
-    /// Export the six variables onto a child command, leaving every
-    /// ambient variable untouched (an ambient `LCA_MODEL` from the
-    /// user's own shell keeps its value — the session's wins here).
-    pub(crate) fn apply(&self, cmd: &mut tokio::process::Command) {
-        cmd.env("LCA_SESSION_ID", &self.session_id)
-            .env("LCA_SESSION_DIR", &self.session_dir)
-            .env("LCA_PROVIDER", &self.provider)
-            .env("LCA_MODEL", &self.model)
-            .env("LCA_DATA_DIR", &self.data_dir);
-        if let Some(thinking) = &self.thinking {
-            cmd.env("LCA_THINKING", thinking);
-        }
-    }
 }
 
 /// The built-in tool executor.

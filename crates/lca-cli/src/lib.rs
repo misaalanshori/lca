@@ -122,6 +122,8 @@ mod headless;
 mod invoke;
 mod models;
 mod persist;
+/// Project-local extensions (gh #138).
+mod project_ext;
 pub(crate) mod prompt;
 /// Manifest-declared provider needs (gh #157): default hosts, the
 /// credential namespace, and the login env override, with no host
@@ -679,8 +681,7 @@ pub use session_cmds::{
 
 /// Dispatch a parsed command line; returns the process exit code.
 pub async fn run(cli: Cli) -> i32 {
-    // gh #81: crash context before anything that can panic.
-    diagnostics::init_crash_context();
+    diagnostics::init_crash_context(); // gh #81: before anything that can panic.
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,
         Err(err) => {
@@ -707,9 +708,8 @@ pub async fn run(cli: Cli) -> i32 {
         Ok(prepared) => prepared,
         Err(code) => return code,
     };
-    // gh #70: skill packs merge, bad paths refuse.
     if let Err(code) = invoke::prepare_resources(&cli, &cwd, &mut flags) {
-        return code;
+        return code; // gh #70: skill packs merge, bad paths refuse.
     }
     // `--list-models` lists and exits (pi's "lists, then exits").
     if let Some(search) = cli.list_models.as_deref() {

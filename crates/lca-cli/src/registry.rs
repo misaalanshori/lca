@@ -35,7 +35,7 @@ pub(crate) fn assemble(
     // extensions (providers still resolve, or the run cannot start).
     // Explicit `-e` paths load after everything, consent and all.
     if !flags.no_extensions {
-        crate::ext::load_project_local(
+        crate::project_ext::load_project_local(
             &mut registry,
             cwd,
             config.extensions_log_limit_bytes() as usize,
