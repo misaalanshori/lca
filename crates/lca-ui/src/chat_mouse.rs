@@ -382,6 +382,51 @@ impl Chat {
 }
 
 impl Chat {
+    /// Whether a drawer tab shows this frame (gh #207): an open panel
+    /// always carries its ▶, a closed one shows ◀ only when an
+    /// extension actually registered for the panel region.
+    pub fn has_panel(&self) -> bool {
+        if self.world.panel_open {
+            return true;
+        }
+        self.world
+            .options
+            .render_regions
+            .as_ref()
+            .is_some_and(|render| !render("panel").is_empty())
+    }
+
+    /// The drawer tab's cell (gh #207): `(col, row)` - the right margin
+    /// when closed, the panel edge when open, vertically centered.
+    /// `None` with no panel region (zero clutter) or off fullscreen.
+    pub fn drawer_rect(&self, width: u16, height: u16) -> Option<(u16, u16)> {
+        if !self.screen_mode || !self.has_panel() || width == 0 || height == 0 {
+            return None;
+        }
+        let col = if self.world.panel_open {
+            width.saturating_sub(super::render::panel_width(width) as u16)
+        } else {
+            width.saturating_sub(1)
+        };
+        Some((col, height / 2))
+    }
+
+    /// Refresh the drawer hover flag (gh #207): the frame paints the
+    /// tab in accent while set.
+    pub fn refresh_drawer_hover(&mut self, col: u16, row: u16, width: u16, height: u16) {
+        self.drawer_hover = self.drawer_rect(width, height) == Some((col, row));
+    }
+
+    /// Click the drawer tab (gh #207): the same flip as Alt+X.
+    /// Returns false off the tab.
+    pub fn click_drawer(&mut self, col: u16, row: u16, width: u16, height: u16) -> bool {
+        if self.drawer_rect(width, height) != Some((col, row)) {
+            return false;
+        }
+        self.world.panel_open = !self.world.panel_open;
+        true
+    }
+
     /// Click-to-focus the composer (gh #165, pi's click-to-focus
     /// routing): a click inside the editor rows dismisses any open
     /// picker and places the caret under the pointer for immediate

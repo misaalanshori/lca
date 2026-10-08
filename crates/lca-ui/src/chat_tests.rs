@@ -1101,6 +1101,10 @@ mod command_tests;
 mod dialog_tests;
 
 #[cfg(test)]
+#[path = "chat_drawer_tests.rs"]
+mod drawer_tests;
+
+#[cfg(test)]
 #[path = "chat_overlay_tests.rs"]
 mod overlay_tests;
 

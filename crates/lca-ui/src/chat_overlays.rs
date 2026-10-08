@@ -107,6 +107,7 @@ impl Chat {
             }
             side_panel(viewport, width, &panel);
         }
+        self.paint_drawer_tab(viewport, width, height);
 
         // Highlight the search matches (FR-UI-12).
         if let Some(query) = &self.search
@@ -116,6 +117,28 @@ impl Chat {
                 *line = highlight_matches(line, query);
             }
         }
+    }
+
+    /// Paint the drawer tab over the margin (gh #207): `◀` opens, `▶`
+    /// closes - the visible face of the Alt+X binding. One cell only,
+    /// accent on hover, so an idle frame stays quiet.
+    fn paint_drawer_tab(&self, viewport: &mut [String], width: u16, height: u16) {
+        let Some((col, row)) = self.drawer_rect(width, height) else {
+            return;
+        };
+        let Some(line) = viewport.get_mut(row as usize) else {
+            return;
+        };
+        use lca_tui::engine::text::slice_by_column;
+        let glyph = if self.world.panel_open { "▶" } else { "◀" };
+        let role = if self.drawer_hover {
+            crate::theme::Role::Accent
+        } else {
+            crate::theme::Role::Border
+        };
+        let before = slice_by_column(line, 0, col as usize, false);
+        let after = slice_by_column(line, col as usize + 1, 10_000, false);
+        *line = format!("{before}{}{after}", (self.theme.role(role))(glyph));
     }
 
     /// Draw the open picker, if any (returns true when one was drawn).

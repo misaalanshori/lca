@@ -419,11 +419,13 @@ fn handle_mouse_event(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) -
     if chat.picker_open() {
         chat.scrollbar_hover = false;
         screen.set_scrollbar_hover(false);
+        chat.drawer_hover = false;
         return handle_picker_mouse(event, chat, screen);
     }
     if chat.world.modal_active() {
         chat.scrollbar_hover = false;
         screen.set_scrollbar_hover(false);
+        chat.drawer_hover = false;
         return false;
     }
     let (width, height) = chat.world.size;
@@ -463,6 +465,8 @@ fn handle_mouse_event(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) -
         } => {
             chat.refresh_scrollbar_hover(col, row, width, height, screen.scroll());
             screen.set_scrollbar_hover(chat.scrollbar_hover);
+            // Gh #207: the drawer tab lifts under hover.
+            chat.refresh_drawer_hover(col, row, width, height);
             false
         }
         MouseEvent::Move {
@@ -580,10 +584,14 @@ fn handle_input(
         // behind the chrome with it.
         if let Some((col, row)) = screen.take_clicked_cell() {
             let (width, height) = chat.world.size;
+            // Gh #207: the drawer tab is chrome - it toggles before
+            // any region or row behind it answers.
+            if chat.click_drawer(col, row, width, height) {
+                let _ = screen.take_clicked_link();
             // Gh #165: the composer owns its rows - a click there
             // focuses the editor (dismissing any picker) instead of
             // hit-testing the transcript behind it.
-            if chat.place_editor_caret(col, row, width, height) {
+            } else if chat.place_editor_caret(col, row, width, height) {
                 let _ = screen.take_clicked_link();
             } else {
                 match chat.click_extension(col, row, width, height) {

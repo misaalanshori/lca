@@ -131,6 +131,9 @@ pub struct Chat {
     /// a release on the same item confirms it, anywhere else just moves
     /// the highlight. `None` means no press owns the gesture.
     pub(crate) picker_press: Option<usize>,
+    /// Whether the pointer hovers the drawer tab (gh #207): the frame
+    /// paints it in accent while set.
+    pub drawer_hover: bool,
     /// The transcript's line count at the last frame (gh #35): scroll is
     /// measured from the live bottom, so growth is what tells a new line
     /// from a re-wrap when holding the reader's place.
@@ -279,6 +282,7 @@ impl Chat {
             scrollbar_hover: false,
             scroll_drag: None,
             picker_press: None,
+            drawer_hover: false,
             last_transcript_len: None,
             last_render_width: 0,
             search: None,

@@ -175,7 +175,7 @@ fn overlay_box_placed(
 
 /// Composite a side panel into the right column of every line.
 pub fn side_panel(base: &mut [String], width: u16, panel: &[String]) {
-    let panel_w = 40usize.min(width as usize / 2);
+    let panel_w = panel_width(width);
     for (i, base_line) in base.iter_mut().enumerate() {
         let text = panel.get(i).map(String::as_str).unwrap_or("");
         let text = lca_tui::engine::text::truncate_to_width(text, panel_w, "…", false);
@@ -187,6 +187,12 @@ pub fn side_panel(base: &mut [String], width: u16, panel: &[String]) {
         );
         *base_line = format!("{before}{text}");
     }
+}
+
+/// The extension panel's width (gh #207): one rule for the paint
+/// and the drawer tab, so they can never disagree.
+pub fn panel_width(width: u16) -> usize {
+    40usize.min(width as usize / 2)
 }
 
 #[cfg(test)]
