@@ -137,6 +137,29 @@ pub struct Cli {
     /// Start with every tool disabled.
     #[arg(long = "no-tools", visible_alias = "nt")]
     pub no_tools: bool,
+    // gh #69 (pi's `--session-id`): the exact project session id, or a
+    // fresh session created under it when absent.
+    /// Open the exact session id, creating it when absent.
+    #[arg(long = "session-id", value_name = "ID")]
+    pub session_id: Option<String>,
+    // gh #69 (pi's `--no-session`): a volatile run that persists
+    // nothing - sessions live in a temp dir dropped at exit. Grant
+    // decisions still persist (trust is not session state).
+    /// Run without persisting any session.
+    #[arg(long = "no-session")]
+    pub no_session: bool,
+    // gh #69 (pi's `-n/--name`): `-n` already skips context files, so
+    // the short stays there and the name is long-only.
+    /// Name the run's session (fresh sessions start titled; resumed
+    /// ones rename).
+    #[arg(long = "name", value_name = "NAME")]
+    pub name: Option<String>,
+    // gh #69 (pi's `--fork`): fork an existing session at its tip into
+    // this project and run it. Exclusive with the other selectors,
+    // combinable with `--session-id` (the fork's id) and `--name`.
+    /// Fork a session at its tip and run the fork.
+    #[arg(long = "fork", value_name = "ID")]
+    pub fork: Option<String>,
     // Deliberate divergence from pi (gh #8's DNA box): pi also has
     // `--api-key <key>`, and LCA will not add one. argv is world-readable
     // in the process list (`ps`), and the standing rule is that secrets
@@ -335,6 +358,11 @@ pub struct CliFlags {
     pub no_builtin_tools: bool,
     /// `--no-tools` (gh #67): every tool starts disabled. Run-scoped.
     pub no_tools: bool,
+    /// `--name` (gh #69): the run's display name. Run-scoped cosmetic,
+    /// never the files.
+    pub name: Option<String>,
+    /// `--no-session` (gh #69): volatile sessions. Run-scoped.
+    pub no_session: bool,
 }
 
 impl CliFlags {
@@ -352,6 +380,8 @@ impl CliFlags {
             exclude_tools: cli.exclude_tools.clone(),
             no_builtin_tools: cli.no_builtin_tools,
             no_tools: cli.no_tools,
+            name: cli.name.clone(),
+            no_session: cli.no_session,
         }
     }
 

@@ -89,6 +89,7 @@ pub async fn rpc(
         proposals,
         prompt_impl,
         _temp_guard: _,
+        _volatile: _,
     } = setup;
 
     // One stdout writer for events and responses alike.

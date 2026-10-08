@@ -98,6 +98,31 @@ pub enum Error {
         /// Where the cycle closed.
         session: String,
     },
+    /// A session id breaks pi's rules (gh #69): letters, numbers, `.`,
+    /// `_`, and `-`, starting and ending with a letter or number.
+    #[error("invalid session id `{id}`: use letters, numbers, `.`, `_`, `-`")]
+    InvalidId {
+        /// The rejected id.
+        id: String,
+    },
+}
+
+/// Whether a session id is usable (gh #69, pi's constraints): letters,
+/// numbers, `.`, `_`, and `-`, starting and ending alphanumerically.
+/// Generated ids always pass; anything else is refused before touching
+/// the store, so ids can never escape their directory.
+pub fn valid_session_id(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let edge = |byte: &u8| byte.is_ascii_alphanumeric();
+    if !edge(&bytes[0]) || !edge(&bytes[bytes.len() - 1]) {
+        return false;
+    }
+    bytes
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 /// Result alias for this crate.

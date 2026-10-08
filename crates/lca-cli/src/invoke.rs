@@ -293,6 +293,8 @@ pub fn interactive(
     model: Option<&str>,
     initial: &[String],
     initial_attachments: &[std::path::PathBuf],
+    fork: Option<&str>,
+    session_id: Option<&str>,
     allow_host: &[String],
     flags: &crate::CliFlags,
 ) -> i32 {
@@ -306,6 +308,8 @@ pub fn interactive(
         model,
         initial,
         initial_attachments,
+        fork,
+        session_id,
         allow_host,
         flags,
     ) {
@@ -356,6 +360,40 @@ pub fn apply_tool_selection(
     registry.set_builtin_active(selection.builtin);
     registry.set_tool_search(selection.tool_search);
     warnings
+}
+
+/// A volatile session store (gh #69: `--no-session`): a temp dir
+/// dropped on the way out, so a volatile run leaves no session files
+/// behind. Grant decisions still persist (trust is not session state).
+pub struct VolatileStore {
+    root: std::path::PathBuf,
+}
+
+impl VolatileStore {
+    /// Create the temp store root, failing loud (never a silent
+    /// fallback to the real store).
+    pub fn create() -> std::io::Result<Self> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0);
+        let root =
+            std::env::temp_dir().join(format!("lca-no-session-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&root)?;
+        Ok(VolatileStore { root })
+    }
+
+    /// The store root to build the session store on.
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+}
+
+impl Drop for VolatileStore {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
 }
 
 /// Read piped stdin (gh #71, pi's `readPipedStdin`): `None` on a

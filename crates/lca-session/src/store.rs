@@ -269,8 +269,23 @@ impl SessionStore {
 
     /// Create a session for `project_dir` and write its `session-start`.
     pub fn create_session(&self, project_dir: &Path, title: &str) -> Result<Session> {
+        self.create_session_with_id(project_dir, &ids::session_id(ids::now_ms()), title)
+    }
+
+    /// Create a session with a chosen id (gh #69: `--session-id`
+    /// creates it when absent). The id validates first, so it can
+    /// never escape its project directory.
+    pub fn create_session_with_id(
+        &self,
+        project_dir: &Path,
+        id: &str,
+        title: &str,
+    ) -> Result<Session> {
+        if !crate::valid_session_id(id) {
+            return Err(crate::Error::InvalidId { id: id.to_string() });
+        }
         let now = ids::now_ms();
-        let id = ids::session_id(now);
+        let id = id.to_string();
         let project = self.project_dir(project_dir);
         std::fs::create_dir_all(&project)?;
         let dir = project.join(&id);
@@ -516,6 +531,35 @@ impl SessionStore {
             });
         }
         self.session(project_dir, reference)
+    }
+
+    /// Rename a session's id (gh #69: `--fork X --session-id Y`
+    /// chooses the fork's id): meta carries no self-id and records
+    /// reference parents, so moving the directory and rebuilding the
+    /// index is the whole move.
+    pub fn reid(&self, session: &Session, new_id: &str) -> Result<Session> {
+        if !crate::valid_session_id(new_id) {
+            return Err(crate::Error::InvalidId {
+                id: new_id.to_string(),
+            });
+        }
+        let dir = session.dir().to_path_buf();
+        let target = dir
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .join(new_id);
+        if target.exists() {
+            return Err(crate::Error::UnknownSession {
+                id: new_id.to_string(),
+            });
+        }
+        std::fs::rename(&dir, &target)?;
+        let project = target
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .to_path_buf();
+        self.rebuild_index_from_key(&project)?;
+        Ok(Session::new(new_id.to_string(), target))
     }
 
     /// Rename a session: `meta.json` atomically, then the index cache.

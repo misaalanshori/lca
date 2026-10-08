@@ -291,3 +291,154 @@ fn tools_allowlist_reaches_the_model_request() {
         requests[1]
     );
 }
+
+// Verifies: gh #69 - `--no-session -p x` runs without persisting any
+// session files.
+#[test]
+fn no_session_leaves_no_session_files() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("volatile"))]));
+    let box_ = sandbox("headless-no-session");
+    let run = box_.run(
+        Some(&mock),
+        &["--model", "zen-free", "--no-session", "-p", "hi"],
+    );
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let sessions = box_.state_dir().join("sessions");
+    let leftovers: Vec<_> = std::fs::read_dir(&sessions)
+        .map(|entries| entries.flatten().collect())
+        .unwrap_or_default();
+    assert!(leftovers.is_empty(), "no session files: {leftovers:?}");
+}
+
+// Verifies: gh #69 - `--session-id` creates the id when absent and
+// reopens it on the next run; `--name` titles it.
+#[test]
+fn session_id_creates_reopens_and_names() {
+    fn meta_titles(box_: &common::Sandbox) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut stack = vec![box_.state_dir().join("sessions")];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.file_name().and_then(|n| n.to_str()) == Some("meta.json") {
+                    let text = std::fs::read_to_string(&path).expect("read meta");
+                    let meta: serde_json::Value = serde_json::from_str(&text).expect("meta parses");
+                    let id = path
+                        .parent()
+                        .and_then(|parent| parent.file_name())
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    out.push((id, meta["title"].as_str().unwrap_or("").to_string()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_text("one")),
+        Reply::Sse(sse_text("two")),
+    ]));
+    let box_ = sandbox("headless-session-id");
+    let first = box_.run(
+        Some(&mock),
+        &[
+            "--model",
+            "zen-free",
+            "--session-id",
+            "demo-1",
+            "--name",
+            "Demo",
+            "-p",
+            "hi",
+        ],
+    );
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(
+        meta_titles(&box_),
+        vec![("demo-1".to_string(), "Demo".to_string())],
+        "created under the id, titled"
+    );
+    let second = box_.run(
+        Some(&mock),
+        &[
+            "--model",
+            "zen-free",
+            "--session-id",
+            "demo-1",
+            "-p",
+            "again",
+        ],
+    );
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(
+        session_logs(&box_).len(),
+        1,
+        "the second run reopens the same session"
+    );
+}
+
+// Verifies: gh #69 - `--fork` clones the parent at its tip and runs
+// the fork.
+#[test]
+fn fork_runs_the_tip_clone() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_text("parent")),
+        Reply::Sse(sse_text("child")),
+    ]));
+    let box_ = sandbox("headless-fork");
+    let parent = box_.run(Some(&mock), &["--model", "zen-free", "-p", "start"]);
+    assert_eq!(
+        parent.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&parent.stderr)
+    );
+    let logs = session_logs(&box_);
+    assert_eq!(logs.len(), 1, "one parent session");
+    let parent_id = logs
+        .keys()
+        .next()
+        .expect("a log")
+        .split('/')
+        .rev()
+        .nth(1)
+        .expect("the id directory")
+        .to_string();
+    let fork = box_.run(
+        Some(&mock),
+        &["--model", "zen-free", "--fork", &parent_id, "-p", "forked"],
+    );
+    assert_eq!(
+        fork.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&fork.stderr)
+    );
+    assert_eq!(session_logs(&box_).len(), 2, "parent plus fork");
+}

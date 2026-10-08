@@ -14,6 +14,7 @@ use lca_config::Config;
 use lca_core::ExtensionRegistry;
 use lca_ext_native::StatsSource;
 use lca_permissions::{GrantStore, SharedPrompt};
+use lca_provider::Provider;
 
 /// Build the registry: installed extensions, the native first-party set,
 /// the bundled provider, then this project's enablement rules.
@@ -73,6 +74,54 @@ pub(crate) fn assemble(
         crate::lock(grants).extension_enabled(cwd, name) == Some(false)
     });
     registry
+}
+
+/// Register the bundled compaction strategy and return its backend.
+#[cfg(feature = "bundled-compaction-default")]
+#[allow(clippy::too_many_arguments)] // one more explicit than a regroup: every arg is used once, at one call site.
+pub(crate) fn register_compaction(
+    registry: &mut ExtensionRegistry,
+    provider: &Arc<dyn Provider>,
+    model_id: &str,
+    session_id: &str,
+    cwd: &Path,
+    shared_prompt: SharedPrompt,
+    grants: &Arc<Mutex<GrantStore>>,
+    temp: &Path,
+) -> Option<Arc<lca_core::ext_provider::ProviderBackend>> {
+    let backend = Arc::new(lca_core::ext_provider::ProviderBackend::new(
+        provider.clone(),
+        model_id.to_string(),
+        session_id.to_string(),
+    ));
+    let cap = crate::extension_capabilities(
+        cwd,
+        "compaction-default",
+        compaction_default::manifest_grants(),
+        shared_prompt,
+        grants.clone(),
+        // No `resources/` bag: a compaction strategy carries code.
+        lca_tools::ResourceSource::None,
+        temp,
+    );
+    cap.set_completion(backend.clone());
+    registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
+    Some(backend)
+}
+
+/// No bundled compaction: no backend.
+#[cfg(not(feature = "bundled-compaction-default"))]
+pub(crate) fn register_compaction(
+    _registry: &mut ExtensionRegistry,
+    _provider: &Arc<dyn Provider>,
+    _model_id: &str,
+    _session_id: &str,
+    _cwd: &Path,
+    _shared_prompt: SharedPrompt,
+    _grants: &Arc<Mutex<GrantStore>>,
+    _temp: &Path,
+) -> Option<Arc<lca_core::ext_provider::ProviderBackend>> {
+    None
 }
 
 #[cfg(test)]

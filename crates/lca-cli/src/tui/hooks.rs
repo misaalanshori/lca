@@ -692,7 +692,7 @@ impl Ui {
         let window = super::model_context_window(live.provider.as_ref(), &model_id);
         let image_policy = crate::models::image_policy_for(&live.provider.list_models(), &model_id);
         let session_id = crate::lock(&self.current_session).id().to_string();
-        let backend = super::register_compaction(
+        let backend = crate::registry::register_compaction(
             &mut fresh,
             &live.provider,
             &model_id,

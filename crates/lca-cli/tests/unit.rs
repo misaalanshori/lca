@@ -22,6 +22,8 @@ fn no_arguments_route_to_the_interactive_interface() {
             resume_picker: false,
             model: None,
             initial: Vec::new(),
+            fork: None,
+            session_id: None,
         }
     );
 }
@@ -107,6 +109,8 @@ fn resume_without_id_lists_sessions() {
             resume_picker: false,
             model: None,
             initial: Vec::new(),
+            fork: None,
+            session_id: None,
         }
     );
 }
@@ -394,6 +398,8 @@ fn bare_r_opens_the_picker_and_session_resumes_direct() {
             resume_picker: false,
             model: None,
             initial: Vec::new(),
+            fork: None,
+            session_id: None,
         }
     );
     assert_eq!(
@@ -403,6 +409,8 @@ fn bare_r_opens_the_picker_and_session_resumes_direct() {
             resume_picker: false,
             model: None,
             initial: Vec::new(),
+            fork: None,
+            session_id: None,
         }
     );
 }

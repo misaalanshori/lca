@@ -295,12 +295,69 @@ pub(crate) struct Setup {
     pub(crate) prompt_impl: HeadlessPrompt,
     // Held for the run: dropping it removes the session temp dir.
     pub(crate) _temp_guard: crate::SessionTempGuard,
+    // Held for a volatile run: dropping it removes the temp store.
+    pub(crate) _volatile: Option<crate::invoke::VolatileStore>,
 }
 
 /// Grants, config, provider, tools, and agent config for one headless
 /// session: every early exit maps the headless codes, exactly as the
 /// one-shot path did before the RPC loop shared it.
 #[allow(clippy::too_many_arguments)]
+/// Fork a session at its tip for a run (gh #69: `--fork`): a clone
+/// titled `--name` or `Fork of <parent>`, re-identified to
+/// `--session-id` when the flags combine. Errors map headless codes.
+fn resolve_fork(
+    store: &SessionStore,
+    cwd: &Path,
+    parent_id: &str,
+    name: Option<&str>,
+    new_id: Option<&str>,
+) -> Result<lca_session::Session, i32> {
+    let parent = match store.session_ref(cwd, parent_id) {
+        Ok(parent) => parent,
+        Err(err) => {
+            eprintln!("error: cannot fork session `{parent_id}`: {err}");
+            return Err(exit::SESSION);
+        }
+    };
+    let title = match name {
+        Some(name) => name.to_string(),
+        None => match store.meta(&parent) {
+            Ok(meta) => format!("Fork of {}", meta.title),
+            Err(_) => return Err(exit::SESSION),
+        },
+    };
+    let child = match store.clone_session(&parent, Some(&title)) {
+        Ok(child) => child,
+        Err(err) => {
+            eprintln!("error: cannot fork session `{parent_id}`: {err}");
+            return Err(exit::SESSION);
+        }
+    };
+    if let Some(new_id) = new_id
+        && child.id() != new_id
+    {
+        return match store.reid(&child, new_id) {
+            Ok(renamed) => Ok(renamed),
+            Err(err) => {
+                eprintln!("error: cannot identify the fork as `{new_id}`: {err}");
+                Err(exit::SESSION)
+            }
+        };
+    }
+    Ok(child)
+}
+
+/// Apply `--name` to a resolved session (gh #69): resumed sessions
+/// rename; a rename failure warns and the run continues.
+fn apply_session_name(store: &SessionStore, session: &lca_session::Session, name: Option<&str>) {
+    if let Some(name) = name
+        && let Err(err) = store.rename(session, name)
+    {
+        eprintln!("warning: cannot name the session `{name}`: {err}");
+    }
+}
+
 pub(crate) async fn setup(
     cwd: &Path,
     model_override: Option<&str>,
@@ -311,7 +368,21 @@ pub(crate) async fn setup(
     title: &str,
 ) -> Result<Setup, i32> {
     let data = data_dir();
-    let store = SessionStore::new(data.clone());
+    // gh #69: a volatile run stores sessions in a temp dir dropped at
+    // exit; grants stay on the real store (trust is not session state).
+    let volatile = match flags.no_session.then(crate::invoke::VolatileStore::create) {
+        Some(Ok(store)) => Some(store),
+        Some(Err(err)) => {
+            eprintln!("error: cannot create a volatile session store: {err}");
+            return Err(exit::INTERNAL);
+        }
+        None => None,
+    };
+    let session_root = volatile
+        .as_ref()
+        .map(|volatile| volatile.root().to_path_buf())
+        .unwrap_or_else(|| data.clone());
+    let store = SessionStore::new(session_root.clone());
     let grants = match GrantStore::open(&data.join("grants.json")) {
         Ok(grants) => std::sync::Arc::new(std::sync::Mutex::new(grants)),
         Err(err) => {
@@ -338,6 +409,10 @@ pub(crate) async fn setup(
     // when reached without `main`. Idempotent.
     lca_tui::install_panic_hook();
     let provider_name = config.provider().to_string();
+    // Gh #69: `--name` titles fresh sessions at creation; resumed ones
+    // rename below (a rename failure warns and the run continues).
+    let title = flags.name.as_deref().unwrap_or(title);
+    let fresh = matches!(session, crate::SessionSelector::New);
     // #111: the run appends to the selected session. A continued run
     // shares the session's `log.jsonl`; only a fresh run starts one.
     let session = match session {
@@ -369,10 +444,38 @@ pub(crate) async fn setup(
                 return Err(exit::SESSION);
             }
         },
+        // Gh #69: fork at the tip (a clone), titled `--name` or
+        // `Fork of <parent>`; `--session-id` chooses the fork's id.
+        crate::SessionSelector::Fork { parent, new_id } => {
+            match resolve_fork(
+                &store,
+                cwd,
+                parent,
+                flags.name.as_deref(),
+                new_id.as_deref(),
+            ) {
+                Ok(session) => session,
+                Err(code) => return Err(code),
+            }
+        }
+        // Gh #69: the exact id, created when absent.
+        crate::SessionSelector::Exact(id) => match store.session(cwd, id) {
+            Ok(session) => session,
+            Err(_) => match store.create_session_with_id(cwd, id, title) {
+                Ok(session) => session,
+                Err(err) => {
+                    eprintln!("error: cannot create session `{id}`: {err}");
+                    return Err(exit::SESSION);
+                }
+            },
+        },
     };
+    if !fresh {
+        apply_session_name(&store, &session, flags.name.as_deref());
+    }
     // Gh #160: the run's temp dir resolves here, from this session,
     // with creation failures fatal (never the old silent `let _`).
-    let temp_dir = match crate::ensure_session_temp(&data, session.id()) {
+    let temp_dir = match crate::ensure_session_temp(&session_root, session.id()) {
         Ok(dir) => dir,
         Err(err) => {
             eprintln!("error: cannot create the session temp dir: {err}");
@@ -488,6 +591,7 @@ pub(crate) async fn setup(
         proposals,
         prompt_impl,
         _temp_guard: temp_guard,
+        _volatile: volatile,
     })
 }
 
@@ -532,6 +636,7 @@ pub async fn headless(
         proposals,
         mut prompt_impl,
         _temp_guard: _,
+        _volatile: _,
     } = setup;
     let session_truncated = store
         .read(&session)

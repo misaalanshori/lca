@@ -2,6 +2,7 @@
 //! `export`, and `session gc` (S3's ceiling split).
 
 use super::*;
+use lca_session::Session;
 
 /// Which session a headless run appends to (#111: `-c` continues the
 /// project's most recent session, `-r <id>` resumes that session).
@@ -13,6 +14,16 @@ pub enum SessionSelector {
     Continue,
     /// A named session.
     Resume(String),
+    /// Fork a session at its tip and run the fork (gh #69):
+    /// `--session-id` alongside chooses the fork's id.
+    Fork {
+        /// The parent session to fork.
+        parent: String,
+        /// The fork's id, when `--session-id` chose it.
+        new_id: Option<String>,
+    },
+    /// An exact session id, created when absent (gh #69).
+    Exact(String),
 }
 
 /// The headless output protocol (gh #56, pi's `--mode`).
@@ -88,6 +99,12 @@ pub enum Route {
         model: Option<String>,
         /// Positional messages: the first is submitted on open (#109).
         initial: Vec<String>,
+        /// Fork this session at its tip and open the fork (gh #69).
+        fork: Option<String>,
+        /// Open the exact session id, creating it when absent (gh #69).
+        /// Volatile sessions (`--no-session`) ride the flags: the store
+        /// root switches under the same session plumbing.
+        session_id: Option<String>,
     },
     /// The merged-configuration printout (FR-CFG-2).
     Config,
@@ -149,6 +166,74 @@ pub fn check_flag_contradictions(cli: &Cli) -> Option<String> {
     if cli.resume_id.is_some() && cli.session.is_some() {
         return Some(
             "-r/--resume and --session select different sessions; pass exactly one".to_string(),
+        );
+    }
+    // gh #69 (pi's exclusivity): `--fork` stands alone except for
+    // `--session-id` (the fork's id) and `--name`; `--session-id`
+    // combines with nothing but those two; `--no-session` with nothing
+    // that names a session.
+    if cli.fork.is_some() {
+        if cli.session.is_some() {
+            return Some(
+                "--fork and --session select different sessions; pass exactly one".to_string(),
+            );
+        }
+        if cli.r#continue {
+            return Some(
+                "--fork and -c/--continue select different sessions; pass exactly one".to_string(),
+            );
+        }
+        if cli.resume_id.is_some() {
+            return Some(
+                "--fork and -r/--resume select different sessions; pass exactly one".to_string(),
+            );
+        }
+        if cli.no_session {
+            return Some(
+                "--fork and --no-session contradict; fork persists the new session".to_string(),
+            );
+        }
+    }
+    if let Some(id) = cli.session_id.as_deref() {
+        if !lca_session::valid_session_id(id) {
+            return Some(format!(
+                "--session-id `{id}` is invalid: use letters, numbers, `.`, `_`, `-`"
+            ));
+        }
+        if cli.session.is_some() {
+            return Some(
+                "--session-id and --session select different sessions; pass exactly one"
+                    .to_string(),
+            );
+        }
+        if cli.r#continue {
+            return Some(
+                "--session-id and -c/--continue select different sessions; pass exactly one"
+                    .to_string(),
+            );
+        }
+        if cli.resume_id.is_some() {
+            return Some(
+                "--session-id and -r/--resume select different sessions; pass exactly one"
+                    .to_string(),
+            );
+        }
+    }
+    if cli.no_session
+        && (cli.session.is_some()
+            || cli.r#continue
+            || cli.resume_id.is_some()
+            || cli.session_id.is_some())
+    {
+        return Some("--no-session persists nothing; drop the session selector".to_string());
+    }
+    // gh #69: the new session flags take no subcommand (like `--session`
+    // before them); `--name` neither (subcommands name their own things).
+    if cli.command.is_some()
+        && (cli.fork.is_some() || cli.session_id.is_some() || cli.no_session || cli.name.is_some())
+    {
+        return Some(
+            "a subcommand takes its own arguments; pass the session flags without one".to_string(),
         );
     }
     // Gh #110: the picker needs the interface; next to a prompt it has
@@ -281,6 +366,13 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
     // contradiction check refuses it next to headless flags first.
     let headless_session = if cli.r#continue {
         SessionSelector::Continue
+    } else if let Some(parent) = cli.fork.clone() {
+        SessionSelector::Fork {
+            parent,
+            new_id: cli.session_id.clone(),
+        }
+    } else if let Some(id) = cli.session_id.clone() {
+        SessionSelector::Exact(id)
     } else if let Some(id) = cli
         .session
         .clone()
@@ -316,6 +408,8 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
             resume_picker: true,
             model: cli.model.clone(),
             initial: messages,
+            fork: cli.fork.clone(),
+            session_id: cli.session_id.clone(),
         };
     }
     if let Some(id) = cli
@@ -328,6 +422,8 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
             resume_picker: false,
             model: cli.model.clone(),
             initial: messages,
+            fork: cli.fork.clone(),
+            session_id: cli.session_id.clone(),
         };
     }
     match &cli.command {
@@ -346,6 +442,8 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
                     resume_picker: false,
                     model: cli.model.clone(),
                     initial: messages,
+                    fork: cli.fork.clone(),
+                    session_id: cli.session_id.clone(),
                 }
             } else {
                 Route::Interactive {
@@ -353,6 +451,8 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
                     resume_picker: false,
                     model: cli.model.clone(),
                     initial: messages,
+                    fork: cli.fork.clone(),
+                    session_id: cli.session_id.clone(),
                 }
             }
         }
@@ -364,6 +464,8 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
                 resume_picker: false,
                 model: cli.model.clone(),
                 initial: messages,
+                fork: cli.fork.clone(),
+                session_id: cli.session_id.clone(),
             },
         },
         Some(Command::Fork { session, message }) => Route::Fork {
@@ -647,6 +749,75 @@ pub(super) fn list_models_command(
     exit::OK
 }
 
+/// Resolve the session to open (gh #69): fork clones at the tip (with
+/// `--session-id` choosing the fork's id), an exact id opens or is
+/// created, otherwise the resumed one or a fresh one. `--name` titles
+/// fresh sessions and renames opened ones (a rename failure warns and
+/// the interface still opens).
+pub fn resolve_session(
+    store: &SessionStore,
+    cwd: &Path,
+    resume: Option<&str>,
+    fork: Option<&str>,
+    session_id: Option<&str>,
+    name: Option<&str>,
+) -> Result<lca_session::Session, String> {
+    let title = name.unwrap_or(lca_session::DEFAULT_TITLE);
+    if let Some(parent_id) = fork {
+        let parent = store
+            .session_ref(cwd, parent_id)
+            .map_err(|err| format!("cannot fork session `{parent_id}`: {err}"))?;
+        let parent_title = store
+            .meta(&parent)
+            .map(|meta| meta.title)
+            .unwrap_or_default();
+        let child_title = name
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("Fork of {parent_title}"));
+        let child = store
+            .clone_session(&parent, Some(&child_title))
+            .map_err(|err| format!("cannot fork session `{parent_id}`: {err}"))?;
+        if let Some(new_id) = session_id
+            && child.id() != new_id
+        {
+            return store
+                .reid(&child, new_id)
+                .map_err(|err| format!("cannot identify the fork as `{new_id}`: {err}"));
+        }
+        return Ok(child);
+    }
+    if let Some(id) = session_id {
+        if let Ok(session) = store.session(cwd, id) {
+            rename_quiet(store, &session, name);
+            return Ok(session);
+        }
+        return store
+            .create_session_with_id(cwd, id, title)
+            .map_err(|err| format!("cannot create session `{id}`: {err}"));
+    }
+    match resume {
+        // Gh #110: the reference may be a session-directory path.
+        Some(id) => {
+            let session = store.session_ref(cwd, id).map_err(|err| format!("{err}"))?;
+            rename_quiet(store, &session, name);
+            Ok(session)
+        }
+        None => store
+            .create_session(cwd, title)
+            .map_err(|err| format!("cannot start a session: {err}")),
+    }
+}
+
+/// Apply `--name` to an opened session (gh #69): a rename failure
+/// warns and the interface still opens.
+fn rename_quiet(store: &SessionStore, session: &Session, name: Option<&str>) {
+    if let Some(name) = name
+        && let Err(err) = store.rename(session, name)
+    {
+        eprintln!("warning: cannot name the session `{name}`: {err}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +844,8 @@ mod tests {
                 resume_picker: false,
                 model: Some("m".to_string()),
                 initial: Vec::new(),
+                fork: None,
+                session_id: None,
             }
         );
         assert_eq!(
@@ -682,6 +855,8 @@ mod tests {
                 resume_picker: false,
                 model: None,
                 initial: Vec::new(),
+                fork: None,
+                session_id: None,
             }
         );
         assert_eq!(
@@ -691,6 +866,8 @@ mod tests {
                 resume_picker: false,
                 model: None,
                 initial: Vec::new(),
+                fork: None,
+                session_id: None,
             }
         );
         assert_eq!(
@@ -760,6 +937,8 @@ mod invocation_tests {
                 resume_picker: false,
                 model: None,
                 initial: vec!["-p".to_string()],
+                fork: None,
+                session_id: None,
             }
         );
     }
@@ -798,5 +977,85 @@ mod invocation_tests {
             check_flag_contradictions(&cli),
             Some("--mode rpc takes no @file arguments; send prompt commands on stdin".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod session_flag_tests {
+    use super::*;
+    use clap::Parser;
+
+    fn check(args: &[&str]) -> Option<String> {
+        let cli = Cli::parse_from(args);
+        check_flag_contradictions(&cli)
+    }
+
+    // Verifies: gh #69 - `--session-id` routes exact-or-create, and a
+    // malformed id refuses before touching the store.
+    #[test]
+    fn session_id_routes_and_validates() {
+        let cli = Cli::parse_from(["lca", "--session-id", "abc-123"]);
+        assert_eq!(
+            route(&cli),
+            Route::Interactive {
+                resume: None,
+                resume_picker: false,
+                model: None,
+                initial: Vec::new(),
+                fork: None,
+                session_id: Some("abc-123".to_string()),
+            }
+        );
+        let cli = Cli::parse_from(["lca", "-p", "hi", "--session-id", "abc-123"]);
+        assert_eq!(
+            route(&cli),
+            Route::Headless {
+                messages: vec!["hi".to_string()],
+                model: None,
+                session: SessionSelector::Exact("abc-123".to_string()),
+                mode: OutputMode::Text,
+            }
+        );
+        assert!(check(&["lca", "--session-id", "abc-123"]).is_none());
+        assert!(check(&["lca", "--session-id", "../evil"]).is_some());
+        assert!(check(&["lca", "--session-id", "x-"]).is_some());
+    }
+
+    // Verifies: gh #69 - pi's exclusivity: `--fork` stands alone, and
+    // `--session-id` combines with nothing but `--fork` and `--name`.
+    #[test]
+    fn fork_and_session_id_exclusivity() {
+        assert!(check(&["lca", "--fork", "abc", "--session", "def"]).is_some());
+        assert!(check(&["lca", "--fork", "abc", "-c"]).is_some());
+        assert!(check(&["lca", "--fork", "abc", "-r", "def"]).is_some());
+        assert!(check(&["lca", "--fork", "abc", "--no-session"]).is_some());
+        assert!(check(&["lca", "--fork", "abc", "--session-id", "def"]).is_none());
+        assert!(check(&["lca", "--fork", "abc", "--name", "n"]).is_none());
+        assert!(check(&["lca", "--session-id", "abc", "--session", "def"]).is_some());
+        assert!(check(&["lca", "--session-id", "abc", "-c"]).is_some());
+        assert!(check(&["lca", "--session-id", "abc", "-r", "def"]).is_some());
+        assert!(check(&["lca", "--no-session", "--session", "def"]).is_some());
+        assert!(check(&["lca", "--no-session", "-p", "hi"]).is_none());
+    }
+
+    // Verifies: gh #69 - `--name` leaves routing alone (it travels
+    // in the flags) but refuses subcommands, which name their own
+    // things.
+    #[test]
+    fn name_rides_runs_and_refuses_subcommands() {
+        let cli = Cli::parse_from(["lca", "-p", "hi", "--name", "demo"]);
+        assert_eq!(
+            route(&cli),
+            Route::Headless {
+                messages: vec!["hi".to_string()],
+                model: None,
+                session: SessionSelector::New,
+                mode: OutputMode::Text,
+            }
+        );
+        assert!(check(&["lca", "-p", "hi", "--name", "demo"]).is_none());
+        // (Global flags ride before the subcommand; after it clap
+        // itself refuses the unknown flag.)
+        assert!(check(&["lca", "--name", "demo", "config"]).is_some());
     }
 }

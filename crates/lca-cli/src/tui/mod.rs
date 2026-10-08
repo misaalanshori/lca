@@ -142,6 +142,8 @@ pub(crate) struct Ui {
 
     /// Images staged for the next turn (`/attach`).
     pending_attachments: Arc<Mutex<Vec<lca_core::StagedAttachment>>>,
+    /// Held for a volatile run: dropping it removes the temp store.
+    _volatile: Option<crate::invoke::VolatileStore>,
     /// The `/login` flow state.
     flow: Arc<Mutex<crate::login::LoginFlow>>,
     /// The last `/login` answer, so the endpoint grant's approval can re-run
@@ -225,6 +227,8 @@ pub fn run(
     model: Option<&str>,
     initial: &[String],
     initial_attachments: &[std::path::PathBuf],
+    fork: Option<&str>,
+    session_id: Option<&str>,
     allow_host: &[String],
     flags: &crate::CliFlags,
 ) -> anyhow::Result<i32> {
@@ -249,6 +253,8 @@ pub fn run(
         model,
         initial,
         initial_attachments,
+        fork,
+        session_id,
         allow_host,
         flags,
     )?);
@@ -524,10 +530,13 @@ impl Ui {
         model_override: Option<&str>,
         initial: &[String],
         initial_attachments: &[std::path::PathBuf],
+        fork: Option<&str>,
+        session_id: Option<&str>,
         allow_host: &[String],
         flags: &crate::CliFlags,
     ) -> anyhow::Result<Ui> {
         let Opened {
+            _volatile: volatile,
             data,
             store,
             config,
@@ -540,7 +549,13 @@ impl Ui {
             initial_records,
             mut initial_tail,
             update_notice,
-        } = open(cwd, resume, yolo, allow_host, flags)?;
+        } = open(cwd, resume, fork, session_id, yolo, allow_host, flags)?;
+        // gh #69: the session temp follows the store root (volatile runs
+        // keep everything under their temp dir).
+        let session_data_root = volatile
+            .as_ref()
+            .map(|volatile| volatile.root().to_path_buf())
+            .unwrap_or_else(|| data.clone());
 
         // ADR-0041: the interpreter is resolved once, here, so the tool
         // description, `/settings`, and every call agree - and a configured
@@ -600,7 +615,7 @@ impl Ui {
 
         // Gh #160: this session's temp dir resolves here, from this
         // session - creation failures fail startup, never silently.
-        let temp_dir = crate::ensure_session_temp(&data, &session_id)?;
+        let temp_dir = crate::ensure_session_temp(&session_data_root, &session_id)?;
         let mut registry = load_registry(
             cwd,
             &config,
@@ -716,7 +731,7 @@ impl Ui {
             }
             None => resolve_model_id(&config, provider_is_ready, provider.as_ref()),
         };
-        let provider_backend = register_compaction(
+        let provider_backend = crate::registry::register_compaction(
             &mut registry,
             &provider,
             &model_id,
@@ -812,6 +827,7 @@ impl Ui {
             theme_cell: Arc::new(Mutex::new(theme_setting)),
             provider_backend,
             pending_attachments: Arc::new(Mutex::new(staged_attachments)),
+            _volatile: volatile,
             flow,
             login_answer: Arc::new(Mutex::new(None)),
             preset_overrides,
@@ -866,6 +882,8 @@ impl Ui {
 /// The session-and-store setup, before the extension registry exists.
 struct Opened {
     data: PathBuf,
+    /// Held for a volatile run: dropping it removes the temp store.
+    _volatile: Option<crate::invoke::VolatileStore>,
     store: Arc<SessionStore>,
     config: Config,
     grants: Arc<Mutex<GrantStore>>,
@@ -884,12 +902,26 @@ struct Opened {
 fn open(
     cwd: &Path,
     resume: Option<&str>,
+    fork: Option<&str>,
+    session_id: Option<&str>,
     yolo: bool,
     allow_host: &[String],
     flags: &crate::CliFlags,
 ) -> anyhow::Result<Opened> {
     let data = crate::data_dir();
-    let store = Arc::new(SessionStore::new(data.clone()));
+    // gh #69: a volatile run stores sessions in a temp dir dropped with
+    // the interface; grants stay on the real store (trust is not
+    // session state).
+    let volatile = flags
+        .no_session
+        .then(crate::invoke::VolatileStore::create)
+        .transpose()
+        .map_err(|err| anyhow::anyhow!("cannot create a volatile session store: {err}"))?;
+    let session_root = volatile
+        .as_ref()
+        .map(|volatile| volatile.root().to_path_buf())
+        .unwrap_or_else(|| data.clone());
+    let store = Arc::new(SessionStore::new(session_root.clone()));
     let grants = Arc::new(Mutex::new(
         GrantStore::open(&data.join("grants.json"))
             .map_err(|err| anyhow::anyhow!("cannot open the grant store: {err}"))?,
@@ -905,7 +937,9 @@ fn open(
     if !flags.offline {
         crate::update::spawn(config.update_check(false), Some(update_notice.clone()));
     }
-    let session = resolve_session(&store, cwd, resume)?;
+    let session =
+        crate::resolve_session(&store, cwd, resume, fork, session_id, flags.name.as_deref())
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
     let current_session = Arc::new(Mutex::new(session.clone()));
     let provider_name = config.provider().to_string();
     let (mut initial_head, initial_records) = initial_view(&store, &session);
@@ -920,6 +954,7 @@ fn open(
     crate::net_consent::attach_allow_hosts(&grants, cwd, allow_host, &store, &session)
         .map_err(|err| anyhow::anyhow!("{err}"))?;
     Ok(Opened {
+        _volatile: volatile,
         data,
         store,
         config,
@@ -933,23 +968,6 @@ fn open(
         initial_tail: Vec::new(),
         update_notice,
     })
-}
-
-/// Resolve the session to open: the resumed one, or a fresh one.
-fn resolve_session(
-    store: &SessionStore,
-    cwd: &Path,
-    resume: Option<&str>,
-) -> anyhow::Result<Session> {
-    match resume {
-        // Gh #110: the reference may be a session-directory path.
-        Some(id) => Ok(store
-            .session_ref(cwd, id)
-            .map_err(|err| anyhow::anyhow!("{err}"))?),
-        None => store
-            .create_session(cwd, lca_session::DEFAULT_TITLE)
-            .map_err(|err| anyhow::anyhow!("cannot start a session: {err}")),
-    }
 }
 
 /// The initial transcript lines: the records, the truncation/skip
@@ -1021,54 +1039,6 @@ fn load_registry(
         }),
         temp,
     )
-}
-
-/// Register the bundled compaction strategy and return its backend.
-#[cfg(feature = "bundled-compaction-default")]
-#[allow(clippy::too_many_arguments)] // one more explicit than a regroup: every arg is used once, at one call site.
-fn register_compaction(
-    registry: &mut ExtensionRegistry,
-    provider: &Arc<dyn Provider>,
-    model_id: &str,
-    session_id: &str,
-    cwd: &Path,
-    shared_prompt: SharedPrompt,
-    grants: &Arc<Mutex<GrantStore>>,
-    temp: &Path,
-) -> Option<Arc<lca_core::ext_provider::ProviderBackend>> {
-    let backend = Arc::new(lca_core::ext_provider::ProviderBackend::new(
-        provider.clone(),
-        model_id.to_string(),
-        session_id.to_string(),
-    ));
-    let cap = crate::extension_capabilities(
-        cwd,
-        "compaction-default",
-        compaction_default::manifest_grants(),
-        shared_prompt,
-        grants.clone(),
-        // No `resources/` bag: a compaction strategy carries code.
-        lca_tools::ResourceSource::None,
-        temp,
-    );
-    cap.set_completion(backend.clone());
-    registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
-    Some(backend)
-}
-
-/// No bundled compaction: no backend.
-#[cfg(not(feature = "bundled-compaction-default"))]
-fn register_compaction(
-    _registry: &mut ExtensionRegistry,
-    _provider: &Arc<dyn Provider>,
-    _model_id: &str,
-    _session_id: &str,
-    _cwd: &Path,
-    _shared_prompt: SharedPrompt,
-    _grants: &Arc<Mutex<GrantStore>>,
-    _temp: &Path,
-) -> Option<Arc<lca_core::ext_provider::ProviderBackend>> {
-    None
 }
 
 /// The configured model, or the first model *in the enabled scope* when

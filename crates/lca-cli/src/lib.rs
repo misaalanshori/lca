@@ -655,7 +655,8 @@ impl PermissionPrompt for HeadlessPrompt {
 }
 
 pub use session_cmds::{
-    OutputMode, Route, SessionSelector, check_flag_contradictions, output_mode, route,
+    OutputMode, Route, SessionSelector, check_flag_contradictions, output_mode, resolve_session,
+    route,
 };
 
 /// Dispatch a parsed command line; returns the process exit code.
@@ -742,6 +743,8 @@ pub async fn run(cli: Cli) -> i32 {
             resume_picker,
             model,
             initial,
+            fork,
+            session_id,
         } => invoke::interactive(
             &cwd,
             resume.as_deref(),
@@ -750,6 +753,8 @@ pub async fn run(cli: Cli) -> i32 {
             model.as_deref(),
             &initial,
             &invocation.file_images,
+            fork.as_deref(),
+            session_id.as_deref(),
             &cli.allow_host,
             &flags,
         ),
