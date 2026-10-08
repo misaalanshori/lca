@@ -72,8 +72,8 @@ impl Ui {
         // deadlocking the first later field that locks the same cell
         // (std Mutex is not reentrant).
         let config = crate::lock(&self.config).clone();
-        let yolo = crate::lock(&self.grants).permission_mode()
-            == lca_permissions::PermissionMode::Yolo;
+        let yolo =
+            crate::lock(&self.grants).permission_mode() == lca_permissions::PermissionMode::Yolo;
         let (keybinding_overrides, keybinding_error) =
             crate::load_user_keybindings(&crate::data_dir());
         let invoke_command: lca_ui::CommandInvoker =
@@ -128,7 +128,10 @@ impl Ui {
             // alt-screen renderer and persists in `ui.json`, which wins
             // over the config file's `ui.fullscreen` when present (gh
             // #112; the malformed warning rides the transcript head).
-            fullscreen: super::hooks::initial_screen_mode(&crate::data_dir(), config.ui_fullscreen())
+            fullscreen: super::hooks::initial_screen_mode(
+                &crate::data_dir(),
+                config.ui_fullscreen(),
+            )
             .0,
             slash_commands: self.slash_commands(),
             workspace: self.cwd.clone(),
