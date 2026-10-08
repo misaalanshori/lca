@@ -519,9 +519,11 @@ fn handle_chunk(
             .and_then(|m| m.as_str())
             .unwrap_or("vendor error")
             .to_string();
+        // Gh #202: a Cloud Code capacity payload retries like its HTTP
+        // 503 twin (which `failure_for_status` already marks retryable).
         return emit(E::Error {
-            message,
-            retryable: false,
+            message: message.clone(),
+            retryable: lca_protocol::is_capacity_error(&message),
         });
     }
     if let Some(candidate) = value

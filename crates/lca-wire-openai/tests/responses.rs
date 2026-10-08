@@ -108,3 +108,27 @@ fn the_sse_mapper_turns_responses_events_typed() {
     });
     assert!(matches!(event(completed)[..], [StreamEvent::Usage { .. }]));
 }
+
+// Verifies: gh #202 acceptance 2 - a Responses `response.failed` naming
+// capacity surfaces as a retryable error.
+#[test]
+fn a_failed_response_naming_capacity_is_retryable() {
+    use lca_protocol::StreamEvent;
+    let mut stream = ResponsesStream::new();
+    let events = stream.feed(&serde_json::json!({
+        "type": "response.failed",
+        "error": {"message": "Selected model is at capacity"},
+    }));
+    let (message, retryable) = events
+        .iter()
+        .find_map(|event| match event {
+            StreamEvent::Error { message, retryable } => Some((message.clone(), *retryable)),
+            _ => None,
+        })
+        .expect("gh #202: the failed response is surfaced");
+    assert!(
+        message.contains("at capacity"),
+        "the vendor message survives: {message}"
+    );
+    assert!(retryable, "capacity clears itself on retry");
+}

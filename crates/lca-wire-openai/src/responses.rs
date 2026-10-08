@@ -278,7 +278,7 @@ impl ResponsesStream {
                     .unwrap_or("vendor error");
                 out.push(StreamEvent::Error {
                     message: message.to_string(),
-                    retryable: false,
+                    retryable: lca_protocol::is_capacity_error(message),
                 });
             }
             _ => {}
@@ -449,6 +449,6 @@ fn single_error(value: &serde_json::Value) -> Option<lca_protocol::StreamEvent> 
         .unwrap_or("vendor error");
     Some(lca_protocol::StreamEvent::Error {
         message: message.to_string(),
-        retryable: false,
+        retryable: lca_protocol::is_capacity_error(message),
     })
 }

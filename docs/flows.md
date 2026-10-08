@@ -329,7 +329,7 @@ Rendering is not one frame per event. The renderer coalesces on a frame interval
 
 An unknown `vendor-event` kind is recorded and ignored. This is the case that exists so a new vendor concept does not force an ABI break.
 
-An `error` event ends the stream. The core decides whether the error is retryable and either retries with backoff or surfaces it, keeping the session open either way.
+An `error` event ends the stream. The core decides whether the error is retryable and either retries with backoff or surfaces it, keeping the session open either way. Capacity names retry even when the provider flagged the failure non-retryable (gh #202): the shared `is_capacity_error` predicate (transient overload wording, HTTP 529) drives both the wire kits' mid-stream classification and the turn loop's retry override.
 
 A stream that ends with a tool call still open is a protocol error. The accumulator reports it, the call is discarded, and the turn ends rather than calling a tool with partial arguments.
 

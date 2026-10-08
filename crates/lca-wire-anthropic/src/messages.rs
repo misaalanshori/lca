@@ -380,7 +380,7 @@ impl AnthropicStream {
                     .unwrap_or("vendor error");
                 out.push(StreamEvent::Error {
                     message: message.to_string(),
-                    retryable: false,
+                    retryable: lca_protocol::is_capacity_error(message),
                 });
             }
             _ => {}

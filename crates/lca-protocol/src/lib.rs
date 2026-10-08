@@ -27,7 +27,7 @@ pub use login::{LoginAnswer, LoginOption};
 pub use message::{ChatMessage, ContentBlock, MessageRole, base64_encode, sniff_image_media_type};
 pub use provider::{
     CompletionRequest, EventSink, IMAGE_RESIZE_EXTRA, IMAGE_VISION_EXTRA, IdentityOutcome,
-    ImageResize, ModelInfo, OauthCap, PROMPT_CACHE_EXTRA, ProviderCap,
+    ImageResize, ModelInfo, OauthCap, PROMPT_CACHE_EXTRA, ProviderCap, is_capacity_error,
 };
 pub use record::{
     FORMAT_VERSION, NestedCallRecord, PREVIOUS_SUMMARY_TYPE, PermissionDecision, Record,

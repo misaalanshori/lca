@@ -65,7 +65,10 @@ impl Agent<'_> {
                     class,
                     retryable,
                 }) => {
-                    if retryable && attempt < self.config.retry_limit {
+                    // Gh #202: capacity names retry even when the
+                    // provider flagged the failure non-retryable.
+                    let retry = retryable || lca_protocol::is_capacity_error(&message);
+                    if retry && attempt < self.config.retry_limit {
                         let delay = self
                             .config
                             .retry_base_delay
@@ -88,8 +91,11 @@ impl Agent<'_> {
                         continue;
                     }
                     // FR-CORE-7: the user sees that retries were tried and
-                    // gave up, not just the raw transport error.
-                    let message = if retryable && attempt > 0 {
+                    // gave up, not just the raw transport error. Any
+                    // attempt past zero scheduled a retry (by flag or by
+                    // the gh #202 capacity override), so it owns the
+                    // finish event and the exhausted note either way.
+                    let message = if attempt > 0 {
                         sink.on_event(TurnEvent::RetryFinished { success: false });
                         format!("{message} (retries exhausted after {attempt})")
                     } else {

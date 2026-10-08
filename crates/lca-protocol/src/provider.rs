@@ -163,3 +163,47 @@ pub trait OauthCap: Send + Sync {
     /// Abandon a flow and stop its listener.
     fn oauth_end(&self, handle: u32) -> Result<(), crate::CapabilityError>;
 }
+
+/// Whether a provider failure message names transient capacity (gh #202):
+/// an overloaded model or status, not a refusal. The turn loop retries
+/// these even when the provider marked the failure non-retryable, and
+/// the wire kits mark matching mid-stream error payloads retryable at
+/// the source. Spec-pinned patterns (pi `3874b3e98` narrows to the
+/// capacity case); keep this the single definition - the kits cannot
+/// depend on `lca-core`, so it lives here, beside the request types.
+pub fn is_capacity_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("at capacity")
+        || lower.contains("is at capacity")
+        || lower.contains("overloaded")
+        || lower.contains("529")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_capacity_error;
+
+    // Verifies: gh #202 - the spec's capacity patterns match, and
+    // refusals, auth failures, and rate limits do not (capacity-only).
+    #[test]
+    fn capacity_patterns_match_and_only_they_do() {
+        for message in [
+            "Selected model is at capacity",
+            "the model is at capacity, try again",
+            "The engine is currently overloaded, please try again later.",
+            "Overloaded",
+            "provider returned HTTP 529: overloaded",
+        ] {
+            assert!(is_capacity_error(message), "capacity: {message}");
+        }
+        for message in [
+            "invalid api key",
+            "context length exceeded",
+            "rate limit exceeded, slow down",
+            "the response was not a server-sent event stream",
+            "",
+        ] {
+            assert!(!is_capacity_error(message), "not capacity: {message}");
+        }
+    }
+}

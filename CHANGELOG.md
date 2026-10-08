@@ -4,6 +4,15 @@ Notable changes to LCA. Versions follow semantic versioning for the product;
 the `lca:ext` ABI version is independent and is printed by `lca --version`.
 Dates are UTC.
 
+## [Unreleased]
+
+### Fixed
+- **Capacity failures retry (gh #202).** `Selected model is at capacity`
+  and HTTP 529 (plus 503/504 siblings) are retryable: the shared
+  `is_capacity_error` predicate classifies mid-stream error payloads
+  at the wire kits and overrides a non-retryable flag in the turn
+  loop, which backs off up to `provider.retry_limit` as before.
+
 ## [0.6.0] - 2026-10-08
 
 The 0.6 train release: extension decoupling, shared wire kits, the

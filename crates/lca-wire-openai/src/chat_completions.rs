@@ -98,6 +98,19 @@ impl SseDecoder {
                 usage: map_usage(usage),
             });
         }
+        // Gh #202: a mid-stream error object has no `choices`; without
+        // this it drops silently. Capacity names retry at the source.
+        if let Some(error) = value.get("error") {
+            let message = error
+                .get("message")
+                .and_then(|message| message.as_str())
+                .unwrap_or("vendor error");
+            emit(StreamEvent::Error {
+                message: message.to_string(),
+                retryable: lca_protocol::is_capacity_error(message),
+            });
+            return;
+        }
         let Some(choice) = value.get("choices").and_then(|c| c.get(0)) else {
             return;
         };

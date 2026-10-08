@@ -289,3 +289,26 @@ fn tool_results_round_trip_on_the_user_role() {
         "the result answers the call"
     );
 }
+
+// Verifies: gh #202 acceptance 2 - an Anthropic `error` event naming an
+// overloaded model surfaces as a retryable error.
+#[test]
+fn an_overloaded_error_event_is_retryable() {
+    let mut stream = AnthropicStream::new();
+    let events = stream.feed(&serde_json::json!({
+        "type": "error",
+        "error": {"type": "overloaded_error", "message": "Overloaded"},
+    }));
+    let (message, retryable) = events
+        .iter()
+        .find_map(|event| match event {
+            StreamEvent::Error { message, retryable } => Some((message.clone(), *retryable)),
+            _ => None,
+        })
+        .expect("gh #202: the error event is surfaced");
+    assert!(
+        message.contains("Overloaded"),
+        "the vendor message survives: {message}"
+    );
+    assert!(retryable, "overload clears itself on retry");
+}
