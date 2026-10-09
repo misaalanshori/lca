@@ -58,113 +58,122 @@ pub fn mock_server() -> Mock {
     let base_for_thread = base.clone();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let mut stream = stream;
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 8192];
-            let mut expected = None;
-            while let Ok(n) = stream.read(&mut chunk) {
-                if n == 0 {
-                    break;
+            // One thread per connection: a stuck reader can never
+            // head-of-line-block the accept loop (a Windows-CI hang
+            // class), and the eprintln names every arrival in the
+            // failure output.
+            let recorded = recorded.clone();
+            let script = script.clone();
+            let current_auth = current_auth.clone();
+            let current_token = current_token.clone();
+            let base_for_thread = base_for_thread.clone();
+            std::thread::spawn(move || {
+                let mut stream = stream;
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 8192];
+                let mut expected = None;
+                while let Ok(n) = stream.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if expected.is_none()
+                        && let Ok(text) = std::str::from_utf8(&buf)
+                        && let Some(start) = text.find("\r\n\r\n")
+                    {
+                        let head = &text[..start];
+                        let length: usize = head
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        expected = Some(start + 4 + length);
+                    }
+                    if expected == Some(buf.len()) {
+                        break;
+                    }
                 }
-                buf.extend_from_slice(&chunk[..n]);
-                if expected.is_none()
-                    && let Ok(text) = std::str::from_utf8(&buf)
-                    && let Some(start) = text.find("\r\n\r\n")
-                {
-                    let head = &text[..start];
-                    let length: usize = head
-                        .lines()
-                        .find_map(|line| {
-                            line.to_ascii_lowercase()
-                                .strip_prefix("content-length:")
-                                .map(|v| v.trim().parse().unwrap_or(0))
-                        })
-                        .unwrap_or(0);
-                    expected = Some(start + 4 + length);
-                }
-                if expected == Some(buf.len()) {
-                    break;
-                }
-            }
-            let text = String::from_utf8_lossy(&buf).into_owned();
-            let mut parts = text.split_whitespace();
-            let method = parts.next().unwrap_or("").to_string();
-            let path = parts.next().unwrap_or("/").to_string();
-            let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
-            let headers = text.split("\r\n\r\n").next().unwrap_or("").to_string();
-            recorded.lock().expect("requests").push((
-                method,
-                path.clone(),
-                headers.clone(),
-                body.clone(),
-            ));
+                let text = String::from_utf8_lossy(&buf).into_owned();
+                let mut parts = text.split_whitespace();
+                let method = parts.next().unwrap_or("").to_string();
+                let path = parts.next().unwrap_or("/").to_string();
+                eprintln!("mock-mcp: {method} {path}");
+                let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+                let headers = text.split("\r\n\r\n").next().unwrap_or("").to_string();
+                recorded.lock().expect("requests").push((
+                    method,
+                    path.clone(),
+                    headers.clone(),
+                    body.clone(),
+                ));
 
-            // A slow route that never answers inside a test budget:
-            // handled on its own thread so one hanging call never
-            // holds up the accept loop for the other tests.
-            if path.contains("/slow") {
-                std::thread::spawn(move || {
+                // A slow route that never answers inside a test budget.
+                if path.contains("/slow") {
                     std::thread::sleep(std::time::Duration::from_secs(30));
                     let _ = stream.write_all(
                         b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
                     );
-                });
-                continue;
-            }
+                    return;
+                }
 
-            let mut scripted = script.lock().expect("script");
-            let hit = scripted
-                .iter()
-                .position(|(needle, _, _, _)| path.contains(needle) || body.contains(needle))
-                .map(|index| scripted.remove(index));
-            drop(scripted);
-            let (status, forced, extra) = match hit {
-                Some((_, status, payload, extra)) => (status, payload, extra),
-                None => (200, None, Vec::new()),
-            };
+                let mut scripted = script.lock().expect("script");
+                let hit = scripted
+                    .iter()
+                    .position(|(needle, _, _, _)| path.contains(needle) || body.contains(needle))
+                    .map(|index| scripted.remove(index));
+                drop(scripted);
+                let (status, forced, extra) = match hit {
+                    Some((_, status, payload, extra)) => (status, payload, extra),
+                    None => (200, None, Vec::new()),
+                };
 
-            // A scripted hit answers verbatim (status, payload, extra
-            // headers); everything else routes by path below.
-            let (status, payload, mut extra) = match (status, forced) {
-                (status, Some(payload)) => (status, payload, extra),
-                (scripted, None) if scripted != 200 => (scripted, "{}".to_string(), extra),
-                _ => route(
-                    &path,
-                    &body,
-                    &headers,
-                    extra,
-                    &current_auth,
-                    &current_token,
-                    &base_for_thread,
-                ),
-            };
-            if path.contains("-sse") && status == 200 {
-                extra.push(("content-type".to_string(), "text/event-stream".to_string()));
-            }
-            let reason = match status {
-                200 => "OK",
-                202 => "Accepted",
-                401 => "Unauthorized",
-                404 => "Not Found",
-                _ => "Error",
-            };
-            let mut response =
-                format!("HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\n");
-            for (name, value) in &extra {
-                response.push_str(&format!("{name}: {value}\r\n"));
-            }
-            // Session tracking pi's client keeps: the mock mints one id
-            // on `initialize` so the round-trip test has something to
-            // carry.
-            if body.contains("\"method\":\"initialize\"") {
-                response.push_str("Mcp-Session-Id: mock-session-1\r\n");
-            }
-            response.push_str(&format!(
-                "content-length: {}\r\nconnection: close\r\n\r\n{}",
-                payload.len(),
-                payload
-            ));
-            let _ = stream.write_all(response.as_bytes());
+                // A scripted hit answers verbatim (status, payload, extra
+                // headers); everything else routes by path below.
+                let (status, payload, mut extra) = match (status, forced) {
+                    (status, Some(payload)) => (status, payload, extra),
+                    (scripted, None) if scripted != 200 => (scripted, "{}".to_string(), extra),
+                    _ => route(
+                        &path,
+                        &body,
+                        &headers,
+                        extra,
+                        &current_auth,
+                        &current_token,
+                        &base_for_thread,
+                    ),
+                };
+                if path.contains("-sse") && status == 200 {
+                    extra.push(("content-type".to_string(), "text/event-stream".to_string()));
+                }
+                let reason = match status {
+                    200 => "OK",
+                    202 => "Accepted",
+                    401 => "Unauthorized",
+                    404 => "Not Found",
+                    _ => "Error",
+                };
+                let mut response =
+                    format!("HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\n");
+                for (name, value) in &extra {
+                    response.push_str(&format!("{name}: {value}\r\n"));
+                }
+                // Session tracking pi's client keeps: the mock mints one id
+                // on `initialize` so the round-trip test has something to
+                // carry.
+                if body.contains("\"method\":\"initialize\"") {
+                    response.push_str("Mcp-Session-Id: mock-session-1\r\n");
+                }
+                response.push_str(&format!(
+                    "content-length: {}\r\nconnection: close\r\n\r\n{}",
+                    payload.len(),
+                    payload
+                ));
+                let _ = stream.write_all(response.as_bytes());
+            });
         }
     });
     Mock {
