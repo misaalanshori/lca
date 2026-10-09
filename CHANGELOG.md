@@ -156,6 +156,9 @@ Dates are UTC.
 - **Meta provider extension (gh #186).** `extensions/meta`: RFC 8628
   device flow splitting identity from the minted day-key (refresh is
   the same mint; 401/403 purges), chat completions, two-model table.
+- **Kimi Code provider extension (gh #187).** `extensions/kimi-coding`:
+  device flow to the token triple, refresh retrying 429/5xx, chat
+  completions, two-model table.
 - **Retry inventory (gh #83).** `provider.retry_base_delay_ms`
   tunes the backoff base (pi's `retry.baseDelayMs`); `retry_limit = 0`
   is pi's `retry.enabled = false`. No transport switch, no max-delay

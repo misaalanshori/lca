@@ -1,0 +1,11 @@
+name = "kimi-coding"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["provider"]
+description = "Moonshot Kimi models via Kimi Code subscription."
+
+[capabilities.net]
+hosts = ["auth.kimi.com", "api.kimi.com"]
+
+[capabilities.credentials]
+namespace = "kimi-coding"
