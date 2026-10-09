@@ -1783,16 +1783,17 @@ checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
 name = "mcp"
 version = "0.6.0"
 dependencies = [
+ "getrandom 0.3.4",
  "lca-core",
  "lca-ext-abi",
  "lca-permissions",
  "lca-protocol",
- "lca-subscription",
  "lca-testkit",
  "lca-tools",
  "lca-wire-mcp",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "toml",
  "wit-bindgen 0.41.0",

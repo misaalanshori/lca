@@ -18,10 +18,13 @@ fn root(name: &str) -> PathBuf {
 }
 
 fn fixture() -> String {
+    // Forward slashes on every platform: a Windows path's
+    // backslashes would read as JSON escapes in mcp.json.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../extensions/mcp/fixtures/echo-mcp-server.py")
         .to_string_lossy()
         .into_owned()
+        .replace('\\', "/")
 }
 
 fn python3_available() -> bool {

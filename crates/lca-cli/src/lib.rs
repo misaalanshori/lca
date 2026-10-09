@@ -364,12 +364,9 @@ pub(crate) fn apply_enablement(
 /// roots, the shared grant store, and the caller's prompt. Every engine and
 /// the turn loop share one `Arc<Mutex<GrantStore>>` so a grant written by
 /// one path is visible to (and never clobbered by) another.
-// #92: only bundled extensions call this; without either feature it would
-// be dead code, and dead code with a warning is a gate failure.
-#[cfg(any(
-    feature = "bundled-openai-compat",
-    feature = "bundled-compaction-default"
-))]
+// #92: bundled extensions and the (unconditional) MCP manager call
+// this; without any caller it would be dead code, and dead code with
+// a warning is a gate failure.
 pub(crate) fn extension_capabilities(
     cwd: &Path,
     name: &str,

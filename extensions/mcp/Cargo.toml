@@ -20,8 +20,11 @@ serde_json.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lca-ext-abi = { path = "../../crates/lca-ext-abi" }
-lca-subscription = { path = "../../crates/lca-subscription" }
 lca-tools = { path = "../../crates/lca-tools" }
+# PKCE S256 (RFC 7636) and the verifier's randomness; both already in
+# the binary's graph, unlike the subscription kit.
+sha2.workspace = true
+getrandom = "0.3"
 lca-permissions = { path = "../../crates/lca-permissions" }
 tokio.workspace = true
 

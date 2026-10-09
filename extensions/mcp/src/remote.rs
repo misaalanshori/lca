@@ -22,6 +22,58 @@ use crate::{
 /// the words).
 pub(crate) const NEEDS_AUTH_MARKER: &str = "requires sign-in";
 
+/// One PKCE pair (RFC 7636): a random verifier and its S256
+/// challenge. Local (not the subscription kit's): the bridge must
+/// not drag the provider-login kit into the binary for two pure
+/// functions (NFR-1's budget).
+pub fn pkce_pair() -> Result<(String, String), String> {
+    let mut verifier_bytes = [0u8; 32];
+    getrandom::fill(&mut verifier_bytes)
+        .map_err(|err| format!("the platform CSPRNG failed: {err}"))?;
+    let verifier = base64url(&verifier_bytes);
+    let challenge = {
+        use sha2::Digest as _;
+        base64url(&sha2::Sha256::digest(verifier.as_bytes()))
+    };
+    Ok((verifier, challenge))
+}
+
+/// Unpadded base64url.
+fn base64url(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(ALPHABET[((n >> 18) & 63) as usize] as char);
+        out.push(ALPHABET[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[((n >> 6) & 63) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[(n & 63) as usize] as char);
+        }
+    }
+    out
+}
+
+/// Percent-encode one URL or form field (uppercase hex).
+pub fn percent_encode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
 /// pi's connect delays, reused between request attempts.
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(250), Duration::from_millis(1000)];
 /// Attempts for one idempotent read (the first try plus pi's two retries).
@@ -402,8 +454,7 @@ pub fn sign_in(
         .oauth_begin("/callback")
         .map_err(|err| format!("cannot start the loopback flow: {err}"))?;
     let meta = discover(caps.clone(), server, &BTreeMap::new())?;
-    let (verifier, challenge) =
-        lca_subscription::pkce_pair().map_err(|err| format!("PKCE failed: {}", err.0))?;
+    let (verifier, challenge) = pkce_pair().map_err(|err| format!("PKCE failed: {err}"))?;
     // pi sends the verifier as the state; the equality check then
     // covers both values at once.
     let state = verifier.clone();
@@ -421,7 +472,7 @@ pub fn sign_in(
         ),
         None => register_client(caps.clone(), server, &meta, &redirect_uri, scope.as_deref())?,
     };
-    let encode = lca_subscription::percent_encode;
+    let encode = percent_encode;
     let mut url = format!(
         "{}?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state={}",
         meta.authorization_endpoint,
@@ -475,13 +526,7 @@ fn token_post(
 ) -> Result<serde_json::Value, String> {
     let encoded = pairs
         .iter()
-        .map(|(key, value)| {
-            format!(
-                "{}={}",
-                lca_subscription::percent_encode(key),
-                lca_subscription::percent_encode(value)
-            )
-        })
+        .map(|(key, value)| format!("{}={}", percent_encode(key), percent_encode(value)))
         .collect::<Vec<_>>()
         .join("&");
     let token_url = token_url.to_string();
@@ -925,5 +970,25 @@ impl HttpSession {
             false,
         )?;
         Ok(outcome_from_result(&result))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Verifies: gh #53 - PKCE matches the RFC 7636 appendix vector
+    // (the bridge carries its own pair, not the subscription kit's,
+    // for NFR-1's budget).
+    #[test]
+    fn pkce_matches_the_rfc_vector() {
+        use sha2::Digest as _;
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        let challenge = base64url(&sha2::Sha256::digest(verifier.as_bytes()));
+        assert_eq!(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+        let (verifier, challenge) = pkce_pair().expect("random pair");
+        assert_eq!(verifier.len(), 43);
+        assert_eq!(challenge.len(), 43);
+        assert_eq!(percent_encode("a b/c?"), "a%20b%2Fc%3F");
     }
 }
