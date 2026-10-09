@@ -531,7 +531,7 @@ pub(crate) async fn setup(
     // lookup.
     let stats_store = store.clone();
     let stats_session = session.clone();
-    let (registry, _mcp, _mcp_warnings) = crate::registry::assemble(
+    let (registry, _mcp, mcp_warnings) = crate::registry::assemble(
         cwd,
         &config,
         shared_prompt.clone(),
@@ -541,6 +541,12 @@ pub(crate) async fn setup(
         &temp_dir,
         flags,
     );
+    // gh #53: MCP load warnings surface like the tool-selection
+    // ones (invalid entries never block the valid ones, silently or
+    // not).
+    for warning in mcp_warnings {
+        eprintln!("{warning}");
+    }
     // gh #67: the run's tool selection lands before consent, so the
     // provider resolves against the tools it will actually offer.
     for warning in crate::invoke::apply_tool_selection(&registry, flags) {

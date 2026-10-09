@@ -56,4 +56,3 @@ fn mcp_without_a_host_names_the_guide() {
     );
     assert!(chat.take_submitted().is_none());
 }
-

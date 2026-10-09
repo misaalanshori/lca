@@ -202,6 +202,25 @@ fn trusted_edits_write_project_overrides() {
     );
 }
 
+// Verifies: gh #53 - planning under a trusted project without a file
+// still hands the manager an override target (creation, not just
+// edits).
+#[test]
+fn plan_points_at_a_missing_project_file() {
+    let dir = root("plan");
+    write(
+        &dir.join("data/mcp.json"),
+        r#"{"mcpServers": {"echo": {"command": "true"}}}"#,
+    );
+    let project = dir.join("project");
+    let (_entries, _grants, _warnings, _user, project_path) =
+        lca_cli::mcp::McpManager::plan(&dir.join("data"), &project, true);
+    assert_eq!(project_path, Some(project.join(".lca/mcp.json")));
+    let (_entries, _grants, _warnings, _user, untrusted) =
+        lca_cli::mcp::McpManager::plan(&dir.join("data"), &project, false);
+    assert_eq!(untrusted, None);
+}
+
 // Verifies: gh #53 - the prompt section lists reachable servers only
 // (codemode/deferred, enabled), with their reachability line.
 #[test]

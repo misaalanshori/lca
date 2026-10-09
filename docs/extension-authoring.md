@@ -179,35 +179,96 @@ validation, hooks, and permission checks as model-issued calls, at
 most eight levels deep, and never reject: unknown tools, blocks, and
 failures all arrive as error results.
 
-## Bridging an MCP server (sketch)
+## Bridging an MCP server
 
 An external MCP server joins as a `tool-catalog` extension
 (ADR-0045, `extensions/mcp`): spawn it through `process`, speak
 newline-delimited JSON-RPC over its pipes (`initialize`, the
 `notifications/initialized` handshake, `tools/list`, `tools/call`),
-and serve each tool `direct` under pi's `mcp__<server>__<tool>` name
-with the server's annotations carried across. One long-lived child
-per server; killing the bridge kills the tree. The spawn passes the
+and serve each tool under pi's `mcp__<server>__<tool>` name with
+the server's annotations carried across. One long-lived child per
+server; killing the bridge kills the tree. The spawn passes the
 same permission prompt as a model-requested command, so a declined
 server never starts and the denial is recorded - per-call arguments
 flow to an already-approved server, and every call runs through the
 turn's hooks like any other extension tool. The sandboxed twin reads
 its server list from the `state` key `mcp-servers`.
 
-A remote server (`HttpServerConfig`: `url`, `headers`, `timeout`,
-`oauth`) rides streamable HTTP over `net`: JSON or SSE envelopes,
-the `Mcp-Session-Id` round-trip, pi's transient retry on the
-idempotent reads (calls never retry), and the configured per-request
-timeout bounding the whole exchange. OAuth is the provider
-pattern: dynamic registration (or a configured client), the PKCE
-loopback flow through the `oauth` capability, tokens in the
-`credentials` namespace keyed by name and URL, proactive refresh
-near expiry, one reactive refresh on 401, purge on `invalid_grant`,
-and step-up scopes remembered into the next sign-in. A static
-`Authorization` header disables OAuth, exactly like pi. The
-sandboxed twin stays stdio-only until the phase-3 management owns
-server URLs; `/mcp`, `mcp.json`, resources, and wider exposures are
-still later phases; this sketch grows into their docs.
+A remote server rides streamable HTTP over `net`: JSON or SSE
+envelopes, the `Mcp-Session-Id` round-trip, pi's transient retry on
+the idempotent reads (calls never retry), and the configured
+per-request timeout bounding the whole exchange. OAuth is the
+provider pattern: dynamic registration (or a configured client),
+the PKCE loopback flow through the `oauth` capability, tokens in
+the `credentials` namespace keyed by name and URL, proactive
+refresh near expiry, one reactive refresh on 401, purge on
+`invalid_grant`, and step-up scopes remembered into the next
+sign-in. A static `Authorization` header disables OAuth, exactly
+like pi.
+
+### Configuration
+
+`mcp.json` lives beside the config: user-level next to the data
+dir, project-level at `<cwd>/.lca/mcp.json` (read only when the
+project is trusted, the config file's own rule). A project entry
+with a transport adds or replaces the server; one without only
+overrides `enabled`, `exposure`, `toolExposure`, and `description`
+of a user-level server. Invalid entries are reported at startup
+and skipped, never blocking the rest.
+
+```json
+{
+  "mcpServers": {
+    "echo": {
+      "command": "python3",
+      "args": ["echo-server.py"],
+      "exposure": "direct",
+      "description": "Echo."
+    },
+    "docs": {
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" },
+      "timeout": 30
+    }
+  }
+}
+```
+
+`${NAME}` expands from the process environment in commands, args,
+headers, and secrets. `!command` values are refused (executing
+config content is a trust hole), `env` waits for the 0.7
+process-env seam (entries carrying it skip loudly), the legacy SSE
+transport is rejected, and `cwd` names an `fs` scope (default
+`workspace`).
+
+### Managing servers
+
+`/mcp` prints every server with state, tools, and source; its
+verbs act: `reconnect`, `enable`/`disable`, `exposure` (set or
+cycle direct → codemode → deferred → hidden), `login` (background
+OAuth; the browser opens where one exists), `logout`. Enable and
+exposure edits persist to the defining file - a user-level server
+edited under a trusted project writes a knob-only project
+override, and later edits stay there. `/reload` re-reads the files.
+Shell management (`lca mcp ...`) waits for the CLI-delegation
+mechanism (#171, 0.7); until then the files stay hand-editable.
+
+### Exposure and resources
+
+The server default is `codemode`; `toolExposure` overrides per
+tool (exact names win, then `*` patterns). Deferred tools surface
+through `tool_search` and declare on activation; hidden tools never
+register. Servers offering resources add `list_mcp_resources`,
+`list_mcp_resource_templates`, and `read_mcp_resource` at the
+widest such server's exposure. Text reads as text, images ride the
+image lane, other bytes stage to a file whose path the model
+receives. Reachable non-direct servers list under `## MCP servers`
+in the system prompt with one line on how their tools are reached.
+
+The sandboxed twin serves server tools over stdio; remote servers
+and the resource trio stay native until server URLs have a managed
+path to the guest (a `net` import on the `tool-catalog` world is a
+WIT change, deferred under the freeze).
 
 ## Other worlds
 

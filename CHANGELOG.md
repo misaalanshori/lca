@@ -7,6 +7,15 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **MCP bridge phase 3 (gh #53, epic complete).** `mcp.json`
+(user + trusted-project, pi merge rules) loads through the session
+manager: `/mcp` verbs (status, reconnect, enable/disable with
+project overrides, exposure set/cycle, background OAuth login,
+logout), resources (`list_mcp_resources`,
+`list_mcp_resource_templates`, `read_mcp_resource` at the widest
+exposure), per-tool exposure (`toolExposure`) with `tool_search`
+discovery, and the `## MCP servers` prompt section. Shell
+management waits for #171 (0.7).
 - **MCP bridge phase 1 (gh #53).** ADR-0045 decides extension-bridge
 over host-service: `extensions/mcp` serves external stdio MCP servers
 as a `tool-catalog` suite (pi's `mcp__<server>__<tool>` names,

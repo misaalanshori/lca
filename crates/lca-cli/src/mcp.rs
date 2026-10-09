@@ -373,9 +373,9 @@ impl McpManager {
         let loaded = load_entries(data_dir, cwd, trusted);
         let (grants, mut warnings) = manager_grants(&loaded.entries);
         warnings.extend(loaded.warnings);
-        let project = trusted
-            .then(|| project_config_path(cwd))
-            .filter(|path| path.is_file());
+        // Trusted whether or not the file exists yet: an override
+        // creates it (persistence makes parents).
+        let project = trusted.then(|| project_config_path(cwd));
         (
             loaded.entries,
             grants,
@@ -596,10 +596,12 @@ fn write_project_override(
         patch["exposure"] = level.into();
     }
     // Merge with an existing override instead of clobbering it.
-    let patch_object: Vec<(String, serde_json::Value)> = patch
-        .as_object()
-        .map_or_else(Vec::new, |object| {
-            object.iter().map(|(key, value)| (key.clone(), value.clone())).collect()
+    let patch_object: Vec<(String, serde_json::Value)> =
+        patch.as_object().map_or_else(Vec::new, |object| {
+            object
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
         });
     if let Some(existing) = file["mcpServers"]
         .get(name)
