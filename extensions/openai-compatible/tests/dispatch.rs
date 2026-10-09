@@ -453,3 +453,23 @@ fn the_body_carries_a_clamped_prompt_cache_key() {
         "the opt-out drops the pin"
     );
 }
+
+// Verifies: gh #185 - `openai-compatible` stays strictly API-key
+// based: no OAuth capability in the manifest, none in the native
+// grants. One-click sign-in lives in the dedicated `openrouter`
+// extension; the default provider never grows the permission.
+#[test]
+fn openai_compatible_declares_no_oauth_capability() {
+    let manifest: toml::Value = openai_compatible::MANIFEST
+        .parse()
+        .expect("MANIFEST parses");
+    assert!(
+        manifest["capabilities"].get("oauth").is_none(),
+        "no oauth section in the manifest"
+    );
+    let grants = openai_compatible::manifest_grants();
+    assert!(
+        grants.oauth.is_none(),
+        "no loopback flow in the native grants"
+    );
+}

@@ -15,6 +15,7 @@ A full ADR is not written for each provider, because there is usually no real al
 | [Codex](codex.md) | OAuth | WASM, install separately | ChatGPT subscription via the Codex responses gateway; shares the subscription kit with Grok. |
 | [Grok](grok.md) | OAuth | WASM, install separately | SuperGrok / X subscription via the Grok responses proxy; shares the subscription kit with Codex. |
 | [Anthropic](anthropic.md) | API key + OAuth | WASM, install separately | Claude via Messages: cache breakpoints, thinking signatures, Pro/Max subscription (browser + copy-code) beside a plain key. |
+| [OpenRouter](openrouter.md) | OAuth (provisions key) | WASM, install separately | One-click browser OAuth on the shared OpenAI wire kit; `openai-compatible` stays key-only. |
 | [LM Studio](lmstudio.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 | [Ollama](ollama.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 
@@ -34,7 +35,7 @@ votes get counted against this table.
 | pi provider | LCA status | Notes |
 |---|---|---|
 | pi `openai` | preset | `openai` row, `OPENAI_API_KEY`. |
-| pi `openrouter` | preset | `openrouter` row, `OPENROUTER_API_KEY`. |
+| pi `openrouter` | preset + extension | `openrouter` row for the key; `openrouter` for the one-click OAuth that provisions one. |
 | pi `deepseek` | preset | `deepseek` row, `DEEPSEEK_API_KEY`. |
 | pi `groq` | preset | `groq` row, `GROQ_API_KEY`. |
 | pi `cerebras` | preset | `cerebras` row. |

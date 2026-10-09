@@ -1,0 +1,14 @@
+name = "openrouter"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["provider"]
+description = "OpenRouter multi-model provider with one-click browser OAuth sign-in."
+
+[capabilities.net]
+hosts = ["openrouter.ai"]
+
+[capabilities.oauth]
+redirect_path = "/callback"
+
+[capabilities.credentials]
+namespace = "openrouter"

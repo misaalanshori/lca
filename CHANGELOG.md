@@ -144,6 +144,10 @@ Dates are UTC.
   signatures/budgets), API key + Claude Pro/Max OAuth (browser
   loopback + copy-code paste, JSON exchange), a four-model static
   table. The host's callback parser accepts the `code#state` paste.
+- **OpenRouter provider extension (gh #185).** `extensions/openrouter`:
+  one-click OAuth PKCE provisioning a permanent key, chat completions
+  on the shared OpenAI kit, live `/models` discovery with a curated
+  floor. `openai-compatible` stays strictly key-only (guarded).
 - **Retry inventory (gh #83).** `provider.retry_base_delay_ms`
   tunes the backoff base (pi's `retry.baseDelayMs`); `retry_limit = 0`
   is pi's `retry.enabled = false`. No transport switch, no max-delay
