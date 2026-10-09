@@ -359,6 +359,7 @@ async fn compaction_and_transform_agree_across_modes_with_completion_denied() {
                 v: lca_protocol::FORMAT_VERSION,
                 ts,
                 id: "01".to_string(),
+                parent: None,
                 content: "first request".to_string(),
                 attachments: Vec::new(),
                 queue: None,
@@ -367,6 +368,7 @@ async fn compaction_and_transform_agree_across_modes_with_completion_denied() {
                 v: lca_protocol::FORMAT_VERSION,
                 ts,
                 id: "02".to_string(),
+                parent: None,
                 content: vec![lca_protocol::ContentBlock::Text {
                     text: "reply".to_string(),
                 }],
@@ -392,6 +394,7 @@ async fn compaction_and_transform_agree_across_modes_with_completion_denied() {
         v: lca_protocol::FORMAT_VERSION,
         ts: 1_700_000_000_100u64,
         id: "03".to_string(),
+        parent: None,
         content: "call-completion".to_string(),
         attachments: Vec::new(),
         queue: None,

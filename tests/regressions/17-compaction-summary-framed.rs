@@ -15,6 +15,7 @@ fn a_compaction_summary_reaches_the_model_framed_as_compacted_history() {
         v: FORMAT_VERSION,
         ts: 1,
         id: "c1".into(),
+        parent: None,
         replaced_from: "u1".into(),
         replaced_to: "a1".into(),
         first_kept_id: String::new(),

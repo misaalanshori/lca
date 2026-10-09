@@ -652,6 +652,7 @@ mod tests {
                 v: lca_protocol::FORMAT_VERSION,
                 ts: 1,
                 id: id.to_string(),
+                parent: None,
                 content: Vec::new(),
                 reasoning: None,
                 reasoning_signature: None,

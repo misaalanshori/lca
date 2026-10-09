@@ -135,6 +135,10 @@ pub fn assemble_with(
             Record::SessionStart { .. }
             | Record::SessionEnd { .. }
             | Record::ForkPoint { .. }
+            // A branch jump is navigation machinery, not content: the
+            // walk already passed through it to reach this chain (gh
+            // #37, ADR-0046).
+            | Record::BranchPoint { .. }
             | Record::Permission { .. }
             | Record::ExtensionEvent { .. }
             // A model switch is history for a reader, not content for the
@@ -312,6 +316,15 @@ pub fn assemble_with(
                 }
                 messages.push(ChatMessage::tool_result(call_id.clone(), text));
             }
+            Record::BranchSummary { summary, .. } => {
+                // An abandoned path's lesson, injected where the new
+                // branch continues (pi's branch-summary shape, gh #37):
+                // framed as context, like a compaction summary.
+                messages.push(ChatMessage::text(
+                    MessageRole::User,
+                    format!("abandoned branch summary: {summary}"),
+                ));
+            }
             Record::Compaction { summary, .. } => {
                 compaction_seen = true;
                 // The summary stands in for the range it replaced
@@ -442,6 +455,7 @@ mod vocabulary_tests {
             v: FORMAT_VERSION,
             ts: 1,
             id: id.to_string(),
+            parent: None,
             content: content.to_string(),
             attachments: vec![],
             queue: None,
@@ -453,6 +467,7 @@ mod vocabulary_tests {
             v: FORMAT_VERSION,
             ts: 2,
             id: id.to_string(),
+            parent: None,
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
             }],
@@ -494,6 +509,7 @@ mod vocabulary_tests {
                 v: FORMAT_VERSION,
                 ts: 2,
                 id: "m1".into(),
+                parent: None,
                 custom_type: "my-extension".into(),
                 content: "Injected context...".into(),
                 display: false,
@@ -526,6 +542,7 @@ mod vocabulary_tests {
                 v: FORMAT_VERSION,
                 ts: 3,
                 id: "e1".into(),
+                parent: None,
                 target_id: "u1".into(),
                 replacement: None,
             },
@@ -533,6 +550,7 @@ mod vocabulary_tests {
                 v: FORMAT_VERSION,
                 ts: 4,
                 id: "e2".into(),
+                parent: None,
                 target_id: "u2".into(),
                 replacement: Some("revised".into()),
             },
@@ -559,6 +577,7 @@ mod vocabulary_tests {
                 v: FORMAT_VERSION,
                 ts: 3,
                 id: "c1".into(),
+                parent: None,
                 call_id: call.call_id.clone(),
                 name: call.name.clone(),
                 arguments: call.arguments.clone(),
@@ -568,6 +587,7 @@ mod vocabulary_tests {
                 v: FORMAT_VERSION,
                 ts: 4,
                 id: "r1".into(),
+                parent: None,
                 call_id: call.call_id.clone(),
                 status: lca_protocol::ToolResultStatus::Ok,
                 content: Some("ok".into()),
@@ -581,6 +601,7 @@ mod vocabulary_tests {
                 v: FORMAT_VERSION,
                 ts: 5,
                 id: "e1".into(),
+                parent: None,
                 target_id: "a1".into(),
                 replacement: Some("first".into()),
             },
@@ -588,6 +609,7 @@ mod vocabulary_tests {
                 v: FORMAT_VERSION,
                 ts: 6,
                 id: "e2".into(),
+                parent: None,
                 target_id: "a1".into(),
                 replacement: Some("second".into()),
             },
@@ -626,6 +648,7 @@ mod vocabulary_tests {
                 v: FORMAT_VERSION,
                 ts: 2,
                 id: "c1".into(),
+                parent: None,
                 from: None,
                 to: "m".into(),
                 provider: "p".into(),
@@ -635,12 +658,14 @@ mod vocabulary_tests {
                 v: FORMAT_VERSION,
                 ts: 3,
                 id: "t1".into(),
+                parent: None,
                 level: "high".into(),
             },
             Record::Usage {
                 v: FORMAT_VERSION,
                 ts: 4,
                 id: "g1".into(),
+                parent: None,
                 kind: "cache_warm".into(),
                 provider: None,
                 model: None,
@@ -650,6 +675,7 @@ mod vocabulary_tests {
                 v: FORMAT_VERSION,
                 ts: 5,
                 id: "l1".into(),
+                parent: None,
                 target_id: "u1".into(),
                 label: Some("checkpoint-1".into()),
             },
@@ -657,12 +683,14 @@ mod vocabulary_tests {
                 v: FORMAT_VERSION,
                 ts: 6,
                 id: "s1".into(),
+                parent: None,
                 name: "Refactor auth module".into(),
             },
             Record::Custom {
                 v: FORMAT_VERSION,
                 ts: 7,
                 id: "x1".into(),
+                parent: None,
                 custom_type: "my-extension".into(),
                 data: serde_json::json!({"count": 42}),
             },

@@ -314,6 +314,8 @@ FR-SESS-7. WHEN the user runs the export command, the agent SHALL produce the ex
 
 FR-SESS-10. WHEN the user names a bookmark on a session record, the agent SHALL persist a `label` record naming the record; the latest label per record wins, an absent label clears it, and the label SHALL be readable in the session export (gh #37 phase 1).
 
+FR-SESS-11. WHEN the user navigates to an earlier record and continues, the agent SHALL append a `branch-point` naming that record and continue in the same log without copying history; reads for display and model context SHALL follow the tip ancestry through `parent` links (falling back to log order where links are absent), and a recorded navigation MAY carry a `branch-summary` (abandoned leaf plus summary) that the assembly injects as context (gh #37 phase 2).
+
 ### Compaction and context transformation
 
 FR-CTX-1. The agent SHALL write a `compaction` extension's result as a durable session record and SHALL reuse it on later reads without invoking the extension again until usage next crosses the threshold.

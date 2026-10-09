@@ -65,6 +65,7 @@ fn pi_parity_session_tree_branches_in_file() {
                 v: 1,
                 ts: 1,
                 id: "u1".to_string(),
+                parent: None,
                 content: "shared history".to_string(),
                 attachments: vec![],
                 queue: None,

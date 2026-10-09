@@ -15,6 +15,7 @@ fn user_record(id: &str, content: &str) -> Record {
         v: FORMAT_VERSION,
         ts: 1,
         id: id.to_string(),
+        parent: None,
         content: content.to_string(),
         attachments: vec![],
         queue: None,

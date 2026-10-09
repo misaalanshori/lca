@@ -575,6 +575,7 @@ impl Ui {
                             v: lca_protocol::FORMAT_VERSION,
                             ts: lca_session::now_ms(),
                             id: lca_session::new_record_id(),
+                            parent: None,
                             content: format!("!{command}"),
                             attachments: Vec::new(),
                             queue: None,

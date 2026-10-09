@@ -352,6 +352,7 @@ impl SessionStore {
                 v: lca_protocol::FORMAT_VERSION,
                 ts: now,
                 id: ids::record_id(now),
+                parent: None,
             },
         )
     }
@@ -688,6 +689,7 @@ impl SessionStore {
                 v: lca_protocol::FORMAT_VERSION,
                 ts: now,
                 id: ids::record_id(now),
+                parent: None,
                 target_id: record_id.to_string(),
                 label: label.map(str::to_string),
             },

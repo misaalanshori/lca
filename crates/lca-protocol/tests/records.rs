@@ -93,6 +93,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 content: String::new(),
                 attachments: vec![],
                 queue: None,
@@ -104,6 +105,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 content: vec![],
                 reasoning: None,
                 reasoning_signature: None,
@@ -119,6 +121,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 call_id: "c".into(),
                 name: "n".into(),
                 arguments: "{}".into(),
@@ -131,6 +134,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 call_id: "c".into(),
                 status: ToolResultStatus::Ok,
                 content: None,
@@ -147,6 +151,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 action: "run ls".into(),
                 decision: PermissionDecision::Once,
                 pattern: None,
@@ -158,6 +163,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 extension: "e".into(),
                 event: "load".into(),
                 detail: String::new(),
@@ -169,6 +175,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 replaced_from: "1".into(),
                 replaced_to: "2".into(),
                 first_kept_id: String::new(),
@@ -196,6 +203,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 from: None,
                 to: "m".into(),
                 provider: "p".into(),
@@ -208,6 +216,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 level: "high".into(),
             },
             "thinking-level-change",
@@ -217,6 +226,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 kind: "cache_warm".into(),
                 provider: Some("p".into()),
                 model: Some("m".into()),
@@ -229,6 +239,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 target_id: "r".into(),
                 label: Some("checkpoint-1".into()),
             },
@@ -239,6 +250,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 name: "Refactor auth module".into(),
             },
             "session-info",
@@ -248,6 +260,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 custom_type: "my-extension".into(),
                 data: serde_json::json!({"count": 42}),
             },
@@ -258,6 +271,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 custom_type: "my-extension".into(),
                 content: "Injected context...".into(),
                 display: true,
@@ -270,6 +284,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
                 target_id: "r".into(),
                 replacement: None,
             },
@@ -280,10 +295,45 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 v: 1,
                 ts,
                 id: "a".into(),
+                parent: None,
             },
             "session-end",
         ),
+        (
+            Record::BranchPoint {
+                v: 1,
+                ts,
+                id: "b".into(),
+                target_id: "a".into(),
+            },
+            "branch-point",
+        ),
+        (
+            Record::BranchSummary {
+                v: 1,
+                ts,
+                id: "c".into(),
+                parent: Some("a".into()),
+                from_id: Some("z".into()),
+                summary: "tried X".into(),
+            },
+            "branch-summary",
+        ),
     ]
+}
+
+// Verifies: the 0.6 freeze (gh #37) - a pre-linkage log line with no
+// `parent` field reads back with `parent: None`, so old sessions load
+// unchanged under the branch walk's log-order fallback.
+#[test]
+fn pre_linkage_lines_parse_with_absent_parent() {
+    let line = r#"{"v":1,"t":"user","ts":7,"id":"a","content":"hi"}"#;
+    let record: Record = serde_json::from_str(line).expect("old line parses");
+    assert_eq!(record.parent(), None);
+    assert_eq!(record.id(), Some("a"));
+    let line = r#"{"v":1,"t":"assistant","ts":8,"id":"b","content":[]}"#;
+    let record: Record = serde_json::from_str(line).expect("old line parses");
+    assert_eq!(record.parent(), None);
 }
 
 #[test]
@@ -360,6 +410,7 @@ fn records_serialize_with_v_t_ts_first() {
         v: FORMAT_VERSION,
         ts: 7,
         id: "x".into(),
+        parent: None,
         content: "hi".into(),
         attachments: vec![],
         queue: None,
@@ -533,6 +584,7 @@ fn assistant_thinking_fields_round_trip_and_old_logs_load() {
         v: 1,
         ts: 1,
         id: "a".into(),
+        parent: None,
         content: vec![ContentBlock::Reasoning {
             reasoning: "because".into(),
             signature: Some("sig-bytes".into()),

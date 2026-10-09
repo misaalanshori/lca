@@ -52,6 +52,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier, sortable by creation order.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// Message text.
         content: String,
         /// Attachment hashes, when present.
@@ -71,6 +77,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// Message content blocks.
         content: Vec<crate::message::ContentBlock>,
         /// Reasoning text, when the model produced one.
@@ -105,6 +117,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// Provider-side call identifier.
         call_id: String,
         /// Tool name.
@@ -122,6 +140,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// Call this answers.
         call_id: String,
         /// Outcome.
@@ -156,6 +180,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// What was attempted, shown verbatim.
         action: String,
         /// What the user chose.
@@ -172,6 +202,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// Extension identity.
         extension: String,
         /// Event kind.
@@ -187,6 +223,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// First replaced record id (inclusive).
         replaced_from: String,
         /// Last replaced record id (inclusive).
@@ -243,6 +285,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// The model the session ran on before this change, when it had
         /// one. Absent when the session's first model was just picked.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -268,6 +316,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// The level now in use (`off`, `minimal`, `low`, `medium`,
         /// `high`, `max`, or a provider extension's own level).
         level: String,
@@ -284,6 +338,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// What produced the usage (`cache_warm`, ...).
         kind: String,
         /// Provider extension that did the work, when one did.
@@ -305,6 +365,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// The labeled record's identifier.
         target_id: String,
         /// The bookmark text; `None` clears it.
@@ -321,6 +387,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// The display name.
         name: String,
     },
@@ -335,6 +407,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// Which extension owns the entry; readers use it to find
         /// their own entries on reload.
         custom_type: String,
@@ -353,6 +431,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// Which extension injected the message.
         custom_type: String,
         /// The injected text (a string; content blocks ride a later
@@ -376,12 +460,56 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// The edited record's identifier (a `user`, `assistant`,
         /// `tool-result`, or `custom-message` record).
         target_id: String,
         /// The replacement text, or `None` to omit the target.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         replacement: Option<String>,
+    },
+    /// An in-file branch jump (gh #37, ADR-0046): navigating to an
+    /// earlier record appends this naming it, and later records chain
+    /// through it. Transparent to the ancestry walk (the walk jumps to
+    /// `target_id`, never follows a parent of its own - it has none);
+    /// skipped in display views, carried in audit and exports.
+    BranchPoint {
+        /// Schema version.
+        v: u32,
+        /// Epoch milliseconds.
+        ts: u64,
+        /// Record identifier.
+        id: String,
+        /// The record the branch continues from.
+        target_id: String,
+    },
+    /// A summary of an abandoned branch path (pi's `branch_summary`
+    /// semantics on this log's vocabulary): appended at a navigation
+    /// point so the new branch inherits what the old one learned.
+    /// Assembly injects the summary as context, like a compaction.
+    BranchSummary {
+        /// Schema version.
+        v: u32,
+        /// Epoch milliseconds.
+        ts: u64,
+        /// Record identifier.
+        id: String,
+        /// The previous record's id: the navigation point, named
+        /// explicitly (an auto-stamp would point at the branch jump).
+        /// `None` only on hand-written records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
+        /// The abandoned leaf the summary covers; `None` when the old
+        /// path was empty (pi's `"root"` sentinel, typed).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_id: Option<String>,
+        /// The summary text.
+        summary: String,
     },
     /// Written on a clean exit; absence is normal after a crash.
     SessionEnd {
@@ -391,6 +519,12 @@ pub enum Record {
         ts: u64,
         /// Record identifier.
         id: String,
+
+        /// The previous record's id (gh #37, ADR-0046): the ancestry
+        /// link the branch walk follows. `None` on records written
+        /// before linkage; the walk falls back to log order there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
     },
 }
 
@@ -437,8 +571,68 @@ impl Record {
             | Record::Custom { v, .. }
             | Record::CustomMessage { v, .. }
             | Record::ContextEdit { v, .. }
+            | Record::BranchPoint { v, .. }
+            | Record::BranchSummary { v, .. }
             | Record::SessionEnd { v, .. } => *v,
         }
+    }
+
+    /// The ancestry link: the previous record's id, when the type
+    /// carries one (gh #37, ADR-0046). `None` on records written
+    /// before linkage and on junction types (`ForkPoint`,
+    /// `BranchPoint`) the walk treats specially.
+    pub fn parent(&self) -> Option<&str> {
+        match self {
+            Record::User { parent, .. }
+            | Record::Assistant { parent, .. }
+            | Record::ToolCall { parent, .. }
+            | Record::ToolResult { parent, .. }
+            | Record::Permission { parent, .. }
+            | Record::ExtensionEvent { parent, .. }
+            | Record::Compaction { parent, .. }
+            | Record::ModelChange { parent, .. }
+            | Record::ThinkingLevelChange { parent, .. }
+            | Record::Usage { parent, .. }
+            | Record::Label { parent, .. }
+            | Record::SessionInfo { parent, .. }
+            | Record::Custom { parent, .. }
+            | Record::CustomMessage { parent, .. }
+            | Record::ContextEdit { parent, .. }
+            | Record::BranchSummary { parent, .. }
+            | Record::SessionEnd { parent, .. } => parent.as_deref(),
+            Record::SessionStart { .. } | Record::ForkPoint { .. } | Record::BranchPoint { .. } => {
+                None
+            }
+        }
+    }
+
+    /// Stamp the ancestry link (gh #37): the store fills this on
+    /// append when the writer left it empty. Junction types ignore
+    /// the stamp (the walk never follows their parent).
+    pub fn set_parent(&mut self, parent: &str) {
+        let slot = match self {
+            Record::User { parent, .. }
+            | Record::Assistant { parent, .. }
+            | Record::ToolCall { parent, .. }
+            | Record::ToolResult { parent, .. }
+            | Record::Permission { parent, .. }
+            | Record::ExtensionEvent { parent, .. }
+            | Record::Compaction { parent, .. }
+            | Record::ModelChange { parent, .. }
+            | Record::ThinkingLevelChange { parent, .. }
+            | Record::Usage { parent, .. }
+            | Record::Label { parent, .. }
+            | Record::SessionInfo { parent, .. }
+            | Record::Custom { parent, .. }
+            | Record::CustomMessage { parent, .. }
+            | Record::ContextEdit { parent, .. }
+            | Record::BranchSummary { parent, .. }
+            | Record::SessionEnd { parent, .. } => parent,
+            Record::SessionStart { .. } | Record::ForkPoint { .. } | Record::BranchPoint { .. } => {
+                return;
+            }
+        };
+        *slot = Some(parent.to_string());
     }
 
     /// Record identifier, when the type has one.
@@ -460,6 +654,8 @@ impl Record {
             | Record::Custom { id, .. }
             | Record::CustomMessage { id, .. }
             | Record::ContextEdit { id, .. }
+            | Record::BranchPoint { id, .. }
+            | Record::BranchSummary { id, .. }
             | Record::SessionEnd { id, .. } => Some(id),
             Record::SessionStart { .. } => None,
         }
@@ -485,6 +681,8 @@ impl Record {
             Record::Custom { .. } => "custom",
             Record::CustomMessage { .. } => "custom-message",
             Record::ContextEdit { .. } => "context-edit",
+            Record::BranchPoint { .. } => "branch-point",
+            Record::BranchSummary { .. } => "branch-summary",
             Record::SessionEnd { .. } => "session-end",
         }
     }
@@ -496,6 +694,7 @@ pub fn thinking_level_change_record(ts: u64, id: impl Into<String>, level: &str)
         v: FORMAT_VERSION,
         ts,
         id: id.into(),
+        parent: None,
         level: level.to_string(),
     }
 }
@@ -514,6 +713,7 @@ pub fn usage_record(
         v: FORMAT_VERSION,
         ts,
         id: id.into(),
+        parent: None,
         kind: kind.to_string(),
         provider: provider.map(str::to_string),
         model: model.map(str::to_string),
@@ -532,6 +732,7 @@ pub fn label_record(
         v: FORMAT_VERSION,
         ts,
         id: id.into(),
+        parent: None,
         target_id: target_id.to_string(),
         label: label.map(str::to_string),
     }
@@ -543,6 +744,7 @@ pub fn session_info_record(ts: u64, id: impl Into<String>, name: &str) -> Record
         v: FORMAT_VERSION,
         ts,
         id: id.into(),
+        parent: None,
         name: name.to_string(),
     }
 }
@@ -572,6 +774,7 @@ pub fn custom_record(
         v: FORMAT_VERSION,
         ts,
         id: id.into(),
+        parent: None,
         custom_type: custom_type.to_string(),
         data,
     }
@@ -590,6 +793,7 @@ pub fn custom_message_record(
         v: FORMAT_VERSION,
         ts,
         id: id.into(),
+        parent: None,
         custom_type: custom_type.to_string(),
         content: content.to_string(),
         display,
@@ -609,8 +813,39 @@ pub fn context_edit_record(
         v: FORMAT_VERSION,
         ts,
         id: id.into(),
+        parent: None,
         target_id: target_id.to_string(),
         replacement: replacement.map(str::to_string),
+    }
+}
+
+/// Convenience constructor for a `branch-point` record: the walk
+/// jumps to `target_id`, so no parent is stamped (gh #37).
+pub fn branch_point_record(ts: u64, id: impl Into<String>, target_id: &str) -> Record {
+    Record::BranchPoint {
+        v: FORMAT_VERSION,
+        ts,
+        id: id.into(),
+        target_id: target_id.to_string(),
+    }
+}
+
+/// Convenience constructor for a `branch-summary` record: the parent
+/// names the navigation point explicitly (gh #37).
+pub fn branch_summary_record(
+    ts: u64,
+    id: impl Into<String>,
+    parent: &str,
+    from_id: Option<&str>,
+    summary: &str,
+) -> Record {
+    Record::BranchSummary {
+        v: FORMAT_VERSION,
+        ts,
+        id: id.into(),
+        parent: Some(parent.to_string()),
+        from_id: from_id.map(str::to_string),
+        summary: summary.to_string(),
     }
 }
 
@@ -625,6 +860,7 @@ pub fn tool_call_record(
         v: FORMAT_VERSION,
         ts,
         id: id.into(),
+        parent: None,
         call_id: call.call_id.clone(),
         name: call.name.clone(),
         arguments: call.arguments.clone(),

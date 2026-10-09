@@ -110,6 +110,7 @@ pub fn model_change_record(
         v: lca_protocol::FORMAT_VERSION,
         ts: lca_session::now_ms(),
         id: lca_session::new_record_id(),
+        parent: None,
         from: from
             .map(str::trim)
             .filter(|id| !id.is_empty())
@@ -137,6 +138,7 @@ pub fn thinking_level_change_record(
         v: lca_protocol::FORMAT_VERSION,
         ts: lca_session::now_ms(),
         id: lca_session::new_record_id(),
+        parent: None,
         level: effective.unwrap_or("default").to_string(),
     })
 }

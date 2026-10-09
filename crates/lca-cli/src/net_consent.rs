@@ -162,6 +162,7 @@ fn record(
         v: FORMAT_VERSION,
         ts: lca_session::now_ms(),
         id: lca_session::new_record_id(),
+        parent: None,
         action: action.display(),
         decision,
         pattern,

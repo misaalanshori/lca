@@ -313,6 +313,7 @@ impl Agent<'_> {
                 v: FORMAT_VERSION,
                 ts: lca_session::now_ms(),
                 id: result_id.clone(),
+                parent: None,
                 call_id: result.call_id.clone(),
                 status: result.status,
                 content: Some(result.content.clone()),
@@ -342,6 +343,7 @@ impl Agent<'_> {
                     v: FORMAT_VERSION,
                     ts: lca_session::now_ms(),
                     id: lca_session::new_record_id(),
+                    parent: None,
                     target_id: result_id,
                     replacement: Some(replacement),
                 },
@@ -537,6 +539,7 @@ impl Agent<'_> {
                 v: FORMAT_VERSION,
                 ts: lca_session::now_ms(),
                 id: lca_session::new_record_id(),
+                parent: None,
                 action: action.display(),
                 decision: if outcome.stored_pattern.is_some() {
                     lca_protocol::PermissionDecision::Always

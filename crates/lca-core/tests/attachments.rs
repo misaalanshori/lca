@@ -75,6 +75,7 @@ fn assembly_appends_an_image_block_for_a_user_attachment() {
             v: FORMAT_VERSION,
             ts: 2,
             id: "u1".to_string(),
+            parent: None,
             content: "what is this?".to_string(),
             attachments: vec!["hash-a".to_string(), "hash-missing".to_string()],
             queue: None,

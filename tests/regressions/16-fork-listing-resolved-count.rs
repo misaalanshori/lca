@@ -13,6 +13,7 @@ fn user(id: &str, content: &str) -> Record {
         v: FORMAT_VERSION,
         ts: 1,
         id: id.into(),
+        parent: None,
         content: content.into(),
         attachments: vec![],
         queue: None,

@@ -22,6 +22,7 @@ fn clone_duplicates_the_tip_and_switches() {
                 v: lca_protocol::FORMAT_VERSION,
                 ts: 1,
                 id: "r1".into(),
+                parent: None,
                 content: "from the clone".into(),
                 attachments: Vec::new(),
                 queue: None,

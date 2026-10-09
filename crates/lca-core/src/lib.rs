@@ -445,6 +445,7 @@ impl<'a> Agent<'a> {
                     v: FORMAT_VERSION,
                     ts: lca_session::now_ms(),
                     id: lca_session::new_record_id(),
+                    parent: None,
                     extension: extension.to_string(),
                     event: event.to_string(),
                     detail: detail.to_string(),

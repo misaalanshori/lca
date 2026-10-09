@@ -116,6 +116,7 @@ fn seed(f: &Fixture, exchanges: usize) {
                     v: FORMAT_VERSION,
                     ts,
                     id: format!("u{i:04}"),
+                    parent: None,
                     content: filler.clone(),
                     attachments: Vec::new(),
                     queue: None,
@@ -129,6 +130,7 @@ fn seed(f: &Fixture, exchanges: usize) {
                     v: FORMAT_VERSION,
                     ts,
                     id: format!("a{i:04}"),
+                    parent: None,
                     content: vec![ContentBlock::Text {
                         text: filler.clone(),
                     }],

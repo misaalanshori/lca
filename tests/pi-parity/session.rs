@@ -22,6 +22,7 @@ fn user(id: &str, content: &str) -> Record {
         v: 1,
         ts: 1,
         id: id.to_string(),
+        parent: None,
         content: content.to_string(),
         attachments: vec![],
         queue: None,
@@ -33,6 +34,7 @@ fn assistant(id: &str) -> Record {
         v: 1,
         ts: 2,
         id: id.to_string(),
+        parent: None,
         content: vec![ContentBlock::Text {
             text: "done".to_string(),
         }],
@@ -165,6 +167,7 @@ fn pi_parity_compaction_appends_marker_and_keeps_originals() {
                 v: 1,
                 ts: 3,
                 id: "c1".to_string(),
+                parent: None,
                 replaced_from: "u1".to_string(),
                 replaced_to: "a1".to_string(),
                 first_kept_id: String::new(),
