@@ -100,8 +100,19 @@ fn the_new_vocabulary_appends_and_reads_back() {
     } = store.read(&session).expect("read");
     assert!(!truncated);
     assert_eq!(skipped_unknown, 0, "the new types are known");
+    // Appends stamp the ancestry link (gh #37): the expected sequence
+    // carries the chain.
     let mut expected = vec![store.raw_start(&session).expect("start")];
-    expected.extend(records);
+    let mut tip: Option<String> = None;
+    for mut record in records {
+        if record.parent().is_none()
+            && let Some(prev) = tip.clone()
+        {
+            record.set_parent(&prev);
+        }
+        tip = record.id().map(str::to_string);
+        expected.push(record);
+    }
     assert_eq!(read, expected);
 }
 
