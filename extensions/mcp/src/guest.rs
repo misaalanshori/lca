@@ -111,10 +111,15 @@ impl GuestServer {
                 .iter()
                 .map(|tool| (tool.qualified.clone(), tool.name.clone()))
                 .collect();
-            let specs = qualify_tools(&config.name, listed)?
-                .iter()
-                .map(to_wit_spec)
-                .collect();
+            let specs = qualify_tools(
+                &config.name,
+                listed,
+                crate::config::McpExposure::Direct,
+                &[],
+            )?
+            .iter()
+            .map(to_wit_spec)
+            .collect();
             Ok((calls, specs))
         })();
         match outcome {

@@ -18,6 +18,7 @@
 //! world. Later phases (OAuth/remote/resources/management) extend this
 //! core; they do not replace it.
 
+pub mod config;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 #[cfg(not(target_arch = "wasm32"))]
@@ -271,12 +272,16 @@ pub struct ServerTool {
     pub annotations: lca_protocol::ToolAnnotations,
 }
 
-/// Qualify one server's tools: pi names, `direct` exposure, one
-/// namespace per server. A sanitized collision refuses the server
-/// (pi's hash suffix is a later-phase nicety, ADR-0045).
+/// Qualify one server's tools: pi names, per-tool exposure from the
+/// server default plus its `toolExposure` rules, one namespace per
+/// server. `hidden` tools are excluded (registered but unreachable).
+/// A sanitized collision refuses the server (pi's hash suffix is a
+/// later-phase nicety, ADR-0045).
 pub fn qualify_tools(
     server: &str,
     tools: Vec<ServerTool>,
+    default: config::McpExposure,
+    rules: &[(String, config::McpExposure)],
 ) -> Result<Vec<lca_protocol::ToolSpec>, String> {
     let mut seen = BTreeMap::new();
     let mut specs = Vec::with_capacity(tools.len());
@@ -287,11 +292,15 @@ pub fn qualify_tools(
                 tool.name, tool.qualified
             ));
         }
+        let exposure = config::exposure_for(default, rules, &tool.name);
+        if exposure == config::McpExposure::Hidden {
+            continue;
+        }
         specs.push(lca_protocol::ToolSpec {
             name: tool.qualified.clone(),
             description: tool.description,
             parameters: tool.parameters,
-            exposure: lca_protocol::ToolExposure::Direct,
+            exposure: exposure.as_tool_exposure(),
             namespace: Some(lca_protocol::ToolNamespace {
                 name: format!("mcp__{}", sanitize(server)),
                 description: format!("Tools from MCP server `{server}`."),
@@ -598,7 +607,8 @@ mod tests {
                 },
             },
         ];
-        let err = qualify_tools("s", tools).expect_err("collision refuses");
+        let err = qualify_tools("s", tools, crate::config::McpExposure::Direct, &[])
+            .expect_err("collision refuses");
         assert!(
             err.contains("do.thing") && err.contains("do_thing"),
             "{err}"

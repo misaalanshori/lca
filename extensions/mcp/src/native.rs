@@ -115,7 +115,12 @@ impl McpBridge {
                     .iter()
                     .map(|tool| (tool.qualified.clone(), tool.name.clone()))
                     .collect();
-                let specs = qualify_tools(&server.name, listed)?;
+                let specs = qualify_tools(
+                    &server.name,
+                    listed,
+                    crate::config::McpExposure::Direct,
+                    &[],
+                )?;
                 Ok(LiveServer::Stdio {
                     caps: caps.clone(),
                     handle,
@@ -156,7 +161,12 @@ impl McpBridge {
                     .iter()
                     .map(|tool| (tool.qualified.clone(), tool.name.clone()))
                     .collect();
-                let specs = qualify_tools(&server.name, listed)?;
+                let specs = qualify_tools(
+                    &server.name,
+                    listed,
+                    crate::config::McpExposure::Direct,
+                    &[],
+                )?;
                 Ok(LiveServer::Http {
                     session: Mutex::new(session),
                     specs,
