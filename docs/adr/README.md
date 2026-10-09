@@ -64,6 +64,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0043 | The unstable release line | Accepted | Unstable line |
 | 0044 | No dynamic CLI flags or shortcuts in the extension ABI | Accepted | Phase-4B |
 | 0045 | MCP arrives as an extension bridge, not a host service | Accepted | gh #53 phase 1 |
+| 0046 | Sessions grow a tree on top of forks, not instead of them | Accepted | gh #37 phase 1 |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
 

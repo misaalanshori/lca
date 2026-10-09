@@ -312,6 +312,8 @@ FR-SESS-9. The agent SHALL store the display form of a working directory in `met
 
 FR-SESS-7. WHEN the user runs the export command, the agent SHALL produce the export specified in `docs/session-log-format.md`, including redaction and the stripping of `permission` and `extension-event` records unless an audit flag is passed.
 
+FR-SESS-10. WHEN the user names a bookmark on a session record, the agent SHALL persist a `label` record naming the record; the latest label per record wins, an absent label clears it, and the label SHALL be readable in the session export (gh #37 phase 1).
+
 ### Compaction and context transformation
 
 FR-CTX-1. The agent SHALL write a `compaction` extension's result as a durable session record and SHALL reuse it on later reads without invoking the extension again until usage next crosses the threshold.
@@ -419,6 +421,8 @@ FR-PERM-17. The host SHALL normalize IPv4-mapped IPv6 addresses before any range
 FR-PERM-18. WHEN the user attaches an ad hoc grant during a session, the agent SHALL honor it for subsequent calls in that session without requiring a restart.
 
 FR-PERM-19. The agent SHALL store project trust state, per-project extension enablement, and ad hoc grants in the user grant store, keyed by the canonical path of the current project.
+
+FR-PERM-20. The agent SHALL accept `-a`/`--approve` (trust this project for the process) and `-na`/`--no-approve` (treat this project as untrusted for the process) with session-scoped semantics onto ADR-0039, refusing both together; without flags the stored trust decides, else `trust.default_project` (`ask`/`always`/`never`, default `ask`) is the fallback, and an explicit trust answer mid-run overrides the startup default (gh #80).
 
 FR-PERM-20. WHILE a project is trusted, persistently or for the session, and a shell command provably stays inside the workspace root, the agent SHALL run it without prompting. A command the agent cannot prove stays inside the workspace SHALL be reviewed (ADR-0039).
 
@@ -585,6 +589,8 @@ FR-CFG-4. WHERE telemetry is added after 1.0, the agent SHALL make it opt-in and
 FR-CFG-5. The agent SHALL NOT write credentials to the session log.
 
 FR-CFG-6. WHILE running interactively, the agent SHALL check for a newer version at most once per day and SHALL NOT block startup on the check; headless mode SHALL make no such request unless the user enables it.
+
+FR-CFG-7. `trust.default_project` SHALL accept `ask`/`always`/`never` defaulting to `ask`, and SHALL be refused when set in a project file: only the user file (or environment) may set a trust fallback, since a project file that granted its own trust would defeat FR-PERM-9 (gh #80).
 
 ## Non-functional requirements
 
