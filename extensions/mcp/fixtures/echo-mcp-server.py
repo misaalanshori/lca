@@ -31,7 +31,7 @@ def main():
                 "id": request_id,
                 "result": {
                     "protocolVersion": "2025-11-25",
-                    "capabilities": {"tools": {}},
+                    "capabilities": {"tools": {}, "resources": {}},
                     "serverInfo": {"name": "echo", "version": "0.1.0"},
                 },
             })
@@ -54,6 +54,58 @@ def main():
                         }
                     ]
                 },
+            })
+        elif method == "resources/list":
+            send({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "resources": [
+                        {
+                            "uri": "echo://greeting",
+                            "name": "greeting",
+                            "description": "A hello.",
+                            "mimeType": "text/plain",
+                        },
+                        {
+                            "uri": "echo://bytes",
+                            "name": "bytes",
+                            "mimeType": "application/octet-stream",
+                        },
+                    ]
+                },
+            })
+        elif method == "resources/templates/list":
+            send({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "resourceTemplates": [
+                        {"uriTemplate": "echo://{name}", "name": "named"}
+                    ]
+                },
+            })
+        elif method == "resources/read":
+            uri = request.get("params", {}).get("uri", "")
+            if uri == "echo://greeting":
+                content = [{"uri": uri, "mimeType": "text/plain", "text": "hello, resource"}]
+            elif uri == "echo://bytes":
+                content = [{"uri": uri, "mimeType": "application/octet-stream",
+                             "blob": "YmluYXJ5LWJ5dGVz"}]
+            elif uri.startswith("echo://"):
+                content = [{"uri": uri, "mimeType": "text/plain",
+                             "text": "hello, {0}".format(uri[len("echo://"):])}]
+            else:
+                send({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32002, "message": "unknown resource"},
+                })
+                continue
+            send({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {"contents": content},
             })
         elif method == "tools/call":
             params = request.get("params", {})

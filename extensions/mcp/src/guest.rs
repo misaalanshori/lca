@@ -105,7 +105,10 @@ impl GuestServer {
             .map_err(|err| format!("MCP server {:?} did not start: {err}", config.name))?;
         let mut session = Session::new(GuestPipe { handle });
         let outcome = (|| -> Result<(BTreeMap<String, String>, Vec<ToolSpec>), String> {
-            session.initialize()?;
+            // The guest serves server tools only; resource tools stay
+            // native until a fixture exercises the wasm path (phase-3
+            // cut, documented in the authoring guide).
+            let _ = session.initialize()?;
             let listed = session.tools(&config.name)?;
             let calls = listed
                 .iter()

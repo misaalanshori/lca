@@ -855,8 +855,9 @@ impl HttpSession {
         }
     }
 
-    /// The MCP opening handshake over POST.
-    pub fn initialize(&mut self) -> Result<(), String> {
+    /// The MCP opening handshake over POST. Returns whether the
+    /// server offers resources.
+    pub fn initialize(&mut self) -> Result<bool, String> {
         let result = self.post(
             "initialize",
             serde_json::json!({
@@ -869,7 +870,41 @@ impl HttpSession {
         if result.get("protocolVersion").is_none() {
             return Err("MCP server omitted its protocol version".to_string());
         }
-        self.notify("notifications/initialized")
+        let offers = result
+            .get("capabilities")
+            .and_then(|capabilities| capabilities.get("resources"))
+            .is_some();
+        self.notify("notifications/initialized")?;
+        Ok(offers)
+    }
+
+    /// List one page of resources plus the next cursor.
+    pub fn resource_list(
+        &mut self,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<crate::McpResource>, Option<String>), String> {
+        let mut params = serde_json::json!({});
+        if let Some(cursor) = cursor {
+            params["cursor"] = cursor.into();
+        }
+        let result = self.post("resources/list", params, true)?;
+        Ok(crate::resources_from_list(&result))
+    }
+
+    /// List the URI templates (method-not-found reads as no
+    /// templates, pi's `withoutTemplates`; anything else errors).
+    pub fn resource_templates(&mut self) -> Result<Vec<crate::McpResourceTemplate>, String> {
+        match self.post("resources/templates/list", serde_json::json!({}), true) {
+            Ok(result) => Ok(crate::templates_from_list(&result)),
+            Err(err) if err.contains("-32601") => Ok(Vec::new()),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Read one resource by URI.
+    pub fn resource_read(&mut self, uri: &str) -> Result<Vec<crate::ResourceContent>, String> {
+        let result = self.post("resources/read", serde_json::json!({"uri": uri}), true)?;
+        crate::contents_from_read(&result)
     }
 
     /// List the server's tools, qualified for `server`.

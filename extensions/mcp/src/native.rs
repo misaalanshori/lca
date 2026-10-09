@@ -56,12 +56,20 @@ enum LiveServer {
         specs: Vec<lca_protocol::ToolSpec>,
         /// Qualified name back to the server-side tool name.
         calls: BTreeMap<String, String>,
+        /// The entry's exposure (resource-tool width included).
+        exposure: lca_protocol::ToolExposure,
+        /// Whether the handshake offered resources.
+        resources: bool,
     },
     Http {
         session: Mutex<crate::remote::HttpSession>,
         specs: Vec<lca_protocol::ToolSpec>,
         /// Qualified name back to the server-side tool name.
         calls: BTreeMap<String, String>,
+        /// The entry's exposure (resource-tool width included).
+        exposure: lca_protocol::ToolExposure,
+        /// Whether the handshake offered resources.
+        resources: bool,
     },
 }
 
@@ -83,6 +91,157 @@ impl LiveServer {
             LiveServer::Stdio { calls, .. } | LiveServer::Http { calls, .. } => calls,
         }
     }
+
+    fn exposure(&self) -> lca_protocol::ToolExposure {
+        match self {
+            LiveServer::Stdio { exposure, .. } | LiveServer::Http { exposure, .. } => *exposure,
+        }
+    }
+
+    fn offers_resources(&self) -> bool {
+        match self {
+            LiveServer::Stdio { resources, .. } | LiveServer::Http { resources, .. } => *resources,
+        }
+    }
+
+    fn locked<T>(
+        &self,
+        run: impl FnOnce(&mut LockedSession<'_>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let poisoned = || "MCP session lock is poisoned".to_string();
+        match self {
+            LiveServer::Stdio { session, .. } => {
+                let guard = session.lock().map_err(|_| poisoned())?;
+                run(&mut LockedSession::Stdio(guard))
+            }
+            LiveServer::Http { session, .. } => {
+                let guard = session.lock().map_err(|_| poisoned())?;
+                run(&mut LockedSession::Http(guard))
+            }
+        }
+    }
+
+    fn resource_list(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<crate::McpResource>, Option<String>), String> {
+        self.locked(|session| session.resource_list(cursor))
+    }
+
+    fn resource_templates(&self) -> Result<Vec<crate::McpResourceTemplate>, String> {
+        self.locked(|session| session.resource_templates())
+    }
+
+    fn resource_read(&self, uri: &str) -> Result<Vec<crate::ResourceContent>, String> {
+        self.locked(|session| session.resource_read(uri))
+    }
+}
+
+/// One locked session behind either transport.
+enum LockedSession<'a> {
+    Stdio(std::sync::MutexGuard<'a, crate::Session<ChildPipe>>),
+    Http(std::sync::MutexGuard<'a, crate::remote::HttpSession>),
+}
+
+impl LockedSession<'_> {
+    fn resource_list(
+        &mut self,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<crate::McpResource>, Option<String>), String> {
+        match self {
+            LockedSession::Stdio(session) => session.resource_list(cursor),
+            LockedSession::Http(session) => session.resource_list(cursor),
+        }
+    }
+
+    fn resource_templates(&mut self) -> Result<Vec<crate::McpResourceTemplate>, String> {
+        match self {
+            LockedSession::Stdio(session) => session.resource_templates(),
+            LockedSession::Http(session) => session.resource_templates(),
+        }
+    }
+
+    fn resource_read(&mut self, uri: &str) -> Result<Vec<crate::ResourceContent>, String> {
+        match self {
+            LockedSession::Stdio(session) => session.resource_read(uri),
+            LockedSession::Http(session) => session.resource_read(uri),
+        }
+    }
+}
+
+/// One `list_mcp_resources` row (pi's shape, plus the server).
+fn resource_row(server: &str, resource: &crate::McpResource) -> serde_json::Value {
+    let mut row = serde_json::json!({
+        "server": server,
+        "uri": resource.uri,
+        "name": resource.name,
+    });
+    if let Some(title) = &resource.title {
+        row["title"] = title.clone().into();
+    }
+    if let Some(description) = &resource.description {
+        row["description"] = description.clone().into();
+    }
+    if let Some(mime) = &resource.mime_type {
+        row["mimeType"] = mime.clone().into();
+    }
+    row
+}
+
+/// Map read contents to one result: text stays text, images ride
+/// the image lane, other bytes land in a file whose path the model
+/// receives (pi's rule).
+fn read_result(
+    call_id: &str,
+    server: &str,
+    contents: Vec<crate::ResourceContent>,
+) -> Result<lca_protocol::ToolResult, String> {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut text = String::new();
+    let mut images = Vec::new();
+    for content in contents {
+        match content {
+            crate::ResourceContent::Text { text: part, .. } => text.push_str(&part),
+            crate::ResourceContent::Blob {
+                uri,
+                mime_type,
+                bytes,
+            } => {
+                let image = mime_type
+                    .as_deref()
+                    .is_some_and(|mime| mime.starts_with("image/"));
+                if image {
+                    images.push(lca_protocol::ImageContent {
+                        media_type: mime_type.unwrap_or_else(|| "image/png".to_string()),
+                        bytes,
+                    });
+                    continue;
+                }
+                let dir = std::env::temp_dir().join("lca-mcp-resources");
+                std::fs::create_dir_all(&dir)
+                    .map_err(|err| format!("cannot stage the resource: {err}"))?;
+                let leaf = uri.rsplit('/').next().unwrap_or("resource");
+                let safe: String = leaf
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
+                let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let path = dir.join(format!("{server}-{id}-{safe}"));
+                std::fs::write(&path, &bytes)
+                    .map_err(|err| format!("cannot stage the resource: {err}"))?;
+                text.push_str(&path.to_string_lossy());
+            }
+        }
+    }
+    let mut result = lca_protocol::ToolResult::ok(call_id.to_string(), text);
+    result.images = images;
+    Ok(result)
 }
 
 /// What one managed server is doing (the `/mcp` rows read these).
@@ -168,7 +327,7 @@ fn connect_one_stdio(
             caps: caps.clone(),
             handle,
         });
-        session.initialize()?;
+        let offers = session.initialize()?;
         let listed = session.tools(&entry.name)?;
         let calls = listed
             .iter()
@@ -181,6 +340,8 @@ fn connect_one_stdio(
             session: Mutex::new(session),
             specs,
             calls,
+            exposure: entry.exposure.as_tool_exposure(),
+            resources: offers,
         })
     })();
     match outcome {
@@ -200,13 +361,16 @@ fn connect_one_http(
     config: &crate::HttpServerConfig,
 ) -> Result<LiveServer, ServerStateKind> {
     let mut session = crate::remote::HttpSession::new(caps.clone(), config.clone());
-    if let Err(err) = session.initialize() {
-        return Err(if err.contains(crate::remote::NEEDS_AUTH_MARKER) {
-            ServerStateKind::NeedsSignIn(err)
-        } else {
-            ServerStateKind::Failed(err)
-        });
-    }
+    let offers = match session.initialize() {
+        Ok(offers) => offers,
+        Err(err) => {
+            return Err(if err.contains(crate::remote::NEEDS_AUTH_MARKER) {
+                ServerStateKind::NeedsSignIn(err)
+            } else {
+                ServerStateKind::Failed(err)
+            });
+        }
+    };
     let listed = session
         .tools(&entry.name)
         .map_err(ServerStateKind::Failed)?;
@@ -220,6 +384,8 @@ fn connect_one_http(
         session: Mutex::new(session),
         specs,
         calls,
+        exposure: entry.exposure.as_tool_exposure(),
+        resources: offers,
     })
 }
 
@@ -364,7 +530,22 @@ impl McpBridge {
         self.servers.iter().map(ManagedServer::status).collect()
     }
 
-    /// Every bridged tool, sorted (the registry's stable order).
+    /// The servers offering resources, in entry order.
+    fn resource_servers(&self) -> Vec<(String, &LiveServer)> {
+        self.servers
+            .iter()
+            .filter_map(|server| {
+                server.live.as_ref().and_then(|live| {
+                    live.offers_resources()
+                        .then(|| (server.entry.name.clone(), live))
+                })
+            })
+            .collect()
+    }
+
+    /// Every bridged tool, sorted (the registry's stable order):
+    /// server tools plus the resource trio when a connected server
+    /// offers resources, at the widest such server's exposure.
     pub fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {
         let mut specs = Vec::new();
         for server in &self.servers {
@@ -372,8 +553,121 @@ impl McpBridge {
                 specs.extend(live.specs().iter().cloned());
             }
         }
+        let exposures = self
+            .resource_servers()
+            .iter()
+            .map(|(_, live)| live.exposure())
+            .collect::<Vec<_>>();
+        if let Some(exposure) = crate::widest_resource_exposure(&exposures) {
+            specs.extend(crate::resource_tool_specs(exposure));
+        }
         specs.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(specs)
+    }
+
+    /// Run one resource call (the trio routes here before the server
+    /// table: the tools belong to the bridge, not to one server).
+    fn execute_resource(
+        &self,
+        call: &lca_protocol::ToolCall,
+    ) -> Result<lca_protocol::ToolResult, lca_protocol::DispatchError> {
+        let failed = |detail: String| lca_protocol::DispatchError::Failed(detail);
+        let args: serde_json::Value = serde_json::from_str(&call.arguments)
+            .map_err(|err| lca_protocol::DispatchError::Failed(format!("bad arguments: {err}")))?;
+        let text = |key: &str| {
+            args.get(key)
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        };
+        match call.name.as_str() {
+            crate::LIST_RESOURCES_TOOL => {
+                let (server, cursor) = match (text("server"), text("cursor")) {
+                    (_, Some(cursor)) => cursor
+                        .split_once(':')
+                        .map(|(server, page)| (Some(server.to_string()), Some(page.to_string())))
+                        .ok_or_else(|| failed("bad cursor".to_string()))?,
+                    (server, None) => (server, None),
+                };
+                let mut rows = Vec::new();
+                let mut next = None;
+                let targets: Vec<(String, &LiveServer)> = match server {
+                    Some(name) => vec![
+                        self.resource_servers()
+                            .into_iter()
+                            .find(|(server, _)| server == &name)
+                            .ok_or_else(|| failed(format!("unknown MCP server {name:?}")))?,
+                    ],
+                    None if cursor.is_some() => {
+                        return Err(failed("a cursor needs its server".to_string()));
+                    }
+                    None => self.resource_servers(),
+                };
+                for (name, live) in &targets {
+                    let (resources, cursor) = live
+                        .resource_list(cursor.as_deref())
+                        .map_err(lca_protocol::DispatchError::Failed)?;
+                    for resource in resources {
+                        rows.push(resource_row(name, &resource));
+                    }
+                    if targets.len() == 1 {
+                        next = cursor.map(|page| format!("{name}:{page}"));
+                    }
+                }
+                let mut answer = serde_json::json!({"resources": rows});
+                if let Some(cursor) = next {
+                    answer["nextCursor"] = cursor.into();
+                }
+                Ok(lca_protocol::ToolResult::ok(
+                    call.call_id.clone(),
+                    answer.to_string(),
+                ))
+            }
+            crate::LIST_TEMPLATES_TOOL => {
+                let mut rows = Vec::new();
+                let targets: Vec<(String, &LiveServer)> = match text("server") {
+                    Some(name) => vec![
+                        self.resource_servers()
+                            .into_iter()
+                            .find(|(server, _)| server == &name)
+                            .ok_or_else(|| failed(format!("unknown MCP server {name:?}")))?,
+                    ],
+                    None => self.resource_servers(),
+                };
+                for (name, live) in &targets {
+                    let templates = live
+                        .resource_templates()
+                        .map_err(lca_protocol::DispatchError::Failed)?;
+                    for template in templates {
+                        rows.push(serde_json::json!({
+                            "server": name,
+                            "uri_template": template.uri_template,
+                            "name": template.name,
+                        }));
+                    }
+                }
+                Ok(lca_protocol::ToolResult::ok(
+                    call.call_id.clone(),
+                    serde_json::json!({"templates": rows}).to_string(),
+                ))
+            }
+            crate::READ_RESOURCE_TOOL => {
+                let (Some(server), Some(uri)) = (text("server"), text("uri")) else {
+                    return Err(failed(
+                        "read_mcp_resource needs `server` and `uri`".to_string(),
+                    ));
+                };
+                let (_, live) = self
+                    .resource_servers()
+                    .into_iter()
+                    .find(|(name, _)| name == &server)
+                    .ok_or_else(|| failed(format!("unknown MCP server {server:?}")))?;
+                let contents = live
+                    .resource_read(&uri)
+                    .map_err(lca_protocol::DispatchError::Failed)?;
+                read_result(&call.call_id, &server, contents).map_err(failed)
+            }
+            _ => Err(failed(format!("unknown MCP tool {:?}", call.name))),
+        }
     }
 
     /// Run one call against its server. A server-side `isError`
@@ -383,6 +677,12 @@ impl McpBridge {
         &self,
         call: &lca_protocol::ToolCall,
     ) -> Result<lca_protocol::ToolResult, lca_protocol::DispatchError> {
+        if matches!(
+            call.name.as_str(),
+            crate::LIST_RESOURCES_TOOL | crate::LIST_TEMPLATES_TOOL | crate::READ_RESOURCE_TOOL
+        ) {
+            return self.execute_resource(call);
+        }
         let server = self
             .servers
             .iter()

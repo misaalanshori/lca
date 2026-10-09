@@ -222,7 +222,11 @@ fn route(
             Some(token) => bearer == format!("bearer {token}"),
         };
         if allowed {
-            return (200, mcp_payload(body, path.contains("-sse")), extra);
+            return (
+                200,
+                mcp_payload(body, path.contains("-sse"), path.contains("-plain")),
+                extra,
+            );
         }
         let mut challenge = vec![(
             "WWW-Authenticate".to_string(),
@@ -275,7 +279,7 @@ fn route(
 
 /// Answer one JSON-RPC call the way a remote echo server would (the
 /// SSE variant wraps the same message as an event).
-fn mcp_payload(body: &str, sse: bool) -> String {
+fn mcp_payload(body: &str, sse: bool, plain: bool) -> String {
     let request: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
     let id = request.get("id").cloned().unwrap_or_default();
     let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
@@ -285,7 +289,11 @@ fn mcp_payload(body: &str, sse: bool) -> String {
             "id": id,
             "result": {
                 "protocolVersion": "2025-11-25",
-                "capabilities": {"tools": {}},
+                "capabilities": if plain {
+                    serde_json::json!({"tools": {}})
+                } else {
+                    serde_json::json!({"tools": {}, "resources": {}})
+                },
                 "serverInfo": {"name": "remote-echo", "version": "0.1.0"},
             },
         }),
@@ -310,6 +318,34 @@ fn mcp_payload(body: &str, sse: bool) -> String {
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {"content": [{"type": "text", "text": format!("echo: {text}")}]},
+            })
+        }
+        "resources/list" => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "resources": [{
+                    "uri": "mock://greeting",
+                    "name": "greeting",
+                    "description": "A hello.",
+                    "mimeType": "text/plain",
+                }],
+            },
+        }),
+        "resources/templates/list" => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {"resourceTemplates": [{"uriTemplate": "mock://{name}", "name": "named"}]},
+        }),
+        "resources/read" => {
+            let uri = request
+                .pointer("/params/uri")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "hello, remote"}]},
             })
         }
         _ if request.get("id").is_some() => serde_json::json!({

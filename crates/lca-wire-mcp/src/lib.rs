@@ -61,6 +61,50 @@ pub fn select_response(
     ))
 }
 
+/// Decode standard base64 (MCP `blob` content). Whitespace refused;
+/// padding required in the last quantum, like every strict decoder.
+pub fn base64_decode(text: &str) -> Result<Vec<u8>, String> {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut values = Vec::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte == b'=' {
+            values.push(64);
+            continue;
+        }
+        let Some(value) = ALPHABET.iter().position(|digit| *digit == byte) else {
+            return Err("bad base64 character".to_string());
+        };
+        values.push(value);
+    }
+    if values.len() % 4 != 0 {
+        return Err("bad base64 length".to_string());
+    }
+    let mut out = Vec::with_capacity(values.len() / 4 * 3);
+    for quantum in values.chunks(4) {
+        let pad = quantum
+            .iter()
+            .rev()
+            .take_while(|digit| **digit == 64)
+            .count();
+        if pad > 2 {
+            return Err("bad base64 padding".to_string());
+        }
+        let digits: Vec<usize> = quantum
+            .iter()
+            .map(|digit| if *digit == 64 { 0 } else { *digit })
+            .collect();
+        let triple = (digits[0] << 18) | (digits[1] << 12) | (digits[2] << 6) | digits[3];
+        out.push((triple >> 16) as u8);
+        if pad < 2 {
+            out.push((triple >> 8) as u8);
+        }
+        if pad < 1 {
+            out.push(triple as u8);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,5 +123,17 @@ mod tests {
         assert!(select_response(&messages, 8).is_err());
         let errors = parse_sse_messages("data: {\"id\":9,\"error\":{\"code\":1}}\n\n");
         assert!(select_response(&errors, 9).is_err());
+    }
+
+    // Verifies: gh #53 - the blob decoder round-trips (padding
+    // included) and refuses alphabet and length violations.
+    #[test]
+    fn base64_vectors_hold() {
+        assert_eq!(base64_decode("aGk=").expect("hi"), b"hi");
+        assert_eq!(base64_decode("aGk6").expect("hi:"), b"hi:");
+        assert_eq!(base64_decode("").expect("empty"), b"");
+        assert!(base64_decode("aGk").is_err());
+        assert!(base64_decode("aGk*").is_err());
+        assert!(base64_decode("====").is_err());
     }
 }
