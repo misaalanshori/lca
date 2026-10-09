@@ -17,6 +17,7 @@ A full ADR is not written for each provider, because there is usually no real al
 | [Anthropic](anthropic.md) | API key + OAuth | WASM, install separately | Claude via Messages: cache breakpoints, thinking signatures, Pro/Max subscription (browser + copy-code) beside a plain key. |
 | [OpenRouter](openrouter.md) | OAuth (provisions key) | WASM, install separately | One-click browser OAuth on the shared OpenAI wire kit; `openai-compatible` stays key-only. |
 | [GitHub Copilot](github-copilot.md) | Device code | WASM, install separately | Copilot subscription via the device flow; token `proxy-ep` routes inference. |
+| [Meta](meta.md) | Device code | WASM, install separately | Muse subscription: device flow mints a day-lived Model API key. |
 | [LM Studio](lmstudio.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 | [Ollama](ollama.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 
@@ -54,7 +55,7 @@ votes get counted against this table.
 | `xai` (API key) | preset + extension | `xai` row for the key; `grok` for the SuperGrok subscription OAuth + responses proxy. |
 | pi `github-copilot` | extension | `github-copilot`: device flow, token mint, Copilot headers; the `github-models` preset still covers only the Models endpoint. |
 | pi `kimi-coding` | absent | No demand yet. |
-| pi `meta` | absent | No demand yet. |
+| pi `meta` | extension | `meta`: device flow splitting identity from the minted day-key. |
 | pi `google` (Gemini API) | absent | Gemini's own API shape; no preset yet. |
 | pi `anthropic` | extension | `anthropic`: API key + Pro/Max OAuth (browser + copy-code), Messages with cache breakpoints and signatures. |
 | pi `azure` | absent | Entra + endpoint shape; no demand yet. |

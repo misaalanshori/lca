@@ -153,6 +153,9 @@ Dates are UTC.
   headers, per-account model catalog. The host shows device codes
   beside the page (a `#code=` fragment convention — freeze-safe, no
   new host import) and skips the paste prompt while polling.
+- **Meta provider extension (gh #186).** `extensions/meta`: RFC 8628
+  device flow splitting identity from the minted day-key (refresh is
+  the same mint; 401/403 purges), chat completions, two-model table.
 - **Retry inventory (gh #83).** `provider.retry_base_delay_ms`
   tunes the backoff base (pi's `retry.baseDelayMs`); `retry_limit = 0`
   is pi's `retry.enabled = false`. No transport switch, no max-delay
