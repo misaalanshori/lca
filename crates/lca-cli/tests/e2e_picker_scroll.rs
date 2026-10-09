@@ -7,6 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 mod common;
 
+#[cfg(unix)]
 use common::*;
 
 // Verifies: gh #226 - the inventoried `/settings` selector on an
