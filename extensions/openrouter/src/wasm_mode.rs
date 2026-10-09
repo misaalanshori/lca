@@ -310,7 +310,7 @@ impl CompletionGuest for OpenRouterWasm {
                 .collect(),
         };
         // Byte-identical to the native delivery: one builder, both drivers.
-        let (url, headers, body, _) = crate::build_request(&GUEST_CAP, &protocol_request)
+        let (url, headers, body) = crate::build_request(&GUEST_CAP, &protocol_request)
             .map_err(|failure| failure.message)?;
         let refs: Vec<(&str, &str)> = headers
             .iter()
