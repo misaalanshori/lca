@@ -601,6 +601,14 @@ impl SessionStore {
 
     /// Rename a session: `meta.json` atomically, then the index cache.
     pub fn rename(&self, session: &Session, title: &str) -> Result<()> {
+        // gh #37 (pi's `session_info` on this vocabulary): the log
+        // carries the rename as an entry (audit trail + file shape),
+        // `meta.json` keeps carrying the display title.
+        let now = ids::now_ms();
+        self.append(
+            session,
+            lca_protocol::session_info_record(now, ids::record_id(now), title),
+        )?;
         let mut meta = self.meta(session)?;
         meta.title = title.to_string();
         write_atomic(&session.meta_path(), &serde_json::to_vec_pretty(&meta)?)?;
@@ -608,6 +616,20 @@ impl SessionStore {
             self.rebuild_index_from_key(project_dir)?;
         }
         Ok(())
+    }
+
+    /// The latest `session-info` name in this session's own log (gh
+    /// #37): `None` when nothing renamed it yet. Latest wins, like
+    /// every appended marker.
+    pub fn session_name(&self, session: &Session) -> Result<Option<String>> {
+        let outcome = self.read(session)?;
+        let mut name = None;
+        for record in &outcome.records {
+            if let lca_protocol::Record::SessionInfo { name: next, .. } = record {
+                name = Some(next.clone());
+            }
+        }
+        Ok(name)
     }
 
     /// Record the model and provider last used on this session - the two

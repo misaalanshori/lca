@@ -32,6 +32,7 @@ pub use provider::{
 pub use record::{
     FORMAT_VERSION, NestedCallRecord, PREVIOUS_SUMMARY_TYPE, PermissionDecision, Record,
     ToolSource, branch_point_record, branch_summary_record, is_previous_summary,
+    session_info_record,
 };
 pub use stream::{StreamEvent, THINKING_SIGNATURE_KIND};
 pub use tool::{

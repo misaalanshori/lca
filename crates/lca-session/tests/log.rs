@@ -1093,10 +1093,16 @@ fn clone_duplicates_the_session_at_its_tip() {
     assert_eq!(store.meta(&child).expect("meta").title, "experimental");
 
     let ReadOutcome { records, .. } = store.read(&child).expect("read child");
-    assert_eq!(records.len(), 2, "session-start and fork-point only");
+    // session-start, fork-point, and the clone titling's session-info
+    // (gh #37: renames ride entries now).
+    assert_eq!(records.len(), 3, "start, fork-point, and session-info");
     match &records[1] {
         Record::ForkPoint { record_id, .. } => assert_eq!(record_id, "r2"),
         other => panic!("expected fork-point, got {other:?}"),
+    }
+    match &records[2] {
+        Record::SessionInfo { name, .. } => assert_eq!(name, "experimental"),
+        other => panic!("expected session-info, got {other:?}"),
     }
     let parent_log = std::fs::read_to_string(parent.log_path()).expect("parent log");
     assert_eq!(

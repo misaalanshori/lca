@@ -141,3 +141,32 @@ fn labels_ride_the_export() {
         "the export carries the bookmark:\n{text}"
     );
 }
+
+// Verifies: FR-SESS-10 is labels; renames ride session-info (gh #37
+// phase 3, pi's SessionInfoEntry on this vocabulary): the rename
+// appends the entry and the title still resolves.
+#[test]
+fn rename_appends_a_session_info_entry() {
+    let store = store("rename-entry");
+    let project = scratch("rename-entry-project");
+    let session = store.create_session(&project, "test").expect("create");
+    store.rename(&session, "Refactor auth").expect("rename");
+
+    let outcome = store.read(&session).expect("read");
+    let named = outcome
+        .records
+        .iter()
+        .filter_map(|record| match record {
+            Record::SessionInfo { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(named, vec!["Refactor auth".to_string()]);
+
+    let meta = store.meta(&session).expect("meta");
+    assert_eq!(meta.title, "Refactor auth");
+    assert_eq!(
+        store.session_name(&session).expect("name"),
+        Some("Refactor auth".to_string())
+    );
+}
