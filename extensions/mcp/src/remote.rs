@@ -16,6 +16,12 @@ use crate::{
     parse_www_authenticate, tools_from_list,
 };
 
+/// The needs-sign-in marker: every sign-in report contains it, and
+/// the managed connect matches on it to sort a 401 into state
+/// instead of failure (one builder, one matcher, one test pinning
+/// the words).
+pub(crate) const NEEDS_AUTH_MARKER: &str = "requires sign-in";
+
 /// pi's connect delays, reused between request attempts.
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(250), Duration::from_millis(1000)];
 /// Attempts for one idempotent read (the first try plus pi's two retries).

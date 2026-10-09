@@ -30,6 +30,7 @@ wit-bindgen = "0.41"
 
 [dev-dependencies]
 lca-core = { path = "../../crates/lca-core" }
+# the deferred-discovery interplay test registers through the real table.
 lca-ext-abi = { path = "../../crates/lca-ext-abi" }
 lca-permissions = { path = "../../crates/lca-permissions" }
 lca-tools = { path = "../../crates/lca-tools" }

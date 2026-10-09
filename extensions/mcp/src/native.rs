@@ -85,12 +85,240 @@ impl LiveServer {
     }
 }
 
-/// The bridge: one long-lived child per configured server.
+/// What one managed server is doing (the `/mcp` rows read these).
+#[derive(Debug, Clone)]
+pub struct ServerStatus {
+    /// pi's server name.
+    pub name: String,
+    /// How the model reaches its tools.
+    pub exposure: crate::config::McpExposure,
+    /// Which file defined it (edits persist there, or to the
+    /// project override).
+    pub source: crate::config::ServerSource,
+    /// Whether it is switched on.
+    pub enabled: bool,
+    /// The connection state.
+    pub state: ServerStateKind,
+    /// Live tools right now (zero unless connected).
+    pub tools: usize,
+}
+
+/// One managed server's connection state.
+#[derive(Debug, Clone)]
+pub enum ServerStateKind {
+    /// Handshook and listed.
+    Connected,
+    /// Kept without connecting.
+    Disabled,
+    /// The handshake failed; the string names the cause.
+    Failed(String),
+    /// The server wants OAuth; the string says which scopes.
+    NeedsSignIn(String),
+}
+
+/// One managed server: its entry, its live session when connected,
+/// and its state for the manager.
+struct ManagedServer {
+    entry: crate::config::ServerEntry,
+    live: Option<LiveServer>,
+    state: ServerStateKind,
+}
+
+impl ManagedServer {
+    fn status(&self) -> ServerStatus {
+        ServerStatus {
+            name: self.entry.name.clone(),
+            exposure: self.entry.exposure,
+            source: self.entry.source,
+            enabled: self.entry.enabled,
+            state: self.state.clone(),
+            tools: self
+                .live
+                .as_ref()
+                .map(|live| live.specs().len())
+                .unwrap_or(0),
+        }
+    }
+
+    fn shutdown(&mut self) {
+        if let Some(live) = self.live.take() {
+            live.shutdown();
+        }
+    }
+}
+
+/// The bridge: one long-lived session per connected server, plus a
+/// state row for every managed entry (connected or not).
 pub struct McpBridge {
-    servers: Vec<LiveServer>,
+    servers: Vec<ManagedServer>,
+}
+
+/// Connect one stdio entry: spawn (the permission layer asks),
+/// handshake, list, qualify with the entry's exposure.
+fn connect_one_stdio(
+    caps: &Arc<lca_tools::Capabilities>,
+    entry: &crate::config::ServerEntry,
+    config: &ServerConfig,
+) -> Result<LiveServer, String> {
+    let handle = caps
+        .process_spawn(&config.command, &config.args, &config.cwd_scope)
+        .map_err(|err| format!("MCP server {:?} did not start: {err}", entry.name))?;
+    let outcome = (|| -> Result<LiveServer, String> {
+        let mut session = crate::Session::new(ChildPipe {
+            caps: caps.clone(),
+            handle,
+        });
+        session.initialize()?;
+        let listed = session.tools(&entry.name)?;
+        let calls = listed
+            .iter()
+            .map(|tool| (tool.qualified.clone(), tool.name.clone()))
+            .collect();
+        let specs = qualify_tools(&entry.name, listed, entry.exposure, &entry.tool_exposure)?;
+        Ok(LiveServer::Stdio {
+            caps: caps.clone(),
+            handle,
+            session: Mutex::new(session),
+            specs,
+            calls,
+        })
+    })();
+    match outcome {
+        Ok(live) => Ok(live),
+        Err(err) => {
+            let _ = caps.process_kill(handle);
+            Err(format!("MCP server {:?} failed: {err}", entry.name))
+        }
+    }
+}
+
+/// Connect one remote entry, sorting the outcome into live, silent
+/// sign-in, or failure (a 401 is a state, not a transport error).
+fn connect_one_http(
+    caps: &Arc<lca_tools::Capabilities>,
+    entry: &crate::config::ServerEntry,
+    config: &crate::HttpServerConfig,
+) -> Result<LiveServer, ServerStateKind> {
+    let mut session = crate::remote::HttpSession::new(caps.clone(), config.clone());
+    if let Err(err) = session.initialize() {
+        return Err(if err.contains(crate::remote::NEEDS_AUTH_MARKER) {
+            ServerStateKind::NeedsSignIn(err)
+        } else {
+            ServerStateKind::Failed(err)
+        });
+    }
+    let listed = session
+        .tools(&entry.name)
+        .map_err(ServerStateKind::Failed)?;
+    let calls = listed
+        .iter()
+        .map(|tool| (tool.qualified.clone(), tool.name.clone()))
+        .collect();
+    let specs = qualify_tools(&entry.name, listed, entry.exposure, &entry.tool_exposure)
+        .map_err(ServerStateKind::Failed)?;
+    Ok(LiveServer::Http {
+        session: Mutex::new(session),
+        specs,
+        calls,
+    })
+}
+
+/// Wrap one inline stdio config in a default entry (the phase-1
+/// constructor: direct, enabled, never persisted).
+fn inline_stdio(config: ServerConfig) -> crate::config::ServerEntry {
+    crate::config::ServerEntry {
+        name: config.name.clone(),
+        kind: crate::config::EntryKind::Stdio {
+            command: config.command.clone(),
+            args: config.args.clone(),
+            cwd_scope: config.cwd_scope.clone(),
+        },
+        enabled: true,
+        exposure: crate::config::McpExposure::Direct,
+        tool_exposure: Vec::new(),
+        description: String::new(),
+        source: crate::config::ServerSource::Inline,
+    }
+}
+
+/// Wrap one inline HTTP config in a default entry (the phase-2
+/// constructor).
+fn inline_http(config: crate::HttpServerConfig) -> crate::config::ServerEntry {
+    crate::config::ServerEntry {
+        name: config.name.clone(),
+        kind: crate::config::EntryKind::Http {
+            url: config.url.clone(),
+            headers: config.headers.clone(),
+            timeout_secs: config.timeout_secs,
+            oauth: config.oauth.clone(),
+        },
+        enabled: true,
+        exposure: crate::config::McpExposure::Direct,
+        tool_exposure: Vec::new(),
+        description: String::new(),
+        source: crate::config::ServerSource::Inline,
+    }
 }
 
 impl McpBridge {
+    /// Connect managed entries: every enabled server is tried, and
+    /// every entry lands a state row (connected, disabled, failed, or
+    /// needs-sign-in). One server's failure never blocks the rest;
+    /// the strict constructors below are the all-or-nothing twins.
+    pub fn connect_managed(
+        caps: Arc<lca_tools::Capabilities>,
+        entries: Vec<crate::config::ServerEntry>,
+    ) -> McpBridge {
+        let mut servers = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if !entry.enabled {
+                servers.push(ManagedServer {
+                    entry,
+                    live: None,
+                    state: ServerStateKind::Disabled,
+                });
+                continue;
+            }
+            match &entry.kind {
+                crate::config::EntryKind::Stdio { .. } => {
+                    let Some(config) = entry.stdio_config() else {
+                        continue;
+                    };
+                    match connect_one_stdio(&caps, &entry, &config) {
+                        Ok(live) => servers.push(ManagedServer {
+                            entry,
+                            live: Some(live),
+                            state: ServerStateKind::Connected,
+                        }),
+                        Err(err) => servers.push(ManagedServer {
+                            entry,
+                            live: None,
+                            state: ServerStateKind::Failed(err),
+                        }),
+                    }
+                }
+                crate::config::EntryKind::Http { .. } => {
+                    let Some(config) = entry.http_config() else {
+                        continue;
+                    };
+                    match connect_one_http(&caps, &entry, &config) {
+                        Ok(live) => servers.push(ManagedServer {
+                            entry,
+                            live: Some(live),
+                            state: ServerStateKind::Connected,
+                        }),
+                        Err(state) => servers.push(ManagedServer {
+                            entry,
+                            live: None,
+                            state,
+                        }),
+                    }
+                }
+            }
+        }
+        McpBridge { servers }
+    }
+
     /// Spawn every server (each spawn asks the permission layer),
     /// handshake, and list tools. A refusal stops the bridge: a server
     /// the user declined never starts, and the denial is recorded on
@@ -99,48 +327,14 @@ impl McpBridge {
         caps: Arc<lca_tools::Capabilities>,
         servers: Vec<ServerConfig>,
     ) -> Result<McpBridge, String> {
-        let mut live = Vec::with_capacity(servers.len());
-        for server in &servers {
-            let handle = caps
-                .process_spawn(&server.command, &server.args, &server.cwd_scope)
-                .map_err(|err| format!("MCP server {:?} did not start: {err}", server.name))?;
-            let outcome = (|| -> Result<LiveServer, String> {
-                let mut session = crate::Session::new(ChildPipe {
-                    caps: caps.clone(),
-                    handle,
-                });
-                session.initialize()?;
-                let listed = session.tools(&server.name)?;
-                let calls = listed
-                    .iter()
-                    .map(|tool| (tool.qualified.clone(), tool.name.clone()))
-                    .collect();
-                let specs = qualify_tools(
-                    &server.name,
-                    listed,
-                    crate::config::McpExposure::Direct,
-                    &[],
-                )?;
-                Ok(LiveServer::Stdio {
-                    caps: caps.clone(),
-                    handle,
-                    session: Mutex::new(session),
-                    specs,
-                    calls,
-                })
-            })();
-            match outcome {
-                Ok(server) => live.push(server),
-                Err(err) => {
-                    let _ = caps.process_kill(handle);
-                    for server in &live {
-                        server.shutdown();
-                    }
-                    return Err(format!("MCP server {:?} failed: {err}", server.name));
-                }
+        let entries = servers.into_iter().map(inline_stdio).collect::<Vec<_>>();
+        let bridge = McpBridge::connect_managed(caps, entries);
+        for server in &bridge.servers {
+            if let ServerStateKind::Failed(err) = &server.state {
+                return Err(err.clone());
             }
         }
-        Ok(McpBridge { servers: live })
+        Ok(bridge)
     }
 
     /// Connect every remote server over streamable HTTP (each
@@ -151,46 +345,32 @@ impl McpBridge {
         caps: Arc<lca_tools::Capabilities>,
         servers: Vec<crate::HttpServerConfig>,
     ) -> Result<McpBridge, String> {
-        let mut live = Vec::with_capacity(servers.len());
-        for server in &servers {
-            let outcome = (|| -> Result<LiveServer, String> {
-                let mut session = crate::remote::HttpSession::new(caps.clone(), server.clone());
-                session.initialize()?;
-                let listed = session.tools(&server.name)?;
-                let calls = listed
-                    .iter()
-                    .map(|tool| (tool.qualified.clone(), tool.name.clone()))
-                    .collect();
-                let specs = qualify_tools(
-                    &server.name,
-                    listed,
-                    crate::config::McpExposure::Direct,
-                    &[],
-                )?;
-                Ok(LiveServer::Http {
-                    session: Mutex::new(session),
-                    specs,
-                    calls,
-                })
-            })();
-            match outcome {
-                Ok(server) => live.push(server),
-                Err(err) => {
-                    for server in &live {
-                        server.shutdown();
-                    }
-                    return Err(format!("MCP server {:?} failed: {err}", server.name));
+        let entries = servers.into_iter().map(inline_http).collect::<Vec<_>>();
+        let bridge = McpBridge::connect_managed(caps, entries);
+        for server in &bridge.servers {
+            match &server.state {
+                ServerStateKind::Failed(err) | ServerStateKind::NeedsSignIn(err) => {
+                    return Err(err.clone());
                 }
+                ServerStateKind::Connected | ServerStateKind::Disabled => {}
             }
         }
-        Ok(McpBridge { servers: live })
+        Ok(bridge)
+    }
+
+    /// One state row per managed entry, in entry order (the `/mcp`
+    /// rows read these).
+    pub fn statuses(&self) -> Vec<ServerStatus> {
+        self.servers.iter().map(ManagedServer::status).collect()
     }
 
     /// Every bridged tool, sorted (the registry's stable order).
     pub fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {
         let mut specs = Vec::new();
         for server in &self.servers {
-            specs.extend(server.specs().iter().cloned());
+            if let Some(live) = &server.live {
+                specs.extend(live.specs().iter().cloned());
+            }
         }
         specs.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(specs)
@@ -206,7 +386,8 @@ impl McpBridge {
         let server = self
             .servers
             .iter()
-            .find(|server| server.calls().contains_key(&call.name))
+            .filter_map(|server| server.live.as_ref())
+            .find(|live| live.calls().contains_key(&call.name))
             .ok_or_else(|| {
                 lca_protocol::DispatchError::Failed(format!("unknown MCP tool {:?}", call.name))
             })?;
@@ -240,7 +421,7 @@ impl Drop for McpBridge {
     /// closes stdin, then SIGTERM, then SIGKILL; the host's
     /// `process_kill` owns that sequence).
     fn drop(&mut self) {
-        for server in &self.servers {
+        for server in &mut self.servers {
             server.shutdown();
         }
     }

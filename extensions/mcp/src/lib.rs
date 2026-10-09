@@ -24,7 +24,7 @@ pub mod native;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod remote;
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{McpBridge, manifest_grants};
+pub use native::{McpBridge, ServerStateKind, ServerStatus, manifest_grants};
 #[cfg(not(target_arch = "wasm32"))]
 pub use remote::{TokenStore, refresh, sign_in};
 #[cfg(target_arch = "wasm32")]

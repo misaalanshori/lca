@@ -12,6 +12,8 @@ pub enum ServerSource {
     User,
     /// The trusted project's file.
     Project,
+    /// Constructed in code, never persisted (phase-1/2 constructors).
+    Inline,
 }
 
 /// How the model reaches one server's tools (pi's `exposure`).
@@ -71,6 +73,45 @@ pub struct ServerEntry {
     pub description: String,
     /// Which file defined it.
     pub source: ServerSource,
+}
+
+/// Convert one entry to its stdio transport config, if it has one.
+impl ServerEntry {
+    /// The stdio transport config, if this entry is a stdio server.
+    pub fn stdio_config(&self) -> Option<crate::ServerConfig> {
+        match &self.kind {
+            EntryKind::Stdio {
+                command,
+                args,
+                cwd_scope,
+            } => Some(crate::ServerConfig {
+                name: self.name.clone(),
+                command: command.clone(),
+                args: args.clone(),
+                cwd_scope: cwd_scope.clone(),
+            }),
+            EntryKind::Http { .. } => None,
+        }
+    }
+
+    /// The HTTP transport config, if this entry is a remote server.
+    pub fn http_config(&self) -> Option<crate::HttpServerConfig> {
+        match &self.kind {
+            EntryKind::Http {
+                url,
+                headers,
+                timeout_secs,
+                oauth,
+            } => Some(crate::HttpServerConfig {
+                name: self.name.clone(),
+                url: url.clone(),
+                headers: headers.clone(),
+                timeout_secs: *timeout_secs,
+                oauth: oauth.clone(),
+            }),
+            EntryKind::Stdio { .. } => None,
+        }
+    }
 }
 
 /// The transport half of one entry.
