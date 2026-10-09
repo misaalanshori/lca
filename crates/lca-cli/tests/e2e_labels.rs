@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 mod common;
 
+#[cfg(unix)]
 use common::*;
 
 // Verifies: FR-SESS-10 - the label verbs work end to end in a real
@@ -80,6 +81,7 @@ fn label_add_list_and_jump_in_a_real_terminal() {
     assert!(ended, "the fork exited cleanly");
 }
 
+#[cfg(unix)]
 fn session_logs(state: &std::path::Path) -> Vec<std::path::PathBuf> {
     fn walk(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
