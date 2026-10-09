@@ -81,6 +81,23 @@ id keeps labels valid across forks and across the future tree.
 - Never in this epic: migration machinery (a #98-adjacent note only),
   stream observation (came with #45, stays deferred per gh #80).
 
+## Addendum (2026-10-10, gh #37 phase 2)
+
+Phase 2 landed three decided details worth pinning:
+
+- **No stored leaf pointer.** The walk starts at the log tip and a
+  branch jump is transparent, which covers every navigation
+  (including re-navigation with nothing appended yet: the tip *is*
+  the jump). One less piece of mutable state; the log stays the sole
+  authority.
+- **Forks inherit chains, not prefixes.** Splicing the taken
+  record's ancestry keeps an abandoned path out of the child; on
+  unlinked parents the walk degrades to the old prefix exactly.
+- **GC and labels see the file.** Reachability walks audit minus
+  compaction suppression (abandoned attachments survive, orphans do
+  not); bookmarks resolve file-globally. Display, transcript, and
+  model context see the live chain only.
+
 ## Revisit conditions
 
 - Fork chains produce a real defect class (broken-chain truncation

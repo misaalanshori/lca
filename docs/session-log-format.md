@@ -72,6 +72,10 @@ persist. `truncated = true` with an `attachment` means the display shown to the 
 
 `fork-point` appears in a forked session and names the parent session and the record identifier the fork was taken at.
 
+`branch-point` navigates within one log (gh #37): it names the record the branch continues from (`target_id`). Later records chain through it; the ancestry walk treats it as transparent (jumps to the target, never follows a parent of its own - it carries none). Skipped in display reads, carried in audit and exports.
+
+`branch-summary` records what an abandoned path learned (gh #37, pi's `branch_summary` shape): `parent` names the navigation point explicitly, `from_id` the abandoned tip (`None` when the old path was empty), `summary` the lesson. Assembly injects the summary as context where the new branch continues, like a compaction summary. Carried in display reads, audit, and exports.
+
 `session-end` is written on a clean exit. Its absence means the session ended without one, which is normal after a crash and is not an error.
 
 `thinking-level-change` records a thinking-level switch (gh #47: pi's `thinking_level_change` semantics under this log's framing). Fields: `id`, `level` (the level the next request runs at, or `default` when the session runs the provider's choice - no level in the picker's set is named that). Writer: the `/thinking` picker's host seam (which the `/settings` thinking row shares), only when the effective level actually moved - re-picking the active level writes nothing, the same rule `model-change` follows. Readers: assembly ignores it - the request itself carries the level.
@@ -100,6 +104,8 @@ hooks (gh #45) - a replacement lands here, never as a rewrite. Readers: assembly
 Records are append-only. Nothing is rewritten in place. Nothing is deleted.
 
 Record identifiers are unique within a session and sortable by creation order. A `tool-result` references its `tool-call` by `call_id`, which is the identifier the model used, not the record identifier.
+
+Every record except `session-start`, `fork-point`, and `branch-point` carries an optional `parent`: the previous record's id, stamped by the store on append when the writer left it empty. Records written before linkage have none, and old logs load unchanged. The ancestry walk starts at the log tip, follows `parent` links newest-first, jumps through `branch-point` records to their targets, and contributes everything before a parentless record in log order (pre-linkage history is linear by construction). Display reads, the transcript, and model context see the resulting chain only; audit reads, label resolution, gc reachability, and exports see the whole file (gc additionally honors compaction suppression, so compacted-away bytes are still collected).
 
 The log order is the authority for conversation order. Timestamps are for display and diagnostics. A reader that sorts by timestamp is wrong, because two records written in the same millisecond have no defined timestamp order.
 

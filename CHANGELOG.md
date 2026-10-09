@@ -7,6 +7,16 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Sessions phase 2 (gh #37).** In-file branching on top of forks
+(ADR-0046): every record carries an additive optional `parent`
+(old lines load parentless under the unknown-fields rule);
+`branch-point` jumps continue the same log with no new session
+directory; `branch-summary` records the abandoned tip plus lesson
+and assembles as context. Display reads, the transcript, and model
+context follow the tip ancestry (log-order fallback where links are
+absent); audit, gc reachability (minus compacted-away records),
+labels, and exports see the whole file. Forking at a branched
+record inherits its chain.
 - **Sessions phase 1 (gh #37, #80-part).** ADR-0046 keeps fork
 directories as the branch container and layers tree semantics on
 top: `/label [n] <name>` bookmarks a message, `/labels` lists every
