@@ -1,0 +1,15 @@
+[package]
+name = "lca-wire-mcp"
+description = "The shared MCP wire-protocol kit (gh #53): the streamable-HTTP envelope (JSON or SSE) and the JSON-RPC response selector. Pure protocol over plain values; transports (stdio pipes, HTTP posts) stay in the extension."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

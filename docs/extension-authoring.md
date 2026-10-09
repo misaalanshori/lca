@@ -192,9 +192,22 @@ same permission prompt as a model-requested command, so a declined
 server never starts and the denial is recorded - per-call arguments
 flow to an already-approved server, and every call runs through the
 turn's hooks like any other extension tool. The sandboxed twin reads
-its server list from the `state` key `mcp-servers`. OAuth servers,
-remote transports, resources, and `/mcp` management are later
-phases; this sketch grows into their docs.
+its server list from the `state` key `mcp-servers`.
+
+A remote server (`HttpServerConfig`: `url`, `headers`, `timeout`,
+`oauth`) rides streamable HTTP over `net`: JSON or SSE envelopes,
+the `Mcp-Session-Id` round-trip, pi's transient retry on the
+idempotent reads (calls never retry), and the configured per-request
+timeout bounding the whole exchange. OAuth is the provider
+pattern: dynamic registration (or a configured client), the PKCE
+loopback flow through the `oauth` capability, tokens in the
+`credentials` namespace keyed by name and URL, proactive refresh
+near expiry, one reactive refresh on 401, purge on `invalid_grant`,
+and step-up scopes remembered into the next sign-in. A static
+`Authorization` header disables OAuth, exactly like pi. The
+sandboxed twin stays stdio-only until the phase-3 management owns
+server URLs; `/mcp`, `mcp.json`, resources, and wider exposures are
+still later phases; this sketch grows into their docs.
 
 ## Other worlds
 

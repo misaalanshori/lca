@@ -15,6 +15,13 @@ prompt; a denial is recorded and the server never starts. A
 one-tool echo fixture plus a scripted turn prove it end to end.
 OAuth/remote/resources/management stay explicitly out (later
 phases).
+- **MCP bridge phase 2 (gh #53).** Streamable-HTTP transport over
+`net` (JSON/SSE envelopes, session ids, transient retry on reads,
+per-request timeouts) plus OAuth (dynamic registration, PKCE
+loopback flow, credential-namespace token store, refresh, purge,
+step-up scopes). Mock remote + mock IdP journeys prove it end to
+end. Still out (phase 3): `mcp.json`, `/mcp` + CLI, resources,
+exposure levels, system-prompt section.
 - **Mouse keystone + scrollbar drag (gh #164).** SGR-1006 normalizes
   to `MouseEvent` (Down/Up/Move/Wheel + modifiers, 1003 hover) with
   a `MouseRegion` hit-test table (no component tree). The scrollbar

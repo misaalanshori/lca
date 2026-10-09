@@ -21,7 +21,11 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod remote;
+#[cfg(not(target_arch = "wasm32"))]
 pub use native::{McpBridge, manifest_grants};
+#[cfg(not(target_arch = "wasm32"))]
+pub use remote::{TokenStore, refresh, sign_in};
 #[cfg(target_arch = "wasm32")]
 mod guest;
 
@@ -44,6 +48,166 @@ pub struct ServerConfig {
     pub args: Vec<String>,
     /// The `fs` scope the server runs in (pi's `cwd`).
     pub cwd_scope: String,
+}
+
+/// One remote server to bridge (pi's `mcpServers` entry, HTTP subset).
+/// Additive: the stdio [`ServerConfig`] above is untouched.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HttpServerConfig {
+    /// pi's server name: letters, digits, `_`, `-`.
+    pub name: String,
+    /// The streamable-HTTP endpoint (pi's `url`).
+    pub url: String,
+    /// Extra headers (pi's `headers`); an `Authorization` header
+    /// disables OAuth for the server, exactly like pi.
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    /// Per-request timeout in seconds (pi's `timeout`, default 60).
+    /// Zero means the default.
+    #[serde(default)]
+    pub timeout_secs: u64,
+    /// OAuth settings (`None` means no sign-in flow configured).
+    #[serde(default)]
+    pub oauth: Option<OAuthConfig>,
+}
+
+/// OAuth settings for one remote server (pi's `oauth` object, the
+/// phase-2 subset: dynamic registration plus scope).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OAuthConfig {
+    /// `client_name` for dynamic registration (default `lca`).
+    #[serde(default)]
+    pub client_name: Option<String>,
+    /// Space-separated scopes to request.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// The authorization server's metadata document: skips discovery
+    /// (pi's `authServerMetadataUrl`).
+    #[serde(default)]
+    pub auth_server_metadata_url: Option<String>,
+    /// A pre-registered client (pi's `clientId`): skips dynamic
+    /// registration.
+    #[serde(default)]
+    pub client_id: Option<String>,
+    /// Its secret, when the server issued one.
+    #[serde(default)]
+    pub client_secret: Option<String>,
+}
+
+impl HttpServerConfig {
+    /// The effective per-request timeout (pi's 60-second default).
+    pub fn timeout(&self) -> std::time::Duration {
+        let secs = if self.timeout_secs == 0 {
+            60
+        } else {
+            self.timeout_secs.min(600)
+        };
+        std::time::Duration::from_secs(secs)
+    }
+
+    /// Whether the configured headers already authenticate (pi:
+    /// OAuth applies only without an `Authorization` header).
+    pub fn has_static_auth(&self) -> bool {
+        self.headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("authorization"))
+    }
+}
+
+/// One stored OAuth credential set (`mcp-auth.json`-shaped, keyed by
+/// server name and URL like pi: servers sharing a URL keep separate
+/// accounts).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StoredToken {
+    /// The bearer token.
+    pub access_token: String,
+    /// For proactive refresh and the 401 retry.
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    /// Milliseconds since the Unix epoch, when the access token dies.
+    #[serde(default)]
+    pub expires_at_ms: Option<u64>,
+    /// The dynamically registered client (or configured) identity.
+    #[serde(default)]
+    pub client_id: String,
+    /// Issued at registration, when the server sends one.
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// The granted scopes, space-separated.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Where the tokens came from (refresh posts here).
+    #[serde(default)]
+    pub token_url: String,
+}
+
+/// The credentials key for one server's tokens.
+pub fn token_key(name: &str, url: &str) -> String {
+    format!("mcp-oauth:{name}:{url}")
+}
+
+/// Scopes of every list, each once (pi's `mergeScopes`): step-up
+/// adds to the granted scopes, never replaces them.
+pub fn merge_scopes(scopes: &[Option<&str>]) -> Option<String> {
+    let mut merged = Vec::new();
+    for scope in scopes.iter().flatten() {
+        for part in scope.split_whitespace() {
+            if !merged.contains(&part) {
+                merged.push(part);
+            }
+        }
+    }
+    (!merged.is_empty()).then(|| merged.join(" "))
+}
+
+/// Parse a `WWW-Authenticate: Bearer ...` challenge into its
+/// parameters (quoted-string aware; unquoted tokens kept bare).
+pub fn parse_www_authenticate(header: &str) -> BTreeMap<String, String> {
+    let mut params = BTreeMap::new();
+    let challenge = header.trim();
+    let rest = challenge
+        .strip_prefix("Bearer")
+        .or_else(|| challenge.strip_prefix("bearer"))
+        .unwrap_or(challenge);
+    let mut current = String::new();
+    let mut key: Option<String> = None;
+    let mut quoted = false;
+    let mut parts = Vec::new();
+    for char in rest.chars() {
+        match char {
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                parts.push(std::mem::take(&mut current));
+            }
+            _ => current.push(char),
+        }
+    }
+    parts.push(current);
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        match (part.split_once('='), key.take()) {
+            (Some((name, value)), _) => {
+                params.insert(name.trim().to_string(), value.trim().to_string());
+            }
+            (None, _) => {
+                key = Some(part.to_string());
+            }
+        }
+    }
+    let _ = key;
+    params
+}
+
+/// Pi's transient set: 408, 429, and 5xx except 501 are worth another
+/// attempt. The bridge retries the idempotent reads (`initialize`,
+/// `tools/list`); a `tools/call` reports the first failure instead
+/// (the server may already have performed it, so retrying could run
+/// it twice).
+pub fn is_transient_status(status: u16) -> bool {
+    status == 408 || status == 429 || (status >= 500 && status != 501)
 }
 
 /// Parse and validate a server list (the guest's `state` read and any
@@ -259,50 +423,62 @@ impl<T: Stdio> Session<T> {
     /// List the server's tools, qualified for `server`.
     pub fn tools(&mut self, server: &str) -> Result<Vec<ServerTool>, String> {
         let result = self.rpc("tools/list", serde_json::json!({}))?;
-        let empty = Vec::new();
-        let listed = result
-            .get("tools")
-            .and_then(|tools| tools.as_array())
-            .unwrap_or(&empty);
-        let mut tools = Vec::with_capacity(listed.len());
-        for entry in listed {
-            let name = entry
-                .get("name")
-                .and_then(|name| name.as_str())
-                .ok_or_else(|| "MCP server listed an unnamed tool".to_string())?;
-            let annotations = entry.get("annotations");
-            tools.push(ServerTool {
-                qualified: tool_name(server, name),
-                name: name.to_string(),
-                description: entry
-                    .get("description")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                parameters: entry
-                    .get("inputSchema")
-                    .cloned()
-                    .unwrap_or(serde_json::json!({"type": "object"})),
-                annotations: lca_protocol::ToolAnnotations {
-                    read_only_hint: annotations
-                        .and_then(|a| a.get("readOnlyHint"))
-                        .and_then(|hint| hint.as_bool()),
-                    destructive_hint: annotations
-                        .and_then(|a| a.get("destructiveHint"))
-                        .and_then(|hint| hint.as_bool()),
-                    idempotent_hint: annotations
-                        .and_then(|a| a.get("idempotentHint"))
-                        .and_then(|hint| hint.as_bool()),
-                    open_world_hint: annotations
-                        .and_then(|a| a.get("openWorldHint"))
-                        .and_then(|hint| hint.as_bool()),
-                },
-            });
-        }
-        Ok(tools)
+        tools_from_list(server, &result)
     }
+}
 
-    /// Call one server tool by its server-side name.
+/// Map one `tools/list` result to qualified tools (both transports
+/// share this, so stdio and HTTP name tools identically).
+pub fn tools_from_list(
+    server: &str,
+    result: &serde_json::Value,
+) -> Result<Vec<ServerTool>, String> {
+    let empty = Vec::new();
+    let listed = result
+        .get("tools")
+        .and_then(|tools| tools.as_array())
+        .unwrap_or(&empty);
+    let mut tools = Vec::with_capacity(listed.len());
+    for entry in listed {
+        let name = entry
+            .get("name")
+            .and_then(|name| name.as_str())
+            .ok_or_else(|| "MCP server listed an unnamed tool".to_string())?;
+        let annotations = entry.get("annotations");
+        tools.push(ServerTool {
+            qualified: tool_name(server, name),
+            name: name.to_string(),
+            description: entry
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            parameters: entry
+                .get("inputSchema")
+                .cloned()
+                .unwrap_or(serde_json::json!({"type": "object"})),
+            annotations: lca_protocol::ToolAnnotations {
+                read_only_hint: annotations
+                    .and_then(|a| a.get("readOnlyHint"))
+                    .and_then(|hint| hint.as_bool()),
+                destructive_hint: annotations
+                    .and_then(|a| a.get("destructiveHint"))
+                    .and_then(|hint| hint.as_bool()),
+                idempotent_hint: annotations
+                    .and_then(|a| a.get("idempotentHint"))
+                    .and_then(|hint| hint.as_bool()),
+                open_world_hint: annotations
+                    .and_then(|a| a.get("openWorldHint"))
+                    .and_then(|hint| hint.as_bool()),
+            },
+        });
+    }
+    Ok(tools)
+}
+
+impl<T: Stdio> Session<T> {
+    /// Call one server tool by its server-side name (split impl: the
+    /// listing mapper above is shared with the HTTP transport).
     pub fn call(
         &mut self,
         name: &str,
@@ -312,31 +488,36 @@ impl<T: Stdio> Session<T> {
             "tools/call",
             serde_json::json!({"name": name, "arguments": arguments}),
         )?;
-        let empty = Vec::new();
-        let content = result
-            .get("content")
-            .and_then(|content| content.as_array())
-            .unwrap_or(&empty);
-        let mut text = String::new();
-        for item in content {
-            let is_text = item.get("type").and_then(|kind| kind.as_str()) == Some("text");
-            if let Some(part) = is_text
-                .then(|| item.get("text"))
-                .flatten()
-                .and_then(|part| part.as_str())
-            {
-                text.push_str(part);
-            } else {
-                text.push_str("[non-text content omitted]");
-            }
+        Ok(outcome_from_result(&result))
+    }
+}
+
+/// Map one `tools/call` result to text (both transports share this).
+pub fn outcome_from_result(result: &serde_json::Value) -> ToolOutcome {
+    let empty: Vec<serde_json::Value> = Vec::new();
+    let content = result
+        .get("content")
+        .and_then(|content| content.as_array())
+        .unwrap_or(&empty);
+    let mut text = String::new();
+    for item in content {
+        let is_text = item.get("type").and_then(|kind| kind.as_str()) == Some("text");
+        if let Some(part) = is_text
+            .then(|| item.get("text"))
+            .flatten()
+            .and_then(|part| part.as_str())
+        {
+            text.push_str(part);
+        } else {
+            text.push_str("[non-text content omitted]");
         }
-        Ok(ToolOutcome {
-            error: result
-                .get("isError")
-                .and_then(|flag| flag.as_bool())
-                .unwrap_or(false),
-            text,
-        })
+    }
+    ToolOutcome {
+        error: result
+            .get("isError")
+            .and_then(|flag| flag.as_bool())
+            .unwrap_or(false),
+        text,
     }
 }
 
@@ -356,6 +537,35 @@ mod tests {
             parse_servers(r#"[{"name":"bad name","command":"x","cwd_scope":"workspace"}]"#)
                 .is_err()
         );
+    }
+
+    // Verifies: gh #53 - the phase-2 envelope shapes hold at the unit
+    // level (the remote tests pin them through the mock).
+    #[test]
+    fn config_shapes_hold() {
+        assert!(is_transient_status(503));
+        assert!(is_transient_status(429));
+        assert!(!is_transient_status(501));
+        assert!(!is_transient_status(400));
+        assert_eq!(
+            merge_scopes(&[Some("base"), Some("extra base"), None]),
+            Some("base extra".to_string())
+        );
+        let challenge = parse_www_authenticate(
+            r#"Bearer resource_metadata="https://x.invalid/m", scope="extra""#,
+        );
+        assert_eq!(challenge.get("scope").map(String::as_str), Some("extra"));
+        let server = HttpServerConfig {
+            name: "r".to_string(),
+            url: "http://127.0.0.1:1/mcp".to_string(),
+            headers: [("Authorization".to_string(), "Bearer x".to_string())]
+                .into_iter()
+                .collect(),
+            timeout_secs: 0,
+            oauth: None,
+        };
+        assert!(server.has_static_auth());
+        assert_eq!(server.timeout(), std::time::Duration::from_secs(60));
     }
 
     // Verifies: gh #53 - a sanitized collision refuses the server with

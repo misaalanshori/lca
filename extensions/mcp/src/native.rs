@@ -44,21 +44,44 @@ impl crate::Stdio for ChildPipe {
     }
 }
 
-/// One live server: its session (behind a lock - one JSON-RPC exchange
-/// at a time per server, which is also what keeps response ids matched
-/// to their requests) plus the specs listed at connect.
-struct LiveServer {
-    caps: Arc<lca_tools::Capabilities>,
-    handle: u32,
-    session: Mutex<crate::Session<ChildPipe>>,
-    specs: Vec<lca_protocol::ToolSpec>,
-    /// Qualified name back to the server-side tool name.
-    calls: BTreeMap<String, String>,
+/// One live server: a stdio child or a remote endpoint. Both serve
+/// the same spec and call shapes; only the pipe differs.
+enum LiveServer {
+    Stdio {
+        caps: Arc<lca_tools::Capabilities>,
+        handle: u32,
+        /// One JSON-RPC exchange at a time per server, which is also
+        /// what keeps response ids matched to their requests.
+        session: Mutex<crate::Session<ChildPipe>>,
+        specs: Vec<lca_protocol::ToolSpec>,
+        /// Qualified name back to the server-side tool name.
+        calls: BTreeMap<String, String>,
+    },
+    Http {
+        session: Mutex<crate::remote::HttpSession>,
+        specs: Vec<lca_protocol::ToolSpec>,
+        /// Qualified name back to the server-side tool name.
+        calls: BTreeMap<String, String>,
+    },
 }
 
 impl LiveServer {
     fn shutdown(&self) {
-        let _ = self.caps.process_kill(self.handle);
+        if let LiveServer::Stdio { caps, handle, .. } = self {
+            let _ = caps.process_kill(*handle);
+        }
+    }
+
+    fn specs(&self) -> &[lca_protocol::ToolSpec] {
+        match self {
+            LiveServer::Stdio { specs, .. } | LiveServer::Http { specs, .. } => specs,
+        }
+    }
+
+    fn calls(&self) -> &BTreeMap<String, String> {
+        match self {
+            LiveServer::Stdio { calls, .. } | LiveServer::Http { calls, .. } => calls,
+        }
     }
 }
 
@@ -93,7 +116,7 @@ impl McpBridge {
                     .map(|tool| (tool.qualified.clone(), tool.name.clone()))
                     .collect();
                 let specs = qualify_tools(&server.name, listed)?;
-                Ok(LiveServer {
+                Ok(LiveServer::Stdio {
                     caps: caps.clone(),
                     handle,
                     session: Mutex::new(session),
@@ -115,11 +138,49 @@ impl McpBridge {
         Ok(McpBridge { servers: live })
     }
 
+    /// Connect every remote server over streamable HTTP (each
+    /// handshake asks nothing: authentication rides stored tokens,
+    /// and a 401 reports that sign-in is needed). A failure stops
+    /// the bridge with the server and the cause named.
+    pub fn connect_http(
+        caps: Arc<lca_tools::Capabilities>,
+        servers: Vec<crate::HttpServerConfig>,
+    ) -> Result<McpBridge, String> {
+        let mut live = Vec::with_capacity(servers.len());
+        for server in &servers {
+            let outcome = (|| -> Result<LiveServer, String> {
+                let mut session = crate::remote::HttpSession::new(caps.clone(), server.clone());
+                session.initialize()?;
+                let listed = session.tools(&server.name)?;
+                let calls = listed
+                    .iter()
+                    .map(|tool| (tool.qualified.clone(), tool.name.clone()))
+                    .collect();
+                let specs = qualify_tools(&server.name, listed)?;
+                Ok(LiveServer::Http {
+                    session: Mutex::new(session),
+                    specs,
+                    calls,
+                })
+            })();
+            match outcome {
+                Ok(server) => live.push(server),
+                Err(err) => {
+                    for server in &live {
+                        server.shutdown();
+                    }
+                    return Err(format!("MCP server {:?} failed: {err}", server.name));
+                }
+            }
+        }
+        Ok(McpBridge { servers: live })
+    }
+
     /// Every bridged tool, sorted (the registry's stable order).
     pub fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {
         let mut specs = Vec::new();
         for server in &self.servers {
-            specs.extend(server.specs.iter().cloned());
+            specs.extend(server.specs().iter().cloned());
         }
         specs.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(specs)
@@ -135,21 +196,27 @@ impl McpBridge {
         let server = self
             .servers
             .iter()
-            .find(|server| server.calls.contains_key(&call.name))
+            .find(|server| server.calls().contains_key(&call.name))
             .ok_or_else(|| {
                 lca_protocol::DispatchError::Failed(format!("unknown MCP tool {:?}", call.name))
             })?;
-        let name = server.calls[&call.name].clone();
+        let name = server.calls()[&call.name].clone();
         let arguments: serde_json::Value = serde_json::from_str(&call.arguments)
             .map_err(|err| lca_protocol::DispatchError::Failed(format!("bad arguments: {err}")))?;
-        let outcome = server
-            .session
-            .lock()
-            .map_err(|_| {
-                lca_protocol::DispatchError::Failed("MCP session lock is poisoned".to_string())
-            })?
-            .call(&name, &arguments)
-            .map_err(lca_protocol::DispatchError::Failed)?;
+        let poisoned =
+            || lca_protocol::DispatchError::Failed("MCP session lock is poisoned".to_string());
+        let outcome = match server {
+            LiveServer::Stdio { session, .. } => session
+                .lock()
+                .map_err(|_| poisoned())?
+                .call(&name, &arguments)
+                .map_err(lca_protocol::DispatchError::Failed)?,
+            LiveServer::Http { session, .. } => session
+                .lock()
+                .map_err(|_| poisoned())?
+                .call(&name, &arguments)
+                .map_err(lca_protocol::DispatchError::Failed)?,
+        };
         Ok(if outcome.error {
             lca_protocol::ToolResult::error(call.call_id.clone(), outcome.text)
         } else {

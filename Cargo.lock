@@ -1680,6 +1680,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lca-wire-mcp"
+version = "0.6.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "lca-wire-openai"
 version = "0.6.0"
 dependencies = [
@@ -1779,8 +1786,10 @@ dependencies = [
  "lca-ext-abi",
  "lca-permissions",
  "lca-protocol",
+ "lca-subscription",
  "lca-testkit",
  "lca-tools",
+ "lca-wire-mcp",
  "serde",
  "serde_json",
  "tokio",
