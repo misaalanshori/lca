@@ -573,13 +573,15 @@ impl McpBridge {
     }
 
     /// The servers offering resources, in entry order (borrows
-    /// the locked rows the caller holds).
+    /// the locked rows the caller holds). Hidden servers stay out:
+    /// their tools never registered, and neither do their resources.
     fn resource_servers(servers: &[ManagedServer]) -> Vec<(String, &LiveServer)> {
         servers
             .iter()
             .filter_map(|server| {
                 server.live.as_ref().and_then(|live| {
-                    live.offers_resources()
+                    (live.offers_resources()
+                        && live.exposure() != lca_protocol::ToolExposure::Hidden)
                         .then(|| (server.entry.name.clone(), live))
                 })
             })

@@ -146,6 +146,27 @@ fn http_resources_list_and_read_deferred() {
     assert_eq!(read.content, "hello, remote");
 }
 
+// Verifies: gh #53 - a hidden server serves nothing: neither its
+// tools nor its resources register.
+#[test]
+fn hidden_servers_serve_nothing() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let caps = sandbox("resources-hidden", mcp::manifest_grants());
+    let mut entry = stdio_entry(McpExposure::Hidden);
+    entry.tool_exposure = Vec::new();
+    let bridge = mcp::McpBridge::connect_managed(caps, vec![entry]);
+    let names: Vec<String> = bridge
+        .tool_specs()
+        .expect("specs")
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect();
+    assert!(names.is_empty(), "{names:?}");
+}
+
 // Verifies: gh #53 - no resource capability, no resource tools:
 // the plain endpoint lists tools only.
 #[test]
