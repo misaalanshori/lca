@@ -506,7 +506,10 @@ fn a_thinking_suffix_outside_the_models_set_is_clamped_to_it() {
     // not offered at all, so one row down from unset is `low` and the
     // notice names what landed with no clamp detour.
     session.send(&["/thinking", "Enter"]);
-    let text = session.wait_for("unset (provider default)", std::time::Duration::from_secs(10));
+    let text = session.wait_for(
+        "unset (provider default)",
+        std::time::Duration::from_secs(10),
+    );
     assert!(text.contains("low"), "the offered level shows: {text}");
     assert!(
         !text.contains("high"),
