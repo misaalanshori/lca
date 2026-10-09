@@ -312,3 +312,64 @@ fn a_compaction_summary_is_framed_as_the_agents_own_memory() {
         "and intact"
     );
 }
+
+// Verifies: FR-SESS-11 (a branch summary rides the new branch as
+// context, and the abandoned path does not).
+#[test]
+fn a_branch_summary_is_injected_and_the_abandoned_path_is_absent() {
+    fn text(message: &lca_protocol::ChatMessage) -> String {
+        message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                lca_protocol::ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+    // What a Display read hands assembly after branching at u1 with a
+    // summary and continuing: the abandoned u2 never arrives.
+    let records = vec![
+        Record::User {
+            v: 1,
+            ts: 1,
+            id: "u1".into(),
+            parent: None,
+            content: "start here".into(),
+            attachments: vec![],
+            queue: None,
+        },
+        Record::BranchSummary {
+            v: 1,
+            ts: 2,
+            id: "s1".into(),
+            parent: Some("u1".into()),
+            from_id: Some("u2".into()),
+            summary: "tried X".into(),
+        },
+        Record::User {
+            v: 1,
+            ts: 3,
+            id: "u3".into(),
+            parent: Some("s1".into()),
+            content: "try Y instead".into(),
+            attachments: vec![],
+            queue: None,
+        },
+    ];
+    let assembled = assemble(&records, "sys");
+    let bodies: Vec<String> = assembled.messages.iter().map(text).collect();
+    assert!(
+        bodies.iter().any(|body| body.contains("tried X")),
+        "the abandoned lesson is on the wire: {bodies:?}"
+    );
+    assert!(
+        bodies.iter().any(|body| body == "try Y instead"),
+        "the new branch is on the wire: {bodies:?}"
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains("abandoned message")),
+        "nothing from the cut path leaks: {bodies:?}"
+    );
+}
