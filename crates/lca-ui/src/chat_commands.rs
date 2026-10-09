@@ -257,6 +257,94 @@ impl Chat {
                 }
                 return Action::Continue;
             }
+            // Gh #37: bookmark the nth user message (`/label <n>
+            // <name>), defaulting to the latest (`/label <name>`).
+            "label" => {
+                let Some(set_label) = self.world.options.hooks.set_label.clone() else {
+                    self.world.notice = Some("labeling is not available in this host".to_string());
+                    return Action::Continue;
+                };
+                let users = self
+                    .transcript
+                    .entries()
+                    .iter()
+                    .filter(|entry| matches!(entry, crate::transcript::Entry::User(_)))
+                    .count();
+                // An explicit index plus a name, or just a name for the
+                // latest message: the host counts the same nth user
+                // record as `/fork` (FR-SESS-10).
+                let (index, name) = match argument.trim().split_once(char::is_whitespace) {
+                    Some((head, tail)) => match head.parse::<usize>() {
+                        Ok(index) => (index, tail.trim().to_string()),
+                        Err(_) => (users.saturating_sub(1), argument.trim().to_string()),
+                    },
+                    None => (users.saturating_sub(1), argument.trim().to_string()),
+                };
+                if users == 0 || name.is_empty() {
+                    self.world.notice = Some("usage: /label [message-index] <name>".to_string());
+                    return Action::Continue;
+                }
+                match set_label(index, &name) {
+                    Ok(target) => {
+                        self.world.notice = Some(format!("bookmarked '{name}' at {target}"));
+                    }
+                    Err(err) => self.world.notice = Some(err),
+                }
+                return Action::Continue;
+            }
+            // Gh #37: list every live bookmark, oldest name first.
+            "labels" => {
+                let Some(list_labels) = self.world.options.hooks.list_labels.clone() else {
+                    self.world.notice = Some("labeling is not available in this host".to_string());
+                    return Action::Continue;
+                };
+                let marks = list_labels();
+                self.world.notice = Some(if marks.is_empty() {
+                    "no bookmarks yet; /label <name> marks the latest message".to_string()
+                } else {
+                    marks
+                        .iter()
+                        .map(|(name, target)| format!("{name} -> {target}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                });
+                return Action::Continue;
+            }
+            // Gh #37: branch at a bookmark and switch (ADR-0046:
+            // navigation is fork-plus-switch until the tree phase).
+            "jump" => {
+                let (Some(list_labels), Some(fork_record)) = (
+                    self.world.options.hooks.list_labels.clone(),
+                    self.world.options.hooks.fork_record.clone(),
+                ) else {
+                    self.world.notice = Some("labeling is not available in this host".to_string());
+                    return Action::Continue;
+                };
+                let name = argument.trim();
+                // First match on the name-sorted listing: deterministic.
+                // True latest-wins lives in `store.resolve_label`; two
+                // live targets sharing a name is pathological.
+                let target = list_labels()
+                    .into_iter()
+                    .find_map(|(mark, target)| (mark == name).then_some(target));
+                let Some(target) = target else {
+                    self.world.notice = Some(format!("no bookmark named '{name}'"));
+                    return Action::Continue;
+                };
+                let report = fork_record(&target);
+                match &report.id {
+                    Some(id) => {
+                        let running = self.turn_running;
+                        self.switch_or_announce(id);
+                        if !running {
+                            self.world.notice =
+                                Some(format!("branched at '{name}' (session: {id})"));
+                        }
+                    }
+                    None => self.world.notice = Some(report.notice),
+                }
+                return Action::Continue;
+            }
             // Gh #204: the quick-cycle checklist - toggles flip rows,
             // enter saves (persists `models.enabled` + live rotation),
             // escape discards.
@@ -648,6 +736,9 @@ fn command_help(command: &str) -> &'static str {
         "/resume" => "search and reopen a session",
         "/fork" => "fork a branch at a message (picker, or /fork <n>)",
         "/clone" => "duplicate this session at its tip and switch (usage: /clone [name])",
+        "/label" => "bookmark a message (usage: /label [message-index] <name>)",
+        "/labels" => "list every bookmark",
+        "/jump" => "branch at a bookmark and switch (usage: /jump <name>)",
         "/scoped-models" => "choose the quick-cycle rotation (Ctrl+P)",
         "/changelog" => "show the latest released changes",
         "/reload" => {

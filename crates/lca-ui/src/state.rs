@@ -499,6 +499,15 @@ pub struct ForkReport {
 
 /// Fork the live session at the nth user message.
 pub type ForkAt = Arc<dyn Fn(usize) -> ForkReport + Send + Sync>;
+/// Fork the live session at a record id (gh #37): `/jump` resolves a
+/// bookmark name, then branches exactly where the mark points.
+pub type ForkAtRecord = Arc<dyn Fn(&str) -> ForkReport + Send + Sync>;
+/// Bookmark the nth user message (0-based) under a name, returning the
+/// labeled record's id (gh #37, FR-SESS-10).
+pub type SetLabel = Arc<dyn Fn(usize, &str) -> Result<String, String> + Send + Sync>;
+/// Every live bookmark as `(name, record id)` pairs, sorted by name
+/// (gh #37, FR-SESS-10).
+pub type ListLabels = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
 /// Clones the live session at its tip under the optional name,
 /// returning the new session's `(id, title)` (gh #205). The host
 /// switches through [`SwitchSession`]; this hook only duplicates.
@@ -594,6 +603,12 @@ pub struct UiHooks {
     pub fork_at: Option<ForkAt>,
     /// Clone the live session at its tip under an optional name (gh #205).
     pub clone_session: Option<CloneSession>,
+    /// Fork at a bookmark's record for `/jump` (gh #37).
+    pub fork_record: Option<ForkAtRecord>,
+    /// Bookmark a message for `/label` (gh #37).
+    pub set_label: Option<SetLabel>,
+    /// List bookmarks for `/labels` (gh #37).
+    pub list_labels: Option<ListLabels>,
     /// Re-run discovery without restarting (gh #130).
     pub reload: Option<Reload>,
     /// List the project's sessions for `/resume` (R2).

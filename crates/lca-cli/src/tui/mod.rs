@@ -11,6 +11,7 @@ mod commands;
 pub(crate) use commands::{settings_text, stage_initial_attachments};
 mod display;
 mod hooks;
+mod label_hooks;
 mod login;
 mod runner;
 mod startup;

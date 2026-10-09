@@ -385,6 +385,9 @@ impl Ui {
             copy_to_clipboard: Some(Arc::new(|text: &str| native_clipboard(text))),
             open_url: Some(Arc::new(open_url)),
             fork_at: Some(self.fork_at()),
+            fork_record: Some(self.fork_record()),
+            set_label: Some(self.set_label()),
+            list_labels: Some(self.list_labels()),
             clone_session: Some(self.clone_session()),
             reload: Some(self.reload_hook()),
             grants: Some(self.grants()),
@@ -869,16 +872,12 @@ impl Ui {
                     notice: format!("no user message at index {index}"),
                 };
             };
-            match store.fork(&session, &record_id) {
-                Ok(branch) => ForkReport {
-                    id: Some(branch.id().to_string()),
-                    notice: format!("✓ Forked from turn {index} (session: {})", branch.id()),
-                },
-                Err(err) => ForkReport {
-                    id: None,
-                    notice: format!("fork failed: {err}"),
-                },
-            }
+            super::label_hooks::fork_report(
+                store.as_ref(),
+                &session,
+                &record_id,
+                &format!("turn {index}"),
+            )
         })
     }
 
