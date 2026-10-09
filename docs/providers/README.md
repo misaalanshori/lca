@@ -19,6 +19,7 @@ A full ADR is not written for each provider, because there is usually no real al
 | [GitHub Copilot](github-copilot.md) | Device code | WASM, install separately | Copilot subscription via the device flow; token `proxy-ep` routes inference. |
 | [Meta](meta.md) | Device code | WASM, install separately | Muse subscription: device flow mints a day-lived Model API key. |
 | [Kimi Code](kimi-coding.md) | Device code | WASM, install separately | Kimi subscription via the device flow, with a retrying refresh. |
+| [llama-server](llama.md) | None (local) | WASM + native command | Loopback llama.cpp router: chat completions plus `/llama` load/unload. |
 | [LM Studio](lmstudio.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 | [Ollama](ollama.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 

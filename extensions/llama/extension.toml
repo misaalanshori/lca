@@ -1,0 +1,11 @@
+name = "llama"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["provider", "command"]
+description = "Local llama-server router models via chat completions and load/unload commands."
+
+[capabilities.net-local]
+addresses = ["localhost", "127.0.0.1"]
+
+[capabilities.credentials]
+namespace = "llama"

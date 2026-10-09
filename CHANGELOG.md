@@ -159,6 +159,11 @@ Dates are UTC.
 - **Kimi Code provider extension (gh #187).** `extensions/kimi-coding`:
   device flow to the token triple, refresh retrying 429/5xx, chat
   completions, two-model table.
+- **llama-server provider extension (gh #62).** `extensions/llama`:
+  loopback router over `net-local` (chat completions + catalog with
+  load states and windows), one-shot `/llama list|load|unload`
+  commands (native delivery; the sandboxed command world has no net
+  and declines in text). No curated floor for your own GGUFs.
 - **Retry inventory (gh #83).** `provider.retry_base_delay_ms`
   tunes the backoff base (pi's `retry.baseDelayMs`); `retry_limit = 0`
   is pi's `retry.enabled = false`. No transport switch, no max-delay
