@@ -422,7 +422,7 @@ FR-PERM-18. WHEN the user attaches an ad hoc grant during a session, the agent S
 
 FR-PERM-19. The agent SHALL store project trust state, per-project extension enablement, and ad hoc grants in the user grant store, keyed by the canonical path of the current project.
 
-FR-PERM-20. The agent SHALL accept `-a`/`--approve` (trust this project for the process) and `-na`/`--no-approve` (treat this project as untrusted for the process) with session-scoped semantics onto ADR-0039, refusing both together; without flags the stored trust decides, else `trust.default_project` (`ask`/`always`/`never`, default `ask`) is the fallback, and an explicit trust answer mid-run overrides the startup default (gh #80).
+FR-PERM-28. The agent SHALL accept `-a`/`--approve` (trust this project for the process) and `-na`/`--no-approve` (treat this project as untrusted for the process) with session-scoped semantics onto ADR-0039, refusing both together; without flags the stored trust decides, else `trust.default_project` (`ask`/`always`/`never`, default `ask`) is the fallback, and an explicit trust answer mid-run overrides the startup default (gh #80).
 
 FR-PERM-20. WHILE a project is trusted, persistently or for the session, and a shell command provably stays inside the workspace root, the agent SHALL run it without prompting. A command the agent cannot prove stays inside the workspace SHALL be reviewed (ADR-0039).
 

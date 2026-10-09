@@ -105,6 +105,14 @@ pub enum Error {
         /// The rejected id.
         id: String,
     },
+    /// A label names a record no resolved history holds (gh #37).
+    #[error("label target `{record}` not found in session {session}")]
+    LabelTargetMissing {
+        /// The session searched.
+        session: String,
+        /// The record identifier sought.
+        record: String,
+    },
 }
 
 /// Whether a session id is usable (gh #69, pi's constraints): letters,
