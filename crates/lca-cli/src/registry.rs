@@ -29,7 +29,7 @@ pub(crate) fn assemble(
     stats: StatsSource,
     temp: &Path,
     flags: &crate::CliFlags,
-) -> ExtensionRegistry {
+) -> (ExtensionRegistry, Arc<crate::mcp::McpManager>, Vec<String>) {
     let mut registry = ExtensionRegistry::new();
     // gh #70: `--no-extensions` skips installed and built-in
     // extensions (providers still resolve, or the run cannot start).
@@ -66,6 +66,26 @@ pub(crate) fn assemble(
         grants,
         &flags.extension,
     );
+    // gh #53: the MCP session manager (files, bridge, actions).
+    // Empty entries connect nothing; the registry still owns the
+    // handle so later turns see rebuilds with no re-registration.
+    // Load warnings ride out beside the registry for the startup
+    // notice (invalid entries never block the valid ones). Built
+    // before the provider takes the prompt handle below.
+    let data = crate::data_dir();
+    let trusted = crate::lock(grants).is_trusted(cwd);
+    let (entries, mgrants, warnings, user_path, project_path) =
+        crate::mcp::McpManager::plan(&data, cwd, trusted);
+    let mcp_caps = crate::extension_capabilities(
+        cwd,
+        "mcp",
+        mgrants,
+        shared_prompt.clone(),
+        grants.clone(),
+        // No `resources/` bag: the bridge carries code, not data.
+        lca_tools::ResourceSource::None,
+        temp,
+    );
     // gh #64: the user's model-metadata overrides ride the provider's
     // settings into native mode (an absent file parses to nothing).
     // The WASM guest has no user-file channel, so it honors a
@@ -100,6 +120,13 @@ pub(crate) fn assemble(
     crate::apply_enablement(&mut registry, |name| {
         crate::lock(grants).extension_enabled(cwd, name) == Some(false)
     });
+    let manager = Arc::new(crate::mcp::McpManager::load(
+        mcp_caps,
+        user_path,
+        project_path,
+        entries,
+    ));
+    registry.register(manager.bridge());
     // gh #81: the crash file names what actually loaded.
     lca_tui::set_crash_extensions(
         registry
@@ -108,7 +135,7 @@ pub(crate) fn assemble(
             .map(|handle| handle.name().to_string())
             .collect(),
     );
-    registry
+    (registry, manager, warnings)
 }
 
 /// Register the bundled compaction strategy and return its backend.
@@ -176,7 +203,7 @@ mod tests {
         let grants = std::sync::Arc::new(std::sync::Mutex::new(
             lca_permissions::GrantStore::open(&root.join("grants.json")).expect("open"),
         ));
-        let registry = super::assemble(
+        let (registry, _mcp, _warnings) = super::assemble(
             &project,
             &config,
             lca_permissions::SharedPrompt::default(),

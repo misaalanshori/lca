@@ -221,12 +221,15 @@ pub fn agent_system_prompt(
         .unwrap_or(0);
     let cwd_text = cwd.to_string_lossy();
     let date_text = civil_date(now);
+    let mcp = crate::mcp::load_entries(&data, cwd, trusted);
+    let mcp_servers = crate::mcp::servers_section(&mcp.entries);
     Ok(compose_system_prompt(&PromptInputs {
         preamble,
         tool_names: lca_core::BUILTIN_TOOLS,
         context_files: files.context_files,
         appends: files.appends,
         skills_catalog: catalog.as_deref(),
+        mcp_servers: mcp_servers.as_deref(),
         cwd: &cwd_text,
         date: &date_text,
     }))
@@ -245,6 +248,8 @@ pub struct PromptInputs<'a> {
     pub appends: Vec<AppendInstruction>,
     /// The skills catalog text (omitted when no skill is advertised).
     pub skills_catalog: Option<&'a str>,
+    /// The MCP servers section (omitted with no reachable servers).
+    pub mcp_servers: Option<&'a str>,
     /// The working directory.
     pub cwd: &'a str,
     /// The calendar date (`YYYY-MM-DD`).
@@ -282,6 +287,10 @@ pub fn compose_system_prompt(inputs: &PromptInputs<'_>) -> String {
     if let Some(catalog) = inputs.skills_catalog {
         out.push_str("\n\n## Skills\n");
         out.push_str(catalog.trim_end());
+    }
+    if let Some(servers) = inputs.mcp_servers {
+        out.push_str("\n\n## MCP servers\n");
+        out.push_str(servers.trim_end());
     }
     out.push_str("\n\n## Workspace\ncwd: ");
     out.push_str(inputs.cwd);
@@ -348,6 +357,7 @@ mod golden_tests {
             skills_catalog: Some(
                 "Available skills:\n- commits — Write commit messages. (from user)\n",
             ),
+            mcp_servers: None,
             cwd: "/repo",
             date: "2026-10-06",
         });
@@ -390,6 +400,7 @@ mod golden_tests {
             context_files: vec![],
             appends: vec![],
             skills_catalog: None,
+            mcp_servers: None,
             cwd: "/repo",
             date: "2026-10-06",
         });
@@ -579,6 +590,7 @@ mod acceptance_tests {
             context_files: vec![],
             appends: vec![],
             skills_catalog: Some(catalog),
+            mcp_servers: Some("- echo: Echo. (callable from scripts; find them by server name)."),
             cwd: "/repo",
             date: "2026-10-06",
         });
@@ -587,6 +599,29 @@ mod acceptance_tests {
         }
         assert!(!out.contains("intent-bearing"), "no bodies ride along");
         assert!(out.contains("## Skills"), "the catalog has its section");
+    }
+
+    // Verifies: gh #53 - the MCP servers section renders after
+    // Skills (and only when servers reach it).
+    #[test]
+    fn the_mcp_section_lists_reachable_servers() {
+        let tools = ["read"];
+        let out = compose_system_prompt(&PromptInputs {
+            preamble: "You are LCA.",
+            tool_names: &tools,
+            context_files: vec![],
+            appends: vec![],
+            skills_catalog: None,
+            mcp_servers: Some("- echo: Echo. (callable from scripts; find them by server name)."),
+            cwd: "/repo",
+            date: "2026-10-06",
+        });
+        let skills_at = out.find("## Skills");
+        let mcp_at = out.find("## MCP servers").expect("section renders");
+        let workspace_at = out.find("## Workspace").expect("workspace renders");
+        assert!(skills_at.is_none_or(|at| at < mcp_at));
+        assert!(mcp_at < workspace_at);
+        assert!(out.contains("- echo: Echo."));
     }
 }
 

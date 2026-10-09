@@ -696,7 +696,7 @@ pub(super) fn list_models_command(
     shared_prompt.set(std::sync::Arc::new(std::sync::Mutex::new(prompt.clone())));
     // No session here (a model listing is not a turn): the system temp
     // dir, explicitly (gh #160).
-    let registry = crate::registry::assemble(
+    let (registry, _mcp, _mcp_warnings) = crate::registry::assemble(
         cwd,
         &config,
         shared_prompt,

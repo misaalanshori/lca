@@ -862,6 +862,11 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         if chat.poll_compact() {
             dirty = true;
         }
+        // ...and a background `/mcp login`: the browser flow outlives
+        // the command that started it.
+        if poll_mcp(&mut chat) {
+            dirty = true;
+        }
 
         // Edge auto-scroll while a selection drag sits on a viewport edge
         // (R6).
@@ -1124,6 +1129,21 @@ fn poll_login(chat: &mut Chat) -> bool {
     match poll() {
         Some(next) => {
             chat.apply_login_next(next);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Poll a background `/mcp login` (gh #53): a finished sign-in posts
+/// its notice once, like the login poll.
+fn poll_mcp(chat: &mut Chat) -> bool {
+    let Some(poll) = chat.world.options.hooks.poll_mcp.clone() else {
+        return false;
+    };
+    match poll() {
+        Some(notice) => {
+            chat.world.notice = Some(notice);
             true
         }
         None => false,

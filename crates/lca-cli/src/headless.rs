@@ -531,7 +531,7 @@ pub(crate) async fn setup(
     // lookup.
     let stats_store = store.clone();
     let stats_session = session.clone();
-    let registry = crate::registry::assemble(
+    let (registry, _mcp, _mcp_warnings) = crate::registry::assemble(
         cwd,
         &config,
         shared_prompt.clone(),

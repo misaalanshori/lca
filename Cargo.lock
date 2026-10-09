@@ -1398,6 +1398,7 @@ dependencies = [
  "lca-tui",
  "lca-ui",
  "libc",
+ "mcp",
  "openai-compatible",
  "serde",
  "serde_json",

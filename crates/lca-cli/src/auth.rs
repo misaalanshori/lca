@@ -233,7 +233,7 @@ pub(super) fn run(cmd: &AuthCmd, allow_host: &[String]) -> i32 {
     let stats: lca_ext_native::StatsSource = Arc::new(String::new);
     // No session here (a credential check precedes any session): the
     // system temp dir, explicitly (gh #160).
-    let registry = crate::registry::assemble(
+    let (registry, _mcp, _mcp_warnings) = crate::registry::assemble(
         &cwd,
         &config,
         shared_prompt,

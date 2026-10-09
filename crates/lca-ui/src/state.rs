@@ -126,6 +126,14 @@ pub type LoginPoll = Arc<dyn Fn() -> Option<LoginNext> + Send + Sync>;
 /// Cancel the background login/identity step (R4).
 pub type LoginCancel = Arc<dyn Fn() + Send + Sync>;
 
+/// One `/mcp` verb (`reconnect`, `enable`, `disable`, `exposure`,
+/// `login`, `logout`): the target server plus the notice to show.
+pub type McpAction = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
+
+/// Poll a background `/mcp login`: `Some` posts the sign-in outcome
+/// as a notice once, `None` keeps waiting (the login-poll shape).
+pub type McpPoll = Arc<dyn Fn() -> Option<String> + Send + Sync>;
+
 /// What a background `/compact` is doing. The command's summarization
 /// call runs on its own thread (it is a model round-trip, and freezing
 /// the interface for it is how pi ended up with a dedicated compaction
@@ -612,6 +620,10 @@ pub struct UiHooks {
     /// Cancel the background login/identity step (R4), called on Escape
     /// while the waiting modal is open.
     pub cancel_login: Option<LoginCancel>,
+    /// One `/mcp` verb (gh #53); absent with the status.
+    pub mcp_action: Option<McpAction>,
+    /// Poll a background `/mcp login` (gh #53); absent with the rest.
+    pub poll_mcp: Option<McpPoll>,
     /// Pre-parse markdown transforms in registration order (gh #12),
     /// collected by the host from native extensions. Empty by default -
     /// no consumer, no rewriting.

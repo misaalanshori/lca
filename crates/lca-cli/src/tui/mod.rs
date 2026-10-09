@@ -215,6 +215,9 @@ pub(crate) struct Ui {
     /// R4: Escape cancelled the current wait, so its background result is
     /// ours to report as a cancel rather than as a failure.
     login_cancelled: Arc<Mutex<bool>>,
+    /// The MCP session manager (gh #53): files, bridge, and actions.
+    /// The cell swaps on `/reload`; the bridge rebuilds in place.
+    mcp: Arc<Mutex<Arc<crate::mcp::McpManager>>>,
 }
 
 /// Enter the interactive interface for `cwd`, optionally resuming `resume`.
@@ -617,7 +620,7 @@ impl Ui {
         // Gh #160: this session's temp dir resolves here, from this
         // session - creation failures fail startup, never silently.
         let temp_dir = crate::ensure_session_temp(&session_data_root, &session_id)?;
-        let mut registry = load_registry(
+        let (mut registry, mcp_manager, mcp_warnings) = load_registry(
             cwd,
             &config,
             shared_prompt.clone(),
@@ -628,6 +631,11 @@ impl Ui {
             &temp_dir,
             flags,
         );
+        // gh #53: MCP load warnings ride the startup head with the
+        // rest (invalid entries never block the valid ones).
+        for warning in mcp_warnings {
+            initial_head.push(warning);
+        }
         // gh #67: the run's tool selection, warned into the startup head.
         for warning in crate::invoke::apply_tool_selection(&registry, flags) {
             initial_head.push(warning);
@@ -858,6 +866,7 @@ impl Ui {
             login_url_shown: Arc::new(Mutex::new(None)),
             login_wait_since: Arc::new(Mutex::new(None)),
             login_cancelled: Arc::new(Mutex::new(false)),
+            mcp: Arc::new(Mutex::new(mcp_manager)),
         })
     }
 
@@ -1021,13 +1030,13 @@ fn load_registry(
     session_cell: &Arc<Mutex<Session>>,
     temp: &Path,
     flags: &crate::CliFlags,
-) -> ExtensionRegistry {
+) -> (ExtensionRegistry, Arc<crate::mcp::McpManager>, Vec<String>) {
     // The one assembly, shared with headless mode and `--list-models`
     // (gh #8): only the stats source differs, and a session's own reads
     // the session this interface is showing.
     let stats_store = store.clone();
     let stats_session = session_cell.clone();
-    crate::registry::assemble(
+    let (registry, manager, warnings) = crate::registry::assemble(
         cwd,
         config,
         shared_prompt,
@@ -1042,7 +1051,8 @@ fn load_registry(
         }),
         temp,
         flags,
-    )
+    );
+    (registry, manager, warnings)
 }
 
 /// The configured model, or the first model *in the enabled scope* when

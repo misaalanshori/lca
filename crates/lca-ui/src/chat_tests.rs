@@ -1117,6 +1117,10 @@ mod overlay_tests;
 mod picker_scroll_tests;
 
 #[cfg(test)]
+#[path = "chat_mcp_tests.rs"]
+mod mcp_tests;
+
+#[cfg(test)]
 #[path = "chat_viewport_tests.rs"]
 mod viewport_tests;
 

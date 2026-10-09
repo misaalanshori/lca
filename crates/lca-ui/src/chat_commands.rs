@@ -95,6 +95,22 @@ impl Chat {
         let live_models = self.model_rows();
 
         match name.as_str() {
+            // gh #53: the MCP manager - verbs, no picker. The status
+            // block lists the verbs; each answer lands as a notice.
+            // Shell management waits for #171 (0.7); files stay
+            // hand-editable, and `/reload` re-reads them.
+            "mcp" => {
+                let Some(act) = self.world.options.hooks.mcp_action.clone() else {
+                    self.world.notice =
+                        Some("no MCP servers configured (see the authoring guide)".to_string());
+                    return Action::Continue;
+                };
+                let mut words = argument.splitn(2, ' ');
+                let verb = words.next().unwrap_or("").to_string();
+                let target = words.next().unwrap_or("").trim().to_string();
+                self.world.notice = Some(act(&verb, &target));
+                return Action::Continue;
+            }
             "help" => {
                 // Gh #58: template commands list with their descriptions.
                 let mut commands = self.world.options.slash_commands.clone();
@@ -647,6 +663,7 @@ fn command_help(command: &str) -> &'static str {
         "/trust" => "trust the project folder (auto-approve in-workspace commands)",
         "/permissions" => "manage allow/deny rules (session, project, global)",
         "/grants" => "review this project's grants and rules",
+        "/mcp" => "manage MCP servers (status, reconnect, enable, exposure, login)",
         "/settings" => "show the merged configuration and where each value came from",
         "/session" => "show this session's tokens, cache, and cost",
         _ => "",

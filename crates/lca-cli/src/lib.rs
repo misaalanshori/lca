@@ -1,12 +1,9 @@
-//! The `lca` binary's logic: argument dispatch, headless mode with the
-//! `--json` envelope contract from `docs/headless.md`, and the session
-//! commands. Interactive mode lives in `lca-tui`.
+//! The `lca` binary's logic: dispatch, headless mode (`docs/headless.md`),
+//! and session commands. Interactive mode lives in `lca-tui`.
 //!
-//! Unsafe code is `deny`ed rather than `forbid`ed so the one documented
-//! exemption below can exist: [`sigpipe`] restores `SIGPIPE`'s default
-//! disposition, which is a single `signal(2)` call std has no safe wrapper
-//! for (GitHub issue #19). Every `unsafe` block in this crate carries a
-//! `SAFETY` note, the discipline `lca-tools` and `lca-tui` already use.
+//! Unsafe is `deny`ed (not `forbid`ed) for one exemption: [`sigpipe`]
+//! restores `SIGPIPE`'s disposition via `signal(2)` (issue #19). Every
+//! `unsafe` block carries a `SAFETY` note (the `lca-tools` discipline).
 #![deny(unsafe_code)]
 
 use std::io::Write;
@@ -143,6 +140,9 @@ use session_cmds::*;
 /// The `/login` picker flow (ADR-0033, `api-key-login-plan.md` D1): the
 /// state machine, with no I/O of its own.
 pub mod login;
+
+/// MCP management (gh #53): `mcp.json`, the manager, prompts.
+pub mod mcp;
 
 /// The request-path consent for an endpoint host the manifest does not
 /// cover, and this run's `--allow-host` grant (gh #29, QA-004).

@@ -87,6 +87,11 @@ fn read_into<R: std::io::Read>(
 impl Ui {
     /// The host hooks wired for this composition (S1).
     pub(super) fn hooks(self: &Arc<Self>) -> UiHooks {
+        fn current_manager(
+            cell: &Arc<Mutex<Arc<crate::mcp::McpManager>>>,
+        ) -> Arc<crate::mcp::McpManager> {
+            crate::lock(cell).clone()
+        }
         // E2: keep the live theme cell in step with the persisted pick so
         // `/settings` shows the session value, like it does for thinking.
         let theme_cell = self.theme_cell.clone();
@@ -384,6 +389,18 @@ impl Ui {
             reload: Some(self.reload_hook()),
             grants: Some(self.grants()),
             revoke_grant: Some(self.revoke_grant()),
+            // gh #53: the MCP manager behind the verb hooks. The cell
+            // swaps on `/reload`; the bridge rebuilds in place.
+            mcp_action: {
+                let mcp = self.mcp.clone();
+                Some(Arc::new(move |verb: &str, target: &str| {
+                    current_manager(&mcp).act(verb, target)
+                }) as lca_ui::McpAction)
+            },
+            poll_mcp: {
+                let mcp = self.mcp.clone();
+                Some(Arc::new(move || current_manager(&mcp).poll()) as lca_ui::McpPoll)
+            },
             // R4: a background login/identity step reports back through the
             // loop's poll instead of blocking the input thread on a
             // 300-second OAuth callback; Escape cancels it.
@@ -706,7 +723,7 @@ impl Ui {
             Err(err) => return fail(err.to_string()),
         };
         let trusted = crate::lock(&self.grants).is_trusted(&self.cwd);
-        let mut fresh = super::load_registry(
+        let (mut fresh, mcp_manager, mcp_warnings) = super::load_registry(
             &self.cwd,
             &config,
             self.shared_prompt.clone(),
@@ -717,6 +734,9 @@ impl Ui {
             &self.temp_dir,
             &self.flags,
         );
+        // Gh #53: `/reload` re-reads `mcp.json` too (files stay
+        // hand-editable); its warnings join the report.
+        *crate::lock(&self.mcp) = mcp_manager;
         let live = crate::lock(&self.live);
         let model_id = crate::lock(&self.model_cell).id.clone();
         let window = super::model_context_window(live.provider.as_ref(), &model_id);
@@ -757,10 +777,14 @@ impl Ui {
         // hand-edited `models.enabled` applies without a restart.
         *crate::lock(&self.config) = config;
         let (bindings, bindings_error) = crate::load_user_keybindings(&self.data);
+        let mut notice =
+            format!("reloaded: {extensions} extensions, settings, prompts, themes, keybindings");
+        for warning in mcp_warnings {
+            notice.push_str("\nwarning: ");
+            notice.push_str(&warning);
+        }
         ReloadReport {
-            notice: format!(
-                "reloaded: {extensions} extensions, settings, prompts, themes, keybindings"
-            ),
+            notice,
             themes: lca_ui::theme::theme_names_all(&crate::invoke::theme_extra_dirs(
                 &self.flags,
                 &self.cwd,

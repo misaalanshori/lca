@@ -28,6 +28,9 @@ lca-protocol = { path = "../lca-protocol" }
 lca-config = { path = "../lca-config" }
 lca-session = { path = "../lca-session" }
 lca-registry = { path = "../lca-registry" }
+# gh #53: the MCP bridge (config format, bridge, OAuth) - a hard dep
+# like the skills merge (#92): the host owns files and prompts.
+mcp = { path = "../../extensions/mcp" }
 lca-ext-host = { path = "../lca-ext-host" }
 toml.workspace = true
 # E2: comment-preserving edits to the user config file (theme, thinking).
@@ -70,6 +73,10 @@ libc = "0.2"
 
 [dev-dependencies]
 lca-testkit = { path = "../lca-testkit" }
+# gh #53: the manager tests build engines and entries directly.
+lca-tools = { path = "../lca-tools" }
+lca-permissions = { path = "../lca-permissions" }
+mcp = { path = "../../extensions/mcp" }
 # sha2 - digest display in the install e2e (the registry's own dep; test-side use).
 sha2.workspace = true
 hyper.workspace = true
