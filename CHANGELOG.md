@@ -7,6 +7,18 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Sessions phase 1 (gh #37, #80-part).** ADR-0046 keeps fork
+directories as the branch container and layers tree semantics on
+top: `/label [n] <name>` bookmarks a message, `/labels` lists every
+bookmark, `/jump <name>` branches at the mark and switches (all on
+record ids; latest label wins, absent clears, export carries them).
+Trust flags onto ADR-0039: `-a`/`--approve` trusts the project for
+the run, `--no-approve` (`--na`) treats it as untrusted, refusing
+each other with exit 2; without flags the stored decision stands,
+else `trust.default_project` (`ask`/`always`/`never`, default
+`ask`, user file only) is the fallback. Session trust now opens the
+project file at load, so `/reload` picks up a mid-session trust
+without a restart.
 - **MCP bridge phase 3 (gh #53, epic complete).** `mcp.json`
 (user + trusted-project, pi merge rules) loads through the session
 manager: `/mcp` verbs (status, reconnect, enable/disable with

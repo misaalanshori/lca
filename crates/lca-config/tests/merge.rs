@@ -933,3 +933,39 @@ fn thinking_budgets_default_override_and_refuse_unknown() {
     .expect_err("an unknown budget name is refused at load");
     assert!(err.to_string().contains("enormous"), "{err}");
 }
+
+// Verifies: FR-CFG-7 (`trust.default_project` defaults to `ask` and
+// rides the user file, never the project file)
+#[test]
+fn default_project_trust_defaults_to_ask_and_refuses_project_files() {
+    let dir = scratch("trust-default");
+    let config = Config::load(&lca_config::LoadInput {
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.trust_default_project(), "ask");
+
+    write(
+        &dir.join("user.toml"),
+        "[trust]\ndefault_project = \"always\"\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.trust_default_project(), "always");
+
+    // A project file that grants its own trust defeats FR-PERM-9: loud.
+    write(
+        &dir.join("project.toml"),
+        "[trust]\ndefault_project = \"always\"\n",
+    );
+    let err = Config::load(&lca_config::LoadInput {
+        project_file: Some(dir.join("project.toml")),
+        trusted: true,
+        ..Default::default()
+    })
+    .expect_err("project-file trust fallback is refused");
+    assert!(err.to_string().contains("user file"), "{err}");
+}

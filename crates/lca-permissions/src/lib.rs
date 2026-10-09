@@ -13,6 +13,7 @@ mod net;
 mod rules;
 mod scope;
 pub mod shell;
+mod trust;
 
 use rules::RuleMatch;
 pub use rules::{RuleDecision, RuleScope, RuleSet, RuleView, wildcard_match};
@@ -140,6 +141,10 @@ pub enum Decision {
 struct SessionGrants {
     /// Canonical project keys trusted for this session.
     trust: BTreeSet<String>,
+    /// Canonical project keys refused for this session (gh #80): the
+    /// trust prompt does not fire here. Refusal never overrides trust;
+    /// it only suppresses the ask.
+    distrust: BTreeSet<String>,
     /// Rules attached for this session.
     rules: RuleSet,
     /// Ad hoc `net` grants for this process only (`--allow-host`), keyed by
@@ -404,6 +409,8 @@ pub struct GrantStore {
     data: StoreData,
     /// Session-only grants (never written to `path`).
     session: SessionGrants,
+    /// Process-wide distrust (`-na`); never persisted, like the mode.
+    force_untrusted: bool,
 }
 
 impl GrantStore {
@@ -427,6 +434,7 @@ impl GrantStore {
             path: PathBuf::new(),
             data: StoreData::default(),
             session: SessionGrants::default(),
+            force_untrusted: false,
         }
     }
 
@@ -452,6 +460,7 @@ impl GrantStore {
             path: path.to_path_buf(),
             data,
             session: SessionGrants::default(),
+            force_untrusted: false,
         })
     }
 
@@ -585,8 +594,10 @@ impl GrantStore {
     }
 
     /// Whether the folder is trusted at all (persisted or session).
+    /// Forced distrust (`-na`) denies both reads until lifted.
     pub fn is_trusted_here(&self, project_dir: &Path) -> bool {
-        self.is_trusted(project_dir) || self.is_trusted_for_session(project_dir)
+        !self.force_untrusted
+            && (self.is_trusted(project_dir) || self.is_trusted_for_session(project_dir))
     }
 
     /// Whether an action is already granted for this project: a rule, the
@@ -662,11 +673,14 @@ impl GrantStore {
     }
 
     /// Project trust state, stored here rather than in the project (FR-PERM-19).
+    /// Forced distrust (`-na`) reads back denied until lifted.
     pub fn is_trusted(&self, project_dir: &Path) -> bool {
-        self.data
-            .projects
-            .get(&canonical_key(project_dir))
-            .is_some_and(|entry| entry.trusted)
+        !self.force_untrusted
+            && self
+                .data
+                .projects
+                .get(&canonical_key(project_dir))
+                .is_some_and(|entry| entry.trusted)
     }
 
     /// Record trust state for this project (FR-PERM-19).

@@ -938,6 +938,10 @@ fn open(
         GrantStore::open(&data.join("grants.json"))
             .map_err(|err| anyhow::anyhow!("cannot open the grant store: {err}"))?,
     ));
+    // gh #80: CLI trust overrides land before the config merge, so the
+    // project-file gate sees them.
+    let trust_default = crate::trust_default_fallback();
+    crate::apply_startup_trust(&mut lock(&grants), cwd, flags, &trust_default);
     let trusted = lock(&grants).is_trusted(cwd);
     let config = crate::load_config_flags(cwd, &lock(&grants), false, yolo, flags)?;
     // Today's update check, if enabled and due: stamped, then spawned - the

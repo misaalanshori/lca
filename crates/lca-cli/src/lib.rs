@@ -10,9 +10,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use std::collections::BTreeMap;
-
-use lca_config::{Config, LoadInput};
+use lca_config::Config;
 use lca_core::{Agent, AgentConfig, StopReason, TurnEvent, TurnOutcome, TurnSink, TurnStatus};
 use lca_permissions::{GrantStore, PermissionPrompt, ProposalDiff};
 use lca_session::{ExportOptions, SessionStore};
@@ -104,6 +102,7 @@ pub fn split_product_version(product: &str) -> (&str, Option<&str>) {
 /// below, so `lca_cli::Cli` and `crate::Cli` are unchanged.
 mod cli_args;
 pub use cli_args::{AuthCmd, Cli, CliFlags, Command, SessionCmd};
+pub use trust::{apply_startup_trust, load_config, load_config_flags, trust_default_fallback};
 
 /// `lca auth ...`: pi's credential commands without the printers (gh
 /// #72, #38).
@@ -149,6 +148,7 @@ pub mod mcp;
 pub mod net_consent;
 
 /// Interactive mode, wired to `lca-tui`.
+mod trust;
 pub mod tui;
 
 /// The daily background update check (FR-CFG-6).
@@ -591,44 +591,6 @@ pub fn configured_tool_timeout(config: &Config) -> Option<std::time::Duration> {
 
 /// Load merged configuration for `cwd`, honoring project-file trust
 /// (FR-CFG-1, FR-PERM-9).
-pub fn load_config(
-    cwd: &Path,
-    grants: &GrantStore,
-    headless: bool,
-    yolo: bool,
-) -> anyhow::Result<Config> {
-    load_config_flags(cwd, grants, headless, yolo, &CliFlags::default())
-}
-
-/// [`load_config`] with the command line's flag-layer values (`--models`
-/// and friends, gh #8): the flags join the same precedence the `--yolo`
-/// flag already rides, so `lca config` and `/settings` name the source.
-pub fn load_config_flags(
-    cwd: &Path,
-    grants: &GrantStore,
-    headless: bool,
-    yolo: bool,
-    cli: &CliFlags,
-) -> anyhow::Result<Config> {
-    let project_file = cwd.join(".lca").join("config.toml");
-    let user_file = config_file().exists().then(config_file);
-    let mut flags: BTreeMap<String, String> = cli.layer();
-    if yolo {
-        // The flag is the loudest layer (FR-CFG-1's precedence): it beats
-        // a config file that says `ask`.
-        flags.insert("permissions.mode".to_string(), "yolo".to_string());
-    }
-    let input = LoadInput {
-        flags,
-        env: lca_config::collect_env(),
-        project_file: project_file.is_file().then_some(project_file),
-        trusted: grants.is_trusted(cwd),
-        user_file,
-        headless,
-    };
-    Ok(Config::load(&input)?)
-}
-
 /// One line naming yolo mode, unmissable on purpose (ADR-0042).
 pub const YOLO_BANNER: &str = "YOLO MODE: every permission prompt is auto-approved as \"always\" and recorded in the \
 session log; explicit deny rules still deny. /settings shows permissions.mode.";
@@ -773,7 +735,10 @@ pub async fn run(cli: Cli) -> i32 {
             &cli.allow_host,
             &flags,
         ),
-        Route::Config => config_command(&cwd),
+        Route::Config {
+            approve,
+            no_approve,
+        } => config_command(&cwd, approve, no_approve),
         Route::ResumeList => resume_list(&cwd),
         Route::Fork { session, message } => fork_command(&cwd, &session, &message),
         Route::Clone { session, title } => clone_command(&cwd, &session, title.as_deref()),
@@ -819,15 +784,15 @@ mod tests {
     // fallback (backstop headless, none interactive).
     #[test]
     fn an_explicit_tool_timeout_is_the_default_and_the_builtin_is_none() {
-        let plain = Config::load(&LoadInput::default()).expect("load");
+        let plain = Config::load(&lca_config::LoadInput::default()).expect("load");
         assert_eq!(
             configured_tool_timeout(&plain),
             None,
             "the built-in 120s default is not an explicit setting"
         );
-        let mut flags = BTreeMap::new();
+        let mut flags = std::collections::BTreeMap::new();
         flags.insert("tool.timeout_seconds".to_string(), "60".to_string());
-        let set = Config::load(&LoadInput {
+        let set = Config::load(&lca_config::LoadInput {
             flags,
             ..Default::default()
         })
@@ -850,7 +815,7 @@ mod tests {
         // A file that says ask, and a flag that says yolo: the flag wins.
         let file = root.join("config.toml");
         std::fs::write(&file, "permissions.mode = \"ask\"\n").expect("write");
-        let mut flags = BTreeMap::new();
+        let mut flags = std::collections::BTreeMap::new();
         flags.insert("permissions.mode".to_string(), "yolo".to_string());
         let config = Config::load(&lca_config::LoadInput {
             flags,

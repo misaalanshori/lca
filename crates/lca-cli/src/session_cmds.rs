@@ -106,8 +106,15 @@ pub enum Route {
         /// root switches under the same session plumbing.
         session_id: Option<String>,
     },
-    /// The merged-configuration printout (FR-CFG-2).
-    Config,
+    /// The merged-configuration printout (FR-CFG-2). Carries the
+    /// trust flags: what the dump shows depends on whether the
+    /// project file loads (gh #80).
+    Config {
+        /// Trust this project for the dump (gh #80).
+        approve: bool,
+        /// Treat this project as untrusted for the dump (gh #80).
+        no_approve: bool,
+    },
     /// The diagnostics dump (gh #81).
     Doctor,
     /// An extension-management subcommand (FR-DIST-*).
@@ -155,6 +162,10 @@ pub enum Route {
 /// carries the usage error; `run` prints it and exits 2. Kept beside
 /// `route` so the rule is unit-testable without a terminal.
 pub fn check_flag_contradictions(cli: &Cli) -> Option<String> {
+    // gh #80: trusting and distrusting one process is nonsense.
+    if cli.approve && cli.no_approve {
+        return Some("-a/--approve and --no-approve contradict; pass exactly one".to_string());
+    }
     if cli.r#continue && cli.resume_id.is_some() {
         return Some(
             "-c/--continue and -r/--resume select different sessions; pass exactly one".to_string(),
@@ -290,15 +301,23 @@ pub fn check_flag_contradictions(cli: &Cli) -> Option<String> {
     None
 }
 
-pub(super) fn config_command(cwd: &Path) -> i32 {
+pub(super) fn config_command(cwd: &Path, approve: bool, no_approve: bool) -> i32 {
     let data = data_dir();
-    let grants = match GrantStore::open(&data.join("grants.json")) {
+    let mut grants = match GrantStore::open(&data.join("grants.json")) {
         Ok(grants) => grants,
         Err(err) => {
             eprintln!("error: {err}");
             return exit::INTERNAL;
         }
     };
+    // gh #80: the dump shows what this process would load.
+    let flags = CliFlags {
+        approve,
+        no_approve,
+        ..Default::default()
+    };
+    let trust_default = crate::trust_default_fallback();
+    crate::apply_startup_trust(&mut grants, cwd, &flags, &trust_default);
     let config = match load_config(cwd, &grants, false, false) {
         Ok(config) => config,
         Err(err) => {
@@ -458,7 +477,10 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
                 }
             }
         }
-        Some(Command::Config) => Route::Config,
+        Some(Command::Config) => Route::Config {
+            approve: cli.approve,
+            no_approve: cli.no_approve,
+        },
         Some(Command::Doctor) => Route::Doctor,
         Some(Command::Resume { id }) => match id {
             None => Route::ResumeList,

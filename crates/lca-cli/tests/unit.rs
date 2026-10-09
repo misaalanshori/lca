@@ -428,3 +428,71 @@ fn bare_r_with_a_prompt_is_a_contradiction() {
         "--session + -c contradict like -r + -c"
     );
 }
+
+// Verifies: FR-PERM-28 (`-a` and `-na` contradict; each parses alone).
+#[test]
+fn trust_flag_contradictions_are_usage_errors() {
+    assert!(
+        check_flag_contradictions(&parse(&["-a", "--no-approve"])).is_some(),
+        "-a contradicts --no-approve"
+    );
+    assert!(
+        check_flag_contradictions(&parse(&["--approve", "--na"])).is_some(),
+        "--na is --no-approve"
+    );
+    assert!(check_flag_contradictions(&parse(&["-a"])).is_none());
+    assert!(check_flag_contradictions(&parse(&["--no-approve"])).is_none());
+}
+
+// Verifies: FR-PERM-28 (startup trust precedence: flags beat stored
+// trust beats the configured fallback).
+#[test]
+fn startup_trust_precedence_flags_stored_default() {
+    use lca_cli::{CliFlags, apply_startup_trust};
+    use lca_permissions::GrantStore;
+    let root = std::env::temp_dir().join(format!("lca-trust-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let plain = root.join("plain");
+    let stored = root.join("stored");
+    std::fs::create_dir_all(&plain).unwrap();
+    std::fs::create_dir_all(&stored).unwrap();
+    let mut grants = GrantStore::open(&root.join("grants.json")).unwrap();
+    grants.set_trusted(&stored, true).unwrap();
+
+    // No flags: stored trust stands, the rest fall to the default.
+    apply_startup_trust(&mut grants, &stored, &CliFlags::default(), "ask");
+    assert!(grants.is_trusted_here(&stored));
+    apply_startup_trust(&mut grants, &plain, &CliFlags::default(), "always");
+    assert!(
+        grants.is_trusted_here(&plain),
+        "always trusts for the session"
+    );
+    assert!(!grants.is_trusted(&plain), "session-scoped, never stored");
+    let refused = root.join("refused");
+    std::fs::create_dir_all(&refused).unwrap();
+    apply_startup_trust(&mut grants, &refused, &CliFlags::default(), "never");
+    assert!(
+        grants.is_refused_for_session(&refused),
+        "never refuses the ask"
+    );
+
+    // `-a` trusts an unstored project for the session only.
+    let fresh = root.join("fresh");
+    std::fs::create_dir_all(&fresh).unwrap();
+    let flags = CliFlags {
+        approve: true,
+        ..Default::default()
+    };
+    apply_startup_trust(&mut grants, &fresh, &flags, "ask");
+    assert!(grants.is_trusted_here(&fresh));
+    assert!(!grants.is_trusted(&fresh), "never persisted");
+
+    // `-na` flattens stored trust for the process.
+    let flags = CliFlags {
+        no_approve: true,
+        ..Default::default()
+    };
+    apply_startup_trust(&mut grants, &stored, &flags, "ask");
+    assert!(!grants.is_trusted_here(&stored), "forced distrust wins");
+    let _ = std::fs::remove_dir_all(&root);
+}

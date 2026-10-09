@@ -43,6 +43,11 @@ pub const MERMAID_MODES: &[&str] = &["off", "final", "streaming"];
 /// `docs/configuration.md`).
 pub const TREE_FILTER_MODES: &[&str] = &["default", "no-tools", "user-only", "labeled-only", "all"];
 
+/// Pi's `defaultProjectTrust` vocabulary (gh #80): the fallback project-trust
+/// behavior when no stored decision exists. User file or environment only;
+/// a project file that granted its own trust would defeat FR-PERM-9.
+pub const TRUST_DEFAULTS: &[&str] = &["ask", "always", "never"];
+
 /// Every configuration key an `LCA_` environment variable can set.
 /// `docs/configuration.md` documents two more that have no environment
 /// form because they are tables, not single values: `models.thinking_levels`
@@ -95,6 +100,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "shell.path",
     "shell.command_prefix",
     "permissions.mode",
+    "trust.default_project",
     "ui.thinking",
     "markdown.codeblock_border",
 ];
@@ -126,6 +132,13 @@ pub fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, Conf
             _ => Err(invalid(format!(
                 "expected {}, got `{raw}`",
                 DOUBLE_ESCAPE_ACTIONS.join(", ")
+            ))),
+        },
+        "trust.default_project" => match raw {
+            _ if TRUST_DEFAULTS.contains(&raw) => Ok(TypedValue::Text(raw.to_string())),
+            _ => Err(invalid(format!(
+                "expected {}, got `{raw}`",
+                TRUST_DEFAULTS.join(", ")
             ))),
         },
         "ui.tree_filter_mode" => match raw {

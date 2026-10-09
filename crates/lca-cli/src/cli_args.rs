@@ -47,6 +47,20 @@ pub struct Cli {
     /// like a human "always" answer. Explicit deny rules still deny.
     #[arg(long)]
     pub yolo: bool,
+    // gh #80 (pi's `-a`/`--approve`): trust the project folder for this
+    // process only (ADR-0039 session semantics). Refused with `-na`.
+    /// Trust this project for this run (session-scoped, never stored).
+    #[arg(short = 'a', long = "approve")]
+    pub approve: bool,
+    // gh #80 (pi's `-na`/`--no-approve`): ignore trust-gated project
+    // files for this process. Long-only with a `--na` alias: `-n`
+    // already skips context files, and clap would read `-na` as the
+    // `-n -a` cluster (the day `-na` meant approve-all plus skip-files
+    // is a day nobody wants). Refused with `-a`.
+    /// Treat this project as untrusted for this run, ignoring stored
+    /// trust and project-local files.
+    #[arg(long = "no-approve", visible_alias = "na")]
+    pub no_approve: bool,
     // `docs/headless.md`: the JSON-lines envelope.
     /// Print one JSON object per line, for scripts (deprecated alias
     /// for `--mode json`; flags are stable within a major).
@@ -384,6 +398,12 @@ pub struct CliFlags {
     /// key: it joins the flag, the `LCA_OFFLINE` env var, or nothing -
     /// never the files (an air gap is per-invocation, not stored).
     pub offline: bool,
+    /// `-a`/`--approve` (gh #80): trust this project for the run. Not a
+    /// config key: session trust is per-invocation, never the files.
+    pub approve: bool,
+    /// `--no-approve` (gh #80): treat this project as untrusted for the
+    /// run. Not a config key, same reason.
+    pub no_approve: bool,
     /// `--tools` (gh #67): the run's tool allowlist. Run-scoped like
     /// `--provider`, never the files.
     pub tools: Option<String>,
@@ -424,6 +444,8 @@ impl CliFlags {
             append_system_prompt: cli.append_system_prompt.clone(),
             no_context_files: cli.no_context_files,
             offline: cli.offline || crate::invoke::offline_env(),
+            approve: cli.approve,
+            no_approve: cli.no_approve,
             tools: cli.tools.clone(),
             exclude_tools: cli.exclude_tools.clone(),
             no_builtin_tools: cli.no_builtin_tools,

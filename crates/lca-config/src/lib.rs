@@ -17,7 +17,7 @@ mod values;
 pub use keys::{
     CODEBLOCK_BORDERS, DOUBLE_ESCAPE_ACTIONS, FULLSCREEN_EXIT_OUTPUTS, FULLSCREEN_SCROLLBARS,
     KNOWN_KEYS, MERMAID_MODES, PERMISSION_MODES, SHELL_TOOLS, THINKING_LEVELS,
-    THINKING_VISIBILITIES, TREE_FILTER_MODES, TypedValue, parse_typed,
+    THINKING_VISIBILITIES, TREE_FILTER_MODES, TRUST_DEFAULTS, TypedValue, parse_typed,
 };
 
 use keys::csv;
@@ -150,6 +150,9 @@ pub struct Config {
     ui_quiet_startup: String,
     ui_double_escape_action: String,
     ui_tree_filter_mode: String,
+    // gh #80 (pi's `defaultProjectTrust`): the fallback when no stored
+    // trust decision exists. User file or environment only.
+    trust_default_project: String,
     ui_autocomplete_max_visible: u64,
     ui_editor_padding_x: u64,
     ui_output_pad: u64,
@@ -247,6 +250,7 @@ impl Default for Config {
             // (LCA's tree lists sessions, nothing to filter).
             ui_double_escape_action: "tree".to_string(),
             ui_tree_filter_mode: "default".to_string(),
+            trust_default_project: "ask".to_string(),
             // gh #82: pi's display inventory in LCA naming. Defaults
             // match pi except where noted (show_progress stays on:
             // current behavior).
@@ -406,6 +410,7 @@ impl Config {
             "shell.path",
             "shell.command_prefix",
             "permissions.mode",
+            "trust.default_project",
             "ui.thinking",
             "skills.inject_matched",
             "markdown.codeblock_border",
@@ -425,6 +430,16 @@ impl Config {
         {
             let layer = read_table(path, "project file")?;
             config.apply_toml_layer(&layer, MergeSource::ProjectFile)?;
+            // gh #80 (FR-CFG-7): a project file that granted its own
+            // trust would defeat FR-PERM-9 - refused loudly, like any
+            // other key the host will not honor.
+            if config.sources.get("trust.default_project") == Some(&MergeSource::ProjectFile) {
+                return Err(ConfigError::InvalidValue {
+                    key: "trust.default_project".to_string(),
+                    label: "project file".to_string(),
+                    reason: "can only be set in the user file".to_string(),
+                });
+            }
             if let Some(toml::Value::Table(proposals)) =
                 table_value(&layer, "permissions.proposals")
             {
@@ -565,7 +580,7 @@ impl Config {
                     };
                     this.apply(key.to_string(), TypedValue::List(list), source)?;
                 }
-                "ui.double_escape_action" | "ui.tree_filter_mode" => {
+                "trust.default_project" | "ui.double_escape_action" | "ui.tree_filter_mode" => {
                     // The domain lives here too, not just in the
                     // flag/env parser: a file value skips that path.
                     let text = value.as_str().ok_or_else(|| {
@@ -573,6 +588,7 @@ impl Config {
                     })?;
                     let ok = match key {
                         "ui.double_escape_action" => DOUBLE_ESCAPE_ACTIONS.contains(&text),
+                        "trust.default_project" => TRUST_DEFAULTS.contains(&text),
                         _ => TREE_FILTER_MODES.contains(&text),
                     };
                     if !ok {
@@ -948,6 +964,7 @@ impl Config {
             "shell.path",
             "shell.command_prefix",
             "permissions.mode",
+            "trust.default_project",
             "ui.thinking",
             "skills.inject_matched",
             "markdown.codeblock_border",
@@ -1013,6 +1030,7 @@ impl Config {
             ("ui.quiet_startup", TypedValue::Text(v)) => self.ui_quiet_startup = v,
             ("ui.double_escape_action", TypedValue::Text(v)) => self.ui_double_escape_action = v,
             ("ui.tree_filter_mode", TypedValue::Text(v)) => self.ui_tree_filter_mode = v,
+            ("trust.default_project", TypedValue::Text(v)) => self.trust_default_project = v,
             ("ui.autocomplete_max_visible", TypedValue::Count(v)) => {
                 self.ui_autocomplete_max_visible = v
             }

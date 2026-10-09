@@ -109,6 +109,7 @@ Network and retry inventory (gh #83, pi's "Network and retries"): attempts and b
 | `markdown.code_block_indent` | short single-line string | `"  "` | Code block content indent (gh #82, pi's `markdown.codeBlockIndent`): prefixed to every rendered block line. Applies live. |
 | `markdown.mermaid` | `off`, `final`, or `streaming` | `streaming` | Mermaid rendering (gh #82, pi's `markdown.mermaid`): `off` keeps fences raw, `final` renders settled messages, `streaming` renders mid-stream too. Applies live. |
 | `thinking` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` | unset | The session's reasoning level, pi's vocabulary. Unset means the provider chooses; `/thinking` sets it live, and `--thinking <level>` sets it from the command line (a level outside this vocabulary is exit 2). `--model <pattern>:<level>` sets it for the session too, without persisting anything. It rides the request extras as `reasoning-effort`, which a provider honors where meaningful. |
+| `trust.default_project` | `ask`, `always`, or `never` | `ask` | The fallback project-trust behavior when no stored decision exists (gh #80, pi's `defaultProjectTrust`): `always` trusts for the session at startup, `never` skips the trust prompt and stays untrusted, `ask` prompts as before. User file or `LCA_TRUST_DEFAULT_PROJECT` only - a project file that granted its own trust would defeat FR-PERM-9, so one that tries is refused at load. `-a`/`--approve` (trust for the run) and `--no-approve`/`--na` (untrusted for the run) beat the fallback; the two refuse each other. An explicit `/trust` answer mid-run still wins.
 | `permissions.mode` | `ask` or `yolo` | `ask` | How permission prompts are answered (ADR-0042). `yolo` answers every prompt "always, for this exact pattern": the pattern is persisted and a `permission` record is written exactly as a human answer would write it. Explicit deny rules still deny. `--yolo` sets it for one process, beating any file. While it is on, the footer carries a `YOLO` line in the error role. Reads outside the workspace never prompt in either mode. |
 | `permissions.proposals` | table | empty | Project file only. Proposals with no force; see ADR-0006. |
 
@@ -172,8 +173,9 @@ traversal. A parent directory's `AGENTS.md` is prompt text from a
 project the user never approved, which is a prompt-injection surface
 the folder-trust model exists to close; the trust prompt already fires
 on first open, so this costs one keypress, not the feature. Project
-files load when the project is trusted at startup (trust granted
-mid-session applies from the next session).
+files load when the project is trusted at startup - session trust
+counts, so `-a`, an `always` fallback, and a mid-session `/trust`
+followed by `/reload` all open them without a restart.
 
 ## Prompt templates
 

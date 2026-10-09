@@ -390,6 +390,10 @@ pub(crate) async fn setup(
             return Err(exit::INTERNAL);
         }
     };
+    // gh #80: CLI trust overrides land before the config merge, so the
+    // project-file gate sees them.
+    let trust_default = crate::trust_default_fallback();
+    crate::apply_startup_trust(&mut lock(&grants), cwd, flags, &trust_default);
     let config = match load_config_flags(cwd, &lock(&grants), true, yolo, flags) {
         Ok(config) => config,
         Err(err) => {

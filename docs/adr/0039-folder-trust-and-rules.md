@@ -108,6 +108,15 @@ The analyzer plus rules composes better and a user can still add
   damage itself and run its own build code; the residual risk is the same
   one pi's folder model accepts.
 
+## Addendum (2026-10-10, gh #80)
+
+Session trust now opens the project file at load: `-a`, an `always`
+`trust.default_project`, and a mid-session `/trust` followed by
+`/reload` all apply project files without a restart. The "needs a
+restart" limitation above is retired for reload-or-later flows; a
+trust granted mid-turn still applies to the next load, never the
+running turn.
+
 ## Revisit conditions
 
 - A real command the analyzer refuses that a user reasonably expects to be

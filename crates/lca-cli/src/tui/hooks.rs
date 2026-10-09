@@ -316,6 +316,15 @@ impl Ui {
                 let cwd = self.cwd.clone();
                 let registry = self.registry().clone();
                 Some(Arc::new(move || {
+                    // gh #80: a startup override settles the question
+                    // before any vote or prompt: forced distrust and a
+                    // session refusal both mean no ask.
+                    {
+                        let store = grants.lock().unwrap_or_else(|p| p.into_inner());
+                        if store.is_force_untrusted() || store.is_refused_for_session(&cwd) {
+                            return false;
+                        }
+                    }
                     // Gh #45's vote runs before the operator is asked:
                     // the first yes/no decides (remembered or not),
                     // undecided falls through to the prompt below.
@@ -362,6 +371,9 @@ impl Ui {
                                 return format!("could not save trust: {err}");
                             }
                             if trusted {
+                                store.set_force_untrusted(false);
+                            }
+                            if trusted {
                                 format!("trusted {} (remembered)", cwd.display())
                             } else {
                                 format!("{} marked untrusted", cwd.display())
@@ -369,6 +381,7 @@ impl Ui {
                         }
                         lca_ui::state::TrustChoice::Session(trusted) => {
                             if trusted {
+                                store.set_force_untrusted(false);
                                 store.trust_for_session(&cwd);
                                 format!("trusted {} for this session", cwd.display())
                             } else {

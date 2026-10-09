@@ -115,3 +115,46 @@ fn rules_are_listed_by_scope() {
     assert_eq!(store.rules(&project).len(), 1);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// Verifies: FR-PERM-28 (`-na` treats the project as untrusted for the
+// process, ignoring stored trust until lifted)
+#[test]
+fn forced_distrust_ignores_stored_trust_until_lifted() {
+    let root = scratch("force");
+    let project = root.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut store = GrantStore::open(&root.join("grants.json")).unwrap();
+    store.set_trusted(&project, true).unwrap();
+    assert!(store.is_trusted_here(&project));
+    store.set_force_untrusted(true);
+    assert!(!store.is_trusted(&project), "stored trust ignored");
+    assert!(!store.is_trusted_here(&project), "session view too");
+    assert!(
+        !store.is_allowed(&project, &shell(&project, "cargo build")),
+        "workspace commands review again"
+    );
+    store.set_force_untrusted(false);
+    assert!(store.is_trusted_here(&project), "lifting restores trust");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Verifies: FR-PERM-28 (a session refusal suppresses the ask without
+// touching stored state)
+#[test]
+fn a_session_refusal_suppresses_the_ask() {
+    let root = scratch("refuse");
+    let project = root.join("proj");
+    let other = root.join("other");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let mut store = GrantStore::open(&root.join("grants.json")).unwrap();
+    assert!(!store.is_refused_for_session(&project));
+    store.distrust_for_session(&project);
+    assert!(store.is_refused_for_session(&project));
+    assert!(
+        !store.is_refused_for_session(&other),
+        "scoped to the project"
+    );
+    assert!(!store.is_trusted_here(&project), "still untrusted");
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -178,6 +178,11 @@ impl Config {
         &self.ui_tree_filter_mode
     }
 
+    /// The fallback project-trust behavior (gh #80, FR-CFG-7).
+    pub fn trust_default_project(&self) -> &str {
+        &self.trust_default_project
+    }
+
     /// Autocomplete popup rows, 3-20 (gh #82, pi's
     /// `autocompleteMaxVisible`).
     pub fn ui_autocomplete_max_visible(&self) -> u64 {
@@ -554,6 +559,7 @@ impl Config {
                     .clone()
                     .unwrap_or_else(|| "ask".to_string()),
             ),
+            ("trust.default_project", self.trust_default_project.clone()),
             (
                 "markdown.codeblock_border",
                 self.markdown_codeblock_border.clone(),
