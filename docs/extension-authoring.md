@@ -179,6 +179,23 @@ validation, hooks, and permission checks as model-issued calls, at
 most eight levels deep, and never reject: unknown tools, blocks, and
 failures all arrive as error results.
 
+## Bridging an MCP server (sketch)
+
+An external MCP server joins as a `tool-catalog` extension
+(ADR-0045, `extensions/mcp`): spawn it through `process`, speak
+newline-delimited JSON-RPC over its pipes (`initialize`, the
+`notifications/initialized` handshake, `tools/list`, `tools/call`),
+and serve each tool `direct` under pi's `mcp__<server>__<tool>` name
+with the server's annotations carried across. One long-lived child
+per server; killing the bridge kills the tree. The spawn passes the
+same permission prompt as a model-requested command, so a declined
+server never starts and the denial is recorded - per-call arguments
+flow to an already-approved server, and every call runs through the
+turn's hooks like any other extension tool. The sandboxed twin reads
+its server list from the `state` key `mcp-servers`. OAuth servers,
+remote transports, resources, and `/mcp` management are later
+phases; this sketch grows into their docs.
+
 ## Other worlds
 
 The `command` world adds a slash command. The spec function returns a name, an argument hint, and a completion mode. The invoke function takes the argument string and returns an effect: insert text into the input, submit a prompt, show a widget, or do nothing.

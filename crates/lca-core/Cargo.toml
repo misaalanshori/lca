@@ -28,6 +28,7 @@ lca-testkit = { path = "../lca-testkit" }
 lca-ext-host = { path = "../lca-ext-host" }
 lca-ext-native = { path = "../lca-ext-native" }
 conformance = { path = "../../extensions/conformance" }
+mcp = { path = "../../extensions/mcp" }
 serde_json.workspace = true
 
 [lints]

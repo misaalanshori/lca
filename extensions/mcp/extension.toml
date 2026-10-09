@@ -1,0 +1,14 @@
+name = "mcp"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["tool-catalog"]
+description = "MCP bridge (gh #53 phase 1): external MCP servers over stdio, one tool suite."
+license = "Apache-2.0"
+
+# The bridge spawns each configured server in the workspace scope; the
+# spawn passes the same permission prompt as a model-requested command.
+[capabilities.fs]
+workspace = "read"
+
+[capabilities.process]
+reason = "Runs configured MCP servers over stdio."

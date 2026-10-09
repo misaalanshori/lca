@@ -7,6 +7,14 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **MCP bridge phase 1 (gh #53).** ADR-0045 decides extension-bridge
+over host-service: `extensions/mcp` serves external stdio MCP servers
+as a `tool-catalog` suite (pi's `mcp__<server>__<tool>` names,
+`direct`, annotations carried). Each spawn passes the permission
+prompt; a denial is recorded and the server never starts. A
+one-tool echo fixture plus a scripted turn prove it end to end.
+OAuth/remote/resources/management stay explicitly out (later
+phases).
 - **Mouse keystone + scrollbar drag (gh #164).** SGR-1006 normalizes
   to `MouseEvent` (Down/Up/Move/Wheel + modifiers, 1003 hover) with
   a `MouseRegion` hit-test table (no component tree). The scrollbar

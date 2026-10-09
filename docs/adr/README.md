@@ -63,6 +63,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0042 | Yolo mode, and the read-only fatigue cut | Accepted | Real-world driving |
 | 0043 | The unstable release line | Accepted | Unstable line |
 | 0044 | No dynamic CLI flags or shortcuts in the extension ABI | Accepted | Phase-4B |
+| 0045 | MCP arrives as an extension bridge, not a host service | Accepted | gh #53 phase 1 |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
 
