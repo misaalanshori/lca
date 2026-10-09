@@ -117,6 +117,13 @@ pub struct Chat {
     /// a release on the same item confirms it, anywhere else just moves
     /// the highlight. `None` means no press owns the gesture.
     pub(crate) picker_press: Option<usize>,
+    /// The painted picker window (gh #226): the `(start, end)` item
+    /// range plus the content height the last frame's rolling viewport
+    /// showed. The mouse hit test reads it back, so clicks land on what
+    /// is actually drawn — never a recomputed guess that wrapping could
+    /// desync. `(0, usize::MAX, 0)` before the first paint (the mouse
+    /// falls back to the full list then).
+    pub(crate) picker_window: std::cell::Cell<(usize, usize, u16)>,
     /// Whether the pointer hovers the drawer tab (gh #207): the frame
     /// paints it in accent while set.
     pub drawer_hover: bool,
@@ -276,6 +283,7 @@ impl Chat {
             scrollbar_hover: false,
             scroll_drag: None,
             picker_press: None,
+            picker_window: std::cell::Cell::new((0, usize::MAX, 0)),
             drawer_hover: false,
             tooltip: None,
             hover_at: None,

@@ -83,6 +83,9 @@ pub(super) fn legacy_sequence_key_id(data: &str) -> Option<&'static str> {
         "\x1bOe" => "ctrl+clear",
         "\x1b[e" => "shift+clear",
         "\x1b[2~" => "insert",
+        "\x1b[1~" | "\x1b[7~" => "home",
+        "\x1b[4~" => "end",
+        "\x1b[3~" => "delete",
         "\x1b[2$" => "shift+insert",
         "\x1b[2^" => "ctrl+insert",
         "\x1b[3$" => "shift+delete",
@@ -158,6 +161,16 @@ mod tests {
         assert_eq!(legacy_sequence_key_id("\x1b[2~"), Some("insert"));
         assert_eq!(legacy_sequence_key_id("\x1bOa"), Some("ctrl+up"));
         assert_eq!(legacy_sequence_key_id("nope"), None);
+    }
+
+    // Verifies: gh #226 - the tilde navigation sequences terminals
+    // actually send decode (tmux sends `\x1b[4~` for End).
+    #[test]
+    fn tilde_navigation_sequences_decode() {
+        assert_eq!(legacy_sequence_key_id("\x1b[1~"), Some("home"));
+        assert_eq!(legacy_sequence_key_id("\x1b[7~"), Some("home"));
+        assert_eq!(legacy_sequence_key_id("\x1b[4~"), Some("end"));
+        assert_eq!(legacy_sequence_key_id("\x1b[3~"), Some("delete"));
     }
 
     #[test]

@@ -53,10 +53,55 @@ pub fn overlay_box_selected(
     overlay_box_placed(base, width, height, title, body, theme, selected, &options);
 }
 
+/// The picker's layout options: one rule for the painter and the
+/// mouse hit box, so they can never disagree (gh #167's comment
+/// made flesh - the mouse builds these through this helper too).
+pub fn picker_overlay_options(
+    height: u16,
+    above_rows: usize,
+) -> lca_tui::engine::core::OverlayOptions {
+    lca_tui::engine::core::OverlayOptions {
+        width: Some(lca_tui::engine::core::SizeValue::Percent(80)),
+        min_width: Some(24),
+        max_height: Some(lca_tui::engine::core::SizeValue::Abs(height)),
+        margin: 2,
+        anchor: Some(lca_tui::engine::core::Anchor::BottomCenter),
+        offset_y: -(i32::try_from(above_rows).unwrap_or(i32::MAX)),
+        ..Default::default()
+    }
+}
+
+/// The rolling window over a picker's items (gh #226, pi's
+/// `getVisibleRange` in `select-list.ts`): `selected` centered when
+/// there is room, clamped at both ends. Pure, so the painter and the
+/// mouse derive the same window from the same inputs.
+pub fn picker_window(
+    items_len: usize,
+    selected: Option<usize>,
+    max_visible: usize,
+) -> (usize, usize) {
+    let max_visible = max_visible.max(1);
+    if items_len == 0 {
+        return (0, 0);
+    }
+    let selected = selected.unwrap_or(0).min(items_len.saturating_sub(1));
+    let half = max_visible / 2;
+    let start = selected
+        .saturating_sub(half)
+        .min(items_len.saturating_sub(max_visible));
+    let end = (start + max_visible).min(items_len);
+    (start, end)
+}
+
 /// [`overlay_box_selected`] anchored above the composer (gh #16): the
 /// box's bottom sits `above_rows` rows above the viewport bottom - pi's
 /// bottom-anchored picker shape - so a tall notice is overlaid, never
 /// stacked under.
+///
+/// Tall bodies roll (gh #226): the last two rows are the picker's
+/// pinned hint rows, everything above them windows around `selected`,
+/// and the frame always closes with scroll counts. Returns the painted
+/// `(start, end, content_height)` the mouse hit test reads back.
 // The eight inputs are the picker's contract plus its anchor offset; a
 // parameter struct would only rename them.
 #[allow(clippy::too_many_arguments)]
@@ -69,17 +114,114 @@ pub fn overlay_box_picker(
     theme: &Theme,
     selected: Option<usize>,
     above_rows: usize,
-) {
-    let options = lca_tui::engine::core::OverlayOptions {
-        width: Some(lca_tui::engine::core::SizeValue::Percent(80)),
-        min_width: Some(24),
-        max_height: Some(lca_tui::engine::core::SizeValue::Abs(height)),
-        margin: 2,
-        anchor: Some(lca_tui::engine::core::Anchor::BottomCenter),
-        offset_y: -(i32::try_from(above_rows).unwrap_or(i32::MAX)),
-        ..Default::default()
+) -> (usize, usize, u16) {
+    let options = picker_overlay_options(height, above_rows);
+    // The granted height bounds the window: two frame rows plus the
+    // two pinned hint rows, at least one item row visible.
+    let content_height = u16::try_from(body.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let rect = resolve_overlay_layout(&options, width, height, content_height);
+    let inner = (rect.width as usize).saturating_sub(4);
+    let items_len = body.len().saturating_sub(2);
+    let max_items = (rect.height as usize).saturating_sub(4).max(1);
+    let (mut start, mut end) = picker_window(items_len, selected, max_items);
+    // Wrap the window's rows; the selected row fills first so it is
+    // always visible, then the rows above and below split the rest.
+    let wrap_row =
+        |index: usize| -> Vec<String> { wrap_text_with_ansi(&linkify_urls(&body[index]), inner) };
+    let mut visible: Vec<(usize, String)> = Vec::new();
+    if items_len > 0 {
+        let selected_row = selected
+            .filter(|s| *s < items_len)
+            .unwrap_or(start.min(items_len.saturating_sub(1)));
+        // Wrap once per row; take lines around the selected row with
+        // leftovers flowing both ways, so a short side never starves
+        // the other. A partially shown row still maps (its owner rides
+        // every line).
+        let rows: Vec<Vec<String>> = (start..end).map(wrap_row).collect();
+        let at = |index: usize| &rows[index - start];
+        let mut selected_lines = at(selected_row).clone();
+        let mut budget = max_items;
+        if selected_lines.len() > budget {
+            selected_lines.truncate(budget);
+        }
+        budget -= selected_lines.len();
+        let above_lines: usize = (start..selected_row).map(|index| at(index).len()).sum();
+        let below_lines: usize = ((selected_row + 1)..end).map(|index| at(index).len()).sum();
+        let mut above_take = (above_lines).min(budget - (below_lines).min(budget / 2));
+        let below_take = (below_lines).min(budget - above_take);
+        above_take += (above_lines - above_take).min(budget - above_take - below_take);
+        let mut above: Vec<(usize, String)> = Vec::new();
+        let mut take = above_take;
+        for index in (start..selected_row).rev() {
+            for line in at(index).iter().rev() {
+                if take == 0 {
+                    break;
+                }
+                above.push((index, line.clone()));
+                take -= 1;
+            }
+            if take == 0 {
+                break;
+            }
+        }
+        above.reverse();
+        let mut below: Vec<(usize, String)> = Vec::new();
+        let mut take = below_take;
+        for index in (selected_row + 1)..end {
+            for line in at(index) {
+                if take == 0 {
+                    break;
+                }
+                below.push((index, line.clone()));
+                take -= 1;
+            }
+            if take == 0 {
+                break;
+            }
+        }
+        visible.extend(above);
+        visible.extend(selected_lines.into_iter().map(|line| (selected_row, line)));
+        visible.extend(below);
+        if let Some((first, _)) = visible.first() {
+            start = *first;
+        }
+        if let Some((last, _)) = visible.last() {
+            end = last + 1;
+        }
+    }
+    // The hint rows never scroll: items, then the pinned tail.
+    let mut windowed: Vec<(usize, String)> = visible;
+    for (offset, line) in body.iter().enumerate().skip(items_len).take(2) {
+        windowed.push((offset, line.clone()));
+    }
+    let title = if start > 0 {
+        format!("{title}  ▲ {start} more")
+    } else {
+        title.to_string()
     };
-    overlay_box_placed(base, width, height, title, body, theme, selected, &options);
+    let bottom_note = if end < items_len {
+        Some(format!("▼ {} more", items_len - end))
+    } else {
+        None
+    };
+    // Re-resolve so the box hugs the windowed content; the anchor is
+    // the same, so the mouse derives the identical rect.
+    let windowed_height = u16::try_from(windowed.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let rect = resolve_overlay_layout(&options, width, height, windowed_height);
+    overlay_box_placed_windowed(
+        base,
+        &rect,
+        &title,
+        &windowed,
+        theme,
+        selected,
+        bottom_note.as_deref(),
+    );
+    (start, end, windowed_height)
 }
 
 /// The shared box painter behind [`overlay_box_selected`] and
@@ -104,28 +246,67 @@ fn overlay_box_placed(
 
     // A full frame: pi's selectors draw complete boxes (DynamicBorder),
     // and a left-only border reads as a half-drawn frame.
-    let mut box_lines: Vec<String> = Vec::new();
-    // Which body row each box row belongs to (`usize::MAX` = frame).
-    let mut owner: Vec<usize> = Vec::new();
-    let title_w = visible_width(title);
-    box_lines.push(format!(
-        "╭─ {title} {}╮",
-        "─".repeat(w.saturating_sub(title_w + 5))
-    ));
-    owner.push(usize::MAX);
+    let mut box_lines: Vec<(usize, String)> = Vec::new();
     for (index, line) in body.iter().enumerate() {
         // gh #178: a raw URL linkifies before the wrap, so every wrapped
         // segment re-opens the full link and clicks open the whole URL.
         for wrapped in wrap_text_with_ansi(&linkify_urls(line), inner) {
             let pad = inner.saturating_sub(visible_width(&wrapped));
-            box_lines.push(format!("│ {wrapped}{} │", " ".repeat(pad)));
-            owner.push(index);
+            box_lines.push((index, format!("│ {wrapped}{} │", " ".repeat(pad))));
         }
     }
-    box_lines.push(format!("╰{}╯", "─".repeat(w.saturating_sub(2))));
+    overlay_box_placed_windowed(base, &rect, title, &box_lines, theme, selected, None);
+}
+
+/// Fit one frame caption (`title` or the scroll note) into the box
+/// width, so an indicator never pushes the border off-screen.
+fn fit_caption(text: &str, inner: usize) -> String {
+    let plain = text.to_string();
+    if visible_width(&plain) <= inner {
+        return plain;
+    }
+    lca_tui::engine::text::truncate_to_width(&plain, inner, "…", false)
+}
+
+/// The shared painter: a closed frame around pre-wrapped `(owner,
+/// line)` rows. `owner` is the body index for selection and mouse
+/// mapping (`usize::MAX` never matches a selection).
+fn overlay_box_placed_windowed(
+    base: &mut [String],
+    rect: &lca_tui::engine::core::Rect,
+    title: &str,
+    box_lines: &[(usize, String)],
+    theme: &Theme,
+    selected: Option<usize>,
+    bottom_note: Option<&str>,
+) {
+    let w = rect.width as usize;
+    let inner = w.saturating_sub(4);
+    // Which body row each painted row belongs to (`usize::MAX` = frame).
+    let mut owner: Vec<usize> = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+    let title = fit_caption(title, inner);
+    let title_w = visible_width(&title);
+    lines.push(format!(
+        "╭─ {title} {}╮",
+        "─".repeat(w.saturating_sub(title_w + 5))
+    ));
+    owner.push(usize::MAX);
+    for (index, line) in box_lines {
+        lines.push(line.clone());
+        owner.push(*index);
+    }
+    let bottom = match bottom_note {
+        Some(note) => {
+            let note = fit_caption(note, inner);
+            let note_w = visible_width(&note);
+            format!("╰─ {note} {}╯", "─".repeat(w.saturating_sub(note_w + 5)))
+        }
+        None => format!("╰{}╯", "─".repeat(w.saturating_sub(2))),
+    };
+    lines.push(bottom);
     owner.push(usize::MAX);
 
-    let box_h = box_lines.len().min(height as usize);
     let col = rect.col as usize;
     let top = rect.row as usize;
     // R4: the diff renderer writes only the spans that changed, so a cell
@@ -137,7 +318,7 @@ fn overlay_box_placed(
     let border = theme.role(Role::Border);
     let accent = theme.role(Role::Accent);
     let selected_bg = theme.bg(Role::SelectedBg);
-    for (i, line) in box_lines.iter().take(box_h).enumerate() {
+    for (i, line) in lines.iter().enumerate() {
         let row = top + i;
         if let Some(base_line) = base.get_mut(row) {
             let before = slice_by_column(base_line, 0, col, false);
@@ -418,5 +599,126 @@ mod tests {
             !other.contains("48;2;58;58;74"),
             "only the selected row is highlighted: {other:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod picker_window_tests {
+    use super::*;
+    use lca_tui::engine::text::strip_terminal_sequences;
+
+    // Verifies: gh #226 - the window centers `selected` with room,
+    // clamps at both ends, and stays empty-safe.
+    #[test]
+    fn the_window_centers_and_clamps() {
+        assert_eq!(picker_window(50, Some(25), 16), (17, 33));
+        assert_eq!(picker_window(50, Some(2), 16), (0, 16));
+        assert_eq!(picker_window(50, Some(49), 16), (34, 50));
+        assert_eq!(picker_window(5, Some(4), 16), (0, 5));
+        assert_eq!(picker_window(0, None, 16), (0, 0));
+        assert_eq!(picker_window(50, None, 16), (0, 16));
+    }
+
+    fn tall_body(items: usize) -> Vec<String> {
+        let mut body: Vec<String> = (0..items).map(|index| format!("item {index:02}")).collect();
+        body.push(String::new());
+        body.push("hint row".to_string());
+        body
+    }
+
+    fn stripped(base: &[String]) -> Vec<String> {
+        base.iter()
+            .map(|line| strip_terminal_sequences(line))
+            .collect()
+    }
+
+    // Verifies: gh #226 - a 50-item picker on an 80x24 pane draws a
+    // closed frame (both borders), the hint row, scroll counts, and
+    // the selected row highlighted.
+    #[test]
+    fn a_tall_picker_keeps_frame_hints_and_selection() {
+        let mut base = vec![".".repeat(80); 24];
+        let (start, end, _) = overlay_box_picker(
+            &mut base,
+            80,
+            24,
+            "models",
+            &tall_body(50),
+            &Theme::plain(),
+            Some(25),
+            3,
+        );
+        assert!(
+            start > 0 && end < 50,
+            "windowed, not clipped: {start}..{end}"
+        );
+        let text = stripped(&base).join("\n");
+        assert!(text.contains("╭─"), "top border draws");
+        assert!(text.contains("▲"), "scroll-up indicator draws: {text}");
+        assert!(text.contains("▼"), "scroll-down indicator draws: {text}");
+        assert!(text.contains("╰─"), "bottom border draws");
+        assert!(text.contains("hint row"), "the pinned hint shows");
+        assert!(text.contains("item 25"), "the selected row shows");
+    }
+
+    // Verifies: gh #226 - at the top there is no upward indicator and
+    // the first rows show; at the bottom the reverse.
+    #[test]
+    fn the_indicators_track_the_window_edges() {
+        let mut base = vec![".".repeat(80); 24];
+        overlay_box_picker(
+            &mut base,
+            80,
+            24,
+            "models",
+            &tall_body(50),
+            &Theme::plain(),
+            Some(0),
+            3,
+        );
+        let text = stripped(&base).join("\n");
+        assert!(!text.contains("▲"), "nothing above: {text}");
+        assert!(text.contains("▼"), "plenty below");
+        assert!(text.contains("item 00"), "starts at the top");
+
+        let mut base = vec![".".repeat(80); 24];
+        overlay_box_picker(
+            &mut base,
+            80,
+            24,
+            "models",
+            &tall_body(50),
+            &Theme::plain(),
+            Some(49),
+            3,
+        );
+        let text = stripped(&base).join("\n");
+        assert!(text.contains("▲"), "plenty above");
+        assert!(!text.contains("▼"), "nothing below: {text}");
+        assert!(text.contains("item 49"), "ends at the bottom");
+    }
+
+    // Verifies: gh #226 - a short picker paints whole with a plain
+    // frame (no indicators, no window).
+    #[test]
+    fn a_short_picker_paints_whole() {
+        let mut base = vec![".".repeat(80); 24];
+        let (start, end, _) = overlay_box_picker(
+            &mut base,
+            80,
+            24,
+            "models",
+            &tall_body(3),
+            &Theme::plain(),
+            Some(1),
+            3,
+        );
+        assert_eq!((start, end), (0, 3));
+        let text = stripped(&base).join("\n");
+        assert!(
+            !text.contains("▲") && !text.contains("▼"),
+            "no indicators: {text}"
+        );
+        assert!(text.contains("item 02"), "every row shows");
     }
 }

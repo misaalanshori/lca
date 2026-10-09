@@ -54,9 +54,11 @@ impl Chat {
         // The hint rows sit past the caller's body, so its index still lands
         // on the selected row.
         let above = self.composer_height(width);
-        overlay_box_picker(
+        let window: (usize, usize, u16) = overlay_box_picker(
             viewport, width, height, title, &body, theme, selected, above,
         );
+        // The mouse hit test reads back exactly what this frame drew.
+        self.picker_window.set(window);
     }
 }
 

@@ -578,11 +578,12 @@ fn handle_input(
             }
             // Gh #167: a wheel inside the picker box walks the
             // selection (pi's select-list wheel path), never the
-            // transcript behind it.
+            // transcript behind it. One shared seam with the
+            // keyboard paging (gh #226).
             if let Some(hit) = chat.picker_hit(col, row, width, height)
                 && !matches!(hit, PickerHit::Backdrop)
             {
-                let _ = chat.handle_picker_key("", Some(if delta < 0 { "up" } else { "down" }));
+                chat.wheel_picker(delta.clamp(-1, 1) as i8);
                 return InputResult::Continue;
             }
             let row = mouse.y.saturating_sub(1);

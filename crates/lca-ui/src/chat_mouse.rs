@@ -12,7 +12,7 @@ use super::chat_pickers::TRUST_OPTIONS;
 use super::ext_widgets::{ButtonHit, widget_render};
 use super::render::{TOOLTIP_MAX_WIDTH, paint_tooltip, tooltip_lines, tooltip_place};
 use crate::transcript::EntryHit;
-use lca_tui::engine::core::{Anchor, OverlayOptions, Rect, SizeValue, resolve_overlay_layout};
+use lca_tui::engine::core::{OverlayOptions, Rect, SizeValue, resolve_overlay_layout};
 use lca_tui::engine::keybindings::key_text;
 use lca_tui::engine::text::visible_width;
 use std::time::Instant;
@@ -484,6 +484,11 @@ impl Chat {
     /// chrome. `None` when no picker is open. Body rows are assumed
     /// unwrapped - a picker row past ~90 cells wraps, and its
     /// continuation hits as the next row.
+    ///
+    /// The map is sliced to the painted rolling window (gh #226): the
+    /// painter stored `(start, end)` on the last frame, so the hit test
+    /// reads back what is drawn. The rect re-resolves over the windowed
+    /// content through the same options the painter uses.
     pub(crate) fn picker_layout(
         &self,
         width: u16,
@@ -546,18 +551,20 @@ impl Chat {
         // The same options `overlay_box_picker` paints with, so the
         // hit box and the painted box are one rule.
         let above = self.composer_height(width);
-        let options = OverlayOptions {
-            width: Some(SizeValue::Percent(80)),
-            min_width: Some(24),
-            max_height: Some(SizeValue::Abs(height)),
-            margin: 2,
-            anchor: Some(Anchor::BottomCenter),
-            offset_y: -i32::try_from(above).unwrap_or(i32::MAX),
-            ..Default::default()
+        let options = super::render::picker_overlay_options(height, above);
+        let (start, end, content) = self.picker_window.get();
+        let start = start.min(map.len());
+        let end = end.clamp(start, map.len());
+        // The painter's own content height when this frame drew the
+        // window, else the full list (the painter's arithmetic for an
+        // unwindowed box).
+        let content = if content == 0 {
+            u16::try_from(map.len().saturating_add(4)).unwrap_or(u16::MAX)
+        } else {
+            content
         };
-        let content = u16::try_from(map.len().saturating_add(4)).unwrap_or(u16::MAX);
         let rect = resolve_overlay_layout(&options, width, height, content);
-        Some((rect, map))
+        Some((rect, map[start..end].to_vec()))
     }
 
     /// Map a viewport cell to the open picker (gh #167): items
@@ -612,6 +619,72 @@ impl Chat {
             picker.selected = item.min(picker.rows.len().saturating_sub(1));
         } else if let Some(picker) = self.model_picker.as_mut() {
             picker.selected = item.min(picker.matches.len().saturating_sub(1));
+        }
+    }
+
+    /// Roll the wheel over the open picker (gh #226, pi's
+    /// select-list wheel): one row per tick, the rolling window
+    /// following `selected` on the next frame. Silent when no picker
+    /// is open.
+    pub fn wheel_picker(&mut self, delta: i8) {
+        fn step(selected: usize, max: usize, delta: i8) -> usize {
+            (selected as i64 + delta as i64).clamp(0, max as i64) as usize
+        }
+        if let Some(picker) = self.tree_picker.as_mut() {
+            picker.selected = step(
+                picker.selected,
+                picker.entries.len().saturating_sub(1),
+                delta,
+            );
+        } else if let Some(picker) = self.resume_picker.as_mut() {
+            picker.selected = step(
+                picker.selected,
+                picker.matches.len().saturating_sub(1),
+                delta,
+            );
+        } else if let Some(picker) = self.fork_picker.as_mut() {
+            picker.selected = step(
+                picker.selected,
+                picker.messages.len().saturating_sub(1),
+                delta,
+            );
+        } else if let Some(picker) = self.scoped_models_picker.as_mut() {
+            picker.selected = step(picker.selected, picker.rows.len().saturating_sub(1), delta);
+        } else if let Some(picker) = self.grants_picker.as_mut() {
+            picker.selected = step(
+                picker.selected,
+                picker.entries.len().saturating_sub(1),
+                delta,
+            );
+        } else if self.theme_picker.is_some() {
+            let selected = step(
+                self.theme_picker
+                    .as_ref()
+                    .map(|picker| picker.selected)
+                    .unwrap_or(0),
+                self.theme_names.len().saturating_sub(1),
+                delta,
+            );
+            if let Some(picker) = self.theme_picker.as_mut() {
+                picker.selected = selected;
+            }
+            self.preview_theme(selected);
+        } else if let Some(picker) = self.trust_picker.as_mut() {
+            picker.selected = step(
+                picker.selected,
+                TRUST_OPTIONS.len().saturating_sub(1),
+                delta,
+            );
+        } else if let Some(picker) = self.thinking_picker.as_mut() {
+            picker.selected = step(picker.selected, picker.offered.len(), delta);
+        } else if let Some(picker) = self.settings_picker.as_mut() {
+            picker.selected = step(picker.selected, picker.rows.len().saturating_sub(1), delta);
+        } else if let Some(picker) = self.model_picker.as_mut() {
+            picker.selected = step(
+                picker.selected,
+                picker.matches.len().saturating_sub(1),
+                delta,
+            );
         }
     }
 

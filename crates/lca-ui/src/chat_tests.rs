@@ -1113,6 +1113,10 @@ mod tooltip_tests;
 mod overlay_tests;
 
 #[cfg(test)]
+#[path = "chat_picker_scroll_tests.rs"]
+mod picker_scroll_tests;
+
+#[cfg(test)]
 #[path = "chat_viewport_tests.rs"]
 mod viewport_tests;
 

@@ -97,6 +97,27 @@ impl Chat {
     }
 
     /// The open picker's key handling, if any (returns `None` when no
+    /// Page/home/end for pickers (gh #226): the rolling window follows
+    /// `selected`, so paging is a longer step. The stride matches the
+    /// dialog list's ten rows.
+    pub(super) const PICKER_PAGE_STRIDE: usize = 10;
+
+    /// Move `selected` for a paging key, clamped into `0..=max`.
+    /// `None` for any other key (the caller's match owns those).
+    pub(super) fn page_selected(selected: usize, max: usize, key: &str) -> Option<usize> {
+        // The parse layer yields camelCase for the tilde sequences
+        // (`pageUp`/`pageDown`) and lowercase elsewhere: accept both.
+        match key {
+            "pageup" | "pageUp" => Some(selected.saturating_sub(Self::PICKER_PAGE_STRIDE)),
+            "pagedown" | "pageDown" => {
+                Some(selected.saturating_add(Self::PICKER_PAGE_STRIDE).min(max))
+            }
+            "home" => Some(0),
+            "end" => Some(max),
+            _ => None,
+        }
+    }
+
     /// picker is open, so the editor path runs).
     pub(super) fn handle_picker_key(&mut self, data: &str, key: Option<&str>) -> Option<Action> {
         // The `/tree` selector owns the keyboard while open (FR-UI-16).
@@ -113,6 +134,18 @@ impl Chat {
                 }
                 Some("down") | Some("j") => {
                     picker.selected = (picker.selected + 1).min(picker.entries.len() - 1);
+                    self.tree_picker = Some(picker);
+                }
+                Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
+                    if let Some(next) = key.and_then(|key| {
+                        Self::page_selected(
+                            picker.selected,
+                            picker.entries.len().saturating_sub(1),
+                            key,
+                        )
+                    }) {
+                        picker.selected = next;
+                    }
                     self.tree_picker = Some(picker);
                 }
                 _ => self.tree_picker = Some(picker),
@@ -151,6 +184,18 @@ impl Chat {
                         (picker.selected + 1).min(picker.entries.len().saturating_sub(1));
                     self.grants_picker = Some(picker);
                 }
+                Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
+                    if let Some(next) = key.and_then(|key| {
+                        Self::page_selected(
+                            picker.selected,
+                            picker.entries.len().saturating_sub(1),
+                            key,
+                        )
+                    }) {
+                        picker.selected = next;
+                    }
+                    self.grants_picker = Some(picker);
+                }
                 _ => self.grants_picker = Some(picker),
             }
             return Some(Action::Continue);
@@ -186,6 +231,19 @@ impl Chat {
                     self.preview_theme(picker.selected);
                     self.theme_picker = Some(picker);
                 }
+                Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
+                    if let Some(next) = key.and_then(|key| {
+                        Self::page_selected(
+                            picker.selected,
+                            self.theme_names.len().saturating_sub(1),
+                            key,
+                        )
+                    }) {
+                        picker.selected = next;
+                    }
+                    self.preview_theme(picker.selected);
+                    self.theme_picker = Some(picker);
+                }
                 _ => self.theme_picker = Some(picker),
             }
             return Some(Action::Continue);
@@ -213,6 +271,14 @@ impl Chat {
                 }
                 Some("down") | Some("j") => {
                     picker.selected = (picker.selected + 1).min(TRUST_OPTIONS.len() - 1);
+                    self.trust_picker = Some(picker);
+                }
+                Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
+                    if let Some(next) = key.and_then(|key| {
+                        Self::page_selected(picker.selected, TRUST_OPTIONS.len() - 1, key)
+                    }) {
+                        picker.selected = next;
+                    }
                     self.trust_picker = Some(picker);
                 }
                 _ => self.trust_picker = Some(picker),
@@ -269,6 +335,14 @@ impl Chat {
                 }
                 Some("down") | Some("j") => {
                     picker.selected = (picker.selected + 1).min(picker.offered.len());
+                    self.thinking_picker = Some(picker);
+                }
+                Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
+                    if let Some(next) = key.and_then(|key| {
+                        Self::page_selected(picker.selected, picker.offered.len(), key)
+                    }) {
+                        picker.selected = next;
+                    }
                     self.thinking_picker = Some(picker);
                 }
                 _ => self.thinking_picker = Some(picker),
@@ -335,6 +409,18 @@ impl Chat {
                 Some("down") => {
                     picker.selected =
                         (picker.selected + 1).min(picker.rows.len().saturating_sub(1));
+                    self.settings_picker = Some(picker);
+                }
+                Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
+                    if let Some(next) = key.and_then(|key| {
+                        Self::page_selected(
+                            picker.selected,
+                            picker.rows.len().saturating_sub(1),
+                            key,
+                        )
+                    }) {
+                        picker.selected = next;
+                    }
                     self.settings_picker = Some(picker);
                 }
                 Some("enter") | Some("right") | Some("left") => {
@@ -418,6 +504,18 @@ impl Chat {
                     }
                     self.scoped_models_picker = Some(picker);
                 }
+                Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
+                    if let Some(next) = key.and_then(|key| {
+                        Self::page_selected(
+                            picker.selected,
+                            picker.rows.len().saturating_sub(1),
+                            key,
+                        )
+                    }) {
+                        picker.selected = next;
+                    }
+                    self.scoped_models_picker = Some(picker);
+                }
                 Some("space") => {
                     picker.toggle_selected();
                     self.scoped_models_picker = Some(picker);
@@ -474,6 +572,18 @@ impl Chat {
                     }
                     self.fork_picker = Some(picker);
                 }
+                Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
+                    if let Some(next) = key.and_then(|key| {
+                        Self::page_selected(
+                            picker.selected,
+                            picker.messages.len().saturating_sub(1),
+                            key,
+                        )
+                    }) {
+                        picker.selected = next;
+                    }
+                    self.fork_picker = Some(picker);
+                }
                 _ => {
                     self.fork_picker = Some(picker);
                 }
@@ -507,6 +617,18 @@ impl Chat {
                 Some("down") => {
                     if !picker.matches.is_empty() {
                         picker.selected = (picker.selected + 1).min(picker.matches.len() - 1);
+                    }
+                    self.resume_picker = Some(picker);
+                }
+                Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
+                    if let Some(next) = key.and_then(|key| {
+                        Self::page_selected(
+                            picker.selected,
+                            picker.matches.len().saturating_sub(1),
+                            key,
+                        )
+                    }) {
+                        picker.selected = next;
                     }
                     self.resume_picker = Some(picker);
                 }
@@ -574,6 +696,18 @@ impl Chat {
                 Some("down") => {
                     if !picker.matches.is_empty() {
                         picker.selected = (picker.selected + 1).min(picker.matches.len() - 1);
+                    }
+                    self.model_picker = Some(picker);
+                }
+                Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
+                    if let Some(next) = key.and_then(|key| {
+                        Self::page_selected(
+                            picker.selected,
+                            picker.matches.len().saturating_sub(1),
+                            key,
+                        )
+                    }) {
+                        picker.selected = next;
                     }
                     self.model_picker = Some(picker);
                 }
