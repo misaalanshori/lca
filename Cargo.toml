@@ -195,9 +195,14 @@ codegen-units = 1
 strip = true
 panic = "abort"
 
-# gh #53: the MCP bridge is I/O-bound plumbing (spawns, pipes, HTTP
-# round-trips); optimize it for size, not speed, for NFR-1's budget.
+# gh #53 / #37: these crates are I/O-bound plumbing (spawns, pipes,
+# HTTP round-trips, file reads, startup parsing) - optimize them for
+# size, not speed, for NFR-1's budget.
 [profile.release.package.mcp]
 opt-level = "z"
 [profile.release.package.lca-wire-mcp]
+opt-level = "z"
+[profile.release.package.lca-session]
+opt-level = "z"
+[profile.release.package.lca-config]
 opt-level = "z"
