@@ -82,7 +82,8 @@ fn echo_server() -> mcp::ServerConfig {
 }
 
 // Verifies: gh #53 - the echo fixture's one tool lists as a direct
-// tool under its pi name, carrying the server's read-only hint.
+// tool under its pi name, carrying the server's read-only hint;
+// the fixture's resources add the bridge trio (phase 3).
 #[test]
 fn an_echo_server_lists_one_direct_tool() {
     if !python3_available() {
@@ -102,13 +103,15 @@ fn an_echo_server_lists_one_direct_tool() {
         "the spawn asked the permission layer"
     );
     let specs = bridge.tool_specs().expect("specs");
-    assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0].name, "mcp__echo__echo");
-    assert_eq!(specs[0].description, "Echoes its text argument back.");
-    assert_eq!(specs[0].exposure, lca_protocol::ToolExposure::Direct);
+    assert_eq!(specs.len(), 4);
+    let echo = specs
+        .iter()
+        .find(|spec| spec.name == "mcp__echo__echo")
+        .expect("echo tool");
+    assert_eq!(echo.description, "Echoes its text argument back.");
+    assert_eq!(echo.exposure, lca_protocol::ToolExposure::Direct);
     assert_eq!(
-        specs[0]
-            .annotations
+        echo.annotations
             .as_ref()
             .and_then(|annotations| annotations.read_only_hint),
         Some(true),

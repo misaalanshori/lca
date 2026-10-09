@@ -119,7 +119,11 @@ fn browser_sign_in_registers_stores_and_connects() {
     // The stored token authenticates the bridge with no new flow.
     mock.guard(Some("mock-access"), None);
     let bridge = mcp::McpBridge::connect_http(caps.clone(), vec![server]).expect("connect");
-    assert_eq!(bridge.tool_specs().expect("specs").len(), 1);
+    assert_eq!(
+        bridge.tool_specs().expect("specs").len(),
+        4,
+        "echo plus the resource trio"
+    );
     assert!(caps.oauth_opened().len() == 1, "no second browser flow");
 }
 
@@ -146,7 +150,11 @@ fn an_expired_token_refreshes_before_use() {
     mock.guard(Some("fresh-access"), None);
 
     let bridge = mcp::McpBridge::connect_http(caps.clone(), vec![server]).expect("connect");
-    assert_eq!(bridge.tool_specs().expect("specs").len(), 1);
+    assert_eq!(
+        bridge.tool_specs().expect("specs").len(),
+        4,
+        "echo plus the resource trio"
+    );
     let refreshes = mock.requests_of("grant_type=refresh_token");
     assert_eq!(refreshes.len(), 1, "one refresh: {refreshes:?}");
     let token = store.load().expect("store reads").expect("still stored");
@@ -234,5 +242,9 @@ fn step_up_scopes_merge_on_re_sign_in() {
     // ...and the widened token opens the server.
     mock.guard(Some("wide-access"), None);
     let bridge = mcp::McpBridge::connect_http(caps.clone(), vec![server]).expect("connect widens");
-    assert_eq!(bridge.tool_specs().expect("specs").len(), 1);
+    assert_eq!(
+        bridge.tool_specs().expect("specs").len(),
+        4,
+        "echo plus the resource trio"
+    );
 }

@@ -17,8 +17,8 @@ fn a_remote_server_lists_and_calls_echo() {
     let bridge =
         mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp")]).expect("connect");
     let specs = bridge.tool_specs().expect("specs");
-    assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0].name, "mcp__remote__echo");
+    assert_eq!(specs.len(), 4, "echo plus the resource trio");
+    assert!(specs.iter().any(|spec| spec.name == "mcp__remote__echo"));
     let result = runtime().block_on(bridge.execute_tool(&lca_protocol::ToolCall {
         call_id: "call-1".to_string(),
         name: "mcp__remote__echo".to_string(),
@@ -91,8 +91,8 @@ fn sse_responses_read() {
     let bridge = mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp-sse")])
         .expect("connect");
     let specs = bridge.tool_specs().expect("specs");
-    assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0].name, "mcp__remote__echo");
+    assert_eq!(specs.len(), 4, "echo plus the resource trio");
+    assert!(specs.iter().any(|spec| spec.name == "mcp__remote__echo"));
 }
 
 // Verifies: gh #53 - the server's session id rides every later post.

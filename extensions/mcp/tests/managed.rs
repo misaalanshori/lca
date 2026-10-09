@@ -77,11 +77,20 @@ fn one_failure_never_blocks_the_rest() {
     assert!(matches!(state("echo"), mcp::ServerStateKind::Connected));
     assert!(matches!(state("off"), mcp::ServerStateKind::Disabled));
     assert!(matches!(state("failing"), mcp::ServerStateKind::Failed(_)));
-    // Only the connected server serves, under its own exposure.
+    // Only the connected server serves, under its own exposure:
+    // the echo tool plus the resource trio (the fixture offers
+    // resources), all deferred.
     let specs = bridge.tool_specs().expect("specs");
-    assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0].name, "mcp__echo__echo");
-    assert_eq!(specs[0].exposure, lca_protocol::ToolExposure::Deferred);
+    assert_eq!(specs.len(), 4);
+    for spec in &specs {
+        assert_eq!(spec.exposure, lca_protocol::ToolExposure::Deferred);
+    }
+    assert!(specs.iter().any(|spec| spec.name == "mcp__echo__echo"));
+    assert!(
+        specs
+            .iter()
+            .any(|spec| spec.name == mcp::READ_RESOURCE_TOOL)
+    );
 }
 
 // Verifies: gh #53 - a guarded remote server lands needs-sign-in

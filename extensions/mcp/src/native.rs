@@ -307,9 +307,12 @@ impl ManagedServer {
 }
 
 /// The bridge: one long-lived session per connected server, plus a
-/// state row for every managed entry (connected or not).
+/// state row for every managed entry (connected or not). The rows sit
+/// behind a lock so the manager can rebuild in place: the registry
+/// keeps one handle and later turns see the new table with no
+/// re-registration.
 pub struct McpBridge {
-    servers: Vec<ManagedServer>,
+    servers: Mutex<Vec<ManagedServer>>,
 }
 
 /// Connect one stdio entry: spawn (the permission layer asks),
@@ -482,7 +485,36 @@ impl McpBridge {
                 }
             }
         }
-        McpBridge { servers }
+        McpBridge {
+            servers: Mutex::new(servers),
+        }
+    }
+
+    /// Reconnect every managed entry in place (the manager calls
+    /// this after any edit): old sessions shut down, states refresh,
+    /// and the same handle serves the new table.
+    pub fn rebuild(
+        &self,
+        caps: Arc<lca_tools::Capabilities>,
+        entries: Vec<crate::config::ServerEntry>,
+    ) {
+        let mut servers = self
+            .servers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for server in servers.iter_mut() {
+            server.shutdown();
+        }
+        *servers = McpBridge::connect_managed(caps, entries).take_servers();
+    }
+
+    /// Take the rows out (rebuild plumbing only).
+    fn take_servers(self) -> Vec<ManagedServer> {
+        self.servers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .drain(..)
+            .collect()
     }
 
     /// Spawn every server (each spawn asks the permission layer),
@@ -495,7 +527,7 @@ impl McpBridge {
     ) -> Result<McpBridge, String> {
         let entries = servers.into_iter().map(inline_stdio).collect::<Vec<_>>();
         let bridge = McpBridge::connect_managed(caps, entries);
-        for server in &bridge.servers {
+        for server in bridge.locked().iter() {
             if let ServerStateKind::Failed(err) = &server.state {
                 return Err(err.clone());
             }
@@ -513,7 +545,7 @@ impl McpBridge {
     ) -> Result<McpBridge, String> {
         let entries = servers.into_iter().map(inline_http).collect::<Vec<_>>();
         let bridge = McpBridge::connect_managed(caps, entries);
-        for server in &bridge.servers {
+        for server in bridge.locked().iter() {
             match &server.state {
                 ServerStateKind::Failed(err) | ServerStateKind::NeedsSignIn(err) => {
                     return Err(err.clone());
@@ -526,13 +558,24 @@ impl McpBridge {
 
     /// One state row per managed entry, in entry order (the `/mcp`
     /// rows read these).
-    pub fn statuses(&self) -> Vec<ServerStatus> {
-        self.servers.iter().map(ManagedServer::status).collect()
+    /// Lock the rows for one read (poisoning recovers: a dead
+    /// manager thread must not wedge the turn).
+    fn locked(&self) -> std::sync::MutexGuard<'_, Vec<ManagedServer>> {
+        self.servers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The servers offering resources, in entry order.
-    fn resource_servers(&self) -> Vec<(String, &LiveServer)> {
-        self.servers
+    /// One state row per managed entry, in entry order (the `/mcp`
+    /// rows read these).
+    pub fn statuses(&self) -> Vec<ServerStatus> {
+        self.locked().iter().map(ManagedServer::status).collect()
+    }
+
+    /// The servers offering resources, in entry order (borrows
+    /// the locked rows the caller holds).
+    fn resource_servers(servers: &[ManagedServer]) -> Vec<(String, &LiveServer)> {
+        servers
             .iter()
             .filter_map(|server| {
                 server.live.as_ref().and_then(|live| {
@@ -548,13 +591,13 @@ impl McpBridge {
     /// offers resources, at the widest such server's exposure.
     pub fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {
         let mut specs = Vec::new();
-        for server in &self.servers {
+        for server in self.locked().iter() {
             if let Some(live) = &server.live {
                 specs.extend(live.specs().iter().cloned());
             }
         }
-        let exposures = self
-            .resource_servers()
+        let locked = self.locked();
+        let exposures = Self::resource_servers(&locked)
             .iter()
             .map(|(_, live)| live.exposure())
             .collect::<Vec<_>>();
@@ -590,9 +633,10 @@ impl McpBridge {
                 };
                 let mut rows = Vec::new();
                 let mut next = None;
+                let locked = self.locked();
                 let targets: Vec<(String, &LiveServer)> = match server {
                     Some(name) => vec![
-                        self.resource_servers()
+                        Self::resource_servers(&locked)
                             .into_iter()
                             .find(|(server, _)| server == &name)
                             .ok_or_else(|| failed(format!("unknown MCP server {name:?}")))?,
@@ -600,7 +644,7 @@ impl McpBridge {
                     None if cursor.is_some() => {
                         return Err(failed("a cursor needs its server".to_string()));
                     }
-                    None => self.resource_servers(),
+                    None => Self::resource_servers(&locked),
                 };
                 for (name, live) in &targets {
                     let (resources, cursor) = live
@@ -624,14 +668,15 @@ impl McpBridge {
             }
             crate::LIST_TEMPLATES_TOOL => {
                 let mut rows = Vec::new();
+                let locked = self.locked();
                 let targets: Vec<(String, &LiveServer)> = match text("server") {
                     Some(name) => vec![
-                        self.resource_servers()
+                        Self::resource_servers(&locked)
                             .into_iter()
                             .find(|(server, _)| server == &name)
                             .ok_or_else(|| failed(format!("unknown MCP server {name:?}")))?,
                     ],
-                    None => self.resource_servers(),
+                    None => Self::resource_servers(&locked),
                 };
                 for (name, live) in &targets {
                     let templates = live
@@ -656,8 +701,8 @@ impl McpBridge {
                         "read_mcp_resource needs `server` and `uri`".to_string(),
                     ));
                 };
-                let (_, live) = self
-                    .resource_servers()
+                let locked = self.locked();
+                let (_, live) = Self::resource_servers(&locked)
                     .into_iter()
                     .find(|(name, _)| name == &server)
                     .ok_or_else(|| failed(format!("unknown MCP server {server:?}")))?;
@@ -683,8 +728,8 @@ impl McpBridge {
         ) {
             return self.execute_resource(call);
         }
-        let server = self
-            .servers
+        let servers = self.locked();
+        let server = servers
             .iter()
             .filter_map(|server| server.live.as_ref())
             .find(|live| live.calls().contains_key(&call.name))
@@ -721,7 +766,12 @@ impl Drop for McpBridge {
     /// closes stdin, then SIGTERM, then SIGKILL; the host's
     /// `process_kill` owns that sequence).
     fn drop(&mut self) {
-        for server in &mut self.servers {
+        for server in self
+            .servers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter_mut()
+        {
             server.shutdown();
         }
     }
