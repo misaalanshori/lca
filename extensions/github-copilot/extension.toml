@@ -1,0 +1,18 @@
+name = "github-copilot"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["provider"]
+description = "GitHub Copilot subscription provider."
+
+[capabilities.net]
+hosts = [
+  "github.com",
+  "api.github.com",
+  "api.githubcopilot.com",
+  "api.individual.githubcopilot.com",
+  "api.business.githubcopilot.com",
+  "api.enterprise.githubcopilot.com",
+]
+
+[capabilities.credentials]
+namespace = "github-copilot"

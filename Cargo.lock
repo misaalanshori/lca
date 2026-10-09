@@ -923,6 +923,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "github-copilot"
+version = "0.6.0"
+dependencies = [
+ "lca-core",
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-subscription",
+ "lca-testkit",
+ "lca-tools",
+ "lca-wire-openai",
+ "serde_json",
+ "tokio",
+ "toml",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "globset"
 version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1332,6 +1350,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "kimi-coding"
+version = "0.6.0"
+dependencies = [
+ "lca-core",
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-subscription",
+ "lca-testkit",
+ "lca-tools",
+ "lca-wire-openai",
+ "serde_json",
+ "tokio",
+ "toml",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1681,6 +1717,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "llama"
+version = "0.6.0"
+dependencies = [
+ "lca-core",
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-subscription",
+ "lca-testkit",
+ "lca-tools",
+ "lca-wire-openai",
+ "serde_json",
+ "tokio",
+ "toml",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1729,6 +1783,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57804b2c9b69967f1536a56f86297e367a33b19e98852ed624b84551cdbc0d90"
 dependencies = [
  "rustix",
+]
+
+[[package]]
+name = "meta"
+version = "0.6.0"
+dependencies = [
+ "lca-core",
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-subscription",
+ "lca-testkit",
+ "lca-tools",
+ "lca-wire-openai",
+ "serde_json",
+ "tokio",
+ "toml",
+ "wit-bindgen 0.41.0",
 ]
 
 [[package]]

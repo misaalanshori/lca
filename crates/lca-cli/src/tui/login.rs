@@ -315,14 +315,28 @@ impl Ui {
                 .unwrap_or_else(|p| p.into_inner()) = Some(url.clone());
             // gh #178 (pi's login-dialog): the URL rides in an explicit
             // OSC 8 sequence, so a wrapped modal row still clicks whole.
+            // gh #184: a device-code URL carries the user code in its
+            // fragment — show the code above the page link.
+            let (page, code) = crate::login::split_device_code(&url);
+            let code_row = code
+                .map(|code| format!("\n\nEnter this code on the page:\n\n{code}\n"))
+                .unwrap_or_default();
             return Some(LoginNext::Waiting {
-                label: format!("{WAIT_LABEL}\n\n\x1b]8;;{url}\x07{url}\x1b]8;;\x07"),
+                label: format!("{WAIT_LABEL}{code_row}\n\n\x1b]8;;{page}\x07{page}\x1b]8;;\x07"),
             });
         }
         // R4(c): after a quiet period, offer the manual fallback — paste
         // the callback URL (pi's `acquireAuthCode`) and the flow completes
         // even where the loopback listener never got the browser's visit.
-        let offer = if *self
+        // gh #184: a device-code flow polls instead — pasting answers
+        // nothing, so the offer stays down and the code keeps showing.
+        let device_flow = self
+            .login_url_shown
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_deref()
+            .is_some_and(|url| crate::login::split_device_code(url).1.is_some());
+        let quiet_period_over = if *self
             .login_manual_offered
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -335,6 +349,7 @@ impl Ui {
                 .unwrap_or_else(|p| p.into_inner());
             since.is_some_and(|t| t.elapsed() >= MANUAL_AFTER)
         };
+        let offer = !device_flow && quiet_period_over;
         if offer {
             *self
                 .login_manual_offered

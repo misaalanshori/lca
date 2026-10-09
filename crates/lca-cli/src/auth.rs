@@ -484,8 +484,16 @@ fn oauth_headless_login(
             && shown.as_deref() != Some(url.as_str())
         {
             shown = Some(url.clone());
-            print(&format!("Open this URL in your browser:\n\n{url}\n"));
-            print("Then paste the callback URL or authorization code here:");
+            // gh #184: a device-code URL names the user code in its
+            // fragment — show it, and skip the paste prompt (the
+            // extension polls; there is nothing to paste).
+            let (page, code) = crate::login::split_device_code(&url);
+            print(&format!("Open this URL in your browser:\n\n{page}\n"));
+            if let Some(code) = code {
+                print(&format!("Enter this code on the page:\n\n{code}\n"));
+            } else {
+                print("Then paste the callback URL or authorization code here:");
+            }
         }
         if let Ok(outcome) = done_rx.try_recv() {
             return report_login_outcome(handle, outcome, print);

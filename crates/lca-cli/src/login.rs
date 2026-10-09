@@ -39,6 +39,25 @@ pub fn picker_row(provider: &str, option: &LoginOption) -> PickerOption {
     }
 }
 
+/// Split a device-code URL (gh #184): an `oauth_open` URL carrying a
+/// `#code=...` fragment names the user code the device page shows.
+/// The fragment never reaches the server, so navigation is unaffected;
+/// the host shows the code beside the page link (the only freeze-safe
+/// channel — no new host import). Returns the page URL without the
+/// fragment, plus the code when present.
+pub fn split_device_code(url: &str) -> (String, Option<String>) {
+    let Some((page, fragment)) = url.split_once('#') else {
+        return (url.to_string(), None);
+    };
+    let Some(code) = fragment.strip_prefix("code=") else {
+        return (url.to_string(), None);
+    };
+    if code.is_empty() {
+        return (url.to_string(), None);
+    }
+    (page.to_string(), Some(code.to_string()))
+}
+
 /// Parse an OAuth redirect callback (R4(c)'s manual fallback): the query
 /// of a pasted callback URL, or a bare query string, into the `(name,
 /// value)` pairs `oauth_await` would have delivered from the loopback
@@ -620,6 +639,36 @@ mod override_tests {
             override_presets("[[preset]]\nname = \"no id\"\n", "openai-compatible", None)
                 .is_empty(),
             "an entry with no id is dropped"
+        );
+    }
+}
+
+#[cfg(test)]
+mod device_code_tests {
+    use super::split_device_code;
+
+    // Verifies: gh #184 - a `#code=` fragment splits into the page and
+    // the user code; anything else passes through untouched.
+    #[test]
+    fn a_device_code_url_splits_into_page_and_code() {
+        assert_eq!(
+            split_device_code("https://github.com/login/device#code=ABCD-1234"),
+            (
+                "https://github.com/login/device".to_string(),
+                Some("ABCD-1234".to_string())
+            )
+        );
+        assert_eq!(
+            split_device_code("https://example.test/auth"),
+            ("https://example.test/auth".to_string(), None)
+        );
+        assert_eq!(
+            split_device_code("https://example.test/cb#other=1"),
+            ("https://example.test/cb#other=1".to_string(), None)
+        );
+        assert_eq!(
+            split_device_code("https://example.test/cb#code="),
+            ("https://example.test/cb#code=".to_string(), None)
         );
     }
 }

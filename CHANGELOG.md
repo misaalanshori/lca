@@ -148,6 +148,11 @@ Dates are UTC.
   one-click OAuth PKCE provisioning a permanent key, chat completions
   on the shared OpenAI kit, live `/models` discovery with a curated
   floor. `openai-compatible` stays strictly key-only (guarded).
+- **GitHub Copilot provider extension (gh #184).** `extensions/github-copilot`:
+  device-code flow, Copilot token mint, `proxy-ep` routing, Copilot
+  headers, per-account model catalog. The host shows device codes
+  beside the page (a `#code=` fragment convention — freeze-safe, no
+  new host import) and skips the paste prompt while polling.
 - **Retry inventory (gh #83).** `provider.retry_base_delay_ms`
   tunes the backoff base (pi's `retry.baseDelayMs`); `retry_limit = 0`
   is pi's `retry.enabled = false`. No transport switch, no max-delay

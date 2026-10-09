@@ -304,3 +304,88 @@ fn the_json_and_pkce_primitives_hold() {
         .map(|(_, value)| value);
     assert_eq!(content_type.as_deref(), Some("application/json"));
 }
+
+// Verifies: gh #184/#186/#187 - the shared device-flow primitives:
+// field validation, the complete-URI preference, the untrusted-URI
+// refusal, and the poll mapping (pending/slow_down/complete/fail).
+#[test]
+fn the_device_flow_primitives_hold() {
+    use lca_subscription::{
+        DevicePollOutcome, device_code_url, poll_device_code, poll_device_once, request_device_code,
+    };
+
+    // A full authorization answers every field; the complete URI wins.
+    let cap = FakeCap::new(vec![(
+        200,
+        br#"{"device_code":"dev-1","user_code":"ABCD-1234","verification_uri":"https://x.test/device","verification_uri_complete":"https://x.test/device?c=ABCD-1234","interval":1,"expires_in":30}"#.to_vec(),
+    )]);
+    let auth = request_device_code(&cap, "https://x.test/auth", "client-1", Some("read:user"))
+        .expect("auth");
+    assert_eq!(auth.device_code, "dev-1");
+    assert_eq!(auth.user_code, "ABCD-1234");
+    assert_eq!(auth.verification_uri, "https://x.test/device?c=ABCD-1234");
+    assert_eq!((auth.interval_secs, auth.expires_in_secs), (1, 30));
+    assert_eq!(
+        device_code_url(&auth),
+        "https://x.test/device?c=ABCD-1234#code=ABCD-1234"
+    );
+    let bodies = cap.request_bodies();
+    assert!(
+        bodies[0].contains("client_id=client-1"),
+        "the client crossed"
+    );
+    assert!(
+        bodies[0].contains("scope=read%3Auser"),
+        "the scope crossed: {}",
+        bodies[0]
+    );
+
+    // A non-http(s) verification URI is refused, not opened.
+    let cap = FakeCap::new(vec![(
+        200,
+        br#"{"device_code":"d","user_code":"u","verification_uri":"ftp://x.test/y"}"#.to_vec(),
+    )]);
+    assert!(
+        request_device_code(&cap, "https://x.test/auth", "c", None).is_err(),
+        "untrusted URIs stay out"
+    );
+
+    // One poll each way.
+    for (body, expect) in [
+        (r#"{"access_token":"tok","expires_in":60}"#, "complete"),
+        (r#"{"error":"authorization_pending"}"#, "pending"),
+        (r#"{"error":"slow_down","interval":10}"#, "slowdown"),
+        (r#"{"error":"access_denied"}"#, "failed"),
+    ] {
+        let cap = FakeCap::new(vec![(200, body.as_bytes().to_vec())]);
+        match poll_device_once(&cap, "https://x.test/token", &[("a", "b")]).expect("poll") {
+            DevicePollOutcome::Complete(json) => assert_eq!(expect, "complete", "{json}"),
+            DevicePollOutcome::Pending => assert_eq!(expect, "pending"),
+            DevicePollOutcome::SlowDown(interval) => {
+                assert_eq!(expect, "slowdown");
+                assert_eq!(interval, Some(10));
+            }
+            DevicePollOutcome::Failed(message) => {
+                assert_eq!(expect, "failed", "{message}");
+            }
+        }
+    }
+
+    // The loop waits out a pending then returns the token.
+    let cap = FakeCap::new(vec![
+        (200, br#"{"error":"authorization_pending"}"#.to_vec()),
+        (200, br#"{"access_token":"tok-2"}"#.to_vec()),
+    ]);
+    let auth = lca_subscription::DeviceAuthorization {
+        device_code: "d".to_string(),
+        user_code: "u".to_string(),
+        verification_uri: "https://x.test/device".to_string(),
+        interval_secs: 1,
+        expires_in_secs: 30,
+    };
+    let json = poll_device_code(&cap, &auth, "https://x.test/token", &[("a", "b")]).expect("token");
+    assert_eq!(
+        json.get("access_token").and_then(|v| v.as_str()),
+        Some("tok-2")
+    );
+}

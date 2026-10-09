@@ -16,6 +16,7 @@ A full ADR is not written for each provider, because there is usually no real al
 | [Grok](grok.md) | OAuth | WASM, install separately | SuperGrok / X subscription via the Grok responses proxy; shares the subscription kit with Codex. |
 | [Anthropic](anthropic.md) | API key + OAuth | WASM, install separately | Claude via Messages: cache breakpoints, thinking signatures, Pro/Max subscription (browser + copy-code) beside a plain key. |
 | [OpenRouter](openrouter.md) | OAuth (provisions key) | WASM, install separately | One-click browser OAuth on the shared OpenAI wire kit; `openai-compatible` stays key-only. |
+| [GitHub Copilot](github-copilot.md) | Device code | WASM, install separately | Copilot subscription via the device flow; token `proxy-ep` routes inference. |
 | [LM Studio](lmstudio.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 | [Ollama](ollama.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 
@@ -51,14 +52,14 @@ votes get counted against this table.
 | pi `vercel-ai-gateway` | preset | `vercel` row, `AI_GATEWAY_API_KEY` (gh #182: preset, not an extension). |
 | pi `openai-codex` | extension | `codex`: ChatGPT subscription OAuth + responses gateway. |
 | `xai` (API key) | preset + extension | `xai` row for the key; `grok` for the SuperGrok subscription OAuth + responses proxy. |
-| pi `github-copilot` | absent | Device flow; the `github-models` preset covers only the Models endpoint. |
+| pi `github-copilot` | extension | `github-copilot`: device flow, token mint, Copilot headers; the `github-models` preset still covers only the Models endpoint. |
+| pi `kimi-coding` | absent | No demand yet. |
+| pi `meta` | absent | No demand yet. |
 | pi `google` (Gemini API) | absent | Gemini's own API shape; no preset yet. |
 | pi `anthropic` | extension | `anthropic`: API key + Pro/Max OAuth (browser + copy-code), Messages with cache breakpoints and signatures. |
 | pi `azure` | absent | Entra + endpoint shape; no demand yet. |
 | pi `amazon-bedrock` | absent | Ambient AWS credentials; no demand yet. |
 | pi `google-vertex` | absent | Ambient GCP credentials; no demand yet. |
-| pi `kimi-coding` | absent | No demand yet. |
-| pi `meta` | absent | No demand yet. |
 | pi `minimax-cn` + `moonshotai-cn` | absent | CN endpoints; the global rows do not cover them. |
 | pi `ant-ling` | absent | No demand yet. |
 | pi `cloudflare-ai-gateway` | absent | A gateway like Vercel; no preset yet. |

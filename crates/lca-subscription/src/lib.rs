@@ -93,12 +93,24 @@ pub fn post_json(
     url: &str,
     body: &serde_json::Value,
 ) -> Result<(u16, String), IdentityFailure> {
+    post_json_with_headers(cap, url, &[], body)
+}
+
+/// POST one JSON object with extra headers (gh #186: Meta's mint
+/// authenticates by header, not by body).
+pub fn post_json_with_headers(
+    cap: &dyn ProviderCap,
+    url: &str,
+    extra: &[(&str, &str)],
+    body: &serde_json::Value,
+) -> Result<(u16, String), IdentityFailure> {
     let bytes = serde_json::to_vec(body)
         .map_err(|err| IdentityFailure(format!("cannot build request: {err}")))?;
-    let headers = [
+    let mut headers = vec![
         ("content-type", "application/json"),
         ("accept", "application/json"),
     ];
+    headers.extend_from_slice(extra);
     let handle = cap
         .net_request("POST", url, &headers, Some(&bytes))
         .map_err(|err| IdentityFailure(err.to_string()))?;
@@ -518,6 +530,245 @@ pub fn run_logout(cap: &dyn ProviderCap, spec: &OAuthSpec) -> IdentityOutcome {
         }
     }
     IdentityOutcome::Ok
+}
+
+/// One RFC 8628 device authorization (gh #184, #186, #187): the
+/// code the user types at the verification page, and the knobs the
+/// poll loop runs on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceAuthorization {
+    /// The `device_code` the token poll redeems.
+    pub device_code: String,
+    /// The `user_code` the person types.
+    pub user_code: String,
+    /// Where they type it (`verification_uri_complete` when the
+    /// server sends one, else `verification_uri`).
+    pub verification_uri: String,
+    /// Seconds between polls (the server's `interval`, else 5 —
+    /// RFC 8628 section 3.2).
+    pub interval_secs: u64,
+    /// The poll loop's own expiry (the server's `expires_in`, else a
+    /// 15-minute client ceiling).
+    pub expires_in_secs: u64,
+}
+
+/// Start one device authorization: form-POST the client (plus scope
+/// where the gateway wants one) and validate the answer. The
+/// verification URI must be http(s) — it opens in the user's browser
+/// (pi's `trustedHttpUrl`).
+pub fn request_device_code(
+    cap: &dyn ProviderCap,
+    url: &str,
+    client_id: &str,
+    scope: Option<&str>,
+) -> Result<DeviceAuthorization, IdentityFailure> {
+    let mut pairs = vec![("client_id", client_id)];
+    if let Some(scope) = scope {
+        pairs.push(("scope", scope));
+    }
+    let (status, text) = post_form_accept(cap, url, &pairs, "application/json")?;
+    if !(200..300).contains(&status) {
+        return Err(IdentityFailure(format!(
+            "device authorization failed: {}",
+            json_error_message(&text)
+        )));
+    }
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| IdentityFailure("invalid device code response".to_string()))?;
+    let get = |key: &str| {
+        json.get(key)
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let device_code = get("device_code");
+    let user_code = get("user_code");
+    if device_code.is_empty() || user_code.is_empty() {
+        return Err(IdentityFailure(
+            "invalid device code response fields".to_string(),
+        ));
+    }
+    let complete = get("verification_uri_complete");
+    let plain = get("verification_uri");
+    let verification_uri = if is_http_url(&complete) {
+        complete
+    } else if is_http_url(&plain) {
+        plain
+    } else {
+        return Err(IdentityFailure(
+            "untrusted verification_uri in device code response".to_string(),
+        ));
+    };
+    Ok(DeviceAuthorization {
+        device_code,
+        user_code,
+        verification_uri,
+        interval_secs: json
+            .get("interval")
+            .and_then(|value| value.as_u64())
+            .filter(|interval| *interval > 0)
+            .unwrap_or(5),
+        expires_in_secs: json
+            .get("expires_in")
+            .and_then(|value| value.as_u64())
+            .filter(|expires| *expires > 0)
+            .unwrap_or(900),
+    })
+}
+
+/// Only http(s) URLs open in the user's browser.
+fn is_http_url(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://")
+}
+
+/// The URL the extension asks the host to open for one device
+/// authorization (gh #184): the verification page with the user code
+/// in the fragment. Fragments never reach the server, so navigation
+/// is unaffected; the host splits the code back off for display (the
+/// only freeze-safe channel — no new host import).
+pub fn device_code_url(authorization: &DeviceAuthorization) -> String {
+    format!(
+        "{}#code={}",
+        authorization.verification_uri, authorization.user_code
+    )
+}
+
+/// One device-token poll's verdict (pi's `device-code.ts` statuses).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DevicePollOutcome {
+    /// The server answered a token: the whole JSON body.
+    Complete(serde_json::Value),
+    /// `authorization_pending`: keep polling.
+    Pending,
+    /// `slow_down`: wait longer (the server's new `interval`, if valid).
+    SlowDown(Option<u64>),
+    /// Anything else: the message ends the flow.
+    Failed(String),
+}
+
+/// POST one device-token poll and map the answer (all three gateways
+/// share the mapping: `access_token` wins, the two wait codes wait,
+/// everything else — including a transport-shaped 5xx — ends it).
+pub fn poll_device_once(
+    cap: &dyn ProviderCap,
+    url: &str,
+    pairs: &[(&str, &str)],
+) -> Result<DevicePollOutcome, IdentityFailure> {
+    let (status, text) = post_form_accept(cap, url, pairs, "application/json")?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok().unwrap_or_default();
+    if (200..300).contains(&status)
+        && let Some(token) = json.get("access_token").and_then(|value| value.as_str())
+        && !token.is_empty()
+    {
+        return Ok(DevicePollOutcome::Complete(json));
+    }
+    let error = json
+        .get("error")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    match error {
+        "authorization_pending" => Ok(DevicePollOutcome::Pending),
+        "slow_down" => Ok(DevicePollOutcome::SlowDown(
+            json.get("interval")
+                .and_then(|value| value.as_u64())
+                .filter(|interval| *interval > 0),
+        )),
+        _ => {
+            let description = json
+                .get("error_description")
+                .and_then(|value| value.as_str())
+                .map(|description| format!(": {description}"))
+                .unwrap_or_default();
+            let message = if error.is_empty() {
+                format!("device token request failed with status {status}")
+            } else {
+                format!("device flow failed: {error}{description}")
+            };
+            Ok(DevicePollOutcome::Failed(message))
+        }
+    }
+}
+
+/// Drive the poll loop to a token (pi's `pollOAuthDeviceCodeFlow`):
+/// wait one interval first, floor intervals at one second, grow 5
+/// seconds per `slow_down` (RFC 8628 section 3.5, the server's own
+/// interval winning when valid), and expire on the authorization's
+/// own clock. Sleeps run in-guest on the login thread; a host cancel
+/// lands on the next poll's network call.
+pub fn poll_device_code(
+    cap: &dyn ProviderCap,
+    authorization: &DeviceAuthorization,
+    url: &str,
+    pairs: &[(&str, &str)],
+) -> Result<serde_json::Value, IdentityFailure> {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(authorization.expires_in_secs);
+    let mut interval = Duration::from_secs(authorization.interval_secs.max(1));
+    let mut slow_downs = 0u32;
+    std::thread::sleep(interval.min(deadline.saturating_duration_since(Instant::now())));
+    while Instant::now() < deadline {
+        match poll_device_once(cap, url, pairs)? {
+            DevicePollOutcome::Complete(json) => return Ok(json),
+            DevicePollOutcome::Failed(message) => return Err(IdentityFailure(message)),
+            DevicePollOutcome::SlowDown(server) => {
+                slow_downs += 1;
+                interval = match server {
+                    Some(secs) => Duration::from_secs(secs.max(1)),
+                    None => interval + Duration::from_secs(5),
+                };
+            }
+            DevicePollOutcome::Pending => {}
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(interval.min(remaining));
+    }
+    Err(IdentityFailure(if slow_downs > 0 {
+        "device flow timed out after one or more slow_down responses; check the machine clock and try again"
+            .to_string()
+    } else {
+        "device flow timed out".to_string()
+    }))
+}
+
+/// POST form fields and read the bounded reply, asking for JSON back
+/// (the device endpoints answer url-encoded without the `Accept`).
+/// Public for the form-speaking token endpoints (gh #187's refresh).
+pub fn post_form_accept(
+    cap: &dyn ProviderCap,
+    url: &str,
+    pairs: &[(&str, &str)],
+    accept: &str,
+) -> Result<(u16, String), IdentityFailure> {
+    let body: String = pairs
+        .iter()
+        .map(|(key, value)| format!("{}={}", percent(key), percent(value)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let headers = [
+        ("content-type", "application/x-www-form-urlencoded"),
+        ("accept", accept),
+    ];
+    let handle = cap
+        .net_request("POST", url, &headers, Some(body.as_bytes()))
+        .map_err(|err| IdentityFailure(err.to_string()))?;
+    let status = cap
+        .net_response_status(handle)
+        .map_err(|err| IdentityFailure(err.to_string()))?;
+    let mut text = Vec::new();
+    while let Some(chunk) = cap
+        .net_read_body(handle, 64 * 1024)
+        .map_err(|err| IdentityFailure(err.to_string()))?
+    {
+        text.extend_from_slice(&chunk);
+        if text.len() > 1024 * 1024 {
+            break;
+        }
+    }
+    let _ = cap.net_close_response(handle);
+    Ok((status, String::from_utf8_lossy(&text).into_owned()))
 }
 
 /// Seconds since the Unix epoch (bounds, labels, expiries).
