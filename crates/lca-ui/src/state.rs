@@ -483,8 +483,15 @@ pub type TrustApply = Arc<dyn Fn(TrustChoice) -> String + Send + Sync>;
 /// Whether the project still needs a trust decision (opens the modal at
 /// startup, Pi's `hasTrustRequiringProjectResources`).
 pub type TrustNeeded = Arc<dyn Fn() -> bool + Send + Sync>;
-/// Returns the session's branch tree as `(id, label)` entries.
+/// Returns the live session's entry tree as `(record id, row text)`
+/// entries, oldest-first and depth-indented (gh #37, FR-UI-16).
 pub type SessionTree = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
+/// Branches at a record id in place and returns the replayed chain
+/// for the transcript (gh #37, FR-UI-16); `None` when the branch
+/// cannot land.
+pub type BranchHere = Arc<dyn Fn(&str) -> Option<Vec<lca_protocol::Record>> + Send + Sync>;
+/// Renames the live session, returning the notice (gh #37).
+pub type RenameSession = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 /// Forks at the nth user message, returning the new branch's id.
 /// What a fork call reports (gh #203): the new session id when the
 /// fork landed (so the interface can switch in-process), plus the
@@ -595,9 +602,13 @@ pub struct UiHooks {
     pub trust_apply: Option<TrustApply>,
     /// Whether the project needs a trust decision at startup.
     pub trust_needed: Option<TrustNeeded>,
-    /// The session's branch tree: `(session id, display label)` entries, the
-    /// current branch included (FR-UI-16).
+    /// The live session's entry tree: `(record id, row text)` entries
+    /// (FR-UI-16, gh #37).
     pub session_tree: Option<SessionTree>,
+    /// Branch at a tree row in place (gh #37, FR-UI-16).
+    pub branch_here: Option<BranchHere>,
+    /// Rename the live session (gh #37).
+    pub rename_session: Option<RenameSession>,
     /// Fork at the nth user message (0-based), reporting the new branch
     /// (FR-UI-16, gh #203).
     pub fork_at: Option<ForkAt>,

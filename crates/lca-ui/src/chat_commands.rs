@@ -345,6 +345,24 @@ impl Chat {
                 }
                 return Action::Continue;
             }
+            // Gh #37: rename the live session (the entry trails in the
+            // log as `session-info`; `/resume` keeps showing the title).
+            "rename" => {
+                let Some(rename) = self.world.options.hooks.rename_session.clone() else {
+                    self.world.notice = Some("renaming is not available in this host".to_string());
+                    return Action::Continue;
+                };
+                let name = argument.trim();
+                if name.is_empty() {
+                    self.world.notice = Some("usage: /rename <name>".to_string());
+                    return Action::Continue;
+                }
+                match rename(name) {
+                    Ok(notice) => self.world.notice = Some(notice),
+                    Err(err) => self.world.notice = Some(err),
+                }
+                return Action::Continue;
+            }
             // Gh #204: the quick-cycle checklist - toggles flip rows,
             // enter saves (persists `models.enabled` + live rotation),
             // escape discards.
@@ -586,12 +604,7 @@ impl Chat {
         match self.world.options.hooks.switch_session.as_ref() {
             Some(switch) => match switch(id) {
                 Some(records) => {
-                    // Replayed with the live rendering (FR-UI-7), not as
-                    // plain lines: same transcript machinery as a live turn.
-                    self.transcript.clear();
-                    self.pending.clear();
-                    let loader = self.world.options.hooks.load_attachment.clone();
-                    self.load_records(&records, loader.as_ref());
+                    self.replay_records(&records);
                     self.world.notice = Some(format!("switched to session {id}"));
                 }
                 None => self.world.notice = Some(format!("cannot open session {id}")),
@@ -599,6 +612,37 @@ impl Chat {
             None => {
                 self.world.notice = Some(format!("resume this branch with: lca --resume {id}"));
             }
+        }
+    }
+
+    /// Replay records with the live rendering (FR-UI-7), not as plain
+    /// lines: the same transcript machinery as a live turn, shared by
+    /// session switches and in-place branches.
+    pub(crate) fn replay_records(&mut self, records: &[lca_protocol::Record]) {
+        self.transcript.clear();
+        self.pending.clear();
+        let loader = self.world.options.hooks.load_attachment.clone();
+        self.load_records(records, loader.as_ref());
+    }
+
+    /// Branch at a tree row and replay the new chain in place (gh #37,
+    /// FR-UI-16): the log keeps one file, the transcript shows the
+    /// branch. Refused while a turn runs, like a session switch.
+    pub(crate) fn branch_and_replay(&mut self, record_id: &str) {
+        if self.turn_running {
+            self.world.notice =
+                Some("a turn is running; finish or cancel it before switching".to_string());
+            return;
+        }
+        match self.world.options.hooks.branch_here.as_ref() {
+            Some(branch) => match branch(record_id) {
+                Some(records) => {
+                    self.replay_records(&records);
+                    self.world.notice = Some(format!("branched at {record_id}; type to continue"));
+                }
+                None => self.world.notice = Some(format!("cannot branch at {record_id}")),
+            },
+            None => self.world.notice = Some("branching is not available in this host".to_string()),
         }
     }
 }
@@ -732,7 +776,8 @@ fn command_help(command: &str) -> &'static str {
         "/fullscreen" => "toggle terminal scrollback and app-owned screen (fullscreen)",
         "/theme" => "pick a theme with live preview",
         "/thinking" => "set the reasoning level",
-        "/tree" => "browse session branches",
+        "/tree" => "browse the session's entry tree and branch in place",
+        "/rename" => "rename this session (usage: /rename <name>)",
         "/resume" => "search and reopen a session",
         "/fork" => "fork a branch at a message (picker, or /fork <n>)",
         "/clone" => "duplicate this session at its tip and switch (usage: /clone [name])",

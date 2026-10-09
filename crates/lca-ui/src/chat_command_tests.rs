@@ -518,3 +518,62 @@ fn tick_syncs_display_tuning_live() {
     assert_eq!(chat.editor.max_visible, 8, "the hook wins");
     assert_eq!(chat.editor.padding_x, 2, "padding follows");
 }
+
+// Verifies: FR-UI-16 - `/tree` selection without a host stays a
+// notice, and `/rename` names the session through the host (gh #37).
+#[test]
+fn tree_selection_and_rename_refuse_without_a_host() {
+    let mut chat = chat();
+    chat.tree_picker = Some(crate::chat_pickers::TreePicker {
+        entries: vec![("r1".into(), "first".into())],
+        selected: 0,
+    });
+    chat.handle_key("\r");
+    assert!(
+        chat.world
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("not available in this host"),
+        "{:?}",
+        chat.world.notice
+    );
+    for c in "/rename new name".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(
+        chat.world
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("not available in this host"),
+        "{:?}",
+        chat.world.notice
+    );
+}
+
+// Verifies: FR-UI-16 - `/rename <name>` renames through the host
+// (gh #37).
+#[test]
+fn rename_names_the_session_through_the_host() {
+    let mut options = options();
+    options.hooks.rename_session = Some(Arc::new(|name: &str| {
+        assert_eq!(name, "fresh title");
+        Ok("renamed to 'fresh title'".to_string())
+    }));
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    for c in "/rename fresh title".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(
+        chat.world
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("fresh title"),
+        "{:?}",
+        chat.world.notice
+    );
+}

@@ -10,6 +10,7 @@
 mod cache;
 mod ids;
 mod store;
+mod tree;
 pub(crate) mod view;
 
 use std::path::PathBuf;
@@ -20,6 +21,7 @@ pub use store::{
     DEFAULT_TITLE, ExportOptions, ReadOutcome, Session, SessionMeta, SessionStore, SessionSummary,
     display_path, row_label,
 };
+pub use tree::EntryRow;
 pub use view::ViewMode;
 
 /// The extension ABI version recorded in a `session-start` record, sourced

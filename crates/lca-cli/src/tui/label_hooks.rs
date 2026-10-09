@@ -57,6 +57,72 @@ impl Ui {
         })
     }
 
+    /// The live session's entry tree for `/tree` (gh #37, FR-UI-16):
+    /// `(record id, row text)` oldest-first, depth-indented, labels as
+    /// `[name]` prefixes, live-chain rows marked.
+    pub(super) fn entry_tree(&self) -> lca_ui::state::SessionTree {
+        let store = self.store.clone();
+        let session_cell = self.current_session.clone();
+        Arc::new(move || {
+            let session = session_cell
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            store
+                .entry_tree(&session)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|row| {
+                    let indent = "  ".repeat(row.depth);
+                    let marked = match row.label {
+                        Some(name) => format!("[{name}] {}", row.text),
+                        None => row.text,
+                    };
+                    let live = if row.live { " ◀" } else { "" };
+                    (row.id, format!("{indent}{marked}{live}"))
+                })
+                .collect()
+        })
+    }
+
+    /// Branch at a tree row and return the replayed chain (gh #37,
+    /// FR-UI-16): the interface replays these records like a session
+    /// switch, but the log kept one file.
+    pub(super) fn branch_here(&self) -> lca_ui::state::BranchHere {
+        let store = self.store.clone();
+        let session_cell = self.current_session.clone();
+        Arc::new(move |record_id: &str| {
+            let session = session_cell
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            if store.branch_at(&session, record_id).is_err() {
+                return None;
+            }
+            store
+                .read_with(&session, lca_session::ViewMode::Display)
+                .map(|outcome| outcome.records)
+                .ok()
+        })
+    }
+
+    /// Rename the live session (gh #37): the entry trails in the log,
+    /// the title resolves as before.
+    pub(super) fn rename_session(&self) -> lca_ui::state::RenameSession {
+        let store = self.store.clone();
+        let session_cell = self.current_session.clone();
+        Arc::new(move |name: &str| {
+            let session = session_cell
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            match store.rename(&session, name) {
+                Ok(()) => Ok(format!("renamed to '{name}'")),
+                Err(err) => Err(format!("cannot rename: {err}")),
+            }
+        })
+    }
+
     /// Every live bookmark as `(name, record id)` (gh #37, FR-SESS-10).
     pub(super) fn list_labels(&self) -> lca_ui::state::ListLabels {
         let store = self.store.clone();

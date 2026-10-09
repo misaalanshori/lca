@@ -293,3 +293,48 @@ fn fork_at_a_branched_record_inherits_its_chain() {
         "no abandoned path: {shown_ids:?}"
     );
 }
+
+// Verifies: FR-UI-16 (the entry tree rows the `/tree` picker shows:
+// record order oldest-first, depth-indented branches, labels, live
+// marks, summaries; tool and jump records stay out).
+#[test]
+fn entry_tree_rows_branches_labels_and_live_marks() {
+    let store = store("entry-tree");
+    let project = scratch("entry-tree-project");
+    let session = store.create_session(&project, "test").expect("create");
+    for id in ["a", "b", "c"] {
+        let mut record = user_record(id, &format!("message {id}"));
+        if let Record::User { content, .. } = &mut record {
+            content.push_str("\nsecond line");
+        }
+        store.append(&session, record).expect("append");
+    }
+    store.set_label(&session, "b", Some("mark")).expect("label");
+    store.branch_at(&session, "a").expect("branch");
+    store
+        .append(&session, user_record("d", "new path"))
+        .expect("d");
+
+    let rows = store.entry_tree(&session).expect("tree");
+    let texts: Vec<String> = rows.iter().map(|row| row.text.clone()).collect();
+    // Tool/jump/session rows never appear; the abandoned path does
+    // (the tree shows every branch, not the live chain).
+    assert!(texts.iter().any(|t| t.contains("message a")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.contains("message c")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.contains("new path")), "{texts:?}");
+    assert_eq!(
+        rows.len(),
+        4,
+        "three users plus the branch child: {texts:?}"
+    );
+
+    let by_id: std::collections::HashMap<&str, &lca_session::EntryRow> =
+        rows.iter().map(|row| (row.id.as_str(), row)).collect();
+    assert_eq!(by_id["b"].label.as_deref(), Some("mark"));
+    assert_eq!(by_id["a"].depth, 0);
+    assert_eq!(by_id["d"].depth, 1, "the branch child indents");
+    assert!(by_id["d"].live, "the live chain marks");
+    assert!(by_id["a"].live);
+    assert!(!by_id["c"].live, "the abandoned path unmarks");
+    assert!(!texts.iter().any(|t| t.contains('\n')), "one line per row");
+}

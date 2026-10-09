@@ -391,12 +391,14 @@ impl Ui {
                     }
                 }))
             },
-            session_tree: Some(self.session_tree()),
             session_list: Some(self.session_list()),
             switch_session: Some(self.switch_session()),
             load_attachment: Some(self.load_attachment()),
             copy_to_clipboard: Some(Arc::new(|text: &str| native_clipboard(text))),
             open_url: Some(Arc::new(open_url)),
+            session_tree: Some(self.entry_tree()),
+            branch_here: Some(self.branch_here()),
+            rename_session: Some(self.rename_session()),
             fork_at: Some(self.fork_at()),
             fork_record: Some(self.fork_record()),
             set_label: Some(self.set_label()),
@@ -636,50 +638,6 @@ impl Ui {
                 cancel
             },
         )
-    }
-
-    /// The `/tree` branch selector (FR-UI-16). Rows carry the same label
-    /// the `/resume` picker does (first prompt while the session still has
-    /// the default title), so a branch named `179079… * (session)` tells
-    /// you which branch it is.
-    fn session_tree(&self) -> lca_ui::state::SessionTree {
-        let store = self.store.clone();
-        let session_cell = self.current_session.clone();
-        let cwd = self.cwd.clone();
-        Arc::new(move || {
-            let session = session_cell
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone();
-            let labels: std::collections::HashMap<String, String> = store
-                .list_sessions(&cwd)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|summary| (summary.id.clone(), summary.display_title()))
-                .collect();
-            store
-                .fork_tree(&session)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|branch| {
-                    let title = labels.get(branch.id()).cloned().unwrap_or_else(|| {
-                        store
-                            .meta(&branch)
-                            .map(|meta| meta.title)
-                            .unwrap_or_default()
-                    });
-                    let marker = if branch.id() == session.id() {
-                        " *"
-                    } else {
-                        ""
-                    };
-                    (
-                        branch.id().to_string(),
-                        format!("{}{marker} ({title})", branch.id()),
-                    )
-                })
-                .collect()
-        })
     }
 
     /// The `/resume` session list (R2), newest first with ages.

@@ -125,8 +125,11 @@ impl Chat {
             match key {
                 Some("escape") => {}
                 Some("enter") => {
+                    // gh #37: tree rows are records now, so Enter
+                    // branches in place (session switches live on
+                    // `/resume`).
                     let (id, _) = picker.entries[picker.selected].clone();
-                    self.switch_or_announce(&id);
+                    self.branch_and_replay(&id);
                 }
                 Some("up") | Some("k") => {
                     picker.selected = picker.selected.saturating_sub(1);

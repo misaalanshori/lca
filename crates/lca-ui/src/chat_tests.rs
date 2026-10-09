@@ -628,16 +628,22 @@ fn alt_up_and_down_jump_between_prompts() {
     assert!(chat.jump_target.is_some());
 }
 
-// Verifies: FR-UI-16 - `/tree` browses session branches and `/fork`
-// creates one at a message.
+// Verifies: FR-UI-16 - `/tree` browses the live session's entry
+// tree and selecting a row branches there in place (gh #37 phase 3:
+// record rows replace the fork-directory rows; fork switching lives
+// on `/resume`, forking on `/fork`).
 #[test]
-fn tree_browses_branches_and_fork_creates_one() {
+fn tree_browses_entry_branches_and_selection_branches_there() {
     let mut options = options();
     options.hooks.session_tree = Some(Arc::new(|| {
         vec![
-            ("root".into(), "root * (session)".into()),
-            ("child".into(), "child (session)".into()),
+            ("r1".into(), "first question".into()),
+            ("r2".into(), "  second question \u{25c0}".into()),
         ]
+    }));
+    options.hooks.branch_here = Some(Arc::new(|id: &str| {
+        assert_eq!(id, "r2");
+        Some(vec![])
     }));
     options.hooks.fork_at = Some(Arc::new(|n: usize| crate::state::ForkReport {
         id: Some("newbranch".to_string()),
@@ -650,12 +656,12 @@ fn tree_browses_branches_and_fork_creates_one() {
     chat.handle_key("\r");
     assert!(chat.tree_picker.is_some());
     let viewport = strip(&chat.viewport(100, 30, 0)).join("\n");
-    assert!(viewport.contains("root"), "{viewport}");
-    assert!(viewport.contains("child"), "{viewport}");
+    assert!(viewport.contains("first question"), "{viewport}");
+    assert!(viewport.contains("second question"), "{viewport}");
     chat.handle_key("j");
     chat.handle_key("\r");
     assert!(
-        chat.world.notice.as_deref().unwrap().contains("--resume"),
+        chat.world.notice.as_deref().unwrap().contains("branched"),
         "{:?}",
         chat.world.notice
     );
