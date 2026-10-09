@@ -84,7 +84,7 @@ persist. `truncated = true` with an `attachment` means the display shown to the 
 
 `label` records a user bookmark on an entry (gh #47: pi's `label` semantics). Fields: `id`, `target_id` (the labeled record), `label` (absent clears the bookmark). Writer: the `/label` verb (gh #37: latest message by default, `[n]` for the nth), appending through the host; `/labels` lists, `/jump` branches at the mark. Readers: assembly ignores it; the `/resume` and session-title surfaces will read it later.
 
-`session-info` records the session display name (gh #47: pi's `session_info` semantics): the name the session selector shows instead of the first message. Fields: `id`, `name`. Writer: the interface (`/name` equivalent), the `--name` flag, or an extension through the host; nothing writes it yet. Readers: assembly ignores it. Kept minimal (name + set) on purpose.
+`session-info` records the session display name (gh #47: pi's `session_info` semantics): the name the session selector shows instead of the first message. Fields: `id`, `name`. Writer: `store.rename`, shared by `/rename`, `lca rename`, `--name`, and clone titling (gh #37) - the entry trails before the `meta.json` write, so the log witnesses every rename. Readers: `/resume` keeps showing the meta title; `session_name` reads the latest entry back. Readers: assembly ignores it. Kept minimal (name + set) on purpose.
 
 `custom` persists extension state (gh #47: pi's `custom` semantics). Fields: `id`, `custom_type` (which extension owns the entry - readers use it to find their own entries on reload), `data` (the extension's JSON). Writer: the host, appending on the extension's behalf under the capability model - an extension never touches the log file (guest-side imports for this are a minor-version decision for the tree/compaction epics; no `wit/` change in this cycle). Readers: assembly ignores it - it never enters model context. Audit-only on export (see below).
 The host's own `custom_type` values: `tool-set-change` (gh #77 -
@@ -170,3 +170,18 @@ A format version change is a change to the `v` field on new records. Old records
 A change that makes existing records unreadable needs a migration tool that rewrites session directories, run once, with the original preserved in a backup directory until the user removes it. This is a last resort. The first question for any format change is whether a new record type solves it, since unknown record types are already skipped.
 
 The format version is recorded in `meta.json` and in the `session-start` record. Both are checked on load, and a mismatch between them is a corruption signal.
+
+## Migration note (gh #37, #98 touchpoint - recorded, not built)
+
+Collapsing fork directories into single-file trees would need: a
+one-shot rewriter that splices each child's records into its parent's
+log at the fork point (re-chaining `parent` links across the splice),
+re-homing attachments into one directory, reworking gc's mark phase
+from directory walks to reference walks, and rebuilding every
+`index.json` from the merged files - with the originals preserved in
+a backup directory until the user removes them, per the rule above.
+Nothing about the current format blocks it (ids are unique per
+session today and would need family-scoped uniqueness), and nothing
+about current usage demands it: forks stay cheap and the entry tree
+already navigates across them via `/resume`. Revisit only on the
+ADR-0046 signal (a real fork-chain defect class).

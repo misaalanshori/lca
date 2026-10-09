@@ -98,6 +98,22 @@ Phase 2 landed three decided details worth pinning:
   not); bookmarks resolve file-globally. Display, transcript, and
   model context see the live chain only.
 
+## Addendum (2026-10-10, gh #37 phase 3)
+
+- **`/tree` is the entry tree now.** Record rows (user, assistant,
+  summaries, compactions; labels as marks, live chain ticked)
+  replace the fork-directory rows; Enter branches in place and
+  replays the chain. Fork switching lives on `/resume`, forking on
+  `/fork` - no capability lost, the picker finally matches pi's
+  shape on our fork-preserving model.
+- **Renames trail entries.** `store.rename` appends `session-info`
+  before the meta write; `/rename`, `lca rename`, `--name`, and
+  clone titling share the path. `/resume` keeps showing the meta
+  title.
+- **No migration built.** The note lives in
+  `docs/session-log-format.md` under Migration; #98 stays the
+  touchpoint.
+
 ## Revisit conditions
 
 - Fork chains produce a real defect class (broken-chain truncation

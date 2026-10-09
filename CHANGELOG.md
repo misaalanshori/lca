@@ -7,6 +7,14 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Sessions phase 3 (gh #37, epic complete).** `/tree` browses the
+live session's entry tree (oldest-first rows, depth indent, label
+marks, live ticks) on the rolling-window picker chrome, and Enter
+branches there in place with the chain replayed (session switches
+stay on `/resume`, forking on `/fork`). `/rename <name>` trails a
+`session-info` entry through the shared rename path (`lca rename`,
+`--name`, and clone titling ride it); `/resume` keeps showing the
+meta title. No migration is built (note below).
 - **Sessions phase 2 (gh #37).** In-file branching on top of forks
 (ADR-0046): every record carries an additive optional `parent`
 (old lines load parentless under the unknown-fields rule);
