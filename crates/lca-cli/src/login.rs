@@ -43,10 +43,24 @@ pub fn picker_row(provider: &str, option: &LoginOption) -> PickerOption {
 /// of a pasted callback URL, or a bare query string, into the `(name,
 /// value)` pairs `oauth_await` would have delivered from the loopback
 /// listener. Returns `None` when there is no query at all.
+/// A `code#state` paste (gh #183: the shape Anthropic's copy-code page
+/// shows, pi's `parseAuthorizationInput`) splits into its two pairs.
 pub fn parse_callback(value: &str) -> Option<Vec<(String, String)>> {
-    let (query, had_question) = match value.split_once('?') {
+    let trimmed = value.trim();
+    if !trimmed.contains('?')
+        && !trimmed.contains('=')
+        && let Some((code, state)) = trimmed.split_once('#')
+        && !code.is_empty()
+        && !state.is_empty()
+    {
+        return Some(vec![
+            ("code".to_string(), code.to_string()),
+            ("state".to_string(), state.to_string()),
+        ]);
+    }
+    let (query, had_question) = match trimmed.split_once('?') {
         Some((_, query)) => (query, true),
-        None => (value, false),
+        None => (trimmed, false),
     };
     // A redirect with no query carries no code: refuse it rather than feed
     // a path (`/callback`) to the flow as a parameter.
@@ -506,6 +520,21 @@ mod callback_tests {
         let pairs = parse_callback("code=abc&state=s").expect("bare query");
         assert_eq!(pairs.len(), 2);
         assert_eq!(pairs[0].1, "abc");
+    }
+
+    // Verifies: gh #183 - a `code#state` paste (Anthropic's
+    // copy-code page, pi's `parseAuthorizationInput`) delivers as
+    // pairs, while a bare code with no state stays out.
+    #[test]
+    fn a_copy_code_paste_splits_into_code_and_state() {
+        assert_eq!(
+            parse_callback("spl-abc123#verifier-state"),
+            Some(vec![
+                ("code".to_string(), "spl-abc123".to_string()),
+                ("state".to_string(), "verifier-state".to_string()),
+            ])
+        );
+        assert_eq!(parse_callback("just-a-code"), None);
     }
 
     // Verifies: a redirect with no query carries no code, so it is refused

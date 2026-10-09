@@ -89,6 +89,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "anthropic"
+version = "0.6.0"
+dependencies = [
+ "lca-core",
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-subscription",
+ "lca-testkit",
+ "lca-tools",
+ "lca-wire-anthropic",
+ "serde_json",
+ "tokio",
+ "toml",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "antigravity"
 version = "0.6.0"
 dependencies = [
@@ -1834,6 +1852,24 @@ dependencies = [
  "lca-ext-abi",
  "lca-permissions",
  "lca-protocol",
+ "lca-testkit",
+ "lca-tools",
+ "lca-wire-openai",
+ "serde_json",
+ "tokio",
+ "toml",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
+name = "openrouter"
+version = "0.6.0"
+dependencies = [
+ "lca-core",
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-subscription",
  "lca-testkit",
  "lca-tools",
  "lca-wire-openai",

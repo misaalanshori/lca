@@ -12,7 +12,42 @@
 //! nothing is dropped, nothing is invented. Image blocks map to
 //! Anthropic's base64 source blocks like the OpenAI kit's vision parts.
 
-use lca_protocol::{CompletionRequest, ContentBlock, MessageRole, StreamEvent, ToolSpec, Usage};
+use lca_protocol::{
+    CapabilityError, CompletionRequest, ContentBlock, MessageRole, StreamEvent, ToolSpec, Usage,
+};
+
+/// A provider call failed: the message the user reads, the
+/// headless envelope class (`docs/headless.md`), whether a retry
+/// could help. The OpenAI kit's shape, so consumers name one type.
+#[derive(Debug)]
+pub struct StreamFailure {
+    /// Human-readable message.
+    pub message: String,
+    /// Class for the headless envelope.
+    pub class: &'static str,
+    /// Whether a retry could help (FR-CORE-6).
+    pub retryable: bool,
+}
+
+impl From<CapabilityError> for StreamFailure {
+    fn from(err: CapabilityError) -> Self {
+        // The OpenAI kit's shape: a refusal is a configuration
+        // problem (never retried, kept out of "transport"), an I/O
+        // failure may heal.
+        let (class, retryable) = match &err {
+            CapabilityError::Permission(_)
+            | CapabilityError::NotGranted(_)
+            | CapabilityError::NotFound(_)
+            | CapabilityError::Invalid(_) => ("invalid", false),
+            CapabilityError::Io(_) | CapabilityError::Timeout(_) => ("transport", true),
+        };
+        StreamFailure {
+            message: err.to_string(),
+            class,
+            retryable,
+        }
+    }
+}
 
 /// A thinking signature preserved for multi-turn continuity (#41): the
 /// decoder emits it when the thinking block closes. Re-exported from

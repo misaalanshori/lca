@@ -6,7 +6,7 @@
 pub mod messages;
 
 pub use messages::{
-    AnthropicStream, DEFERRED_PLACEHOLDER, INLINE_TOOLS_BETA, THINKING_SIGNATURE_KIND,
-    build_messages_body, frozen_tools, message_usage, parse_sse, tool_addition_block,
-    tool_removal_block,
+    AnthropicStream, DEFERRED_PLACEHOLDER, INLINE_TOOLS_BETA, StreamFailure,
+    THINKING_SIGNATURE_KIND, build_messages_body, frozen_tools, message_usage, parse_sse,
+    tool_addition_block, tool_removal_block,
 };

@@ -14,6 +14,7 @@ A full ADR is not written for each provider, because there is usually no real al
 | [Antigravity](antigravity.md) | OAuth | WASM, install separately | Reference implementation for the OAuth pattern; see ADR-0004, ADR-0009. |
 | [Codex](codex.md) | OAuth | WASM, install separately | ChatGPT subscription via the Codex responses gateway; shares the subscription kit with Grok. |
 | [Grok](grok.md) | OAuth | WASM, install separately | SuperGrok / X subscription via the Grok responses proxy; shares the subscription kit with Codex. |
+| [Anthropic](anthropic.md) | API key + OAuth | WASM, install separately | Claude via Messages: cache breakpoints, thinking signatures, Pro/Max subscription (browser + copy-code) beside a plain key. |
 | [LM Studio](lmstudio.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 | [Ollama](ollama.md) | None | WASM (specified, not in the tree) | Local server, `net-local`; see ADR-0011. |
 
@@ -51,7 +52,7 @@ votes get counted against this table.
 | `xai` (API key) | preset + extension | `xai` row for the key; `grok` for the SuperGrok subscription OAuth + responses proxy. |
 | pi `github-copilot` | absent | Device flow; the `github-models` preset covers only the Models endpoint. |
 | pi `google` (Gemini API) | absent | Gemini's own API shape; no preset yet. |
-| pi `anthropic` | absent | No preset yet; a Custom endpoint covers OpenAI-shaped URLs only. |
+| pi `anthropic` | extension | `anthropic`: API key + Pro/Max OAuth (browser + copy-code), Messages with cache breakpoints and signatures. |
 | pi `azure` | absent | Entra + endpoint shape; no demand yet. |
 | pi `amazon-bedrock` | absent | Ambient AWS credentials; no demand yet. |
 | pi `google-vertex` | absent | Ambient GCP credentials; no demand yet. |

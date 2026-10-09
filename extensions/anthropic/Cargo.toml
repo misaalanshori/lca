@@ -1,0 +1,39 @@
+[package]
+name = "anthropic"
+description = "Anthropic Claude models via API key or Claude Pro/Max subscription (WASM by default, dual-mode source)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# rlib for the native twin, cdylib for the wasm32-wasip2 component.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+lca-protocol = { path = "../../crates/lca-protocol" }
+lca-wire-anthropic = { path = "../../crates/lca-wire-anthropic" }
+lca-subscription = { path = "../../crates/lca-subscription" }
+serde_json.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lca-ext-abi = { path = "../../crates/lca-ext-abi" }
+lca-tools = { path = "../../crates/lca-tools" }
+lca-permissions = { path = "../../crates/lca-permissions" }
+tokio.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = "0.41"
+
+[dev-dependencies]
+lca-core = { path = "../../crates/lca-core" }
+lca-ext-abi = { path = "../../crates/lca-ext-abi" }
+lca-permissions = { path = "../../crates/lca-permissions" }
+lca-tools = { path = "../../crates/lca-tools" }
+lca-testkit = { path = "../../crates/lca-testkit" }
+toml = { workspace = true }
+
+[lints]
+workspace = true

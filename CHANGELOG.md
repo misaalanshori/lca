@@ -139,6 +139,11 @@ Dates are UTC.
   system blocks, and the `inline-tools-2026-09-15` beta constant
   land in `lca-wire-anthropic`; the header and turn state ride
   with `extensions/anthropic` (#183).
+- **Anthropic provider extension (gh #183).** `extensions/anthropic`:
+  Messages on the shared wire kit (cache breakpoints, P5A thinking
+  signatures/budgets), API key + Claude Pro/Max OAuth (browser
+  loopback + copy-code paste, JSON exchange), a four-model static
+  table. The host's callback parser accepts the `code#state` paste.
 - **Retry inventory (gh #83).** `provider.retry_base_delay_ms`
   tunes the backoff base (pi's `retry.baseDelayMs`); `retry_limit = 0`
   is pi's `retry.enabled = false`. No transport switch, no max-delay

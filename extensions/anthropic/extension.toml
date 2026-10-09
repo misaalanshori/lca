@@ -1,0 +1,14 @@
+name = "anthropic"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["provider"]
+description = "Anthropic Claude models via API key or Claude Pro/Max subscription."
+
+[capabilities.net]
+hosts = ["api.anthropic.com", "claude.ai", "platform.claude.com"]
+
+[capabilities.oauth]
+redirect_path = "/callback"
+
+[capabilities.credentials]
+namespace = "anthropic"

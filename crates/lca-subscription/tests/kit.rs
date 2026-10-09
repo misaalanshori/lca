@@ -265,3 +265,42 @@ fn a_state_mismatch_fails_before_the_exchange() {
     assert!(outcome.is_err());
     assert!(cap.request_bodies().is_empty(), "no exchange attempted");
 }
+
+// Verifies: gh #183/#185 - the shared JSON + PKCE primitives the
+// non-standard gateways build on: one S256 pair, URL-encoded values,
+// and a JSON POST with the bounded read.
+#[test]
+fn the_json_and_pkce_primitives_hold() {
+    let (verifier, challenge) = lca_subscription::pkce_pair().expect("pair");
+    assert_eq!(verifier.len(), 43, "32 random bytes base64url'd");
+    assert_eq!(challenge.len(), 43, "SHA-256 base64url'd");
+    assert!(verifier != challenge);
+    assert_eq!(
+        lca_subscription::percent_encode("a b+c"),
+        "a%20b%2Bc",
+        "uppercase hex like URLSearchParams"
+    );
+    let cap = FakeCap::new(vec![(200, b"{}".to_vec())]);
+    let (status, _) = lca_subscription::post_json(
+        &cap,
+        "https://example.test/token",
+        &serde_json::json!({"grant_type": "authorization_code"}),
+    )
+    .expect("post");
+    assert_eq!(status, 200);
+    let bodies = cap.request_bodies();
+    assert_eq!(bodies.len(), 1);
+    assert!(
+        bodies[0].contains("authorization_code"),
+        "JSON body crossed"
+    );
+    let content_type = cap
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .flat_map(|(_, _, headers, _)| headers.clone())
+        .find(|(name, _)| name == "content-type")
+        .map(|(_, value)| value);
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+}

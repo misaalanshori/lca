@@ -84,6 +84,60 @@ fn post_form(
     Ok((status, String::from_utf8_lossy(&text).into_owned()))
 }
 
+/// POST one JSON object over capabilities and read the bounded
+/// reply (gh #183, gh #185): the Anthropic and OpenRouter token
+/// exchanges speak JSON where the older gateways speak form. Same
+/// one-megabyte bound as the form POST below; the caller names the status.
+pub fn post_json(
+    cap: &dyn ProviderCap,
+    url: &str,
+    body: &serde_json::Value,
+) -> Result<(u16, String), IdentityFailure> {
+    let bytes = serde_json::to_vec(body)
+        .map_err(|err| IdentityFailure(format!("cannot build request: {err}")))?;
+    let headers = [
+        ("content-type", "application/json"),
+        ("accept", "application/json"),
+    ];
+    let handle = cap
+        .net_request("POST", url, &headers, Some(&bytes))
+        .map_err(|err| IdentityFailure(err.to_string()))?;
+    let status = cap
+        .net_response_status(handle)
+        .map_err(|err| IdentityFailure(err.to_string()))?;
+    let mut text = Vec::new();
+    while let Some(chunk) = cap
+        .net_read_body(handle, 64 * 1024)
+        .map_err(|err| IdentityFailure(err.to_string()))?
+    {
+        text.extend_from_slice(&chunk);
+        if text.len() > 1024 * 1024 {
+            break;
+        }
+    }
+    let _ = cap.net_close_response(handle);
+    Ok((status, String::from_utf8_lossy(&text).into_owned()))
+}
+
+/// One PKCE S256 pair (gh #183, gh #185): the verifier crosses on the
+/// code exchange, the challenge rides the authorize URL. The same
+/// CSPRNG and base64url the kit's own flow uses.
+pub fn pkce_pair() -> Result<(String, String), IdentityFailure> {
+    let verifier = base64url(&random_bytes(32)?);
+    let challenge = {
+        use sha2::Digest as _;
+        base64url(&sha2::Sha256::digest(verifier.as_bytes()))
+    };
+    Ok((verifier, challenge))
+}
+
+/// The URL-encoder for one authorize query value (gh #183, gh #185):
+/// the form field encoder's shape, shared so the extensions build
+/// URLs exactly like the kit's own flow does.
+pub fn percent_encode(text: &str) -> String {
+    percent(text)
+}
+
 /// Percent-encode a form field (uppercase hex, like every OAuth server
 /// and `URLSearchParams` produce).
 fn percent(text: &str) -> String {
