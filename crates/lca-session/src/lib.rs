@@ -10,7 +10,7 @@
 mod cache;
 mod ids;
 mod store;
-mod view;
+pub(crate) mod view;
 
 use std::path::PathBuf;
 
@@ -104,6 +104,14 @@ pub enum Error {
     InvalidId {
         /// The rejected id.
         id: String,
+    },
+    /// A branch names a record no resolved history holds (gh #37).
+    #[error("branch target `{record}` not found in session {session}")]
+    BranchTargetMissing {
+        /// The session searched.
+        session: String,
+        /// The record identifier sought.
+        record: String,
     },
     /// A label names a record no resolved history holds (gh #37).
     #[error("label target `{record}` not found in session {session}")]

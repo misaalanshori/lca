@@ -162,7 +162,9 @@ fn arb_log() -> impl Strategy<Value = Vec<Record>> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
-    // Any sequence of valid records writes and reads back identically.
+    // Any sequence of valid records writes and reads back identically
+    // modulo the ancestry stamp (gh #37): append links each record to
+    // the log tip, so the expected sequence carries those links.
     #[test]
     fn session_log_round_trips(records in arb_log()) {
         let dir = scratch("roundtrip");
@@ -176,7 +178,17 @@ proptest! {
         let read = store.read(&session).expect("read");
         prop_assert!(!read.truncated);
         let mut expected = vec![store.raw_start(&session).expect("start")];
-        expected.extend(records);
+        let mut tip: Option<String> = None;
+        for record in records {
+            let mut record = record;
+            if record.parent().is_none()
+                && let Some(prev) = tip.clone()
+            {
+                record.set_parent(&prev);
+            }
+            tip = record.id().map(str::to_string);
+            expected.push(record);
+        }
         prop_assert_eq!(read.records, expected);
         std::fs::remove_dir_all(&dir).ok();
     }

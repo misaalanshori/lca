@@ -238,6 +238,26 @@ pub struct SessionStore {
     root: PathBuf,
 }
 
+/// The newest record id in a log buffer (gh #37): newest line
+/// first, skipping blanks and a partial crash tail. Empty when no
+/// complete line names one.
+fn last_id_in(buf: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(buf);
+    for line in text.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(id) = value.get("id").and_then(|v| v.as_str()) {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
 impl SessionStore {
     /// Root the store at the user data directory (`.../sessions` lives below).
     pub fn new(root: PathBuf) -> Self {
@@ -329,7 +349,17 @@ impl SessionStore {
     }
 
     /// Append one record: a single write of the full line, then flush.
-    pub fn append(&self, session: &Session, record: lca_protocol::Record) -> Result<()> {
+    pub fn append(&self, session: &Session, mut record: lca_protocol::Record) -> Result<()> {
+        // gh #37 (FR-SESS-11): stamp the ancestry link from the log tip
+        // when the writer left it empty. Junction types (`BranchPoint`
+        // and friends) ignore the stamp; the walk never follows theirs.
+        // The tip is re-read per append (a short backward scan), so a
+        // second process appending the same session still links truly.
+        if record.parent().is_none()
+            && let Some(tip) = self.tip_id(session)?
+        {
+            record.set_parent(&tip);
+        }
         let line = serde_json::to_string(&record)?;
         let mut file = std::fs::OpenOptions::new()
             .create(true)
@@ -473,8 +503,14 @@ impl SessionStore {
         let tree = self.fork_tree(session)?;
         let mut reachable = BTreeSet::new();
         for member in &tree {
-            let outcome = self.read_with(member, ViewMode::Display)?;
-            collect_referenced(&outcome.records, &mut reachable);
+            // The full file minus compacted-away records (gh #37): an
+            // abandoned branch's attachments are still in the log and
+            // must survive, while a compaction orphan is truly gone.
+            let outcome = self.read_with(member, ViewMode::Audit)?;
+            collect_referenced(
+                &crate::view::reachable_records(outcome.records),
+                &mut reachable,
+            );
         }
         let mut deleted = Vec::new();
         for member in &tree {
@@ -670,12 +706,90 @@ impl SessionStore {
         Ok(session)
     }
 
+    /// The last id-bearing record in this session's own log (gh #37):
+    /// a short backward scan, so appends link without re-reading the
+    /// whole file. A partial crash tail is skipped like the reader
+    /// skips it; a missing log means a first write (`None`).
+    fn tip_id(&self, session: &Session) -> Result<Option<String>> {
+        use std::io::{Read, Seek, SeekFrom};
+        const TAIL: u64 = 1_048_576;
+        let path = session.log_path();
+        let mut file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(crate::Error::Io(source));
+            }
+        };
+        let len = file.metadata()?.len();
+        let start = len.saturating_sub(TAIL);
+        file.seek(SeekFrom::Start(start))?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        if let Some(id) = last_id_in(&buf) {
+            return Ok(Some(id));
+        }
+        if start == 0 {
+            return Ok(None);
+        }
+        // A single line over a megabyte (pathological: spills cap far
+        // below it): correctness first, forward scan.
+        let full = std::fs::read(&path)?;
+        Ok(last_id_in(&full))
+    }
+
+    /// Navigate to `record_id` and continue in this same log (gh #37,
+    /// FR-SESS-11): appends a `branch-point` naming it. Later appends
+    /// chain through the jump, so the live view and the model see the
+    /// target's ancestry plus the new records - no new session
+    /// directory, the parent's log untouched otherwise.
+    pub fn branch_at(&self, session: &Session, record_id: &str) -> Result<lca_protocol::Record> {
+        let resolved = self.resolved(session, ViewMode::Audit)?;
+        if !resolved.records.iter().any(|r| r.id() == Some(record_id)) {
+            return Err(crate::Error::BranchTargetMissing {
+                session: session.id().to_string(),
+                record: record_id.to_string(),
+            });
+        }
+        let now = ids::now_ms();
+        let record = lca_protocol::branch_point_record(now, ids::record_id(now), record_id);
+        self.append(session, record.clone())?;
+        Ok(record)
+    }
+
+    /// Navigate like [`SessionStore::branch_at`] and record what the
+    /// abandoned path learned (gh #37, FR-SESS-11, pi's
+    /// `branchWithSummary`): the summary's parent names the navigation
+    /// point explicitly and `from_id` the abandoned tip, so assembly
+    /// injects it where the new branch continues.
+    pub fn summarize_branch(
+        &self,
+        session: &Session,
+        record_id: &str,
+        summary: &str,
+    ) -> Result<lca_protocol::Record> {
+        let resolved = self.resolved(session, ViewMode::Audit)?;
+        if !resolved.records.iter().any(|r| r.id() == Some(record_id)) {
+            return Err(crate::Error::BranchTargetMissing {
+                session: session.id().to_string(),
+                record: record_id.to_string(),
+            });
+        }
+        let from = resolved.records.iter().rev().find_map(|r| r.id());
+        self.branch_at(session, record_id)?;
+        let now = ids::now_ms();
+        let record =
+            lca_protocol::branch_summary_record(now, ids::record_id(now), record_id, from, summary);
+        self.append(session, record.clone())?;
+        Ok(record)
+    }
+
     /// Bookmark `record_id` as `label` (gh #37, ADR-0046): appends a
     /// `label` record to the live session's own log. `None` clears the
     /// bookmark. The target is resolved through the fork chain, so a
     /// fork can bookmark (and see) its ancestors' records (FR-SESS-10).
     pub fn set_label(&self, session: &Session, record_id: &str, label: Option<&str>) -> Result<()> {
-        let resolved = self.resolved(session, ViewMode::Display)?;
+        let resolved = self.resolved(session, ViewMode::Audit)?;
         if !resolved.records.iter().any(|r| r.id() == Some(record_id)) {
             return Err(crate::Error::LabelTargetMissing {
                 session: session.id().to_string(),
@@ -700,7 +814,7 @@ impl SessionStore {
     /// resolved history latest-wins, so a clear (`None`) erases an
     /// earlier name and a fork sees its ancestors' marks (FR-SESS-10).
     pub fn labels(&self, session: &Session) -> Result<std::collections::BTreeMap<String, String>> {
-        let resolved = self.resolved(session, ViewMode::Display)?;
+        let resolved = self.resolved(session, ViewMode::Audit)?;
         let mut marks = std::collections::BTreeMap::new();
         for record in &resolved.records {
             if let lca_protocol::Record::Label {
@@ -724,7 +838,7 @@ impl SessionStore {
     /// across the resolved history; `None` when no live bookmark
     /// carries the name (FR-SESS-10).
     pub fn resolve_label(&self, session: &Session, name: &str) -> Result<Option<String>> {
-        let resolved = self.resolved(session, ViewMode::Display)?;
+        let resolved = self.resolved(session, ViewMode::Audit)?;
         // Latest set wins per name; a clear erases only names pointing
         // at its own target, so a sibling keeping the name resolves.
         let mut by_name = std::collections::BTreeMap::new();

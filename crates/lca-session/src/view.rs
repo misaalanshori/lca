@@ -28,6 +28,15 @@ impl SessionStore {
     pub fn read_with(&self, session: &Session, mode: ViewMode) -> Result<ReadOutcome> {
         let mut outcome = self.chain(session)?;
         if matches!(mode, ViewMode::Display) {
+            // gh #37 (FR-SESS-11): the live view follows the tip
+            // ancestry, so an abandoned branch leaves the transcript
+            // and the model context. Audit walks everything.
+            let tip = outcome.records.iter().rev().find_map(|r| r.id());
+            if let Some(tip) = tip {
+                let (chain, warnings) = ancestry(&outcome.records, tip);
+                outcome.records = chain;
+                outcome.warnings.extend(warnings);
+            }
             outcome.records = suppress_compacted(outcome.records);
         }
         Ok(outcome)
@@ -64,17 +73,24 @@ impl SessionStore {
                     outcome.skipped_unknown += parent_chain.skipped_unknown;
                     outcome.warnings.extend(parent_chain.warnings);
                     let parent_record = meta.parent_record.as_deref().unwrap_or_default();
-                    let cut = parent_chain
+                    if !parent_chain
                         .records
                         .iter()
-                        .position(|r| r.id() == Some(parent_record))
-                        .ok_or_else(|| crate::Error::ForkPointMissing {
+                        .any(|r| r.id() == Some(parent_record))
+                    {
+                        return Err(crate::Error::ForkPointMissing {
                             session: handle.id().to_string(),
                             record: parent_record.to_string(),
-                        })?;
-                    outcome
-                        .records
-                        .splice(0..0, parent_chain.records[..=cut].iter().cloned());
+                        });
+                    }
+                    // gh #37 (FR-SESS-11): the fork inherits the taken
+                    // record's ancestry, not the raw prefix - a fork at
+                    // a branched record leaves the abandoned path
+                    // behind. Unlinked parents walk linearly, which is
+                    // exactly the old prefix.
+                    let (history, warnings) = ancestry(&parent_chain.records, parent_record);
+                    outcome.warnings.extend(warnings);
+                    outcome.records.splice(0..0, history);
                     true
                 }
                 None => false,
@@ -106,6 +122,72 @@ impl SessionStore {
         }
         Ok(Session::new(parent_id.to_string(), dir))
     }
+}
+
+/// The tip-ancestry chain from `start` in log order (gh #37,
+/// FR-SESS-11, ADR-0046): follow `parent` links newest-first; a branch
+/// jump is transparent (continue at its target); a record with no link
+/// contributes everything before it (pre-linkage logs are linear by
+/// construction, so this is exactly the old behavior there). Returns
+/// the chain plus warnings: a dangling link, a missing jump target, or
+/// a link cycle stops the walk and keeps what it proved - corruption
+/// handling in the FR-SESS-6 spirit, never silent invention.
+pub(crate) fn ancestry(records: &[Record], start: &str) -> (Vec<Record>, Vec<String>) {
+    use std::collections::{BTreeMap, BTreeSet};
+    let by_id: BTreeMap<&str, &Record> = records
+        .iter()
+        .filter_map(|r| r.id().map(|id| (id, r)))
+        .collect();
+    let mut warnings = Vec::new();
+    let mut rev: Vec<&Record> = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut current: Option<&str> = Some(start);
+    let mut fallback_before: Option<usize> = None;
+    while let Some(id) = current {
+        if !seen.insert(id) {
+            warnings.push(format!(
+                "ancestry cycle at record `{id}`; history truncated"
+            ));
+            break;
+        }
+        let Some(pos) = records.iter().position(|r| r.id() == Some(id)) else {
+            warnings.push(format!("ancestry link `{id}` not found; history truncated"));
+            break;
+        };
+        let record = &records[pos];
+        if let Record::BranchPoint { target_id, .. } = record {
+            if by_id.contains_key(target_id.as_str()) {
+                current = Some(target_id);
+                continue;
+            }
+            warnings.push(format!(
+                "branch target `{target_id}` not found; history truncated"
+            ));
+            break;
+        }
+        rev.push(record);
+        match record.parent() {
+            Some(parent) => current = Some(parent),
+            None => {
+                fallback_before = Some(pos);
+                break;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(pos) = fallback_before {
+        out.extend(records[..pos].iter().cloned());
+    }
+    out.extend(rev.into_iter().rev().cloned());
+    (out, warnings)
+}
+
+/// The reachability view for the sweep (gh #37): everything except
+/// compaction-suppressed records. Abandoned branches still hold their
+/// attachments, so this walks Audit, not the live chain - while a
+/// compacted-away record's bytes are truly orphaned.
+pub(crate) fn reachable_records(records: Vec<Record>) -> Vec<Record> {
+    suppress_compacted(records)
 }
 
 /// Hide every record inside any `compaction` record's replaced range; a
