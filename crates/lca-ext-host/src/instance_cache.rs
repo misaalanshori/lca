@@ -44,32 +44,45 @@ use super::*;
 #[derive(Default)]
 pub(super) struct InstanceCache {
     tool: Option<(Store<HostState>, lca_ext_abi::host::tool::Tool)>,
-    tool_catalog:
-        Option<(Store<HostState>, lca_ext_abi::host::tool_catalog::ToolCatalog)>,
+    tool_catalog: Option<(
+        Store<HostState>,
+        lca_ext_abi::host::tool_catalog::ToolCatalog,
+    )>,
     command: Option<(Store<HostState>, lca_ext_abi::host::command::Command)>,
     hooks: Option<(Store<HostState>, lca_ext_abi::host::hooks::Hooks)>,
     provider: Option<(Store<HostState>, lca_ext_abi::host::provider::Provider)>,
-    compaction:
-        Option<(Store<HostState>, lca_ext_abi::host::compaction::Compaction)>,
-    context_transform:
-        Option<(Store<HostState>, lca_ext_abi::host::context_transform::ContextTransform)>,
+    compaction: Option<(Store<HostState>, lca_ext_abi::host::compaction::Compaction)>,
+    context_transform: Option<(
+        Store<HostState>,
+        lca_ext_abi::host::context_transform::ContextTransform,
+    )>,
     ui: Option<(Store<HostState>, lca_ext_abi::host::ui::Ui)>,
-    hooks_message:
-        Option<(Store<HostState>, lca_ext_abi::host::hooks_message::HooksMessage)>,
-    hooks_tool_call:
-        Option<(Store<HostState>, lca_ext_abi::host::hooks_tool_call::HooksToolCall)>,
-    hooks_tool_result:
-        Option<(Store<HostState>, lca_ext_abi::host::hooks_tool_result::HooksToolResult)>,
-    hooks_stream:
-        Option<(Store<HostState>, lca_ext_abi::host::hooks_stream::HooksStream)>,
-    hooks_settle:
-        Option<(Store<HostState>, lca_ext_abi::host::hooks_settle::HooksSettle)>,
-    hooks_compaction:
-        Option<(Store<HostState>, lca_ext_abi::host::hooks_compaction::HooksCompaction)>,
-    hooks_cache:
-        Option<(Store<HostState>, lca_ext_abi::host::hooks_cache::HooksCache)>,
-    hooks_trust:
-        Option<(Store<HostState>, lca_ext_abi::host::hooks_trust::HooksTrust)>,
+    hooks_message: Option<(
+        Store<HostState>,
+        lca_ext_abi::host::hooks_message::HooksMessage,
+    )>,
+    hooks_tool_call: Option<(
+        Store<HostState>,
+        lca_ext_abi::host::hooks_tool_call::HooksToolCall,
+    )>,
+    hooks_tool_result: Option<(
+        Store<HostState>,
+        lca_ext_abi::host::hooks_tool_result::HooksToolResult,
+    )>,
+    hooks_stream: Option<(
+        Store<HostState>,
+        lca_ext_abi::host::hooks_stream::HooksStream,
+    )>,
+    hooks_settle: Option<(
+        Store<HostState>,
+        lca_ext_abi::host::hooks_settle::HooksSettle,
+    )>,
+    hooks_compaction: Option<(
+        Store<HostState>,
+        lca_ext_abi::host::hooks_compaction::HooksCompaction,
+    )>,
+    hooks_cache: Option<(Store<HostState>, lca_ext_abi::host::hooks_cache::HooksCache)>,
+    hooks_trust: Option<(Store<HostState>, lca_ext_abi::host::hooks_trust::HooksTrust)>,
 }
 
 impl InstanceCache {

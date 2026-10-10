@@ -117,7 +117,9 @@ fn a_fuel_exhausted_guest_comes_back_fresh_and_stays_enabled() {
     };
     let mut host = ExtHost::new(tiny, env("evict"));
     let extension = host.load(fixture(), manifest()).expect("loads");
-    let err = extension.execute(&call("loop")).expect_err("runs out of fuel");
+    let err = extension
+        .execute(&call("loop"))
+        .expect_err("runs out of fuel");
     assert!(
         matches!(err, CallError::FuelExhausted),
         "a spin exhausts fuel, got {err:?}"

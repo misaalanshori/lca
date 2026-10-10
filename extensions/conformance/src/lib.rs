@@ -311,14 +311,13 @@ pub fn run_shared(
         // A fresh instance per call answers 1 every time; a cached one
         // counts up - the statefulness probe.
         "call-count" => {
-            static CALLS: std::sync::atomic::AtomicU64 =
-                std::sync::atomic::AtomicU64::new(0);
+            static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
             ModeOutcome {
                 ok: true,
                 text: format!("call {n}"),
             }
-        },
+        }
         // Gh #124's acceptance: a tool asking `ui.confirm`, reporting
         // the verdict as data (a denial is `ok` too - the question was
         // asked and answered, which is what the mode probes).
@@ -686,10 +685,9 @@ pub fn outcome_to_result(call_id: &str, outcome: ModeOutcome) -> ToolResult {
 mod scripts;
 
 pub use scripts::{
-    compact_excerpts, compact_script, provider_models, provider_models_default,
-    scripted_events, scripted_login, scripted_login_options, scripted_login_submit,
-    scripted_logout, scripted_usage, scripted_usage_report, transform_script, ui_event_script,
-    ui_script,
+    compact_excerpts, compact_script, provider_models, provider_models_default, scripted_events,
+    scripted_login, scripted_login_options, scripted_login_submit, scripted_logout, scripted_usage,
+    scripted_usage_report, transform_script, ui_event_script, ui_script,
 };
 
 // ---------------------------------------------------------------------------

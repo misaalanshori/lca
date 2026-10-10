@@ -54,8 +54,8 @@ mod tool_hooks;
 mod transform;
 mod ui;
 
-pub use manifest::{LoadError, Manifest};
 use instance_cache::InstanceCache;
+pub use manifest::{LoadError, Manifest};
 use provider::{
     IdentityOp, identity_simple_work, identity_usage_work, login_options_work, login_submit_work,
     provider_models_work, provider_stream_work,
