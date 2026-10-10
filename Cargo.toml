@@ -214,3 +214,11 @@ opt-level = "z"
 opt-level = "z"
 [profile.release.package.lca-permissions]
 opt-level = "z"
+# #103: the extension host's dispatch glue (instance cache included)
+# joins the size list. It runs on every tool call, but its cost is
+# lock/check/re-arm bookkeeping dwarfed by the guest's own execution;
+# what matters for NFR-1 is the 16-world checkout/checkin surface
+# compiling small, not fast. Revisit with a measurement if a hot-path
+# profile ever disagrees.
+[profile.release.package.lca-ext-host]
+opt-level = "z"
