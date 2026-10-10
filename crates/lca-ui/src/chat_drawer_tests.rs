@@ -190,7 +190,7 @@ fn panel_clicks_land_past_the_border() {
     let mut chat = Chat::new(opts, std::sync::Arc::new(KeybindingsManager::new()));
     chat.screen_mode = true;
     chat.world.panel_open = true;
-    let (w, h) = (80u16, 24u16);
+    let w = 80u16;
     let origin = w as usize - crate::render::panel_width(w);
     // The border cells are chrome, never widget input.
     assert!(
