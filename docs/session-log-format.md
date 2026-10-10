@@ -171,7 +171,7 @@ A change that makes existing records unreadable needs a migration tool that rewr
 
 The format version is recorded in `meta.json` and in the `session-start` record. Both are checked on load, and a mismatch between them is a corruption signal.
 
-`lca session migrate <id>` (gh #98) is the one rewrite this format ships: linkage backfill. Pre-linkage records (no `parent`, written before gh #37) chain to their log predecessor - exactly what `append` would have stamped - so the entry tree and the ancestry walk see old logs. The rules:
+`lca migrate <id>` (gh #98) is the one rewrite this format ships: linkage backfill. Pre-linkage records (no `parent`, written before gh #37) chain to their log predecessor - exactly what `append` would have stamped - so the entry tree and the ancestry walk see old logs. The rules:
 
 - One log per run. The original survives in `<session>/backups/migrate-<unix-seconds>/log.jsonl` until the user removes it.
 - Only stamped lines change, by value surgery (unknown fields survive); everything else - unknown-future lines, junction records, linked records - rides through byte-identical.

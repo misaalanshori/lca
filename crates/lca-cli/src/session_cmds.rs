@@ -156,7 +156,7 @@ pub enum Route {
         /// Session id.
         session: String,
     },
-    /// Forward-migrate a session log to the current format (gh #98).
+    /// Forward-migrate a session log (gh #98).
     Migrate {
         /// Session id.
         session: String,
@@ -518,9 +518,9 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
             SessionCmd::Gc { session } => Route::Gc {
                 session: session.clone(),
             },
-            SessionCmd::Migrate { session } => Route::Migrate {
-                session: session.clone(),
-            },
+        },
+        Some(Command::Migrate { session }) => Route::Migrate {
+            session: session.clone(),
         },
         Some(Command::Ext { cmd }) => Route::Ext(cmd.clone()),
         Some(Command::Auth { cmd }) => Route::Auth(cmd.clone()),

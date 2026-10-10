@@ -501,7 +501,7 @@ fn startup_trust_precedence_flags_stored_default() {
 #[test]
 fn session_migrate_routes_to_the_migrate_command() {
     assert_eq!(
-        route(&parse(&["session", "migrate", "s1"])),
+        route(&parse(&["migrate", "s1"])),
         Route::Migrate {
             session: "s1".into()
         }

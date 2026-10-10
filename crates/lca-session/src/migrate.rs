@@ -157,56 +157,25 @@ impl SessionStore {
                 warnings,
             });
         }
-        // Views before: the lossless check compares these after.
+        // Transcript before: the lossless check compares it after
+        // (the audit-view check rides the raw contents below:
+        // ancestors never rewrite, so the own log covers it).
         let before_display = self.view_ids(session, ViewMode::Display)?;
-        let before_audit = self.view_ids(session, ViewMode::Audit)?;
         let before_values = self.audit_values(session)?;
 
         let backup = self.backup_log(session)?;
         let text = std::fs::read_to_string(session.log_path())?;
-        let mut stamped = 0;
-        let mut previous: Option<String> = None;
-        let mut out = String::new();
-        for line in text.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            // Only stamped lines change, and only by surgery on the
-            // parsed value (unknown fields survive); everything else
-            // rides through byte-identical.
-            let mut rewritten = line.to_string();
-            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(line) {
-                let version = value.get("v").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let tag = value.get("t").and_then(|t| t.as_str()).unwrap_or("");
-                let linkable = version <= lca_protocol::FORMAT_VERSION
-                    && value.get("parent").is_none()
-                    && is_linkable_tag(tag);
-                if linkable
-                    && let Some(prev) = previous.clone()
-                    && value.is_object()
-                {
-                    value["parent"] = serde_json::Value::String(prev);
-                    rewritten = serde_json::to_string(&value).unwrap_or_else(|_| line.to_string());
-                    stamped += 1;
-                }
-                if let Some(id) = value.get("id").and_then(|id| id.as_str()) {
-                    previous = Some(id.to_string());
-                }
-            }
-            out.push_str(&rewritten);
-            out.push('\n');
-        }
+        let (out, stamped) = stamp_log(&text);
         std::fs::write(session.log_path(), out)?;
 
-        // Lossless verification: the same records in the same order
-        // everywhere, contents equal modulo the stamped links.
+        // Lossless verification: the same transcript, the same
+        // contents modulo the stamped links.
         let after_display = self.view_ids(session, ViewMode::Display)?;
-        let after_audit = self.view_ids(session, ViewMode::Audit)?;
         let after_values = self.audit_values(session)?;
-        if before_display != after_display || before_audit != after_audit {
+        if before_display != after_display {
             return Err(super::Error::CannotMigrate {
                 session: session.id().to_string(),
-                reason: "verification failed: views changed; the backup holds the original"
+                reason: "verification failed: transcript changed; the backup holds the original"
                     .to_string(),
             });
         }
@@ -303,4 +272,42 @@ impl SessionStore {
 /// value path never instantiates the record enum (NFR-1).
 fn is_linkable_tag(tag: &str) -> bool {
     !matches!(tag, "session-start" | "fork-point" | "branch-point")
+}
+
+/// Chain parentless linkable lines to their id-predecessor (gh #98):
+/// pure string transform, infallible, so the caller keeps the only
+/// error paths. Only stamped lines change, and only by surgery on
+/// the parsed value (unknown fields survive); everything else rides
+/// through byte-identical.
+fn stamp_log(text: &str) -> (String, usize) {
+    let mut stamped = 0;
+    let mut previous: Option<String> = None;
+    let mut out = String::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut rewritten = line.to_string();
+        if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(line) {
+            let version = value.get("v").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let tag = value.get("t").and_then(|t| t.as_str()).unwrap_or("");
+            let linkable = version <= lca_protocol::FORMAT_VERSION
+                && value.get("parent").is_none()
+                && is_linkable_tag(tag);
+            if linkable
+                && let Some(prev) = previous.clone()
+                && value.is_object()
+            {
+                value["parent"] = serde_json::Value::String(prev);
+                rewritten = serde_json::to_string(&value).unwrap_or_else(|_| line.to_string());
+                stamped += 1;
+            }
+            if let Some(id) = value.get("id").and_then(|id| id.as_str()) {
+                previous = Some(id.to_string());
+            }
+        }
+        out.push_str(&rewritten);
+        out.push('\n');
+    }
+    (out, stamped)
 }

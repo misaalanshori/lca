@@ -38,7 +38,7 @@ covering the transcript behind it.
 - **Friendly settings labels (gh #235).** The selector paints human
 labels with the highlighted row's help in the pinned hint, sections
 breathe, and `ui.tree_filter_mode` joins the inventory.
-- **Session migration (gh #98).** `lca session migrate <id>`
+- **Session migration (gh #98).** `lca migrate <id>`
 backfills linkage on pre-linkage logs with backup and lossless
 verification (views identical or refused); already-current logs
 report and write nothing; mismatches and truncated logs refuse

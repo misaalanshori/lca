@@ -575,7 +575,7 @@ fn session_migrate_reports_a_current_log() {
         .next()
         .expect("session id")
         .to_string();
-    let output = box_.run(None, &["session", "migrate", &id]);
+    let output = box_.run(None, &["migrate", &id]);
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     assert!(
         stdout(&output).contains("already current"),

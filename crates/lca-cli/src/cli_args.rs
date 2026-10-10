@@ -268,6 +268,14 @@ pub enum Command {
         /// Title for the clone (defaults to `Clone of <parent-title>`).
         title: Option<String>,
     },
+    // gh #98: a top-level session verb like its fork/clone/rename
+    // siblings (a second `SessionCmd` variant triples that tiny
+    // enum's clap parser; NFR-1).
+    /// Forward-migrate a session log to the current format.
+    Migrate {
+        /// The session to migrate.
+        session: String,
+    },
     /// Give a session a new title.
     Rename {
         /// The session to rename.
@@ -370,12 +378,6 @@ pub enum SessionCmd {
     /// Delete attachments that no resolved record list references.
     Gc {
         /// The session whose fork tree to sweep.
-        session: String,
-    },
-    /// Forward-migrate a session log to the current format (gh #98):
-    /// linkage backfill with backup and lossless verification.
-    Migrate {
-        /// The session to migrate.
         session: String,
     },
 }
