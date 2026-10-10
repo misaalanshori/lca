@@ -4,7 +4,7 @@
 //! file ceiling. Fixtures (`options`, `chat`) stay in `chat_tests.rs`.
 
 use super::*;
-use super::{chat, options};
+use super::options;
 use std::sync::Arc;
 
 // Verifies: gh #75 - Ctrl+D in `/resume` asks on the row, `y`
