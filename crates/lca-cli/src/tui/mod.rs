@@ -815,17 +815,8 @@ impl Ui {
 
         // gh #71: opener `@file` images stage before construction
         // (the struct moves the session, so the clone happens here).
-        // gh #122: staging is content - it materializes a pending
-        // session (meta and session-start land with the attachments).
-        if !initial_attachments.is_empty() {
-            let session = current_session
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone();
-            let _ = store.ensure_materialized(&session);
-        }
         let staged_attachments =
-            stage_initial_attachments(&Arc::clone(&current_session), initial_attachments);
+            stage_initial_attachments(&store, &Arc::clone(&current_session), initial_attachments);
         Ok(Ui {
             cwd: cwd.to_path_buf(),
             data,

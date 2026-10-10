@@ -19,12 +19,18 @@ use super::display::model_effect_on;
 /// does. A file that will not stage warns and drops - the interface
 /// stays usable, and the warning names the path.
 pub(crate) fn stage_initial_attachments(
+    store: &lca_session::SessionStore,
     session: &Arc<Mutex<Session>>,
     paths: &[std::path::PathBuf],
 ) -> Vec<lca_core::StagedAttachment> {
     let Ok(session) = session.lock() else {
         return Vec::new();
     };
+    // gh #122: staging is content - it materializes a pending
+    // session (meta and session-start land with the attachments).
+    if !paths.is_empty() {
+        let _ = store.ensure_materialized(&session);
+    }
     let mut staged = Vec::new();
     for path in paths {
         match lca_core::stage_image(&session, path) {
