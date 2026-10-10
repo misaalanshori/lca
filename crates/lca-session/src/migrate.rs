@@ -61,6 +61,8 @@ pub struct MigrateReport {
 
 impl SessionStore {
     /// Read a session's version stamps without rewriting (gh #98).
+    /// Value-level throughout: no record-enum instantiation, so the
+    /// reader's size budget never notices this (NFR-1).
     pub fn version_state(&self, session: &Session) -> super::Result<VersionState> {
         let meta_version = self.meta(session).ok().map(|meta| meta.format_version);
         let outcome = self.read(session)?;
@@ -69,10 +71,22 @@ impl SessionStore {
         let mut parentless = 0;
         let mut unknown_future = 0;
         let mut predecessor: Option<String> = None;
-        for record in &outcome.records {
-            let version = record_version(record);
+        let text = std::fs::read_to_string(session.log_path()).unwrap_or_default();
+        for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let version = value.get("v").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             max_record_version = max_record_version.max(version);
-            if record.parent().is_none() && is_linkable(record) {
+            if version > lca_protocol::FORMAT_VERSION {
+                unknown_future += 1;
+                continue;
+            }
+            let tag = value.get("t").and_then(|t| t.as_str()).unwrap_or("");
+            if tag == "session-start" && header_version.is_none() {
+                header_version = value.get("v").and_then(|v| v.as_u64()).map(|v| v as u32);
+            }
+            if value.get("parent").is_none() && is_linkable_tag(tag) {
                 // A leading record has no id to point at (append
                 // leaves it parentless too); only a record with an
                 // id-predecessor wants a stamp.
@@ -80,25 +94,8 @@ impl SessionStore {
                     parentless += 1;
                 }
             }
-            if let Some(id) = record.id() {
+            if let Some(id) = value.get("id").and_then(|id| id.as_str()) {
                 predecessor = Some(id.to_string());
-            }
-            if header_version.is_none()
-                && let lca_protocol::Record::SessionStart { v, .. } = record
-            {
-                header_version = Some(*v);
-            }
-        }
-        // Skipped lines never parsed: future versions surface from
-        // the raw text so the report names them.
-        let text = std::fs::read_to_string(session.log_path()).unwrap_or_default();
-        for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
-                let version = value.get("v").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                max_record_version = max_record_version.max(version);
-                if version > lca_protocol::FORMAT_VERSION {
-                    unknown_future += 1;
-                }
             }
         }
         let mismatched = match (meta_version, header_version) {
@@ -172,20 +169,21 @@ impl SessionStore {
             // parsed value (unknown fields survive); everything else
             // rides through byte-identical.
             let mut rewritten = line.to_string();
-            if let Ok(record) = serde_json::from_str::<lca_protocol::Record>(line) {
-                let version = record_version(&record);
+            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(line) {
+                let version = value.get("v").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let tag = value.get("t").and_then(|t| t.as_str()).unwrap_or("");
                 let linkable = version <= lca_protocol::FORMAT_VERSION
-                    && record.parent().is_none()
-                    && is_linkable(&record);
+                    && value.get("parent").is_none()
+                    && is_linkable_tag(tag);
                 if linkable
                     && let Some(prev) = previous.clone()
-                    && let Ok(mut value) = serde_json::from_str::<serde_json::Value>(line)
+                    && value.is_object()
                 {
                     value["parent"] = serde_json::Value::String(prev);
                     rewritten = serde_json::to_string(&value).unwrap_or_else(|_| line.to_string());
                     stamped += 1;
                 }
-                if let Some(id) = record.id() {
+                if let Some(id) = value.get("id").and_then(|id| id.as_str()) {
                     previous = Some(id.to_string());
                 }
             }
@@ -241,11 +239,18 @@ impl SessionStore {
             .collect())
     }
 
-    /// Audit contents minus `parent` (the one field migration stamps).
+    /// Audit contents minus `parent` (the one field migration
+    /// stamps), read as values so unknown fields compare too.
     fn audit_values(&self, session: &Session) -> super::Result<Vec<serde_json::Value>> {
+        let text = std::fs::read_to_string(session.log_path())?;
         let mut values = Vec::new();
-        for record in self.read(session)?.records {
-            let mut value = serde_json::to_value(&record)?;
+        for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            // The caller refused truncated logs, so every line parses.
+            let mut value: serde_json::Value = serde_json::from_str(line)
+                .map_err(|err| super::Error::CannotMigrate {
+                    session: session.id().to_string(),
+                    reason: format!("verification failed: unreadable line: {err}"),
+                })?;
             if let Some(object) = value.as_object_mut() {
                 object.remove("parent");
             }
@@ -283,41 +288,9 @@ impl SessionStore {
     }
 }
 
-/// A record's schema version (one arm per variant, so a new record
-/// type fails loudly here instead of silently reporting 0).
-fn record_version(record: &lca_protocol::Record) -> u32 {
-    use lca_protocol::Record::*;
-    match record {
-        SessionStart { v, .. }
-        | User { v, .. }
-        | Assistant { v, .. }
-        | ToolCall { v, .. }
-        | ToolResult { v, .. }
-        | Permission { v, .. }
-        | ExtensionEvent { v, .. }
-        | Compaction { v, .. }
-        | ForkPoint { v, .. }
-        | ModelChange { v, .. }
-        | ThinkingLevelChange { v, .. }
-        | Usage { v, .. }
-        | Label { v, .. }
-        | SessionInfo { v, .. }
-        | Custom { v, .. }
-        | CustomMessage { v, .. }
-        | ContextEdit { v, .. }
-        | BranchSummary { v, .. }
-        | BranchPoint { v, .. }
-        | SessionEnd { v, .. } => *v,
-    }
-}
-
-/// Whether a record takes an ancestry link (junction records never
-/// do - the walk jumps through them).
-fn is_linkable(record: &lca_protocol::Record) -> bool {
-    !matches!(
-        record,
-        lca_protocol::Record::SessionStart { .. }
-            | lca_protocol::Record::ForkPoint { .. }
-            | lca_protocol::Record::BranchPoint { .. }
-    )
+/// Whether a record type takes an ancestry link (gh #98): junction
+/// records never do - the walk jumps through them. Tag-level, so the
+/// value path never instantiates the record enum (NFR-1).
+fn is_linkable_tag(tag: &str) -> bool {
+    !matches!(tag, "session-start" | "fork-point" | "branch-point")
 }
