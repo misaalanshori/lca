@@ -183,9 +183,21 @@ impl Chat {
             for (row, index) in picker.matches.iter().enumerate() {
                 let entry = &picker.entries[*index];
                 let cur = if row == picker.selected { '>' } else { ' ' };
+                // gh #75: the confirming row asks inline (same row
+                // count, so the hit map holds).
+                if picker.confirming == Some(row) {
+                    body.push(format!(" {cur} delete '{}'? (y/n)", entry.title));
+                    continue;
+                }
+                // gh #75: bookmark names ride the row they filter by.
+                let marks = if entry.labels.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", entry.labels.join(", "))
+                };
                 body.push(format!(
-                    " {cur} {} ({} messages, {})",
-                    entry.title, entry.messages, entry.age
+                    " {cur} {}{} ({} messages, {})",
+                    entry.title, marks, entry.messages, entry.age
                 ));
             }
             self.picker_overlay(

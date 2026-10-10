@@ -515,6 +515,9 @@ pub type ForkAtRecord = Arc<dyn Fn(&str) -> ForkReport + Send + Sync>;
 /// Bookmark the nth user message (0-based) under a name, returning the
 /// labeled record's id (gh #37, FR-SESS-10).
 pub type SetLabel = Arc<dyn Fn(usize, &str) -> Result<String, String> + Send + Sync>;
+/// Trash a session by id, returning the notice to show (gh #75).
+/// The store keeps the directory under trash for recovery.
+pub type DeleteSession = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 /// Every live bookmark as `(name, record id)` pairs, sorted by name
 /// (gh #37, FR-SESS-10).
 pub type ListLabels = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
@@ -632,6 +635,8 @@ pub struct UiHooks {
     pub fork_record: Option<ForkAtRecord>,
     /// Bookmark a message for `/label` (gh #37).
     pub set_label: Option<SetLabel>,
+    /// Trash a session from `/resume` (gh #75).
+    pub delete_session: Option<DeleteSession>,
     /// List bookmarks for `/labels` (gh #37).
     pub list_labels: Option<ListLabels>,
     /// Re-run discovery without restarting (gh #130).

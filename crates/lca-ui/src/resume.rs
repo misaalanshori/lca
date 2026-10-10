@@ -25,6 +25,9 @@ pub struct SessionEntry {
     pub messages: usize,
     /// A human age (`now`, `5m`, `3h`, …), for the row's right side.
     pub age: String,
+    /// Live bookmark names in this session (gh #75): the filter
+    /// matches them, the row shows them.
+    pub labels: Vec<String>,
 }
 
 /// One parsed query term.
@@ -91,7 +94,8 @@ pub fn session_matches(entry: &SessionEntry, query: &str) -> bool {
     if terms.is_empty() {
         return true;
     }
-    let haystack = format!("{} {}", entry.title, entry.id).to_lowercase();
+    let haystack =
+        format!("{} {} {}", entry.title, entry.id, entry.labels.join(" ")).to_lowercase();
     terms.iter().all(|term| match term {
         Term::Substring(needle) => haystack.contains(needle.as_str()),
         Term::Regex(Some(regex)) => regex.is_match(&haystack),
@@ -121,6 +125,9 @@ pub struct ResumePicker {
     pub matches: Vec<usize>,
     /// The highlighted row (an index into `matches`).
     pub selected: usize,
+    /// The match awaiting delete confirmation (gh #75): `Some`
+    /// means `y` trashes, `n` keeps. An index into `matches`.
+    pub confirming: Option<usize>,
 }
 
 impl ResumePicker {
@@ -132,11 +139,15 @@ impl ResumePicker {
             query: String::new(),
             matches,
             selected: 0,
+            confirming: None,
         }
     }
 
     /// Re-filter after a query change, keeping the selection in range.
+    /// A pending delete confirm dies with the old view (gh #75):
+    /// the locked row may point anywhere now.
     pub fn refilter(&mut self) {
+        self.confirming = None;
         self.matches = filter_sessions(&self.entries, &self.query);
         if self.selected >= self.matches.len() {
             self.selected = self.matches.len().saturating_sub(1);
@@ -162,18 +173,21 @@ mod tests {
                 title: "Fix the parser".into(),
                 messages: 4,
                 age: "5m".into(),
+                labels: Vec::new(),
             },
             SessionEntry {
                 id: "s2".into(),
                 title: "Node CVE triage".into(),
                 messages: 2,
                 age: "3h".into(),
+                labels: Vec::new(),
             },
             SessionEntry {
                 id: "s3".into(),
                 title: "Docs pass".into(),
                 messages: 9,
                 age: "2d".into(),
+                labels: Vec::new(),
             },
         ]
     }

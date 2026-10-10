@@ -20,12 +20,14 @@ fn resume_picker_searches_sessions() {
                 title: "parser fix".into(),
                 messages: 3,
                 age: "5m".into(),
+                labels: Vec::new(),
             },
             crate::resume::SessionEntry {
                 id: "b".into(),
                 title: "docs pass".into(),
                 messages: 1,
                 age: "2d".into(),
+                labels: Vec::new(),
             },
         ]
     }));

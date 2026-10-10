@@ -670,6 +670,24 @@ impl Chat {
         // The `/resume` picker owns the keyboard while open (R2): a search
         // box where up/down navigate and printable keys edit the query.
         if let Some(mut picker) = self.resume_picker.take() {
+            // A delete confirm owns every key until it resolves (gh #75).
+            if picker.confirming.is_some() {
+                match key {
+                    Some("escape") | Some("n") => {
+                        picker.confirming = None;
+                        self.resume_picker = Some(picker);
+                    }
+                    Some("y") => {
+                        let at = picker.confirming.take();
+                        self.resume_picker = Some(picker);
+                        self.commit_resume_delete(at);
+                    }
+                    _ => {
+                        self.resume_picker = Some(picker);
+                    }
+                }
+                return Some(Action::Continue);
+            }
             match key {
                 Some("escape") => {}
                 Some("enter") => {
@@ -704,6 +722,42 @@ impl Chat {
                     picker.query.pop();
                     picker.refilter();
                     self.resume_picker = Some(picker);
+                }
+                // gh #75: Ctrl+D trashes (with a confirm); the live
+                // session refuses - trash it and the transcript loses
+                // its floor.
+                Some("ctrl+d") => {
+                    if self.world.options.hooks.delete_session.is_none() {
+                        self.world.notice =
+                            Some("deleting sessions is not available in this host".to_string());
+                        self.resume_picker = Some(picker);
+                        return Some(Action::Continue);
+                    }
+                    let current = self
+                        .world
+                        .options
+                        .hooks
+                        .current_session_id
+                        .as_ref()
+                        .map(|current| current());
+                    let target = picker
+                        .matches
+                        .get(picker.selected)
+                        .and_then(|index| picker.entries.get(*index));
+                    match target {
+                        Some(entry) if current.as_deref() == Some(entry.id.as_str()) => {
+                            self.world.notice =
+                                Some("that session is open here - switch away first".to_string());
+                            self.resume_picker = Some(picker);
+                        }
+                        Some(_) => {
+                            picker.confirming = Some(picker.selected);
+                            self.resume_picker = Some(picker);
+                        }
+                        None => {
+                            self.resume_picker = Some(picker);
+                        }
+                    }
                 }
                 _ => {
                     if let Some(text) = printable(data).or_else(|| paste_text(data)) {

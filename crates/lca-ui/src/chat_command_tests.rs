@@ -77,6 +77,7 @@ fn open_resume_picker_lists_sessions_or_says_none() {
             title: "first".into(),
             messages: 3,
             age: "today".into(),
+            labels: Vec::new(),
         }]
     }));
     let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
@@ -1176,5 +1177,23 @@ fn tree_browses_entry_branches_and_selection_branches_there() {
             .contains("forked at 1"),
         "{:?}",
         chat.world.notice
+    );
+}
+
+// Verifies: gh #75 (pi's `/name`) - `/name` renames the live session
+// like `/rename`, through the same host seam.
+#[test]
+fn slash_name_renames_through_the_host() {
+    let mut opts = options();
+    opts.hooks.rename_session = Some(Arc::new(|name: &str| Ok(format!("renamed to '{name}'"))));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    for c in "/name my title".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert_eq!(
+        chat.world.notice.as_deref(),
+        Some("renamed to 'my title'"),
+        "the host seam answers"
     );
 }

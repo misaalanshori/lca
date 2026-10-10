@@ -360,7 +360,8 @@ impl Chat {
             }
             // Gh #37: rename the live session (the entry trails in the
             // log as `session-info`; `/resume` keeps showing the title).
-            "rename" => {
+            // Gh #75: pi's `/name` is the same verb under its own name.
+            "rename" | "name" => {
                 let Some(rename) = self.world.options.hooks.rename_session.clone() else {
                     self.world.notice = Some("renaming is not available in this host".to_string());
                     return Action::Continue;
@@ -578,6 +579,39 @@ impl Chat {
             _ => self.open_tree_picker(),
         }
         Action::Continue
+    }
+
+    /// Commit a resume delete confirm (gh #75): the hook trashes by
+    /// record id, then the list rebuilds from the host so the row is
+    /// really gone (not just hidden).
+    pub(crate) fn commit_resume_delete(&mut self, at: Option<usize>) {
+        let Some(delete) = self.world.options.hooks.delete_session.clone() else {
+            self.world.notice = Some("deleting sessions is not available in this host".to_string());
+            return;
+        };
+        let id = at.and_then(|selected| {
+            let picker = self.resume_picker.as_ref()?;
+            let index = picker.matches.get(selected)?;
+            picker.entries.get(*index).map(|entry| entry.id.clone())
+        });
+        let Some(id) = id else {
+            return;
+        };
+        match delete(&id) {
+            Ok(notice) => {
+                self.world.notice = Some(notice);
+                if let Some(list) = self.world.options.hooks.session_list.clone() {
+                    let rows = list();
+                    if let Some(picker) = self.resume_picker.as_mut() {
+                        picker.entries = rows;
+                        picker.refilter();
+                        picker.selected =
+                            picker.selected.min(picker.matches.len().saturating_sub(1));
+                    }
+                }
+            }
+            Err(err) => self.world.notice = Some(err),
+        }
     }
 
     /// Open the session picker over the current session (gh #110:
@@ -892,6 +926,7 @@ fn command_help(command: &str) -> &'static str {
         "/thinking" => "set the reasoning level",
         "/tree" => "browse the session's entry tree and branch in place",
         "/rename" => "rename this session (usage: /rename <name>)",
+        "/name" => "rename this session, pi's spelling (usage: /name <name>)",
         "/resume" => "search and reopen a session",
         "/fork" => "fork a branch at a message (picker, or /fork <n>)",
         "/clone" => "duplicate this session at its tip and switch (usage: /clone [name])",

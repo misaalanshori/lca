@@ -219,6 +219,8 @@ impl Ui {
         names.insert(13, "/scoped-models".to_string());
         names.insert(14, "/mcp".to_string());
         names.insert(15, "/changelog".to_string());
+        // gh #75: pi's `/name` completes like the `/rename` it names.
+        names.insert(16, "/name".to_string());
         // gh #43: the skill command plus one entry per skill, so
         // `/skill:name` completes and forwards to the host.
         names.push("/skill".to_string());

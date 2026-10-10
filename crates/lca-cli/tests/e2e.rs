@@ -583,3 +583,36 @@ fn session_migrate_reports_a_current_log() {
         stdout(&output)
     );
 }
+
+// Verifies: gh #75 — `lca delete <id>` trashes the session directory
+// and names the recovery path; the session lists no more.
+#[test]
+fn session_delete_trashes_and_names_recovery() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("stored"))]));
+    let box_ = sandbox("session-delete");
+    let output = box_.run(Some(&mock), &["-p", "hi"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+
+    let listing = stdout(&box_.run(None, &["resume"]));
+    let id = listing
+        .lines()
+        .next()
+        .expect("one session at least")
+        .split_whitespace()
+        .next()
+        .expect("session id")
+        .to_string();
+    let output = box_.run(None, &["delete", &id]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("trashed") && stdout(&output).contains("recover"),
+        "stdout: {}",
+        stdout(&output)
+    );
+    let listing = stdout(&box_.run(None, &["resume"]));
+    assert!(
+        !listing.lines().any(|line| line.starts_with(&id)),
+        "trashed sessions list no more: {listing}"
+    );
+}

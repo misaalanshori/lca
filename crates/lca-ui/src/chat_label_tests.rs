@@ -152,3 +152,19 @@ fn jump_names_an_unknown_bookmark() {
         chat.world.notice
     );
 }
+
+// Verifies: gh #75 - resume rows match bookmark names: labels ride
+// the haystack, not just titles and ids.
+#[test]
+fn resume_filter_matches_bookmark_names() {
+    use crate::resume::{SessionEntry, filter_sessions};
+    let entries = vec![SessionEntry {
+        id: "s1".into(),
+        title: "Fix the parser".into(),
+        messages: 4,
+        age: "5m".into(),
+        labels: vec!["checkpoint-1".into()],
+    }];
+    assert_eq!(filter_sessions(&entries, "checkpoint").len(), 1);
+    assert!(filter_sessions(&entries, "nope").is_empty());
+}

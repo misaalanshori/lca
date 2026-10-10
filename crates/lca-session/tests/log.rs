@@ -1144,3 +1144,30 @@ fn a_session_reference_opens_by_path_or_id() {
     assert_eq!(by_path.id(), session.id());
     assert!(store.session_ref(&project, "nope").is_err(), "unknown");
 }
+
+// Verifies: gh #75 - trashing moves the session directory under a
+// timestamped trash directory (recoverable, never `rm`), and the
+// session lists no more.
+#[test]
+fn trash_moves_the_session_directory_to_recover() {
+    let store = store("trash");
+    let project = scratch("trash-project");
+    let session = store.create_session(&project, "test").expect("create");
+    let id = session.id().to_string();
+    assert!(session.dir().is_dir());
+
+    let trashed = store.trash(&session).expect("trash");
+    assert!(!session.dir().exists(), "the session directory is gone");
+    assert!(
+        trashed.is_dir() && trashed.join("meta.json").is_file(),
+        "the whole directory survives under trash: {}",
+        trashed.display()
+    );
+    let ids: Vec<String> = store
+        .list_sessions(&project)
+        .expect("list")
+        .into_iter()
+        .map(|summary| summary.id)
+        .collect();
+    assert!(!ids.contains(&id), "trashed sessions list no more");
+}

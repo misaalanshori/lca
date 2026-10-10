@@ -507,3 +507,16 @@ fn session_migrate_routes_to_the_migrate_command() {
         }
     );
 }
+
+// Verifies: gh #75 (trash delete is a top-level session verb, beside
+// rename - a second SessionCmd variant would triple that tiny enum's
+// clap parser; NFR-1, gh #98's lesson).
+#[test]
+fn session_delete_routes_to_the_delete_command() {
+    assert_eq!(
+        route(&parse(&["delete", "s1"])),
+        Route::Delete {
+            session: "s1".into()
+        }
+    );
+}

@@ -305,12 +305,14 @@ fn paste_into_the_resume_picker_search_filters_the_list() {
             title: "alpha".into(),
             messages: 1,
             age: "now".into(),
+            labels: Vec::new(),
         },
         crate::resume::SessionEntry {
             id: "b".into(),
             title: "beta".into(),
             messages: 2,
             age: "now".into(),
+            labels: Vec::new(),
         },
     ]));
     chat.handle_key(&bracketed("beta"));
@@ -1124,6 +1126,9 @@ mod label_tests;
 
 #[path = "chat_tab_tests.rs"]
 mod tab_tests;
+
+#[path = "chat_resume_tests.rs"]
+mod resume_tests;
 
 // Verifies: gh #41 (a model without `high` thinking does not offer
 // it): the picker hides unsupported levels instead of merely

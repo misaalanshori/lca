@@ -40,6 +40,7 @@ fn tabbed_options() -> crate::state::UiOptions {
                 title: format!("title {id}"),
                 messages: 1,
                 age: "now".to_string(),
+                labels: Vec::new(),
             })
             .collect()
     }));

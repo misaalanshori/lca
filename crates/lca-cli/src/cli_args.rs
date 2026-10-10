@@ -283,6 +283,14 @@ pub enum Command {
         /// The new title.
         title: String,
     },
+    // gh #75: trash a session (recoverable, never `rm`). Top-level
+    // beside rename: a second `SessionCmd` variant would triple that
+    // tiny enum's clap parser (NFR-1, gh #98's lesson).
+    /// Move a session to the trash directory.
+    Delete {
+        /// The session to trash.
+        session: String,
+    },
     // FR-SESS-7, `docs/session-log-format.md`.
     /// Write a session out for sharing or inspection.
     Export {
