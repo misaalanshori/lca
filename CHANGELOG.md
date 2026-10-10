@@ -25,6 +25,12 @@ glyph: each layer opens and closes its own SGR state, so
 transcript italics and background bands neither tint overlays nor
 leak past them (the right slice re-arms the base state as FR-UI-23
 established).
+- **C-c clears the composer (gh #225).** The first C-c with text
+present clears it (standing down an armed exit); empty-armed C-c
+exits on the second tap, as the hint always promised.
+- **Hover no longer scrolls pickers (gh #230).** The rolling window
+holds while the selection sits inside it, so hover highlights in
+place; wheel and keys rescroll by leaving it.
 - **DAG tree navigator (gh #231).** `/tree` is a graphical
 navigator now: branch connectors (`├─`/`└─`/`│`), role markers,
 Up/Down walk, Left/Right fold, `f` filter cycling

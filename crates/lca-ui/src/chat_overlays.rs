@@ -54,8 +54,11 @@ impl Chat {
         // The hint rows sit past the caller's body, so its index still lands
         // on the selected row.
         let above = self.composer_height(width);
+        // gh #230: the painted window rides in so a hover keeps it.
+        let prev = self.picker_window.get();
+        let keep = (prev.1 != usize::MAX).then_some((prev.0, prev.1));
         let window: (usize, usize, u16) = overlay_box_picker(
-            viewport, width, height, title, &body, theme, selected, above,
+            viewport, width, height, title, &body, theme, selected, above, keep,
         );
         // The mouse hit test reads back exactly what this frame drew.
         self.picker_window.set(window);

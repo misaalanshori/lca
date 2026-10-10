@@ -102,8 +102,13 @@ pub fn picker_window(
 /// pinned hint rows, everything above them windows around `selected`,
 /// and the frame always closes with scroll counts. Returns the painted
 /// `(start, end, content_height)` the mouse hit test reads back.
-// The eight inputs are the picker's contract plus its anchor offset; a
-// parameter struct would only rename them.
+///
+/// The window is sticky (gh #230): when `keep` carries the painted
+/// window and the selection sits inside it, the window holds -
+/// hover highlights in place instead of recentering the list under
+/// a stationary cursor. Wheel and keys rescroll by leaving it.
+// The nine inputs are the picker's contract plus its anchor offset;
+// a parameter struct would only rename them.
 #[allow(clippy::too_many_arguments)]
 pub fn overlay_box_picker(
     base: &mut [String],
@@ -114,6 +119,7 @@ pub fn overlay_box_picker(
     theme: &Theme,
     selected: Option<usize>,
     above_rows: usize,
+    keep: Option<(usize, usize)>,
 ) -> (usize, usize, u16) {
     let options = picker_overlay_options(height, above_rows);
     // The granted height bounds the window: two frame rows plus the
@@ -126,6 +132,17 @@ pub fn overlay_box_picker(
     let items_len = body.len().saturating_sub(2);
     let max_items = (rect.height as usize).saturating_sub(4).max(1);
     let (mut start, mut end) = picker_window(items_len, selected, max_items);
+    // gh #230: a selection inside the painted window keeps it. The
+    // hit test only ever reports painted rows, so a hover always
+    // lands inside and never rescrolls; keys and wheel leave it.
+    if let Some((prev_start, prev_end)) = keep {
+        let size = end.saturating_sub(start);
+        let covers = selected.is_some_and(|at| at >= prev_start && at < prev_end);
+        if prev_end.saturating_sub(prev_start) == size && prev_end <= items_len && covers {
+            start = prev_start;
+            end = prev_end;
+        }
+    }
     // Wrap the window's rows; the selected row fills first so it is
     // always visible, then the rows above and below split the rest.
     let wrap_row =
@@ -785,6 +802,7 @@ mod picker_window_tests {
             &Theme::plain(),
             Some(25),
             3,
+            None,
         );
         assert!(
             start > 0 && end < 50,
@@ -813,6 +831,7 @@ mod picker_window_tests {
             &Theme::plain(),
             Some(0),
             3,
+            None,
         );
         let text = stripped(&base).join("\n");
         assert!(!text.contains("▲"), "nothing above: {text}");
@@ -829,6 +848,7 @@ mod picker_window_tests {
             &Theme::plain(),
             Some(49),
             3,
+            None,
         );
         let text = stripped(&base).join("\n");
         assert!(text.contains("▲"), "plenty above");
@@ -850,6 +870,7 @@ mod picker_window_tests {
             &Theme::plain(),
             Some(1),
             3,
+            None,
         );
         assert_eq!((start, end), (0, 3));
         let text = stripped(&base).join("\n");

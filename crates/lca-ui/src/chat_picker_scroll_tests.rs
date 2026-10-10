@@ -127,3 +127,36 @@ fn settings_paging_keys_jump_and_step_selection() {
     let _ = chat.handle_picker_key("", Some("pagedown"));
     assert_eq!(chat.settings_picker.as_ref().unwrap().selected, 10);
 }
+
+// Verifies: gh #230 - hovering a visible item highlights without
+// moving the rolling window: the stored window survives a hover
+// that stays inside it.
+#[test]
+fn hover_inside_the_window_highlights_without_scrolling() {
+    use crate::chat_pickers::ModelPicker;
+    let models: Vec<(String, String)> =
+        (0..50).map(|i| (format!("m{i:02}"), format!("model {i:02}"))).collect();
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.model_picker = Some(ModelPicker::new(models));
+    // Keyboard to the bottom: the window sits at the end.
+    let (w, h) = (80u16, 24u16);
+    let _ = chat.viewport(w, h, 0);
+    let _ = chat.handle_picker_key("", Some("end"));
+    let _ = chat.viewport(w, h, 0);
+    let (start, end, _) = chat.picker_window.get();
+    assert!(start > 0, "the window rolled: ({start}, {end})");
+    let selected_before = chat.model_picker.as_ref().expect("open").selected;
+    // Hover the first visible row: selection follows, window holds.
+    chat.hover_picker_item(start);
+    let picker = chat.model_picker.as_ref().expect("open");
+    assert_eq!(picker.selected, start, "the highlight follows");
+    // One frame with the hovered selection: the window must hold.
+    let _ = chat.viewport(w, h, 0);
+    assert_eq!(
+        chat.picker_window.get(),
+        (start, end, chat.picker_window.get().2),
+        "hover never rescrolls"
+    );
+    assert_ne!(selected_before, start, "the key walk moved first");
+}
