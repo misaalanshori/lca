@@ -33,7 +33,7 @@ pub enum ClickOutcome {
     NextPrompt,
 }
 
-use lca_tui::engine::text::{slice_by_column, truncate_to_width, visible_width};
+use lca_tui::engine::text::{truncate_to_width, visible_width};
 
 use super::chat::Chat;
 use crate::theme::Role;
@@ -463,10 +463,10 @@ impl Chat {
             let label_width = visible_width(&label);
             let column = avail.saturating_sub(label_width) / 2;
             let row = &mut lines[window - 1];
-            let left = slice_by_column(row, 0, column, false);
-            let right = slice_by_column(row, column + label_width, width as usize, false);
             let styled = (self.theme.bg(Role::SelectedBg))(&(self.theme.role(Role::Text))(&label));
-            *row = format!("{left}{styled}{right}");
+            // gh #238: the jump label splices at the seam, so transcript
+            // italics cannot reach it and its band cannot leak right.
+            *row = crate::render::splice_segment(row, column, label_width, &styled);
         }
 
         lines.extend(dock);

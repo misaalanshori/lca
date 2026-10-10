@@ -798,3 +798,39 @@ fn clicking_a_tool_header_expands_that_card() {
         "the full result shows: {expanded:?}"
     );
 }
+
+// Verifies: gh #238 - the jump indicator splices at the seam: over
+// italic transcript rows the label still opens with a reset (no
+// bleed in) and closes with one (no bleed out).
+#[test]
+fn the_jump_indicator_isolates_sgr_state_over_italic_rows() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    for i in 0..40 {
+        chat.transcript
+            .push_user(format!("*thinking* question {i}"));
+        chat.transcript.append_text(&format!("answer {i}"));
+        chat.transcript.finish_assistant();
+    }
+    let (w, h) = (80u16, 24u16);
+    let scrolled = chat.viewport(w, h, 12);
+    let row = scrolled
+        .iter()
+        .find(|row| row.contains("Jump to latest message"))
+        .expect("the indicator paints while scrolled");
+    let reset = lca_tui::engine::core::SEGMENT_RESET;
+    let label_at = row.find("Jump to latest message").expect("label");
+    // Entry reset before the label: everything left of it may carry
+    // the transcript's italic, the label itself starts clean.
+    let entry = row[..label_at].rfind(reset).expect("entry reset");
+    assert!(
+        !row[entry + reset.len()..label_at].contains("\x1b[3m"),
+        "no italic reaches the label: {row:?}"
+    );
+    // Exit reset after the label's band: the band cannot leak right.
+    let band_end = label_at + "Jump to latest message".len();
+    assert!(
+        row[band_end..].starts_with(reset) || row[band_end..].contains(reset),
+        "the band closes: {row:?}"
+    );
+}

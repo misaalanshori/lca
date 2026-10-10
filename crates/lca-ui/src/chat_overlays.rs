@@ -131,22 +131,24 @@ impl Chat {
         let Some(line) = viewport.get_mut(row as usize) else {
             return;
         };
-        use lca_tui::engine::text::slice_by_column;
         let glyph = if self.world.panel_open { "▶" } else { "◀" };
         let role = if self.drawer_hover {
             crate::theme::Role::Accent
         } else {
             crate::theme::Role::Border
         };
-        let before = slice_by_column(line, 0, col as usize, false);
-        let after = slice_by_column(line, col as usize + 1, 10_000, false);
-        *line = format!("{before}{}{after}", (self.theme.role(role))(glyph));
+        // gh #238: the glyph splices at the seam, so the row behind
+        // cannot tint it and its accent cannot leak right.
+        *line =
+            crate::render::splice_segment(line, col as usize, 1, &(self.theme.role(role))(glyph));
     }
 
     /// Draw the open picker, if any (returns true when one was drawn).
     fn compose_pickers(&self, viewport: &mut [String], width: u16, height: u16) -> bool {
         if let Some(picker) = &self.tree_picker {
-            let mut body = vec!["Session branches:".to_string(), String::new()];
+            // gh #37 phase 3: the picker lists the live session's
+            // entry rows now, not fork sessions.
+            let mut body = vec!["Message branches:".to_string(), String::new()];
             for (index, (_id, label)) in picker.entries.iter().enumerate() {
                 let cur = if index == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {label}"));

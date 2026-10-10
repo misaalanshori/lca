@@ -354,19 +354,44 @@ fn overlay_box_placed_windowed(
     }
 }
 
-/// Composite a side panel into the right column of every line.
+/// Splice an overlay segment into a base row at the seam (gh #238):
+/// the one place the layer contract lives, so call sites cannot drift.
+/// Entry reset opens the segment in clean state (no bleed in from the
+/// base row); the segment pads to exactly `width` columns (no
+/// transparency gaps); exit reset closes it (no bleed out); the right
+/// slice re-arms the base row's own state through `pending_ansi`
+/// (FR-UI-23's mechanism). `x` is the segment's start column.
+pub fn splice_segment(base: &str, x: usize, width: usize, segment: &str) -> String {
+    use lca_tui::engine::text::truncate_to_width;
+    let before = slice_by_column(base, 0, x, false);
+    let segment = truncate_to_width(segment, width, "", false);
+    let segment = format!(
+        "{segment}{}",
+        " ".repeat(width.saturating_sub(visible_width(&segment)))
+    );
+    let after = slice_by_column(base, x.saturating_add(width), 10_000, false);
+    format!("{before}{SEGMENT_RESET}{segment}{SEGMENT_RESET}{after}")
+}
+
+/// Composite a side panel into the right column of every line (gh
+/// #238: each row splices at the seam, so transcript bands cannot
+/// bleed into the panel and panel rows always close cleanly).
 pub fn side_panel(base: &mut [String], width: u16, panel: &[String]) {
     let panel_w = panel_width(width);
     for (i, base_line) in base.iter_mut().enumerate() {
         let text = panel.get(i).map(String::as_str).unwrap_or("");
         let text = lca_tui::engine::text::truncate_to_width(text, panel_w, "…", false);
         let col = (width as usize).saturating_sub(panel_w);
+        // Pad the base side first (the seam keeps the caller's
+        // alignment), then splice the panel text to full width over
+        // the padded row.
         let before = slice_by_column(base_line, 0, col, false);
         let before = format!(
             "{before}{}",
             " ".repeat(col.saturating_sub(visible_width(&before)))
         );
-        *base_line = format!("{before}{text}");
+        let padded = format!("{before}{text}");
+        *base_line = splice_segment(&padded, col, panel_w, &text);
     }
 }
 
@@ -434,8 +459,13 @@ pub fn paint_tooltip(base: &mut [String], x: u16, y: u16, lines: &[String], them
             "{before}{}",
             " ".repeat((x as usize).saturating_sub(visible_width(&before)))
         );
-        let after = slice_by_column(row, x as usize + width, 10_000, false);
-        *row = format!("{before}{}{after}", bg(&ink(line)));
+        // gh #238: the tooltip splices at the seam, so the underlying
+        // row cannot tint it and its background cannot leak right. The
+        // padded row keeps the original tail past the splice point.
+        let span = bg(&ink(line));
+        let tail = slice_by_column(row, x as usize, 10_000, false);
+        let padded = format!("{before}{tail}");
+        *row = splice_segment(&padded, x as usize, width, &span);
     }
 }
 
@@ -464,12 +494,120 @@ mod tests {
         assert!(joined.contains("login"));
     }
 
+    // Verifies: gh #238 - the seam isolates SGR state both ways:
+    // base styles never enter the segment, segment styles never leave
+    // it, and the right slice re-arms the base state.
+    #[test]
+    fn splice_segment_isolates_sgr_state_both_directions() {
+        use lca_tui::engine::core::SEGMENT_RESET;
+        // Base row opens italic and never closes it; the segment opens
+        // bold and never closes it.
+        let base = "aa\x1b[3mbbccdd".to_string();
+        let row = splice_segment(&base, 2, 2, "\x1b[1mXX");
+        let reset = SEGMENT_RESET;
+        assert_eq!(
+            row,
+            format!("aa{reset}\x1b[1mXX{reset}\x1b[3mccdd"),
+            "byte-exact splice: {row:?}"
+        );
+        // The segment's bold cannot reach the right slice...
+        let after_bold = row.find("\x1b[1m").expect("segment style");
+        let exit = row.find(reset).expect("entry reset");
+        let second =
+            row[exit + reset.len()..].find(reset).expect("exit reset") + exit + reset.len();
+        assert!(
+            after_bold > exit && after_bold < second,
+            "bold inside the segment"
+        );
+        // ...and the base row's italic re-arms after the exit reset
+        // (pending_ansi carries it into the right slice).
+        assert!(
+            row[second + reset.len()..].contains("\x1b[3m"),
+            "base state restored"
+        );
+    }
+
+    // Verifies: gh #238 - short segments pad to full width (no
+    // transparency gaps) and long ones clip without an ellipsis.
+    #[test]
+    fn splice_segment_pads_and_clips_to_exact_width() {
+        use lca_tui::engine::text::visible_width;
+        let row = splice_segment("0123456789", 3, 4, "AB");
+        assert_eq!(visible_width(&row), 10);
+        let stripped: String = row.chars().filter(|c| *c != '\x1b').collect();
+        assert!(stripped.contains("AB  "), "padded: {stripped:?}");
+        let row = splice_segment("0123456789", 2, 3, "ABCDEFG");
+        assert_eq!(visible_width(&row), 10, "clipped, width kept");
+    }
+
+    // Verifies: gh #238 - the side panel splices at the seam: a
+    // transcript background band cannot tint panel cells, the panel
+    // always closes, and rows stay exactly `width` columns wide.
+    #[test]
+    fn side_panel_isolates_sgr_state_and_keeps_width() {
+        use lca_tui::engine::core::SEGMENT_RESET;
+        use lca_tui::engine::text::visible_width;
+        // Base row opens a background band and never closes it.
+        let mut base = vec![format!("xx\x1b[48;2;1;2;3m{}", "y".repeat(78)); 3];
+        side_panel(&mut base, 80, &["panel".to_string()]);
+        for line in &base {
+            assert_eq!(visible_width(line), 80, "exact width: {line:?}");
+            assert_eq!(
+                line.matches(SEGMENT_RESET).count(),
+                2,
+                "open and close: {line:?}"
+            );
+        }
+        let reset = SEGMENT_RESET;
+        let first = &base[0];
+        // The band code appears only before the entry reset...
+        let entry = first.find(reset).expect("entry");
+        assert!(
+            first[..entry].contains("48;2;1;2;3"),
+            "base state left of the seam"
+        );
+        // ...never inside the panel cells.
+        let exit = first[entry + reset.len()..].find(reset).expect("exit") + entry + reset.len();
+        assert!(
+            !first[entry + reset.len()..exit].contains("48;2;1;2;3"),
+            "no band in the panel: {first:?}"
+        );
+        assert!(first.contains("panel"), "content survives");
+    }
+
+    // Verifies: gh #238 - the tooltip splices at the seam: the row
+    // beneath cannot tint it and its background cannot leak right.
+    #[test]
+    fn tooltip_isolates_sgr_state_both_directions() {
+        use lca_tui::engine::core::SEGMENT_RESET;
+        let theme = Theme::plain();
+        let mut base = vec!["aa\x1b[3mbbccdd".to_string()];
+        paint_tooltip(&mut base, 2, 0, &["\x1b[1mXX".to_string()], &theme);
+        let reset = SEGMENT_RESET;
+        let row = &base[0];
+        // Entry reset, bold segment, exit reset, then the base row's
+        // own italic re-armed over the remaining cells.
+        assert!(
+            row.contains(&format!("aa{reset}")),
+            "entry reset after the left slice: {row:?}"
+        );
+        assert!(row.contains("\x1b[1mXX"), "segment content survives");
+        let exit = row.find(&format!("XX{reset}")).expect("exit reset");
+        assert!(
+            row[exit..].contains("\x1b[3m"),
+            "base state restored right of the seam: {row:?}"
+        );
+    }
+
     #[test]
     fn side_panel_takes_the_right_column() {
         let mut base = vec!["x".repeat(80); 3];
         side_panel(&mut base, 80, &["panel".to_string()]);
         let line = strip_terminal_sequences(&base[0]);
-        assert!(line.ends_with("panel"));
+        // Rows close with a reset now (gh #238): the content still
+        // lands at the right column, terminated, not dangling.
+        assert!(line.contains("panel"), "{line:?}");
+        assert!(line.trim_end().ends_with("panel"), "{line:?}");
     }
 
     // Verifies: R11 - the overlay box is a full frame, not a half one.
