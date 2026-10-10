@@ -246,11 +246,26 @@ async fn native_and_wasm_modes_produce_identical_results() {
             }
             result
         };
-        assert_eq!(
-            normalize(wasm_result),
-            normalize(native_result),
-            "divergence in scenario {scenario}"
-        );
+        // The pty echo tail races too (`exit 0 ` vs `exit 0 pty-marker`,
+        // macOS CI): one retry absorbs it. A second mismatch is a real
+        // divergence, not timing — assert it loud.
+        if normalize(wasm_result.clone()) != normalize(native_result.clone())
+            && scenario.contains("\"mode\":\"pty-io\"")
+        {
+            let wasm_retry = wasm.execute_tool(&call(scenario)).await.expect("wasm");
+            let native_retry = native.execute_tool(&call(scenario)).await.expect("native");
+            assert_eq!(
+                normalize(wasm_retry),
+                normalize(native_retry),
+                "divergence in scenario {scenario}"
+            );
+        } else {
+            assert_eq!(
+                normalize(wasm_result),
+                normalize(native_result),
+                "divergence in scenario {scenario}"
+            );
+        }
     }
     // Sanity: the scenarios actually exercised success and refusal paths.
     let ok = wasm
