@@ -108,6 +108,10 @@ pub(crate) struct Ui {
     grants: Arc<Mutex<GrantStore>>,
     /// The session the interface is showing; swappable (`/tree`, `/resume`).
     current_session: Arc<Mutex<Session>>,
+    /// Every session id this run opened (gh #209): tabs, switches,
+    /// and resumes all land here, so `close` ends each one cleanly
+    /// instead of leaving background tabs crash-shaped.
+    opened_sessions: Arc<Mutex<Vec<String>>>,
     /// Open the session picker instead of a fresh session (gh #110:
     /// bare `-r`), carried into `UiOptions` for the run loop.
     resume_picker: bool,
@@ -821,7 +825,14 @@ impl Ui {
             store,
             config: Mutex::new(config),
             grants,
-            current_session,
+            current_session: Arc::clone(&current_session),
+            opened_sessions: Arc::new(Mutex::new(vec![
+                current_session
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .id()
+                    .to_string(),
+            ])),
             resume_picker,
             live: Arc::new(Mutex::new(LiveTarget {
                 name: provider_name,
@@ -877,18 +888,24 @@ impl Ui {
         &self.temp_dir
     }
 
-    /// The close-out: let hooks flush state, then close the session.
+    /// The close-out: let hooks flush state, then close every
+    /// session this run opened (gh #209 - background tabs end cleanly
+    /// too, never crash-shaped).
     fn close(&self) {
         let registry = self.registry();
         lca_core::drive_blocking(async move {
             registry.on_session_close().await;
         });
-        let final_session = self
-            .current_session
+        let opened = self
+            .opened_sessions
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        let _ = self.store.close(&final_session);
+        for id in opened {
+            if let Ok(session) = self.store.session(&self.cwd, &id) {
+                let _ = self.store.close(&session);
+            }
+        }
     }
 }
 /// The session-and-store setup, before the extension registry exists.

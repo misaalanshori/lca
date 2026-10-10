@@ -785,6 +785,7 @@ impl Ui {
         let cwd = self.cwd.clone();
         let data = self.data.clone();
         let session_cell = self.current_session.clone();
+        let opened = self.opened_sessions.clone();
         Arc::new(move |id: &str| -> Option<Vec<lca_protocol::Record>> {
             let session = store.session(&cwd, id).ok()?;
             let read = store.read_with(&session, ViewMode::Display).ok()?;
@@ -793,6 +794,11 @@ impl Ui {
                 return None;
             }
             *session_cell.lock().unwrap_or_else(|p| p.into_inner()) = session;
+            // gh #209: every opened session ends cleanly at close.
+            let mut opened = opened.lock().unwrap_or_else(|p| p.into_inner());
+            if !opened.iter().any(|open| open == id) {
+                opened.push(id.to_string());
+            }
             Some(read.records)
         })
     }

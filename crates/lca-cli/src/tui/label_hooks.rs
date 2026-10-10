@@ -71,6 +71,7 @@ impl Ui {
         let cwd = self.cwd.clone();
         let data = self.data.clone();
         let session_cell = self.current_session.clone();
+        let opened = self.opened_sessions.clone();
         Arc::new(move || {
             // DEFAULT_TITLE, like any fresh session: the row adopts
             // the first message once one lands (gh #209).
@@ -82,6 +83,11 @@ impl Ui {
                 return None;
             }
             *session_cell.lock().unwrap_or_else(|p| p.into_inner()) = session.clone();
+            // gh #209: every opened session ends cleanly at close.
+            let mut opened = opened.lock().unwrap_or_else(|p| p.into_inner());
+            if !opened.iter().any(|open| open == session.id()) {
+                opened.push(session.id().to_string());
+            }
             Some(session.id().to_string())
         })
     }
