@@ -397,6 +397,7 @@ impl Ui {
             copy_to_clipboard: Some(Arc::new(|text: &str| native_clipboard(text))),
             open_url: Some(Arc::new(open_url)),
             session_tree: Some(self.entry_tree()),
+            new_session: Some(self.new_session()),
             tree_filter_mode: Some(self.tree_filter_mode()),
             label_record: Some(self.label_record()),
             branch_here: Some(self.branch_here()),

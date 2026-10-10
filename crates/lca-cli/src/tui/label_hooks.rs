@@ -64,6 +64,28 @@ impl Ui {
         Arc::new(move || mode.clone())
     }
 
+    /// Create a fresh session for a new tab (gh #209): same project
+    /// and working directory, current from here on, like a switch.
+    pub(super) fn new_session(&self) -> lca_ui::state::NewSession {
+        let store = self.store.clone();
+        let cwd = self.cwd.clone();
+        let data = self.data.clone();
+        let session_cell = self.current_session.clone();
+        Arc::new(move || {
+            // DEFAULT_TITLE, like any fresh session: the row adopts
+            // the first message once one lands (gh #209).
+            let session = store
+                .create_session(&cwd, lca_session::DEFAULT_TITLE)
+                .ok()?;
+            if let Err(err) = crate::ensure_session_temp(&data, session.id()) {
+                eprintln!("error: cannot create the session temp dir: {err}");
+                return None;
+            }
+            *session_cell.lock().unwrap_or_else(|p| p.into_inner()) = session.clone();
+            Some(session.id().to_string())
+        })
+    }
+
     /// The live session's entry tree for `/tree` (gh #37, FR-UI-16,
     /// gh #231): structured rows oldest-first; the navigator paints
     /// connectors, markers, and filters from these.

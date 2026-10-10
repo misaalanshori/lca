@@ -442,6 +442,11 @@ fn handle_mouse_event(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) -
         return false;
     }
     let (width, height) = chat.world.size;
+    // gh #209: the tab bar owns row 0 (its gestures never reach
+    // the scrollbar or the transcript behind it).
+    if chat.handle_tab_mouse(&event) {
+        return true;
+    }
     match event {
         MouseEvent::Down {
             col,
@@ -928,6 +933,8 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             );
             let viewport = chat.viewport(width, height, screen.scroll());
             screen.render(&mut terminal, viewport, width, height);
+            // gh #209: mirror the live scroll for per-tab restores.
+            chat.last_scroll = screen.scroll();
             dirty = false;
         }
 

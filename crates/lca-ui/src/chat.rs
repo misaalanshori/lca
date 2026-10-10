@@ -20,6 +20,7 @@ use crate::chat_commands::{is_turn_boundary_command, paste_text, printable, prov
 use crate::chat_pickers::{
     GrantPicker, ModelPicker, ShellRun, ThemePicker, ThinkingPicker, TreePicker, TrustPicker,
 };
+
 use crate::footer::Footer;
 
 use crate::separator::Separator;
@@ -138,6 +139,15 @@ pub struct Chat {
     pub(super) last_transcript_len: Option<usize>,
     /// The width that count was measured at (gh #35).
     pub(super) last_render_width: u16,
+    /// The screen scroll at the last frame (gh #209): the run loop
+    /// mirrors it here so a tab switch can save the reader's place.
+    pub(crate) last_scroll: u16,
+    /// The session tabs (gh #209): one per open conversation.
+    pub(crate) tabs: Vec<crate::chat_tabs::SessionTab>,
+    /// The active tab's index.
+    pub(crate) active_tab: usize,
+    /// The previously active tab (a close lands here).
+    pub(crate) prev_tab: usize,
     /// The open transcript search query (FR-UI-12), when any.
     pub search: Option<String>,
     /// Document lines matching the search query.
@@ -297,6 +307,10 @@ impl Chat {
             hover_at: None,
             last_transcript_len: None,
             last_render_width: 0,
+            last_scroll: 0,
+            tabs: Vec::new(),
+            active_tab: 0,
+            prev_tab: 0,
             search: None,
             search_matches: Vec::new(),
             search_index: 0,
@@ -336,6 +350,9 @@ impl Chat {
         for line in &initial_tail {
             chat.transcript.push_raw(line.clone());
         }
+        // gh #209: the first tab seeds here, so every later tab op
+        // finds it.
+        chat.seed_tabs();
         chat
     }
 
@@ -456,6 +473,9 @@ impl Chat {
                 self.meter.finish_turn(&mut self.footer);
                 self.transcript.finish_assistant();
                 self.turn_running = false;
+                // gh #209: a turn can land the session's first
+                // message, which is what tab titles resolve from.
+                self.refresh_active_tab_title();
                 // pi clears the indicator on stop; the transcript's error
                 // line and the footer's status carry a stop that was not
                 // clean (chrome.md has no error kind).
@@ -575,6 +595,13 @@ impl Chat {
         }
         if self.keybindings.matches(data, "app.thinking.toggle") {
             self.transcript.toggle_thinking_expanded();
+            return Action::Continue;
+        }
+        // gh #209: session tabs - new, close (empty composer only,
+        // so Ctrl+W keeps deleting words with text), cycle, and
+        // Alt+digit direct jumps. Pickers own the keyboard while open
+        // (above), the editor owns the rest below.
+        if self.handle_tab_key(data, key.as_deref()) {
             return Action::Continue;
         }
         if self.keybindings.matches(data, "app.search") {

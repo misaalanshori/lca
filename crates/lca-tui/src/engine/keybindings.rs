@@ -139,9 +139,25 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
         // interface itself owns. They live in the registry so an embedder
         // that rebinds is honored and `/hotkeys` lists them.
         ("app.tools.expand", def!(&["ctrl+o"], "Expand tool output")),
+        // gh #209: Ctrl+T opens a session tab now; thinking keeps
+        // its T mnemonic on Alt+T (the free Ctrl slots collide with
+        // control characters or flow control).
         (
             "app.thinking.toggle",
-            def!(&["ctrl+t"], "Expand the thinking run"),
+            def!(&["alt+t"], "Expand the thinking run"),
+        ),
+        ("app.tabs.new", def!(&["ctrl+t"], "Open a session tab")),
+        (
+            "app.tabs.close",
+            def!(&["ctrl+w"], "Close the session tab (empty composer)"),
+        ),
+        (
+            "app.tabs.next",
+            def!(&["ctrl+tab"], "Cycle to the next session tab"),
+        ),
+        (
+            "app.tabs.prev",
+            def!(&["shift+ctrl+tab"], "Cycle to the previous session tab"),
         ),
         ("app.search", def!(&["ctrl+r"], "Search the transcript")),
         // gh #8 (EFG-003): pi's model-cycle keys take `ctrl+p`, the
@@ -628,4 +644,41 @@ mod tests {
         assert_eq!(kb.conflicts().len(), 1);
         assert_eq!(kb.conflicts()[0].keybindings.len(), 2);
     }
+}
+
+// Verifies: gh #209 - Ctrl+T opens a session tab (thinking expands
+// on Ctrl+G now), Ctrl+W closes one, Ctrl+Tab cycles; each claimed
+// exactly once.
+#[test]
+fn tab_keys_are_claimed_once() {
+    let kb = KeybindingsManager::new();
+    assert!(kb.matches("\x14", "app.tabs.new"), "ctrl+t opens");
+    assert!(kb.matches("\x1bt", "app.thinking.toggle"), "alt+t expands");
+    assert!(kb.matches("\x17", "app.tabs.close"), "ctrl+w closes");
+    for (key, action) in [
+        ("ctrl+t", "app.tabs.new"),
+        ("alt+t", "app.thinking.toggle"),
+        ("ctrl+tab", "app.tabs.next"),
+        ("shift+ctrl+tab", "app.tabs.prev"),
+    ] {
+        let claimants: Vec<&str> = tui_keybindings()
+            .iter()
+            .filter(|(_, def)| def.default_keys.contains(&key))
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(claimants, vec![action], "one action claims {key}");
+    }
+    // gh #209: Ctrl+W is shared on purpose - the editor's word
+    // delete wins with text, the tab close wins on empty. The
+    // runtime rule lives in Chat, not the registry.
+    let claimants: Vec<&str> = tui_keybindings()
+        .iter()
+        .filter(|(_, def)| def.default_keys.contains(&"ctrl+w"))
+        .map(|(name, _)| *name)
+        .collect();
+    assert_eq!(
+        claimants,
+        vec!["tui.editor.deleteWordBackward", "app.tabs.close"],
+        "ctrl+w is shared deliberately"
+    );
 }

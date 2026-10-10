@@ -234,6 +234,13 @@ impl Chat {
 
         // The footer.
         dock.extend(self.footer_lines(width));
+        // gh #209: in scrollback mode the tab row pins below the
+        // footer - dock rows never enter the scrollback, so the bar
+        // cannot drift up. Fullscreen paints it on row 0 instead
+        // (viewport below), so it never doubles here.
+        if !self.screen_mode {
+            dock.extend(self.tab_bar_main(width));
+        }
         (transcript, dock)
     }
 
@@ -394,7 +401,12 @@ impl Chat {
             return lines;
         }
         let (transcript, dock) = self.sections(width);
-        let window = height.saturating_sub(dock.len() as u16) as usize;
+        // gh #209: the tab bar owns row 0; the transcript window
+        // shrinks past it.
+        let tab_rows = self.tab_bar_alt(width);
+        let window = height
+            .saturating_sub(dock.len() as u16)
+            .saturating_sub(tab_rows.len() as u16) as usize;
         let content = transcript.len();
         let from_bottom = (scroll as usize).min(content.saturating_sub(window));
         let end = content - from_bottom;
@@ -469,7 +481,12 @@ impl Chat {
             *row = crate::render::splice_segment(row, column, label_width, &styled);
         }
 
-        lines.extend(dock);
+        // gh #209: row 0 carries the tabs (painted after the
+        // scrollbar/jump math, which counts transcript rows).
+        let mut framed = tab_rows;
+        framed.extend(lines);
+        framed.extend(dock);
+        let mut lines = framed;
         if self.world.modal_active() || self.picker_open() {
             lines.resize(height as usize, String::new());
         }
@@ -485,7 +502,15 @@ impl Chat {
     /// this one rule, so they can never disagree.
     pub(crate) fn scroll_extent(&self, width: u16, height: u16) -> (usize, usize) {
         let (transcript, dock) = self.sections(width);
-        let window = height.saturating_sub(dock.len() as u16) as usize;
+        // gh #209: the fullscreen tab bar owns row 0, like viewport.
+        let tabs = if self.screen_mode {
+            self.tab_bar_alt(width).len()
+        } else {
+            0
+        };
+        let window = height
+            .saturating_sub(dock.len() as u16)
+            .saturating_sub(tabs as u16) as usize;
         (transcript.len(), window)
     }
 

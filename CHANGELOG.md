@@ -43,6 +43,14 @@ backfills linkage on pre-linkage logs with backup and lossless
 verification (views identical or refused); already-current logs
 report and write nothing; mismatches and truncated logs refuse
 with what to fix. Unknown-future lines ride through verbatim.
+- **Session tabs (gh #209).** Ctrl+T opens a tab, Ctrl+W closes
+(empty composer; with text it still deletes a word), Ctrl+Tab cycles,
+Alt+1-9 jump, click selects/closes/adds. Each tab keeps its session,
+composer draft, and scroll; transcripts replay from the log on
+switch (scrollback appends a transition divider, fullscreen swaps
+in place). Single tab collapses to `[+]`. Ctrl+T belonged to
+thinking-expand, which moves to Alt+T. Mid-turn tab moves refuse;
+background turns stay a follow-up.
 - **DAG tree navigator (gh #231).** `/tree` is a graphical
 navigator now: branch connectors (`├─`/`└─`/`│`), role markers,
 Up/Down walk, Left/Right fold, `f` filter cycling

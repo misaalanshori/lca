@@ -17,6 +17,7 @@ mod chat_pickers;
 mod chat_render;
 mod chat_search;
 mod chat_shell;
+mod chat_tabs;
 pub mod dialogs;
 pub mod ext_widgets;
 pub mod footer;

@@ -1122,6 +1122,9 @@ mod viewport_tests;
 #[path = "chat_label_tests.rs"]
 mod label_tests;
 
+#[path = "chat_tab_tests.rs"]
+mod tab_tests;
+
 // Verifies: gh #41 (a model without `high` thinking does not offer
 // it): the picker hides unsupported levels instead of merely
 // clamping after the fact.

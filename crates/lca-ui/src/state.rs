@@ -546,6 +546,10 @@ pub type SessionList = Arc<dyn Fn() -> Vec<crate::resume::SessionEntry> + Send +
 /// transcript replays them with the live rendering (FR-UI-7), not a
 /// plain-text dump.
 pub type SwitchSession = Arc<dyn Fn(&str) -> Option<Vec<lca_protocol::Record>> + Send + Sync>;
+/// Creates a fresh session in the working directory and returns its
+/// id (gh #209); `None` when the host cannot (a tab reports it,
+/// never invents an id).
+pub type NewSession = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 /// Resolves a user attachment hash to `(media type, bytes)` for the
 /// replayed transcript; `None` when the file is gone.
 pub type LoadAttachment = Arc<dyn Fn(&str) -> Option<(String, Vec<u8>)> + Send + Sync>;
@@ -608,6 +612,8 @@ pub struct UiHooks {
     /// The live session's entry tree as structured rows (FR-UI-16,
     /// gh #37, gh #231).
     pub session_tree: Option<SessionTree>,
+    /// Creates a fresh session for a new tab (gh #209).
+    pub new_session: Option<NewSession>,
     /// The configured tree filter mode for `/tree` (gh #231).
     pub tree_filter_mode: Option<TreeFilterMode>,
     /// Bookmark a tree row by record id for `/tree` label editing

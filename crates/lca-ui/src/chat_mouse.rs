@@ -333,6 +333,13 @@ impl Chat {
         let Some(geometry) = self.scrollbar_for_frame(width, height, scroll) else {
             return ScrollbarHit::Miss;
         };
+        // gh #209: the tab bar owns the top rows (its own hit
+        // test runs first); transcript rows sit below it.
+        let tab = self.tab_top(width);
+        if row < tab {
+            return ScrollbarHit::Miss;
+        }
+        let row = row - tab;
         if col != geometry.column || row >= geometry.rows {
             return ScrollbarHit::Miss;
         }
@@ -379,6 +386,9 @@ impl Chat {
         }
         let max = content.saturating_sub(window);
         let travel = geometry.rows.saturating_sub(geometry.thumb_height) as f64;
+        // gh #209: the drag maps pointer rows to track rows below
+        // the tab bar.
+        let pointer_row = pointer_row.saturating_sub(self.tab_top(width));
         let offset = f64::from(pointer_row.saturating_sub(grab)).clamp(0.0, travel);
         let top = if travel <= 0.0 {
             0.0
@@ -412,7 +422,10 @@ impl Chat {
         if !self.screen_mode || !self.has_panel() || width == 0 || height == 0 {
             return None;
         }
-        let row = (self.window_height(width, height) as u16).saturating_sub(1);
+        // gh #209: below the fullscreen tab bar when it shows.
+        let row = (self.window_height(width, height) as u16)
+            .saturating_sub(1)
+            .saturating_add(self.tab_top(width));
         let col = if self.world.panel_open {
             width.saturating_sub(super::render::panel_width(width) as u16)
         } else {

@@ -450,7 +450,7 @@ fn reasoning_shows_a_snippet_by_default() {
     assert!(shown[0].contains("one"), "{lines:?}");
     assert!(shown[2].contains("three"), "{lines:?}");
     assert!(
-        shown[3].contains("… +2 lines") && shown[3].contains("ctrl+t to expand"),
+        shown[3].contains("… +2 lines") && shown[3].contains("alt+t to expand"),
         "{lines:?}"
     );
     assert!(!lines.iter().any(|l| l.contains("four")), "{lines:?}");

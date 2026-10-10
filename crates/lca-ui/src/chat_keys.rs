@@ -824,7 +824,7 @@ impl Chat {
         // it is not part of either count.
         let total = self.transcript_len(width);
         let window = self.window_height(width, height);
-        let scroll = total.saturating_sub(target + window);
+        let scroll = total.saturating_sub(target.saturating_add(window));
         Some(scroll.min(u16::MAX as usize) as u16)
     }
 }
