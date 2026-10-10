@@ -337,13 +337,10 @@ impl Ui {
             )),
             // The generic identity commands dispatch across installed
             // providers first (FR-PROV-11); with zero enabled providers
-            // FR-PROV-6's report shows instead.
-            "login" | "logout" | "usage" => self
-                .registry()
-                .invoke_generic(name, argument, &self.live_name())
-                .unwrap_or_else(|| {
-                    CommandEffect::ShowWidget(crate::no_model_message(&self.live_name()))
-                }),
+            // FR-PROV-6's report shows instead. The op runs off the
+            // interface thread (#102): progress now, the result through
+            // `poll_login`.
+            "login" | "logout" | "usage" => self.command_identity(name, argument),
             // R4: a provider's namespaced identity `login` blocks on a
             // browser callback (the owner's freeze). It runs on a
             // background thread; the interface polls the result.
@@ -367,6 +364,41 @@ impl Ui {
                 .invoke_command(name, argument)
                 .unwrap_or(CommandEffect::None),
         }
+    }
+
+    /// The generic `/login`, `/logout`, `/usage` (FR-PROV-11): the
+    /// identity op is a provider round-trip, so it runs on a background
+    /// thread (#102) and the interface answers progress at once. The
+    /// result arrives as a notice through `poll_login`. Zero providers
+    /// stays synchronous: it is a local, instant answer (FR-PROV-6).
+    fn command_identity(self: &Arc<Self>, name: &str, argument: &str) -> CommandEffect {
+        if self.registry().provider_names().is_empty() {
+            return CommandEffect::ShowWidget(crate::no_model_message(&self.live_name()));
+        }
+        let step = super::login::PendingStep::wrap(
+            self.login_pending.clone(),
+            self.login_generation.clone(),
+        );
+        let ticket = step.issue();
+        let registry = self.registry();
+        let command = name.to_string();
+        let argument = argument.to_string();
+        let live = self.live_name();
+        step.run(ticket, move || {
+            match registry.invoke_generic(&command, &argument, &live) {
+                Some(CommandEffect::ShowWidget(text)) => lca_ui::LoginNext::Message(text),
+                Some(_) => lca_ui::LoginNext::Message(format!("{command} done")),
+                None => lca_ui::LoginNext::Message(crate::no_model_message(&live)),
+            }
+        });
+        CommandEffect::ShowWidget(
+            match name {
+                "login" => "signing in…",
+                "logout" => "signing out…",
+                _ => "fetching usage…",
+            }
+            .to_string(),
+        )
     }
 
     /// `/permissions` (ADR-0039): manage allow/deny rules.

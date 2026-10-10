@@ -53,8 +53,16 @@ impl PendingStep {
     /// Run `work` for a generation ticket, delivering its answer unless a
     /// newer step or a cancel superseded it meanwhile.
     pub(super) fn run(&self, ticket: u64, work: impl FnOnce() -> LoginNext + Send + 'static) {
-        let next = work();
-        self.deliver(ticket, next);
+        let step = PendingStep {
+            slot: self.slot.clone(),
+            generation: self.generation.clone(),
+        };
+        // Its own thread: the caller never joins it (QA-016 - a slow
+        // provider call must not freeze the interface thread).
+        std::thread::spawn(move || {
+            let next = work();
+            step.deliver(ticket, next);
+        });
     }
 
     /// Deliver a finished step unless it is stale.
@@ -366,7 +374,18 @@ impl Ui {
             .login_handle
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .clone()?;
+            .clone();
+        let Some(handle) = handle else {
+            // #102: no step in flight and none landed - a leftover
+            // cancel flag is stale (a dropped discovery's Escape, whose
+            // delivery never arrives by design). Clear it so the next
+            // step starts clean instead of misreporting a cancel.
+            *self
+                .login_cancelled
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = false;
+            return None;
+        };
         // R3: fold the auth URL into the waiting label as soon as the
         // extension asks the host to open it, so a failed auto-open still
         // leaves a copyable URL on screen.
@@ -441,6 +460,10 @@ impl Ui {
             .login_cancelled
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = true;
+        // Supersede any recording step, so a slow discovery landing
+        // after this Escape is dropped instead of popping a stale
+        // picker (#102).
+        PendingStep::wrap(self.login_pending.clone(), self.login_generation.clone()).cancel();
         let handle = self
             .login_handle
             .lock()
@@ -537,7 +560,10 @@ impl Ui {
         });
     }
 
-    /// The `/login` entry seam.
+    /// The `/login` entry seam. Discovery (a provider round-trip per
+    /// scope member) runs off the interface thread (#102): this answers
+    /// `Waiting` at once and the picker (or message) arrives through
+    /// `poll_login`, so a stalled discovery never freezes input.
     pub(super) fn login_options(self: &Arc<Self>) -> lca_ui::LoginRequest {
         let ui = self.clone();
         Arc::new(move |argument: &str| -> LoginNext {
@@ -555,51 +581,69 @@ impl Ui {
             } else {
                 names.clone()
             };
-            let options = ui.gather(&scope);
-            // `/login <option>` skips the picker: the same journey, drivable
-            // from a script.
-            if !argument.is_empty()
-                && let Some((owner, _)) = options
-                    .iter()
-                    .find(|(_, option)| option.id == argument)
-                    .map(|(owner, option)| (owner.clone(), option.clone()))
-            {
-                let mut flow = ui.flow.lock().unwrap_or_else(|p| p.into_inner());
-                let _ = flow.offer(options);
-                return match flow.pick(&owner, argument) {
-                    crate::login::Step::Next(next) => next,
-                    step => ui.login_apply(step),
-                };
+            let step = PendingStep::wrap(ui.login_pending.clone(), ui.login_generation.clone());
+            let ticket = step.issue();
+            // A fresh step clears a stale cancel, so an Escape from an
+            // older wait never misreports this one's result.
+            *ui.login_cancelled.lock().unwrap_or_else(|p| p.into_inner()) = false;
+            let worker = ui.clone();
+            let argument = argument.to_string();
+            step.run(ticket, move || worker.discover_login(scope, &argument));
+            LoginNext::Waiting {
+                label: "discovering login options… (esc cancels)".to_string(),
             }
-            if !argument.is_empty()
-                && !names.iter().any(|name| name == argument)
-                && !options.iter().any(|(_, option)| option.id == argument)
-            {
-                return LoginNext::Message(format!(
-                    "no provider or login option named `{argument}`; installed: {}",
-                    names.join(", ")
-                ));
-            }
-            // gh #25 / ADR-0033: the zero-options route, closed at the
-            // target-resolution site so no provider can reach an empty
-            // picker. `Message` is what `/<provider>.login` answers with,
-            // so both routes read the same line and `poll_login` opens the
-            // waiting modal from here.
-            if identity_instead_of_picker(
-                argument,
-                &names,
-                options
-                    .iter()
-                    .filter(|(owner, _)| owner.as_str() == argument)
-                    .count(),
-            ) && let Some(handle) = ui.registry().provider(argument).cloned()
-            {
-                ui.spawn_identity_login(handle);
-                return LoginNext::Message(WAIT_LABEL.to_string());
-            }
-            let mut flow = ui.flow.lock().unwrap_or_else(|p| p.into_inner());
-            flow.offer(options)
         })
+    }
+
+    /// The off-thread half of [`Ui::login_options`]: gather each
+    /// provider's options, then run the unchanged entry tail (option-id
+    /// skip, unknown-name refusal, zero-options identity route, picker).
+    fn discover_login(self: &Arc<Self>, scope: Vec<String>, argument: &str) -> LoginNext {
+        let names = self.registry().provider_names();
+        let options = self.gather(&scope);
+        // `/login <option>` skips the picker: the same journey, drivable
+        // from a script.
+        if !argument.is_empty()
+            && let Some((owner, _)) = options
+                .iter()
+                .find(|(_, option)| option.id == argument)
+                .map(|(owner, option)| (owner.clone(), option.clone()))
+        {
+            let mut flow = self.flow.lock().unwrap_or_else(|p| p.into_inner());
+            let _ = flow.offer(options);
+            return match flow.pick(&owner, argument) {
+                crate::login::Step::Next(next) => next,
+                step => self.login_apply(step),
+            };
+        }
+        if !argument.is_empty()
+            && !names.iter().any(|name| name == argument)
+            && !options.iter().any(|(_, option)| option.id == argument)
+        {
+            return LoginNext::Message(format!(
+                "no provider or login option named `{argument}`; installed: {}",
+                names.join(", ")
+            ));
+        }
+        // gh #25 / ADR-0033: the zero-options route, closed at the
+        // target-resolution site so no provider can reach an empty
+        // picker. `Message` is what `/<provider>.login` answers with,
+        // so both routes read the same line and `poll_login` opens the
+        // waiting modal from here.
+        if identity_instead_of_picker(
+            argument,
+            &names,
+            options
+                .iter()
+                .filter(|(owner, _)| owner.as_str() == argument)
+                .count(),
+        ) && let Some(handle) = self.registry().provider(argument).cloned()
+        {
+            self.spawn_identity_login(handle);
+            return LoginNext::Message(WAIT_LABEL.to_string());
+        }
+        let mut flow = self.flow.lock().unwrap_or_else(|p| p.into_inner());
+        flow.offer(options)
     }
 
     /// The user chose a `/login` picker entry.
@@ -790,8 +834,8 @@ fn login_endpoint_hosts(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::AtomicU64;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use lca_ext_abi::ExtensionDispatch as _;
@@ -817,17 +861,17 @@ mod tests {
             vec![lca_ext_abi::World::Provider]
         }
 
-        fn tool_specs(
-            &self,
-        ) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {
+        fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {
             Ok(Vec::new())
         }
 
         fn execute_tool<'a>(
             &'a self,
             _call: &'a lca_protocol::ToolCall,
-        ) -> lca_ext_abi::DispatchFuture<'a, Result<lca_protocol::ToolResult, lca_protocol::DispatchError>>
-        {
+        ) -> lca_ext_abi::DispatchFuture<
+            'a,
+            Result<lca_protocol::ToolResult, lca_protocol::DispatchError>,
+        > {
             Box::pin(std::future::ready(Err(
                 lca_protocol::DispatchError::Failed("no tools".to_string()),
             )))
@@ -856,8 +900,10 @@ mod tests {
         fn on_pre_tool_use<'a>(
             &'a self,
             _call: &'a lca_protocol::ToolCall,
-        ) -> lca_ext_abi::DispatchFuture<'a, Result<lca_protocol::HookAction, lca_protocol::DispatchError>>
-        {
+        ) -> lca_ext_abi::DispatchFuture<
+            'a,
+            Result<lca_protocol::HookAction, lca_protocol::DispatchError>,
+        > {
             Box::pin(std::future::ready(Ok(lca_protocol::HookAction::Allow)))
         }
 
@@ -890,8 +936,10 @@ mod tests {
 
         fn login_options(
             &self,
-        ) -> lca_ext_abi::DispatchFuture<'static, Result<Vec<lca_protocol::LoginOption>, lca_protocol::DispatchError>>
-        {
+        ) -> lca_ext_abi::DispatchFuture<
+            'static,
+            Result<Vec<lca_protocol::LoginOption>, lca_protocol::DispatchError>,
+        > {
             let delay = self.delay;
             Box::pin(async move {
                 std::thread::sleep(delay);
@@ -914,13 +962,10 @@ mod tests {
     /// The discovery work the `/login` step runs: gather the fake's
     /// options off-thread (a `drive_blocking` bridge like [`Ui::gather`]
     /// uses) and open the picker over them.
-    fn discovery(
-        fake: Arc<SlowFake>,
-    ) -> impl FnOnce() -> lca_ui::LoginNext + Send + 'static {
+    fn discovery(fake: Arc<SlowFake>) -> impl FnOnce() -> lca_ui::LoginNext + Send + 'static {
         move || {
-            let options =
-                lca_core::drive_blocking(async move { fake.login_options().await })
-                    .unwrap_or_default();
+            let options = lca_core::drive_blocking(async move { fake.login_options().await })
+                .unwrap_or_default();
             if options.is_empty() {
                 return lca_ui::LoginNext::Message("nothing to sign in to".to_string());
             }
@@ -957,10 +1002,7 @@ mod tests {
         );
         step.cancel();
         std::thread::sleep(Duration::from_millis(2000));
-        assert!(
-            step.take().is_none(),
-            "a cancelled step delivers nothing"
-        );
+        assert!(step.take().is_none(), "a cancelled step delivers nothing");
     }
 
     // Verifies: #102 (QA-016) - the finished discovery opens the picker

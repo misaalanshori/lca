@@ -203,6 +203,11 @@ pub(crate) struct Ui {
     /// R4: a background login/identity step's result, taken by the
     /// interface's `poll_login` hook.
     login_pending: Arc<Mutex<Option<lca_ui::LoginNext>>>,
+    /// #102: the generation counter behind `login_pending`. Each new
+    /// step issues one; a delivery or cancel from another generation is
+    /// stale and dropped, so a slow discovery can never pop a picker
+    /// its Escape already dismissed.
+    login_generation: Arc<std::sync::atomic::AtomicU64>,
     /// The background `/compact`'s state, read by the interface's
     /// `poll_compact` hook so a summarization call never blocks it.
     compact_state: Arc<Mutex<lca_ui::CompactState>>,
@@ -872,6 +877,7 @@ impl Ui {
             initial_messages: initial.to_vec(),
             update_notice,
             login_pending: Arc::new(Mutex::new(None)),
+            login_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             compact_state: Arc::new(Mutex::new(lca_ui::CompactState::Idle)),
             login_handle: Arc::new(Mutex::new(None)),
             login_manual_offered: Arc::new(Mutex::new(false)),
