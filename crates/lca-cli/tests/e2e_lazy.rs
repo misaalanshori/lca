@@ -18,22 +18,11 @@ fn launch_and_quit_writes_no_session_directory() {
     let sandbox = sandbox("lazy-quit");
     let session = Tmux::new("lazy-quit");
     session.spawn(&sandbox, None, false, &[], &[]);
-    // No `[session in …]` header: a lazy session replays no
-    // session-start until its first record lands.
-    session.wait_for("no model", std::time::Duration::from_secs(30));
+    // The orientation header shows from the working directory even
+    // with nothing replayed (gh #122).
+    session.wait_for("[session in", std::time::Duration::from_secs(30));
     session.send(&["/exit", "Enter"]);
-    // No log exists to carry a session-end marker (that is the
-    // point), so the exit lands when the pane goes dead instead.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    loop {
-        if session.capture().trim().is_empty() {
-            break;
-        }
-        if std::time::Instant::now() > deadline {
-            panic!("the interface never exited");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(150));
-    }
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 
     let sessions = sandbox.state_dir().join("sessions");
     let mut logs = Vec::new();

@@ -313,5 +313,7 @@ fn a_login_right_after_startup_shows_the_providers_models() {
     // Let the picker close before the command line takes the next keys.
     std::thread::sleep(std::time::Duration::from_millis(500));
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }

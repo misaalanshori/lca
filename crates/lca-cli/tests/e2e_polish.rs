@@ -45,7 +45,9 @@ fn ctrl_c_clears_text_then_exits() {
     session.send(&["C-c"]);
     std::thread::sleep(std::time::Duration::from_millis(400));
     session.send(&["C-c"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
 // Verifies: gh #230 - hovering settings rows highlights in place:
@@ -79,24 +81,37 @@ fn hover_highlights_settings_without_scrolling() {
     assert!(
         pane.lines()
             .find(|line| line.contains("Display mode"))
-            .is_some_and(|line| !line.trim_start().starts_with('>')),
+            .is_some_and(|line| !line.contains("> Display mode")),
         "the cursor starts elsewhere:\n{pane}"
     );
-    // SGR-1006 hover (motion, no button).
+    // SGR-1006 hover (motion, no button). Content-driven: the
+    // highlight lands when the cursor row moves, never on a sleep.
     session.send_literal(&format!("\x1b[<35;{};{}M", col + 1, row + 1));
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    let pane = session.capture();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let pane = loop {
+        let pane = session.capture();
+        let follows = pane
+            .lines()
+            .find(|line| line.contains("Display mode"))
+            .is_some_and(|line| line.contains("> Display mode"));
+        if follows || std::time::Instant::now() > deadline {
+            break pane;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    };
     assert!(
         pane.lines()
             .find(|line| line.contains("Display mode"))
-            .is_some_and(|line| { line.trim_start().starts_with('>') }),
+            .is_some_and(|line| { line.contains("> Display mode") }),
         "the highlight follows the pointer:\n{pane}"
     );
     assert!(!pane.contains('▲'), "nothing scrolled:\n{pane}");
     session.send(&["Escape"]);
     std::thread::sleep(std::time::Duration::from_millis(300));
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
 // Verifies: gh #235 - the selector paints friendly labels with the
@@ -130,7 +145,9 @@ fn settings_selector_shows_labels_and_help() {
     session.send(&["Escape"]);
     std::thread::sleep(std::time::Duration::from_millis(300));
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
 // Verifies: gh #237 - the drawer tab shows on the margin and the open
@@ -163,5 +180,7 @@ fn drawer_tab_and_panel_tint_reach_the_pane() {
     );
     session.send(&["M-x"]);
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }

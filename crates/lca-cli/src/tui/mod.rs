@@ -985,6 +985,15 @@ fn open(
     let current_session = Arc::new(Mutex::new(session.clone()));
     let provider_name = config.provider().to_string();
     let (mut initial_head, initial_records) = initial_view(&store, &session);
+    // gh #122: a fresh session replays no session-start (nothing
+    // written yet), but the orientation header still shows - from
+    // the working directory, not the log.
+    if initial_records.is_empty() {
+        initial_head.push(format!(
+            "[session in {}]",
+            lca_ui::display_path(&cwd.display().to_string())
+        ));
+    }
     // ADR-0042: the mode applies to the shared grant store, so the model's
     // tool calls and an extension's `process` calls answer alike. The banner
     // leads the transcript: hands-free must never mean invisible.

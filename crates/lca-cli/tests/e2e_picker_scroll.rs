@@ -77,5 +77,7 @@ fn a_tall_settings_selector_rolls_with_frame_and_selection_on_screen() {
     session.send(&["Escape"]);
     std::thread::sleep(std::time::Duration::from_millis(400));
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }

@@ -32,7 +32,9 @@ fn styled_extension_bytes_reach_a_real_terminal() {
     session.spawn(&sandbox, None, false, &[], &[]);
     // Wall-clock margin, not a performance claim: debug WASM compiles
     // stack up when heavy tmux tests run together on few cores.
-    session.wait_for("[session in", std::time::Duration::from_secs(30));
+    // No `[session in …]` header: fresh sessions stay pending (gh
+    // #122) and replay no session-start until the first record.
+    session.wait_for("no model", std::time::Duration::from_secs(30));
 
     // The footer vocabulary page renders; its SGR survives to glass.
     session.wait_for("NOT A PROMPT", std::time::Duration::from_secs(10));
@@ -43,7 +45,7 @@ fn styled_extension_bytes_reach_a_real_terminal() {
     );
 
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
 // Verifies: gh #172 pillar 4 on a real pane - SGR-1006 bytes at the
@@ -62,7 +64,9 @@ fn a_synthesized_click_names_the_panel_button() {
     session.spawn(&sandbox, None, false, &[], &[]);
     // Wall-clock margin, not a performance claim: debug WASM compiles
     // stack up when heavy tmux tests run together on few cores.
-    session.wait_for("[session in", std::time::Duration::from_secs(30));
+    // No `[session in …]` header: fresh sessions stay pending (gh
+    // #122) and replay no session-start until the first record.
+    session.wait_for("no model", std::time::Duration::from_secs(30));
 
     // Fullscreen captures the mouse; the panel shows the button
     // (`alt+x` toggles it: `app.panel.toggle`).
@@ -84,5 +88,5 @@ fn a_synthesized_click_names_the_panel_button() {
     // reaches the editor.
     session.send(&["M-x"]);
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }

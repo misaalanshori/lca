@@ -235,7 +235,9 @@ fn the_configured_scope_cuts_the_cycle_and_the_picker() {
     );
 
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
 // Verifies: gh #8 acceptance (scope) - `--models a,b` is the same scope
@@ -284,7 +286,9 @@ fn the_models_flag_sets_the_scope_for_the_run() {
     );
 
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
 // Verifies: gh #8 acceptance (2) - Ctrl+S in the picker persists the
@@ -358,7 +362,9 @@ fn ctrl_s_saves_the_default_and_a_fresh_session_resolves_it() {
     );
 
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 
     // A fresh process, no `--model`, no `OPENAI_MODEL`: the file's value
     // is the one that resolves.
@@ -369,7 +375,9 @@ fn ctrl_s_saves_the_default_and_a_fresh_session_resolves_it() {
         std::time::Duration::from_secs(20),
     );
     again.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&again, std::time::Duration::from_secs(15));
 }
 
 // Verifies: gh #8 / EFG-041 - `--model <pattern>` fuzzy-resolves against
@@ -414,7 +422,9 @@ fn the_model_flag_fuzzy_resolves_and_its_suffix_sets_the_level() {
     );
 
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
 // Verifies: gh #8 acceptance (3) - `--thinking <level>` is the session
@@ -454,7 +464,9 @@ fn the_thinking_flag_is_the_session_default() {
     );
 
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
 // Verifies: gh #8 phase 4 (pi's `modelThinkingLevels`) - a level the
@@ -520,7 +532,9 @@ fn a_thinking_suffix_outside_the_models_set_is_clamped_to_it() {
     session.wait_for("thinking: low", std::time::Duration::from_secs(10));
 
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
 // Verifies: gh #8 phase 4 - a switch applies the new model's configured

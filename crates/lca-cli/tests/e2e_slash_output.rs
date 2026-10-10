@@ -56,7 +56,9 @@ fn hotkeys_lands_in_scrollback_while_the_dock_stays_bounded() {
         "the dock stays bounded (footer intact)"
     );
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
 // Verifies: gh #232 - `/model` opens its picker frame promptly and the
@@ -93,5 +95,7 @@ fn model_picker_opens_promptly_and_fills_in() {
     session.send(&["Escape"]);
     std::thread::sleep(std::time::Duration::from_millis(300));
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }

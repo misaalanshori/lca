@@ -770,6 +770,24 @@ pub fn find_session_end(state: &std::path::Path) -> Option<String> {
     text.contains("\"t\":\"session-end\"").then_some(text)
 }
 
+/// Wait for the interface to exit when no session log exists to
+/// carry a session-end marker (gh #122: a quit without messages
+/// writes nothing, so there is no marker to wait for - the dead
+/// pane is the receipt).
+#[cfg(unix)]
+pub fn wait_for_pane_end(session: &Tmux, timeout: std::time::Duration) {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if session.capture().trim().is_empty() {
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("the interface never exited");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+}
+
 #[cfg(unix)]
 pub fn wait_for_session_end(state: &std::path::Path, timeout: std::time::Duration) -> String {
     let deadline = std::time::Instant::now() + timeout;

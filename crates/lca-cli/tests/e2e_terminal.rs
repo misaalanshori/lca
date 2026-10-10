@@ -809,7 +809,9 @@ fn the_interface_opens_in_the_zero_provider_state_and_recovers_through_login() {
     session.send(&["Escape"]);
     std::thread::sleep(std::time::Duration::from_millis(300));
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
     drop(session);
 
     // Re-enable the provider and come back: the state has to be
@@ -1061,7 +1063,9 @@ fn the_footer_line_carries_the_working_directory_and_branch() {
     );
 
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
 // Verifies: FR-CONC-1's turn boundary in the real interface - a cancelled
@@ -1171,5 +1175,7 @@ fn gh121_external_editor_round_trips_in_a_real_terminal() {
     session.send(&["Enter"]);
     session.wait_for("No model is active", std::time::Duration::from_secs(10));
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // No turns ran, so no log exists for a session-end marker (gh
+    // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
