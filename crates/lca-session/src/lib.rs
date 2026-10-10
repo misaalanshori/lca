@@ -9,6 +9,7 @@
 
 mod cache;
 mod ids;
+mod lazy;
 mod migrate;
 mod store;
 mod tree;

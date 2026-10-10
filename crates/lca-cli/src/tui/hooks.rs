@@ -406,6 +406,7 @@ impl Ui {
             fork_record: Some(self.fork_record()),
             set_label: Some(self.set_label()),
             list_labels: Some(self.list_labels()),
+            delete_session: Some(self.delete_session()),
             clone_session: Some(self.clone_session()),
             reload: Some(self.reload_hook()),
             grants: Some(self.grants()),
@@ -655,11 +656,27 @@ impl Ui {
                 .into_iter()
                 .map(|summary| {
                     let title = summary.display_title();
+                    // gh #75: bookmark names ride the row so the
+                    // picker filter finds them (one resolved read per
+                    // session - the picker opens rarely, the list is
+                    // short, and listing already reads every log).
+                    let labels = store
+                        .session(&cwd, &summary.id)
+                        .ok()
+                        .and_then(|session| store.labels(&session).ok())
+                        .map(|marks| {
+                            let mut names: Vec<String> = marks.into_values().collect();
+                            names.sort();
+                            names.dedup();
+                            names
+                        })
+                        .unwrap_or_default();
                     lca_ui::resume::SessionEntry {
                         id: summary.id,
                         title,
                         messages: summary.message_count,
                         age: age_label(now, summary.modified_ms),
+                        labels,
                     }
                 })
                 .collect()
@@ -787,7 +804,9 @@ impl Ui {
         let session_cell = self.current_session.clone();
         let opened = self.opened_sessions.clone();
         Arc::new(move |id: &str| -> Option<Vec<lca_protocol::Record>> {
-            let session = store.session(&cwd, id).ok()?;
+            // gh #122: a pending session has no directory yet -
+            // entering it replays nothing instead of refusing.
+            let session = store.open_or_pending(&cwd, id).ok()?;
             let read = store.read_with(&session, ViewMode::Display).ok()?;
             if let Err(err) = crate::ensure_session_temp(&data, session.id()) {
                 eprintln!("error: cannot create the session temp dir: {err}");

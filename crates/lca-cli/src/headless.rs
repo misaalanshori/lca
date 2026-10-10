@@ -420,13 +420,10 @@ pub(crate) async fn setup(
     // #111: the run appends to the selected session. A continued run
     // shares the session's `log.jsonl`; only a fresh run starts one.
     let session = match session {
-        crate::SessionSelector::New => match store.create_session(cwd, title) {
-            Ok(session) => session,
-            Err(err) => {
-                eprintln!("error: cannot start a session: {err}");
-                return Err(exit::INTERNAL);
-            }
-        },
+        // gh #122: fresh headless sessions stay pending until the
+        // first turn appends (a prompt always follows, so this only
+        // shows when nothing runs).
+        crate::SessionSelector::New => store.new_pending(cwd, title),
         crate::SessionSelector::Continue => match latest_session(&store, cwd) {
             Some(id) => match store.session(cwd, &id) {
                 Ok(session) => session,
@@ -465,7 +462,7 @@ pub(crate) async fn setup(
         // Gh #69: the exact id, created when absent.
         crate::SessionSelector::Exact(id) => match store.session(cwd, id) {
             Ok(session) => session,
-            Err(_) => match store.create_session_with_id(cwd, id, title) {
+            Err(_) => match store.new_pending_with_id(cwd, id, title) {
                 Ok(session) => session,
                 Err(err) => {
                     eprintln!("error: cannot create session `{id}`: {err}");

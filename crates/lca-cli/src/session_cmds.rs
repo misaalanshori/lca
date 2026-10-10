@@ -137,6 +137,11 @@ pub enum Route {
         /// Title for the clone (defaults to `Clone of <parent-title>`).
         title: Option<String>,
     },
+    /// Trash a session (gh #75).
+    Delete {
+        /// Session id.
+        session: String,
+    },
     /// Rename a session.
     Rename {
         /// Session id.
@@ -510,6 +515,9 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
             session: session.clone(),
             title: title.clone(),
         },
+        Some(Command::Delete { session }) => Route::Delete {
+            session: session.clone(),
+        },
         Some(Command::Export { session, audit }) => Route::Export {
             session: session.clone(),
             audit: *audit,
@@ -607,6 +615,34 @@ pub(super) fn rename_command(cwd: &Path, id: &str, title: &str) -> i32 {
     match store.session(cwd, id) {
         Ok(session) => match store.rename(&session, title) {
             Ok(()) => exit::OK,
+            Err(err) => {
+                eprintln!("error: {err}");
+                exit::SESSION
+            }
+        },
+        Err(err) => {
+            eprintln!("error: {err}");
+            exit::SESSION
+        }
+    }
+}
+
+/// `lca delete <id>`: move a session to the trash directory (gh
+/// #75). Prints where it went so recovery is one `mv` away.
+pub(super) fn delete_command(cwd: &Path, id: &str) -> i32 {
+    let Ok((store, _)) = open_store() else {
+        return exit::INTERNAL;
+    };
+    match store.session(cwd, id) {
+        Ok(session) => match store.trash(&session) {
+            Ok(target) => {
+                println!(
+                    "trashed {} (recover with `mv {} <sessions-dir>`)",
+                    id,
+                    target.display()
+                );
+                exit::OK
+            }
             Err(err) => {
                 eprintln!("error: {err}");
                 exit::SESSION
@@ -866,8 +902,9 @@ pub fn resolve_session(
             rename_quiet(store, &session, name);
             return Ok(session);
         }
+        // gh #122: same laziness under an exact id.
         return store
-            .create_session_with_id(cwd, id, title)
+            .new_pending_with_id(cwd, id, title)
             .map_err(|err| format!("cannot create session `{id}`: {err}"));
     }
     match resume {
@@ -877,9 +914,11 @@ pub fn resolve_session(
             rename_quiet(store, &session, name);
             Ok(session)
         }
-        None => store
-            .create_session(cwd, title)
-            .map_err(|err| format!("cannot start a session: {err}")),
+        // gh #122: a fresh session is a handle plus pending intent -
+        // no directory until the first record lands. The name rides
+        // the spec, so no quiet rename (which would materialize just
+        // to warn).
+        None => Ok(store.new_pending(cwd, title)),
     }
 }
 

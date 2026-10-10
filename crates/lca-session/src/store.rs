@@ -236,6 +236,9 @@ impl Session {
 #[derive(Clone)]
 pub struct SessionStore {
     root: PathBuf,
+    pub(crate) pending: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, crate::lazy::PendingSpec>>,
+    >,
 }
 
 /// The newest record id in a log buffer (gh #37): newest line
@@ -261,7 +264,10 @@ fn last_id_in(buf: &[u8]) -> Option<String> {
 impl SessionStore {
     /// Root the store at the user data directory (`.../sessions` lives below).
     pub fn new(root: PathBuf) -> Self {
-        SessionStore { root }
+        SessionStore {
+            root,
+            pending: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        }
     }
 
     /// The `sessions/` directory.
@@ -283,7 +289,7 @@ impl SessionStore {
         ids::project_key(&canonical.to_string_lossy())
     }
 
-    fn project_dir(&self, project_dir: &Path) -> PathBuf {
+    pub(crate) fn project_dir(&self, project_dir: &Path) -> PathBuf {
         self.sessions_dir().join(self.project_key(project_dir))
     }
 
@@ -349,7 +355,10 @@ impl SessionStore {
     }
 
     /// Append one record: a single write of the full line, then flush.
+    /// A pending session materializes first (gh #122): the directory,
+    /// meta, and session-start land ahead of the record.
     pub fn append(&self, session: &Session, mut record: lca_protocol::Record) -> Result<()> {
+        self.materialize(session)?;
         // gh #37 (FR-SESS-11): stamp the ancestry link from the log tip
         // when the writer left it empty. Junction types (`BranchPoint`
         // and friends) ignore the stamp; the walk never follows theirs.
@@ -373,8 +382,13 @@ impl SessionStore {
 
     /// Write the clean-exit `session-end` marker (`docs/session-log-format.md`:
     /// its absence means the session ended without one, normal after a crash).
-    /// The CLI calls this when a session ends.
+    /// The CLI calls this when a session ends. A session that never
+    /// materialized has no records to end (gh #122): skip it, so
+    /// launch-and-quit leaves no directory.
     pub fn close(&self, session: &Session) -> Result<()> {
+        if !session.log_path().is_file() {
+            return Ok(());
+        }
         let now = ids::now_ms();
         self.append(
             session,
@@ -421,6 +435,12 @@ impl SessionStore {
     /// an error (`docs/session-log-format.md` § Fork).
     fn ancestors(&self, session: &Session) -> Result<Vec<Session>> {
         let mut chain = vec![session.clone()];
+        // gh #122: a session with no directory yet has no parents
+        // (a missing dir means never materialized, never corrupt -
+        // a present dir without meta still errors below).
+        if !session.dir().is_dir() {
+            return Ok(chain);
+        }
         let mut visited = BTreeSet::new();
         visited.insert(session.id().to_string());
         let mut current = session.clone();
@@ -495,6 +515,27 @@ impl SessionStore {
     /// gone from what a reader sees, so its attachment is an orphan. As the
     /// sweep touches every member's directory, asking for any member cleans
     /// the whole tree (the cascade the plan calls for when children exist).
+    /// Move a session directory under a timestamped trash directory
+    /// (gh #75): recoverable by moving it back, never `rm`. The
+    /// project index rebuilds without it on the next listing.
+    pub fn trash(&self, session: &Session) -> Result<PathBuf> {
+        if !session.dir().is_dir() {
+            return Err(crate::Error::UnknownSession {
+                id: session.id().to_string(),
+            });
+        }
+        let now = ids::now_ms();
+        let target = self
+            .root
+            .join("trash")
+            .join(format!("{}-{now}", session.id()));
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(session.dir(), &target)?;
+        Ok(target)
+    }
+
     /// The tree's reachable set is computed first and deletion second, so
     /// the sweep never mistakes its own deletions for reachability.
     // ponytail: manual, whole-tree sweep; an automatic sweep at compaction
@@ -640,6 +681,19 @@ impl SessionStore {
     /// model (the zero-provider state) is not "last used" and is ignored.
     pub fn record_model_used(&self, session: &Session, provider: &str, model: &str) -> Result<()> {
         if model.is_empty() {
+            return Ok(());
+        }
+        // gh #122: before materialize, the choice rides the pending
+        // spec into the meta written at first append.
+        if !session.meta_path().is_file()
+            && let Some(spec) = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_mut(session.id())
+        {
+            spec.model = Some(model.to_string());
+            spec.provider = Some(provider.to_string());
             return Ok(());
         }
         let mut meta = self.meta(session)?;
@@ -1102,7 +1156,7 @@ const KNOWN_TYPES: &[&str] = &[
     "session-end",
 ];
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let temp = path.with_extension("tmp");
     {
         let mut file = std::fs::File::create(&temp)?;

@@ -60,6 +60,13 @@ impl SessionStore {
                     session: handle.id().to_string(),
                 });
             }
+            // gh #122: a missing directory means never materialized
+            // (empty, not corrupt - a present dir still reads strictly
+            // below).
+            if !handle.dir().is_dir() {
+                current = None;
+                continue;
+            }
             let meta = self.meta(&handle)?;
             let own = self.read(&handle)?;
             outcome.truncated |= own.truncated;
