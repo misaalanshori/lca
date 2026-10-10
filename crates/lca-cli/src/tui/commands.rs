@@ -375,7 +375,7 @@ impl Ui {
         if self.registry().provider_names().is_empty() {
             return CommandEffect::ShowWidget(crate::no_model_message(&self.live_name()));
         }
-        let step = super::login::PendingStep::wrap(
+        let step = super::pending_step::PendingStep::wrap(
             self.login_pending.clone(),
             self.login_generation.clone(),
         );
