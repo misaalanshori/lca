@@ -62,6 +62,9 @@ fn tabs_open_switch_isolated_and_close_in_a_real_terminal() {
     session.wait_for("answer one", std::time::Duration::from_secs(15));
     session.send(&["second question", "Enter"]);
     session.wait_for("answer two", std::time::Duration::from_secs(25));
+    // Turn-end, not first-delta: /exit into a running turn never
+    // lands (gh #231's lesson, same shape).
+    session.wait_for("done", std::time::Duration::from_secs(25));
     session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
 }
