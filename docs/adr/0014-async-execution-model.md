@@ -37,3 +37,25 @@ Sequential tool execution is a decision the requirements section states explicit
 ## Revisit conditions
 
 A workload where sequential tool execution is the measured bottleneck, with data showing the tool calls in question are genuinely independent, would justify designing concurrent execution properly rather than defaulting away from it further out of caution alone.
+
+## Annotation, 2026-10-11 (#103)
+
+The fresh-instance-per-call rule this record's cancellation story leaned
+on is lifted for statefulness: the host keeps one live guest per world
+per extension (`lca-ext-host::instance_cache`), checked out with fuel
+refilled and the epoch deadline re-armed, checked back in on success.
+Trap isolation survives because eviction, not the guest, is now the
+unit of freshness: `classify` drops the whole cache on every Wasmtime
+failure (trap, fuel exhaustion, epoch interrupt), and `disable` drops
+it with the extension, so the next call builds fresh exactly where the
+old code did. Per-guest epoch accounting falls out of the re-arm:
+each cached guest carries its own deadline against the engine's
+current epoch, so a global bump traps only a guest executing at that
+moment and never corrupts an idle cached one. Guest-answered
+refusals (compaction, transform rejection, declined stream, failed
+login) keep their instances: the guest is healthy, only its answer
+was no. No interface changes: no new world, export, manifest key, or
+`ABI_VERSION` move (the 0.6 freeze holds). The `session-shutdown`
+lifecycle the issue names stays unbuilt for the same reason - cleanup
+rides the existing `session-close` hook - and is the first thing to
+revisit when the 0.7 line opens.
