@@ -556,7 +556,7 @@ fn headless_redaction_hook_mutates_the_result_live() {
     );
 }
 
-// Verifies: gh #98 — `lca session migrate <id>` runs against a real
+// Verifies: gh #98 — `lca migrate <id>` runs against a real
 // session and reports a current log with nothing to do.
 #[test]
 fn session_migrate_reports_a_current_log() {
