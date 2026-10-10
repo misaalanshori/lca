@@ -248,6 +248,8 @@ impl TreePicker {
                     TreeRowKind::Tool => "tool: ",
                     TreeRowKind::Summary => "summary: ",
                     TreeRowKind::Compaction => "compaction: ",
+                    TreeRowKind::Custom => "custom: ",
+                    TreeRowKind::CustomMessage => "message: ",
                 };
                 line.push_str(marker);
                 line.push_str(&row.text);

@@ -20,6 +20,10 @@ pub enum EntryKind {
     Summary,
     /// A compaction landmark.
     Compaction,
+    /// Extension state (gh #137): navigable, never model content.
+    Custom,
+    /// An extension context injection (gh #137).
+    CustomMessage,
 }
 
 /// One navigable row of a session's entry tree (gh #37, FR-UI-16).
@@ -78,6 +82,12 @@ fn entry_rows(
             }
             lca_protocol::Record::Compaction { summary, .. } => {
                 Some((EntryKind::Compaction, head(summary)))
+            }
+            lca_protocol::Record::Custom { custom_type, .. } => {
+                Some((EntryKind::Custom, custom_type.clone()))
+            }
+            lca_protocol::Record::CustomMessage { content, .. } => {
+                Some((EntryKind::CustomMessage, head(content)))
             }
             _ => None,
         }

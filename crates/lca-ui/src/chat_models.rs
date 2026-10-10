@@ -155,6 +155,10 @@ pub enum TreeRowKind {
     Summary,
     /// A compaction landmark.
     Compaction,
+    /// Extension state (gh #137).
+    Custom,
+    /// An extension context injection (gh #137).
+    CustomMessage,
 }
 
 /// Returns the live session's entry tree as structured rows,

@@ -74,10 +74,9 @@ impl Ui {
         let opened = self.opened_sessions.clone();
         Arc::new(move || {
             // DEFAULT_TITLE, like any fresh session: the row adopts
-            // the first message once one lands (gh #209).
-            let session = store
-                .create_session(&cwd, lca_session::DEFAULT_TITLE)
-                .ok()?;
+            // the first message once one lands (gh #209). Pending,
+            // like every fresh session since gh #122.
+            let session = store.new_pending(&cwd, lca_session::DEFAULT_TITLE);
             if let Err(err) = crate::ensure_session_temp(&data, session.id()) {
                 eprintln!("error: cannot create the session temp dir: {err}");
                 return None;
@@ -115,6 +114,8 @@ impl Ui {
                         lca_session::EntryKind::Tool => TreeRowKind::Tool,
                         lca_session::EntryKind::Summary => TreeRowKind::Summary,
                         lca_session::EntryKind::Compaction => TreeRowKind::Compaction,
+                        lca_session::EntryKind::Custom => TreeRowKind::Custom,
+                        lca_session::EntryKind::CustomMessage => TreeRowKind::CustomMessage,
                     };
                     TreeRow {
                         id: row.id,
@@ -211,6 +212,25 @@ impl Ui {
                 .collect::<Vec<_>>();
             pairs.sort();
             pairs
+        })
+    }
+
+    /// Trash a session by id (gh #75): recoverable under the trash
+    /// directory, which the notice names.
+    pub(super) fn delete_session(&self) -> lca_ui::state::DeleteSession {
+        let store = self.store.clone();
+        let cwd = self.cwd.clone();
+        Arc::new(move |id: &str| -> Result<String, String> {
+            let session = store
+                .session(&cwd, id)
+                .map_err(|err| format!("cannot trash session `{id}`: {err}"))?;
+            let target = store
+                .trash(&session)
+                .map_err(|err| format!("cannot trash session `{id}`: {err}"))?;
+            Ok(format!(
+                "trashed '{id}' (recover from {})",
+                target.display()
+            ))
         })
     }
 }

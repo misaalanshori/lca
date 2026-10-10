@@ -403,3 +403,112 @@ fn entry_tree_carries_tool_rows_with_kinds() {
     );
     assert_eq!(by_id["r"].depth, 2, "the result nests under its call");
 }
+
+// Verifies: gh #137 - extension state joins the entry tree as its
+// own kinds: `custom` reads its type, `custom-message` its head.
+#[test]
+fn entry_tree_carries_custom_rows_with_kinds() {
+    use lca_protocol::{FORMAT_VERSION, Record};
+    let store = store("entry-tree-custom");
+    let project = scratch("entry-tree-custom-project");
+    let session = store.create_session(&project, "test").expect("create");
+    store
+        .append(&session, user_record("u", "do it"))
+        .expect("user");
+    store
+        .append(
+            &session,
+            Record::Custom {
+                v: FORMAT_VERSION,
+                ts: 2,
+                id: "x".to_string(),
+                parent: Some("u".to_string()),
+                custom_type: "tool-set-change".to_string(),
+                data: serde_json::json!({"active": []}),
+            },
+        )
+        .expect("custom");
+    store
+        .append(
+            &session,
+            Record::CustomMessage {
+                v: FORMAT_VERSION,
+                ts: 3,
+                id: "m".to_string(),
+                parent: Some("x".to_string()),
+                custom_type: "my-extension".to_string(),
+                content: "injected context".to_string(),
+                display: true,
+                details: None,
+            },
+        )
+        .expect("message");
+    let rows = store.entry_tree(&session).expect("tree");
+    let by_id: std::collections::HashMap<&str, &lca_session::EntryRow> =
+        rows.iter().map(|row| (row.id.as_str(), row)).collect();
+    assert_eq!(by_id["x"].kind, lca_session::EntryKind::Custom);
+    assert_eq!(by_id["m"].kind, lca_session::EntryKind::CustomMessage);
+    assert!(
+        by_id["x"].text.contains("tool-set-change"),
+        "the state names its type: {:?}",
+        by_id["x"].text
+    );
+    assert!(
+        by_id["m"].text.contains("injected context"),
+        "the message heads its content: {:?}",
+        by_id["m"].text
+    );
+    assert_eq!(by_id["m"].depth, 2, "the message nests under the state");
+}
+
+// Verifies: gh #137 - branch navigation leaves abandoned extension
+// state behind: a `custom-message` off the live chain never reaches
+// the Display view the model assembles from.
+#[test]
+fn abandoned_custom_messages_leave_the_display_view() {
+    use lca_protocol::{FORMAT_VERSION, Record};
+    let store = store("branch-custom");
+    let project = scratch("branch-custom-project");
+    let session = store.create_session(&project, "test").expect("create");
+    store
+        .append(&session, user_record("u1", "first"))
+        .expect("u1");
+    store
+        .append(
+            &session,
+            Record::CustomMessage {
+                v: FORMAT_VERSION,
+                ts: 2,
+                id: "m1".to_string(),
+                parent: Some("u1".to_string()),
+                custom_type: "my-extension".to_string(),
+                content: "abandoned injection".to_string(),
+                display: true,
+                details: None,
+            },
+        )
+        .expect("custom");
+    store.branch_at(&session, "u1").expect("branch");
+    store
+        .append(&session, user_record("u2", "second path"))
+        .expect("u2");
+
+    let display = store
+        .resolved(&session, ViewMode::Display)
+        .expect("display");
+    let ids: Vec<&str> = display
+        .records
+        .iter()
+        .filter_map(|record| record.id())
+        .collect();
+    assert!(
+        !ids.contains(&"m1"),
+        "the abandoned injection leaves: {ids:?}"
+    );
+    assert!(ids.contains(&"u2"), "the live path stays: {ids:?}");
+    let audit = store.resolved(&session, ViewMode::Audit).expect("audit");
+    assert!(
+        audit.records.iter().any(|record| record.id() == Some("m1")),
+        "audit keeps it"
+    );
+}
