@@ -273,42 +273,90 @@ fn model_label_for(provider: Option<&str>, model: Option<&str>) -> String {
 /// keys fall back to a title-cased last segment with no help, so an
 /// inventoried key is never blank.
 pub(super) fn setting_meta(key: &str) -> (String, String) {
-    let known = |label: &str, description: &str| {
-        (label.to_string(), description.to_string())
-    };
+    let known = |label: &str, description: &str| (label.to_string(), description.to_string());
     match key {
-        "ui.theme" => known("Theme", "Color palette: auto, dark, light, plain, system, or a file"),
+        "ui.theme" => known(
+            "Theme",
+            "Color palette: auto, dark, light, plain, system, or a file",
+        ),
         "ui.color" => known("Color", "SGR color output: auto or never"),
-        "ui.fullscreen" => known("Display mode", "Terminal scrollback or app-owned fullscreen"),
-        "ui.quiet_startup" => known("Quiet startup", "Startup header level: full, header only, or hidden"),
-        "ui.autocomplete_max_visible" => known("Completion rows", "Autocomplete popup rows, 3 to 20"),
-        "ui.editor_padding_x" => known("Editor padding", "Horizontal padding inside the prompt editor"),
+        "ui.fullscreen" => known(
+            "Display mode",
+            "Terminal scrollback or app-owned fullscreen",
+        ),
+        "ui.quiet_startup" => known(
+            "Quiet startup",
+            "Startup header level: full, header only, or hidden",
+        ),
+        "ui.autocomplete_max_visible" => {
+            known("Completion rows", "Autocomplete popup rows, 3 to 20")
+        }
+        "ui.editor_padding_x" => known(
+            "Editor padding",
+            "Horizontal padding inside the prompt editor",
+        ),
         "ui.output_pad" => known("Output margin", "Assistant transcript left margin, 0 or 1"),
-        "markdown.codeblock_border" => known("Code border", "Fenced code frame: full, horizontal, or none"),
-        "thinking" => known("Thinking effort", "Reasoning effort level the model is asked for"),
-        "ui.thinking" => known("Thinking display", "Reasoning block display: snippet, full, or hidden"),
+        "markdown.codeblock_border" => known(
+            "Code border",
+            "Fenced code frame: full, horizontal, or none",
+        ),
+        "thinking" => known(
+            "Thinking effort",
+            "Reasoning effort level the model is asked for",
+        ),
+        "ui.thinking" => known(
+            "Thinking display",
+            "Reasoning block display: snippet, full, or hidden",
+        ),
         "permissions.mode" => known("Permissions", "Approval mode for tool and network prompts"),
-        "compaction.enabled" => known("Auto compaction", "Compact context automatically when it fills"),
-        "compaction.threshold" => known("Compaction threshold", "Context fraction that triggers compaction"),
-        "compaction.reserve_tokens" => known("Compaction reserve", "Token reserve kept past the cut"),
+        "compaction.enabled" => known(
+            "Auto compaction",
+            "Compact context automatically when it fills",
+        ),
+        "compaction.threshold" => known(
+            "Compaction threshold",
+            "Context fraction that triggers compaction",
+        ),
+        "compaction.reserve_tokens" => {
+            known("Compaction reserve", "Token reserve kept past the cut")
+        }
         "compaction.keep_recent_tokens" => {
             known("Keep recent", "Recent tokens kept verbatim past the cut")
         }
         "shell.tool" => known("Shell", "Shell interpreter for the shell tool"),
-        "shell.path" => known("Shell path", "Exact interpreter path, winning over shell choice"),
+        "shell.path" => known(
+            "Shell path",
+            "Exact interpreter path, winning over shell choice",
+        ),
         "shell.command_prefix" => known("Shell prefix", "Prefix prepended to every shell command"),
-        "tool.timeout_seconds" => known("Shell timeout", "Shell command timeout in seconds when set"),
-        "tool.result_limit_bytes" => known("Result limit", "Tool output cap before truncation marks"),
-        "tool.max_iterations" => known("Max iterations", "Tool calls per turn; 0 is unlimited"),
-        "provider.retry_limit" => known("Retry limit", "Retry attempts on retryable network errors"),
-        "tool.edit_requires_read" => known("Edit needs read", "Edits refuse without a prior fresh read"),
-        "ui.double_escape_action" => known("Double escape", "What Esc Esc opens: tree, fork, or nothing"),
-        "ui.tree_filter_mode" => known("Tree filter", "The /tree navigator opening view"),
-        "ui.fullscreen_scrollbar" => known("Scrollbar", "Fullscreen scrollbar: auto, always, or hidden"),
-        "ui.fullscreen_copy_on_select" => {
-            known("Copy on select", "Copy fullscreen selections to the clipboard")
+        "tool.timeout_seconds" => {
+            known("Shell timeout", "Shell command timeout in seconds when set")
         }
-        "ui.fullscreen_wheel_lines" => known("Wheel lines", "Fullscreen lines per mouse-wheel tick"),
+        "tool.result_limit_bytes" => {
+            known("Result limit", "Tool output cap before truncation marks")
+        }
+        "tool.max_iterations" => known("Max iterations", "Tool calls per turn; 0 is unlimited"),
+        "provider.retry_limit" => {
+            known("Retry limit", "Retry attempts on retryable network errors")
+        }
+        "tool.edit_requires_read" => {
+            known("Edit needs read", "Edits refuse without a prior fresh read")
+        }
+        "ui.double_escape_action" => known(
+            "Double escape",
+            "What Esc Esc opens: tree, fork, or nothing",
+        ),
+        "ui.tree_filter_mode" => known("Tree filter", "The /tree navigator opening view"),
+        "ui.fullscreen_scrollbar" => {
+            known("Scrollbar", "Fullscreen scrollbar: auto, always, or hidden")
+        }
+        "ui.fullscreen_copy_on_select" => known(
+            "Copy on select",
+            "Copy fullscreen selections to the clipboard",
+        ),
+        "ui.fullscreen_wheel_lines" => {
+            known("Wheel lines", "Fullscreen lines per mouse-wheel tick")
+        }
         "ui.fullscreen_exit_output" => known("Exit output", "What leaving fullscreen prints"),
         "terminal.show_images" => known("Show images", "Display inline images in the transcript"),
         "terminal.image_width_cells" => known("Image width", "Inline image width cap in cells"),
@@ -316,7 +364,10 @@ pub(super) fn setting_meta(key: &str) -> (String, String) {
         "images.auto_resize" => known("Auto resize", "Resize pasted images to fit"),
         "markdown.code_block_indent" => known("Code indent", "Prefix spaces on fenced code lines"),
         "markdown.mermaid" => known("Mermaid", "Mermaid diagram rendering mode"),
-        "cache.noise_floor_tokens" => known("Cache noise floor", "Cache misses below this are not counted"),
+        "cache.noise_floor_tokens" => known(
+            "Cache noise floor",
+            "Cache misses below this are not counted",
+        ),
         "extensions.log_limit_bytes" => known("Extension log cap", "Extension log truncation size"),
         "update.check" => known("Update check", "Daily background version check"),
         _ => {

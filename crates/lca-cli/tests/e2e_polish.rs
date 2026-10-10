@@ -72,7 +72,8 @@ fn hover_highlights_settings_without_scrolling() {
         .lines()
         .enumerate()
         .find_map(|(row, line)| {
-            line.find("Display mode").map(|col| (col as u16, row as u16))
+            line.find("Display mode")
+                .map(|col| (col as u16, row as u16))
         })
         .expect("a visible settings row");
     assert!(
@@ -86,15 +87,12 @@ fn hover_highlights_settings_without_scrolling() {
     std::thread::sleep(std::time::Duration::from_millis(600));
     let pane = session.capture();
     assert!(
-        pane.lines().find(|line| line.contains("Display mode")).is_some_and(|line| {
-            line.trim_start().starts_with('>')
-        }),
+        pane.lines()
+            .find(|line| line.contains("Display mode"))
+            .is_some_and(|line| { line.trim_start().starts_with('>') }),
         "the highlight follows the pointer:\n{pane}"
     );
-    assert!(
-        !pane.contains('▲'),
-        "nothing scrolled:\n{pane}"
-    );
+    assert!(!pane.contains('▲'), "nothing scrolled:\n{pane}");
     session.send(&["Escape"]);
     std::thread::sleep(std::time::Duration::from_millis(300));
     session.send(&["/exit", "Enter"]);
@@ -116,7 +114,7 @@ fn settings_selector_shows_labels_and_help() {
     session.wait_for("[session in", std::time::Duration::from_secs(30));
 
     session.send(&["/settings", "Enter"]);
-    let pane = session.wait_for("Editor padding", std::time::Duration::from_secs(15));
+    session.wait_for("Editor padding", std::time::Duration::from_secs(15));
     // The pinned hint (with the description) sits at the box
     // bottom: End brings the tail and the last row's help on screen.
     session.send(&["End"]);
@@ -153,7 +151,10 @@ fn drawer_tab_and_panel_tint_reach_the_pane() {
     session.send(&["/fullscreen", "Enter"]);
     session.send(&["M-x"]);
     let pane = session.wait_for("OK", std::time::Duration::from_secs(15));
-    assert!(pane.contains('◀') || pane.contains('▶'), "the tab shows:\n{pane}");
+    assert!(
+        pane.contains('◀') || pane.contains('▶'),
+        "the tab shows:\n{pane}"
+    );
     let framed = session.capture_e();
     assert!(framed.contains('│'), "the panel border draws");
     assert!(

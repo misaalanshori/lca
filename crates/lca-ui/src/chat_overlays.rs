@@ -413,13 +413,11 @@ impl Chat {
             let hint = if picker.editing.is_some() {
                 HINT_SETTINGS_EDIT.to_string()
             } else if let Some(row) = picker.rows.get(picker.selected) {
-                let cap = (width as usize).saturating_sub(HINT_SETTINGS.len() + 12).max(20);
-                let desc = lca_tui::engine::text::truncate_to_width(
-                    &row.description,
-                    cap,
-                    "…",
-                    false,
-                );
+                let cap = (width as usize)
+                    .saturating_sub(HINT_SETTINGS.len() + 12)
+                    .max(20);
+                let desc =
+                    lca_tui::engine::text::truncate_to_width(&row.description, cap, "…", false);
                 if desc.is_empty() {
                     HINT_SETTINGS.to_string()
                 } else {

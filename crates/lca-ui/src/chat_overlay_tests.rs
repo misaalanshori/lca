@@ -1185,36 +1185,3 @@ fn scoped_models_click_toggles_instead_of_saving() {
         "the row unchecked"
     );
 }
-
-// Verifies: gh #235 - settings rows paint friendly labels, never raw
-// keys, with the highlighted row's description in the pinned hint.
-#[test]
-fn settings_rows_paint_labels_and_a_description() {
-    use crate::state::SettingRow;
-    let row = |key: &str, label: &str, description: &str| SettingRow {
-        section: "S".to_string(),
-        key: key.to_string(),
-        label: label.to_string(),
-        description: description.to_string(),
-        value: "0".to_string(),
-        source: "default".to_string(),
-        values: vec![],
-    };
-    let mut chat = chat();
-    chat.screen_mode = true;
-    chat.settings_picker = Some(crate::chat_pickers::SettingsPicker {
-        rows: vec![
-            row("ui.editor_padding_x", "Editor padding", "Horizontal pad."),
-            row("ui.theme", "Theme", "Pick a palette."),
-        ],
-        selected: 1,
-        editing: None,
-    });
-    let text = strip(&chat.viewport(100, 30, 0)).join("\n");
-    assert!(text.contains("Editor padding"), "labels paint:\n{text}");
-    assert!(!text.contains("ui.editor_padding_x"), "raw keys hide:\n{text}");
-    assert!(
-        text.contains("Pick a palette."),
-        "the highlighted description shows:\n{text}"
-    );
-}

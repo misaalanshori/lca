@@ -34,6 +34,8 @@ fn rows_hook(writes: Writes) -> UiHooks {
         let row = |section: &str, key: &str, values: &[&str]| SettingRow {
             section: section.to_string(),
             key: key.to_string(),
+            label: key.to_string(),
+            description: String::new(),
             value: written
                 .get(key)
                 .cloned()
