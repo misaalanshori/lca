@@ -303,6 +303,22 @@ pub fn run_shared(
             ok: true,
             text: "conformance ok".to_string(),
         },
+        // #103 (QA-017): the guest-side call counter. Mode-gated so
+        // no other probe observes it, and asserted relatively (each
+        // call returns one more than the last on the same guest), so
+        // the native twin's process-wide counter and the WASM guest's
+        // per-instance one both qualify without agreeing absolutely.
+        // A fresh instance per call answers 1 every time; a cached one
+        // counts up - the statefulness probe.
+        "call-count" => {
+            static CALLS: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
+            let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            ModeOutcome {
+                ok: true,
+                text: format!("call {n}"),
+            }
+        },
         // Gh #124's acceptance: a tool asking `ui.confirm`, reporting
         // the verdict as data (a denial is `ok` too - the question was
         // asked and answered, which is what the mode probes).
