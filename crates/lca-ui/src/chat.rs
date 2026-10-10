@@ -727,6 +727,12 @@ impl Chat {
         if self.keybindings.matches(data, "app.clear") {
             return if self.turn_running {
                 Action::CancelTurn
+            } else if !self.editor.text().is_empty() {
+                // gh #225: the hint promises `clear/exit` - text
+                // present clears (and stands down an armed exit).
+                self.editor.set_text("");
+                self.world.ctrl_c_armed = false;
+                Action::Continue
             } else if self.world.ctrl_c_armed {
                 self.world.ctrl_c_armed = false;
                 Action::Exit

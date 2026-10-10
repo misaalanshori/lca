@@ -1151,3 +1151,18 @@ fn a_model_without_a_set_offers_every_level() {
     assert_eq!(picker.offered.len(), 7, "unset + six levels");
     assert!(picker.offered.contains(&"high".to_string()));
 }
+
+// Verifies: gh #225 - the first C-c clears composer text (the hint's
+// promise); empty-armed C-c exits on the second tap.
+#[test]
+fn ctrl_c_clears_text_first_and_exits_when_empty() {
+    let mut chat = chat();
+    for c in "scratch-text".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    assert_eq!(chat.editor.text(), "scratch-text");
+    assert_eq!(chat.handle_key("\x03"), Action::Continue);
+    assert_eq!(chat.editor.text(), "", "the first tap clears");
+    assert_eq!(chat.handle_key("\x03"), Action::Continue);
+    assert_eq!(chat.handle_key("\x03"), Action::Exit);
+}
