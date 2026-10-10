@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};
-use lca_ext_host::{ExtHost, ExtensionLimits, HostEnvironment};
+use lca_ext_host::{DEFAULT_FUEL_PER_CALL, ExtHost, ExtensionLimits, HostEnvironment};
 use lca_ext_native::NativeRegistry;
 use lca_permissions::{
     Decision, GrantStore, PermissionPrompt, ProposalDiff, ScopeGrant, ScopeRoots,
@@ -747,4 +747,199 @@ fn context_windows_are_identical_across_modes() {
         0,
         "an unknown id reports no window in either mode: {native_models:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// gh #236: the Antigravity catalog at real size (32 models, ~15 KiB,
+// pi-antigravity's verified shape) through the shipped component.
+// ---------------------------------------------------------------------------
+
+/// A committed 32-model `fetchAvailableModels` catalog (~15 KiB) in
+/// pi-antigravity's verified shape (`ModelInfoRaw`: displayName,
+/// quotaInfo, capability flags). Written inline so the size is pinned
+/// in review: a unit mock that shrinks this re-opens the fuel hole.
+fn realistic_catalog() -> String {
+    let families = [
+        ("gemini-3.8-flash", "Gemini 3.8 Flash", true, true),
+        ("gemini-3.7-flash", "Gemini 3.7 Flash", true, true),
+        ("gemini-3.6-flash", "Gemini 3.6 Flash", true, true),
+        ("gemini-3.5-flash", "Gemini 3.5 Flash", true, true),
+        ("gemini-3.1-pro", "Gemini 3.1 Pro", true, true),
+        ("gemini-2.5-pro", "Gemini 2.5 Pro", true, true),
+        ("gemini-2.5-flash", "Gemini 2.5 Flash", true, true),
+        ("gemini-2.0-flash", "Gemini 2.0 Flash", false, true),
+        ("claude-opus-4-6", "Claude Opus 4.6", true, true),
+        ("claude-sonnet-4-6", "Claude Sonnet 4.6", true, true),
+        ("claude-haiku-4-5", "Claude Haiku 4.5", true, false),
+        ("gpt-oss-120b", "GPT OSS 120B", false, false),
+    ];
+    let mut models = serde_json::Map::new();
+    for i in 0..32 {
+        let (base, display, thinking, images) = families[i % families.len()];
+        let id = if i < families.len() {
+            base.to_string()
+        } else {
+            format!("{base}-exp-{i}")
+        };
+        models.insert(
+            id.clone(),
+            serde_json::json!({
+                "isInternal": false,
+                "displayName": format!("{display} (Antigravity)"),
+                "label": display,
+                "modelName": id,
+                "modelProvider": if id.contains("gemini") { "google" } else { "anthropic" },
+                "apiProvider": "antigravity",
+                "supportsThinking": thinking,
+                "supportsImages": images,
+                "recommended": i < 3,
+                "quotaInfo": {"remainingFraction": 0.87, "resetTime": "2026-10-17T00:00:00Z"},
+                "experiments": [format!("exp-{i}-a"), format!("exp-{i}-b")],
+            }),
+        );
+    }
+    serde_json::json!({
+        "models": models,
+        "defaultAgentModelId": "gemini-3.8-flash",
+    })
+    .to_string()
+}
+
+/// One loopback Google: the catalog above for `fetchAvailableModels`,
+/// `{}` elsewhere.
+fn catalog_mock(catalog: String) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten().take(8) {
+            let mut stream = stream;
+            let mut buf = vec![0u8; 65536];
+            let mut head = Vec::new();
+            while let Ok(n) = std::io::Read::read(&mut stream, &mut buf) {
+                if n == 0 {
+                    break;
+                }
+                head.extend_from_slice(&buf[..n]);
+                if head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let text = String::from_utf8_lossy(&head).into_owned();
+            let path = text.split_whitespace().nth(1).unwrap_or("/").to_string();
+            recorded.lock().expect("paths").push(path.clone());
+            let payload = if path.contains("fetchAvailableModels") {
+                catalog.clone()
+            } else {
+                "{}".to_string()
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                payload.len(),
+                payload
+            );
+            let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+        }
+    });
+    (format!("http://{addr}"), seen)
+}
+
+const AG_FIXTURE: &[u8] = include_bytes!("../../../extensions/antigravity/fixtures/component.wasm");
+const AG_MANIFEST: &str = include_str!("../../../extensions/antigravity/extension.toml");
+
+/// Load the shipped Antigravity component at `fuel` with loopback
+/// credentials seeded: a live access token, far-future expiry, and the
+/// mock as its API base, plus a session 127.0.0.1 grant.
+fn antigravity_guest(name: &str, fuel: u64, api_base: &str) -> Arc<dyn ExtensionDispatch> {
+    let fixture = Fixture::new(name);
+    {
+        let mut store = fixture.store.lock().expect("store");
+        store
+            .attach_session_net_pattern(&fixture.roots.workspace, "127.0.0.1")
+            .expect("loopback grant");
+    }
+    let creds = fixture.root.join("data/credentials/antigravity.json");
+    std::fs::create_dir_all(creds.parent().expect("dir")).expect("mkdir");
+    std::fs::write(
+        &creds,
+        serde_json::json!({
+            "access": "mock-access",
+            "expires": "9999999999",
+            "project": "mock-project",
+            "api_base": api_base,
+        })
+        .to_string(),
+    )
+    .expect("seed");
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            memory_bytes: 64 * 1024 * 1024,
+            fuel_per_call: fuel,
+            log_limit_bytes: 4096,
+        },
+        fixture.env(),
+    );
+    let handle = host.load(AG_FIXTURE, AG_MANIFEST).expect("load");
+    let mut registry = NativeRegistry::new();
+    registry.register(Arc::new(handle));
+    let mut handles = registry.into_handles();
+    handles.pop().expect("handle")
+}
+
+// Verifies: gh #236 - a real-size catalog lists through the shipped
+// component within the production fuel budget (FR-EXT-4, FR-PROV-2).
+#[tokio::test]
+async fn antigravity_lists_a_realistic_catalog_within_production_fuel() {
+    let catalog = realistic_catalog();
+    assert!(
+        catalog.len() >= 10_000,
+        "the fixture must stay real-size: {} bytes",
+        catalog.len()
+    );
+    let (base, seen) = catalog_mock(catalog);
+    let guest = antigravity_guest("ag-catalog", DEFAULT_FUEL_PER_CALL, &base);
+    let models = guest.provider_models(&[]).expect("listing succeeds");
+    assert_eq!(models.len(), 32, "every catalog model lists");
+    assert_eq!(models[0].id, "claude-haiku-4-5", "sorted by id: {models:?}");
+    assert!(
+        models.iter().any(|m| m.name.contains("Gemini 3.8 Flash")),
+        "display names parse"
+    );
+    assert!(
+        !seen.lock().expect("paths").is_empty(),
+        "the catalog was fetched"
+    );
+}
+
+// Verifies: gh #236 - the margin, not just the pass: a 4x catalog
+// (128 models, ~49 KiB, measured floor ~6M fuel) lists within HALF
+// the production budget, so catalog growth has somewhere to go
+// before fuel matters.
+#[tokio::test]
+async fn antigravity_big_catalog_holds_half_budget_margin() {
+    let catalog = realistic_catalog();
+    let mut value: serde_json::Value = serde_json::from_str(&catalog).expect("json");
+    let models = value
+        .get("models")
+        .expect("models")
+        .as_object()
+        .expect("obj")
+        .clone();
+    let mut merged = models.clone();
+    for i in 0..96 {
+        let (key, entry) = models.iter().nth(i % models.len()).expect("entry");
+        merged.insert(format!("{key}-b{i}"), entry.clone());
+    }
+    value["models"] = serde_json::Value::Object(merged);
+    let big = value.to_string();
+    assert!(
+        big.len() >= 45_000,
+        "the margin probe must stay big: {}",
+        big.len()
+    );
+    let (base, _) = catalog_mock(big);
+    let guest = antigravity_guest("ag-margin", DEFAULT_FUEL_PER_CALL / 2, &base);
+    let models = guest.provider_models(&[]).expect("margin holds");
+    assert_eq!(models.len(), 128, "every model lists");
 }

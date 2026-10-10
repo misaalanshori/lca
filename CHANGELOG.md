@@ -6,7 +6,19 @@ Dates are UTC.
 
 ## [Unreleased]
 
-### Added
+### Fixed
+- **Antigravity model listing on real payloads (gh #236).** The
+claimed 10M-fuel exhaustion did not reproduce on the fresh
+component (measured floor: ~1.5M for a 12 KiB / 32-model catalog,
+~6M for 49 KiB / 128 models); the production budget moves to a
+measured 25M anyway for catalog-growth headroom, shared as one
+const across both host sites and the manifest default. A trapped
+listing now warns loudly with the extension named instead of
+dissolving into `offers no models`, and provider switching falls
+back to the new provider's first model when neither the current
+nor the default id matches. Guards: a realistic-catalog listing
+through the shipped component, a half-budget margin probe at 4x
+catalog size, and the refreshed component fixture.
 - **Sessions phase 3 (gh #37, epic complete).** `/tree` browses the
 live session's entry tree (oldest-first rows, depth indent, label
 marks, live ticks) on the rolling-window picker chrome, and Enter

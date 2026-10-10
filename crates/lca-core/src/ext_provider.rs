@@ -103,10 +103,24 @@ impl Provider for ExtensionProvider {
 
     fn list_models(&self) -> Vec<ModelInfo> {
         // A handle that cannot enumerate answers with an error; the
-        // picker falls back to the configured model (FR-PROV-2).
-        self.handle
+        // picker falls back to the configured model (FR-PROV-2). The
+        // failure is warned loudly, never swallowed: an empty list
+        // with no diagnostic is exactly how a fuel trap became
+        // "offers no models" (gh #236).
+        match self
+            .handle
             .provider_models(&self.settings.lock().unwrap_or_else(|p| p.into_inner()))
-            .unwrap_or_default()
+        {
+            Ok(models) => models,
+            Err(err) => {
+                tracing::warn!(
+                    extension = self.handle.name(),
+                    error = %err,
+                    "provider model listing failed; answering empty"
+                );
+                Vec::new()
+            }
+        }
     }
 
     fn stream(

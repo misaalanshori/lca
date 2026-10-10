@@ -380,7 +380,7 @@ fn manifest_limits(value: &toml::Value) -> Result<Option<ExtensionLimits>, LoadE
     let fuel = table
         .get("fuel_per_call")
         .and_then(|v| v.as_integer())
-        .unwrap_or(10_000_000);
+        .unwrap_or(super::DEFAULT_FUEL_PER_CALL as i64);
     if memory_mb < 1 || fuel < 1000 {
         return Err(LoadError::InvalidManifest(
             "`limits` values are below the schema minimums".into(),

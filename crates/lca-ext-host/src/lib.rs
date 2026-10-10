@@ -75,6 +75,16 @@ pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<
 /// (NFR-19).
 pub const SUPPORTED_ABI_WINDOW: &str = "0.5..=0.6, plus the 1.0 freeze line";
 
+/// Default per-call fuel for production hosts (gh #236). Measured
+/// 2026-10-10 against the shipped Antigravity component: a 12 KiB /
+/// 32-model catalog lists for ~1.5M fuel, a 49 KiB / 128-model one
+/// for ~6M, so 25M covers ~150 KiB catalogs (roughly 10x today's
+/// reality) while every guest call stays bounded. Raise only with a
+/// new measurement, never blindly: the margin probe
+/// (`antigravity_big_catalog_holds_half_budget_margin`) pins half of
+/// this budget against 4x today's catalog.
+pub const DEFAULT_FUEL_PER_CALL: u64 = 25_000_000;
+
 /// Resource limits applied to every call, resolved from the manifest and
 /// clamped to host maximums (`docs/flows.md`).
 #[derive(Debug, Clone)]

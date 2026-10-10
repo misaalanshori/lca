@@ -202,7 +202,7 @@ The granted set, not the declared set, governs every call: the host links each c
 
 Native-linked extensions skip everything from the digest check through instantiation. They register directly and carry an unsandboxed label. This is the only path where the capability resolution does not run, and it is reserved for code that ships in the binary.
 
-Resource limits are applied to the store at instantiation: a memory ceiling and a fuel budget per call. Both come from the manifest clamped to host maximums.
+Resource limits are applied to the store at instantiation: a memory ceiling and a fuel budget per call. Both come from the manifest clamped to host maximums. The production default is 25M fuel per call (gh #236, measured 2026-10-10: a 12 KiB / 32-model Antigravity catalog lists for ~1.5M, a 49 KiB / 128-model one for ~6M, so the default covers ~150 KiB catalogs while every guest call stays bounded). A fuel trap answers the caller with an error, never silently: model listing warns loudly and falls back, and the margin probe pins half the budget against 4x today's catalog.
 
 A trap during `initialize` disables the extension for the session and does not stop the agent from starting.
 

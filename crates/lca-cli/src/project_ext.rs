@@ -120,7 +120,7 @@ pub(crate) fn guest_host(
     lca_ext_host::ExtHost::new(
         lca_ext_host::ExtensionLimits {
             memory_bytes: 64 * 1024 * 1024,
-            fuel_per_call: 10_000_000,
+            fuel_per_call: lca_ext_host::DEFAULT_FUEL_PER_CALL,
             log_limit_bytes,
         },
         env,

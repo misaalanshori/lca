@@ -25,6 +25,7 @@ toml.workspace = true
 proptest.workspace = true
 compaction-default = { path = "../../extensions/compaction-default" }
 lca-testkit = { path = "../lca-testkit" }
+tracing-subscriber.workspace = true
 lca-ext-host = { path = "../lca-ext-host" }
 lca-ext-native = { path = "../lca-ext-native" }
 conformance = { path = "../../extensions/conformance" }

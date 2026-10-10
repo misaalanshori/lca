@@ -35,6 +35,22 @@ pub(crate) fn stage_initial_attachments(
     staged
 }
 
+/// Pick the model a provider switch lands on (gh #236): keep the
+/// session's model when the new provider offers it, else that
+/// provider's default, else its first listed model (a switch whose
+/// current id exists nowhere still moves).
+fn pick_model<'a>(
+    listed: &'a [lca_protocol::ModelInfo],
+    current: &str,
+    default_id: &str,
+) -> Option<&'a lca_protocol::ModelInfo> {
+    listed
+        .iter()
+        .find(|model| model.id == current)
+        .or_else(|| listed.iter().find(|model| model.id == default_id))
+        .or_else(|| listed.first())
+}
+
 impl Ui {
     /// Every model this session offers: every enabled provider's list
     /// (each across its profiles, gh #31), cut to the enabled scope
@@ -796,10 +812,7 @@ impl Ui {
                 .id
                 .clone();
             let default_id = super::resolve_model_id(&crate::lock(&ui.config), true, &adapter);
-            let pick = listed
-                .iter()
-                .find(|model| model.id == current)
-                .or_else(|| listed.iter().find(|model| model.id == default_id));
+            let pick = pick_model(&listed, &current, &default_id);
             let Some(pick) = pick else {
                 return format!("`{provider}` offers no models");
             };
@@ -1097,5 +1110,39 @@ mod tests {
         let config = config_with("lca-settings-theme", "");
         let text = settings_text(&config, None, Some("light"), None, None);
         assert!(text.contains("ui.theme = light [session]"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::pick_model;
+
+    fn models() -> Vec<lca_protocol::ModelInfo> {
+        ["b-one", "a-two"]
+            .iter()
+            .map(|id| lca_protocol::ModelInfo {
+                id: id.to_string(),
+                name: id.to_string(),
+                context_window: 0,
+                max_tokens: 0,
+                extras: Default::default(),
+            })
+            .collect()
+    }
+
+    // Verifies: gh #236 - a switch keeps the current model when
+    // offered, else the provider default, else the first listed model
+    // (a current id that exists nowhere still moves).
+    #[test]
+    fn switch_pick_prefers_current_then_default_then_first() {
+        let listed = models();
+        assert_eq!(pick_model(&listed, "a-two", "b-one").unwrap().id, "a-two");
+        assert_eq!(pick_model(&listed, "missing", "b-one").unwrap().id, "b-one");
+        assert_eq!(
+            pick_model(&listed, "missing", "also-missing").unwrap().id,
+            "b-one",
+            "first listed, not 'offers no models'"
+        );
+        assert!(pick_model(&[], "x", "y").is_none());
     }
 }
