@@ -6,6 +6,22 @@ use super::store::{Session, SessionStore};
 use super::view::ViewMode;
 use super::{Result, ids};
 
+/// The record kind behind an entry row (gh #231): the DAG
+/// navigator filters and marks rows by this, never by sniffing text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    /// A user prompt.
+    User,
+    /// An assistant reply (textless ones are pure tool calls).
+    Assistant,
+    /// A tool call or result.
+    Tool,
+    /// A branch summary landmark.
+    Summary,
+    /// A compaction landmark.
+    Compaction,
+}
+
 /// One navigable row of a session's entry tree (gh #37, FR-UI-16).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryRow {
@@ -13,7 +29,10 @@ pub struct EntryRow {
     pub id: String,
     /// Nesting depth (the picker indents two spaces per level).
     pub depth: usize,
-    /// One-line row text (labels and live marks ride separately).
+    /// The record kind (gh #231).
+    pub kind: EntryKind,
+    /// One-line row text, bare of kind markers (the navigator paints
+    /// those; gh #231).
     pub text: String,
     /// The live bookmark on this record, when one names it.
     pub label: Option<String>,
@@ -31,28 +50,40 @@ fn entry_rows(
     marks: &std::collections::BTreeMap<String, String>,
 ) -> Vec<EntryRow> {
     use std::collections::BTreeMap;
-    fn row_text(record: &lca_protocol::Record) -> Option<String> {
+    fn row_kind_text(record: &lca_protocol::Record) -> Option<(EntryKind, String)> {
         let head = |text: &str| text.lines().next().unwrap_or_default().to_string();
         match record {
-            lca_protocol::Record::User { content, .. } => Some(head(content)),
+            lca_protocol::Record::User { content, .. } => Some((EntryKind::User, head(content))),
             lca_protocol::Record::Assistant { content, .. } => {
                 let text = content.iter().find_map(|block| match block {
                     lca_protocol::ContentBlock::Text { text } => Some(text.clone()),
                     _ => None,
                 });
-                Some(
+                Some((
+                    EntryKind::Assistant,
                     text.map(|t| head(&t))
                         .unwrap_or_else(|| "(tool call)".to_string()),
-                )
+                ))
             }
+            lca_protocol::Record::ToolCall { name, .. } => Some((EntryKind::Tool, name.clone())),
+            lca_protocol::Record::ToolResult { content, .. } => Some((
+                EntryKind::Tool,
+                content
+                    .as_deref()
+                    .map(head)
+                    .unwrap_or_else(|| "(no output)".to_string()),
+            )),
             lca_protocol::Record::BranchSummary { summary, .. } => {
-                Some(format!("summary: {}", head(summary)))
+                Some((EntryKind::Summary, head(summary)))
             }
             lca_protocol::Record::Compaction { summary, .. } => {
-                Some(format!("compaction: {}", head(summary)))
+                Some((EntryKind::Compaction, head(summary)))
             }
             _ => None,
         }
+    }
+    fn row_text(record: &lca_protocol::Record) -> Option<String> {
+        row_kind_text(record).map(|(_, text)| text)
     }
     // Nearest candidate ancestor through anything the picker skips.
     let by_id: BTreeMap<&str, &lca_protocol::Record> = records
@@ -111,10 +142,13 @@ fn entry_rows(
         };
         for record in siblings {
             let id = record.id().unwrap_or_default().to_string();
+            let (kind, text) =
+                row_kind_text(record).unwrap_or((EntryKind::Assistant, String::new()));
             rows.push(EntryRow {
                 id: id.clone(),
                 depth,
-                text: row_text(record).unwrap_or_default(),
+                kind,
+                text,
                 label: marks.get(&id).cloned(),
                 live: live.contains(&id),
             });
@@ -138,8 +172,8 @@ impl SessionStore {
     /// depth-indented, with labels and live-chain marks.
     ///
     /// Rows cover the whole file (every branch, like pi's tree), not
-    /// the live chain: user and assistant messages plus summary and
-    /// compaction landmarks. Tool traffic, jump markers, label records,
+    /// the live chain: user and assistant messages, tool traffic, plus
+    /// summary and compaction landmarks. Jump markers, label records,
     /// and session framing stay out (labels surface as row marks).
     pub fn entry_tree(&self, session: &Session) -> Result<Vec<EntryRow>> {
         let audit = self.resolved(session, ViewMode::Audit)?;

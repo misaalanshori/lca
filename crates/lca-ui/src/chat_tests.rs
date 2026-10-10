@@ -4,6 +4,19 @@ use lca_protocol::{ToolCall, ToolResult};
 use lca_tui::engine::text::strip_terminal_sequences;
 use std::path::PathBuf;
 
+/// One structured tree row for navigator tests (gh #231): a user
+/// row at `depth` unless the kind says otherwise.
+pub(super) fn tree_row(id: &str, depth: usize, text: &str) -> crate::state::TreeRow {
+    crate::state::TreeRow {
+        id: id.to_string(),
+        depth,
+        kind: crate::state::TreeRowKind::User,
+        text: text.to_string(),
+        label: None,
+        live: false,
+    }
+}
+
 pub(super) fn options() -> UiOptions {
     UiOptions {
         prompt_slot: Default::default(),
@@ -642,54 +655,6 @@ fn alt_up_and_down_jump_between_prompts() {
 // Verifies: FR-UI-16 - `/tree` browses the live session's entry
 // tree and selecting a row branches there in place (gh #37 phase 3:
 // record rows replace the fork-directory rows; fork switching lives
-// on `/resume`, forking on `/fork`).
-#[test]
-fn tree_browses_entry_branches_and_selection_branches_there() {
-    let mut options = options();
-    options.hooks.session_tree = Some(Arc::new(|| {
-        vec![
-            ("r1".into(), "first question".into()),
-            ("r2".into(), "  second question \u{25c0}".into()),
-        ]
-    }));
-    options.hooks.branch_here = Some(Arc::new(|id: &str| {
-        assert_eq!(id, "r2");
-        Some(vec![])
-    }));
-    options.hooks.fork_at = Some(Arc::new(|n: usize| crate::state::ForkReport {
-        id: Some("newbranch".to_string()),
-        notice: format!("forked at {n}: newbranch"),
-    }));
-    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
-    for c in "/tree".chars() {
-        chat.handle_key(&c.to_string());
-    }
-    chat.handle_key("\r");
-    assert!(chat.tree_picker.is_some());
-    let viewport = strip(&chat.viewport(100, 30, 0)).join("\n");
-    assert!(viewport.contains("first question"), "{viewport}");
-    assert!(viewport.contains("second question"), "{viewport}");
-    chat.handle_key("j");
-    chat.handle_key("\r");
-    assert!(
-        chat.world.notice.as_deref().unwrap().contains("branched"),
-        "{:?}",
-        chat.world.notice
-    );
-    for c in "/fork 1".chars() {
-        chat.handle_key(&c.to_string());
-    }
-    chat.handle_key("\r");
-    assert!(
-        chat.world
-            .notice
-            .as_deref()
-            .unwrap()
-            .contains("forked at 1"),
-        "{:?}",
-        chat.world.notice
-    );
-}
 
 // Verifies: FR-UI-18 - a permission prompt shows a visible,
 // keyboard-interruptible auto-approve countdown.

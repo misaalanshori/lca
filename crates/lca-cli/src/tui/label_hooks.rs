@@ -57,10 +57,18 @@ impl Ui {
         })
     }
 
-    /// The live session's entry tree for `/tree` (gh #37, FR-UI-16):
-    /// `(record id, row text)` oldest-first, depth-indented, labels as
-    /// `[name]` prefixes, live-chain rows marked.
+    /// The configured tree filter mode for `/tree` (gh #231): the
+    /// config value at options-build time; `f` cycles from it.
+    pub(super) fn tree_filter_mode(&self) -> lca_ui::state::TreeFilterMode {
+        let mode = crate::lock(&self.config).ui_tree_filter_mode().to_string();
+        Arc::new(move || mode.clone())
+    }
+
+    /// The live session's entry tree for `/tree` (gh #37, FR-UI-16,
+    /// gh #231): structured rows oldest-first; the navigator paints
+    /// connectors, markers, and filters from these.
     pub(super) fn entry_tree(&self) -> lca_ui::state::SessionTree {
+        use lca_ui::state::{TreeRow, TreeRowKind};
         let store = self.store.clone();
         let session_cell = self.current_session.clone();
         Arc::new(move || {
@@ -73,16 +81,49 @@ impl Ui {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|row| {
-                    let indent = "  ".repeat(row.depth);
-                    let marked = match row.label {
-                        Some(name) => format!("[{name}] {}", row.text),
-                        None => row.text,
+                    let kind = match row.kind {
+                        lca_session::EntryKind::User => TreeRowKind::User,
+                        lca_session::EntryKind::Assistant => TreeRowKind::Assistant,
+                        lca_session::EntryKind::Tool => TreeRowKind::Tool,
+                        lca_session::EntryKind::Summary => TreeRowKind::Summary,
+                        lca_session::EntryKind::Compaction => TreeRowKind::Compaction,
                     };
-                    let live = if row.live { " ◀" } else { "" };
-                    (row.id, format!("{indent}{marked}{live}"))
+                    TreeRow {
+                        id: row.id,
+                        depth: row.depth,
+                        kind,
+                        text: row.text,
+                        label: row.label,
+                        live: row.live,
+                    }
                 })
                 .collect()
         })
+    }
+
+    /// Bookmark a tree row by record id (gh #231, FR-SESS-10): an
+    /// empty name clears the bookmark. Errors name the record, never
+    /// the store's vocabulary.
+    pub(super) fn label_record(&self) -> lca_ui::state::LabelRecord {
+        let store = self.store.clone();
+        let session_cell = self.current_session.clone();
+        Arc::new(
+            move |record_id: &str, name: &str| -> Result<String, String> {
+                let session = session_cell
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                let label = (!name.is_empty()).then(|| name.to_string());
+                store
+                    .set_label(&session, record_id, label.as_deref())
+                    .map_err(|_| format!("no tree row points at record {record_id}"))?;
+                Ok(if name.is_empty() {
+                    "bookmark cleared".to_string()
+                } else {
+                    format!("bookmarked '{name}'")
+                })
+            },
+        )
     }
 
     /// Branch at a tree row and return the replayed chain (gh #37,

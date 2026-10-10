@@ -2,6 +2,8 @@
 //! split from `chat_commands.rs` (the 1,200-line ceiling): gh #233's
 //! lazy snapshot plus gh #232's background discovery and loader.
 
+use std::sync::Arc;
+
 use super::chat::Chat;
 use crate::chat_pickers::ModelPicker;
 
@@ -120,3 +122,47 @@ impl Chat {
         self.model_refresh = None;
     }
 }
+
+/// One structured row of the live session's entry tree (gh #231):
+/// the DAG navigator paints connectors, markers, and filters from
+/// this, never by sniffing text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeRow {
+    /// The record navigating here branches at.
+    pub id: String,
+    /// Nesting depth in the pre-order row list.
+    pub depth: usize,
+    /// The record kind (filtering and role markers read this).
+    pub kind: TreeRowKind,
+    /// One-line row body, bare of kind markers.
+    pub text: String,
+    /// The live bookmark on this record, when one names it.
+    pub label: Option<String>,
+    /// Whether the record is on the live chain.
+    pub live: bool,
+}
+
+/// The record kind behind a [`TreeRow`] (gh #231).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeRowKind {
+    /// A user prompt.
+    User,
+    /// An assistant reply (`(tool call)` marks a textless one).
+    Assistant,
+    /// A tool call or result.
+    Tool,
+    /// A branch summary landmark.
+    Summary,
+    /// A compaction landmark.
+    Compaction,
+}
+
+/// Returns the live session's entry tree as structured rows,
+/// oldest-first in pre-order (gh #231, FR-UI-16).
+pub type SessionTree = Arc<dyn Fn() -> Vec<TreeRow> + Send + Sync>;
+/// Reads the configured tree filter mode (`ui.tree_filter_mode`, gh
+/// #231): the navigator opens on this mode, `f` cycles from it.
+pub type TreeFilterMode = Arc<dyn Fn() -> String + Send + Sync>;
+/// Bookmark a record by id under a name, returning the notice to
+/// show; an empty name clears the bookmark (gh #231, FR-SESS-10).
+pub type LabelRecord = Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;

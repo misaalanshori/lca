@@ -12,7 +12,7 @@ use crate::chat_pickers::TRUST_OPTIONS;
 // composed through [`Chat::picker_overlay`], so a new picker gets the row too.
 const HINT_MOVE: &str = "↑↓ move · enter apply · esc close";
 const HINT_FILTER: &str = "↑↓ move · enter apply · esc close · type to filter";
-const HINT_TREE: &str = "↑↓ move · enter show · esc close";
+const HINT_TREE: &str = "↑↓ move · ←/→ fold · f filter · e label · enter show · esc close";
 const HINT_GRANTS: &str = "↑↓ move · enter revoke · esc close";
 const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
 const HINT_SETTINGS: &str = "↑↓ move · enter/←→ change · q/esc close";
@@ -146,12 +146,19 @@ impl Chat {
     /// Draw the open picker, if any (returns true when one was drawn).
     fn compose_pickers(&self, viewport: &mut [String], width: u16, height: u16) -> bool {
         if let Some(picker) = &self.tree_picker {
-            // gh #37 phase 3: the picker lists the live session's
-            // entry rows now, not fork sessions.
-            let mut body = vec!["Message branches:".to_string(), String::new()];
-            for (index, (_id, label)) in picker.entries.iter().enumerate() {
-                let cur = if index == picker.selected { '>' } else { ' ' };
-                body.push(format!(" {cur} {label}"));
+            // gh #231: the DAG navigator paints connectors and role
+            // markers on S37C's rolling-window chrome; the header
+            // names the filter, the hint the navigator keys.
+            let mut body = vec![
+                format!("Message branches ({})", picker.filter.name()),
+                String::new(),
+            ];
+            if picker.visible_len() == 0 {
+                body.push("  (no matches)".to_string());
+            }
+            for (row, line) in picker.paint_rows().iter().enumerate() {
+                let cur = if row == picker.selected { '>' } else { ' ' };
+                body.push(format!(" {cur} {line}"));
             }
             self.picker_overlay(
                 viewport,
@@ -161,7 +168,7 @@ impl Chat {
                 &body,
                 HINT_TREE,
                 &self.theme,
-                Some(2 + picker.selected),
+                (picker.visible_len() > 0).then_some(2 + picker.selected),
             );
             return true;
         }

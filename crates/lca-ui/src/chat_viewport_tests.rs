@@ -722,10 +722,10 @@ fn clicking_the_editor_dismisses_an_open_picker() {
     let mut chat = chat();
     chat.screen_mode = true;
     chat.editor.set_text("hello");
-    chat.tree_picker = Some(crate::chat_pickers::TreePicker {
-        entries: vec![("a".to_string(), "first".to_string())],
-        selected: 0,
-    });
+    chat.tree_picker = Some(crate::chat_pickers::TreePicker::new(
+        vec![super::tree_row("a", 0, "first")],
+        crate::chat_pickers::TreeFilter::Default,
+    ));
     let (w, h) = (80u16, 24u16);
     let (top, _) = chat.editor_rect(w, h).expect("the editor is on screen");
     assert!(chat.place_editor_caret(2, top, w, h), "the click lands");
@@ -739,10 +739,10 @@ fn footer_clicks_are_not_editor_clicks() {
     let mut chat = chat();
     chat.screen_mode = true;
     chat.editor.set_text("hello");
-    chat.tree_picker = Some(crate::chat_pickers::TreePicker {
-        entries: vec![("a".to_string(), "first".to_string())],
-        selected: 0,
-    });
+    chat.tree_picker = Some(crate::chat_pickers::TreePicker::new(
+        vec![super::tree_row("a", 0, "first")],
+        crate::chat_pickers::TreeFilter::Default,
+    ));
     let (w, h) = (80u16, 24u16);
     assert!(
         !chat.place_editor_caret(2, h - 1, w, h),

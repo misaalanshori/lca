@@ -120,30 +120,93 @@ impl Chat {
 
     /// picker is open, so the editor path runs).
     pub(super) fn handle_picker_key(&mut self, data: &str, key: Option<&str>) -> Option<Action> {
-        // The `/tree` selector owns the keyboard while open (FR-UI-16).
+        // The `/tree` navigator owns the keyboard while open (FR-UI-16,
+        // gh #231): Up/Down walk, Left/Right fold, `f` cycles filters,
+        // `e` edits the bookmark, Enter branches in place.
         if let Some(mut picker) = self.tree_picker.take() {
+            // A label edit owns every key until it commits (gh #231).
+            if picker.editing.is_some() {
+                match key {
+                    Some("escape") => {
+                        picker.editing = None;
+                        self.tree_picker = Some(picker);
+                    }
+                    Some("enter") => {
+                        let name = picker.editing.take().unwrap_or_default();
+                        let id = picker.selected_id().unwrap_or_default();
+                        self.tree_picker = Some(picker);
+                        self.commit_tree_label(&id, name.trim());
+                    }
+                    Some("backspace") => {
+                        if let Some(buffer) = picker.editing.as_mut() {
+                            buffer.pop();
+                        }
+                        self.tree_picker = Some(picker);
+                    }
+                    _ => {
+                        if let Some(text) = printable(data).or_else(|| paste_text(data))
+                            && let Some(buffer) = picker.editing.as_mut()
+                        {
+                            buffer.push_str(&text);
+                        }
+                        self.tree_picker = Some(picker);
+                    }
+                }
+                return Some(Action::Continue);
+            }
             match key {
                 Some("escape") => {}
                 Some("enter") => {
                     // gh #37: tree rows are records now, so Enter
                     // branches in place (session switches live on
                     // `/resume`).
-                    let (id, _) = picker.entries[picker.selected].clone();
-                    self.branch_and_replay(&id);
+                    if let Some(id) = picker.selected_id() {
+                        self.branch_and_replay(&id);
+                    } else {
+                        self.tree_picker = Some(picker);
+                    }
                 }
                 Some("up") | Some("k") => {
                     picker.selected = picker.selected.saturating_sub(1);
                     self.tree_picker = Some(picker);
                 }
                 Some("down") | Some("j") => {
-                    picker.selected = (picker.selected + 1).min(picker.entries.len() - 1);
+                    picker.selected =
+                        (picker.selected + 1).min(picker.visible_len().saturating_sub(1));
+                    self.tree_picker = Some(picker);
+                }
+                // gh #231: Left folds (or climbs to the parent),
+                // Right unfolds (or drops to the first child).
+                Some("left") => {
+                    let at = picker.selected;
+                    if !picker.toggle_fold_at(at) {
+                        picker.move_to_parent();
+                    }
+                    self.tree_picker = Some(picker);
+                }
+                Some("right") => {
+                    if !picker.move_to_first_child() {
+                        let at = picker.selected;
+                        picker.toggle_fold_at(at);
+                    }
+                    self.tree_picker = Some(picker);
+                }
+                // gh #231: `f` cycles the filter forward, wrapping.
+                Some("f") => {
+                    picker.set_filter(picker.filter.cycle_forward());
+                    self.tree_picker = Some(picker);
+                }
+                // gh #231: `e` edits the selected row's bookmark.
+                Some("e") => {
+                    let current = picker.visible_label(picker.selected).unwrap_or_default();
+                    picker.editing = Some(current);
                     self.tree_picker = Some(picker);
                 }
                 Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
                     if let Some(next) = key.and_then(|key| {
                         Self::page_selected(
                             picker.selected,
-                            picker.entries.len().saturating_sub(1),
+                            picker.visible_len().saturating_sub(1),
                             key,
                         )
                     }) {

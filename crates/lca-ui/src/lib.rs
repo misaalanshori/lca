@@ -44,11 +44,12 @@ pub use lca_tui::widgets::markdown::{
 pub use run::run;
 pub use separator::{Separator, SeparatorState};
 pub use state::{
-    Action, CommandInvoker, DialogExchange, DialogModal, LoginCancel, LoginComplete, LoginConfirm,
-    LoginNext, LoginPick, LoginPoll, LoginRequest, McpAction, McpPoll, ModelRow, PickerOption,
-    PromptRequest, RegionInteractor, RegionRenderer, SettingRow, SettingsRows, ShellEvent,
-    ShellHandle, ShellRunner, SwitchConfirm, TurnChannels, TurnRunner, UiHooks, UiOptions, UiState,
-    display_path, sanitize_block, sanitize_text,
+    Action, CommandInvoker, DialogExchange, DialogModal, LabelRecord, LoginCancel, LoginComplete,
+    LoginConfirm, LoginNext, LoginPick, LoginPoll, LoginRequest, McpAction, McpPoll, ModelRow,
+    PickerOption, PromptRequest, RegionInteractor, RegionRenderer, SettingRow, SettingsRows,
+    ShellEvent, ShellHandle, ShellRunner, SwitchConfirm, TreeFilterMode, TreeRow, TreeRowKind,
+    TurnChannels, TurnRunner, UiHooks, UiOptions, UiState, display_path, sanitize_block,
+    sanitize_text,
 };
 pub use state::{CompactPoll, CompactState};
 pub use theme::Theme;

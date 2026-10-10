@@ -483,9 +483,8 @@ pub type TrustApply = Arc<dyn Fn(TrustChoice) -> String + Send + Sync>;
 /// Whether the project still needs a trust decision (opens the modal at
 /// startup, Pi's `hasTrustRequiringProjectResources`).
 pub type TrustNeeded = Arc<dyn Fn() -> bool + Send + Sync>;
-/// Returns the live session's entry tree as `(record id, row text)`
-/// entries, oldest-first and depth-indented (gh #37, FR-UI-16).
-pub type SessionTree = Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
+pub use crate::chat_models::{LabelRecord, SessionTree, TreeFilterMode, TreeRow, TreeRowKind};
+
 /// Branches at a record id in place and returns the replayed chain
 /// for the transcript (gh #37, FR-UI-16); `None` when the branch
 /// cannot land.
@@ -602,9 +601,14 @@ pub struct UiHooks {
     pub trust_apply: Option<TrustApply>,
     /// Whether the project needs a trust decision at startup.
     pub trust_needed: Option<TrustNeeded>,
-    /// The live session's entry tree: `(record id, row text)` entries
-    /// (FR-UI-16, gh #37).
+    /// The live session's entry tree as structured rows (FR-UI-16,
+    /// gh #37, gh #231).
     pub session_tree: Option<SessionTree>,
+    /// The configured tree filter mode for `/tree` (gh #231).
+    pub tree_filter_mode: Option<TreeFilterMode>,
+    /// Bookmark a tree row by record id for `/tree` label editing
+    /// (gh #231).
+    pub label_record: Option<LabelRecord>,
     /// Branch at a tree row in place (gh #37, FR-UI-16).
     pub branch_here: Option<BranchHere>,
     /// Rename the live session (gh #37).

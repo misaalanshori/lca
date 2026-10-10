@@ -317,7 +317,7 @@ fn entry_tree_rows_branches_labels_and_live_marks() {
 
     let rows = store.entry_tree(&session).expect("tree");
     let texts: Vec<String> = rows.iter().map(|row| row.text.clone()).collect();
-    // Tool/jump/session rows never appear; the abandoned path does
+    // Jump/session rows never appear; the abandoned path does
     // (the tree shows every branch, not the live chain).
     assert!(texts.iter().any(|t| t.contains("message a")), "{texts:?}");
     assert!(texts.iter().any(|t| t.contains("message c")), "{texts:?}");
@@ -337,4 +337,69 @@ fn entry_tree_rows_branches_labels_and_live_marks() {
     assert!(by_id["a"].live);
     assert!(!by_id["c"].live, "the abandoned path unmarks");
     assert!(!texts.iter().any(|t| t.contains('\n')), "one line per row");
+}
+
+// Verifies: gh #231 - tool traffic joins the entry tree as its own
+// kind (the DAG navigator filters it); calls read `tool: <name>`,
+// results read their content head.
+#[test]
+fn entry_tree_carries_tool_rows_with_kinds() {
+    use lca_protocol::{FORMAT_VERSION, Record};
+    let store = store("entry-tree-tools");
+    let project = scratch("entry-tree-tools-project");
+    let session = store.create_session(&project, "test").expect("create");
+    store
+        .append(&session, user_record("u", "do it"))
+        .expect("user");
+    store
+        .append(
+            &session,
+            Record::ToolCall {
+                v: FORMAT_VERSION,
+                ts: 2,
+                id: "c".to_string(),
+                parent: Some("u".to_string()),
+                call_id: "k".to_string(),
+                name: "read".to_string(),
+                arguments: "{\"path\": \"/x\"}".to_string(),
+                source: lca_protocol::ToolSource::Builtin,
+            },
+        )
+        .expect("call");
+    store
+        .append(
+            &session,
+            Record::ToolResult {
+                v: FORMAT_VERSION,
+                ts: 3,
+                id: "r".to_string(),
+                parent: Some("c".to_string()),
+                call_id: "k".to_string(),
+                status: lca_protocol::ToolResultStatus::Ok,
+                content: Some("file bytes".to_string()),
+                attachment: None,
+                truncated: false,
+                exit_code: None,
+                full_output_path: None,
+                nested: Vec::new(),
+            },
+        )
+        .expect("result");
+    let rows = store.entry_tree(&session).expect("tree");
+    let by_id: std::collections::HashMap<&str, &lca_session::EntryRow> =
+        rows.iter().map(|row| (row.id.as_str(), row)).collect();
+    assert_eq!(by_id["c"].kind, lca_session::EntryKind::Tool);
+    assert_eq!(by_id["r"].kind, lca_session::EntryKind::Tool);
+    assert_eq!(by_id["u"].kind, lca_session::EntryKind::User);
+    assert!(
+        by_id["c"].text.contains("read"),
+        "the call names its tool: {:?}",
+        by_id["c"].text
+    );
+    assert!(
+        by_id["r"].text.contains("file bytes"),
+        "the result heads its content: {:?}",
+        by_id["r"].text
+    );
+    assert_eq!(by_id["r"].depth, 2, "the result nests under its call");
 }

@@ -486,10 +486,43 @@ impl Chat {
         )))
     }
 
-    /// Open the `/tree` branch picker (FR-UI-16, gh #132): an empty
-    /// list names it instead of opening.
+    /// Commit a tree label edit (gh #231): the hook bookmarks (or
+    /// clears) by record id, then the navigator rebuilds so the mark
+    /// shows on the same frame.
+    pub(crate) fn commit_tree_label(&mut self, id: &str, name: &str) {
+        let Some(label) = self.world.options.hooks.label_record.clone() else {
+            self.world.notice = Some("labeling is not available in this host".to_string());
+            return;
+        };
+        match label(id, name) {
+            Ok(notice) => {
+                self.world.notice = Some(notice);
+                let rows = self
+                    .world
+                    .options
+                    .hooks
+                    .session_tree
+                    .as_ref()
+                    .map(|tree| tree())
+                    .unwrap_or_default();
+                if rows.is_empty() {
+                    self.tree_picker = None;
+                } else if let Some(picker) = self.tree_picker.as_mut() {
+                    let selected = picker.selected_id();
+                    picker.rows = rows;
+                    picker.rebuild();
+                    picker.restore(selected);
+                }
+            }
+            Err(err) => self.world.notice = Some(err),
+        }
+    }
+
+    /// Open the `/tree` DAG navigator (FR-UI-16, gh #132, gh #231):
+    /// an empty list names it instead of opening. The filter opens on
+    /// `ui.tree_filter_mode` (active now, not inert).
     pub fn open_tree_picker(&mut self) {
-        let entries = self
+        let rows = self
             .world
             .options
             .hooks
@@ -497,13 +530,21 @@ impl Chat {
             .as_ref()
             .map(|tree| tree())
             .unwrap_or_default();
-        if entries.is_empty() {
+        if rows.is_empty() {
             self.world.notice = Some("no branches yet".to_string());
         } else {
-            self.tree_picker = Some(TreePicker {
-                entries,
-                selected: 0,
-            });
+            let mode = self
+                .world
+                .options
+                .hooks
+                .tree_filter_mode
+                .as_ref()
+                .map(|read| read())
+                .unwrap_or_default();
+            self.tree_picker = Some(TreePicker::new(
+                rows,
+                crate::chat_pickers::TreeFilter::parse(&mode),
+            ));
         }
     }
 

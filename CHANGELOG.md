@@ -25,6 +25,13 @@ glyph: each layer opens and closes its own SGR state, so
 transcript italics and background bands neither tint overlays nor
 leak past them (the right slice re-arms the base state as FR-UI-23
 established).
+- **DAG tree navigator (gh #231).** `/tree` is a graphical
+navigator now: branch connectors (`├─`/`└─`/`│`), role markers,
+Up/Down walk, Left/Right fold, `f` filter cycling
+(`default`/`no-tools`/`user-only`/`labeled-only`/`all`, opening on
+`ui.tree_filter_mode`), Enter branches in place, `e` edits the
+bookmark through the host. Tool traffic joins the entry tree as its
+own kind (hidden by default).
 - **Slash outputs ride the transcript (gh #234).** Informational
 multi-line outputs (`/help`, `/hotkeys`, `/changelog`, a bookmark
 list) append as scrollable transcript entries pi's way; the dock

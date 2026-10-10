@@ -38,9 +38,8 @@ pub const FULLSCREEN_EXIT_OUTPUTS: &[&str] = &["transcript", "resume-hint"];
 /// Mermaid rendering modes (gh #82, pi's `markdown.mermaid`).
 pub const MERMAID_MODES: &[&str] = &["off", "final", "streaming"];
 
-/// Pi's `treeFilterMode` vocabulary (gh #132): accepted
-/// config-error-free, currently inert (the no-op documents itself in
-/// `docs/configuration.md`).
+/// Pi's `treeFilterMode` vocabulary (gh #132, wired by gh #231): the
+/// `/tree` navigator opens on this mode.
 pub const TREE_FILTER_MODES: &[&str] = &["default", "no-tools", "user-only", "labeled-only", "all"];
 
 /// Pi's `defaultProjectTrust` vocabulary (gh #80): the fallback project-trust

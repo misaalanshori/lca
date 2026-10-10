@@ -7,7 +7,7 @@
 //! in `chat_tests.rs` and are imported from it.
 
 use super::*;
-use super::{chat, options, strip};
+use super::{chat, options, strip, tree_row};
 use lca_protocol::CommandEffect;
 
 #[test]
@@ -62,10 +62,7 @@ fn resume_picker_searches_sessions() {
 fn tree_selection_branches_in_place() {
     let mut chat = chat();
     chat.world.options.hooks.session_tree = Some(Arc::new(|| {
-        vec![
-            ("r1".into(), "first".into()),
-            ("r2".into(), "second".into()),
-        ]
+        vec![tree_row("r1", 0, "first"), tree_row("r2", 0, "second")]
     }));
     chat.world.options.hooks.branch_here = Some(Arc::new(|id: &str| {
         (id == "r2").then(|| {
@@ -1131,14 +1128,14 @@ fn tree_rows_map_one_to_one_with_branches() {
     use crate::chat_mouse::PickerHit;
     let mut chat = chat();
     chat.screen_mode = true;
-    chat.tree_picker = Some(crate::chat_pickers::TreePicker {
-        entries: vec![
-            ("a".to_string(), "first".to_string()),
-            ("b".to_string(), "second".to_string()),
-            ("c".to_string(), "third".to_string()),
+    chat.tree_picker = Some(crate::chat_pickers::TreePicker::new(
+        vec![
+            tree_row("a", 0, "first"),
+            tree_row("b", 0, "second"),
+            tree_row("c", 0, "third"),
         ],
-        selected: 0,
-    });
+        crate::chat_pickers::TreeFilter::Default,
+    ));
     let (w, h) = (80u16, 24u16);
     let (rect, _) = chat.picker_layout(w, h).expect("the box maps");
     for item in 0..3usize {

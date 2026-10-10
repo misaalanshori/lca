@@ -499,7 +499,7 @@ impl Chat {
         }
         let map: Vec<Option<usize>> = if let Some(picker) = &self.tree_picker {
             std::iter::repeat_n(None, 2)
-                .chain((0..picker.entries.len()).map(Some))
+                .chain((0..picker.visible_len()).map(Some))
                 .collect()
         } else if let Some(picker) = &self.resume_picker {
             let mut map = vec![None, None];
@@ -596,7 +596,7 @@ impl Chat {
     /// theme picker live-previews like its keyboard path does.
     pub fn hover_picker_item(&mut self, item: usize) {
         if let Some(picker) = self.tree_picker.as_mut() {
-            picker.selected = item.min(picker.entries.len().saturating_sub(1));
+            picker.selected = item.min(picker.visible_len().saturating_sub(1));
         } else if let Some(picker) = self.resume_picker.as_mut() {
             picker.selected = item.min(picker.matches.len().saturating_sub(1));
         } else if let Some(picker) = self.fork_picker.as_mut() {
@@ -633,7 +633,7 @@ impl Chat {
         if let Some(picker) = self.tree_picker.as_mut() {
             picker.selected = step(
                 picker.selected,
-                picker.entries.len().saturating_sub(1),
+                picker.visible_len().saturating_sub(1),
                 delta,
             );
         } else if let Some(picker) = self.resume_picker.as_mut() {
