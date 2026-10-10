@@ -1,12 +1,15 @@
 //! GitHub issue #16 (open): "picker overlays anchor above tall notices
-//! instead of above the composer" - with a tall notice up (e.g. after
-//! `/help`), pickers stacked above the notice rather than sitting
-//! directly above the composer.
+//! instead of above the composer" - with a notice up, pickers stacked
+//! above the notice rather than sitting directly above the composer.
 //!
 //! Decision (composer-polish brief): pickers anchor directly above the
 //! composer (pi's bottom-anchored shape), overlaying the notice area
 //! when present. One layout rule in the overlay composition; every
 //! picker inherits it.
+//!
+//! gh #234 retired tall dock notices (informational outputs ride the
+//! transcript now), so the guard below raises a short notice instead:
+//! the anchoring rule is unchanged.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -63,13 +66,13 @@ fn chat() -> Chat {
     )
 }
 
-// With a tall notice up, the picker's box sits directly above the
+// With a notice up, the picker's box sits directly above the
 // composer: its bottom border is the row before the editor's first row,
 // so the notice area behind it is overlaid, not stacked under.
 #[test]
 fn the_picker_box_sits_directly_above_the_composer() {
     let mut chat = chat();
-    for c in "/help".chars() {
+    for c in "/nope".chars() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
@@ -77,8 +80,8 @@ fn the_picker_box_sits_directly_above_the_composer() {
         chat.world
             .notice
             .as_deref()
-            .is_some_and(|n| n.contains("commands:")),
-        "the tall notice is up: {:?}",
+            .is_some_and(|n| n.contains("unknown command")),
+        "the notice is up: {:?}",
         chat.world.notice
     );
     for c in "/model".chars() {
