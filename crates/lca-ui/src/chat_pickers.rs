@@ -120,6 +120,14 @@ pub struct ModelPicker {
     pub matches: Vec<usize>,
     /// The highlighted row (an index into `matches`).
     pub selected: usize,
+    /// A background discovery is still running (gh #232): the body
+    /// shows a loading line until the rows land.
+    pub loading: bool,
+    /// The spinner frame's clock (bumped by `Chat::tick` on its 80 ms
+    /// cadence while `loading` holds).
+    pub loading_advanced: std::time::Instant,
+    /// The visible spinner frame.
+    pub loading_frame: usize,
 }
 
 impl ModelPicker {
@@ -131,7 +139,22 @@ impl ModelPicker {
             query: String::new(),
             matches,
             selected: 0,
+            loading: false,
+            loading_advanced: std::time::Instant::now(),
+            loading_frame: 0,
         }
+    }
+
+    /// Advance the loading spinner (gh #232): one frame per 80 ms
+    /// cadence while a background discovery runs. Returns `true` when
+    /// the frame moved, so the loop knows to repaint.
+    pub fn tick(&mut self) -> bool {
+        if !self.loading || self.loading_advanced.elapsed() < crate::separator::FRAME_MS {
+            return false;
+        }
+        self.loading_frame += 1;
+        self.loading_advanced = std::time::Instant::now();
+        true
     }
 
     /// Re-filter after a query change, keeping the selection in range. The

@@ -73,7 +73,18 @@ fn a_slash_command_dispatches_without_submitting() {
         chat.handle_key(&c.to_string());
     }
     assert_eq!(chat.handle_key("\r"), Action::Continue);
-    assert!(chat.world.notice.as_deref().unwrap().contains("/model"));
+    // gh #234: the listing rides the transcript now, not the dock.
+    let text: String = chat
+        .transcript
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            crate::transcript::Entry::Notice(body) => Some(body.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("/model"), "{text}");
     assert!(chat.take_submitted().is_none());
 }
 
@@ -743,6 +754,8 @@ fn the_live_model_hook_feeds_the_picker() {
     }
     chat.handle_key("\r");
     assert!(chat.model_picker.is_some());
+    // gh #232: the rows arrive on the background thread.
+    chat.drain_model_refresh();
     let viewport = strip(&chat.viewport(100, 30, 0)).join("\n");
     assert!(viewport.contains("live-a"), "{viewport}");
 }
@@ -1067,14 +1080,24 @@ fn hotkeys_shows_the_effective_rebound_key() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
-    let notice = chat.world.notice.clone().unwrap_or_default();
+    // gh #234: the registry rides the transcript now, not the dock.
+    let text: String = chat
+        .transcript
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            crate::transcript::Entry::Notice(body) => Some(body.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        notice.contains("ctrl+q - Delete character backward"),
-        "the rebound key is listed: {notice}"
+        text.contains("ctrl+q - Delete character backward"),
+        "the rebound key is listed: {text}"
     );
     assert!(
-        !notice.contains("backspace - Delete character backward"),
-        "the replaced default is not: {notice}"
+        !text.contains("backspace - Delete character backward"),
+        "the replaced default is not: {text}"
     );
 }
 

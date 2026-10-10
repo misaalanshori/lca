@@ -857,6 +857,11 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         if poll_pending_models(&mut chat) {
             dirty = true;
         }
+        // ...and a background catalog discovery: `/model` opened
+        // instantly and the rows fill the loader here (gh #232).
+        if chat.poll_model_refresh() {
+            dirty = true;
+        }
         // ...and so does a background `/compact`: the summarization call
         // runs on its own thread and the interface keeps painting.
         if chat.poll_compact() {
@@ -864,7 +869,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         }
         // ...and a background `/mcp login`: the browser flow outlives
         // the command that started it.
-        if poll_mcp(&mut chat) {
+        if crate::chat_commands::poll_mcp(&mut chat) {
             dirty = true;
         }
 
@@ -1135,21 +1140,6 @@ fn poll_login(chat: &mut Chat) -> bool {
     }
 }
 
-/// Poll a background `/mcp login` (gh #53): a finished sign-in posts
-/// its notice once, like the login poll.
-fn poll_mcp(chat: &mut Chat) -> bool {
-    let Some(poll) = chat.world.options.hooks.poll_mcp.clone() else {
-        return false;
-    };
-    match poll() {
-        Some(notice) => {
-            chat.world.notice = Some(notice);
-            true
-        }
-        None => false,
-    }
-}
-
 /// Open the `/model` picker when the host has rows ready for it - the
 /// consent flow's second step (gh #31 review): the ask ran off-thread, so
 /// the modal could render, and the list it produced arrives here. One-shot:
@@ -1159,7 +1149,14 @@ fn poll_pending_models(chat: &mut Chat) -> bool {
         return false;
     };
     let rows = pending();
-    if rows.is_empty() || chat.model_picker.is_some() {
+    if rows.is_empty() {
+        return false;
+    }
+    // gh #232: consent rows replace a loading picker (the background
+    // discovery it waited on is over); any other open picker keeps
+    // the floor.
+    let loading = chat.model_picker.as_ref().is_some_and(|open| open.loading);
+    if chat.model_picker.is_some() && !loading {
         return false;
     }
     // gh #233: consent grants landed with these rows; the snapshot

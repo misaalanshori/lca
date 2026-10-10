@@ -453,10 +453,25 @@ fn changelog_shows_the_latest_released_section() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
-    let notice = chat.world.notice.as_deref().expect("a notice shows");
+    // gh #234: the section rides the transcript now, not the dock.
     assert!(
-        notice.contains("0.6.0") && !notice.contains("[Unreleased]"),
-        "the latest release, not the work in progress: {notice:.200}"
+        chat.world.notice.is_none(),
+        "the dock stays clean: {:?}",
+        chat.world.notice
+    );
+    let text: String = chat
+        .transcript
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            crate::transcript::Entry::Notice(body) => Some(body.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("0.6.0") && !text.contains("[Unreleased]"),
+        "the latest release, not the work in progress: {text:.200}"
     );
 }
 
@@ -603,6 +618,9 @@ fn dispatching_help_never_enumerates_models() {
             chat.handle_key(&c.to_string());
         }
         chat.handle_key("\r");
+        // gh #232: pickers own the keyboard while open; closing keeps
+        // every command dispatching from a clean editor.
+        chat.handle_key("\x1b");
         chat.editor.set_text("");
     }
     assert_eq!(
@@ -626,17 +644,20 @@ fn model_catalog_snapshots_and_login_invalidates() {
         vec![("m".to_string(), "M".to_string())]
     }));
     let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    // gh #232: the drain makes each background arrival deterministic.
     for c in "/model".chars() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
     assert!(chat.model_picker.is_some());
+    chat.drain_model_refresh();
     chat.handle_key("\x1b");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     for c in "/model".chars() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
+    chat.drain_model_refresh();
     chat.handle_key("\x1b");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "snapshot reused");
     chat.apply_login_next(crate::state::LoginNext::Message("signed in".to_string()));
@@ -644,6 +665,7 @@ fn model_catalog_snapshots_and_login_invalidates() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
+    chat.drain_model_refresh();
     assert_eq!(calls.load(Ordering::SeqCst), 2, "login invalidates");
 }
 
@@ -675,6 +697,8 @@ fn switch_reload_and_revoke_invalidate_the_snapshot() {
             chat.handle_key(&c.to_string());
         }
         chat.handle_key("\r");
+        // gh #232: the drain makes each background arrival deterministic.
+        chat.drain_model_refresh();
         chat.handle_key("\x1b");
     }
     model(&mut chat);
@@ -696,4 +720,183 @@ fn switch_reload_and_revoke_invalidate_the_snapshot() {
     });
     model(&mut chat);
     assert_eq!(calls.load(Ordering::SeqCst), 4, "revoke invalidates");
+}
+
+// Verifies: gh #234 - informational multi-line outputs ride the
+// transcript as scrollable entries; the dock stays a 1-2 line anchor.
+#[test]
+fn informational_outputs_route_to_the_transcript_not_the_dock() {
+    let mut opts = options();
+    opts.hooks.list_labels = Some(Arc::new(|| {
+        vec![
+            ("aaa".to_string(), "r1".to_string()),
+            ("bbb".to_string(), "r2".to_string()),
+        ]
+    }));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    for command in ["/help", "/hotkeys", "/changelog", "/labels"] {
+        for c in command.chars() {
+            chat.handle_key(&c.to_string());
+        }
+        chat.handle_key("\r");
+    }
+    assert!(
+        chat.world.notice.is_none(),
+        "the dock stays clean: {:?}",
+        chat.world.notice
+    );
+    let text: String = chat
+        .transcript
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            crate::transcript::Entry::Notice(body) => Some(body.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    for marker in ["commands:", "keys:", "0.6.0", "aaa -> r1"] {
+        assert!(text.contains(marker), "the transcript carries {marker}");
+    }
+}
+
+// Verifies: gh #234 - short confirmations and errors stay dock
+// notices; only unbounded outputs move to the transcript.
+#[test]
+fn short_confirmations_stay_dock_notices() {
+    let mut opts = options();
+    opts.hooks.list_labels = Some(Arc::new(Vec::new));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    for c in "/labels".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert_eq!(
+        chat.world.notice.as_deref(),
+        Some("no bookmarks yet; /label <name> marks the latest message"),
+        "the one-line hint stays a notice"
+    );
+    assert_eq!(
+        chat.transcript.entries().len(),
+        1,
+        "nothing scrollable was said (the seed hint line stands alone)"
+    );
+    for c in "/nope".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert_eq!(
+        chat.world.notice.as_deref(),
+        Some("unknown command /nope"),
+        "errors stay notices"
+    );
+}
+
+// Verifies: gh #232 - the picker opens instantly while discovery runs:
+// dispatch returns on the same frame with a loading state up, and the
+// rows fill in when the background enumeration lands.
+#[test]
+fn model_picker_opens_instantly_while_discovery_runs() {
+    use std::sync::Barrier;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let gate = Arc::new(Barrier::new(2));
+    let held = gate.clone();
+    let started = Arc::new(AtomicBool::new(false));
+    let flag = started.clone();
+    let mut opts = options();
+    opts.models = Vec::new();
+    opts.hooks.models = Some(Arc::new(move || {
+        flag.store(true, Ordering::SeqCst);
+        held.wait();
+        vec![("m".to_string(), "M".to_string())]
+    }));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    let picker = chat.model_picker.as_ref().expect("opens on the same frame");
+    assert!(picker.loading, "the loading state shows");
+    assert!(picker.models.is_empty(), "no rows yet: nothing blocked");
+    let frame = chat.viewport(80, 24, 0).join("\n");
+    assert!(
+        frame.contains("Loading"),
+        "the painter says so:\n{frame:.500}"
+    );
+    gate.wait();
+    chat.drain_model_refresh();
+    let picker = chat.model_picker.as_ref().expect("still open");
+    assert!(!picker.loading, "loading clears");
+    assert_eq!(picker.models.len(), 1, "the rows filled in");
+    assert!(started.load(Ordering::SeqCst), "the hook ran off-thread");
+}
+
+// Verifies: gh #232 + #233 - a cached catalog opens with rows and no
+// refresh thread: the snapshot IS the instant path.
+#[test]
+fn cached_catalog_opens_with_rows_and_no_refresh_thread() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let mut opts = options();
+    opts.models = Vec::new();
+    opts.hooks.models = Some(Arc::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        vec![("m".to_string(), "M".to_string())]
+    }));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    chat.drain_model_refresh();
+    chat.handle_key("\x1b");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "one enumeration");
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    let picker = chat.model_picker.as_ref().expect("opens");
+    assert!(!picker.loading, "no refresh: the snapshot answers");
+    assert_eq!(picker.models.len(), 1, "rows on the same frame");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "still one enumeration");
+}
+
+// Verifies: gh #232 - an empty discovery closes the loading picker and
+// runs the extension `model` command (the gh #31 consent path survives
+// the async turn).
+#[test]
+fn empty_discovery_falls_through_to_consent() {
+    use std::sync::Mutex;
+    let invoked = Arc::new(Mutex::new(Vec::new()));
+    let recorded = invoked.clone();
+    let mut opts = options();
+    opts.models = Vec::new();
+    opts.hooks.models = Some(Arc::new(Vec::new));
+    opts.invoke_command = Arc::new(move |name: &str, argument: &str| {
+        recorded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((name.to_string(), argument.to_string()));
+        lca_protocol::CommandEffect::None
+    });
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(chat.model_picker.is_some(), "loading opens first");
+    chat.drain_model_refresh();
+    assert!(
+        chat.model_picker.is_none(),
+        "empty discovery closes the loader"
+    );
+    assert_eq!(
+        invoked
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_slice(),
+        &[("model".to_string(), String::new())],
+        "the extension command runs consent"
+    );
 }

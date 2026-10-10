@@ -694,6 +694,8 @@ fn pending_models_delivery_invalidates_the_snapshot() {
     }
     chat.handle_key("\r");
     assert!(chat.model_picker.is_some());
+    // gh #232: the drain makes the background arrival deterministic.
+    chat.drain_model_refresh();
     chat.handle_key("\x1b");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(super::poll_pending_models(&mut chat), "rows deliver");
@@ -703,5 +705,6 @@ fn pending_models_delivery_invalidates_the_snapshot() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
+    chat.drain_model_refresh();
     assert_eq!(calls.load(Ordering::SeqCst), 2, "delivery invalidates");
 }

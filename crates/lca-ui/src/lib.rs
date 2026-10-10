@@ -10,6 +10,7 @@ pub mod chat;
 mod chat_commands;
 mod chat_confirm;
 mod chat_keys;
+mod chat_models;
 mod chat_mouse;
 mod chat_overlays;
 mod chat_pickers;

@@ -197,9 +197,19 @@ fn hotkeys_lists_bindings() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
-    let notice = chat.world.notice.as_deref().unwrap_or_default();
-    assert!(notice.contains("keys:"), "{notice}");
-    assert!(notice.contains("enter"), "{notice}");
+    // gh #234: the registry rides the transcript now, not the dock.
+    let text: String = chat
+        .transcript
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            crate::transcript::Entry::Notice(body) => Some(body.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("keys:"), "{text}");
+    assert!(text.contains("enter"), "{text}");
 }
 
 // Verifies: FR-CORE-12 - edit-all-queued returns the queue to the editor

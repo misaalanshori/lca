@@ -188,6 +188,9 @@ pub struct Chat {
     /// hook. `None` means unlisted; login, switch, grant, reload, and
     /// scope events clear it (see `invalidate_models`).
     pub(crate) model_rows_cache: Option<Vec<crate::state::ModelRow>>,
+    /// A background catalog discovery's rows (gh #232): the picker
+    /// opened instantly and this fills it when the thread lands.
+    pub(crate) model_refresh: Option<std::sync::mpsc::Receiver<Vec<crate::state::ModelRow>>>,
 }
 impl Chat {
     /// Build the chat: widgets, theme, and the autocomplete chain.
@@ -316,6 +319,7 @@ impl Chat {
             fork_picker: None,
             scoped_models_picker: None,
             model_rows_cache: None,
+            model_refresh: None,
         };
         chat.transcript.set_thinking_visibility(thinking_visibility);
         // gh #12: the host's collected pre-parse transforms ride the
@@ -514,52 +518,17 @@ impl Chat {
             .clone()
     }
 
-    /// Poll a background `/compact` (the command summarizes on its own
-    /// thread, so the interface never freezes for it - the failure this
-    /// replaced typed a character and only saw it appear 3.5 s later).
-    /// `Running` raises the working state and says so; `Done` posts the
-    /// summary or the refusal and rests it (chrome.md's compaction
-    /// indicator, in LCA's generic working state).
-    ///
-    /// Returns `true` when something on screen changed.
-    pub fn poll_compact(&mut self) -> bool {
-        let Some(poll) = self.world.options.hooks.poll_compact.clone() else {
-            return false;
-        };
-        match poll() {
-            crate::state::CompactState::Idle => {
-                if self.compacting {
-                    self.compacting = false;
-                    self.separator.idle();
-                    true
-                } else {
-                    false
-                }
-            }
-            crate::state::CompactState::Running => {
-                if self.compacting {
-                    false
-                } else {
-                    self.compacting = true;
-                    self.separator.working();
-                    self.world.notice = Some("compacting this session…".to_string());
-                    true
-                }
-            }
-            crate::state::CompactState::Done(notice) => {
-                self.compacting = false;
-                self.separator.idle();
-                self.world.notice = Some(notice);
-                true
-            }
-        }
-    }
-
     /// Advance the separator's spinner. Returns `true` when the frame
     /// moved, so the loop repaints; idle never wakes the renderer.
     pub fn tick(&mut self) -> bool {
         self.sync_display_tuning();
-        self.separator.tick()
+        let separator = self.separator.tick();
+        // gh #232: the loading spinner rides the same repaint.
+        let loading = match self.model_picker.as_mut() {
+            Some(picker) => picker.tick(),
+            None => false,
+        };
+        separator || loading
     }
 
     /// Handle one keypress: the modal first, then the pickers, the

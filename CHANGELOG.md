@@ -25,6 +25,16 @@ glyph: each layer opens and closes its own SGR state, so
 transcript italics and background bands neither tint overlays nor
 leak past them (the right slice re-arms the base state as FR-UI-23
 established).
+- **Slash outputs ride the transcript (gh #234).** Informational
+multi-line outputs (`/help`, `/hotkeys`, `/changelog`, a bookmark
+list) append as scrollable transcript entries pi's way; the dock
+stays a 1-2 line anchor for short confirmations and errors.
+- **Async catalog discovery (gh #232).** `/model` opens instantly on
+the #233 snapshot (or a loading spinner when unlisted) and a
+background thread fills the picker in place; an empty discovery
+still falls through to endpoint consent (#31). Async refresh runs
+only on a cache miss; login/switch/grant/reload/scope events cancel
+a pending arrival.
 - **Slash dispatch freeze (gh #233).** The model catalog enumerates
 lazily on bare `/model` only and snapshots behind it; every other
 command dispatches without touching providers. Login, switch,

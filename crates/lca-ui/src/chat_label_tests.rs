@@ -92,11 +92,18 @@ fn labels_lists_every_bookmark() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
-    let notice = chat.world.notice.clone().unwrap_or_default();
-    assert!(
-        notice.contains("a-mark") && notice.contains("b-mark"),
-        "{notice}"
-    );
+    // gh #234: the list rides the transcript now, not the dock.
+    let text: String = chat
+        .transcript
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            crate::transcript::Entry::Notice(body) => Some(body.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("a-mark") && text.contains("b-mark"), "{text}");
 }
 
 // Verifies: FR-SESS-10 - `/jump` forks at the bookmark and switches

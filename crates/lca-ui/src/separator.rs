@@ -16,8 +16,9 @@ use lca_tui::engine::text::{truncate_to_width, visible_width};
 use crate::theme::{Role, StyleFn, Theme};
 
 /// pi's braille spinner frames and cadence (`pi-tui` `loader.ts`).
-const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const FRAME_MS: Duration = Duration::from_millis(80);
+/// Shared with the model picker's loading line (gh #232).
+pub(crate) const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+pub(crate) const FRAME_MS: Duration = Duration::from_millis(80);
 
 /// What the separator is saying right now (pi's `StatusIndicatorKind` plus
 /// `IdleStatus`).

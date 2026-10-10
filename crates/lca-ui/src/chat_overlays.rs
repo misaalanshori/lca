@@ -415,7 +415,13 @@ impl Chat {
         if let Some(picker) = &self.model_picker {
             let active = self.model_label();
             let mut body = vec![format!("  search: {}", picker.query), String::new()];
-            if picker.matches.is_empty() {
+            if picker.models.is_empty() && picker.loading {
+                // gh #232: the background discovery is still running -
+                // a spinner line, never a blank box.
+                let frame = crate::separator::FRAMES
+                    .get(picker.loading_frame % crate::separator::FRAMES.len());
+                body.push(format!("  {} Loading models…", frame.unwrap_or(&"…")));
+            } else if picker.matches.is_empty() {
                 body.push("  (no matches)".to_string());
             }
             for (row, index) in picker.matches.iter().enumerate() {

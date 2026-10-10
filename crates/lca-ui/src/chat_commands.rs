@@ -12,8 +12,7 @@ use lca_tui::widgets::autocomplete::{
 
 use super::chat::Chat;
 use crate::chat_pickers::{
-    ModelPicker, SettingsPicker, ThemePicker, ThinkingPicker, TreePicker, TrustPicker,
-    thinking_offered_all,
+    SettingsPicker, ThemePicker, ThinkingPicker, TreePicker, TrustPicker, thinking_offered_all,
 };
 use crate::state::{Action, UiOptions};
 
@@ -114,11 +113,11 @@ impl Chat {
                         commands.push(format!("/{}", template.name));
                     }
                 }
-                self.world.notice = Some(help_notice(&commands));
+                self.push_output(help_notice(&commands));
                 return Action::Continue;
             }
             "hotkeys" => {
-                self.world.notice = Some(hotkeys_notice(&self.keybindings));
+                self.push_output(hotkeys_notice(&self.keybindings));
                 return Action::Continue;
             }
             "fullscreen" => {
@@ -169,9 +168,12 @@ impl Chat {
             // runs endpoint consent (gh #31) instead of reporting
             // nothing - short-circuiting here would amputate that.
             "model" if argument.trim().is_empty() => {
-                let live_models = self.model_rows_cached();
-                if !live_models.is_empty() {
-                    self.model_picker = Some(ModelPicker::new(live_models));
+                // gh #232: instant open, never a blocking enumerate -
+                // the snapshot answers or a loader shows while the
+                // background thread runs. An empty discovery closes the
+                // loader and falls through to consent below.
+                self.open_model_picker();
+                if self.model_picker.is_some() {
                     return Action::Continue;
                 }
             }
@@ -306,15 +308,19 @@ impl Chat {
                     return Action::Continue;
                 };
                 let marks = list_labels();
-                self.world.notice = Some(if marks.is_empty() {
-                    "no bookmarks yet; /label <name> marks the latest message".to_string()
+                if marks.is_empty() {
+                    self.world.notice = Some(
+                        "no bookmarks yet; /label <name> marks the latest message".to_string(),
+                    );
                 } else {
-                    marks
-                        .iter()
-                        .map(|(name, target)| format!("{name} -> {target}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                });
+                    self.push_output(
+                        marks
+                            .iter()
+                            .map(|(name, target)| format!("{name} -> {target}"))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    );
+                }
                 return Action::Continue;
             }
             // Gh #37: branch at a bookmark and switch (ADR-0046:
@@ -391,11 +397,11 @@ impl Chat {
             // Gh #131: the embedded changelog's latest released section.
             "changelog" => {
                 let section = latest_changelog_section();
-                self.world.notice = Some(if section.is_empty() {
-                    "no released changes yet".to_string()
+                if section.is_empty() {
+                    self.world.notice = Some("no released changes yet".to_string());
                 } else {
-                    section
-                });
+                    self.push_output(section);
+                }
                 return Action::Continue;
             }
             "quit" | "exit" => return Action::Exit,
@@ -423,31 +429,7 @@ impl Chat {
             .iter()
             .any(|command| command == &full)
         {
-            match (self.world.options.invoke_command)(&name, &argument) {
-                CommandEffect::ShowWidget(text) => {
-                    self.world.notice = Some(crate::state::sanitize_block(&text));
-                }
-                CommandEffect::AttachImage {
-                    media_type,
-                    bytes,
-                    note,
-                } => {
-                    let info = lca_tui::widgets::image::ImageInfo::new(&media_type, &bytes);
-                    self.transcript.push_image(info, bytes);
-                    self.world.notice = Some(crate::state::sanitize_block(&note));
-                }
-                CommandEffect::InsertText(text) => {
-                    self.editor.insert_str(&crate::state::sanitize_block(&text));
-                }
-                CommandEffect::SubmitPrompt(text) => {
-                    self.transcript.push_user(text.clone());
-                    self.submitted_queue = None;
-                    self.submitted = Some(text);
-                    return Action::Submit;
-                }
-                CommandEffect::None => {}
-            }
-            return Action::Continue;
+            return self.dispatch_extension_command(&name, &argument);
         }
         // Gh #58: prompt templates fill the editor (reviewable, never
         // auto-submitted). Extensions keep precedence: their names
@@ -464,6 +446,38 @@ impl Chat {
 
     /// Expand a `/name args` prompt template into editor text (gh #58):
     /// `None` when no template carries the name.
+    /// Run an extension-owned slash command through the host (gh #25
+    /// keeps `<provider>.login` here too): the shared tail of
+    /// `dispatch_command` and the async model-consent path (gh #232 -
+    /// an empty discovery still reaches endpoint consent).
+    pub(crate) fn dispatch_extension_command(&mut self, name: &str, argument: &str) -> Action {
+        match (self.world.options.invoke_command)(name, argument) {
+            CommandEffect::ShowWidget(text) => {
+                self.world.notice = Some(crate::state::sanitize_block(&text));
+            }
+            CommandEffect::AttachImage {
+                media_type,
+                bytes,
+                note,
+            } => {
+                let info = lca_tui::widgets::image::ImageInfo::new(&media_type, &bytes);
+                self.transcript.push_image(info, bytes);
+                self.world.notice = Some(crate::state::sanitize_block(&note));
+            }
+            CommandEffect::InsertText(text) => {
+                self.editor.insert_str(&crate::state::sanitize_block(&text));
+            }
+            CommandEffect::SubmitPrompt(text) => {
+                self.transcript.push_user(text.clone());
+                self.submitted_queue = None;
+                self.submitted = Some(text);
+                return Action::Submit;
+            }
+            CommandEffect::None => {}
+        }
+        Action::Continue
+    }
+
     pub(crate) fn expand_template(&mut self, name: &str, argument: &str) -> Option<String> {
         let templates = self.world.options.hooks.prompt_templates.clone()?;
         let template = templates().into_iter().find(|t| t.name == name)?;
@@ -599,35 +613,54 @@ impl Chat {
         }
     }
 
-    /// The models `/model` should offer: the host's live list when one is
-    /// wired, else the startup snapshot (a login's discovery reaches the
-    /// picker without a restart). Rows, not bare ids: the label decorates,
-    /// the id stays raw (G2).
-    pub fn model_rows(&self) -> Vec<crate::state::ModelRow> {
-        self.world
-            .options
-            .hooks
-            .models
-            .as_ref()
-            .map(|list| list())
-            .unwrap_or_else(|| self.world.options.models.clone())
-    }
-
-    /// The model catalog snapshot (gh #233): the first read
-    /// enumerates through the host hook, later reads reuse it until
-    /// `invalidate_models` clears it.
-    pub(crate) fn model_rows_cached(&mut self) -> Vec<crate::state::ModelRow> {
-        if self.model_rows_cache.is_none() {
-            self.model_rows_cache = Some(self.model_rows());
+    /// Poll a background `/compact` (the command summarizes on its own
+    /// thread, so the interface never freezes for it - the failure this
+    /// replaced typed a character and only saw it appear 3.5 s later).
+    /// `Running` raises the working state and says so; `Done` posts the
+    /// summary or the refusal and rests it (chrome.md's compaction
+    /// indicator, in LCA's generic working state).
+    ///
+    /// Returns `true` when something on screen changed.
+    pub fn poll_compact(&mut self) -> bool {
+        let Some(poll) = self.world.options.hooks.poll_compact.clone() else {
+            return false;
+        };
+        match poll() {
+            crate::state::CompactState::Idle => {
+                if self.compacting {
+                    self.compacting = false;
+                    self.separator.idle();
+                    true
+                } else {
+                    false
+                }
+            }
+            crate::state::CompactState::Running => {
+                if self.compacting {
+                    false
+                } else {
+                    self.compacting = true;
+                    self.separator.working();
+                    self.world.notice = Some("compacting this session…".to_string());
+                    true
+                }
+            }
+            crate::state::CompactState::Done(notice) => {
+                self.compacting = false;
+                self.separator.idle();
+                self.world.notice = Some(notice);
+                true
+            }
         }
-        self.model_rows_cache.clone().unwrap_or_default()
     }
 
-    /// Clear the catalog snapshot (gh #233): login, switch, grant,
-    /// reload, and scope events all change what providers offer, so
-    /// the next `/model` re-enumerates.
-    pub(crate) fn invalidate_models(&mut self) {
-        self.model_rows_cache = None;
+    /// Route an informational multi-line output to the transcript (gh
+    /// #234): the dock is a 1-2 line anchor, never a document viewer -
+    /// unbounded outputs (`/help`, `/hotkeys`, `/changelog`, a bookmark
+    /// list) scroll as transcript entries pi's way, while short
+    /// confirmations and errors stay dock notices.
+    pub(crate) fn push_output(&mut self, text: String) {
+        self.transcript.push_notice(text);
     }
 
     /// Switch to a session in place when the host supports it (R3), else
@@ -1065,5 +1098,21 @@ impl Chat {
         self.editor.max_visible = tuning.autocomplete_max_visible.clamp(3, 20) as usize;
         self.editor.padding_x = tuning.editor_padding_x.min(3) as usize;
         self.transcript.apply_display(&tuning);
+    }
+}
+
+/// Poll a background `/mcp login` (gh #53): a finished sign-in posts
+/// its notice once, like the login poll. Split from `run.rs` (the
+/// 1,200-line ceiling); the loop calls it every frame.
+pub(crate) fn poll_mcp(chat: &mut Chat) -> bool {
+    let Some(poll) = chat.world.options.hooks.poll_mcp.clone() else {
+        return false;
+    };
+    match poll() {
+        Some(notice) => {
+            chat.world.notice = Some(notice);
+            true
+        }
+        None => false,
     }
 }
