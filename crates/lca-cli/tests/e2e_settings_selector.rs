@@ -61,14 +61,15 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     // section paints (the box clips to the viewport, gh #82).
     session.resize(120, 55);
 
-    // 1. The selector opens: key, current value, winning source. The
-    // needle is a curated key, never a bare word: `wait_for("thinking")`
-    // matched footer/status text before the selector opened (macOS CI).
+    // 1. The selector opens: label, current value, winning source.
+    // The needle is a curated label, never a bare word:
+    // `wait_for("thinking")` matched footer/status text before the
+    // selector opened (macOS CI).
     session.send(&["/settings", "Enter"]);
-    let pane = session.wait_for("ui.theme", std::time::Duration::from_secs(15));
+    let pane = session.wait_for("Theme", std::time::Duration::from_secs(15));
     assert!(
-        pane.contains("ui.theme") && pane.contains("permissions.mode"),
-        "the curated keys are listed:\n{pane}"
+        pane.contains("Theme") && pane.contains("Permissions"),
+        "the curated rows are listed:\n{pane}"
     );
     assert!(
         pane.contains("default"),
@@ -77,7 +78,7 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     // The selector settles with the first row selected: every Down
     // below counts from row 0, so a re-sorted list fails here,
     // loudly, instead of silently retargeting.
-    session.wait_for("> ui.theme", std::time::Duration::from_secs(10));
+    session.wait_for("> Theme", std::time::Duration::from_secs(10));
 
     // 2. The `thinking` row opens the existing thinking sub-picker
     // (Display carries eight rows before Model starts), and choosing a
@@ -85,14 +86,14 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     // selected-row marker moves before the next key is sent, so a slow
     // frame never eats a step.
     for marker in [
-        "> ui.color",
-        "> ui.fullscreen",
-        "> ui.quiet_startup",
-        "> ui.autocomplete_max_visible",
-        "> ui.editor_padding_x",
-        "> ui.output_pad",
-        "> markdown.codeblock_border",
-        "> thinking",
+        "> Color",
+        "> Display mode",
+        "> Quiet startup",
+        "> Completion rows",
+        "> Editor padding",
+        "> Output margin",
+        "> Code border",
+        "> Thinking effort",
     ] {
         session.send(&["Down"]);
         session.wait_for(marker, std::time::Duration::from_secs(10));
@@ -111,7 +112,7 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     // The notice row sits under the tall box (it wins over the dock),
     // so wait for the durable outcome - the re-read row - never the
     // transient notice.
-    session.wait_for("thinking = high", std::time::Duration::from_secs(10));
+    session.wait_for("Thinking effort = high", std::time::Duration::from_secs(10));
 
     // 3. The selector is back on screen after its sub-picker closed
     //    (pi's submenu shape - the list is never lost), and it answers
@@ -120,7 +121,7 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     //    never the notice.
     let pane = session.wait_for("user file", std::time::Duration::from_secs(15));
     assert!(
-        pane.contains("thinking = high"),
+        pane.contains("Thinking effort = high"),
         "...and the new value:\n{pane}"
     );
 

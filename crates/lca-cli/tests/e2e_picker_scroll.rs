@@ -36,7 +36,7 @@ fn a_tall_settings_selector_rolls_with_frame_and_selection_on_screen() {
     assert!(pane.contains("╰"), "bottom border draws:\n{pane}");
     assert!(pane.contains("▼"), "more below at the top:\n{pane}");
     assert!(
-        pane.contains("> ui.theme"),
+        pane.contains("> Theme"),
         "starts on the first row:\n{pane}"
     );
 

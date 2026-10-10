@@ -183,13 +183,16 @@ impl Chat {
     /// Hit-test the panel: the right columns, one row per line. A
     /// button span names its widget, any other panel cell reports
     /// relative coordinates.
-    fn click_panel(&mut self, col: u16, row: u16, width: u16) -> Option<ExtClick> {
+    pub(crate) fn click_panel(&mut self, col: u16, row: u16, width: u16) -> Option<ExtClick> {
         let panel_w = 40usize.min(width as usize / 2);
         let origin = (width as usize).saturating_sub(panel_w);
         let (col, row) = (col as usize, row as usize);
-        if col < origin {
+        // gh #237: the `│ ` border owns the panel's first two cells;
+        // widget columns start past it, where the painter put them.
+        if col < origin + 2 {
             return None;
         }
+        let col = col - origin - 2;
         let trees = self
             .world
             .options
@@ -208,7 +211,7 @@ impl Chat {
             let (lines, hits) = widget_render(&tree.nodes, &ctx);
             if row >= line && row < line + lines.len() {
                 let rel_row = row - line;
-                let rel_col = col - origin;
+                let rel_col = col;
                 let input = match hits.iter().find(|hit| {
                     hit.line == rel_row && rel_col >= hit.col_start && rel_col < hit.col_end
                 }) {

@@ -166,3 +166,54 @@ fn side_panel_draws_a_bordered_tint_over_the_transcript() {
         "no transcript bleeds through: {covered:?}"
     );
 }
+
+// Verifies: gh #237 - panel clicks map past the `│ ` border: the
+// border cells are chrome, and a button click names its widget id.
+#[test]
+fn panel_clicks_land_past_the_border() {
+    use crate::chat_mouse::ExtClick;
+    let mut opts = options();
+    opts.render_regions = Some(std::sync::Arc::new(|region: &str| {
+        if region != "panel" {
+            return Vec::new();
+        }
+        vec![(
+            "drawer-demo".to_string(),
+            lca_protocol::WidgetTree {
+                nodes: vec![lca_protocol::Widget::Button {
+                    id: "ok".to_string(),
+                    label: "OK".to_string(),
+                }],
+            },
+        )]
+    }));
+    let mut chat = Chat::new(opts, std::sync::Arc::new(KeybindingsManager::new()));
+    chat.screen_mode = true;
+    chat.world.panel_open = true;
+    let (w, h) = (80u16, 24u16);
+    let origin = w as usize - crate::render::panel_width(w);
+    // The border cells are chrome, never widget input.
+    assert!(
+        chat.click_panel(origin as u16, 0, w).is_none()
+            || matches!(
+                chat.click_panel(origin as u16, 0, w),
+                Some(ExtClick::Swallowed)
+            ),
+        "border cell is chrome"
+    );
+    // Sweep the content cells: one of them names the button.
+    let mut named = false;
+    for col in (origin + 2)..(origin + 10) {
+        if let Some(ExtClick::Event(region, input)) = chat.click_panel(col as u16, 0, w) {
+            assert_eq!(region, "panel");
+            if input
+                == (lca_protocol::UiInput::ClickWidget {
+                    id: "ok".to_string(),
+                })
+            {
+                named = true;
+            }
+        }
+    }
+    assert!(named, "a content click names the button");
+}
