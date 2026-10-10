@@ -167,8 +167,9 @@ fn messages_behind_a_queued_command_still_flush_in_order() {
     );
 }
 
-// `/help` typed mid-turn dispatches at once: the notice updates, nothing
-// queues, and the model never hears about it.
+// `/help` typed mid-turn dispatches at once: the transcript entry lands
+// (gh #234 routes it there, not the dock), nothing queues, and the
+// model never hears about it.
 #[test]
 fn a_safe_command_dispatches_immediately_mid_turn() {
     let called = invoked();
@@ -179,13 +180,19 @@ fn a_safe_command_dispatches_immediately_mid_turn() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
+    let text: String = chat
+        .transcript
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            lca_ui::transcript::Entry::Notice(body) => Some(body.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        chat.world
-            .notice
-            .as_deref()
-            .is_some_and(|n| n.contains("commands:")),
-        "the help notice landed at once: {:?}",
-        chat.world.notice
+        text.contains("commands:"),
+        "the help entry landed at once: {text:.300}"
     );
     assert!(chat.pending.is_empty(), "nothing queued");
     assert_eq!(steer.lock().unwrap().len(), 0, "nothing steered");
