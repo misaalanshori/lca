@@ -35,16 +35,21 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     );
 
     // Two turns, then a rewind plus a third turn: the first row forks.
+    // Each turn is awaited to `done`, not just first-delta: the tree
+    // reads a quiescent log, never a mid-stream one (gh #231).
     session.send(&["alpha question", "Enter"]);
     session.wait_for("answer one", std::time::Duration::from_secs(25));
+    session.wait_for("done", std::time::Duration::from_secs(25));
     session.send(&["beta question", "Enter"]);
     session.wait_for("answer two", std::time::Duration::from_secs(25));
+    session.wait_for("done", std::time::Duration::from_secs(25));
     session.send(&["/tree", "Enter"]);
     session.wait_for("Message branches", std::time::Duration::from_secs(15));
     session.send(&["Enter"]);
     session.wait_for("branched at", std::time::Duration::from_secs(20));
     session.send(&["gamma question", "Enter"]);
     session.wait_for("answer three", std::time::Duration::from_secs(25));
+    session.wait_for("done", std::time::Duration::from_secs(25));
 
     // The fork paints connectors with role markers. The needle is
     // picker chrome: the questions echo in the transcript too.
