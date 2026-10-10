@@ -43,7 +43,9 @@ fn drawer_tab_toggles_the_panel() {
     chat.screen_mode = true;
     let (w, h) = (80u16, 24u16);
     let (col, row) = chat.drawer_rect(w, h).expect("the tab shows");
-    assert_eq!((col, row), (w - 1, h / 2), "right margin, centered");
+    // gh #237: bottom-pinned, left of the scrollbar - never centered.
+    let bottom = chat.window_height(w, h).saturating_sub(1) as u16;
+    assert_eq!((col, row), (w - 2, bottom), "pinned, unobscured");
     let frame = chat.viewport(w, h, 0).join("\n");
     assert!(frame.contains('◀'), "collapsed handle paints");
     assert!(chat.click_drawer(col, row, w, h), "the click lands");
@@ -96,4 +98,71 @@ fn drawer_glyph_isolates_sgr_state_over_styled_rows() {
     );
     let after = glyph_at + '◀'.len_utf8();
     assert!(row[after..].contains(reset), "the glyph closes: {row:?}");
+}
+
+// Verifies: gh #237 - the tab pins to the transcript window's bottom
+// row: one cell left of the scrollbar closed, on the panel edge open.
+#[test]
+fn drawer_tab_pins_to_the_window_bottom() {
+    let mut opts = options();
+    opts.render_regions = Some(std::sync::Arc::new(|region: &str| {
+        if region != "panel" {
+            return Vec::new();
+        }
+        vec![(
+            "drawer-demo".to_string(),
+            lca_protocol::WidgetTree {
+                nodes: vec![lca_protocol::Widget::Text {
+                    content: "panel body".to_string(),
+                    role: "default".to_string(),
+                }],
+            },
+        )]
+    }));
+    let mut chat = Chat::new(opts, std::sync::Arc::new(KeybindingsManager::new()));
+    chat.screen_mode = true;
+    let (w, h) = (80u16, 24u16);
+    let bottom = chat.window_height(w, h).saturating_sub(1) as u16;
+    assert_eq!(
+        chat.drawer_rect(w, h),
+        Some((w - 2, bottom)),
+        "closed: left of the scrollbar, above the dock"
+    );
+    let (col, row) = chat.drawer_rect(w, h).expect("the tab shows");
+    assert!(chat.click_drawer(col, row, w, h), "the click lands");
+    assert_eq!(
+        chat.drawer_rect(w, h),
+        Some((w - 40, bottom)),
+        "open: on the panel edge, same row"
+    );
+}
+
+// Verifies: gh #237 - the open panel draws a `│` border on a
+// SidePanel tint that covers the transcript behind it: stripped rows
+// show border plus content only, and the tint SGR reaches every row.
+#[test]
+fn side_panel_draws_a_bordered_tint_over_the_transcript() {
+    use crate::render::{panel_width, side_panel};
+    use crate::theme::Theme;
+    use lca_tui::engine::text::{strip_terminal_sequences, visible_width};
+    let theme = Theme::colored();
+    let (w, panel_w) = (80u16, panel_width(80));
+    let mut base = vec!["t".repeat(80); 3];
+    side_panel(&mut base, w, &["panel body".to_string()], &theme);
+    for line in &base {
+        assert_eq!(visible_width(line), 80, "exact width: {line:?}");
+        assert!(
+            line.contains("\x1b[48;2;51;51;63m"),
+            "the SidePanel tint reaches the row: {line:?}"
+        );
+    }
+    let stripped = strip_terminal_sequences(&base[0]);
+    assert!(stripped.contains('│'), "the border draws: {stripped:?}");
+    assert!(stripped.contains("panel body"), "{stripped:?}");
+    let panel_col = 80 - panel_w;
+    let covered: String = stripped.chars().skip(panel_col).collect();
+    assert!(
+        !covered.contains('t'),
+        "no transcript bleeds through: {covered:?}"
+    );
 }

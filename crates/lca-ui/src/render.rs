@@ -393,22 +393,32 @@ pub fn splice_segment(base: &str, x: usize, width: usize, segment: &str) -> Stri
 /// Composite a side panel into the right column of every line (gh
 /// #238: each row splices at the seam, so transcript bands cannot
 /// bleed into the panel and panel rows always close cleanly).
-pub fn side_panel(base: &mut [String], width: u16, panel: &[String]) {
+/// The extension side panel (gh #207, tinted by gh #237): a `│`
+/// border in [`Role::Border`] plus panel cells on a [`Role::SidePanel`]
+/// tint that covers the transcript behind them - empty rows pad with
+/// tinted spaces, so nothing bleeds through. One [`splice_segment`]
+/// seam per row keeps the #238 reset hygiene.
+pub fn side_panel(base: &mut [String], width: u16, panel: &[String], theme: &Theme) {
     let panel_w = panel_width(width);
+    let col = (width as usize).saturating_sub(panel_w);
+    let tint = theme.bg(Role::SidePanel);
+    let edge = theme.role(Role::Border);
     for (i, base_line) in base.iter_mut().enumerate() {
         let text = panel.get(i).map(String::as_str).unwrap_or("");
-        let text = lca_tui::engine::text::truncate_to_width(text, panel_w, "…", false);
-        let col = (width as usize).saturating_sub(panel_w);
+        let content_w = panel_w.saturating_sub(2);
+        let text = lca_tui::engine::text::truncate_to_width(text, content_w, "…", false);
         // Pad the base side first (the seam keeps the caller's
-        // alignment), then splice the panel text to full width over
-        // the padded row.
+        // alignment), then splice the bordered, tinted panel span to
+        // full width over the padded row.
         let before = slice_by_column(base_line, 0, col, false);
         let before = format!(
             "{before}{}",
             " ".repeat(col.saturating_sub(visible_width(&before)))
         );
-        let padded = format!("{before}{text}");
-        *base_line = splice_segment(&padded, col, panel_w, &text);
+        let padded = format!("{before}{}", " ".repeat(panel_w));
+        let fill = content_w.saturating_sub(visible_width(&text));
+        let span = tint(&format!("{} {text}{}", edge("│"), " ".repeat(fill)));
+        *base_line = splice_segment(&padded, col, panel_w, &span);
     }
 }
 
@@ -566,7 +576,7 @@ mod tests {
         use lca_tui::engine::text::visible_width;
         // Base row opens a background band and never closes it.
         let mut base = vec![format!("xx\x1b[48;2;1;2;3m{}", "y".repeat(78)); 3];
-        side_panel(&mut base, 80, &["panel".to_string()]);
+        side_panel(&mut base, 80, &["panel".to_string()], &Theme::plain());
         for line in &base {
             assert_eq!(visible_width(line), 80, "exact width: {line:?}");
             assert_eq!(
@@ -619,7 +629,7 @@ mod tests {
     #[test]
     fn side_panel_takes_the_right_column() {
         let mut base = vec!["x".repeat(80); 3];
-        side_panel(&mut base, 80, &["panel".to_string()]);
+        side_panel(&mut base, 80, &["panel".to_string()], &Theme::plain());
         let line = strip_terminal_sequences(&base[0]);
         // Rows close with a reset now (gh #238): the content still
         // lands at the right column, terminated, not dangling.

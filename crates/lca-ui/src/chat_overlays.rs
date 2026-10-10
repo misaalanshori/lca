@@ -110,7 +110,7 @@ impl Chat {
             if panel.is_empty() {
                 panel.push("(nothing registered for the panel)".to_string());
             }
-            side_panel(viewport, width, &panel);
+            side_panel(viewport, width, &panel, &self.theme);
         }
         self.paint_drawer_tab(viewport, width, height);
 
@@ -388,8 +388,10 @@ impl Chat {
                 if !row.section.is_empty() && row.section != section {
                     section = row.section.as_str();
                     body.push(format!(" ── {section} ──"));
+                    // gh #235: air under the divider.
+                    body.push(String::new());
                     if index <= picker.selected {
-                        selected_body += 1;
+                        selected_body += 2;
                     }
                 }
                 let cur = if index == picker.selected { '>' } else { ' ' };
@@ -398,25 +400,41 @@ impl Chat {
                 if index == picker.selected
                     && let Some(buffer) = picker.editing.as_ref()
                 {
-                    body.push(format!(" {cur} {} = {}█", row.key, buffer));
+                    body.push(format!(" {cur} {} = {}█", row.label, buffer));
                 } else {
                     body.push(format!(
                         " {cur} {} = {} [{}]",
-                        row.key, row.value, row.source
+                        row.label, row.value, row.source
                     ));
                 }
             }
+            // gh #235: the highlighted row's description rides the
+            // pinned hint (outside the items, so the row map holds).
+            let hint = if picker.editing.is_some() {
+                HINT_SETTINGS_EDIT.to_string()
+            } else if let Some(row) = picker.rows.get(picker.selected) {
+                let cap = (width as usize).saturating_sub(HINT_SETTINGS.len() + 12).max(20);
+                let desc = lca_tui::engine::text::truncate_to_width(
+                    &row.description,
+                    cap,
+                    "…",
+                    false,
+                );
+                if desc.is_empty() {
+                    HINT_SETTINGS.to_string()
+                } else {
+                    format!("{} · {desc}", HINT_SETTINGS)
+                }
+            } else {
+                HINT_SETTINGS.to_string()
+            };
             self.picker_overlay(
                 viewport,
                 width,
                 height,
                 "settings",
                 &body,
-                if picker.editing.is_some() {
-                    HINT_SETTINGS_EDIT
-                } else {
-                    HINT_SETTINGS
-                },
+                &hint,
                 &self.theme,
                 Some(selected_body),
             );

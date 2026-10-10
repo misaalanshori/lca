@@ -104,6 +104,7 @@ roles! {
     SearchMatchBg => "searchMatchBg",
     UserMessageBg => "userMessageBg",
     CustomMessageBg => "customMessageBg",
+    SidePanel => "sidePanel",
     ToolPendingBg => "toolPendingBg",
     ToolSuccessBg => "toolSuccessBg",
     ToolErrorBg => "toolErrorBg",
@@ -897,7 +898,7 @@ mod tests {
     fn every_role_resolves_in_both_builtin_palettes() {
         assert!(Palette::dark().is_complete(), "dark palette is complete");
         assert!(Palette::light().is_complete(), "light palette is complete");
-        assert_eq!(Role::ALL.len(), 56, "the ~50-token vocabulary");
+        assert_eq!(Role::ALL.len(), 57, "the ~50-token vocabulary");
     }
 
     #[test]

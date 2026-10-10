@@ -401,19 +401,21 @@ impl Chat {
             .is_some_and(|render| !render("panel").is_empty())
     }
 
-    /// The drawer tab's cell (gh #207): `(col, row)` - the right margin
-    /// when closed, the panel edge when open, vertically centered.
+    /// The drawer tab's cell (gh #207, bottom-pinned by gh #237):
+    /// `(col, row)` on the transcript window's bottom row - one cell
+    /// left of the scrollbar when closed, the panel edge when open.
     /// `None` with no panel region (zero clutter) or off fullscreen.
     pub fn drawer_rect(&self, width: u16, height: u16) -> Option<(u16, u16)> {
         if !self.screen_mode || !self.has_panel() || width == 0 || height == 0 {
             return None;
         }
+        let row = (self.window_height(width, height) as u16).saturating_sub(1);
         let col = if self.world.panel_open {
             width.saturating_sub(super::render::panel_width(width) as u16)
         } else {
-            width.saturating_sub(1)
+            width.saturating_sub(2)
         };
-        Some((col, height / 2))
+        Some((col, row))
     }
 
     /// Refresh the drawer hover flag (gh #207): the frame paints the
