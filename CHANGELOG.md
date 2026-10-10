@@ -38,6 +38,11 @@ covering the transcript behind it.
 - **Friendly settings labels (gh #235).** The selector paints human
 labels with the highlighted row's help in the pinned hint, sections
 breathe, and `ui.tree_filter_mode` joins the inventory.
+- **Session migration (gh #98).** `lca session migrate <id>`
+backfills linkage on pre-linkage logs with backup and lossless
+verification (views identical or refused); already-current logs
+report and write nothing; mismatches and truncated logs refuse
+with what to fix. Unknown-future lines ride through verbatim.
 - **DAG tree navigator (gh #231).** `/tree` is a graphical
 navigator now: branch connectors (`├─`/`└─`/`│`), role markers,
 Up/Down walk, Left/Right fold, `f` filter cycling

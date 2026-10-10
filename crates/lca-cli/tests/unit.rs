@@ -496,3 +496,14 @@ fn startup_trust_precedence_flags_stored_default() {
     assert!(!grants.is_trusted_here(&stored), "forced distrust wins");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// Verifies: gh #98 (migration is a host-side session subcommand)
+#[test]
+fn session_migrate_routes_to_the_migrate_command() {
+    assert_eq!(
+        route(&parse(&["session", "migrate", "s1"])),
+        Route::Migrate {
+            session: "s1".into()
+        }
+    );
+}

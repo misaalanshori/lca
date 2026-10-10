@@ -171,6 +171,15 @@ A change that makes existing records unreadable needs a migration tool that rewr
 
 The format version is recorded in `meta.json` and in the `session-start` record. Both are checked on load, and a mismatch between them is a corruption signal.
 
+`lca session migrate <id>` (gh #98) is the one rewrite this format ships: linkage backfill. Pre-linkage records (no `parent`, written before gh #37) chain to their log predecessor - exactly what `append` would have stamped - so the entry tree and the ancestry walk see old logs. The rules:
+
+- One log per run. The original survives in `<session>/backups/migrate-<unix-seconds>/log.jsonl` until the user removes it.
+- Only stamped lines change, by value surgery (unknown fields survive); everything else - unknown-future lines, junction records, linked records - rides through byte-identical.
+- Verified, not trusted: the Display and Audit id-sequences and the contents modulo `parent` must read identical before and after, or the rewrite is refused and the backup named.
+- Refused with a message, never rewritten blind: a meta/header version mismatch (pick the true version by hand first) and a truncated log (repair it first). Unknown-future records migrate along verbatim with a warning, the same warn-and-skip the reader applies.
+- A log with nothing to stamp reports `already current` and writes nothing.
+- Fork relatives only add a note: tree collapse stays designed-not-built (see below); the one log still migrates.
+
 ## Migration note (gh #37, #98 touchpoint - recorded, not built)
 
 Collapsing fork directories into single-file trees would need: a

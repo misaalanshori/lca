@@ -156,6 +156,11 @@ pub enum Route {
         /// Session id.
         session: String,
     },
+    /// Forward-migrate a session log to the current format (gh #98).
+    Migrate {
+        /// Session id.
+        session: String,
+    },
 }
 
 /// Flag combinations that contradict each other (#109, #111). `Some`
@@ -513,6 +518,9 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
             SessionCmd::Gc { session } => Route::Gc {
                 session: session.clone(),
             },
+            SessionCmd::Migrate { session } => Route::Migrate {
+                session: session.clone(),
+            },
         },
         Some(Command::Ext { cmd }) => Route::Ext(cmd.clone()),
         Some(Command::Auth { cmd }) => Route::Auth(cmd.clone()),
@@ -626,6 +634,47 @@ pub(super) fn export_command(cwd: &Path, id: &str, audit: bool) -> i32 {
                 exit::SESSION
             }
         },
+        Err(err) => {
+            eprintln!("error: {err}");
+            exit::SESSION
+        }
+    }
+}
+
+/// `lca session migrate <id>`: forward-migrate one log (gh #98).
+/// Prints what was stamped and where the backup lives, or that the
+/// log was already current; refusals name what to fix first.
+pub(super) fn migrate_command(cwd: &Path, id: &str) -> i32 {
+    let Ok((store, _)) = open_store() else {
+        return exit::INTERNAL;
+    };
+    let session = match store.session(cwd, id) {
+        Ok(session) => session,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return exit::SESSION;
+        }
+    };
+    match store.migrate(&session) {
+        Ok(report) => {
+            if report.already_current {
+                println!("already current");
+            } else {
+                println!(
+                    "migrated {} record{} (backup {})",
+                    report.stamped,
+                    if report.stamped == 1 { "" } else { "s" },
+                    report
+                        .backup
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default(),
+                );
+            }
+            for warning in report.warnings {
+                println!("note: {warning}");
+            }
+            exit::OK
+        }
         Err(err) => {
             eprintln!("error: {err}");
             exit::SESSION

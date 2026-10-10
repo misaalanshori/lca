@@ -745,6 +745,7 @@ pub async fn run(cli: Cli) -> i32 {
         Route::Rename { session, title } => rename_command(&cwd, &session, &title),
         Route::Export { session, audit } => export_command(&cwd, &session, audit),
         Route::Gc { session } => gc_command(&cwd, &session),
+        Route::Migrate { session } => migrate_command(&cwd, &session),
         Route::Ext(cmd) => ext::run(cmd, flags.offline).await,
         Route::Auth(cmd) => auth::run(&cmd, &cli.allow_host),
         Route::Doctor => doctor::run(&crate::data_dir(), &cwd),

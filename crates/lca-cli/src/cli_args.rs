@@ -372,6 +372,12 @@ pub enum SessionCmd {
         /// The session whose fork tree to sweep.
         session: String,
     },
+    /// Forward-migrate a session log to the current format (gh #98):
+    /// linkage backfill with backup and lossless verification.
+    Migrate {
+        /// The session to migrate.
+        session: String,
+    },
 }
 
 /// The command line's configuration-backed values: the flags that ride

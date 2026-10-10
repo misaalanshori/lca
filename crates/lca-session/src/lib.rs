@@ -9,6 +9,7 @@
 
 mod cache;
 mod ids;
+mod migrate;
 mod store;
 mod tree;
 pub(crate) mod view;
@@ -17,6 +18,7 @@ use std::path::PathBuf;
 
 pub use cache::{CacheMiss, CacheWasteTotals, collect_cache_misses, compute_cache_waste};
 pub use lca_protocol::{PermissionDecision, ToolResultStatus, ToolSource};
+pub use migrate::{MigrateReport, VersionState};
 pub use store::{
     DEFAULT_TITLE, ExportOptions, ReadOutcome, Session, SessionMeta, SessionStore, SessionSummary,
     display_path, row_label,
@@ -122,6 +124,15 @@ pub enum Error {
         session: String,
         /// The record identifier sought.
         record: String,
+    },
+    /// A migration refused to rewrite (gh #98): the reason tells
+    /// what to fix first, never a subsystem name.
+    #[error("cannot migrate session {session}: {reason}")]
+    CannotMigrate {
+        /// The session refused.
+        session: String,
+        /// What to fix first.
+        reason: String,
     },
 }
 

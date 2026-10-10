@@ -555,3 +555,31 @@ fn headless_redaction_hook_mutates_the_result_live() {
         "the raw token never reached the model: {content}"
     );
 }
+
+// Verifies: gh #98 — `lca session migrate <id>` runs against a real
+// session and reports a current log with nothing to do.
+#[test]
+fn session_migrate_reports_a_current_log() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("stored"))]));
+    let box_ = sandbox("session-migrate");
+    let output = box_.run(Some(&mock), &["-p", "hi"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+
+    let listing = stdout(&box_.run(None, &["resume"]));
+    let id = listing
+        .lines()
+        .next()
+        .expect("one session at least")
+        .split_whitespace()
+        .next()
+        .expect("session id")
+        .to_string();
+    let output = box_.run(None, &["session", "migrate", &id]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("already current"),
+        "stdout: {}",
+        stdout(&output)
+    );
+}
