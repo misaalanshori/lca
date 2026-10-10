@@ -79,10 +79,7 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     );
     session.send(&["Right"]);
     let pane = session.wait_for("└─", std::time::Duration::from_secs(10));
-    assert!(
-        pane.contains("├─"),
-        "unfold restores the subtree:\n{pane}"
-    );
+    assert!(pane.contains("├─"), "unfold restores the subtree:\n{pane}");
 
     // `f` cycles default -> no-tools -> user-only -> labeled-only.
     session.send(&["f"]);
