@@ -35,10 +35,7 @@ fn a_tall_settings_selector_rolls_with_frame_and_selection_on_screen() {
     assert!(pane.contains("╭"), "top border draws:\n{pane}");
     assert!(pane.contains("╰"), "bottom border draws:\n{pane}");
     assert!(pane.contains("▼"), "more below at the top:\n{pane}");
-    assert!(
-        pane.contains("> Theme"),
-        "starts on the first row:\n{pane}"
-    );
+    assert!(pane.contains("> Theme"), "starts on the first row:\n{pane}");
 
     // In-place repaints append nothing to terminal scrollback.
     let history_before = session.capture_with_history().lines().count();
