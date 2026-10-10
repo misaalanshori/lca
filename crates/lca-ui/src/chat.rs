@@ -504,8 +504,6 @@ impl Chat {
             .clone()
     }
 
-    /// The models `/model` should offer: the host's live list when one is
-
     /// The session's thinking level, resolved from the shared cell (R1).
     pub fn thinking_level(&self) -> Option<String> {
         self.world

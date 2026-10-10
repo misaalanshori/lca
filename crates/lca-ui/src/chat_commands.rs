@@ -164,15 +164,16 @@ impl Chat {
             // gh #233: the catalog enumerates lazily here only (every
             // other command dispatches without touching providers), and
             // the snapshot behind it invalidates on login, switch,
-            // grant, reload, and scope events.
+            // grant, reload, and scope events. An empty list falls
+            // through to the extension `model` command below, which
+            // runs endpoint consent (gh #31) instead of reporting
+            // nothing - short-circuiting here would amputate that.
             "model" if argument.trim().is_empty() => {
                 let live_models = self.model_rows_cached();
-                if live_models.is_empty() {
-                    self.world.notice = Some("no models available".to_string());
-                } else {
+                if !live_models.is_empty() {
                     self.model_picker = Some(ModelPicker::new(live_models));
+                    return Action::Continue;
                 }
-                return Action::Continue;
             }
             "tree" => {
                 self.open_tree_picker();
@@ -598,6 +599,7 @@ impl Chat {
         }
     }
 
+    /// The models `/model` should offer: the host's live list when one is
     /// wired, else the startup snapshot (a login's discovery reaches the
     /// picker without a restart). Rows, not bare ids: the label decorates,
     /// the id stays raw (G2).
