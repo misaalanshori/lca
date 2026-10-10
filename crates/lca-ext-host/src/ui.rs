@@ -56,18 +56,12 @@ pub(super) fn render_work(
     // loop to answer itself, so the import refuses while this wraps the
     // guest call (worker threads never wrap, so tools and hooks ask).
     super::host_imports::without_dialogs(|| {
-        let pre = inner
-            .ui
-            .as_ref()
-            .ok_or_else(|| CallError::InvalidArguments("no ui world".into()))?;
-        let mut store = inner.build_store()?;
-        let instance = pre
-            .instantiate(&mut store)
-            .map_err(|err| inner.classify(err))?;
+        let (mut store, instance) = inner.checkout_ui()?;
         let tree = instance
             .lca_ext_render()
             .call_render(&mut store, region)
             .map_err(|err| inner.classify(err))?;
+        inner.checkin_ui(store, instance);
         Ok(tree.map(|nodes| lca_protocol::WidgetTree {
             nodes: nodes.into_iter().map(from_wit_widget).collect(),
         }))
@@ -83,14 +77,7 @@ pub(super) fn event_work(
     super::host_imports::without_dialogs(|| {
         use lca_protocol::UiEffect;
         use ui_exports::interaction::Input as WasmInput;
-        let pre = inner
-            .ui
-            .as_ref()
-            .ok_or_else(|| CallError::InvalidArguments("no ui world".into()))?;
-        let mut store = inner.build_store()?;
-        let instance = pre
-            .instantiate(&mut store)
-            .map_err(|err| inner.classify(err))?;
+        let (mut store, instance) = inner.checkout_ui()?;
         let wasm_input = match input {
             lca_protocol::UiInput::Key { key } => WasmInput::Key(key.clone()),
             lca_protocol::UiInput::Submit { text } => WasmInput::Submit(text.clone()),
@@ -105,6 +92,7 @@ pub(super) fn event_work(
             .map_err(|err| inner.classify(err))?;
         use ui_exports::interaction::Effect;
         let _ = region;
+        inner.checkin_ui(store, instance);
         Ok(match effect {
             Effect::None => UiEffect::None,
             Effect::CloseModal => UiEffect::CloseModal,

@@ -24,20 +24,25 @@ pub(super) fn compact_work(
     inner: &Inner,
     records: Vec<lca_protocol::Record>,
 ) -> Result<String, CallError> {
-    let pre = inner
-        .compaction
-        .as_ref()
-        .ok_or_else(|| CallError::InvalidArguments("no compaction world".into()))?;
-    let mut store = inner.build_store()?;
-    let instance = pre
-        .instantiate(&mut store)
-        .map_err(|err| inner.classify(err))?;
+    let (mut store, instance) = inner.checkout_compaction()?;
     let wit_records: Vec<_> = records.iter().map(to_wit_session_record).collect();
     let summary = instance
         .lca_ext_compact()
         .call_compact(&mut store, &wit_records)
         .map_err(|err| inner.classify(err))?;
-    summary.map_err(|reason| CallError::InvalidArguments(format!("compaction refused: {reason}")))
+    // A refusal is the guest's healthy verdict, not a poisoned guest:
+    // the instance stays cached (#103).
+    let summary = match summary {
+        Ok(summary) => summary,
+        Err(reason) => {
+            inner.checkin_compaction(store, instance);
+            return Err(CallError::InvalidArguments(format!(
+                "compaction refused: {reason}"
+            )));
+        }
+    };
+    inner.checkin_compaction(store, instance);
+    Ok(summary)
 }
 
 /// Protocol messages -> the `context-transform` world's WIT records.
@@ -150,19 +155,15 @@ pub(super) fn transform_work(
     inner: &Inner,
     messages: Vec<lca_protocol::ChatMessage>,
 ) -> Result<Result<Vec<lca_protocol::ChatMessage>, String>, CallError> {
-    let pre = inner
-        .context_transform
-        .as_ref()
-        .ok_or_else(|| CallError::InvalidArguments("no context-transform world".into()))?;
-    let mut store = inner.build_store()?;
-    let instance = pre
-        .instantiate(&mut store)
-        .map_err(|err| inner.classify(err))?;
+    let (mut store, instance) = inner.checkout_transform()?;
     let wit_messages = to_wit_messages(&messages);
     let outcome = instance
         .lca_ext_transform()
         .call_transform(&mut store, &wit_messages)
         .map_err(|err| inner.classify(err))?;
+    // A rejection is the guest's healthy verdict (FR-CTX-3), not a
+    // poisoned guest: the instance stays cached (#103).
+    inner.checkin_transform(store, instance);
     Ok(match outcome {
         Ok(list) => Ok(from_wit_messages(list)),
         Err(reason) => Err(reason),

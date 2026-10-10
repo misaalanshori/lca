@@ -8,11 +8,14 @@
 //! themselves resolve through [`lca_tools::Capabilities`], the same engine
 //! a native-linked extension calls (conformance identity by construction).
 //!
-//! Every call runs in a fresh store carrying the manifest's limits: a
+//! Every call runs in an armed store carrying the manifest's limits: a
 //! memory ceiling, a fuel budget per call (FR-EXT-4), and epoch
-//! interruption for cancellation (FR-CONC-1). Traps and limit breaches
-//! disable the extension for the session while the host continues
-//! (FR-EXT-3, FR-EXT-5).
+//! interruption for cancellation (FR-CONC-1). #103 keeps one live guest
+//! per world in an instance cache (see `instance_cache`): checkout
+//! re-arms a cached guest, checkin parks it back, and any trap, fuel
+//! exhaustion, or cancellation evicts it, so ADR-0014's trap isolation
+//! holds. Traps and limit breaches disable the extension for the
+//! session while the host continues (FR-EXT-3, FR-EXT-5).
 //!
 //! The crate needs no `unsafe`: components load through Wasmtime's safe
 //! `Component::new`, and calls go through generated typed bindings.
@@ -44,6 +47,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 mod dispatch_hooks;
 mod host_imports;
+mod instance_cache;
 mod manifest;
 mod provider;
 mod tool_hooks;
@@ -51,6 +55,7 @@ mod transform;
 mod ui;
 
 pub use manifest::{LoadError, Manifest};
+use instance_cache::InstanceCache;
 use provider::{
     IdentityOp, identity_simple_work, identity_usage_work, login_options_work, login_submit_work,
     provider_models_work, provider_stream_work,
@@ -449,6 +454,7 @@ impl ExtHost {
                 enabled: Arc::new(AtomicBool::new(true)),
                 in_flight: AtomicU64::new(0),
                 interrupted: AtomicBool::new(false),
+                cache: Mutex::new(InstanceCache::default()),
                 logs: Arc::new(Mutex::new(Vec::new())),
                 cap,
                 dialogs: self.env.dialogs.clone(),
@@ -526,6 +532,9 @@ struct Inner {
     /// `turn_started`. Without it, a cancel that races call setup is
     /// lost and the guest spins (the 2026-10-01 Windows CI hang).
     interrupted: AtomicBool,
+    /// #103: one live guest per world (the store owning its linear
+    /// memory plus the instance bound to it). See `instance_cache`.
+    cache: Mutex<InstanceCache>,
 }
 
 impl Inner {
@@ -539,6 +548,35 @@ impl Inner {
 
     fn disable(&self) {
         self.enabled.store(false, Ordering::SeqCst);
+        // #103: a disabled extension never serves from a stale guest.
+        lock(&self.cache).clear();
+    }
+
+    /// Reset a store for another call: full fuel, a fresh epoch
+    /// deadline, no parent call, and the lost-interrupt re-arm.
+    /// `build_store` runs this same tail for a fresh store, so both
+    /// paths arm identically (#103: the per-guest epoch accounting).
+    fn arm(&self, store: &mut Store<HostState>) -> Result<(), CallError> {
+        // One epoch tick of grace: with epoch interruption enabled a store
+        // starts already past its deadline, so give every store one tick
+        // and let cancellation consume it (ADR-0014: the host, not the
+        // guest, decides when the deadline passes).
+        store.set_epoch_deadline(1);
+        store
+            .set_fuel(self.limits.fuel_per_call)
+            .map_err(|err| CallError::InvalidArguments(err.to_string()))?;
+        // A cached store may carry the previous call's parent: the
+        // `tools` import must never parent across calls (gh #77).
+        store.data_mut().executing_call = None;
+        // Re-arm an interrupt that landed while this store was waiting:
+        // its epoch bump was absorbed by the deadline set above
+        // (`current_epoch + 1` from now), so without this the call would
+        // never trap. The check after the set closes the race for any
+        // interleaving with `interrupt` (FR-CONC-1).
+        if self.interrupted.load(Ordering::SeqCst) {
+            self.engine.increment_epoch();
+        }
+        Ok(())
     }
 
     fn build_store(&self) -> Result<Store<HostState>, CallError> {
@@ -563,22 +601,7 @@ impl Inner {
             },
         );
         store.limiter(|state| &mut state.limits);
-        // One epoch tick of grace: with epoch interruption enabled a store
-        // starts already past its deadline, so give every fresh store one
-        // tick and let cancellation consume it (ADR-0014: the host, not
-        // the guest, decides when the deadline passes).
-        store.set_epoch_deadline(1);
-        store
-            .set_fuel(self.limits.fuel_per_call)
-            .map_err(|err| CallError::InvalidArguments(err.to_string()))?;
-        // Re-arm an interrupt that landed while this store was being
-        // built: its epoch bump was absorbed by the deadline set above
-        // (`current_epoch + 1` from now), so without this the call would
-        // never trap. The check after the set closes the race for any
-        // interleaving with `interrupt` (FR-CONC-1).
-        if self.interrupted.load(Ordering::SeqCst) {
-            self.engine.increment_epoch();
-        }
+        self.arm(&mut store)?;
         Ok(store)
     }
 
@@ -586,6 +609,12 @@ impl Inner {
     /// disable the extension (FR-EXT-3, FR-EXT-5) and which merely answer
     /// the caller (FR-EXT-4, FR-CONC-1).
     fn classify(&self, err: wasmtime::Error) -> CallError {
+        // #103: every Wasmtime failure evicts the whole cache. A
+        // trapped, fuel-exhausted, or epoch-interrupted guest is
+        // mid-execution in an unknown state; the next call builds
+        // fresh, which is what keeps ADR-0014's trap isolation true
+        // under the cache.
+        lock(&self.cache).clear();
         use wasmtime::Trap;
         if let Some(trap) = err.downcast_ref::<Trap>() {
             return match trap {

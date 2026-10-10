@@ -12,19 +12,11 @@ use lca_ext_abi::host::provider::exports::lca::ext::provider_models as wit_model
 // Provider-world work: model listing, the streaming completion, identity
 // ---------------------------------------------------------------------------
 
-fn provider_missing_world() -> CallError {
-    CallError::InvalidArguments("no provider world".into())
-}
-
 pub(super) fn provider_models_work(
     inner: &Inner,
     settings: &[(String, String)],
 ) -> Result<Vec<ModelInfo>, CallError> {
-    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
-    let mut store = inner.build_store()?;
-    let instance = pre
-        .instantiate(&mut store)
-        .map_err(|err| inner.classify(err))?;
+    let (mut store, instance) = inner.checkout_provider()?;
     // The same opaque settings `complete` gets in its request `extras`
     // (ADR-0035): one source of truth for the extension's configuration.
     let pairs: Vec<wit_models::ExtraPair> = settings
@@ -38,6 +30,7 @@ pub(super) fn provider_models_work(
         .lca_ext_provider_models()
         .call_list_models(&mut store, &pairs)
         .map_err(|err| inner.classify(err))?;
+    inner.checkin_provider(store, instance);
     Ok(models
         .into_iter()
         .map(|model| ModelInfo {
@@ -56,26 +49,32 @@ pub(super) fn provider_models_work(
         .collect())
 }
 
-/// One streaming completion, run on a blocking thread: instantiate, call
-/// `stream-completion`, then poll the pull resource until it ends,
-/// pushing every event into `bridge` (ADR-0004's host-driven shape).
+/// One streaming completion, run on a blocking thread: check out the
+/// cached guest, call `stream-completion`, then poll the pull resource
+/// until it ends, pushing every event into `bridge` (ADR-0004's
+/// host-driven shape).
 pub(super) fn provider_stream_work(
     inner: &Inner,
     request: CompletionRequest,
     bridge: Arc<dyn EventSink>,
 ) -> Result<(), CallError> {
-    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
-    let mut store = inner.build_store()?;
-    let instance = pre
-        .instantiate(&mut store)
-        .map_err(|err| inner.classify(err))?;
+    let (mut store, instance) = inner.checkout_provider()?;
     let wit_request = to_wit_request(&request);
     let created = instance
         .lca_ext_provider_completion()
         .call_stream_completion(&mut store, &wit_request)
         .map_err(|err| inner.classify(err))?;
-    let stream = created
-        .map_err(|detail| CallError::InvalidArguments(format!("stream-completion: {detail}")))?;
+    let stream = match created {
+        Ok(stream) => stream,
+        Err(detail) => {
+            // The guest declined the request; the guest itself is
+            // healthy, so it stays cached (#103).
+            inner.checkin_provider(store, instance);
+            return Err(CallError::InvalidArguments(format!(
+                "stream-completion: {detail}"
+            )));
+        }
+    };
     loop {
         let next = instance
             .lca_ext_provider_completion()
@@ -94,9 +93,11 @@ pub(super) fn provider_stream_work(
         }
     }
     // The handle indexes the guest's own table inside this store's
-    // instance; both die together at the end of this call (a fresh store
-    // per call), so nothing leaks even without an explicit delete.
+    // instance; a cached instance keeps serving it until the next
+    // checkout, and eviction drops both together, so nothing leaks
+    // even without an explicit delete (#103).
     let _ = stream;
+    inner.checkin_provider(store, instance);
     Ok(())
 }
 
@@ -109,11 +110,7 @@ pub(super) fn identity_simple_work(
     inner: &Inner,
     op: IdentityOp,
 ) -> Result<IdentityOutcome, CallError> {
-    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
-    let mut store = inner.build_store()?;
-    let instance = pre
-        .instantiate(&mut store)
-        .map_err(|err| inner.classify(err))?;
+    let (mut store, instance) = inner.checkout_provider()?;
     let outcome = match op {
         IdentityOp::Login => instance
             .lca_ext_provider_identity()
@@ -124,21 +121,19 @@ pub(super) fn identity_simple_work(
             .call_logout(&mut store)
             .map_err(|err| inner.classify(err))?,
     };
+    inner.checkin_provider(store, instance);
     Ok(from_wit_identity(outcome))
 }
 
 pub(super) fn identity_usage_work(
     inner: &Inner,
 ) -> Result<Result<Usage, IdentityOutcome>, CallError> {
-    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
-    let mut store = inner.build_store()?;
-    let instance = pre
-        .instantiate(&mut store)
-        .map_err(|err| inner.classify(err))?;
+    let (mut store, instance) = inner.checkout_provider()?;
     let outcome = instance
         .lca_ext_provider_identity()
         .call_usage(&mut store)
         .map_err(|err| inner.classify(err))?;
+    inner.checkin_provider(store, instance);
     Ok(match outcome {
         Ok(usage) => Ok(from_wit_identity_usage(usage)),
         Err(fallback) => Err(from_wit_identity(fallback)),
@@ -163,15 +158,12 @@ fn from_wit_identity_usage(usage: wit_identity::TokenUsage) -> Usage {
 pub(super) fn login_options_work(
     inner: &Inner,
 ) -> Result<Vec<lca_protocol::LoginOption>, CallError> {
-    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
-    let mut store = inner.build_store()?;
-    let instance = pre
-        .instantiate(&mut store)
-        .map_err(|err| inner.classify(err))?;
+    let (mut store, instance) = inner.checkout_provider()?;
     let options = instance
         .lca_ext_provider_login()
         .call_login_options(&mut store)
         .map_err(|err| inner.classify(err))?;
+    inner.checkin_provider(store, instance);
     Ok(options.into_iter().map(from_wit_login_option).collect())
 }
 
@@ -195,11 +187,7 @@ pub(super) fn login_submit_work(
     inner: &Inner,
     answer: lca_protocol::LoginAnswer,
 ) -> Result<Vec<(String, String)>, CallError> {
-    let pre = inner.provider.as_ref().ok_or_else(provider_missing_world)?;
-    let mut store = inner.build_store()?;
-    let instance = pre
-        .instantiate(&mut store)
-        .map_err(|err| inner.classify(err))?;
+    let (mut store, instance) = inner.checkout_provider()?;
     let wit_answer = wit_login::LoginAnswer {
         choice: answer.choice.clone(),
         values: answer
@@ -215,6 +203,9 @@ pub(super) fn login_submit_work(
         .lca_ext_provider_login()
         .call_login_submit(&mut store, &wit_answer)
         .map_err(|err| inner.classify(err))?;
+    // A `Failed` answer is the guest's healthy verdict, not a poisoned
+    // guest: the instance stays cached (#103).
+    inner.checkin_provider(store, instance);
     match result {
         wit_login::LoginResult::Ok => Ok(Vec::new()),
         wit_login::LoginResult::Settings(pairs) => Ok(pairs
