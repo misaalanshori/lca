@@ -63,6 +63,9 @@ impl SessionStore {
     /// Read a session's version stamps without rewriting (gh #98).
     /// Value-level throughout: no record-enum instantiation, so the
     /// reader's size budget never notices this (NFR-1).
+    /// Never inlined: a cold one-shot path must not drag
+    /// its callees into every caller (NFR-1).
+    #[inline(never)]
     pub fn version_state(&self, session: &Session) -> super::Result<VersionState> {
         let meta_version = self.meta(session).ok().map(|meta| meta.format_version);
         let outcome = self.read(session)?;
@@ -116,6 +119,9 @@ impl SessionStore {
     /// Forward-migrate one session log (gh #98): linkage backfill
     /// with backup and lossless verification. Refuses what cannot be
     /// verified (a stamp mismatch, a truncated log) with a message.
+    /// Never inlined: a cold one-shot path must not drag
+    /// its callees into every caller (NFR-1).
+    #[inline(never)]
     pub fn migrate(&self, session: &Session) -> super::Result<MigrateReport> {
         let state = self.version_state(session)?;
         if state.mismatched {
@@ -230,6 +236,7 @@ impl SessionStore {
     }
 
     /// Record ids in a resolved view (the lossless check's shape).
+    #[inline(never)]
     fn view_ids(&self, session: &Session, mode: ViewMode) -> super::Result<Vec<String>> {
         Ok(self
             .resolved(session, mode)?
@@ -241,13 +248,14 @@ impl SessionStore {
 
     /// Audit contents minus `parent` (the one field migration
     /// stamps), read as values so unknown fields compare too.
+    #[inline(never)]
     fn audit_values(&self, session: &Session) -> super::Result<Vec<serde_json::Value>> {
         let text = std::fs::read_to_string(session.log_path())?;
         let mut values = Vec::new();
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             // The caller refused truncated logs, so every line parses.
-            let mut value: serde_json::Value = serde_json::from_str(line)
-                .map_err(|err| super::Error::CannotMigrate {
+            let mut value: serde_json::Value =
+                serde_json::from_str(line).map_err(|err| super::Error::CannotMigrate {
                     session: session.id().to_string(),
                     reason: format!("verification failed: unreadable line: {err}"),
                 })?;
@@ -261,6 +269,7 @@ impl SessionStore {
 
     /// Copy the log into a backup directory (the format's rule: the
     /// original survives until the user removes it).
+    #[inline(never)]
     fn backup_log(&self, session: &Session) -> super::Result<std::path::PathBuf> {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -278,6 +287,7 @@ impl SessionStore {
 
     /// The fork-collapse deferral note (gh #98): this migrates one
     /// log; collapsing a fork tree stays designed-not-built.
+    #[inline(never)]
     fn fork_note(&self, session: &Session) -> Vec<String> {
         let relatives = self.fork_tree(session).map(|tree| tree.len()).unwrap_or(1);
         if relatives > 1 {
