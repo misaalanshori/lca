@@ -674,3 +674,34 @@ fn screen_switch_applies_copy_and_wheel_tuning() {
         Screen::Main(_) => panic!("should be fullscreen"),
     }
 }
+
+// Verifies: gh #233 - consent-delivered rows invalidate the snapshot,
+// so the next `/model` re-enumerates past the grant.
+#[test]
+fn pending_models_delivery_invalidates_the_snapshot() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let mut opts = options();
+    opts.hooks.models = Some(Arc::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        vec![("m".to_string(), "M".to_string())]
+    }));
+    opts.pending_models = Some(Arc::new(|| vec![("n".to_string(), "N".to_string())]));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(chat.model_picker.is_some());
+    chat.handle_key("\x1b");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(super::poll_pending_models(&mut chat), "rows deliver");
+    assert!(chat.model_picker.is_some(), "consent opens the picker");
+    chat.handle_key("\x1b");
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "delivery invalidates");
+}

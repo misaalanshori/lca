@@ -19,6 +19,18 @@ back to the new provider's first model when neither the current
 nor the default id matches. Guards: a realistic-catalog listing
 through the shipped component, a half-budget margin probe at 4x
 catalog size, and the refreshed component fixture.
+- **Overlay SGR hygiene (gh #238).** One `splice_segment` seam
+now serves the jump indicator, side panel, tooltip, and drawer
+glyph: each layer opens and closes its own SGR state, so
+transcript italics and background bands neither tint overlays nor
+leak past them (the right slice re-arms the base state as FR-UI-23
+established).
+- **Slash dispatch freeze (gh #233).** The model catalog enumerates
+lazily on bare `/model` only and snapshots behind it; every other
+command dispatches without touching providers. Login, switch,
+grant, reload, consent-delivery, and scope events invalidate the
+snapshot. Async discovery stays a follow-up (#232).
+
 - **Sessions phase 3 (gh #37, epic complete).** `/tree` browses the
 live session's entry tree (oldest-first rows, depth indent, label
 marks, live ticks) on the rolling-window picker chrome, and Enter

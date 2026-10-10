@@ -577,3 +577,123 @@ fn rename_names_the_session_through_the_host() {
         chat.world.notice
     );
 }
+
+// Verifies: gh #233 - dispatching a non-model command never touches
+// the model catalog hook (dispatch stays instant).
+#[test]
+fn dispatching_help_never_enumerates_models() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let mut options = options();
+    options.hooks.models = Some(Arc::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        vec![("m".to_string(), "M".to_string())]
+    }));
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    for command in [
+        "/help",
+        "/theme",
+        "/trust",
+        "/settings",
+        "/hotkeys",
+        "/session",
+    ] {
+        for c in command.chars() {
+            chat.handle_key(&c.to_string());
+        }
+        chat.handle_key("\r");
+        chat.editor.set_text("");
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "no enumeration off the model arm"
+    );
+}
+
+// Verifies: gh #233 - the model catalog snapshots: the first bare
+// `/model` enumerates once, the second reuses the snapshot, and a
+// login step invalidates it.
+#[test]
+fn model_catalog_snapshots_and_login_invalidates() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let mut options = options();
+    options.hooks.models = Some(Arc::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        vec![("m".to_string(), "M".to_string())]
+    }));
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert!(chat.model_picker.is_some());
+    chat.handle_key("\x1b");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    chat.handle_key("\x1b");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "snapshot reused");
+    chat.apply_login_next(crate::state::LoginNext::Message("signed in".to_string()));
+    for c in "/model".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "login invalidates");
+}
+
+// Verifies: gh #233 - switch, reload, and revoke events invalidate
+// the snapshot, so the next `/model` re-enumerates.
+#[test]
+fn switch_reload_and_revoke_invalidate_the_snapshot() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let mut options = options();
+    options.hooks.models = Some(Arc::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        vec![("m".to_string(), "M".to_string())]
+    }));
+    options.hooks.switch_session = Some(Arc::new(|_: &str| Some(vec![])));
+    options.hooks.reload = Some(Arc::new(|| crate::state::ReloadReport {
+        notice: "reloaded".to_string(),
+        themes: Vec::new(),
+        key_bindings: Default::default(),
+        keybinding_error: None,
+    }));
+    options.hooks.revoke_grant = Some(Arc::new(|_: &crate::state::GrantEntry| {
+        "revoked".to_string()
+    }));
+    let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
+    fn model(chat: &mut Chat) {
+        for c in "/model".chars() {
+            chat.handle_key(&c.to_string());
+        }
+        chat.handle_key("\r");
+        chat.handle_key("\x1b");
+    }
+    model(&mut chat);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    chat.switch_or_announce("other");
+    model(&mut chat);
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "switch invalidates");
+    for c in "/reload".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    model(&mut chat);
+    assert_eq!(calls.load(Ordering::SeqCst), 3, "reload invalidates");
+    chat.revoke_grant(&crate::state::GrantEntry {
+        install_consent: false,
+        subject: "s".to_string(),
+        detail: "d".to_string(),
+        revocable: true,
+    });
+    model(&mut chat);
+    assert_eq!(calls.load(Ordering::SeqCst), 4, "revoke invalidates");
+}

@@ -1162,6 +1162,9 @@ fn poll_pending_models(chat: &mut Chat) -> bool {
     if rows.is_empty() || chat.model_picker.is_some() {
         return false;
     }
+    // gh #233: consent grants landed with these rows; the snapshot
+    // predates them.
+    chat.invalidate_models();
     chat.model_picker = Some(ModelPicker::new(rows));
     true
 }

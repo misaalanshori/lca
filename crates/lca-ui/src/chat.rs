@@ -183,6 +183,11 @@ pub struct Chat {
     pub fork_picker: Option<crate::chat_pickers::ForkPicker>,
     /// The `/scoped-models` checklist while open (gh #204).
     pub scoped_models_picker: Option<crate::chat_pickers::ScopedModelsPicker>,
+    /// The cached model catalog snapshot (gh #233): enumeration is
+    /// per-provider WASM work, so dispatch reads this instead of the
+    /// hook. `None` means unlisted; login, switch, grant, reload, and
+    /// scope events clear it (see `invalidate_models`).
+    pub(crate) model_rows_cache: Option<Vec<crate::state::ModelRow>>,
 }
 impl Chat {
     /// Build the chat: widgets, theme, and the autocomplete chain.
@@ -310,6 +315,7 @@ impl Chat {
             resume_picker: None,
             fork_picker: None,
             scoped_models_picker: None,
+            model_rows_cache: None,
         };
         chat.transcript.set_thinking_visibility(thinking_visibility);
         // gh #12: the host's collected pre-parse transforms ride the
@@ -499,18 +505,6 @@ impl Chat {
     }
 
     /// The models `/model` should offer: the host's live list when one is
-    /// wired, else the startup snapshot (a login's discovery reaches the
-    /// picker without a restart). Rows, not bare ids: the label decorates,
-    /// the id stays raw (G2).
-    pub fn model_rows(&self) -> Vec<crate::state::ModelRow> {
-        self.world
-            .options
-            .hooks
-            .models
-            .as_ref()
-            .map(|list| list())
-            .unwrap_or_else(|| self.world.options.models.clone())
-    }
 
     /// The session's thinking level, resolved from the shared cell (R1).
     pub fn thinking_level(&self) -> Option<String> {
@@ -666,7 +660,10 @@ impl Chat {
 
     /// Revoke one grant (S8): the store's own write path for an ad hoc
     /// grant, or the manual path the install-consent group names.
-    pub(super) fn revoke_grant(&self, entry: &crate::state::GrantEntry) -> String {
+    pub(super) fn revoke_grant(&mut self, entry: &crate::state::GrantEntry) -> String {
+        // gh #233: a revoked grant (net patterns gate catalog fetches)
+        // can shrink what providers offer.
+        self.invalidate_models();
         if !entry.revocable {
             return format!(
                 "`{}` is {subject}: the extension's approved set - revoke it with `lca ext disable {subject}` (or re-run /login)",
@@ -1033,6 +1030,9 @@ impl Chat {
 
     /// Apply the CLI's next login step (the host's [`LoginNext`]).
     pub fn apply_login_next(&mut self, next: LoginNext) {
+        // gh #233: every login/logout step can change credentials, so
+        // what providers offer may have changed with it.
+        self.invalidate_models();
         crate::state::apply_login_next(&mut self.world, next);
     }
 

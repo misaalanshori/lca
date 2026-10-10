@@ -532,6 +532,8 @@ impl Chat {
                         self.world.notice = Some("keep at least one model in rotation".to_string());
                         self.scoped_models_picker = Some(picker);
                     } else if let Some(save) = self.world.options.hooks.save_scoped_models.clone() {
+                        // gh #233: the rotation scope shapes the offered set.
+                        self.invalidate_models();
                         self.world.notice = Some(save(picker.checked.clone()));
                     } else {
                         self.world.notice =

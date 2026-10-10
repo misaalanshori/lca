@@ -89,11 +89,6 @@ impl Chat {
             }
             _ => (name, argument),
         };
-        // The live list, not the startup snapshot, so a login that
-        // discovered models after its grant reaches the picker (pain point
-        // #4). Computed once per command; the host hook is a cheap read.
-        let live_models = self.model_rows();
-
         match name.as_str() {
             // gh #53: the MCP manager - verbs, no picker. The status
             // block lists the verbs; each answer lands as a notice.
@@ -166,8 +161,17 @@ impl Chat {
                 });
                 return Action::Continue;
             }
-            "model" if argument.trim().is_empty() && !live_models.is_empty() => {
-                self.model_picker = Some(ModelPicker::new(live_models));
+            // gh #233: the catalog enumerates lazily here only (every
+            // other command dispatches without touching providers), and
+            // the snapshot behind it invalidates on login, switch,
+            // grant, reload, and scope events.
+            "model" if argument.trim().is_empty() => {
+                let live_models = self.model_rows_cached();
+                if live_models.is_empty() {
+                    self.world.notice = Some("no models available".to_string());
+                } else {
+                    self.model_picker = Some(ModelPicker::new(live_models));
+                }
                 return Action::Continue;
             }
             "tree" => {
@@ -208,6 +212,8 @@ impl Chat {
                     return Action::Continue;
                 };
                 let report = reload();
+                // gh #233: a rebuilt registry offers a new catalog.
+                self.invalidate_models();
                 // Interface-owned state refreshes here; the host did
                 // the files, the registry, and the agent config.
                 self.world.options.themes = report.themes;
@@ -592,6 +598,36 @@ impl Chat {
         }
     }
 
+    /// wired, else the startup snapshot (a login's discovery reaches the
+    /// picker without a restart). Rows, not bare ids: the label decorates,
+    /// the id stays raw (G2).
+    pub fn model_rows(&self) -> Vec<crate::state::ModelRow> {
+        self.world
+            .options
+            .hooks
+            .models
+            .as_ref()
+            .map(|list| list())
+            .unwrap_or_else(|| self.world.options.models.clone())
+    }
+
+    /// The model catalog snapshot (gh #233): the first read
+    /// enumerates through the host hook, later reads reuse it until
+    /// `invalidate_models` clears it.
+    pub(crate) fn model_rows_cached(&mut self) -> Vec<crate::state::ModelRow> {
+        if self.model_rows_cache.is_none() {
+            self.model_rows_cache = Some(self.model_rows());
+        }
+        self.model_rows_cache.clone().unwrap_or_default()
+    }
+
+    /// Clear the catalog snapshot (gh #233): login, switch, grant,
+    /// reload, and scope events all change what providers offer, so
+    /// the next `/model` re-enumerates.
+    pub(crate) fn invalidate_models(&mut self) {
+        self.model_rows_cache = None;
+    }
+
     /// Switch to a session in place when the host supports it (R3), else
     /// print the resume command. Refused while a turn runs: the agent and
     /// its stream must not be swapped mid-flight.
@@ -601,6 +637,8 @@ impl Chat {
                 Some("a turn is running; finish or cancel it before switching".to_string());
             return;
         }
+        // gh #233: a switch can change provider readiness.
+        self.invalidate_models();
         match self.world.options.hooks.switch_session.as_ref() {
             Some(switch) => match switch(id) {
                 Some(records) => {
