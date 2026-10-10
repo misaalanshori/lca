@@ -30,20 +30,17 @@ fn lca_binary() -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
-fn find_session_end(dir: &Path) -> bool {
+fn has_session_log(dir: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return false;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if find_session_end(&path) {
+            if has_session_log(&path) {
                 return true;
             }
-        } else if path.file_name().is_some_and(|n| n == "log.jsonl")
-            && let Ok(text) = std::fs::read_to_string(&path)
-            && text.contains("\"t\":\"session-end\"")
-        {
+        } else if path.file_name().is_some_and(|n| n == "log.jsonl") {
             return true;
         }
     }
@@ -51,7 +48,7 @@ fn find_session_end(dir: &Path) -> bool {
 }
 
 #[test]
-fn a_clean_exit_on_a_pseudo_console_writes_session_end() {
+fn a_clean_exit_on_a_pseudo_console_leaves_without_hanging() {
     let Some(bin) = lca_binary() else {
         eprintln!("skip: no lca.exe beside the test binary (run the workspace build)");
         return;
@@ -99,23 +96,28 @@ fn a_clean_exit_on_a_pseudo_console_writes_session_end() {
     );
     pty.write(b"/exit\r").expect("write /exit");
 
-    // A clean quit writes session-end; the old teardown hung instead.
+    // A clean quit exits promptly (the old teardown hung instead).
+    // gh #122: with no records there is no log to carry session-end,
+    // so EOF on the drain is the receipt, and no session dir may remain.
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut ended = false;
     while Instant::now() < deadline {
         // Drain the pseudo-console: a TUI writing its shutdown sequences
         // with nobody reading can fill the pipe and block its own exit.
-        let _ = pty.read(65536);
-        if find_session_end(&state) {
-            ended = true;
-            break;
+        match pty.read(65536) {
+            Ok(None) | Err(_) => {
+                ended = true;
+                break;
+            }
+            Ok(Some(_)) => {}
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     pty.kill();
-    let _ = std::fs::remove_dir_all(&root);
+    assert!(ended, "a clean exit leaves (the old code hung)");
     assert!(
-        ended,
-        "a clean exit must write session-end (the old code hung)"
+        !has_session_log(&state),
+        "launch-and-quit writes no session log"
     );
+    let _ = std::fs::remove_dir_all(&root);
 }

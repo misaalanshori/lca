@@ -999,26 +999,28 @@ fn the_double_ctrl_c_exits_on_windows() {
     pty.write(b"\x03").expect("ctrl+c");
     std::thread::sleep(std::time::Duration::from_millis(400));
     pty.write(b"\x03").expect("ctrl+c again");
-    let log = find_session_log(&sandbox.state_dir()).expect("a session log");
+    // gh #122: a quit without messages writes no session log, so the
+    // receipt is the exiting process (EOF on the drain) plus no
+    // session directory left behind.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        // Keep draining the pseudo-console (see the render test's note).
-        let _ = read_until(
-            &mut pty,
-            &mut screen,
-            "\u{0}",
-            std::time::Duration::from_millis(50),
-        );
-        let text = std::fs::read_to_string(&log).unwrap_or_default();
-        if text.contains("\"t\":\"session-end\"") {
-            break;
+    let mut exited = false;
+    while std::time::Instant::now() < deadline {
+        // Keep draining the pseudo-console (see the render test's
+        // note); EOF (`None`) is the exited process.
+        match pty.read(65536) {
+            Ok(None) | Err(_) => {
+                exited = true;
+                break;
+            }
+            Ok(Some(_)) => {}
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "double Ctrl+C writes session-end"
-        );
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+    assert!(exited, "double Ctrl+C exits");
+    assert!(
+        find_session_log(&sandbox.state_dir()).is_none(),
+        "launch-and-quit writes no session log"
+    );
 }
 
 // Verifies: G4 (issue #9) - the footer's first line is the working
