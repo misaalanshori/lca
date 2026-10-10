@@ -52,11 +52,11 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     let pane = session.wait_for("Message branches", std::time::Duration::from_secs(15));
     assert!(
         pane.contains("├─") && pane.contains("└─"),
-        "the fork paints branch connectors:\n{pane:.2000}"
+        "the fork paints branch connectors:\n{pane}"
     );
     assert!(
         pane.contains("user: alpha question"),
-        "role markers name the rows:\n{pane:.2000}"
+        "role markers name the rows:\n{pane}"
     );
 
     // Left folds the first row's subtree (connectors leave with it);
@@ -75,13 +75,13 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     };
     assert!(
         !pane.contains("├─") && !pane.contains("└─"),
-        "the folded subtree hides:\n{pane:.2000}"
+        "the folded subtree hides:\n{pane}"
     );
     session.send(&["Right"]);
     let pane = session.wait_for("└─", std::time::Duration::from_secs(10));
     assert!(
         pane.contains("├─"),
-        "unfold restores the subtree:\n{pane:.2000}"
+        "unfold restores the subtree:\n{pane}"
     );
 
     // `f` cycles default -> no-tools -> user-only -> labeled-only.
@@ -93,7 +93,7 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     let pane = session.wait_for("(labeled-only)", std::time::Duration::from_secs(10));
     assert!(
         pane.contains("(no matches)"),
-        "nothing is bookmarked yet:\n{pane:.2000}"
+        "nothing is bookmarked yet:\n{pane}"
     );
 
     // Back to default, down to a row, Enter branches there in place.
