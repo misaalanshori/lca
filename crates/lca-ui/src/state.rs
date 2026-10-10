@@ -465,6 +465,10 @@ pub struct SettingRow {
     pub section: String,
     /// The dotted configuration key.
     pub key: String,
+    /// The human-readable label the picker paints (gh #235).
+    pub label: String,
+    /// One-line help for the highlighted row (gh #235).
+    pub description: String,
     /// The current value: the live one where the session overrides the file.
     pub value: String,
     /// Where it won: `flag`, `environment`, `project file`, `user file`,

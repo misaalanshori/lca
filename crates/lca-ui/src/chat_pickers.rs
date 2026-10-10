@@ -615,6 +615,9 @@ impl SettingsPicker {
         for (index, row) in self.rows.iter().enumerate() {
             if !row.section.is_empty() && row.section != section {
                 section = row.section.as_str();
+                // Divider plus its padding blank (gh #235): both
+                // chrome, mirroring the painter one row at a time.
+                rows.push(None);
                 rows.push(None);
             }
             rows.push(Some(index));

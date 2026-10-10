@@ -268,6 +268,68 @@ fn model_label_for(provider: Option<&str>, model: Option<&str>) -> String {
 /// The `/settings` selector rows (gh #30, sectioned gh #174):
 /// every scalar key with its live value and winning source, re-read
 /// per call. Split from `hooks.rs` (the 1,200-line ceiling).
+/// The friendly label and one-line help for a settings key (gh
+/// #235): the picker paints these, never the raw dotted key. New
+/// keys fall back to a title-cased last segment with no help, so an
+/// inventoried key is never blank.
+pub(super) fn setting_meta(key: &str) -> (String, String) {
+    let known = |label: &str, description: &str| {
+        (label.to_string(), description.to_string())
+    };
+    match key {
+        "ui.theme" => known("Theme", "Color palette: auto, dark, light, plain, system, or a file"),
+        "ui.color" => known("Color", "SGR color output: auto or never"),
+        "ui.fullscreen" => known("Display mode", "Terminal scrollback or app-owned fullscreen"),
+        "ui.quiet_startup" => known("Quiet startup", "Startup header level: full, header only, or hidden"),
+        "ui.autocomplete_max_visible" => known("Completion rows", "Autocomplete popup rows, 3 to 20"),
+        "ui.editor_padding_x" => known("Editor padding", "Horizontal padding inside the prompt editor"),
+        "ui.output_pad" => known("Output margin", "Assistant transcript left margin, 0 or 1"),
+        "markdown.codeblock_border" => known("Code border", "Fenced code frame: full, horizontal, or none"),
+        "thinking" => known("Thinking effort", "Reasoning effort level the model is asked for"),
+        "ui.thinking" => known("Thinking display", "Reasoning block display: snippet, full, or hidden"),
+        "permissions.mode" => known("Permissions", "Approval mode for tool and network prompts"),
+        "compaction.enabled" => known("Auto compaction", "Compact context automatically when it fills"),
+        "compaction.threshold" => known("Compaction threshold", "Context fraction that triggers compaction"),
+        "compaction.reserve_tokens" => known("Compaction reserve", "Token reserve kept past the cut"),
+        "compaction.keep_recent_tokens" => {
+            known("Keep recent", "Recent tokens kept verbatim past the cut")
+        }
+        "shell.tool" => known("Shell", "Shell interpreter for the shell tool"),
+        "shell.path" => known("Shell path", "Exact interpreter path, winning over shell choice"),
+        "shell.command_prefix" => known("Shell prefix", "Prefix prepended to every shell command"),
+        "tool.timeout_seconds" => known("Shell timeout", "Shell command timeout in seconds when set"),
+        "tool.result_limit_bytes" => known("Result limit", "Tool output cap before truncation marks"),
+        "tool.max_iterations" => known("Max iterations", "Tool calls per turn; 0 is unlimited"),
+        "provider.retry_limit" => known("Retry limit", "Retry attempts on retryable network errors"),
+        "tool.edit_requires_read" => known("Edit needs read", "Edits refuse without a prior fresh read"),
+        "ui.double_escape_action" => known("Double escape", "What Esc Esc opens: tree, fork, or nothing"),
+        "ui.tree_filter_mode" => known("Tree filter", "The /tree navigator opening view"),
+        "ui.fullscreen_scrollbar" => known("Scrollbar", "Fullscreen scrollbar: auto, always, or hidden"),
+        "ui.fullscreen_copy_on_select" => {
+            known("Copy on select", "Copy fullscreen selections to the clipboard")
+        }
+        "ui.fullscreen_wheel_lines" => known("Wheel lines", "Fullscreen lines per mouse-wheel tick"),
+        "ui.fullscreen_exit_output" => known("Exit output", "What leaving fullscreen prints"),
+        "terminal.show_images" => known("Show images", "Display inline images in the transcript"),
+        "terminal.image_width_cells" => known("Image width", "Inline image width cap in cells"),
+        "terminal.show_progress" => known("Progress bar", "Taskbar progress around turns"),
+        "images.auto_resize" => known("Auto resize", "Resize pasted images to fit"),
+        "markdown.code_block_indent" => known("Code indent", "Prefix spaces on fenced code lines"),
+        "markdown.mermaid" => known("Mermaid", "Mermaid diagram rendering mode"),
+        "cache.noise_floor_tokens" => known("Cache noise floor", "Cache misses below this are not counted"),
+        "extensions.log_limit_bytes" => known("Extension log cap", "Extension log truncation size"),
+        "update.check" => known("Update check", "Daily background version check"),
+        _ => {
+            let label = key.rsplit('.').next().unwrap_or(key).replace('_', " ");
+            let mut label: Vec<char> = label.chars().collect();
+            if let Some(first) = label.first_mut() {
+                first.make_ascii_uppercase();
+            }
+            (label.into_iter().collect(), String::new())
+        }
+    }
+}
+
 pub(super) fn settings_rows(
     ui: &Arc<super::Ui>,
     data: std::path::PathBuf,
@@ -311,9 +373,12 @@ pub(super) fn settings_rows(
                     .map(|(value, source)| (value.clone(), source.to_string()))
                     .unwrap_or_else(|| ("<unset>".to_string(), "default".to_string())),
             };
+            let (label, description) = setting_meta(key);
             SettingRow {
                 section: section.to_string(),
                 key: key.to_string(),
+                label,
+                description,
                 value,
                 source,
                 values: values.iter().map(|value| value.to_string()).collect(),
@@ -376,6 +441,11 @@ pub(super) fn settings_rows(
                 "Terminal & Execution",
                 "ui.double_escape_action",
                 lca_config::DOUBLE_ESCAPE_ACTIONS,
+            ),
+            row(
+                "Terminal & Execution",
+                "ui.tree_filter_mode",
+                lca_config::TREE_FILTER_MODES,
             ),
             row(
                 "Terminal & Execution",
@@ -708,5 +778,70 @@ mod tests {
         assert_eq!(age_label(1_000_000 + 5 * 60_000, 1_000_000), "5m");
         assert_eq!(age_label(1_000_000 + 3 * 3_600_000, 1_000_000), "3h");
         assert_eq!(age_label(1_000_000 + 2 * 86_400_000, 1_000_000), "2d");
+    }
+}
+
+#[cfg(test)]
+mod setting_meta_tests {
+    use super::setting_meta;
+
+    // Verifies: gh #235 - every inventoried key carries a friendly
+    // label and help; unknown keys degrade to a title-cased label,
+    // never a blank.
+    #[test]
+    fn every_inventoried_key_has_a_label_and_help() {
+        for key in [
+            "ui.theme",
+            "ui.color",
+            "ui.fullscreen",
+            "ui.quiet_startup",
+            "ui.autocomplete_max_visible",
+            "ui.editor_padding_x",
+            "ui.output_pad",
+            "markdown.codeblock_border",
+            "thinking",
+            "ui.thinking",
+            "permissions.mode",
+            "compaction.enabled",
+            "compaction.threshold",
+            "compaction.reserve_tokens",
+            "compaction.keep_recent_tokens",
+            "shell.tool",
+            "shell.path",
+            "shell.command_prefix",
+            "tool.timeout_seconds",
+            "tool.result_limit_bytes",
+            "tool.max_iterations",
+            "provider.retry_limit",
+            "tool.edit_requires_read",
+            "ui.double_escape_action",
+            "ui.tree_filter_mode",
+            "ui.fullscreen_scrollbar",
+            "ui.fullscreen_copy_on_select",
+            "ui.fullscreen_wheel_lines",
+            "ui.fullscreen_exit_output",
+            "terminal.show_images",
+            "terminal.image_width_cells",
+            "terminal.show_progress",
+            "images.auto_resize",
+            "markdown.code_block_indent",
+            "markdown.mermaid",
+            "cache.noise_floor_tokens",
+            "extensions.log_limit_bytes",
+            "update.check",
+        ] {
+            let (label, description) = setting_meta(key);
+            assert!(!label.is_empty(), "{key} has a label");
+            assert_ne!(label, key, "{key} is not raw");
+            assert!(!description.is_empty(), "{key} has help");
+        }
+    }
+
+    #[test]
+    fn unknown_keys_degrade_gracefully() {
+        assert_eq!(
+            setting_meta("whatever.new_key"),
+            ("New key".to_string(), String::new())
+        );
     }
 }

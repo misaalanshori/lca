@@ -31,6 +31,13 @@ exits on the second tap, as the hint always promised.
 - **Hover no longer scrolls pickers (gh #230).** The rolling window
 holds while the selection sits inside it, so hover highlights in
 place; wheel and keys rescroll by leaving it.
+- **Drawer tab pinned, panel tinted (gh #237).** The drawer tab
+sits on the transcript window's bottom row (left of the scrollbar
+closed, panel edge open) with a `│` border and `sidePanel` tint
+covering the transcript behind it.
+- **Friendly settings labels (gh #235).** The selector paints human
+labels with the highlighted row's help in the pinned hint, sections
+breathe, and `ui.tree_filter_mode` joins the inventory.
 - **DAG tree navigator (gh #231).** `/tree` is a graphical
 navigator now: branch connectors (`├─`/`└─`/`│`), role markers,
 Up/Down walk, Left/Right fold, `f` filter cycling

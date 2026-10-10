@@ -111,6 +111,8 @@ fn settings_paging_keys_jump_and_step_selection() {
         rows: (0..30)
             .map(|i| crate::state::SettingRow {
                 key: format!("k{i:02}"),
+                label: format!("Kay {i:02}"),
+                description: String::new(),
                 value: "v".to_string(),
                 source: "default".to_string(),
                 section: String::new(),
