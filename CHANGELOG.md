@@ -51,6 +51,18 @@ switch (scrollback appends a transition divider, fullscreen swaps
 in place). Single tab collapses to `[+]`. Ctrl+T belonged to
 thinking-expand, which moves to Alt+T. Mid-turn tab moves refuse;
 background turns stay a follow-up.
+- **Session extras (gh #75).** Resume rows carry bookmark names
+and the filter matches them; `/name` aliases `/rename`; `lca delete`
+and `/resume` Ctrl+D (with inline confirm, never the live session)
+trash recoverably. `--no-session` stays the cheap volatile answer
+(true in-memory needs a RAM backend: deferred, not built).
+- **Lazy sessions (gh #122).** Fresh sessions leave no directory
+until the first record (TUI, headless, and tabs alike); pending
+titles, renames, and model choices apply at materialize; reads stay
+empty and closes stay silent until then.
+- **Custom tree rows (gh #137).** Extension `custom`/`custom-message`
+records join the entry tree as their own kinds; assembly already
+injects only the live chain, pinned by a guard.
 - **DAG tree navigator (gh #231).** `/tree` is a graphical
 navigator now: branch connectors (`├─`/`└─`/`│`), role markers,
 Up/Down walk, Left/Right fold, `f` filter cycling

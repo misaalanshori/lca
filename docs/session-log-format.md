@@ -27,6 +27,8 @@ Sessions live under the user data directory, grouped by project.
 
 `meta.json` holds session metadata: format version, creation time, the model and provider last used, the working directory, a title, and the fork origin when there is one.
 
+A fresh session is lazy (gh #122): resolving one yields a handle plus creation intent, and no directory exists until the first record lands (an attachment stage counts as content). The pending title, rename, and model choice apply at materialize; reads over an unmaterialized session are empty, never errors; closing one writes nothing. Forks and clones always write records at creation, so they stay eager.
+
 `log.jsonl` is the record log. It is the authority for everything.
 
 `attachments/` holds content too large for the log, stored by content hash. Images, large tool outputs, and pasted files go here. A record references an attachment by hash. The built-in tools truncate their display at `tool.result_limit_bytes` and spill the untruncated text here as `attachments/<sha256>`; the `tool-result` record's `attachment` field carries that hash. A user message's `attachments` list carries image hashes: `/attach` (or headless `--attach`) stages the file here, the message text gets a `[image attachment <hash8>, <media>, <n> bytes]` stub, and assembly sends the bytes as a typed image block to a provider that carries vision (ADR-0029).
@@ -138,6 +140,10 @@ Appends are written with a single write call per record where the record fits, t
 A crash mid-write leaves a partial final line. The reader discards it. That is the whole recovery story for the common case, and it is why the framing is one record per line.
 
 The agent does not call fsync on every record. A crash can lose the last few records. The alternative is a synchronous write per token, which is not a reasonable cost for the failure it prevents.
+
+## Trash
+
+`SessionStore::trash` (gh #75) moves a session directory under a timestamped `<data>/trash/` directory: recoverable by moving it back, never `rm`. Trashed sessions list no more. `lca delete <id>` does this from the shell; `/resume` Ctrl+D does it from the picker after an inline `y` confirm (never the live session - switch away first).
 
 ## Reading and error handling
 
