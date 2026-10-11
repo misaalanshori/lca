@@ -223,7 +223,9 @@ fn turn_started_clears_a_leftover_interrupt() {
 }
 
 // Verifies: FR-EXT-5 (exceeding the memory limit stops the instance and
-// disables the extension).
+// disables the extension) with #151's typed shape: a breached ceiling
+// surfaces as the guest allocator's unreachable trap (measured), so the
+// host reports `Trap`, never a guessed `MemoryLimit`.
 #[test]
 fn memory_limit_stops_a_hungry_instance() {
     let mut host = ExtHost::new(
@@ -237,10 +239,7 @@ fn memory_limit_stops_a_hungry_instance() {
     let err = extension
         .execute(&call("alloc"))
         .expect_err("hits the ceiling");
-    assert!(
-        matches!(err, CallError::MemoryLimit | CallError::Trap(_)),
-        "got {err:?}"
-    );
+    assert!(matches!(err, CallError::Trap(_)), "got {err:?}");
     assert!(
         !extension.is_enabled(),
         "disabled for the session (FR-EXT-5)"
@@ -375,5 +374,28 @@ fn a_single_tool_guest_loads_and_dispatches_without_a_catalog() {
         result.content.contains("legacy-echo"),
         "the guest answered: {}",
         result.content
+    );
+}
+
+// Verifies: #151 (QA-005) - guest-answered text never routes through
+// error classification: a mode whose very name contains `allocation`
+// reports an ordinary tool error, and the extension stays enabled.
+// Error text is data the guest returned, never a runtime signal.
+#[test]
+fn guest_error_text_is_never_classified_as_a_trap() {
+    let mut host = ExtHost::new(limits(), env("h-text"));
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    let result = extension
+        .execute(&call("allocation calculation error"))
+        .expect("the guest answers");
+    assert_eq!(result.status, ToolResultStatus::Error);
+    assert!(
+        result.content.contains("allocation calculation error"),
+        "the guest's text arrives intact: {}",
+        result.content
+    );
+    assert!(
+        extension.is_enabled(),
+        "guest text never disables the extension"
     );
 }
