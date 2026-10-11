@@ -82,10 +82,9 @@ fn pi_parity_session_tree_branches_in_file() {
 
 // Verifies: pi:packages/coding-agent/docs/cli.md (`--mode rpc`) and
 // pi:packages/coding-agent/docs/rpc.md (bidirectional JSONL protocol).
-// Witness for #56 (PG-004, RPC/JSON event parity): LCA has no `--mode`
-// flag and no RPC server yet.
+// Landed gh #56 (PG-004): `--mode` parses with an `rpc` value and the
+// RPC server answers, so this runs un-ignored as a green pin.
 #[test]
-#[ignore = "witness for #56: no --mode flag yet"]
 fn pi_parity_rpc_mode_exists() {
     use clap::Parser as _;
     let cli = lca_cli::Cli::try_parse_from(["lca", "--mode", "rpc", "hello"])

@@ -6,7 +6,7 @@ The project name in this document is LCA. The binary is `lca` and the crates use
 
 ## Companion documents
 
-This document sets the requirements and the architecture. Forty-two decisions that support it are written up separately as architecture decision records under `docs/adr/`, numbered 0001 through 0043 (0020 is unused), covering runtime selection, crate decomposition, the widget tree, the provider stream shape, filesystem scopes, the permission store split, the decision against an out-of-process runner, extension composition, the extension update path, distribution beyond OCI, local network access, provider identity operations, the three kinds of pluggability, the async execution model, compaction and context transform, the pty capability, prompt cache preservation and measurement, web-embedded extension hosting, the two-crate TUI architecture (ADR-0037), steering (ADR-0038), folder trust with permission rules (ADR-0039), install and update through root-hosted one-liner scripts (ADR-0040), the `shell` tool's interpreter selection and command transport (ADR-0041), yolo mode together with the read-only fatigue cut (ADR-0042), and the unstable release line (ADR-0043). Where this document and an ADR could drift, the ADR is the more current statement of the reasoning; this document is the more current statement of the requirement itself.
+This document sets the requirements and the architecture. Forty-six decisions that support it are written up separately as architecture decision records under `docs/adr/`, numbered 0001 through 0046 (0020 is unused), covering runtime selection, crate decomposition, the widget tree, the provider stream shape, filesystem scopes, the permission store split, the decision against an out-of-process runner, extension composition, the extension update path, distribution beyond OCI, local network access, provider identity operations, the three kinds of pluggability, the async execution model, compaction and context transform, the pty capability, prompt cache preservation and measurement, web-embedded extension hosting, the two-crate TUI architecture (ADR-0037), steering (ADR-0038), folder trust with permission rules (ADR-0039), install and update through root-hosted one-liner scripts (ADR-0040), the `shell` tool's interpreter selection and command transport (ADR-0041), yolo mode together with the read-only fatigue cut (ADR-0042), the unstable release line (ADR-0043), the refusal of per-extension CLI flags (ADR-0044), the MCP extension bridge (ADR-0045), and the session tree on forks (ADR-0046). Where this document and an ADR could drift, the ADR is the more current statement of the reasoning; this document is the more current statement of the requirement itself.
 
 Fourteen further documents fill in detail this one only summarizes: the capability catalog at `docs/capabilities.md`, the extension authoring guide at `docs/extension-authoring.md`, the ABI versioning policy at `docs/abi-versioning.md`, the session log format at `docs/session-log-format.md`, the runtime flows as diagrams at `docs/flows.md`, the threat model at `docs/threat-model.md`, the release and versioning policy at `docs/release-policy.md`, the software testing plan at `docs/testing-plan.md`, per-platform implementation notes at `docs/platform-notes.md`, the configuration key reference at `docs/configuration.md`, the headless and scripting contract at `docs/headless.md`, the installation specification at `docs/installation.md`, a glossary of project-specific terminology at `docs/glossary.md`, and the provenance of what this design takes from Pi and fx at `docs/inspiration.md`. First-party provider extensions are documented individually under `docs/providers/`. The extension manifest schema is at `schemas/extension-manifest.schema.json` and is the normative validation source; the manifest examples in this document are illustrative.
 
@@ -744,13 +744,27 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── lca-tui/                terminal engine and widget library
 │   ├── lca-ui/                 agent interface: transcript, chrome, selectors
 │   ├── lca-sdk/                embedding API
+│   ├── lca-subscription/       shared kit for subscription-gateway providers (OAuth PKCE, token refresh, Responses SSE)
+│   ├── lca-wire-anthropic/     shared Anthropic-family wire kit (Messages builder, SSE decoder, cache breakpoints)
+│   ├── lca-wire-mcp/           shared MCP wire kit (streamable-HTTP envelope, JSON-RPC selector; transports stay in extensions)
+│   ├── lca-wire-openai/        shared OpenAI-family wire kit (Chat Completions SSE, Responses builder/mapper)
 │   └── lca-testkit/            fake provider and harness
 ├── extensions/
 │   ├── conformance/            ABI conformance extension
 │   ├── hooks-example/          reference hooks implementation
 │   ├── openai-compatible/      default provider; native-linked by default
+│   ├── anthropic/              Claude models via API key or Pro/Max subscription; WASM by default
 │   ├── antigravity/            reference OAuth provider; WASM by default
-│   ├── codex/                  second OAuth provider; WASM - specified, not yet in the tree
+│   ├── codex/                  ChatGPT-subscription models; WASM by default
+│   ├── github-copilot/         Copilot subscription provider; WASM by default
+│   ├── grok/                   xAI Grok via SuperGrok/X subscription; WASM by default
+│   ├── kimi-coding/            Moonshot Kimi via subscription; WASM by default
+│   ├── llama/                  local llama-server router models; WASM by default
+│   ├── mcp/                    external MCP servers over stdio as a tool-catalog extension
+│   ├── meta/                   Meta Llama and Muse via subscription; WASM by default
+│   ├── openrouter/             multi-model provider with browser OAuth; WASM by default
+│   ├── tool-legacy/            pre-catalog single-tool shape (gh #77 compat probe)
+│   ├── ui-example/             reference ui extension (status, panel with live pty, modal)
 │   ├── lmstudio/               local provider; net-local - specified, not yet in the tree
 │   ├── ollama/                 local provider; net-local - specified, not yet in the tree
 │   ├── skills/                 a `context-transform` example; not registered by default (skills merge is host-side, ADR-0034)
@@ -758,12 +772,17 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 ├── web/
 │   ├── orchestrator/           JS glue for the browser build
 │   └── examples/
-├── xtask/                      build, size check, release packaging
+├── scripts/                    build automation and gates (wasm-check, gates, installers' suites); no `xtask` crate was ever tracked - the SRDD once named one, and `scripts/` plus CI workflows are what actually run
 ├── docs/
-│   ├── adr/                    architecture decision records, 0001 through 0040 (0020 unused)
+│   ├── adr/                    architecture decision records, 0001 through 0046 (0020 unused)
 │   ├── capabilities.md         the capability catalog
+│   ├── compaction.md           compaction behavior and the reserve math
+│   ├── conpty-testing-plan.md  Windows console testing
 │   ├── extension-authoring.md
 │   ├── abi-versioning.md
+│   ├── parity-baseline.md      the pi tree pin this set measures against
+│   ├── phase0-report.md        the Phase 0 measurement record
+│   ├── pi-parity.md            the living pi-parity checklist (RM-001)
 │   ├── session-log-format.md
 │   ├── flows.md                sequence diagrams for the runtime paths
 │   ├── threat-model.md
@@ -780,12 +799,13 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   └── extension-manifest.schema.json
 ├── tests/
 │   ├── regressions/            one file per closed defect, named by tracking identifier
+│   ├── pi-parity/              the pi-parity harness (green pins plus ignore-gated red witnesses)
 │   ├── install/                the installers' own suite (testing plan section 15)
 │   └── ...                     workspace-level integration tests
 └── .github/workflows/
 ```
 
-Extensions in `extensions/` build two ways. The workspace builds them as normal crates for the native-linked path. The `xtask` build target compiles them to `wasm32-wasip2` components for the sandboxed path. Both come from the same source. `lca-cli` gates each one behind its own Cargo feature; `bundled-openai-compat` and `bundled-compaction-default` are on by default, the rest are off by default and installed like any third-party extension. See ADR-0013.
+Extensions in `extensions/` build two ways. The workspace builds them as normal crates for the native-linked path. `scripts/wasm-check.sh` builds them to `wasm32-wasip2` components for the sandboxed path. Both come from the same source. `lca-cli` gates each one behind its own Cargo feature; `bundled-openai-compat` and `bundled-compaction-default` are on by default, the rest are off by default and installed like any third-party extension. See ADR-0013.
 
 *Annotation (2026-09-26, ADR-0034):* `bundled-skills` still exists as a Cargo feature and still compiles the crate, but nothing registers the handle it builds — the skills merge is host-side now. The feature is kept so the example stays buildable; it is not a switch that changes what runs.
 

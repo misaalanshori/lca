@@ -44,7 +44,7 @@ The changelog says plainly which minor releases break what. A user pinning a ver
 
 `main` is always releasable. Every merge to `main` passes the full pipeline on all three operating systems.
 
-Work happens on short-lived branches off `main` and merges back through a pull request. Long-lived feature branches are avoided, because the workspace has fifteen crates and a long branch turns into a rebase problem.
+Work happens on short-lived branches off `main` and merges back through a pull request. Long-lived feature branches are avoided, because the workspace has twenty crates under `crates/` plus the `extensions/` provider tree, and a long branch turns into a rebase problem.
 
 Release branches are cut only for a patch release against an older minor version, which happens for a security fix. Otherwise a release is a tag on `main`.
 

@@ -63,3 +63,9 @@ The decision's boundaries are unchanged: `lca-ui` sits at the same layer
 as `lca-tui` and depends on it, and the direction rule this record fixes
 still holds. The count is annotated rather than rewritten because the
 original decision is the record of what was decided on this date.
+
+*Annotation (2026-10-11):* the count is now **twenty** crates under
+`crates/`: `lca-subscription` plus the three `lca-wire-*` protocol kits
+(Anthropic, MCP, OpenAI). Same rule as the sixteen annotation - the
+boundaries are unchanged, only the count moves, and the workspace also
+holds the `extensions/` provider tree alongside `crates/`.

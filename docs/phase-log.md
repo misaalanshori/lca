@@ -1196,3 +1196,115 @@ unblocks the join), and the `\\?\` verbatim prefix leaked into displayed
 paths (a display-only `display_path`; canonical forms stay load-bearing for
 the `fs` scope check). Regressions 35–37 guard each. The pty trio keeps its
 macOS `ENOTTY` ignore — the one remaining platform gap. Released as 0.5.2.
+
+## The parity harness (RM-001, P0-A, 2026-10-05)
+
+The parity work starts from a recorded green baseline instead of vibes.
+`docs/parity-baseline.md` (P0-A, RM-003, #105, recorded 2026-10-05)
+pins the pi reference (`v1.0.0-25-ga276dabe5`, verified present by
+`git describe`) and the live oracle (`~/gits/pi` HEAD, freshly pulled
+at record time), then runs the suite on a clean detached worktree at
+the `v0.5.4` tag — never the working tree — and removes the worktree
+after. `docs/pi-parity.md` (RM-001, #93) is the living checklist: every
+case carries a `// Verifies: pi:<anchor>` comment naming the pi file
+and section, never pi internals. Green pins assert matched behavior;
+red witnesses assert the not-yet-built kind and ride `#[ignore]`-gated
+(the one sanctioned exception to green main: CI runs the target on
+every push, so a hard-red witness would hold main red). Settled
+divergences are documented, never pinned against. Evidence: the
+harness at `tests/pi-parity/`, run as
+`cargo nextest run -E 'test(pi_parity)'`, with the ignored set run as
+`--run-ignored all`.
+
+## v0.5.3 — UI/UX phase 1, the installers, the second line (2026-10-02)
+
+The composer stops fighting its user: the caret is painted by the
+interface (reverse-video grapheme, pi's default), Up/Down match pi's
+buffer-then-history boundary, and `/settings` during a running turn
+no longer freezes behind the turn's `tools` lock. `tool.max_iterations`
+defaults to 0 = unlimited, with FR-CORE-9 carrying the dated
+amendment. The unstable release line opens (ADR-0043): every green
+`main` commit publishes six binaries plus `artifacts.sha256` and
+provenance to a rolling `unstable` prerelease, installable through the
+same one-liners that now front the product (`install.sh` /
+`install.ps1`, ADR-0040) — verification mandatory, never optional.
+The `shell` tool runs a real shell chosen by a documented ladder
+(ADR-0041), with Windows commands delivered through per-call script
+files so quotes and newlines survive. Yolo mode answers every prompt
+with a persisted always-pattern beside a visible marker, and
+deny rules still deny (ADR-0042, with the read-only fatigue cut for
+`read`/`list`/`glob`/`grep` outside the workspace). Markdown parity
+pass one, pi's color roles spent by the renderers, pi's spinner in
+the separator, hand-written syntax grammars, LaTeX math and mermaid
+fences, thinking snippets, `ui.fullscreen = false` by default, and the
+data home unified at `~/.lca` on every platform with no migration
+code. Released as 0.5.3.
+
+## v0.5.4 (2026-10-05)
+
+Model switching follows the provider (gh #8, #31), provider profiles
+carry honest labels, `/settings` becomes a selector (#30), the edit
+result renders as pi's diff card (#9), the SDK gains its approval
+surface (#14), and compaction asks the model with a budget (#169).
+One GrantStore everywhere (#29), quieter shutdown and resumption,
+`lca config` print-only by design, and the dependency bump to
+Wasmtime 49.0.2. The P0-A baseline receipt ran on this tag's clean
+worktree. Released as 0.5.4.
+
+## The 0.6 train (2026-10-07–08, released 0.6.0)
+
+Four cycles, each green before the next. Cycle 1 (#188 custom
+endpoints as extension data, #157 manifest-declared provider needs)
+and cycle 2 (shared wire kits #189, unified `/model` catalog with
+provider switching #177) ride no WIT change. Cycle 3 breaks the
+interface once and labels it: the `ui@0.6.0` redesign with host
+dialogs (#172, #124) ships `abi 0.6`. Cycle 4 (#77 tool suites with
+exposure and nested calls, #45 additive hooks) is the train's last
+break, in place on the 0.6 line — then `wit/` + `schemas/` freeze
+for the whole line, enforced by the empty-diff gate. Along the way:
+two subscription providers with the parity table (#63, #180–182),
+compaction's file tracking, checkpoint, and phased delivery (#36),
+system-prompt files (#68), user key bindings (#66), and the ranked
+autocomplete and popup polish (#175, #176, #178, #179). The
+label-tracks-minor rule died here: the label now bumps only on a real
+breaking change (`lca 0.6.x` ships `abi 0.6`), annotated in
+`docs/abi-versioning.md`. Released as 0.6.0.
+
+## Post-0.6: the unreleased queue through #102/#103 (2026-10-08–11)
+
+No tag yet; CHANGELOG's `[Unreleased]` is the record and the guards
+named there are the evidence. Sessions: in-file branching in three
+phases on top of forks (labels, `parent` links, `branch-point`
+records, `/tree` navigator — gh #37, ADR-0046, epic complete), plus
+bookmarks and `/name` (#75), lazy creation (#122), custom records
+(#137), the DAG navigator (#231), transcript-routed slash outputs
+(#234), and instant `/model` with background discovery (#232, #233).
+MCP arrives as an extension bridge in three phases (#53, ADR-0045).
+The pointer suite lands whole: SGR-1006 keystone, editor/picker mouse,
+transcript clicks, drawer, tooltips, velocity, tabs widget (#164–167,
+#206–210, #208). Six provider extensions (Anthropic #183 with the
+inline-tools beta #201, OpenRouter #185, Copilot #184, Meta #186,
+Kimi #187, llama-server #62) join the tree. The invocation surface
+fills out: `@file`/stdin/`--`/`--offline` (#71), tool/session/
+resource flags (#67, #69, #70), `/reload` (#130), prompt templates
+(#58), `/fork` and `/scoped-models` pickers (#203, #204), categorized
+settings (#174), `/clone` (#205), crash reports with `lca doctor`
+(#81), migration (#98), tabs (#209), retry and capacity handling
+(#83, #202), thinking budgets (#41), and project-local extensions
+(#138). Then the QA pair: #103 gives WASM guests an epoch-safe
+instance cache (per-world checkout with re-armed fuel and deadline,
+eviction on any Wasmtime failure — ADR-0014's addendum; guards:
+statefulness, fresh-after-fuel, cross-guest isolation, epoch
+survival; 52/52 ext-host tests green) and #102 moves `/login`
+discovery and the generic identity commands off the interface thread
+(generation-guarded `PendingStep` into the existing `poll_login`;
+guard `a_slow_login_does_not_freeze_input`; 145/145 cli lib tests
+green). The pair's size cost tripped NFR-1 (CI: 26,236,792 vs the
+25 MB budget); the sanctioned diet — `opt-level = "z"` for
+`lca-ext-host`, then `opt-level = "s"` for
+`cranelift-codegen`/`cranelift-assembler-x64`, with a same-toolchain
+cold-JIT smoke showing no material slowdown — landed the binary at
+22,815,656 in CI (run 38099324419), ~3.4 MB under the limit. The
+pi-parity ledger now reads 26 green pins against 2 ignore-gated red
+witnesses (#39's `bash`-as-canonical, #37's directory-`fork()`),
+transitions recorded in `docs/pi-parity.md` itself.

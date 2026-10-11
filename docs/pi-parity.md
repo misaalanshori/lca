@@ -7,7 +7,7 @@ Harness: `tests/pi-parity/` — run `cargo nextest run -E 'test(pi_parity)'`.
 Every case carries a `// Verifies: pi:<anchor>` comment; anchors name the
 pi file and section, never pi internals.
 
-## Green pins (24)
+## Green pins (26)
 
 | Pi anchor | LCA test(s) | What matches |
 |---|---|---|
@@ -26,6 +26,8 @@ pi file and section, never pi internals.
 | `packages/coding-agent/docs/environment-variables.md` + `docs/cli.md` | `pi_parity_config_precedence_flag_beats_env_beats_file` | flags > env > project > user > defaults |
 | `packages/coding-agent/docs/security.md` | `pi_parity_zero_prompt_mode_is_explicit_never_default` | prompts by default; yolo is opt-in |
 | `packages/coding-agent/test/agent-session-retry.test.ts` | `pi_parity_retryable_error_retries_then_succeeds`, `pi_parity_fatal_error_keeps_the_session_open` | retryable retries with an announcement; fatal errors leave the session open |
+| `packages/coding-agent/docs/compaction.md#when-it-triggers` | `pi_parity_compaction_uses_token_budget_trigger` | auto-compaction budget keys `compaction.reserve_tokens` / `keepRecentTokens` land (gh #36 phase 1) |
+| `packages/coding-agent/docs/cli.md` (`--mode rpc`) + `docs/rpc.md` | `pi_parity_rpc_mode_exists` | `--mode` flag parses with an `rpc` value; bidirectional JSONL protocol (gh #56) |
 
 Two deliberate measurement differences (match here / differ here):
 
@@ -41,7 +43,7 @@ Two deliberate measurement differences (match here / differ here):
 ## Settled divergences (documented, never pinned against)
 
 Yolo-over-no-prompts, provider profiles over one-provider, theme roles over
-raw colors, fork-directories over in-file branching (until #37 lands),
+raw colors, fork-directories as the branch container with in-file branching layered on top (#37 phases 1-3, ADR-0046: `parent` links, `branch-point` records, `/tree` - the `fork()` API itself still forks directories, see the red witness below),
 `session-start` record shape over pi's header shape, LCA's headless event
 vocabulary over pi's `agent_start/message_start/...` stream, and the
 read-before-edit staleness guard over pi's blind edits (gh #117: kept,
@@ -49,7 +51,7 @@ but off by default behind `tool.edit_requires_read`, so the default
 behavior is pi parity). Extension-registered CLI flags and shortcuts over pi's `registerFlag`/`registerShortcut` (gh #79, PG-027/PG-054): refused by ADR-0044 — per-extension knobs are config keys, actions are slash commands and (when it lands) `lca <ext>` delegation. A parity case
 that fails because of one of these is a wrong case, not a failing product.
 
-## Red witnesses (4, `#[ignore]`-gated)
+## Red witnesses (2, `#[ignore]`-gated)
 
 Run with `cargo nextest run -E 'test(pi_parity)' --run-ignored`. Each fails
 ONLY on its not-yet-built behavior. ignore-gating (rather than hard red) is
@@ -58,7 +60,5 @@ hold main red; the gate stays meaningful while the milestones own the work.
 
 | Witness | Owner | Behavior it waits for |
 |---|---|---|
-| `pi_parity_compaction_uses_token_budget_trigger` | #36 (EFG-001, RM-012/13) | `compaction.reserveTokens` / `keepRecentTokens` budget trigger |
-| `pi_parity_builtin_bash_tool_name` | #39 (EFG-005) | pi-named `bash` tool |
-| `pi_parity_session_tree_branches_in_file` | #37 (EFG-002, RM-011) | in-file `id`/`parentId` branching |
-| `pi_parity_rpc_mode_exists` | #56 (PG-004) | `--mode rpc` + RPC protocol |
+| `pi_parity_builtin_bash_tool_name` | #39 (EFG-005, closed; gap noted 2026-10-11) | pi-named `bash` tool — `bash` currently rides as a gh-#119 alias, not a canonical builtin, so the canonical-membership assertion still fails |
+| `pi_parity_session_tree_branches_in_file` | #37 (EFG-002, RM-011, closed; gap noted 2026-10-11) | in-file `id`/`parentId` branching — the epic landed as branch-in-place (ADR-0046) while `store.fork()` still forks directories, so this fork-API assertion still fails |
