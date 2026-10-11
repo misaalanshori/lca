@@ -17,6 +17,11 @@
 
 use super::headless::{HeadlessSink, Setup, setup};
 use super::*;
+use lca_core::{Agent, AgentConfig, TurnOutcome};
+use lca_session::SessionStore;
+use lca_tools::{CancelFlag, ToolExecutor};
+use std::io::Write;
+use std::path::Path;
 
 /// A `Write` sink that ships complete lines over a channel (one stdout
 /// writer downstream; a client that stops reading stalls nothing here,

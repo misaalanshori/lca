@@ -2,7 +2,11 @@
 //! `export`, and `session gc` (S3's ceiling split).
 
 use super::*;
+use lca_permissions::GrantStore;
 use lca_session::Session;
+use lca_session::{ExportOptions, SessionStore};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Which session a headless run appends to (#111: `-c` continues the
 /// project's most recent session, `-r <id>` resumes that session).

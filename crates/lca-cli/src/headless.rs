@@ -1,7 +1,18 @@
 //! Headless mode: one turn, the `--json` envelope, and the exit-code map
 //! (S3's ceiling split; the documented contract is `docs/headless.md`).
 
-use super::*;
+use super::exit;
+use crate::{
+    HeadlessPrompt, apply_enablement, data_dir, extension_capabilities, load_config_flags, lock,
+    no_model_message, skills_roots,
+};
+use lca_config::Config;
+use lca_core::{Agent, AgentConfig, StopReason, TurnEvent, TurnOutcome, TurnSink, TurnStatus};
+use lca_permissions::GrantStore;
+use lca_session::SessionStore;
+use lca_tools::{CancelFlag, ToolExecutor};
+use std::path::Path;
+use std::sync::Arc;
 
 /// Maps a turn outcome onto the documented exit codes.
 pub fn exit_code(outcome: &TurnOutcome, needed_approval: bool, error_class: Option<&str>) -> i32 {
@@ -1073,5 +1084,20 @@ mod sink_tests {
         assert_eq!(records[0]["mode"], "steer");
         assert_eq!(records[2]["success"], true);
         assert_eq!(records[4]["max_attempts"], 3);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A tool-using turn emits one assistant message before the tool and one
+    // after; plain headless glued them into one run-on line.
+    #[test]
+    fn plain_headless_separates_multiple_assistant_messages() {
+        let mut sink = HeadlessSink::new(false, false);
+        sink.on_event(TurnEvent::AssistantText("I'll read the file.".into()));
+        sink.on_event(TurnEvent::AssistantText("The answer is 42.".into()));
+        assert_eq!(sink.plain, "I'll read the file.\n\nThe answer is 42.");
     }
 }
