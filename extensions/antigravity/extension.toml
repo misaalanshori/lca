@@ -1,5 +1,5 @@
 name = "antigravity"
-version = "1.0.0"
+version = "1.0.1"
 abi = "0.6"
 worlds = ["provider"]
 description = "Google Antigravity models, including image generation, via subscription login."

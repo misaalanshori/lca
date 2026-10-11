@@ -1,0 +1,112 @@
+name: publish-extensions
+
+# Extensions-only releases: first-party components to ghcr.io WITHOUT
+# binaries (binaries ride the unstable line; this workflow never builds
+# or uploads one). Curated per release: only the extensions enumerated
+# in "Build the release set" publish (both tags); source-identical ones
+# keep their versions and tags untouched (immutable tag rule), and a
+# later release edits that list. Test-only and reference probes
+# (conformance, hooks-example, tool-legacy, ui-example) never ship.
+#
+# HTTPS-archive zips plug in here when a zipped extension ships (the
+# skills zip rides publish.yml's release assets today; nothing in the
+# current set needs one, so there is no zip step).
+#
+# Triggered manually with the extensions tag (e.g.
+# extensions-abi-0.6-20261011): a bare tag, never a version and never
+# moved after creation. The tag needs no GitHub Release object, so this
+# never fires publish.yml's release trigger.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: The extensions tag to publish (must exist on main)
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+# A release is deliberate: queue a second publish rather than cancel one
+# mid-upload and leave partial assets on the tag.
+concurrency:
+  group: publish-extensions
+  cancel-in-progress: false
+
+jobs:
+  publish-extensions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history and tags: the regression-backfill check needs the
+          # previous release tag to diff tests/regressions/.
+          fetch-depth: 0
+          ref: ${{ inputs.release-tag }}
+      - name: Check the regression backfill
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          prev=$(git describe --tags --abbrev=0 "${RELEASE_TAG}^" 2>/dev/null || true)
+          if [ -z "$prev" ]; then
+            echo "no previous tag; first release, nothing to check"
+            exit 0
+          fi
+          fixed=$(git diff "$prev..$RELEASE_TAG" -- CHANGELOG.md | grep -c '^+.*### Fixed' || true)
+          if [ "$fixed" -eq 0 ]; then
+            echo "no '### Fixed' changelog section in this release"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$prev..$RELEASE_TAG" -- tests/regressions/)
+          if [ -z "$changed" ]; then
+            echo "::error::the release changelog has a '### Fixed' section but tests/regressions/ gained no file since $prev (docs/testing-plan.md section 7, NFR-24)"
+            exit 1
+          fi
+          echo "regression backfill present:"
+          echo "$changed"
+      - name: Install the pinned toolchain
+        run: |
+          rustup set profile minimal
+          rustup target add wasm32-wasip2
+      - name: Build the release set
+        run: |
+          cargo build --release --target wasm32-wasip2 \
+            -p antigravity -p anthropic -p openrouter -p github-copilot \
+            -p meta -p kimi-coding -p llama -p mcp
+      - name: Publish the OCI artifacts (abi line tag + version tag)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LCA_OCI_USER: ${{ github.actor }}
+        run: |
+          publish() {
+            local image="$1" wasm="$2" manifest="$3" version abi
+            # strip() before strip('"'): the line carries its newline, so
+            # a bare strip('"') leaves it inside the tag and the registry
+            # looks for a tag that is not there (404).
+            version=$(python3 -c "import sys;v=dict(l.split(' = ') for l in open(sys.argv[1]) if ' = ' in l)['version'];print(v.strip().strip('\"'))" "$manifest")
+            abi=$(python3 -c "import sys;v=dict(l.split(' = ') for l in open(sys.argv[1]) if ' = ' in l)['abi'];print(v.strip().strip('\"'))" "$manifest")
+            bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "abi-${abi}" "$wasm" "$manifest"
+            bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "${version}" "$wasm" "$manifest"
+          }
+          publish antigravity target/wasm32-wasip2/release/antigravity.wasm extensions/antigravity/extension.toml
+          publish anthropic target/wasm32-wasip2/release/anthropic.wasm extensions/anthropic/extension.toml
+          publish openrouter target/wasm32-wasip2/release/openrouter.wasm extensions/openrouter/extension.toml
+          publish github-copilot target/wasm32-wasip2/release/github_copilot.wasm extensions/github-copilot/extension.toml
+          publish meta target/wasm32-wasip2/release/meta.wasm extensions/meta/extension.toml
+          publish kimi-coding target/wasm32-wasip2/release/kimi_coding.wasm extensions/kimi-coding/extension.toml
+          publish llama target/wasm32-wasip2/release/llama.wasm extensions/llama/extension.toml
+          publish mcp target/wasm32-wasip2/release/mcp.wasm extensions/mcp/extension.toml
+      # Best effort: repo-scoped packages follow the public repo's
+      # visibility, this just makes it explicit when the API allows.
+      - name: Ensure the packages are public
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for image in antigravity anthropic openrouter github-copilot meta kimi-coding llama mcp; do
+            gh api --method PATCH "/user/packages/container/lca%2F${image}" -f visibility=public || true
+          done

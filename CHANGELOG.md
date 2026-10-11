@@ -6,6 +6,19 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+- **Extensions-only publish (`extensions-abi-0.6-20261011`).**
+  Thirteen shippable first-party extensions ride the `abi-0.6` line;
+  this release publishes eight: `antigravity` 1.0.1 (listing-fuel
+  fix #236 changed its bytes since v0.6.0, hence the patch bump)
+  plus first publishes `anthropic`, `openrouter`, `github-copilot`,
+  `meta`, `kimi-coding`, `llama`, and `mcp`, all 0.1.0.
+  `openai-compatible` 1.0.0, `skills` 1.0.0, `compaction-default`
+  1.0.0, `codex` 0.1.0, and `grok` 0.1.0 are source-identical since
+  v0.6.0 and keep their versions and tags untouched (immutable tag
+  rule). No binary rides this release (it stays on the `unstable`
+  line); no WIT or schema change.
+
 ### Fixed
 - **Antigravity model listing on real payloads (gh #236).** The
 claimed 10M-fuel exhaustion did not reproduce on the fresh
