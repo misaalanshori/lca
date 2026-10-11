@@ -686,6 +686,13 @@ pub async fn headless(
             (message.clone(), Vec::new())
         };
         let turn = {
+            // #49: per-turn nested-completion backend (same shape as
+            // the interactive runner).
+            let nested = std::sync::Arc::new(lca_core::ext_provider::ProviderBackend::new(
+                provider.clone(),
+                agent_config.model.clone(),
+                session.id().to_string(),
+            ));
             let mut agent = Agent::new(
                 &store,
                 &session,
@@ -696,6 +703,7 @@ pub async fn headless(
                 proposals.as_ref(),
                 agent_config.clone(),
             );
+            agent.set_nested_backend(nested);
             agent
                 .run_turn_with_attachments(
                     &turn_text,

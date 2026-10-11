@@ -24,6 +24,7 @@ pub mod skills;
 
 pub use bridge::{BridgeError, bridge_stream};
 pub use capabilities::CompletionBackend;
+pub use capabilities::SharedBackend;
 pub use capabilities::{BrowserError, CompletionError};
 pub use capabilities::{
     BrowserOpener, Capabilities, CapabilityGrants, Denial, RESOURCE_FILE_MAX_BYTES,

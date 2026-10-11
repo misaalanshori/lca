@@ -304,6 +304,14 @@ pub struct Capabilities {
     resources: ResourceSource,
 }
 
+/// A completion backend behind a type-free boundary (#49): the
+/// extension-dispatch trait cannot name `CompletionBackend` without
+/// dragging the tools crate into the contract crate, so the turn
+/// wraps the `Arc` in this sized carrier and hosts downcast it back.
+/// Carries no behavior of its own.
+#[derive(Clone)]
+pub struct SharedBackend(pub Arc<dyn CompletionBackend>);
+
 impl Capabilities {
     /// Build the engine for one extension. `roots.private` is the base
     /// directory; each extension gets its own subdirectory inside it
@@ -432,6 +440,19 @@ impl Capabilities {
     /// routes to the active provider; ADR-0008's star topology).
     pub fn set_completion(&self, backend: Arc<dyn CompletionBackend>) {
         *lock(&self.completion) = Some(backend);
+    }
+
+    /// Install the turn's nested-completion backend where none is
+    /// installed (#49): tool guests complete through it, and the turn
+    /// drains per-call and per-turn usage from it. Handles with their
+    /// own backend (compaction) keep it; the install is a no-op for
+    /// them. Takes the type-free carrier because the dispatch trait
+    /// cannot name the backend type; anything else is ignored.
+    pub fn install_completion_backend(&self, shared: &SharedBackend) {
+        let mut slot = lock(&self.completion);
+        if slot.is_none() {
+            *slot = Some(shared.0.clone());
+        }
     }
 
     /// Ask the host for one response (capability catalog `completion`).

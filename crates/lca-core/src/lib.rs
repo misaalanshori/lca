@@ -256,6 +256,12 @@ pub struct Agent<'a> {
     prompt: &'a mut dyn PermissionPrompt,
     proposals: Option<&'a Proposals>,
     config: AgentConfig,
+    /// The turn's nested-completion backend (#49): installed into
+    /// handles with an empty completion slot at turn start, drained
+    /// per tool call (stamped onto the result) and at turn end (into
+    /// the turn totals). `None` keeps the old shape - tool guests
+    /// cannot complete, exactly as before.
+    nested_backend: Option<Arc<dyn lca_tools::CompletionBackend>>,
 }
 
 impl<'a> Agent<'a> {
@@ -305,7 +311,17 @@ impl<'a> Agent<'a> {
             prompt,
             proposals,
             config,
+            nested_backend: None,
         }
+    }
+
+    /// Attach the turn's nested-completion backend (#49). The runner
+    /// builds one per turn (live provider, turn model and session)
+    /// and the turn installs it into handles that carry none, so
+    /// tool-driven completions attribute to this turn's cost.
+    /// Handles with their own backend (compaction) keep it.
+    pub fn set_nested_backend(&mut self, backend: Arc<dyn lca_tools::CompletionBackend>) {
+        self.nested_backend = Some(backend);
     }
 
     /// Run one turn to completion (or cancellation, or error).

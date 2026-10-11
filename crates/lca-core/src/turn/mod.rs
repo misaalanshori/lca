@@ -97,6 +97,17 @@ impl Agent<'_> {
         for handle in self.config.extensions.handles() {
             handle.set_tools_view(self.config.extensions.as_tools_view());
         }
+        // #49: the turn's nested-completion backend reaches every
+        // handle with an empty completion slot (compaction keeps its
+        // own); per-call and turn-end drains below attribute its
+        // usage to this turn's cost.
+        if let Some(backend) = &self.nested_backend {
+            let shared: std::sync::Arc<dyn std::any::Any + Send + Sync> =
+                std::sync::Arc::new(lca_tools::SharedBackend(backend.clone()));
+            for handle in self.config.extensions.handles() {
+                handle.set_completion_backend(&shared);
+            }
+        }
         let _nested_guard = NestedGuard {
             registry: self.config.extensions.clone(),
         };
@@ -302,7 +313,10 @@ impl Agent<'_> {
             // Sequential execution inside one turn (FR-CONC-2).
             for call in &response.calls {
                 tool_calls += 1;
-                if let Err(outcome) = self.run_tool_call(call, sink, cancel, &mut nested).await {
+                if let Err(outcome) = self
+                    .run_tool_call(call, sink, cancel, &mut nested, &mut turn_usage)
+                    .await
+                {
                     return outcome;
                 }
                 if cancel.is_cancelled() {

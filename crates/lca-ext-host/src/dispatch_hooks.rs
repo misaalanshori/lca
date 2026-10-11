@@ -399,6 +399,15 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
         self.inner.cap.cancel();
     }
 
+    /// Install the turn's nested-completion backend where empty (#49).
+    /// Anything else downcasts to nothing and is ignored, so a foreign
+    /// object can never rewire the capability engine.
+    fn set_completion_backend(&self, backend: &Arc<dyn std::any::Any + Send + Sync>) {
+        if let Ok(shared) = backend.clone().downcast::<lca_tools::SharedBackend>() {
+            self.inner.cap.install_completion_backend(&shared);
+        }
+    }
+
     fn turn_started(&self) {
         // The turn boundary clears both halves of the previous turn's
         // cancellation, so this turn's first call starts clean

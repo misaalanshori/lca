@@ -544,6 +544,18 @@ pub mod dispatch {
         /// the caller's cancellation flag.
         fn interrupt(&self) {}
 
+        /// Install the turn's nested-completion backend (#49): the turn
+        /// wraps it in `lca_tools::SharedBackend` because this contract
+        /// cannot name the backend type. Hosts with a capability engine
+        /// install where empty (compaction keeps its own); the default
+        /// ignores it, so handles without that machinery keep today's
+        /// shape (their tools cannot complete, exactly as before).
+        fn set_completion_backend(
+            &self,
+            _backend: &std::sync::Arc<dyn std::any::Any + Send + Sync>,
+        ) {
+        }
+
         /// Start-of-turn bookkeeping on the host side: clear the
         /// cancellation `interrupt` left behind, so the next turn's first
         /// call is not pre-cancelled by the previous turn's cancel

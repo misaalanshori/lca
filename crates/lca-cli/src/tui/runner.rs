@@ -144,6 +144,15 @@ fn turn_worker(
             };
         }
         let live = ui.live_provider();
+        // #49: the turn's nested-completion backend (live provider,
+        // turn model and session). Tool-driven completions attribute
+        // to this turn's cost; the default summarization budget bounds
+        // unsupervised nested generations.
+        let nested = std::sync::Arc::new(lca_core::ext_provider::ProviderBackend::new(
+            live.clone(),
+            turn_config.model.clone(),
+            session.id().to_string(),
+        ));
         let mut agent = Agent::new(
             &ui.store,
             &session,
@@ -154,6 +163,7 @@ fn turn_worker(
             ui.proposals.as_ref(),
             turn_config,
         );
+        agent.set_nested_backend(nested);
         agent
             .run_turn_queued(&turn_text, queue, &turn_attachments, &mut sink, &cancel)
             .await

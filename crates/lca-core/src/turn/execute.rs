@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use lca_protocol::{
     DispatchError, FORMAT_VERSION, HookAction, Record, StopReason, ToolCall, ToolResult,
-    ToolResultStatus, TurnEvent, TurnOutcome,
+    ToolResultStatus, TurnEvent, TurnOutcome, Usage,
 };
 use lca_tools::{CancelFlag, ToolExecutor};
 
@@ -100,13 +100,14 @@ impl Agent<'_> {
         sink: &mut dyn TurnSink,
         cancel: &CancelFlag,
         server: &mut NestedServer,
+        turn_usage: &mut Usage,
     ) -> Result<(), TurnOutcome> {
         // The full path without the transcript tail: mutation,
         // verdict, execution, composition (gh #45 + #77). Nested
         // calls serve through this; the transcript tail (persist,
         // finish event, observe) stays the caller's.
         let (effective, result) = self.run_call_full(call, 0, sink, cancel, server).await?;
-        self.finish_tool_call(&effective, result, sink, server)
+        self.finish_tool_call(&effective, result, sink, server, turn_usage)
             .await
     }
 
@@ -281,6 +282,15 @@ impl Agent<'_> {
         }
     }
 
+    /// Drain the turn backend's accrued nested-completion usage (#49)
+    /// into the turn totals; returns it for result attribution. `None`
+    /// without a backend, or when nothing accrued since the last drain.
+    fn drain_nested_usage(&self, total: &mut Usage) -> Option<Usage> {
+        let drained = self.nested_backend.as_ref()?.take_usage()?;
+        super::accumulate_usage(total, &drained);
+        Some(drained)
+    }
+
     /// Persist the result, emit its event, and observe (gh #45's
     /// `post-tool-use` still sees every call, composed or not).
     /// Shared by top-level calls and the mutation-blocked path so a
@@ -289,16 +299,24 @@ impl Agent<'_> {
     async fn finish_tool_call(
         &mut self,
         effective: &ToolCall,
-        result: ToolResult,
+        mut result: ToolResult,
         sink: &mut dyn TurnSink,
         server: &mut NestedServer,
+        turn_usage: &mut Usage,
     ) -> Result<(), TurnOutcome> {
         let registry = self.config.extensions.clone();
+        // #49: this call's nested-completion usage attributes here
+        // (programmatic callers read `extras`) and joins the turn
+        // totals (session cost) below.
+        if let Some(drained) = self.drain_nested_usage(turn_usage)
+            && let Ok(json) = serde_json::to_string(&drained)
+        {
+            result.extras.insert("usage".to_string(), json);
+        }
         // The id first: a `message_end` replacement below targets
         // this record, not the call. The bounded nested record
         // attaches here, so the event and the log share it (gh #77).
         let result_id = lca_session::new_record_id();
-        let mut result = result;
         result.nested = std::mem::take(server.records.entry(result.call_id.clone()).or_default())
             .into_iter()
             .map(|summary| lca_protocol::NestedCallRecord {
