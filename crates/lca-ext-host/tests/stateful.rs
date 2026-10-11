@@ -175,3 +175,64 @@ fn an_epoch_bump_for_one_guest_leaves_an_idle_guest_usable() {
         "the idle guest survived the other guest's epoch bump"
     );
 }
+
+// Verifies: #150 (QA-004) - guest B mid-call is unaffected by A's
+// cancel. Both guests spin unboundedly; interrupting A must trap
+// only A. On a shared engine the global bump would take B's in-flight
+// call down with it, and the error count below goes non-zero.
+#[test]
+fn a_sibling_cancel_never_traps_a_running_guest() {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    let unlimited = ExtensionLimits {
+        fuel_per_call: u64::MAX,
+        ..limits()
+    };
+    let mut host = ExtHost::new(unlimited, env("concurrent"));
+    let a = host.load(fixture(), manifest()).expect("loads");
+    let b = host.load(fixture(), manifest()).expect("loads");
+    let run_a = a.clone();
+    let busy_a = std::thread::spawn(move || run_a.execute(&call("loop")));
+    while a.in_flight() == 0 {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // B spins too, on its own thread: both guests are executing when
+    // the cancel lands, which is exactly the shape the shared engine
+    // could not survive.
+    let run_b = b.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let errors = Arc::new(AtomicU64::new(0));
+    let halt = stop.clone();
+    let faults = errors.clone();
+    let busy_b = std::thread::spawn(move || {
+        while !halt.load(Ordering::SeqCst) {
+            if run_b.execute(&call("loop")).is_err() && !halt.load(Ordering::SeqCst) {
+                faults.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    });
+    while b.in_flight() == 0 {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    a.interrupt();
+    // Give a shared engine every chance to take B down with A.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(
+        b.in_flight() > 0,
+        "B is still running after A's cancel"
+    );
+    assert_eq!(
+        errors.load(Ordering::SeqCst),
+        0,
+        "no B call trapped on A's cancel"
+    );
+    // Cleanup owns its own cancel: both loops end interrupted, and the
+    // cleanup trap lands after `stop`, so it never counts above.
+    stop.store(true, Ordering::SeqCst);
+    b.interrupt();
+    let _ = busy_b.join();
+    let err_a = busy_a.join().expect("A joins").expect_err("A was cancelled");
+    assert!(
+        matches!(err_a, CallError::Cancelled),
+        "A trapped on its own cancel, got {err_a:?}"
+    );
+}
