@@ -445,6 +445,23 @@ impl FakeExt {
         });
         self
     }
+
+    /// Attach an extras entry to an already-added tool (#78's ride).
+    fn with_extras(mut self, tool: &str, key: &str, value: &str) -> FakeExt {
+        if let Some(spec) = self.tools.iter_mut().find(|spec| spec.name == tool) {
+            spec.extras.insert(key.to_string(), value.to_string());
+        }
+        self
+    }
+
+    /// Declare structural annotations on an already-added tool (the
+    /// catalog world's shape, which always wins over extras).
+    fn with_annotations(mut self, tool: &str, annotations: ToolAnnotations) -> FakeExt {
+        if let Some(spec) = self.tools.iter_mut().find(|spec| spec.name == tool) {
+            spec.annotations = Some(annotations);
+        }
+        self
+    }
 }
 
 impl FakeExt {
@@ -678,4 +695,58 @@ fn search_declares_deferred_hits_for_the_next_request() {
         .map(|spec| spec.name.clone())
         .collect();
     assert_eq!(declared, vec!["lazy".to_string(), "seen".to_string()]);
+}
+
+// Verifies: #78 (PG-026) - annotations ride spec extras: a guest
+// without a structural annotations field declares hints as JSON under
+// the `annotations` extras key, and the registered spec carries them.
+// Invalid JSON degrades to absent; explicit annotations always win.
+#[test]
+fn annotations_ride_spec_extras() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(
+        FakeExt::new("probe")
+            .with_suite_tool("readish", ToolExposure::Direct, None)
+            .with_extras("readish", "annotations", r#"{"read_only_hint":true}"#)
+            .with_suite_tool("broken", ToolExposure::Direct, None)
+            .with_extras("broken", "annotations", "nope{")
+            .with_suite_tool("loud", ToolExposure::Direct, None)
+            .with_annotations(
+                "loud",
+                ToolAnnotations {
+                    destructive_hint: Some(true),
+                    ..Default::default()
+                },
+            )
+            .with_extras("loud", "annotations", r#"{"read_only_hint":true}"#),
+    ));
+    let readish = registry.tool_schema("readish").expect("registered");
+    assert_eq!(
+        readish
+            .annotations
+            .as_ref()
+            .and_then(|hints| hints.read_only_hint),
+        Some(true),
+        "hints ride extras"
+    );
+    let broken = registry.tool_schema("broken").expect("registered");
+    assert!(
+        broken.annotations.is_none(),
+        "invalid JSON degrades to absent"
+    );
+    let loud = registry.tool_schema("loud").expect("registered");
+    assert_eq!(
+        loud.annotations
+            .as_ref()
+            .and_then(|hints| hints.destructive_hint),
+        Some(true),
+        "explicit annotations win over extras"
+    );
+    assert_eq!(
+        loud.annotations
+            .as_ref()
+            .and_then(|hints| hints.read_only_hint),
+        None,
+        "extras do not merge into explicit annotations"
+    );
 }

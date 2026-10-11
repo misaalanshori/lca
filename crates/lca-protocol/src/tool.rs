@@ -73,7 +73,7 @@ pub struct ToolNamespace {
 /// Hints about what a tool does (MCP tool annotations, gh #77): the
 /// model sees them; the host's permission layer never decides on
 /// them. A hint is not a bypass.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ToolAnnotations {
     /// The tool only reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
