@@ -650,3 +650,32 @@ async fn cache_and_trust_default_without_their_worlds() {
         (lca_protocol::TrustVote::Undecided, false)
     );
 }
+
+// Verifies: #55 (PG-003) - search declares: a deferred tool is absent
+// from the request until `tool_search` names it, and the next
+// declaration carries it. Unknown names never take effect.
+#[test]
+fn search_declares_deferred_hits_for_the_next_request() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(
+        FakeExt::new("suite")
+            .with_suite_tool("seen", ToolExposure::Direct, None)
+            .with_suite_tool("lazy", ToolExposure::Deferred, None),
+    ));
+    let declared: Vec<String> = registry
+        .declared_tool_specs()
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect();
+    assert_eq!(declared, vec!["seen".to_string()]);
+    assert_eq!(
+        registry.note_discovered(&["lazy".to_string(), "nope".to_string()]),
+        vec!["lazy".to_string()]
+    );
+    let declared: Vec<String> = registry
+        .declared_tool_specs()
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect();
+    assert_eq!(declared, vec!["lazy".to_string(), "seen".to_string()]);
+}

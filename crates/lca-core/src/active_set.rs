@@ -15,6 +15,11 @@ use lca_protocol::ToolExposure;
 #[derive(Debug, Default)]
 pub(crate) struct ActiveSet {
     pub(crate) names: Option<std::collections::HashSet<String>>,
+    /// Deferred tools the model discovered through `tool_search` (#55):
+    /// declared from here on, while undiscovered deferred tools stay
+    /// out of every request. Separate from `names` so a discovery
+    /// never disturbs the user's own selection.
+    pub(crate) discovered: std::collections::HashSet<String>,
     /// Bumped on every set; the turn records the transcript entry.
     pub(crate) revision: u64,
     /// Executor-table (built-in) tools selected for the session (gh
@@ -126,5 +131,27 @@ impl ExtensionRegistry {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .revision
+    }
+
+    /// Record `tool_search` hits as discovered (#55): only registered
+    /// names take effect. Bumps the revision when anything is newly
+    /// added, so the turn's per-request check records the change.
+    /// Returns the newly added names, sorted.
+    pub fn note_discovered(&self, names: &[String]) -> Vec<String> {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut added = Vec::new();
+        for name in names {
+            if self.tool_schemas.contains_key(name) && active.discovered.insert(name.clone()) {
+                added.push(name.clone());
+            }
+        }
+        added.sort();
+        if !added.is_empty() {
+            active.revision += 1;
+        }
+        added
     }
 }
