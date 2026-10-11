@@ -216,10 +216,7 @@ fn a_sibling_cancel_never_traps_a_running_guest() {
     a.interrupt();
     // Give a shared engine every chance to take B down with A.
     std::thread::sleep(std::time::Duration::from_millis(300));
-    assert!(
-        b.in_flight() > 0,
-        "B is still running after A's cancel"
-    );
+    assert!(b.in_flight() > 0, "B is still running after A's cancel");
     assert_eq!(
         errors.load(Ordering::SeqCst),
         0,
@@ -230,7 +227,10 @@ fn a_sibling_cancel_never_traps_a_running_guest() {
     stop.store(true, Ordering::SeqCst);
     b.interrupt();
     let _ = busy_b.join();
-    let err_a = busy_a.join().expect("A joins").expect_err("A was cancelled");
+    let err_a = busy_a
+        .join()
+        .expect("A joins")
+        .expect_err("A was cancelled");
     assert!(
         matches!(err_a, CallError::Cancelled),
         "A trapped on its own cancel, got {err_a:?}"
