@@ -151,7 +151,7 @@ fn epoch_interrupt_cancels_a_running_call() {
     );
     let extension = host.load(fixture(), manifest()).expect("loads");
 
-    let engine = host.engine().clone();
+    let engine = extension.engine().clone();
     let watcher = extension.clone();
     let stopper = std::thread::spawn(move || {
         // Wait for the guest to be running before bumping: a bump that

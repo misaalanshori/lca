@@ -20,11 +20,12 @@
 //!
 //! What survives, by construction (ADR-0014's trap isolation):
 //!
-//! * Per-guest epoch accounting: each cached guest carries its own
-//!   deadline, re-armed against the engine's current epoch at every
-//!   checkout. A global bump only traps a guest that is executing
-//!   right then; an idle cached guest is unaffected, and its next
-//!   checkout re-arms past the bump.
+//! * Per-guest epoch accounting: each extension owns its engine (#150),
+//!   so a bump reaches only its own running guests to begin with; each
+//!   cached guest additionally carries its own deadline, re-armed
+//!   against its engine's current epoch at every checkout. An idle
+//!   cached guest is unaffected by anything, and its next checkout
+//!   re-arms past any bump in between.
 //! * Cross-guest independence: every extension owns its stores, so a
 //!   trap or eviction in one never touches another's.
 //! * Concurrency: checkout takes the slot, so two calls racing on one

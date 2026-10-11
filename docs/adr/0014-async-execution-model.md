@@ -59,3 +59,16 @@ was no. No interface changes: no new world, export, manifest key, or
 lifecycle the issue names stays unbuilt for the same reason - cleanup
 rides the existing `session-close` hook - and is the first thing to
 revisit when the 0.7 line opens.
+
+## Annotation, 2026-10-11 (#150)
+
+The "global bump" above is gone: each loaded extension now owns its
+engine (`ExtHost` builds one per `load`), so an epoch bump reaches
+only that extension's running guests and never a sibling's -
+mid-call or idle. The re-arm and eviction rules stand unchanged;
+the per-extension engine is what makes them sufficient under
+concurrent execution (turns plus the interface's background workers).
+`WasmExtension::engine` exposes the scope for tests; the old
+host-wide accessor is removed. Engine construction is load-time (the
+component compile dominates it); per-engine memory overhead is
+unmeasured and watched by the NFR-6 idle gate.

@@ -212,8 +212,8 @@ fn epoch_interruption_traps_within_fifty_milliseconds() {
 /// One clean measurement: fresh engine (its epoch starts at zero, and
 /// every store's deadline of one is what the increment consumes).
 fn attempt_epoch_latency() -> Option<Duration> {
-    let (extension, host) = load();
-    let engine = host.engine().clone();
+    let (extension, _host) = load();
+    let engine = extension.engine().clone();
 
     let watch = extension.clone();
     let spinner = std::thread::spawn(move || {

@@ -177,32 +177,32 @@ impl WasiView for HostState {
     }
 }
 
-/// The host: one engine shared by every extension load.
+/// One engine per loaded extension (#150): a shared engine's global
+/// epoch bump traps every executing guest, so each extension gets its
+/// own engine and its own epoch counter, and a cancel reaches only its
+/// target. Construction is load-time (the component compile dominates
+/// it); fuel budgets and epoch deadlines are per-store either way, so
+/// nothing else changes shape.
+#[allow(clippy::expect_used)] // startup-fatal: a wasmtime engine that cannot build leaves nothing to run.
+fn build_engine() -> Engine {
+    let mut config = wasmtime::Config::new();
+    config.wasm_component_model(true);
+    config.consume_fuel(true);
+    config.epoch_interruption(true);
+    Engine::new(&config).expect("engine")
+}
+
+/// The host: limits and environment shared by every extension load.
+/// Epoch scopes are per extension (see `build_engine`), never shared.
 pub struct ExtHost {
-    engine: Engine,
     limits: ExtensionLimits,
     env: Arc<HostEnvironment>,
 }
 
 impl ExtHost {
     /// Build the host with its resource limits and environment.
-    #[allow(clippy::expect_used)] // startup-fatal: a wasmtime engine that cannot build leaves nothing to run.
     pub fn new(limits: ExtensionLimits, env: Arc<HostEnvironment>) -> ExtHost {
-        let mut config = wasmtime::Config::new();
-        config.wasm_component_model(true);
-        config.consume_fuel(true);
-        config.epoch_interruption(true);
-        let engine = Engine::new(&config).expect("engine");
-        ExtHost {
-            engine,
-            limits,
-            env,
-        }
-    }
-
-    /// The engine, so cancellation can increment its epoch from anywhere.
-    pub fn engine(&self) -> &Engine {
-        &self.engine
+        ExtHost { limits, env }
     }
 
     /// The resolved limits new stores get.
@@ -292,9 +292,10 @@ impl ExtHost {
             },
             None => self.limits.clone(),
         };
-        let component = wasmtime::component::Component::new(&self.engine, wasm)
+        let engine = build_engine();
+        let component = wasmtime::component::Component::new(&engine, wasm)
             .map_err(|err| LoadError::Link(err.to_string()))?;
-        let mut linker: HostLinker = Linker::new(&self.engine);
+        let mut linker: HostLinker = Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).expect("wasi imports");
         Tool::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state).expect("world imports");
         // The compaction world always imports `completion`; like every
@@ -437,7 +438,7 @@ impl ExtHost {
 
         Ok(WasmExtension {
             inner: Arc::new(Inner {
-                engine: self.engine.clone(),
+                engine,
                 name: manifest.name,
                 worlds: manifest.worlds.clone(),
                 tool,
@@ -708,6 +709,14 @@ impl WasmExtension {
     /// The extension's identity.
     pub fn name(&self) -> &str {
         &self.inner.name
+    }
+
+    /// This extension's epoch scope (#150): its own engine, so an
+    /// epoch bump here traps only this extension's running calls and
+    /// never a sibling's. Tests use it to drive cancellation the way
+    /// `interrupt` does without the flag and capability halves.
+    pub fn engine(&self) -> &Engine {
+        &self.inner.engine
     }
 
     /// Whether it is still enabled for this session (FR-EXT-7's data, and
