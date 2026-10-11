@@ -608,6 +608,17 @@ impl Inner {
     /// Map a Wasmtime failure onto the host's contract: which failures
     /// disable the extension (FR-EXT-3, FR-EXT-5) and which merely answer
     /// the caller (FR-EXT-4, FR-CONC-1).
+    ///
+    /// #151: strictly typed, never substring-guessed. The old
+    /// message-text arms (`allocation`, `memory ceiling`, `fuel`,
+    /// `epoch`) could not fire on any real signal - `Trap::OutOfFuel`
+    /// and `Trap::Interrupt` are matched above before their messages
+    /// are ever read, and no wasmtime error carries `memory ceiling` -
+    /// but they could misfire on guest words riding an error chain
+    /// (a link error naming `fuel` reported fuel exhaustion without
+    /// disabling; one naming `allocation` disabled the extension).
+    /// The one live string was `Trap::AllocationTooLarge`'s message,
+    /// which now matches by code with the same outcome.
     fn classify(&self, err: wasmtime::Error) -> CallError {
         // #103: every Wasmtime failure evicts the whole cache. A
         // trapped, fuel-exhausted, or epoch-interrupted guest is
@@ -620,25 +631,24 @@ impl Inner {
             return match trap {
                 Trap::OutOfFuel => CallError::FuelExhausted,
                 Trap::Interrupt => CallError::Cancelled,
+                // An oversized single allocation request: the host's
+                // memory ceiling path, same outcome the substring arm
+                // gave it (disabled, `MemoryLimit`).
+                Trap::AllocationTooLarge => {
+                    self.disable();
+                    CallError::MemoryLimit
+                }
                 other => {
                     self.disable();
                     CallError::Trap(other.to_string())
                 }
             };
         }
-        let text = err.to_string();
-        if text.contains("allocation") || text.contains("memory ceiling") {
-            self.disable();
-            return CallError::MemoryLimit;
-        }
-        if text.contains("fuel") {
-            return CallError::FuelExhausted;
-        }
-        if text.contains("epoch") || text.contains("interrupt") {
-            return CallError::Cancelled;
-        }
+        // Anything else (link failures, host-shape errors): the text is
+        // reported, never interpreted. Guest-answered strings never reach
+        // here at all - a WIT result is data, not a runtime failure.
         self.disable();
-        CallError::Trap(text)
+        CallError::Trap(err.to_string())
     }
 }
 
