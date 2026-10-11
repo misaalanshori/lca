@@ -74,7 +74,11 @@ impl RunGuest for CatalogComponent {
             status: if outcome.ok { "ok" } else { "error" }.to_string(),
             content: Some(outcome.text),
             truncated: false,
-            extras: Vec::new(),
+            extras: outcome
+                .extras
+                .into_iter()
+                .map(|(key, value)| lca::ext::types::ExtraPair { key, value })
+                .collect(),
         }
     }
 }

@@ -20,7 +20,12 @@ pub(super) fn schema_work(inner: &Inner) -> Result<ToolSpec, CallError> {
         exposure: lca_protocol::ToolExposure::Direct,
         namespace: None,
         annotations: None,
-        extras: Default::default(),
+        // #49: the output-schema declaration rides schema extras.
+        extras: schema
+            .extras
+            .into_iter()
+            .map(|pair| (pair.key, pair.value))
+            .collect(),
     })
 }
 
@@ -65,7 +70,13 @@ pub(super) fn execute_work(
         content: guest_result.content.unwrap_or_default(),
         truncated: guest_result.truncated,
         images: Vec::new(),
-        extras: Default::default(),
+        // #49: structured side data rides through verbatim; the
+        // model reads `content`, programs read `extras`.
+        extras: guest_result
+            .extras
+            .into_iter()
+            .map(|pair| (pair.key, pair.value))
+            .collect(),
         exit_code: None,
         full_output_path: None,
         nested: Vec::new(),
@@ -293,7 +304,13 @@ fn map_guest_result(
         content: guest_result.content.unwrap_or_default(),
         truncated: guest_result.truncated,
         images: Vec::new(),
-        extras: Default::default(),
+        // #49: like the single-tool world, structured side data rides
+        // through verbatim.
+        extras: guest_result
+            .extras
+            .into_iter()
+            .map(|pair| (pair.key, pair.value))
+            .collect(),
         exit_code: None,
         full_output_path: None,
         nested: Vec::new(),

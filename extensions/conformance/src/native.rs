@@ -26,6 +26,7 @@ impl Cap for NativeCap {
             return ModeOutcome {
                 ok: false,
                 text: err.to_string(),
+                extras: Default::default(),
             };
         }
         // Without a loaded registry there is nothing to call
@@ -34,6 +35,7 @@ impl Cap for NativeCap {
             return ModeOutcome {
                 ok: false,
                 text: "no tool registry is loaded".to_string(),
+                extras: Default::default(),
             };
         };
         if view.is_callable(name) {
@@ -53,28 +55,33 @@ impl Cap for NativeCap {
                         return ModeOutcome {
                             ok: false,
                             text: "the turn is gone; the nested call was dropped".to_string(),
+                            extras: Default::default(),
                         };
                     }
                     match reply_rx.recv() {
                         Ok(result) => ModeOutcome {
                             ok: result.status == lca_protocol::ToolResultStatus::Ok,
                             text: result.content,
+                            extras: Default::default(),
                         },
                         Err(_) => ModeOutcome {
                             ok: false,
                             text: "the turn dropped the nested call".to_string(),
+                            extras: Default::default(),
                         },
                     }
                 }
                 None => ModeOutcome {
                     ok: false,
                     text: "no turn is running to serve the nested call".to_string(),
+                    extras: Default::default(),
                 },
             }
         } else {
             ModeOutcome {
                 ok: false,
                 text: format!("tool `{name}` is not callable right now"),
+                extras: Default::default(),
             }
         }
     }
@@ -225,7 +232,7 @@ impl NativeConformance {
             exposure: lca_protocol::ToolExposure::Direct,
             namespace: None,
             annotations: None,
-            extras: Default::default(),
+            extras: crate::schema_extras(),
         }
     }
 

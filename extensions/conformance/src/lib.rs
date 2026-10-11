@@ -140,13 +140,31 @@ pub struct ModeOutcome {
     pub ok: bool,
     /// The text handed back to the model.
     pub text: String,
+    /// Structured side data, carried verbatim to programmatic callers
+    /// (#49: the model reads `text`, programs read `extras`). Empty
+    /// unless a mode sets it.
+    pub extras: std::collections::BTreeMap<String, String>,
 }
 
 fn fail(err: CapabilityError) -> ModeOutcome {
     ModeOutcome {
         ok: false,
         text: err.text(),
+        extras: Default::default(),
     }
+}
+
+/// The schema's extras, identical in both modes (#49): the probe
+/// declares an output schema for its structured result data. The
+/// host carries extras opaquely; validation is a later ABI train's
+/// job (the issue's own direction).
+pub fn schema_extras() -> std::collections::BTreeMap<String, String> {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert(
+        "output-schema".to_string(),
+        r#"{"type":"object","properties":{"answer":{"type":"integer"},"unit":{"type":"string"}}}"#.to_string(),
+    );
+    extras
 }
 
 /// The tool schema, identical in both modes.
@@ -248,6 +266,7 @@ pub fn run_tool_mode(
         "log" => ModeOutcome {
             ok: true,
             text: "logged".to_string(),
+            extras: Default::default(),
         },
         "alloc" => {
             let mut hog: Vec<Vec<u8>> = Vec::new();
@@ -260,6 +279,7 @@ pub fn run_tool_mode(
             ModeOutcome {
                 ok: true,
                 text: "allocated".to_string(),
+                extras: Default::default(),
             }
         }
         _ => run_shared(cap, parent_call_id, mode, args),
@@ -302,6 +322,28 @@ pub fn run_shared(
         "ok" => ModeOutcome {
             ok: true,
             text: "conformance ok".to_string(),
+            extras: Default::default(),
+        },
+        // #49: declared structured output. The model reads `text`;
+        // the `structured_content` extras key carries the JSON
+        // verbatim for programmatic callers. `ok: false` keeps its
+        // data too (isError-with-data).
+        "structured" => {
+            let ok = args.get("ok").and_then(|value| value.as_bool()).unwrap_or(true);
+            let mut extras = std::collections::BTreeMap::new();
+            extras.insert(
+                "structured_content".to_string(),
+                r#"{"answer":42,"unit":"parsecs"}"#.to_string(),
+            );
+            ModeOutcome {
+                ok,
+                text: if ok {
+                    "the answer is 42 parsecs".to_string()
+                } else {
+                    "the sensor failed, but here is what it reported".to_string()
+                },
+                extras,
+            }
         },
         // #103 (QA-017): the guest-side call counter. Mode-gated so
         // no other probe observes it, and asserted relatively (each
@@ -316,6 +358,7 @@ pub fn run_shared(
             ModeOutcome {
                 ok: true,
                 text: format!("call {n}"),
+                extras: Default::default(),
             }
         }
         // Gh #124's acceptance: a tool asking `ui.confirm`, reporting
@@ -334,6 +377,7 @@ pub fn run_shared(
                 Ok(verdict) => ModeOutcome {
                     ok: true,
                     text: format!("confirm: {verdict}"),
+                    extras: Default::default(),
                 },
                 Err(err) => fail(CapabilityError::Invalid(err)),
             }
@@ -353,6 +397,7 @@ pub fn run_shared(
             ModeOutcome {
                 ok: outcome.ok,
                 text: format!("nested: {}", outcome.text),
+                extras: Default::default(),
             }
         }
         // Gh #45's redaction marker: the tool-result hook rewrites
@@ -361,6 +406,7 @@ pub fn run_shared(
         "spill-secret" => ModeOutcome {
             ok: true,
             text: "the token is conformance-secret, handle with care".to_string(),
+            extras: Default::default(),
         },
         "fs-read" => {
             let (Some(scope), Some(path)) = (
@@ -375,6 +421,7 @@ pub fn run_shared(
                 Ok(bytes) => ModeOutcome {
                     ok: true,
                     text: format!("fs: {}", String::from_utf8_lossy(&bytes)),
+                    extras: Default::default(),
                 },
                 Err(err) => fail(err),
             }
@@ -389,6 +436,7 @@ pub fn run_shared(
                 Ok(names) => ModeOutcome {
                     ok: true,
                     text: format!("list: {}", names.join(",")),
+                    extras: Default::default(),
                 },
                 Err(err) => fail(err),
             }
@@ -406,6 +454,7 @@ pub fn run_shared(
                             .collect::<Vec<_>>()
                             .join(",")
                     ),
+                    extras: Default::default(),
                 },
                 Err(err) => fail(err),
             }
@@ -420,6 +469,7 @@ pub fn run_shared(
                 Ok(bytes) => ModeOutcome {
                     ok: true,
                     text: format!("resource: {}", String::from_utf8_lossy(&bytes)),
+                    extras: Default::default(),
                 },
                 Err(err) => fail(err),
             }
@@ -437,6 +487,7 @@ pub fn run_shared(
                 Ok(()) => ModeOutcome {
                     ok: true,
                     text: format!("state wrote {key}"),
+                    extras: Default::default(),
                 },
                 Err(err) => fail(err),
             }
@@ -449,10 +500,12 @@ pub fn run_shared(
                 Ok(Some(bytes)) => ModeOutcome {
                     ok: true,
                     text: format!("state: {}", String::from_utf8_lossy(&bytes)),
+                    extras: Default::default(),
                 },
                 Ok(None) => ModeOutcome {
                     ok: true,
                     text: "state: <none>".to_string(),
+                    extras: Default::default(),
                 },
                 Err(err) => fail(err),
             }
@@ -467,6 +520,7 @@ pub fn run_shared(
                 Ok(()) => ModeOutcome {
                     ok: true,
                     text: format!("state deleted {key}"),
+                    extras: Default::default(),
                 },
                 Err(err) => fail(err),
             }
@@ -482,6 +536,7 @@ pub fn run_shared(
                         .collect::<Vec<_>>()
                         .join(",")
                 ),
+                extras: Default::default(),
             },
             Err(err) => fail(err),
         },
@@ -515,6 +570,7 @@ pub fn run_shared(
             ModeOutcome {
                 ok: code == 0,
                 text: format!("exit {code} {}", String::from_utf8_lossy(&output).trim()),
+                extras: Default::default(),
             }
         }
         "pty" => {
@@ -549,6 +605,7 @@ pub fn run_shared(
             ModeOutcome {
                 ok: code == 0,
                 text: format!("exit {code} {}", String::from_utf8_lossy(&output).trim()),
+                extras: Default::default(),
             }
         }
         "fs-write" => {
@@ -568,6 +625,7 @@ pub fn run_shared(
                 Ok((is_dir, len)) => ModeOutcome {
                     ok: true,
                     text: format!("fs-write: dir={is_dir} len={len}"),
+                    extras: Default::default(),
                 },
                 Err(err) => fail(err),
             }
@@ -596,6 +654,7 @@ pub fn run_shared(
             ModeOutcome {
                 ok: true,
                 text: format!("process-io stdin={wrote} stderr={read_err}"),
+                extras: Default::default(),
             }
         }
         // Exercises `pty.write` and `pty.resize`; no output is read or waited
@@ -620,11 +679,13 @@ pub fn run_shared(
             ModeOutcome {
                 ok: true,
                 text: format!("pty-io resize={resized} write={wrote}"),
+                extras: Default::default(),
             }
         }
         _ => ModeOutcome {
             ok: false,
             text: format!("unknown mode {mode}"),
+            extras: Default::default(),
         },
     }
 }
@@ -675,7 +736,7 @@ pub fn outcome_to_result(call_id: &str, outcome: ModeOutcome) -> ToolResult {
         content: outcome.text,
         truncated: false,
         images: Vec::new(),
-        extras: Default::default(),
+        extras: outcome.extras,
         exit_code: None,
         full_output_path: None,
         nested: Vec::new(),

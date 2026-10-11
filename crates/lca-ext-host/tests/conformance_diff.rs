@@ -1050,3 +1050,58 @@ async fn the_new_hooks_agree_across_modes() {
         (lca_protocol::TrustVote::Yes, true)
     );
 }
+
+// Verifies: #49 (EFG-017) - declared structured output in both delivery
+// modes: the model gets text, the programmatic path gets the
+// `structured_content` data verbatim, and an error keeps its data too.
+// The schema declares the output shape in both modes.
+#[tokio::test]
+async fn structured_output_round_trips_in_both_modes() {
+    let fixture = Fixture::new("structured");
+    let (wasm, native, _) = fixture.both_modes();
+    for (label, args, status, text) in [
+        (
+            "ok",
+            r#"{"mode":"structured"}"#,
+            lca_protocol::ToolResultStatus::Ok,
+            "the answer is 42 parsecs",
+        ),
+        (
+            "err",
+            r#"{"mode":"structured","ok":false}"#,
+            lca_protocol::ToolResultStatus::Error,
+            "the sensor failed, but here is what it reported",
+        ),
+    ] {
+        let wasm_result = wasm.execute_tool(&call(args)).await.expect("wasm");
+        let native_result = native.execute_tool(&call(args)).await.expect("native");
+        for (side, result) in [("wasm", &wasm_result), ("native", &native_result)] {
+            assert_eq!(result.status, status, "{label}/{side} status");
+            assert_eq!(result.content, text, "{label}/{side} model text");
+            assert_eq!(
+                result
+                    .extras
+                    .get("structured_content")
+                    .map(String::as_str),
+                Some(r#"{"answer":42,"unit":"parsecs"}"#),
+                "{label}/{side} data verbatim"
+            );
+        }
+        assert_eq!(
+            wasm_result.extras, native_result.extras,
+            "{label} modes agree on data"
+        );
+    }
+    for (side, specs) in [
+        ("wasm", wasm.tool_specs().expect("wasm schema")),
+        ("native", native.tool_specs().expect("native schema")),
+    ] {
+        let spec = specs.iter().find(|spec| spec.name == "conformance").expect("tool");
+        assert!(
+            spec.extras
+                .get("output-schema")
+                .is_some_and(|schema| schema.contains("answer")),
+            "{side} schema declares the output shape"
+        );
+    }
+}
