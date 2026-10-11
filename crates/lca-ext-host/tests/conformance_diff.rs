@@ -1079,10 +1079,7 @@ async fn structured_output_round_trips_in_both_modes() {
             assert_eq!(result.status, status, "{label}/{side} status");
             assert_eq!(result.content, text, "{label}/{side} model text");
             assert_eq!(
-                result
-                    .extras
-                    .get("structured_content")
-                    .map(String::as_str),
+                result.extras.get("structured_content").map(String::as_str),
                 Some(r#"{"answer":42,"unit":"parsecs"}"#),
                 "{label}/{side} data verbatim"
             );
@@ -1119,8 +1116,7 @@ async fn structured_output_round_trips_in_both_modes() {
         );
     }
     {
-        let native =
-            conformance::NativeConformance::new(fixture.capabilities());
+        let native = conformance::NativeConformance::new(fixture.capabilities());
         let spec = native.schema();
         assert!(
             spec.extras

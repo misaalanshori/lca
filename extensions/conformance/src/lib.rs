@@ -162,7 +162,8 @@ pub fn schema_extras() -> std::collections::BTreeMap<String, String> {
     let mut extras = std::collections::BTreeMap::new();
     extras.insert(
         "output-schema".to_string(),
-        r#"{"type":"object","properties":{"answer":{"type":"integer"},"unit":{"type":"string"}}}"#.to_string(),
+        r#"{"type":"object","properties":{"answer":{"type":"integer"},"unit":{"type":"string"}}}"#
+            .to_string(),
     );
     extras
 }
@@ -329,7 +330,10 @@ pub fn run_shared(
         // verbatim for programmatic callers. `ok: false` keeps its
         // data too (isError-with-data).
         "structured" => {
-            let ok = args.get("ok").and_then(|value| value.as_bool()).unwrap_or(true);
+            let ok = args
+                .get("ok")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true);
             let mut extras = std::collections::BTreeMap::new();
             extras.insert(
                 "structured_content".to_string(),
@@ -344,7 +348,7 @@ pub fn run_shared(
                 },
                 extras,
             }
-        },
+        }
         // #103 (QA-017): the guest-side call counter. Mode-gated so
         // no other probe observes it, and asserted relatively (each
         // call returns one more than the last on the same guest), so
