@@ -181,11 +181,21 @@ struct UiPrompt {
 
 impl PermissionPrompt for UiPrompt {
     fn ask(&mut self, action: &lca_permissions::Action) -> Decision {
+        self.ask_annotated(action, None)
+    }
+
+    /// #78: tool hints ride to the prompt surface; the decision path
+    /// never reads them.
+    fn ask_annotated(
+        &mut self,
+        action: &lca_permissions::Action,
+        annotations: Option<&lca_protocol::ToolAnnotations>,
+    ) -> Decision {
         let (respond, response) = std::sync::mpsc::sync_channel(1);
         if self
             .tx
             .send(PromptRequest {
-                action: action.display(),
+                action: action.display_annotated(annotations),
                 respond,
             })
             .is_err()

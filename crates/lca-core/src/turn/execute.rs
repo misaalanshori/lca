@@ -488,6 +488,19 @@ impl Agent<'_> {
         ToolResult::ok(call.call_id.clone(), lines.join("\n"))
     }
 
+    /// The called tool's annotations for the permission prompt (#78):
+    /// extension specs from the registry, built-in specs from the
+    /// executor table. `None` renders exactly `display`.
+    fn tool_annotations(&self, name: &str) -> Option<lca_protocol::ToolAnnotations> {
+        if let Some(hints) = self.config.extensions.tool_annotations(name) {
+            return Some(hints);
+        }
+        lca_tools::ToolExecutor::specs(self.tools.resolved_shell())
+            .into_iter()
+            .find(|spec| spec.name == name)
+            .and_then(|spec| spec.annotations)
+    }
+
     /// The permission check for a gated tool: lock the shared store for the
     /// authorize call only, record the decision, and report a denial as a
     /// denied result. `Ok(None)` means proceed; `Ok(Some(result))` is the
@@ -512,12 +525,17 @@ impl Agent<'_> {
                 ));
             }
         };
+        // #78: the called tool's hints ride to the prompt;
+        // built-ins without specs read `None`. Computed before the
+        // authorize call so the prompt borrow below never aliases it.
+        let annotations = self.tool_annotations(&call.name);
         let outcome = match lca_permissions::authorize(
             &mut guard,
             self.tools.workspace(),
             action,
             self.proposals,
             self.prompt,
+            annotations.as_ref(),
         ) {
             Ok(outcome) => outcome,
             Err(err) => {

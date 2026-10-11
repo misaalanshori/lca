@@ -1281,3 +1281,68 @@ async fn tool_search_declares_deferred_hits_mid_turn() {
         "the record names the discovery: {data}"
     );
 }
+
+// A prompt that records the annotated surface it was shown (#78):
+// scripted decision, observed surface.
+struct HintSpy {
+    surfaces: Vec<String>,
+}
+
+impl lca_permissions::PermissionPrompt for HintSpy {
+    fn ask(&mut self, action: &lca_permissions::Action) -> Decision {
+        self.surfaces.push(action.display());
+        Decision::Always
+    }
+    fn ask_annotated(
+        &mut self,
+        action: &lca_permissions::Action,
+        annotations: Option<&lca_protocol::ToolAnnotations>,
+    ) -> Decision {
+        self.surfaces.push(action.display_annotated(annotations));
+        Decision::Always
+    }
+    fn review_proposals(&mut self, _diff: &lca_permissions::ProposalDiff) -> bool {
+        false
+    }
+}
+
+// Verifies: #78 (PG-026) - the turn carries the called tool's hints to
+// the prompt: a shell call's approval surface names its builtin hints,
+// and the approved turn still runs.
+#[tokio::test]
+async fn shell_prompt_shows_builtin_hints() {
+    let provider = FakeProvider::builder()
+        .turn(|t| {
+            t.tool_call("shell", r#"{"command":"echo hi"}"#)
+                .usage(fake_usage(10, 5, 0, 5))
+        })
+        .turn(|t| t.text("done").usage(fake_usage(20, 5, 10, 0)))
+        .build();
+    let mut h = harness("shell-hints", provider, default_config());
+    let mut sink = CollectingSink::default();
+    let mut prompt = HintSpy {
+        surfaces: Vec::new(),
+    };
+    let mut agent = Agent::new(
+        &h.store,
+        &h.session,
+        h.provider.as_ref(),
+        &mut h.tools,
+        h.grants.clone(),
+        &mut prompt,
+        None,
+        h.config.clone(),
+    );
+    let outcome = agent
+        .run_turn("say hi loudly", &mut sink, &lca_tools::CancelFlag::new())
+        .await;
+    assert_eq!(outcome.status, lca_core::TurnStatus::Ok);
+    assert!(
+        prompt
+            .surfaces
+            .iter()
+            .any(|surface| surface.contains("echo hi") && surface.contains("destructive")),
+        "the approval surface names the builtin hints: {:?}",
+        prompt.surfaces
+    );
+}

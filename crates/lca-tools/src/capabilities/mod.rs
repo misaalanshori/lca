@@ -743,6 +743,7 @@ impl Capabilities {
                 &action,
                 self.proposals.as_ref(),
                 &mut *prompt,
+                None,
             )
         };
         match decision {
@@ -942,6 +943,7 @@ impl Capabilities {
                 &action,
                 self.proposals.as_ref(),
                 &mut *prompt,
+                None,
             )
         };
         match decision {

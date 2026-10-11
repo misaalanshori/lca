@@ -73,6 +73,34 @@ impl Action {
         }
     }
 
+    /// The action with tool hints appended (#78): hints inform the
+    /// human, never the decision - approval matching reads the
+    /// action, never this text. No hints (or none set) renders
+    /// exactly `display`.
+    pub fn display_annotated(&self, annotations: Option<&lca_protocol::ToolAnnotations>) -> String {
+        let base = self.display();
+        let Some(hints) = annotations else {
+            return base;
+        };
+        let mut words = Vec::new();
+        if hints.read_only_hint == Some(true) {
+            words.push("read-only");
+        }
+        if hints.destructive_hint == Some(true) {
+            words.push("destructive");
+        }
+        if hints.idempotent_hint == Some(true) {
+            words.push("idempotent");
+        }
+        if hints.open_world_hint == Some(true) {
+            words.push("open-world");
+        }
+        if words.is_empty() {
+            return base;
+        }
+        format!("{base} ({})", words.join(", "))
+    }
+
     /// The value approvals match against.
     fn match_value(&self) -> String {
         match self {
@@ -175,6 +203,17 @@ impl ProposalDiff {
 pub trait PermissionPrompt: Send {
     /// Ask about one action.
     fn ask(&mut self, action: &Action) -> Decision;
+    /// Ask about one action with tool hints attached (#78): the prompt
+    /// may show them; the decision path never reads them (a hint is
+    /// not a bypass, ADR-0045). The default keeps old behavior.
+    fn ask_annotated(
+        &mut self,
+        action: &Action,
+        annotations: Option<&lca_protocol::ToolAnnotations>,
+    ) -> Decision {
+        let _ = annotations;
+        self.ask(action)
+    }
     /// Show the proposal difference; true applies the new set.
     fn review_proposals(&mut self, diff: &ProposalDiff) -> bool;
 }
@@ -954,6 +993,7 @@ pub fn authorize(
     action: &Action,
     proposals: Option<&Proposals>,
     prompt: &mut dyn PermissionPrompt,
+    annotations: Option<&lca_protocol::ToolAnnotations>,
 ) -> Result<Outcome, Error> {
     let mut reviewed = false;
     if let Some(proposals) = proposals {
@@ -1024,7 +1064,7 @@ pub fn authorize(
         });
     }
 
-    match prompt.ask(action) {
+    match prompt.ask_annotated(action, annotations) {
         Decision::Denied => Ok(Outcome {
             allowed: false,
             prompted: true,

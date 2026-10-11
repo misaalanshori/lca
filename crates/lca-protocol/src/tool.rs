@@ -113,6 +113,23 @@ pub struct ToolSpec {
     pub extras: BTreeMap<String, String>,
 }
 
+impl ToolSpec {
+    /// Fill `annotations` from the `annotations` extras key when the
+    /// guest did not declare them structurally (#78): single-tool
+    /// guests cross no annotations field in WIT, so the JSON rides
+    /// extras instead. Explicit annotations always win; invalid JSON
+    /// degrades to absent, never an error.
+    pub fn with_annotations_from_extras(mut self) -> Self {
+        if self.annotations.is_none()
+            && let Some(json) = self.extras.get("annotations")
+            && let Ok(hints) = serde_json::from_str::<ToolAnnotations>(json)
+        {
+            self.annotations = Some(hints);
+        }
+        self
+    }
+}
+
 /// One tool call the model requested.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {

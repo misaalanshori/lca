@@ -10,7 +10,7 @@ use std::sync::Arc;
 use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};
 use lca_protocol::{
     ChatMessage, CommandEffect, DispatchError, HookAction, IdentityOutcome, PostToolObservation,
-    ToolCall, ToolExposure, ToolSpec, Usage,
+    ToolAnnotations, ToolCall, ToolExposure, ToolSpec, Usage,
 };
 
 /// A namespace and the tools grouped under it (gh #77's grouping:
@@ -296,7 +296,10 @@ impl ExtensionRegistry {
                                 kind: "tool",
                                 winner,
                             }),
-                            None => pending.push(spec),
+                            // #78: single-tool guests declare hints
+                            // through extras; normalize on the way in so
+                            // every consumer below sees one shape.
+                            None => pending.push(spec.with_annotations_from_extras()),
                         }
                     }
                 }
@@ -532,6 +535,16 @@ impl ExtensionRegistry {
     /// dispatch (extension authoring guide: the host validates, then calls).
     pub fn tool_schema(&self, name: &str) -> Option<&ToolSpec> {
         self.tool_schemas.get(name)
+    }
+
+    /// The annotations a registered tool declares (#78): structural
+    /// hints first (normalized from extras at registration), else
+    /// `None`. The permission prompt may show them; nothing decides
+    /// on them.
+    pub fn tool_annotations(&self, name: &str) -> Option<ToolAnnotations> {
+        self.tool_schemas
+            .get(name)
+            .and_then(|spec| spec.annotations.clone())
     }
 
     /// Whether the host may run a tool by name right now (gh #77's

@@ -65,8 +65,9 @@ fn always_approval_persists_across_reloads() {
 
     let mut store = GrantStore::open(&store_path(&root)).expect("open");
     let mut prompt = ScriptedPrompt::new(vec![Decision::Always]);
-    let outcome = lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt)
-        .expect("authorize");
+    let outcome =
+        lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt, None)
+            .expect("authorize");
     assert!(outcome.allowed());
     assert_eq!(prompt.asked.len(), 1);
 
@@ -82,6 +83,7 @@ fn always_approval_persists_across_reloads() {
             &action,
             None,
             &mut ScriptedPrompt::new(vec![]),
+            None,
         )
         .expect("authorize")
         .allowed(),
@@ -103,7 +105,7 @@ fn approvals_are_never_written_inside_the_project() {
     let before: Vec<_> = std::fs::read_dir(&project).expect("read").collect();
     let mut store = GrantStore::open(&root.join("grants.json")).expect("open");
     let mut prompt = ScriptedPrompt::new(vec![Decision::Always]);
-    lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt)
+    lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt, None)
         .expect("authorize");
     let after: Vec<_> = std::fs::read_dir(&project).expect("read").collect();
     assert_eq!(
@@ -130,7 +132,7 @@ fn keys_by_the_canonical_project_path() {
 
     let mut store = GrantStore::open(&store_path(&root)).expect("open");
     let mut prompt = ScriptedPrompt::new(vec![Decision::Always]);
-    lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt)
+    lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt, None)
         .expect("authorize");
 
     // A different spelling of the same directory finds the same entry.
@@ -151,7 +153,7 @@ fn once_approvals_do_not_persist() {
     let mut store = GrantStore::open(&store_path(&root)).expect("open");
     let mut prompt = ScriptedPrompt::new(vec![Decision::Once]);
     assert!(
-        lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt)
+        lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt, None)
             .expect("authorize")
             .allowed()
     );
@@ -159,8 +161,9 @@ fn once_approvals_do_not_persist() {
     let mut reloaded = GrantStore::open(&store_path(&root)).expect("reopen");
     assert!(!reloaded.is_allowed(&project, &action), "once is once");
     let mut prompt = ScriptedPrompt::new(vec![Decision::Denied]);
-    let outcome = lca_permissions::authorize(&mut reloaded, &project, &action, None, &mut prompt)
-        .expect("authorize");
+    let outcome =
+        lca_permissions::authorize(&mut reloaded, &project, &action, None, &mut prompt, None)
+            .expect("authorize");
     assert!(outcome.denied());
     assert_eq!(prompt.asked.len(), 1, "it asks again");
 }
@@ -176,8 +179,9 @@ fn denials_store_nothing() {
     };
     let mut store = GrantStore::open(&store_path(&root)).expect("open");
     let mut prompt = ScriptedPrompt::new(vec![Decision::Denied]);
-    let outcome = lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt)
-        .expect("authorize");
+    let outcome =
+        lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt, None)
+            .expect("authorize");
     assert!(outcome.denied());
     assert!(!store.is_allowed(&project, &action));
     let saved = std::fs::read_to_string(store_path(&root)).unwrap_or_default();
@@ -206,9 +210,15 @@ fn proposals_alone_never_authorize() {
     // not approved this set, so nothing is copied into the user store.
     let mut prompt = ScriptedPrompt::new(vec![Decision::Denied]);
     prompt.review_answer = false;
-    let outcome =
-        lca_permissions::authorize(&mut store, &project, &action, Some(&props), &mut prompt)
-            .expect("authorize");
+    let outcome = lca_permissions::authorize(
+        &mut store,
+        &project,
+        &action,
+        Some(&props),
+        &mut prompt,
+        None,
+    )
+    .expect("authorize");
     assert!(outcome.denied(), "a proposal has no force until approved");
     assert_eq!(prompt.asked.len(), 1);
 }
@@ -228,7 +238,7 @@ fn changed_proposals_prompt_with_the_difference() {
         command: "cargo build".into(),
         cwd: project.clone(),
     };
-    lca_permissions::authorize(&mut store, &project, &action, Some(&v1), &mut prompt)
+    lca_permissions::authorize(&mut store, &project, &action, Some(&v1), &mut prompt, None)
         .expect("first review");
     assert_eq!(prompt.reviews.len(), 1, "the first set is reviewed");
     assert!(prompt.reviews[0].added.len() == 2 && prompt.reviews[0].removed.is_empty());
@@ -243,8 +253,15 @@ fn changed_proposals_prompt_with_the_difference() {
         cwd: project.clone(),
     };
     let mut prompt2 = ScriptedPrompt::new(vec![Decision::Always]);
-    lca_permissions::authorize(&mut store, &project, &action2, Some(&v2), &mut prompt2)
-        .expect("second review");
+    lca_permissions::authorize(
+        &mut store,
+        &project,
+        &action2,
+        Some(&v2),
+        &mut prompt2,
+        None,
+    )
+    .expect("second review");
     assert_eq!(prompt2.reviews.len(), 1, "a changed set re-prompts");
     let diff = &prompt2.reviews[0];
     assert_eq!(diff.added.keys().collect::<Vec<_>>(), vec!["cargo clippy"]);
@@ -277,7 +294,7 @@ fn rejecting_a_proposal_diff_keeps_the_old_set() {
         command: "git status".into(),
         cwd: project.clone(),
     };
-    lca_permissions::authorize(&mut store, &project, &action, Some(&v1), &mut prompt)
+    lca_permissions::authorize(&mut store, &project, &action, Some(&v1), &mut prompt, None)
         .expect("review");
     assert!(store.is_allowed(&project, &action));
 
@@ -288,8 +305,9 @@ fn rejecting_a_proposal_diff_keeps_the_old_set() {
         command: "git push".into(),
         cwd: project.clone(),
     };
-    let outcome = lca_permissions::authorize(&mut store, &project, &push, Some(&v2), &mut prompt2)
-        .expect("authorize");
+    let outcome =
+        lca_permissions::authorize(&mut store, &project, &push, Some(&v2), &mut prompt2, None)
+            .expect("authorize");
     assert!(outcome.denied());
     assert!(
         !store.is_allowed(&project, &push),
@@ -530,7 +548,8 @@ fn an_always_net_approval_persists_as_an_adhoc_grant() {
     };
 
     let outcome =
-        lca_permissions::authorize(&mut store, &project, &action, None, &mut Always).expect("auth");
+        lca_permissions::authorize(&mut store, &project, &action, None, &mut Always, None)
+            .expect("auth");
     assert!(outcome.allowed);
     assert_eq!(outcome.stored_pattern.as_deref(), Some("llm.example.com"));
     assert_eq!(
@@ -549,7 +568,7 @@ fn an_always_net_approval_persists_as_an_adhoc_grant() {
             false
         }
     }
-    let again = lca_permissions::authorize(&mut store, &project, &action, None, &mut Panic)
+    let again = lca_permissions::authorize(&mut store, &project, &action, None, &mut Panic, None)
         .expect("authorize");
     assert!(again.allowed);
     assert!(!again.prompted, "the stored grant already covers it");
@@ -571,8 +590,9 @@ fn yolo_approves_and_records_like_an_always_answer() {
     let mut store = GrantStore::open(&store_path(&root)).expect("open");
     store.set_permission_mode(lca_permissions::PermissionMode::Yolo);
     let mut prompt = ScriptedPrompt::new(vec![]);
-    let outcome = lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt)
-        .expect("authorize");
+    let outcome =
+        lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt, None)
+            .expect("authorize");
     assert!(outcome.allowed(), "yolo allows");
     assert!(!outcome.prompted, "without asking");
     assert!(outcome.yolo, "and flags the decision for the session log");
@@ -585,8 +605,9 @@ fn yolo_approves_and_records_like_an_always_answer() {
 
     // The pattern is a real grant: a second call is allowed through the
     // ordinary path, with no yolo flag needed.
-    let outcome = lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt)
-        .expect("authorize");
+    let outcome =
+        lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt, None)
+            .expect("authorize");
     assert!(outcome.allowed());
     assert!(!outcome.prompted);
     assert!(!outcome.yolo, "a stored pattern is not a yolo decision");
@@ -612,11 +633,12 @@ fn yolo_still_honours_a_deny_rule() {
 
     let action = Action::Shell {
         command: "rm -rf /tmp/x".into(),
-        cwd: project.clone(),
+        cwd: std::path::PathBuf::from("/tmp"),
     };
     let mut prompt = ScriptedPrompt::new(vec![]);
-    let outcome = lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt)
-        .expect("authorize");
+    let outcome =
+        lca_permissions::authorize(&mut store, &project, &action, None, &mut prompt, None)
+            .expect("authorize");
     assert!(!outcome.allowed(), "the explicit deny rule wins");
     assert!(outcome.denied_by_rule);
     assert!(!outcome.yolo);
@@ -636,7 +658,7 @@ fn reads_outside_the_workspace_do_not_prompt() {
     let read = Action::ReadPath {
         path: PathBuf::from("/etc/hostname"),
     };
-    let outcome = lca_permissions::authorize(&mut store, &project, &read, None, &mut prompt)
+    let outcome = lca_permissions::authorize(&mut store, &project, &read, None, &mut prompt, None)
         .expect("authorize");
     assert!(outcome.allowed());
     assert!(!outcome.prompted, "no prompt for a read");
@@ -652,7 +674,7 @@ fn reads_outside_the_workspace_do_not_prompt() {
             "/etc/*",
         )
         .expect("deny rule");
-    let outcome = lca_permissions::authorize(&mut store, &project, &read, None, &mut prompt)
+    let outcome = lca_permissions::authorize(&mut store, &project, &read, None, &mut prompt, None)
         .expect("authorize");
     assert!(!outcome.allowed(), "the deny rule beats the read cut");
     assert!(outcome.denied_by_rule);
@@ -671,9 +693,104 @@ fn writes_outside_the_workspace_still_prompt_in_ask_mode() {
     let write = Action::WritePath {
         path: PathBuf::from("/etc/hosts"),
     };
-    let outcome = lca_permissions::authorize(&mut store, &project, &write, None, &mut prompt)
+    let outcome = lca_permissions::authorize(&mut store, &project, &write, None, &mut prompt, None)
         .expect("authorize");
     assert!(!outcome.allowed());
     assert!(outcome.prompted, "a write outside the workspace asks");
     assert_eq!(prompt.asked.len(), 1);
+}
+
+// Verifies: #78 (PG-026) - tool hints render on the prompt surface and
+// reach it through `authorize`, while decisions ignore them entirely:
+// the same action decides identically with or without hints (a hint is
+// not a bypass, ADR-0045).
+#[test]
+fn annotated_prompts_show_hints_without_changing_decisions() {
+    use lca_protocol::ToolAnnotations;
+    /// A prompt that records the annotated surface it was shown.
+    struct Recording {
+        asked: Vec<String>,
+    }
+    impl PermissionPrompt for Recording {
+        fn ask(&mut self, action: &Action) -> Decision {
+            self.asked.push(action.display());
+            Decision::Denied
+        }
+        fn ask_annotated(
+            &mut self,
+            action: &Action,
+            annotations: Option<&ToolAnnotations>,
+        ) -> Decision {
+            self.asked.push(action.display_annotated(annotations));
+            Decision::Denied
+        }
+        fn review_proposals(&mut self, _diff: &ProposalDiff) -> bool {
+            false
+        }
+    }
+    let action = Action::Shell {
+        command: "rm -rf /tmp/x".into(),
+        cwd: std::path::PathBuf::from("/tmp"),
+    };
+    // No hints renders exactly `display`.
+    assert_eq!(action.display_annotated(None), action.display());
+    let hints = ToolAnnotations {
+        destructive_hint: Some(true),
+        ..Default::default()
+    };
+    let shown = action.display_annotated(Some(&hints));
+    assert!(
+        shown.starts_with(&action.display()) && shown.contains("destructive"),
+        "hints append, never rewrite: {shown}"
+    );
+    // Each variant reaches the prompt surface intact...
+    for (tag, annotations) in [("plain", None), ("hinted", Some(&hints))] {
+        let root = scratch(&format!("annotated-prompt-{tag}"));
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let mut store = GrantStore::open(&root.join("grants.json")).expect("open");
+        let mut prompt = Recording { asked: Vec::new() };
+        let outcome = lca_permissions::authorize(
+            &mut store,
+            &project,
+            &action,
+            None,
+            &mut prompt,
+            annotations,
+        )
+        .expect("authorize");
+        assert!(!outcome.allowed(), "the scripted prompt denies");
+        assert!(outcome.prompted, "a shell command asks");
+        assert_eq!(prompt.asked.len(), 1);
+    }
+    // ...and an allow rule decides identically with or without hints.
+    for (tag, annotations) in [("plain", None), ("hinted", Some(&hints))] {
+        let root = scratch(&format!("annotated-rule-{tag}"));
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let mut store = GrantStore::open(&root.join("grants.json")).expect("open");
+        store
+            .add_rule(
+                &project,
+                lca_permissions::RuleScope::Project,
+                lca_permissions::RuleDecision::Allow,
+                "rm *".to_string(),
+            )
+            .expect("rule");
+        let mut prompt = Recording { asked: Vec::new() };
+        let outcome = lca_permissions::authorize(
+            &mut store,
+            &project,
+            &action,
+            None,
+            &mut prompt,
+            annotations,
+        )
+        .expect("authorize");
+        assert!(outcome.allowed(), "the allow rule allows");
+        assert!(
+            prompt.asked.is_empty(),
+            "rules decide without prompting, hints or not"
+        );
+    }
 }

@@ -84,7 +84,7 @@ pub fn endpoint_consent(
     {
         return EndpointConsent::Granted;
     }
-    match authorize(&mut guard, cwd, &action, None, prompt) {
+    match authorize(&mut guard, cwd, &action, None, prompt, None) {
         Ok(outcome) => {
             // A prompted answer, a yolo answer, and a rule denial all
             // belong in the log (ADR-0042: approve everything must never

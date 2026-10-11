@@ -339,7 +339,7 @@ impl ToolExecutor {
                     extras: Default::default(),
                 }
             };
-        vec![
+        let mut specs = vec![
             spec(
                 "skill",
                 "Load a skill's full instructions by name (the system prompt advertises the catalog, not the bodies). Restricted skills answer here only through /skill:name.",
@@ -428,7 +428,31 @@ impl ToolExecutor {
                 }),
                 &["command"],
             ),
-        ]
+        ];
+        // #78: the built-ins declare MCP hints like any extension
+        // tool; the permission prompt may show them, never decide on
+        // them. Read-only tools only read; writers may destroy; the
+        // shell may do either and reach the open world.
+        for spec in &mut specs {
+            let hints = match spec.name.as_str() {
+                "read" | "list" | "glob" | "grep" | "skill" => lca_protocol::ToolAnnotations {
+                    read_only_hint: Some(true),
+                    ..Default::default()
+                },
+                "write" | "edit" => lca_protocol::ToolAnnotations {
+                    destructive_hint: Some(true),
+                    ..Default::default()
+                },
+                "shell" => lca_protocol::ToolAnnotations {
+                    destructive_hint: Some(true),
+                    open_world_hint: Some(true),
+                    ..Default::default()
+                },
+                _ => continue,
+            };
+            spec.annotations = Some(hints);
+        }
+        specs
     }
 
     /// What must be approved before this call runs (FR-TOOL-3): every shell
