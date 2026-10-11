@@ -10,6 +10,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 binary=target/release/lca
+# Documented last-resort lever, NOT a default (owner ruling):
+# `-C force-unwind-tables=no` would shave unwind tables off the binary
+# but degrades #81's crash-report backtraces (a shipped feature) and
+# external profiling, so it stays off unless the budget demands it.
 size=$(stat -c %s "$binary" 2>/dev/null || stat -f %z "$binary")
 max_size=$((25 * 1024 * 1024))
 echo "binary size: $size bytes (limit $max_size)"

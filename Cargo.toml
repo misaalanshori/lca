@@ -222,3 +222,12 @@ opt-level = "z"
 # profile ever disagrees.
 [profile.release.package.lca-ext-host]
 opt-level = "z"
+# Size-lever ruling: Cranelift itself compiles for size (adopted). The
+# guest-JIT compiler's own code shrinks while the guests it emits are
+# unaffected; first-load time is the watch metric (see the commit
+# message's cold-JIT smoke). Revisit with a measurement if profiles
+# disagree.
+[profile.release.package.cranelift-codegen]
+opt-level = "s"
+[profile.release.package.cranelift-assembler-x64]
+opt-level = "s"
