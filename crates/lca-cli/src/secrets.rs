@@ -443,6 +443,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(feature = "bundled-openai-compat")]
     #[test]
     fn the_engine_honors_a_grant_attached_for_the_workspace() {
         let root = lca_testkit::scratch_path("lca-engine-project");

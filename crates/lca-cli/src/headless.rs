@@ -3,9 +3,12 @@
 
 use super::exit;
 use crate::{
-    HeadlessPrompt, apply_enablement, data_dir, extension_capabilities, load_config_flags, lock,
-    no_model_message, skills_roots,
+    HeadlessPrompt, apply_enablement, data_dir, load_config_flags, lock, no_model_message,
+    skills_roots,
 };
+// Gated with its only use site below (the compaction-default block).
+#[cfg(feature = "bundled-compaction-default")]
+use crate::extension_capabilities;
 use lca_config::Config;
 use lca_core::{Agent, AgentConfig, StopReason, TurnEvent, TurnOutcome, TurnSink, TurnStatus};
 use lca_permissions::GrantStore;
@@ -771,7 +774,7 @@ fn wire(
     // Without the compaction strategy neither the prompt nor the session
     // feeds anything downstream; the bindings stay for the default build.
     #[cfg(not(feature = "bundled-compaction-default"))]
-    let _ = (&shared_prompt, &session);
+    let _ = (&shared_prompt, &session, &temp);
     // The grant store's disable wins before the provider resolves
     // (FR-PROV-9/FR-PERM-19); applied again after the two
     // completion-dependent handles register below.
