@@ -137,6 +137,20 @@ Constrain the parameters. An enum with three values produces better calls than a
 
 The host validates arguments against this schema before it calls `execute`. An argument that fails validation never reaches the extension.
 
+A tool may declare an output schema and return structured data
+(#49): put the JSON Schema text under the `output-schema` key of
+the schema's extras, and the matching JSON document under the
+`structured_content` key of the result's extras. The model reads
+`content` as text; programmatic callers read `structured_content`
+verbatim, including on error results, which keep their data. The
+host carries both keys opaquely and validates nothing; a declared
+schema for the wire format itself is a later ABI train's job.
+Single-tool guests declare hints the same way: a JSON object under
+the `annotations` extras key (`read_only_hint`, `destructive_hint`,
+`idempotent_hint`, `open_world_hint`) lands on the registered spec
+where the permission prompt can show it. Suite (`tool-catalog`)
+guests declare both structurally.
+
 ## Tool suites, exposure, and namespaces
 
 One component may register a whole suite: declare the `tool-catalog`
@@ -153,7 +167,7 @@ calls. `codemode` tools are callable whenever registered and listed
 for codemode-style callers. `deferred` tools are found through
 discovery instead: the model calls the built-in `tool_search` with a
 keyword, the hits activate, and the next request declares the newly
-active `direct` ones. `hidden` tools are registered but unreachable:
+active `direct` tools and the newly discovered `deferred` ones. `hidden` tools are registered but unreachable:
 not declared, not callable, not searchable. Re-register `hidden` to
 withdraw a tool. An unknown exposure refuses the whole registration,
 naming the value.
