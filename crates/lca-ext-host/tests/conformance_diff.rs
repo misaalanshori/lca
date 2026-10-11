@@ -1092,16 +1092,41 @@ async fn structured_output_round_trips_in_both_modes() {
             "{label} modes agree on data"
         );
     }
-    for (side, specs) in [
-        ("wasm", wasm.tool_specs().expect("wasm schema")),
-        ("native", native.tool_specs().expect("native schema")),
-    ] {
-        let spec = specs.iter().find(|spec| spec.name == "conformance").expect("tool");
+    // The single-tool schema declares the output shape in both modes.
+    // (The suite dispatch prefers catalog specs; the declaration
+    // lives on the single-tool schema both twins share.)
+    {
+        let mut host = ExtHost::new(
+            ExtensionLimits {
+                memory_bytes: 64 * 1024 * 1024,
+                fuel_per_call: 100_000_000,
+                log_limit_bytes: 4096,
+            },
+            fixture.env(),
+        );
+        let wasm = host
+            .load(
+                include_bytes!("../../../extensions/conformance/fixtures/tool-world.wasm"),
+                include_str!("../../../extensions/conformance/extension.toml"),
+            )
+            .expect("load");
+        let spec = wasm.schema().expect("schema");
         assert!(
             spec.extras
                 .get("output-schema")
                 .is_some_and(|schema| schema.contains("answer")),
-            "{side} schema declares the output shape"
+            "wasm schema declares the output shape"
+        );
+    }
+    {
+        let native =
+            conformance::NativeConformance::new(fixture.capabilities());
+        let spec = native.schema();
+        assert!(
+            spec.extras
+                .get("output-schema")
+                .is_some_and(|schema| schema.contains("answer")),
+            "native schema declares the output shape"
         );
     }
 }

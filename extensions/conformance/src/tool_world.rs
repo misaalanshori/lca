@@ -84,10 +84,14 @@ impl Cap for GuestCap {
     }
     fn tools_execute(&self, _parent_call_id: &str, name: &str, args: &str) -> crate::ModeOutcome {
         // The host parents the call; the guest only names it (gh #77).
+        // #49: nested structured data stops here this train - the
+        // `nested-result` WIT record carries no extras (formalized
+        // next ABI train); content and verdict cross.
         let result = lca::host::tools::execute_tool(name, args);
         crate::ModeOutcome {
             ok: !result.is_error,
             text: result.content,
+            extras: Default::default(),
         }
     }
     fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, crate::CapabilityError> {
