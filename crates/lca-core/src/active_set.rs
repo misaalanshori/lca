@@ -85,6 +85,21 @@ impl ExtensionRegistry {
         names
     }
 
+    /// Tools the model discovered through `tool_search` (#55), sorted.
+    /// Declared from discovery on alongside the active set.
+    pub fn discovered_tools(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .discovered
+            .iter()
+            .cloned()
+            .collect();
+        names.sort();
+        names
+    }
+
     /// Select executor-table (built-in) tools for the session (gh
     /// #67): `None` keeps every built-in (no flags); the request
     /// builder filters its static table through this. Never bumps the
@@ -126,6 +141,8 @@ impl ExtensionRegistry {
 
     /// The active set's revision: the turn compares it across requests
     /// to record transcript entries for mid-turn changes (gh #77).
+    /// Discovery bumps it too (#55), so a search records like any
+    /// other mid-turn change.
     pub fn active_revision(&self) -> u64 {
         self.active
             .lock()

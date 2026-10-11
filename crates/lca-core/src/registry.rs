@@ -631,14 +631,22 @@ impl ExtensionRegistry {
     }
 
     /// What the next declaration request carries (gh #77): enabled,
-    /// active, `direct` tools, sorted. Everything else reaches the
-    /// model through discovery, orchestration, or not at all.
+    /// active, `direct` tools, plus `deferred` tools the model already
+    /// discovered through `tool_search` (#55). Everything else reaches
+    /// the model through orchestration, or not at all.
     pub fn declared_tool_specs(&self) -> Vec<ToolSpec> {
+        let discovered = self
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .discovered
+            .clone();
         let mut specs: Vec<ToolSpec> = self
             .tool_specs()
             .into_iter()
             .filter(|spec| {
-                spec.exposure == ToolExposure::Direct && self.is_active(&spec.name, spec.exposure)
+                (spec.exposure == ToolExposure::Direct && self.is_active(&spec.name, spec.exposure))
+                    || (spec.exposure == ToolExposure::Deferred && discovered.contains(&spec.name))
             })
             .collect();
         specs.sort_by(|a, b| a.name.cmp(&b.name));

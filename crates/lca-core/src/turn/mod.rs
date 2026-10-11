@@ -384,6 +384,7 @@ impl Agent<'_> {
         if revision != *active_seen {
             *active_seen = revision;
             let active = self.config.extensions.active_tools();
+            let discovered = self.config.extensions.discovered_tools();
             if let Err(err) = self.store.append(
                 self.session,
                 Record::Custom {
@@ -392,7 +393,7 @@ impl Agent<'_> {
                     id: lca_session::new_record_id(),
                     parent: None,
                     custom_type: "tool-set-change".to_string(),
-                    data: serde_json::json!({ "active": active }),
+                    data: serde_json::json!({ "active": active, "discovered": discovered }),
                 },
             ) {
                 return Err(self.fail(

@@ -472,11 +472,9 @@ impl Agent<'_> {
             );
         }
         let names: Vec<String> = hits.iter().map(|spec| spec.name.clone()).collect();
-        let mut active = registry.active_tools();
-        active.extend(names.iter().cloned());
-        active.sort();
-        active.dedup();
-        let _ = registry.set_active_tools(&active);
+        // #55: discovery records hits without disturbing the user's
+        // own active set; the next request declares them.
+        let _ = registry.note_discovered(&names);
         let mut lines = vec![format!("{} tool(s) activated:", hits.len())];
         for spec in &hits {
             match &spec.namespace {

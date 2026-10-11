@@ -1140,3 +1140,144 @@ async fn stream_observers_see_the_normalized_sequence_in_order() {
         "usage closes the sequence: {kinds:?}"
     );
 }
+
+// A suite double serving one deferred tool (gh #77's discovery shape).
+struct DeferredSuite;
+
+impl ExtensionDispatch for DeferredSuite {
+    fn name(&self) -> &str {
+        "deferred-suite"
+    }
+    fn delivery(&self) -> DeliveryMode {
+        DeliveryMode::Native
+    }
+    fn worlds(&self) -> Vec<World> {
+        vec![World::ToolCatalog]
+    }
+    fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, DispatchError> {
+        Ok(vec![lca_protocol::ToolSpec {
+            name: "lazy".to_string(),
+            description: "a deferred tool".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+            exposure: lca_protocol::ToolExposure::Deferred,
+            namespace: None,
+            annotations: None,
+            extras: Default::default(),
+        }])
+    }
+    fn execute_tool<'a>(
+        &'a self,
+        _call: &'a lca_protocol::ToolCall,
+    ) -> DispatchFuture<'a, Result<lca_protocol::ToolResult, DispatchError>> {
+        Box::pin(std::future::ready(Ok(lca_protocol::ToolResult::ok(
+            "c", "lazy ran",
+        ))))
+    }
+    fn command_specs(&self) -> Result<Vec<lca_protocol::CommandSpec>, DispatchError> {
+        Ok(Vec::new())
+    }
+    fn invoke_command(
+        &self,
+        _name: &str,
+        _argument: &str,
+    ) -> Result<lca_protocol::CommandEffect, DispatchError> {
+        Ok(lca_protocol::CommandEffect::None)
+    }
+    fn on_pre_turn(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_pre_tool_use<'a>(
+        &'a self,
+        _call: &'a lca_protocol::ToolCall,
+    ) -> DispatchFuture<'a, Result<lca_protocol::HookAction, DispatchError>> {
+        Box::pin(std::future::ready(Ok(lca_protocol::HookAction::Allow)))
+    }
+    fn on_post_tool_use<'a>(
+        &'a self,
+        _observation: &'a lca_protocol::PostToolObservation,
+    ) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_post_turn_end<'a>(
+        &'a self,
+        _status: &'a str,
+    ) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_attention_required<'a>(
+        &'a self,
+        _reason: &'a str,
+    ) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+}
+
+// Verifies: #55 (PG-003) - the mid-turn journey: request one carries no
+// deferred tool but offers `tool_search`; the search activates the hit;
+// request two declares it; the log records the change with both lists.
+#[tokio::test]
+async fn tool_search_declares_deferred_hits_mid_turn() {
+    let provider = FakeProvider::builder()
+        .turn(|t| {
+            t.tool_call("tool_search", r#"{"query":"lazy"}"#)
+                .usage(fake_usage(10, 5, 0, 5))
+        })
+        .turn(|t| t.text("done").usage(fake_usage(20, 5, 10, 0)))
+        .build();
+    let mut h = harness("search-declares", provider, default_config());
+    let mut registry = lca_core::ExtensionRegistry::new();
+    registry.register(Arc::new(DeferredSuite));
+    h.config.extensions = Arc::new(registry);
+    let mut sink = CollectingSink::default();
+    let mut prompt = Prompt {
+        answers: vec![],
+        asked: vec![],
+    };
+    let outcome = turn(&mut h, "find the lazy tool", &mut sink, &mut prompt).await;
+    assert_eq!(outcome.status, lca_core::TurnStatus::Ok);
+    let requests = h.provider.requests();
+    assert_eq!(requests.len(), 2, "search round then answer round");
+    let first: Vec<String> = requests[0]
+        .tools
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect();
+    assert!(
+        !first.contains(&"lazy".to_string()),
+        "deferred stays out of request one: {first:?}"
+    );
+    assert!(
+        first.contains(&"tool_search".to_string()),
+        "discovery is offered while undisclosed tools exist: {first:?}"
+    );
+    let second: Vec<String> = requests[1]
+        .tools
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect();
+    assert!(
+        second.contains(&"lazy".to_string()),
+        "request two declares the hit: {second:?}"
+    );
+    let read = h.store.read(&h.session).expect("read");
+    let change = read.records.iter().find_map(|record| match record {
+        Record::Custom {
+            custom_type, data, ..
+        } if custom_type == "tool-set-change" => Some(data),
+        _ => None,
+    });
+    let data = change.expect("the activation is recorded");
+    assert_eq!(
+        data.get("discovered")
+            .and_then(|value| value.as_array())
+            .map(|list| list
+                .iter()
+                .filter_map(|value| value.as_str())
+                .collect::<Vec<_>>()),
+        Some(vec!["lazy"]),
+        "the record names the discovery: {data}"
+    );
+}

@@ -91,7 +91,8 @@ persist. `truncated = true` with an `attachment` means the display shown to the 
 `custom` persists extension state (gh #47: pi's `custom` semantics). Fields: `id`, `custom_type` (which extension owns the entry - readers use it to find their own entries on reload), `data` (the extension's JSON). Writer: the host, appending on the extension's behalf under the capability model - an extension never touches the log file (guest-side imports for this are a minor-version decision for the tree/compaction epics; no `wit/` change in this cycle). Readers: assembly ignores it - it never enters model context. Audit-only on export (see below).
 The host's own `custom_type` values: `tool-set-change` (gh #77 -
 the active tool set after a mid-turn change, `data.active` naming
-every active tool; written before the next model request, so the log
+every active tool and `data.discovered` naming tools `tool_search`
+declared (#55); written before the next model request, so the log
 shows what each request declared) and `previous-summary` (gh #36).
 
 `custom-message` is extension context injection (gh #47: pi's `custom_message` semantics). Fields: `id`, `custom_type`, `content` (the injected text - a string; content blocks ride a later record version if an extension needs them), `display` (whether the interface shows it with distinct styling), optional `details` (extension metadata, never sent to the model). Writer: the host, like `custom` - on an extension's behalf, or on
