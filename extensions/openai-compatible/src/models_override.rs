@@ -22,6 +22,9 @@ pub struct ModelOverride {
     pub resize: Option<lca_protocol::ImageResize>,
     /// Fixed cache lifetimes in seconds, per tier.
     pub prompt_cache: Option<PromptCache>,
+    /// Fixed reasoning levels, canonical names (`off`, `low`, ...).
+    /// `Some(vec![])` means the model does not reason (gh #242).
+    pub thinking_levels: Option<Vec<String>>,
 }
 
 /// Cache lifetimes in seconds, pi's `promptCache` tiers. Carried, not
@@ -119,6 +122,14 @@ pub fn parse_model_overrides(text: &str) -> Vec<ModelOverride> {
                             (short.is_some() || long.is_some())
                                 .then_some(PromptCache { short, long })
                         });
+                    let thinking_levels = table.get("thinking_levels").and_then(|value| {
+                        value.as_array().map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item.as_str().map(str::to_string))
+                                .collect()
+                        })
+                    });
                     Some(ModelOverride {
                         id,
                         provider,
@@ -126,6 +137,7 @@ pub fn parse_model_overrides(text: &str) -> Vec<ModelOverride> {
                         input,
                         resize,
                         prompt_cache,
+                        thinking_levels,
                     })
                 })
                 .collect()
@@ -183,6 +195,12 @@ pub fn override_extras(item: &ModelOverride) -> Vec<(String, String)> {
             ));
         }
     }
+    if let Some(levels) = &item.thinking_levels {
+        extras.push((
+            lca_protocol::THINKING_LEVELS_EXTRA.to_string(),
+            levels.join(","),
+        ));
+    }
     extras
 }
 
@@ -209,4 +227,70 @@ pub fn apply_model_overrides(
             model
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Verifies: gh #242 - `thinking_levels` in `models.toml` parses
+    // into the override, and an empty list (no reasoning) survives
+    // as explicitly empty, never absent.
+    #[test]
+    fn thinking_levels_parse_into_the_override() {
+        let parsed = parse_model_overrides(
+            "[[model]]\nid = \"gem-flash\"\nthinking_levels = [\"low\", \"medium\", \"high\"]\n",
+        );
+        assert_eq!(
+            parsed.first().and_then(|item| item.thinking_levels.clone()),
+            Some(vec![
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string()
+            ])
+        );
+        let bare = parse_model_overrides("[[model]]\nid = \"gpt-4o\"\nthinking_levels = []\n");
+        assert_eq!(
+            bare.first().and_then(|item| item.thinking_levels.clone()),
+            Some(Vec::new()),
+            "empty means no reasoning, not unknown"
+        );
+        let unset = parse_model_overrides("[[model]]\nid = \"mystery\"\n");
+        assert_eq!(
+            unset.first().and_then(|item| item.thinking_levels.clone()),
+            None,
+            "absent means unknown"
+        );
+    }
+
+    // Verifies: gh #242 - the override's levels ride the extras
+    // channel the picker reads, comma-joined; empty joins to empty.
+    #[test]
+    fn thinking_levels_ride_the_extras_channel() {
+        let item = ModelOverride {
+            id: "m".to_string(),
+            thinking_levels: Some(vec!["low".to_string(), "high".to_string()]),
+            ..Default::default()
+        };
+        assert!(
+            override_extras(&item).contains(&(
+                lca_protocol::THINKING_LEVELS_EXTRA.to_string(),
+                "low,high".to_string()
+            )),
+            "{:?}",
+            override_extras(&item)
+        );
+        let none = ModelOverride {
+            id: "n".to_string(),
+            thinking_levels: Some(Vec::new()),
+            ..Default::default()
+        };
+        assert!(
+            override_extras(&none).contains(&(
+                lca_protocol::THINKING_LEVELS_EXTRA.to_string(),
+                String::new()
+            )),
+            "empty stays present: {none:?}"
+        );
+    }
 }

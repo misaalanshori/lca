@@ -82,6 +82,34 @@ fn read_into<R: std::io::Read>(
     }
 }
 
+/// The levels `/thinking` offers (gh #41, gh #242): the user's
+/// `[models.thinking_levels]` set wins; else the model's advertised
+/// `thinking_levels` extras filter the canonical order (unknown names
+/// drop); else everything, the historical behavior for unknowing
+/// models. `Some("")` (advertised empty) means the model does not
+/// reason: the empty offer makes the picker notice instead.
+fn offered_levels(configured: Option<&[String]>, advertised: Option<&str>) -> Vec<String> {
+    const ORDER: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    if let Some(allowed) = configured {
+        return ORDER
+            .iter()
+            .filter(|level| allowed.iter().any(|name| name == *level))
+            .map(|level| (*level).to_string())
+            .collect();
+    }
+    match advertised {
+        Some(list) => {
+            let advertised: Vec<&str> = list.split(',').map(str::trim).collect();
+            ORDER
+                .iter()
+                .filter(|level| advertised.contains(level))
+                .map(|level| (*level).to_string())
+                .collect()
+        }
+        None => ORDER.iter().map(|level| (*level).to_string()).collect(),
+    }
+}
+
 impl Ui {
     /// The host hooks wired for this composition (S1).
     pub(super) fn hooks(self: &Arc<Self>) -> UiHooks {
@@ -132,6 +160,10 @@ impl Ui {
                 // gh #41: the picker offers the current model's allowed
                 // set in canonical order (a model without `high` never
                 // shows it); models without a set offer everything.
+                // Gh #242: the user's `[models.thinking_levels]` set
+                // wins; else the model's advertised `thinking_levels`
+                // extras filter the order (unknown names drop, empty
+                // means no reasoning and the picker notices instead).
                 Some(Arc::new(move || {
                     let model = ui
                         .model_cell
@@ -140,16 +172,19 @@ impl Ui {
                         .id
                         .clone();
                     let config = crate::lock(&ui.config);
-                    const ORDER: &[&str] =
-                        &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-                    match config.allowed_thinking_levels(&model) {
-                        Some(allowed) => ORDER
-                            .iter()
-                            .filter(|level| allowed.iter().any(|name| name == *level))
-                            .map(|level| (*level).to_string())
-                            .collect(),
-                        None => ORDER.iter().map(|level| (*level).to_string()).collect(),
-                    }
+                    let advertised = ui
+                        .all_models()
+                        .into_iter()
+                        .find(|info| info.id == model)
+                        .and_then(|info| {
+                            info.extras
+                                .get(lca_protocol::THINKING_LEVELS_EXTRA)
+                                .cloned()
+                        });
+                    offered_levels(
+                        config.allowed_thinking_levels(&model),
+                        advertised.as_deref(),
+                    )
                 }))
             },
             set_thinking: {
@@ -1053,4 +1088,32 @@ mod tests {
             "program and flag split, path appended: {edited:?}"
         );
     }
+}
+
+// Verifies: gh #242 - the offered set resolves user config first,
+// then the model's advertised extras, then everything: an empty
+// advertisement means no reasoning (the picker notices instead).
+#[test]
+fn offered_levels_prefer_config_then_extras_then_all() {
+    assert_eq!(
+        offered_levels(Some(&["low".to_string()]), Some("low,medium,high")),
+        vec!["low".to_string()],
+        "config wins over extras"
+    );
+    assert_eq!(
+        offered_levels(None, Some("high,low")),
+        vec!["low".to_string(), "high".to_string()],
+        "extras filter to canonical order"
+    );
+    assert_eq!(
+        offered_levels(None, Some("bogus")),
+        Vec::<String>::new(),
+        "unknown names drop"
+    );
+    assert_eq!(
+        offered_levels(None, Some("")),
+        Vec::<String>::new(),
+        "advertised empty means no reasoning"
+    );
+    assert_eq!(offered_levels(None, None).len(), 7, "unknown offers all");
 }

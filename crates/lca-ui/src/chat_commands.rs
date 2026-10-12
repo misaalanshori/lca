@@ -54,9 +54,24 @@ impl Chat {
             .hooks
             .thinking_offered
             .as_ref()
-            .map(|offer| offer())
-            .filter(|offered| !offered.is_empty())
-            .unwrap_or_else(thinking_offered_all);
+            .map(|offer| offer());
+        // Gh #242: an explicitly empty offer means the model does
+        // not reason - notice instead of an empty picker. No hook
+        // (or nothing configured anywhere) keeps the historical all.
+        let Some(offered) = offered else {
+            return self.open_thinking_picker_with(thinking_offered_all(), current);
+        };
+        if offered.is_empty() {
+            self.world.notice = Some(format!(
+                "Current model ({}) does not support thinking",
+                self.model_label()
+            ));
+            return;
+        }
+        self.open_thinking_picker_with(offered, current);
+    }
+
+    fn open_thinking_picker_with(&mut self, offered: Vec<String>, current: Option<String>) {
         let selected = match current.as_deref() {
             None => 0,
             Some(level) => offered

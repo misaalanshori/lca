@@ -129,6 +129,12 @@ id = "gpt-4o"             # matches the `list-models` id
 provider = "openai-compatible"  # optional: scope to one provider
 context_window = 128000   # or "$MY_WINDOW"
 input = ["text", "image"]
+# Reasoning tiers the model supports, canonical names (`off`,
+# `low`, ...); an empty list means it does not reason (gh #242).
+# `/thinking` offers exactly these, in canonical order; unknown
+# levels drop. Absent means unknown and offers everything, as
+# `[models.thinking_levels]` still wins when both say.
+thinking_levels = ["low", "medium", "high"]
 
 [model.input_limits.images.resize]
 max_width = 1568
