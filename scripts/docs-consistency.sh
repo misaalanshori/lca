@@ -128,8 +128,48 @@ if [ -n "$leak" ]; then
   fail=1
 fi
 
+# Reserved-string vocabularies (gh #108, QA-022): explicit value lists
+# on both sides; a rename edits the docs table, the code, and this
+# list together. The Rust vocabulary test pins parse/serialize
+# behavior; this pins the docs tables to the same values.
+record_tags=(
+  session-start user assistant tool-call tool-result permission
+  extension-event compaction fork-point model-change thinking-level-change
+  usage label session-info custom custom-message context-edit
+  branch-point branch-summary session-end
+)
+for tag in "${record_tags[@]}"; do
+  if ! grep -qF "\`$tag\`" docs/session-log-format.md; then
+    echo "docs-consistency: record tag '$tag' is known to the reader but missing from docs/session-log-format.md"
+    fail=1
+  fi
+  if ! grep -qF "\"$tag\"" crates/lca-session/src/store.rs; then
+    echo "docs-consistency: record tag '$tag' is documented but missing from the reader's known types"
+    fail=1
+  fi
+done
+scopes=(workspace private home-config temp)
+for scope in "${scopes[@]}"; do
+  if ! grep -qF "\`$scope\`" docs/capabilities.md; then
+    echo "docs-consistency: scope '$scope' parses but is missing from docs/capabilities.md"
+    fail=1
+  fi
+  if ! grep -qF "\"$scope\"" crates/lca-permissions/src/scope.rs; then
+    echo "docs-consistency: scope '$scope' is documented but missing from the scope vocabulary"
+    fail=1
+  fi
+done
+extras_keys=(image.vision image.resize prompt_cache thinking_levels)
+for key in "${extras_keys[@]}"; do
+  if ! grep -qF "\`$key\`" docs/providers/openai-compatible.md; then
+    echo "docs-consistency: extras key '$key' is a constant but missing from docs/providers/openai-compatible.md"
+    fail=1
+  fi
+done
+
 if [ "$fail" = 0 ]; then
   echo "docs-consistency: one gate list, two pointers, no copies"
   echo "docs-consistency: preset table and capability sections match their data"
+  echo "docs-consistency: vocabulary tables match their validators"
 fi
 exit "$fail"

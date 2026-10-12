@@ -1103,7 +1103,17 @@ const KNOWN_TYPES: &[&str] = &[
     "custom-message",
     "context-edit",
     "session-end",
+    "branch-point",
+    "branch-summary",
 ];
+
+/// The record `t` tags the reader treats as known (gh #108): a
+/// malformed line of one of these stops the reader as corruption
+/// (FR-SESS-6); any other tag skips as a newer agent's record. The
+/// vocabulary test pins this list against every tag the writer emits.
+pub fn known_record_types() -> &'static [&'static str] {
+    KNOWN_TYPES
+}
 
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let temp = path.with_extension("tmp");

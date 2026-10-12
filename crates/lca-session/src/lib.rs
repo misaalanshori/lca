@@ -27,7 +27,7 @@ pub use lca_protocol::{PermissionDecision, ToolResultStatus, ToolSource};
 pub use migrate::{MigrateReport, VersionState};
 pub use store::{
     DEFAULT_TITLE, ExportOptions, ReadOutcome, Session, SessionMeta, SessionStore, SessionSummary,
-    display_path, row_label,
+    display_path, known_record_types, row_label,
 };
 pub use tree::{EntryKind, EntryRow};
 pub use view::ViewMode;

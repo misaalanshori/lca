@@ -69,8 +69,18 @@ be billed.
 persisted) and apply to default-profile models only; a named profile is
 its own, environment notwithstanding.
 
-## Cache behavior
+## `ModelInfo.extras` keys
 
+`list-models` entries carry an `extras` map for non-structural per-model data (gh #108: the exact strings are the cross-boundary contract — a WASM guest in any language writes them, the host reads them, and a typo on either side fails silently, so the vocabulary test pins them against the `lca-protocol` constants):
+
+| Key | Value | Read by |
+|---|---|---|
+| `image.vision` | `"true"` (takes image input) or `"false"`; absent means unknown and bytes pass through | The tool executor's image policy |
+| `image.resize` | `WIDTHxHEIGHT:BYTES` vendor-sourced profile | Image downscaling before send |
+| `prompt_cache` | `short=SEC,long=SEC` cache lifetimes | The cache-warming eligibility gate (gh #42, #64) |
+| `thinking_levels` | Comma-joined canonical reasoning levels; present-but-empty means the model does not reason | The `/thinking` picker (gh #242) |
+
+## Cache behavior
 Most OpenAI-shaped endpoints, including OpenAI's own, cache automatically with no explicit marker required, so this provider generally ignores the cache-boundary hint rather than acting on it. It still reports `cache_read` and `cache_write` from the response's usage fields whenever the configured endpoint provides them, since that costs nothing and is what makes the cache-waste measurement in `docs/testing-plan.md` work for whatever server a user pointed this provider at.
 
 ## Context windows

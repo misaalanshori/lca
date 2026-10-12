@@ -71,6 +71,13 @@ path = "tests/regressions/mod.rs"
 name = "pi-parity"
 path = "tests/pi-parity/mod.rs"
 
+# QA-022 (#108): the reserved-string vocabulary coverage contract.
+# Record `t` values, extras keys, fs scopes, and net patterns are
+# stringly typed by design; these tests pin validators to doc tables.
+[[test]]
+name = "vocabulary"
+path = "tests/vocabulary/mod.rs"
+
 [workspace.package]
 version = "0.6.0"
 edition = "2024"
