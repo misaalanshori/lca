@@ -1,0 +1,8 @@
+name = "rules-compat"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["context-transform"]
+description = "Discovers Cursor, Cline, Windsurf, and Copilot rule files and injects them into prompt context."
+
+[capabilities.fs]
+workspace = "read"
