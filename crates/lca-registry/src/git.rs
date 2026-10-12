@@ -33,11 +33,7 @@ fn git(args: &[&str], dir: &Path) -> Result<String, Error> {
         .current_dir(dir)
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
-        .map_err(|err| {
-            Error::Fetch(format!(
-                "git clone needs the `git` command on PATH: {err}"
-            ))
-        })?;
+        .map_err(|err| Error::Fetch(format!("git clone needs the `git` command on PATH: {err}")))?;
     if !out.status.success() {
         return Err(Error::Fetch(format!(
             "git {} failed: {}",
@@ -72,9 +68,7 @@ pub fn resolve_git(source: &str) -> Result<Resolved, Error> {
         .args(["clone", "--quiet", &url, &scratch.display().to_string()])
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
-        .map_err(|err| {
-            Error::Fetch(format!("git clone needs the `git` command on PATH: {err}"))
-        })
+        .map_err(|err| Error::Fetch(format!("git clone needs the `git` command on PATH: {err}")))
         .and_then(|out| {
             if out.status.success() {
                 Ok(out)
