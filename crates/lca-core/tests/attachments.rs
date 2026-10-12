@@ -106,3 +106,58 @@ fn assembly_appends_an_image_block_for_a_user_attachment() {
         "text first, then the resolved image; the missing hash is skipped"
     );
 }
+
+// Verifies: gh #113 - assembly emits image blocks for a tool result's
+// persisted image hashes (same resolver shape as user attachments);
+// an unresolvable hash is skipped without failing the turn.
+#[test]
+fn assembly_emits_image_blocks_for_tool_result_images() {
+    let records = vec![
+        Record::SessionStart {
+            v: FORMAT_VERSION,
+            ts: 1,
+            agent_version: "0.1.3".to_string(),
+            abi_version: "0.5".to_string(),
+            working_dir: "/tmp".to_string(),
+        },
+        Record::ToolResult {
+            v: FORMAT_VERSION,
+            ts: 2,
+            id: "r1".to_string(),
+            parent: None,
+            call_id: "call-1".to_string(),
+            status: lca_protocol::ToolResultStatus::Ok,
+            content: Some("[image image/png, 12 bytes]".to_string()),
+            attachment: None,
+            truncated: false,
+            exit_code: None,
+            nested: Vec::new(),
+            full_output_path: None,
+            images: vec!["hash-a".to_string(), "hash-missing".to_string()],
+        },
+    ];
+    let assembled = lca_core::assemble_with(&records, "system", &|hash| {
+        (hash == "hash-a").then(|| lca_core::Attachment {
+            media_type: "image/png".to_string(),
+            bytes: PNG.to_vec(),
+        })
+    });
+    let result = assembled
+        .messages
+        .iter()
+        .find(|message| message.role == lca_protocol::MessageRole::Tool)
+        .expect("the tool result message");
+    assert_eq!(
+        result.content,
+        vec![
+            lca_protocol::ContentBlock::Text {
+                text: "[image image/png, 12 bytes]".to_string()
+            },
+            lca_protocol::ContentBlock::Image {
+                media_type: "image/png".to_string(),
+                bytes: PNG.to_vec()
+            },
+        ],
+        "text first, then the resolved image; the missing hash is skipped"
+    );
+}
