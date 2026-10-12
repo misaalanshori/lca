@@ -45,6 +45,35 @@ fn fixture_tree(name: &str) -> PathBuf {
     link("docs/release-policy.md");
     link("docs/capabilities.md");
     link("docs/providers/README.md");
+    link("docs/session-log-format.md");
+    link("docs/providers/openai-compatible.md");
+    link("crates/lca-session/src/store.rs");
+    link("crates/lca-permissions/src/scope.rs");
+    // The README link-rot check resolves every `docs/*.md` link
+    // against the tree, so the fixture tracks the README's link set
+    // instead of a hardcoded copy that rots behind it.
+    let readme = std::fs::read_to_string(repo.join("README.md")).expect("read README");
+    let mut links: Vec<&str> = Vec::new();
+    let mut rest = readme.as_str();
+    while let Some(start) = rest.find("(docs/") {
+        rest = &rest[start + 1..];
+        let end = rest.find(')').expect("link closes");
+        let mut target = &rest[..end];
+        if let Some(hash) = target.find('#') {
+            target = &target[..hash];
+        }
+        if target.ends_with(".md") && !links.contains(&target) {
+            links.push(target);
+        }
+        rest = &rest[end..];
+    }
+    for target in links {
+        // The explicit links above overlap the README's set; a
+        // second symlink for the same path is an error, not a copy.
+        if !tree.join(target).exists() {
+            link(target);
+        }
+    }
     link("schemas/extension-manifest.schema.json");
     link("extensions/openai-compatible/resources/provider-presets.toml");
     link("AGENTS.md");
@@ -156,6 +185,42 @@ fn a_documented_capability_missing_from_the_schema_fails_the_net() {
     assert!(
         !output.status.success(),
         "a documented capability the schema never heard of must fail the net"
+    );
+    let _ = std::fs::remove_dir_all(&tree);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_dropped_record_tag_in_docs_fails_the_net() {
+    let tree = fixture_tree("lca-drift-tag");
+    drift_file(
+        &tree,
+        "docs/session-log-format.md",
+        "`branch-summary`",
+        "`branch-summary-x`",
+    );
+    let output = run_net(&tree);
+    assert!(
+        !output.status.success(),
+        "a documented record tag deleted behind the reader's back must fail the net"
+    );
+    let _ = std::fs::remove_dir_all(&tree);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_dropped_scope_in_docs_fails_the_net() {
+    let tree = fixture_tree("lca-drift-scope");
+    drift_file(
+        &tree,
+        "docs/capabilities.md",
+        "| `workspace` |",
+        "| `workspace-x` |",
+    );
+    let output = run_net(&tree);
+    assert!(
+        !output.status.success(),
+        "a documented scope deleted behind the vocabulary's back must fail the net"
     );
     let _ = std::fs::remove_dir_all(&tree);
 }
