@@ -1134,6 +1134,10 @@ mod label_tests;
 mod queue_tests;
 
 #[cfg(test)]
+#[path = "chat_tree_tests.rs"]
+mod tree_tests;
+
+#[cfg(test)]
 #[path = "chat_extman_tests.rs"]
 mod extman_tests;
 
