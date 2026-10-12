@@ -58,6 +58,7 @@ fn chat(grants: Vec<GrantEntry>) -> Chat {
                 ..UiHooks::default()
             },
             fullscreen: true,
+            follow_up_mode: lca_protocol::QueueMode::OneAtATime,
         },
         Arc::new(KeybindingsManager::new()),
     )

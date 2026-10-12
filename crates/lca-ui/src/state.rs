@@ -786,6 +786,9 @@ pub struct UiOptions {
     pub hooks: UiHooks,
     /// Whether the session starts in the fullscreen (alt-screen) renderer.
     pub fullscreen: bool,
+    /// How queued follow-ups flush at turn end (gh #76,
+    /// `queue.follow_up_mode`): the host sets it from configuration.
+    pub follow_up_mode: lca_protocol::QueueMode,
 }
 
 /// A worker asking a host-rendered question (gh #124): the question
@@ -1078,6 +1081,7 @@ mod tests {
             confirm_switch: None,
             hooks: UiHooks::default(),
             fullscreen: false,
+            follow_up_mode: lca_protocol::QueueMode::OneAtATime,
         }
     }
 

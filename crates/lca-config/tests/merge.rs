@@ -1075,7 +1075,10 @@ fn queue_modes_default_merge_and_refuse() {
     assert_eq!(config.queue_steering_mode(), "one-at-a-time");
     assert_eq!(config.queue_follow_up_mode(), "all");
 
-    write(&dir.join("user.toml"), "queue.steering_mode = \"sometimes\"\n");
+    write(
+        &dir.join("user.toml"),
+        "queue.steering_mode = \"sometimes\"\n",
+    );
     Config::load(&lca_config::LoadInput {
         user_file: Some(dir.join("user.toml")),
         ..Default::default()

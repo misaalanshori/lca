@@ -16,7 +16,7 @@ mod values;
 
 pub use keys::{
     CODEBLOCK_BORDERS, CustomCatalog, DOUBLE_ESCAPE_ACTIONS, FULLSCREEN_EXIT_OUTPUTS,
-    FULLSCREEN_SCROLLBARS, KNOWN_KEYS, MERMAID_MODES, PERMISSION_MODES, SHELL_TOOLS,
+    FULLSCREEN_SCROLLBARS, KNOWN_KEYS, MERMAID_MODES, PERMISSION_MODES, QUEUE_MODES, SHELL_TOOLS,
     THINKING_LEVELS, THINKING_VISIBILITIES, TREE_FILTER_MODES, TRUST_DEFAULTS, TypedValue,
     parse_typed,
 };
@@ -181,6 +181,12 @@ pub struct Config {
     shell_path: Option<String>,
     shell_command_prefix: Option<String>,
     permissions_mode: Option<String>,
+    // gh #76: queue delivery modes (pi's names verbatim). Steering
+    // defaults to `all` (today's flush); follow-ups to `one-at-a-time`
+    // (today's one-per-turn-end). Both differ from pi's defaults by
+    // decision: changing them would change long-standing behavior.
+    queue_steering_mode: String,
+    queue_follow_up_mode: String,
     thinking_visibility: Option<String>,
     // gh #43: matched skill-text injection is opt-in (default OFF);
     // the catalog advertises either way.
@@ -287,6 +293,8 @@ impl Default for Config {
             shell_path: None,
             shell_command_prefix: None,
             permissions_mode: None,
+            queue_steering_mode: "all".to_string(),
+            queue_follow_up_mode: "one-at-a-time".to_string(),
             thinking_visibility: None,
             skills_inject_matched: false,
             markdown_codeblock_border: "full".to_string(),
@@ -419,6 +427,8 @@ impl Config {
             "shell.path",
             "shell.command_prefix",
             "permissions.mode",
+            "queue.steering_mode",
+            "queue.follow_up_mode",
             "trust.default_project",
             "ui.thinking",
             "skills.inject_matched",
@@ -912,6 +922,18 @@ impl Config {
                     }
                     this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
                 }
+                "queue.steering_mode" | "queue.follow_up_mode" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    if !QUEUE_MODES.contains(&text) {
+                        return Err(invalid(format!(
+                            "expected one of {}, got `{text}`",
+                            QUEUE_MODES.join(", ")
+                        )));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
                 "thinking" => {
                     let text = value.as_str().ok_or_else(|| {
                         invalid(format!("expected a string, got {}", type_name(&value)))
@@ -1006,6 +1028,8 @@ impl Config {
             "shell.path",
             "shell.command_prefix",
             "permissions.mode",
+            "queue.steering_mode",
+            "queue.follow_up_mode",
             "trust.default_project",
             "ui.thinking",
             "skills.inject_matched",
@@ -1114,6 +1138,8 @@ impl Config {
             ("shell.path", TypedValue::Text(v)) => self.shell_path = Some(v),
             ("shell.command_prefix", TypedValue::Text(v)) => self.shell_command_prefix = Some(v),
             ("permissions.mode", TypedValue::Text(v)) => self.permissions_mode = Some(v),
+            ("queue.steering_mode", TypedValue::Text(v)) => self.queue_steering_mode = v,
+            ("queue.follow_up_mode", TypedValue::Text(v)) => self.queue_follow_up_mode = v,
             ("ui.thinking", TypedValue::Text(v)) => self.thinking_visibility = Some(v),
             ("skills.inject_matched", TypedValue::Bool(v)) => self.skills_inject_matched = v,
             ("thinking", TypedValue::Text(v)) => self.thinking = Some(v),

@@ -87,6 +87,10 @@ pub struct Chat {
     pub world: UiState,
     /// Messages queued while a turn runs (ADR-0038).
     pub pending: Vec<PendingMessage>,
+    /// How queued follow-ups flush at turn end (gh #76): `OneAtATime`
+    /// pops one per turn end (historical); `All` flushes every pending
+    /// follow-up as one joined submission. Set from `queue.follow_up_mode`.
+    pub follow_up_mode: lca_protocol::QueueMode,
     /// The shared queue the running turn drains at each boundary.
     pub current_steer: Option<lca_protocol::SteerQueue>,
     /// A submitted prompt awaiting the loop's handoff.
@@ -210,6 +214,9 @@ impl Chat {
     /// Build the chat: widgets, theme, and the autocomplete chain.
     pub fn new(options: UiOptions, keybindings: Arc<KeybindingsManager>) -> Chat {
         let mut world = UiState::new(options);
+        // gh #76: the follow-up flush mode rides the chat (the options
+        // move into the world below, so it is read out first).
+        let world_follow_up_mode = world.options.follow_up_mode;
         // The resumed session's records replay with the live rendering and
         // the trailing notices come after them, so both are taken out of the
         // options before `world` moves into the chat (FR-UI-7).
@@ -295,6 +302,7 @@ impl Chat {
             separator: Separator::new(),
             world,
             pending: Vec::new(),
+            follow_up_mode: world_follow_up_mode,
             current_steer: None,
             submitted: None,
             submitted_queue: None,
@@ -909,6 +917,9 @@ impl Chat {
     /// Leading queued commands dispatch first (they never become model
     /// text and never join the transcript as user messages); the first
     /// queued message behind them flushes as the next turn, if any.
+    /// Gh #76: `All` follow-up mode flushes every pending follow-up as
+    /// one joined submission instead (steer entries flush one per call
+    /// either way - the boundary already delivered them).
     pub fn take_next_pending(&mut self) -> Option<String> {
         // Queued commands run first, as commands: dispatch each one in
         // order and stop flushing if one of them submitted a prompt of
@@ -923,6 +934,9 @@ impl Chat {
         if self.pending.is_empty() {
             return None;
         }
+        if self.follow_up_mode == lca_protocol::QueueMode::All {
+            return self.take_all_pending();
+        }
         let next = self.pending.remove(0);
         self.transcript.push_user(next.text.clone());
         // The flush keeps the marker the message was queued with: a steer
@@ -930,6 +944,24 @@ impl Chat {
         // was running", and the record this turn writes has to say so.
         self.submitted_queue = Some(next.mode);
         Some(next.text)
+    }
+
+    /// Flush every pending message as one joined submission (gh #76's
+    /// `all` follow-up mode): commands already dispatched above, so
+    /// only texts remain; the first message's marker rides the turn.
+    fn take_all_pending(&mut self) -> Option<String> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        let drained: Vec<PendingMessage> = std::mem::take(&mut self.pending);
+        let mode = drained.first().map(|next| next.mode);
+        let mut texts = Vec::new();
+        for next in &drained {
+            self.transcript.push_user(next.text.clone());
+            texts.push(next.text.clone());
+        }
+        self.submitted_queue = mode;
+        Some(texts.join("\n\n"))
     }
 
     /// Restore the queued messages to the editor, in order (FR-CORE-12).

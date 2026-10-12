@@ -367,6 +367,16 @@ impl Config {
         self.permissions_mode.as_deref()
     }
 
+    /// `queue.steering_mode`: `all` (default) or `one-at-a-time` (gh #76).
+    pub fn queue_steering_mode(&self) -> &str {
+        &self.queue_steering_mode
+    }
+
+    /// `queue.follow_up_mode`: `one-at-a-time` (default) or `all` (gh #76).
+    pub fn queue_follow_up_mode(&self) -> &str {
+        &self.queue_follow_up_mode
+    }
+
     /// `ui.thinking`: `snippet` (default), `full`, or `hidden` (R6).
     /// Distinct from [`Config::thinking`], which is the effort level; a
     /// dotted `thinking.*` key cannot exist beside a `thinking = "..."`

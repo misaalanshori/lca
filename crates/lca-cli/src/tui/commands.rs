@@ -158,6 +158,9 @@ impl Ui {
                 config.ui_fullscreen(),
             )
             .0,
+            // gh #76: queued follow-ups flush per `queue.follow_up_mode`.
+            follow_up_mode: lca_protocol::QueueMode::parse(config.queue_follow_up_mode())
+                .unwrap_or_default(),
             slash_commands: self.slash_commands(),
             workspace: self.cwd.clone(),
             // gh #66: the user key file sits beside the config (the

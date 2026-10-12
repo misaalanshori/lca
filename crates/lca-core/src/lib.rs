@@ -137,6 +137,9 @@ pub struct AgentConfig {
     /// Messages the interface queued while the turn runs; drained at each
     /// model-call boundary (ADR-0038).
     pub steer: lca_protocol::SteerQueue,
+    /// How queued steering flushes (gh #76): `All` drains everything
+    /// per boundary (historical); `OneAtATime` drains one, FIFO.
+    pub steering_mode: lca_protocol::QueueMode,
 }
 
 impl std::fmt::Debug for AgentConfig {
@@ -219,6 +222,7 @@ impl Default for AgentConfig {
             data_dir: std::path::PathBuf::new(),
             thinking_budget: None,
             steer: lca_protocol::steer_queue(),
+            steering_mode: lca_protocol::QueueMode::All,
         }
     }
 }

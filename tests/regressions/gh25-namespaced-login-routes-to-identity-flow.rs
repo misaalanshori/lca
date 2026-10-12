@@ -119,6 +119,7 @@ fn chat(seams: &Seams) -> Chat {
         confirm_switch: None,
         hooks: UiHooks::default(),
         fullscreen: false,
+        follow_up_mode: lca_protocol::QueueMode::OneAtATime,
     };
     Chat::new(options, Arc::new(KeybindingsManager::new()))
 }

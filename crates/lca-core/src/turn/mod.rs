@@ -342,11 +342,22 @@ impl Agent<'_> {
     /// Drain the steering queue into user records at this boundary
     /// (ADR-0038): each steered message extends the message list the way any
     /// user message does, so the stable cache prefix keeps its value.
+    /// Gh #76: `OneAtATime` drains the first waiting message and leaves
+    /// the rest queued, in order; `All` flushes everything (historical).
     #[allow(clippy::result_large_err)]
     fn drain_steer(&self, sink: &mut dyn TurnSink) -> Result<(), TurnOutcome> {
         let steered: Vec<lca_protocol::QueuedMessage> = {
             let mut queue = super::lock(&self.config.steer);
-            std::mem::take(&mut *queue)
+            match self.config.steering_mode {
+                lca_protocol::QueueMode::All => std::mem::take(&mut *queue),
+                lca_protocol::QueueMode::OneAtATime => {
+                    if queue.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![queue.remove(0)]
+                    }
+                }
+            }
         };
         for message in steered {
             let marker = message.mode.marker().to_string();

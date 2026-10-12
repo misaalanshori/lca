@@ -54,6 +54,7 @@ fn chat() -> Chat {
             confirm_switch: None,
             hooks: UiHooks::default(),
             fullscreen: true,
+            follow_up_mode: lca_protocol::QueueMode::OneAtATime,
         },
         Arc::new(KeybindingsManager::new()),
     )

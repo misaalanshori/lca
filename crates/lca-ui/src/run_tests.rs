@@ -75,6 +75,7 @@ fn options() -> UiOptions {
         confirm_switch: None,
         hooks: crate::state::UiHooks::default(),
         fullscreen: false,
+        follow_up_mode: lca_protocol::QueueMode::OneAtATime,
     }
 }
 

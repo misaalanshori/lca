@@ -18,6 +18,10 @@ pub const SHELL_TOOLS: &[&str] = &["auto", "bash", "pwsh", "powershell", "cmd"];
 /// The `permissions.mode` vocabulary (ADR-0042).
 pub const PERMISSION_MODES: &[&str] = &["ask", "yolo"];
 
+/// The queue delivery vocabulary (gh #76, pi's `steeringMode` /
+/// `followUpMode` names verbatim).
+pub const QUEUE_MODES: &[&str] = &["all", "one-at-a-time"];
+
 /// One user-configured custom extension catalog (#227): an id, a
 /// display name, and the catalog document URL. Parsed from the
 /// `extensions.catalogs` array; the hub merges these behind the
@@ -117,6 +121,8 @@ pub const KNOWN_KEYS: &[&str] = &[
     "shell.path",
     "shell.command_prefix",
     "permissions.mode",
+    "queue.steering_mode",
+    "queue.follow_up_mode",
     "trust.default_project",
     "ui.thinking",
     "markdown.codeblock_border",
@@ -299,6 +305,16 @@ pub fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, Conf
                 Err(invalid(format!(
                     "expected one of {}, got `{raw}`",
                     PERMISSION_MODES.join(", ")
+                )))
+            }
+        }
+        "queue.steering_mode" | "queue.follow_up_mode" => {
+            if QUEUE_MODES.contains(&raw) {
+                Ok(TypedValue::Text(raw.to_string()))
+            } else {
+                Err(invalid(format!(
+                    "expected one of {}, got `{raw}`",
+                    QUEUE_MODES.join(", ")
                 )))
             }
         }

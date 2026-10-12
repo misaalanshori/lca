@@ -69,6 +69,38 @@ pub struct QueuedMessage {
     pub mode: SubmitMode,
 }
 
+/// How queued messages flush (gh #76, pi's `steeringMode` /
+/// `followUpMode` vocabulary): everything waiting goes at once, or
+/// one per boundary/turn, in order either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QueueMode {
+    /// Flush everything waiting (LCA's historical behavior for
+    /// steering; pi defaults the other way).
+    #[default]
+    All,
+    /// One per boundary (steering) or turn end (follow-ups).
+    OneAtATime,
+}
+
+impl QueueMode {
+    /// Parse a config value; pi's hyphenated names only.
+    pub fn parse(text: &str) -> Option<QueueMode> {
+        match text {
+            "all" => Some(QueueMode::All),
+            "one-at-a-time" => Some(QueueMode::OneAtATime),
+            _ => None,
+        }
+    }
+
+    /// The config-file spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QueueMode::All => "all",
+            QueueMode::OneAtATime => "one-at-a-time",
+        }
+    }
+}
+
 /// The shared queue the interface fills and the turn loop drains at each
 /// model-call boundary (ADR-0038). `FollowUp` entries stay in the
 /// interface's own list; only `Steer` entries are pushed here.

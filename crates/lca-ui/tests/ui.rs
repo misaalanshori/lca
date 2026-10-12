@@ -54,6 +54,7 @@ fn options(plain: bool) -> UiOptions {
         confirm_switch: None,
         hooks: lca_ui::UiHooks::default(),
         fullscreen: true,
+        follow_up_mode: lca_protocol::QueueMode::OneAtATime,
     }
 }
 

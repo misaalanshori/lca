@@ -512,6 +512,8 @@ fn agent_config_for(
         retry_max_delay: std::time::Duration::from_millis(config.provider_retry_max_delay_ms()),
         max_iterations: config.tool_max_iterations() as u32,
         extensions: registry.clone(),
+        steering_mode: lca_protocol::QueueMode::parse(config.queue_steering_mode())
+            .unwrap_or_default(),
         compaction_threshold: config.compaction_threshold(),
         compaction_enabled: config.compaction_enabled(),
         compaction_reserve_tokens: config.compaction_reserve_tokens(),
