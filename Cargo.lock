@@ -1081,6 +1081,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hash-edit"
+version = "0.6.0"
+dependencies = [
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-tools",
+ "serde_json",
+ "tokio",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
