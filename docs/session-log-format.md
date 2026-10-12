@@ -62,7 +62,7 @@ nested-call record: one entry per directly nested call (`name`,
 `status`, `content_head` capped at 500 characters), the first twenty
 winning; calls that nested nothing carry none. Nested calls never
 appear as their own records - the parent's result is where they
-persist. `truncated = true` with an `attachment` means the display shown to the model was cut and the full text is in that attachment; `truncated = true` with no attachment means the content was dropped (no session was attached, as in one-shot use).
+persist. `truncated = true` with an `attachment` means the display shown to the model was cut and the full text is in that attachment; `truncated = true` with no attachment means the content was dropped (no session was attached, as in one-shot use). `images` (gh #113) carries image attachment hashes a tool returned: the bytes live content-addressed in `attachments/`, assembly resolves them to image blocks, and lines written before the field load with none (no version bump, same additive rule as `model-change` above).
 
 `permission` records a grant decision made during the session. Fields: `action`, `decision` of once, always, or denied, and `pattern` when the decision was always. This is a record of what happened, not the grant store itself.
 
