@@ -310,8 +310,8 @@ fn the_yolo_toggle_is_loud_in_the_footer() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("YOLO: every permission prompt auto-approved"),
-        "the footer marker is up:\n{rendered}"
+        rendered.contains("[YOLO]"),
+        "the footer badge is up:\n{rendered}"
     );
 }
 

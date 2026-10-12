@@ -93,7 +93,8 @@ fn the_dock_pins_while_the_transcript_scrolls() {
     assert_eq!(scrolled.len(), H as usize, "the frame fills the viewport");
     let editor = |rows: &[String]| {
         rows.iter()
-            .rposition(|row| strip(row).trim_start().starts_with("> "))
+            .rposition(|row| strip(row).contains('╭'))
+            .map(|cap| cap + 1)
     };
     let bottom_editor = editor(&at_bottom).expect("editor at the bottom");
     let scrolled_editor = editor(&scrolled).expect("editor while scrolled");

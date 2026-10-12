@@ -915,3 +915,18 @@ fn slash_name_renames_through_the_host() {
         "the host seam answers"
     );
 }
+
+// Verifies: gh #242 - a model advertising no reasoning levels gets a
+// notice naming it, not an empty picker.
+#[test]
+fn a_model_without_reasoning_gets_a_notice_not_a_picker() {
+    let mut chat = chat();
+    chat.world.options.hooks.thinking_offered = Some(std::sync::Arc::new(Vec::new));
+    chat.open_thinking_picker();
+    assert!(chat.thinking_picker.is_none(), "no picker opens");
+    let notice = chat.world.notice.clone().unwrap_or_default();
+    assert!(
+        notice.contains("does not support thinking"),
+        "the notice names the gap: {notice:?}"
+    );
+}

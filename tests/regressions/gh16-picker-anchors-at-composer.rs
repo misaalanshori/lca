@@ -97,18 +97,26 @@ fn the_picker_box_sits_directly_above_the_composer() {
         .map(|l| strip_terminal_sequences(l))
         .collect();
     assert_eq!(rows.len(), 30, "fullscreen sizes to the viewport");
+    // Gh #249: the composer wears a rounded frame now - the picker's
+    // own bottom border comes first in the pane, the editor frame's
+    // top cap right after it (rposition would land on the editor's
+    // own bottom cap instead).
     let bottom = rows
         .iter()
-        .rposition(|l| l.contains('╰'))
+        .position(|l| l.contains('╰'))
         .expect("the picker box bottom border is on screen");
-    let editor = rows
+    // Gh #249: the composer wears a rounded frame now - its top cap,
+    // not a `>` row, sits directly under the picker box.
+    let cap = rows
         .iter()
-        .rposition(|l| l.starts_with("> "))
-        .expect("the editor row is on screen");
+        .skip(bottom)
+        .position(|l| l.contains('╭'))
+        .map(|i| i + bottom)
+        .expect("the editor frame top cap is on screen");
     assert_eq!(
         bottom + 1,
-        editor,
-        "the picker sits directly above the composer (box bottom {bottom}, editor {editor}):\n{}",
+        cap,
+        "the picker sits directly above the composer (box bottom {bottom}, frame cap {cap}):\n{}",
         rows.join("\n")
     );
 }

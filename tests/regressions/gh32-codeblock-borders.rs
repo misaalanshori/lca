@@ -132,8 +132,17 @@ fn horizontal_drops_the_side_pipes_and_keeps_the_bars() {
         !below.trim().is_empty() && below.trim().chars().all(|c| c == '─'),
         "the bottom bar sits right under the code: {below:?} in {out:?}"
     );
+    // Gh #249: the prompt editor wears its own frame further down
+    // the viewport, so scope the corner ban to the code rows and the
+    // bar rows directly around them.
+    let first = out
+        .iter()
+        .position(|row| row.contains("print(1)"))
+        .expect("the first code line");
     assert!(
-        !out.iter().any(|row| row.contains('╭') || row.contains('╰')),
+        !out[first..=last + 1]
+            .iter()
+            .any(|row| row.contains('╭') || row.contains('╰')),
         "no frame corners either: {out:?}"
     );
 }
@@ -163,8 +172,15 @@ fn none_draws_nothing_but_the_code() {
         below.trim().is_empty() || !below.trim().chars().all(|c| c == '─'),
         "no bar under the code: {below:?} in {out:?}"
     );
+    // Gh #249: scoped to the code rows, as above.
+    let first = out
+        .iter()
+        .position(|row| row.contains("print(1)"))
+        .expect("the first code line");
     assert!(
-        !out.iter().any(|row| row.contains('╭') || row.contains('╰')),
+        !out[first..=last + 1]
+            .iter()
+            .any(|row| row.contains('╭') || row.contains('╰')),
         "no frame: {out:?}"
     );
 }
