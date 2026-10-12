@@ -120,12 +120,40 @@ pub fn build_messages_body(
                         _ => None,
                     })
                     .collect();
+                // Gh #113: images serialize natively inside the
+                // tool result (the text+image block array); text-only
+                // results keep the string form.
+                let has_image = message
+                    .content
+                    .iter()
+                    .any(|block| matches!(block, ContentBlock::Image { .. }));
+                let content = if has_image {
+                    let mut blocks = Vec::new();
+                    if !text.is_empty() {
+                        blocks.push(serde_json::json!({ "type": "text", "text": text }));
+                    }
+                    for block in &message.content {
+                        if let ContentBlock::Image { media_type, bytes } = block {
+                            blocks.push(serde_json::json!({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": lca_protocol::base64_encode(bytes),
+                                },
+                            }));
+                        }
+                    }
+                    serde_json::Value::Array(blocks)
+                } else {
+                    serde_json::Value::String(text)
+                };
                 messages.push(serde_json::json!({
                     "role": "user",
                     "content": [{
                         "type": "tool_result",
                         "tool_use_id": message.tool_call_id.as_deref().unwrap_or(""),
-                        "content": text,
+                        "content": content,
                     }],
                 }));
             }

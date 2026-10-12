@@ -677,6 +677,7 @@ fn export_lists_attachment_hashes_that_exist() {
                     exit_code: None,
                     nested: Vec::new(),
                     full_output_path: None,
+                    images: Vec::new(),
                 },
             )
             .expect("append");
@@ -799,6 +800,7 @@ fn attachment_record(id: &str, hash: &str) -> Record {
         exit_code: None,
         nested: Vec::new(),
         full_output_path: None,
+        images: Vec::new(),
     }
 }
 

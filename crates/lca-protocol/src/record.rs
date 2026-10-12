@@ -171,6 +171,13 @@ pub enum Record {
         /// content head, never the full text). Absent before gh #77.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         nested: Vec<NestedCallRecord>,
+        /// Image attachment hashes the tool returned (gh #113, pi's
+        /// `ImageContent` in tool results): stored content-addressed
+        /// like user attachments, resolved to image blocks at
+        /// assembly. Old lines without it load with none (no format
+        /// bump: the field defaults, old readers skip it).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<String>,
     },
     /// A grant decision made during the session.
     Permission {

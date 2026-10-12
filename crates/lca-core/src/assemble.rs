@@ -54,20 +54,66 @@ pub fn stage_image(session: &Session, path: &std::path::Path) -> Result<StagedAt
             path.display()
         ));
     };
-    let hash = lca_tools::sha256_hex(&bytes);
-    let dir = session.dir().join("attachments");
-    std::fs::create_dir_all(&dir)
-        .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
-    let target = dir.join(&hash);
-    if !target.exists() {
-        write_attachment(&target, &bytes)?;
-    }
+    let hash = store_image_bytes(session, &bytes)?;
     let stub = format!(
         "[image attachment {}, {media_type}, {} bytes]",
         &hash[..8],
         bytes.len()
     );
     Ok(StagedAttachment { hash, stub })
+}
+
+/// Write validated image bytes into the session's content-addressed
+/// attachment store (owner-only) and return the hash. The bytes must
+/// already be a known image (the `read` tool and the clipboard path
+/// both validate before calling); the media type is re-sniffed at
+/// resolve time, so only bytes are stored (gh #113).
+pub fn store_image_bytes(session: &Session, bytes: &[u8]) -> Result<String, String> {
+    let hash = lca_tools::sha256_hex(bytes);
+    let dir = session.dir().join("attachments");
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+    let target = dir.join(&hash);
+    if !target.exists() {
+        write_attachment(&target, bytes)?;
+    }
+    Ok(hash)
+}
+
+/// [`store_image_bytes`] for async callers (gh #153): the same write
+/// through `tokio::fs`, so tool-result persistence never blocks a
+/// runtime thread.
+pub async fn store_image_bytes_async(session: &Session, bytes: &[u8]) -> Result<String, String> {
+    use tokio::io::AsyncWriteExt;
+    let hash = lca_tools::sha256_hex(bytes);
+    let dir = session.dir().join("attachments");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+    let target = dir.join(&hash);
+    if !tokio::fs::try_exists(&target)
+        .await
+        .map_err(|err| format!("cannot stat {}: {err}", target.display()))?
+    {
+        // Owner-only (0600 on Unix), like the sync writer: the
+        // `create_new` miss below races a parallel identical store,
+        // which wrote the same content-addressed bytes - ignore it.
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // Owner-only on Unix: `tokio::fs::OpenOptions` carries its
+        // own `mode`, no trait import needed.
+        #[cfg(unix)]
+        options.mode(0o600);
+        match options.open(&target).await {
+            Ok(mut file) => file
+                .write_all(bytes)
+                .await
+                .map_err(|err| format!("cannot write {}: {err}", target.display()))?,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(format!("cannot create {}: {err}", target.display())),
+        }
+    }
+    Ok(hash)
 }
 
 /// Write one attachment file owner-only (0600 on Unix), never executable.
@@ -295,6 +341,7 @@ pub fn assemble_with(
                 content,
                 attachment,
                 truncated,
+                images,
                 ..
             } => {
                 if matches!(edits.get(id.as_str()), Some(None)) {
@@ -314,7 +361,19 @@ pub fn assemble_with(
                 if *truncated {
                     text.push_str("\n[result truncated]");
                 }
-                messages.push(ChatMessage::tool_result(call_id.clone(), text));
+                let mut message = ChatMessage::tool_result(call_id.clone(), text);
+                // Gh #113: persisted image hashes resolve like user
+                // attachments; an unresolvable hash is skipped without
+                // failing the turn.
+                for hash in images {
+                    if let Some(attachment) = resolve(hash) {
+                        message.content.push(ContentBlock::Image {
+                            media_type: attachment.media_type,
+                            bytes: attachment.bytes,
+                        });
+                    }
+                }
+                messages.push(message);
             }
             Record::BranchSummary { summary, .. } => {
                 // An abandoned path's lesson, injected where the new
@@ -596,6 +655,7 @@ mod vocabulary_tests {
                 exit_code: None,
                 nested: Vec::new(),
                 full_output_path: None,
+                images: Vec::new(),
             },
             Record::ContextEdit {
                 v: FORMAT_VERSION,

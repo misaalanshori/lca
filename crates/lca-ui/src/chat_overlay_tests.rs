@@ -457,6 +457,7 @@ fn a_replayed_session_renders_like_the_live_one() {
             exit_code: None,
             nested: Vec::new(),
             full_output_path: None,
+            images: Vec::new(),
         },
     ];
     chat.load_records(&records, None);

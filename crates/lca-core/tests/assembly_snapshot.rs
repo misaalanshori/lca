@@ -83,6 +83,7 @@ fn canonical_records() -> Vec<Record> {
             exit_code: None,
             nested: Vec::new(),
             full_output_path: None,
+            images: Vec::new(),
         },
         Record::Assistant {
             v: 1,

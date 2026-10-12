@@ -620,6 +620,7 @@ mod cut_tests {
             exit_code: None,
             nested: Vec::new(),
             full_output_path: None,
+            images: Vec::new(),
         }
     }
 

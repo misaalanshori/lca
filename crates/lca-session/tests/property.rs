@@ -68,6 +68,7 @@ fn arb_record(n: u32) -> impl Strategy<Value = Record> {
             exit_code: None,
             nested: Vec::new(),
             full_output_path: None,
+            images: Vec::new(),
         }),
         arb_text().prop_map(move |detail| Record::ExtensionEvent {
             v: FORMAT_VERSION,

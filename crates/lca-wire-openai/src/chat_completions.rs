@@ -248,15 +248,38 @@ pub fn parse_sse(body: &[u8], emit: &mut dyn FnMut(StreamEvent)) {
     decoder.finish(emit);
 }
 
+/// One tool-call batch in the Chat Completions shape, shared by the
+/// whole-message and split-tool paths below.
+fn tool_calls_wire(message: &ChatMessage) -> serde_json::Value {
+    serde_json::Value::Array(
+        message
+            .tool_calls
+            .iter()
+            .map(|call| {
+                serde_json::json!({
+                    "id": call.call_id,
+                    "type": "function",
+                    "function": { "name": call.name, "arguments": call.arguments },
+                })
+            })
+            .collect(),
+    )
+}
+
 /// Map the resolved message list onto the OpenAI chat shape. Reasoning
 /// blocks are model-internal and are not resent. Text and image blocks both
 /// map: text becomes the string content, and a message with an image becomes
 /// the content-part array OpenAI uses for vision (the "cannot carry images"
 /// case is the text stub the attach path already put in the message).
+///
+/// Gh #113: a `tool`-role message carrying images splits in two - the
+/// tool message stays text-only (OpenAI rejects image parts in `tool`
+/// content) and a synthetic `user` message follows with the image
+/// parts, pi's approach for providers without native tool images.
 pub fn to_wire(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
     messages
         .iter()
-        .map(|message| {
+        .flat_map(|message| {
             let role = match message.role {
                 MessageRole::System => "system",
                 MessageRole::User => "user",
@@ -273,49 +296,51 @@ pub fn to_wire(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
                     ContentBlock::Image { .. } => None,
                 })
                 .collect();
+            let mut image_parts = Vec::new();
+            for block in &message.content {
+                if let ContentBlock::Image { media_type, bytes } = block {
+                    image_parts.push(serde_json::json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!(
+                                "data:{media_type};base64,{}",
+                                lca_protocol::base64_encode(bytes)
+                            ),
+                        },
+                    }));
+                }
+            }
+            // The split: tool text stays on the tool message (with its
+            // call id), images ride the synthetic follower.
+            if message.role == MessageRole::Tool && !image_parts.is_empty() {
+                let mut tool = serde_json::json!({ "role": role, "content": text });
+                if !message.tool_calls.is_empty() {
+                    tool["tool_calls"] = tool_calls_wire(message);
+                }
+                if let Some(call_id) = &message.tool_call_id {
+                    tool["tool_call_id"] = serde_json::Value::String(call_id.clone());
+                }
+                return vec![
+                    tool,
+                    serde_json::json!({ "role": "user", "content": image_parts }),
+                ];
+            }
             let mut wire = serde_json::json!({ "role": role, "content": text });
-            if message
-                .content
-                .iter()
-                .any(|block| matches!(block, ContentBlock::Image { .. }))
-            {
+            if !image_parts.is_empty() {
                 let mut parts = Vec::new();
                 if !text.is_empty() {
                     parts.push(serde_json::json!({ "type": "text", "text": text }));
                 }
-                for block in &message.content {
-                    if let ContentBlock::Image { media_type, bytes } = block {
-                        parts.push(serde_json::json!({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": format!(
-                                    "data:{media_type};base64,{}",
-                                    lca_protocol::base64_encode(bytes)
-                                ),
-                            },
-                        }));
-                    }
-                }
+                parts.extend(image_parts);
                 wire["content"] = serde_json::Value::Array(parts);
             }
             if !message.tool_calls.is_empty() {
-                let calls: Vec<serde_json::Value> = message
-                    .tool_calls
-                    .iter()
-                    .map(|call| {
-                        serde_json::json!({
-                            "id": call.call_id,
-                            "type": "function",
-                            "function": { "name": call.name, "arguments": call.arguments },
-                        })
-                    })
-                    .collect();
-                wire["tool_calls"] = serde_json::Value::Array(calls);
+                wire["tool_calls"] = tool_calls_wire(message);
             }
             if let Some(call_id) = &message.tool_call_id {
                 wire["tool_call_id"] = serde_json::Value::String(call_id.clone());
             }
-            wire
+            vec![wire]
         })
         .collect()
 }

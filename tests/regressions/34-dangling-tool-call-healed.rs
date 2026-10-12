@@ -129,6 +129,7 @@ fn a_complete_turn_is_unchanged() {
             exit_code: None,
             nested: Vec::new(),
             full_output_path: None,
+            images: Vec::new(),
         },
     ];
     let assembled = assemble(&records, "system");

@@ -265,3 +265,43 @@ fn a_mid_stream_auth_error_stays_non_retryable() {
         .expect("gh #202: the mid-stream error is surfaced");
     assert!(!retryable, "an auth refusal does not clear itself on retry");
 }
+
+// Verifies: gh #113 - a `tool`-role message carrying images splits:
+// the tool message stays text-only (OpenAI rejects image parts in
+// `tool` content) and a synthetic user message follows with the
+// image parts (pi's approach for providers without native tool
+// images). Text-only tool messages are untouched.
+#[test]
+fn a_tool_image_splits_into_a_following_user_message() {
+    let message = ChatMessage {
+        role: MessageRole::Tool,
+        content: vec![
+            ContentBlock::Text {
+                text: "seen".to_string(),
+            },
+            ContentBlock::Image {
+                media_type: "image/png".to_string(),
+                bytes: vec![1, 2, 3],
+            },
+        ],
+        tool_calls: Vec::new(),
+        tool_call_id: Some("call-9".to_string()),
+        usage: None,
+        extras: Default::default(),
+    };
+    let wire = to_wire(&[message]);
+    assert_eq!(wire.len(), 2, "tool plus one synthetic user message");
+    assert_eq!(wire[0]["role"], "tool");
+    assert_eq!(wire[0]["content"], "seen");
+    assert_eq!(wire[0]["tool_call_id"], "call-9");
+    assert_eq!(wire[1]["role"], "user");
+    let parts = wire[1]["content"].as_array().expect("array content");
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0]["type"], "image_url");
+    assert_eq!(parts[0]["image_url"]["url"], "data:image/png;base64,AQID");
+
+    let text_only = ChatMessage::tool_result("call-9", "seen");
+    let wire = to_wire(&[text_only]);
+    assert_eq!(wire.len(), 1, "no image means no synthetic message");
+    assert_eq!(wire[0]["role"], "tool");
+}

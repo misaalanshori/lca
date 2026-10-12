@@ -474,3 +474,47 @@ fn signatures_replay_beside_frozen_tools() {
         "the signature replays: {blocks:?}"
     );
 }
+
+// Verifies: gh #113 - a tool result carrying images serializes them
+// natively: the `tool_result` content becomes the text+image block
+// array Anthropic accepts. Text-only results keep the string form.
+#[test]
+fn a_tool_image_serializes_inside_the_tool_result() {
+    let mut request = user_request();
+    request.messages.push(lca_protocol::ChatMessage {
+        role: MessageRole::Tool,
+        content: vec![
+            ContentBlock::Text {
+                text: "seen".to_string(),
+            },
+            ContentBlock::Image {
+                media_type: "image/png".to_string(),
+                bytes: vec![1, 2, 3],
+            },
+        ],
+        tool_calls: Vec::new(),
+        tool_call_id: Some("call-9".to_string()),
+        usage: None,
+        extras: Default::default(),
+    });
+    let body = build_messages_body(&request, "sys", "m", 1024, false);
+    let tool = body["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| {
+            message["content"]
+                .as_array()
+                .is_some_and(|blocks| blocks.iter().any(|block| block["type"] == "tool_result"))
+        })
+        .expect("tool result rides a user message");
+    let content = tool["content"][0]["content"]
+        .as_array()
+        .expect("block array");
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(
+        content[1]["source"]["data"], "AQID",
+        "base64 bytes ride the image block"
+    );
+}

@@ -325,6 +325,23 @@ impl Agent<'_> {
                 content_head: summary.content_head,
             })
             .collect();
+        // Gh #113: the tool's image bytes persist content-addressed
+        // (hashes on the record, bytes in the attachment store), so
+        // assembly and resume resolve them like user attachments. A
+        // store failure fails the turn: silently dropping the image
+        // would show the model a stub with no picture.
+        let mut image_hashes = Vec::new();
+        for image in &result.images {
+            match crate::assemble::store_image_bytes_async(self.session, &image.bytes).await {
+                Ok(hash) => image_hashes.push(hash),
+                Err(err) => {
+                    return Err(self.fail(
+                        StopReason::Error,
+                        format!("cannot store the tool image: {err}"),
+                    ));
+                }
+            }
+        }
         if let Err(err) = self.store.append(
             self.session,
             Record::ToolResult {
@@ -340,6 +357,7 @@ impl Agent<'_> {
                 exit_code: result.exit_code,
                 full_output_path: result.full_output_path.clone(),
                 nested: result.nested.clone(),
+                images: image_hashes,
             },
         ) {
             return Err(self.fail(

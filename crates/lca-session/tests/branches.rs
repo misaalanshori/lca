@@ -255,6 +255,7 @@ fn gc_keeps_abandoned_branch_attachments() {
                 exit_code: None,
                 nested: Vec::new(),
                 full_output_path: None,
+                images: Vec::new(),
             },
         )
         .expect("tool");
@@ -381,6 +382,7 @@ fn entry_tree_carries_tool_rows_with_kinds() {
                 truncated: false,
                 exit_code: None,
                 full_output_path: None,
+                images: Vec::new(),
                 nested: Vec::new(),
             },
         )
