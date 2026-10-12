@@ -814,10 +814,19 @@ impl Chat {
 
     /// Record a hover cell (gh #210): a cell with tooltip text holds a
     /// showing tooltip, anything else dismisses and rearms the clock.
+    /// #229: the same tip text on a new cell repositions the open
+    /// tooltip instead of freezing it (reposition, not reopen); the
+    /// 250 ms debut delay is untouched.
     pub fn note_hover(&mut self, col: u16, row: u16, width: u16, height: u16, scroll: u16) {
         let now = self.tooltip_at(col, row, width, height, scroll);
         let shown = self.tooltip.as_ref().map(|tip| tip.lines.join("\n"));
         if now.is_some() && shown.as_deref() == now.as_deref() {
+            if let Some(tip) = self.tooltip.as_mut() {
+                let wide = tip.lines.iter().map(|line| visible_width(line)).max().unwrap_or(0);
+                let (x, y) = tooltip_place(width, height, col, row, wide, tip.lines.len());
+                tip.col = x;
+                tip.row = y;
+            }
             return;
         }
         self.tooltip = None;
