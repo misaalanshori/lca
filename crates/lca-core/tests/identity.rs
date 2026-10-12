@@ -412,3 +412,15 @@ fn identity_prompt_handles_no_model_selected() {
     assert!(prompt.contains("unselected"));
     assert!(!prompt.contains("gpt-"));
 }
+
+// Verifies: gh #243 - an unsupported `/usage` answers helpfully,
+// never a bare refusal: it names the missing quota endpoint and
+// points at `/session` for live token spending.
+#[test]
+fn unsupported_usage_points_at_session() {
+    let mut conformance = ExtensionRegistry::new();
+    conformance.register(Arc::new(FakeProviderWithNotSupported));
+    let usage = widget(conformance.invoke_command("no-login.usage", ""));
+    assert!(usage.contains("not supported"), "{usage}");
+    assert!(usage.contains("/session"), "{usage}");
+}

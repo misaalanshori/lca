@@ -452,7 +452,12 @@ impl ExtensionRegistry {
                 IdentityCommand::Usage => match handle.identity_usage().await {
                     Ok(Ok(usage)) => CommandEffect::ShowWidget(format_usage(&usage)),
                     Ok(Err(IdentityOutcome::NotSupported)) => {
-                        CommandEffect::ShowWidget(format!("usage is not supported by `{name}`"))
+                        // Gh #243: a bare refusal leaves users asking
+                        // whether usage exists at all - name the missing
+                        // quota endpoint and point at live token spending.
+                        CommandEffect::ShowWidget(format!(
+                            "usage is not supported by `{name}` (no account quota endpoint); session token spending is available via /session"
+                        ))
                     }
                     Ok(Err(IdentityOutcome::Failed(reason))) => {
                         CommandEffect::ShowWidget(format!("usage failed: {reason}"))
