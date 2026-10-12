@@ -84,49 +84,16 @@ pub struct Skill {
     pub source: SkillSource,
 }
 
-/// Parse one `SKILL.md` (the standard Claude format).
+/// Parse one `SKILL.md` (the standard Claude format): the shared
+/// frontmatter parser (`lca-protocol`), plus this merge's source.
 pub fn parse_skill(fallback_name: &str, source: SkillSource, text: &str) -> Skill {
-    let mut name = fallback_name.to_string();
-    let mut description = String::new();
-    let mut match_line = String::new();
-    let mut model_invocable = true;
-    let mut body_start = 0usize;
-    let mut consumed = 0usize;
-    for line in text.split('\n') {
-        let trimmed = line.trim();
-        body_start = consumed;
-        consumed += line.len() + 1;
-        if trimmed.is_empty() || trimmed == "---" {
-            body_start = consumed;
-            break;
-        }
-        if let Some((key, value)) = trimmed.split_once(':') {
-            match key.trim() {
-                "name" => name = value.trim().to_string(),
-                "description" => description = value.trim().to_string(),
-                "match" => match_line = value.to_string(),
-                "disable-model-invocation" => {
-                    model_invocable = value.trim() != "true";
-                }
-                _ => {} // unknown header keys are reserved, not errors
-            }
-        } else {
-            body_start = consumed - line.len() - 1;
-            break;
-        }
-    }
-    let body = text.get(body_start..).unwrap_or("").trim().to_string();
-    let match_words = match_line
-        .split(',')
-        .map(|word| word.trim().to_lowercase())
-        .filter(|word| !word.is_empty())
-        .collect();
+    let parsed = lca_protocol::skills::parse_skill_text(fallback_name, text);
     Skill {
-        name,
-        description,
-        match_words,
-        model_invocable,
-        body,
+        name: parsed.name,
+        description: parsed.description,
+        match_words: parsed.match_words,
+        model_invocable: parsed.model_invocable,
+        body: parsed.body,
         source,
     }
 }

@@ -53,42 +53,14 @@ pub struct Skill {
     pub body: String,
 }
 
-/// Parse one `SKILL.md`.
+/// Parse one `SKILL.md`: the shared frontmatter parser
+/// (`lca-protocol`), mapped onto this crate's skill shape.
 pub fn parse_skill(fallback_name: &str, text: &str) -> Skill {
-    let mut name = fallback_name.to_string();
-    let mut match_line = String::new();
-    let mut body_start = 0usize;
-    let mut consumed = 0usize;
-    for line in text.split('\n') {
-        let trimmed = line.trim();
-        body_start = consumed;
-        consumed += line.len() + 1;
-        if trimmed.is_empty() || trimmed == "---" {
-            body_start = consumed;
-            break;
-        }
-        if let Some((key, value)) = trimmed.split_once(':') {
-            match key.trim() {
-                "name" => name = value.trim().to_string(),
-                "match" => match_line = value.to_string(),
-                _ => {} // unknown header keys are reserved, not errors
-            }
-        } else {
-            // Not a header line: the body starts here.
-            body_start = consumed - line.len() - 1;
-            break;
-        }
-    }
-    let body = text.get(body_start..).unwrap_or("").trim().to_string();
-    let match_words = match_line
-        .split(',')
-        .map(|word| word.trim().to_lowercase())
-        .filter(|word| !word.is_empty())
-        .collect();
+    let parsed = lca_protocol::skills::parse_skill_text(fallback_name, text);
     Skill {
-        name,
-        match_words,
-        body,
+        name: parsed.name,
+        match_words: parsed.match_words,
+        body: parsed.body,
     }
 }
 

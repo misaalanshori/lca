@@ -12,6 +12,7 @@ pub mod login;
 pub mod message;
 pub mod provider;
 pub mod record;
+pub mod skills;
 pub mod stream;
 pub mod tool;
 pub mod turn;
