@@ -405,10 +405,8 @@ fn tool_body_click_collapses_without_scroll_jump() {
         !pane.lines().any(|line| body_number(line) == Some(clicked)),
         "the clicked body line left:\n{pane}"
     );
-    let landed = pane
-        .lines()
-        .enumerate()
-        .find_map(|(row, line)| line.contains("seq 1 40").then_some(row))
+    pane.lines()
+        .find(|line| line.contains("seq 1 40"))
         .expect("the header stays in view");
     session.send(&["/exit", "Enter"]);
     wait_for_pane_end(&session, std::time::Duration::from_secs(15));

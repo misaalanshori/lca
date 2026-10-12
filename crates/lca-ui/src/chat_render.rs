@@ -15,19 +15,6 @@
 /// toggles that run, like Ctrl+T; the jump indicator's row asks for the
 /// live bottom. Alt-screen only - the main screen never captures the
 /// mouse (gh35/gh33 contract), so it refuses every click.
-/// Keep a collapsed card stationary (gh #247): the shrink delta rides
-/// the from-bottom scroll offset down, so collapsing a tall card holds
-/// the clicked row instead of clamping the view at the log's top.
-/// Growth needs no ride: `clamp_scroll`'s follow-end rule already adds
-/// a growth delta on the next frame, so riding it here would count the
-/// same rows twice and throw the view upward. Saturates at the live
-/// bottom; `after >= before` holds. Pure so the viewport tests pin it
-/// without a terminal.
-pub fn anchor_scroll(scroll: u16, before: usize, after: usize) -> u16 {
-    let shed = before.saturating_sub(after).min(u16::MAX as usize) as u16;
-    scroll.saturating_sub(shed)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClickOutcome {
     /// No clickable region under the cursor.
@@ -44,6 +31,19 @@ pub enum ClickOutcome {
     PreviousPrompt,
     /// The scrollbar's ▼ stepper was hit: jump to the next prompt.
     NextPrompt,
+}
+
+/// Keep a collapsed card stationary (gh #247): the shrink delta rides
+/// the from-bottom scroll offset down, so collapsing a tall card holds
+/// the clicked row instead of clamping the view at the log's top.
+/// Growth needs no ride: `clamp_scroll`'s follow-end rule already adds
+/// a growth delta on the next frame, so riding it here would count the
+/// same rows twice and throw the view upward. Saturates at the live
+/// bottom; `after >= before` holds. Pure so the viewport tests pin it
+/// without a terminal.
+pub fn anchor_scroll(scroll: u16, before: usize, after: usize) -> u16 {
+    let shed = before.saturating_sub(after).min(u16::MAX as usize) as u16;
+    scroll.saturating_sub(shed)
 }
 
 use lca_tui::engine::text::{truncate_to_width, visible_width};
