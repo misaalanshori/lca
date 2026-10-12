@@ -237,8 +237,14 @@ fn pi_parity_compaction_cut_never_lands_on_a_tool_result() {
     }
     let mut registry = lca_core::ExtensionRegistry::new();
     registry.register(std::sync::Arc::new(WholePairs));
-    lca_core::compact_now(store.clone(), session.clone(), std::sync::Arc::new(registry), None, None)
-        .expect("manual compaction runs");
+    lca_core::compact_now(
+        store.clone(),
+        session.clone(),
+        std::sync::Arc::new(registry),
+        None,
+        None,
+    )
+    .expect("manual compaction runs");
     // Audit, not Display: the Display view suppresses the replaced range
     // itself, so the range edges are only addressable unsuppressed.
     let read = store
@@ -266,7 +272,9 @@ fn pi_parity_compaction_cut_never_lands_on_a_tool_result() {
         .collect();
     let (from, to) = &compaction;
     let span = |id: &str| {
-        ids.iter().position(|known| known == &id).expect("seeded id")
+        ids.iter()
+            .position(|known| known == &id)
+            .expect("seeded id")
     };
     let (lo, hi) = (span(from), span(to));
     for pair in [["c1", "r1"], ["c2", "r2"]] {
@@ -337,7 +345,10 @@ fn pi_parity_context_edit_omission_survives_resume_and_fork() {
         "unrelated records still assemble: {texts:?}",
     );
     assert!(
-        reread.records.iter().any(|record| record.id() == Some("u1")),
+        reread
+            .records
+            .iter()
+            .any(|record| record.id() == Some("u1")),
         "raw history keeps the omitted record",
     );
     // Fork at the edit: the child's chain carries the parent's edits,
