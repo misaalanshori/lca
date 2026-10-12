@@ -2,7 +2,7 @@
 
 Version 0.1, 2026-09-30.
 
-Two scripts at the repository root, `install.sh` (POSIX sh: Linux and macOS) and `install.ps1` (Windows PowerShell), are the primary distribution channel named in `docs/release-policy.md`. Both are hosted at the repository root on `main` and served through `raw.githubusercontent.com`, so the documented URL always resolves to the current script, and the same script is the updater: run the one-liner again and the install is replaced in place.
+Two scripts at the repository root, `install.sh` (POSIX sh: Linux and macOS) and `install.ps1` (Windows PowerShell), are the primary distribution channel named in `docs/release-policy.md`. Both are hosted at the repository root on `main` and served through `raw.githubusercontent.com`, so the documented URL always resolves to the current script, and the same script is the updater: run the one-liner again and the install is replaced in place. `lca update` runs that same script in place (self via the installer path, never unverified): `--check` reports, `--extensions` runs `ext update --all`, `--models` refetches the catalog documents, `--all` is everything, `--force` reinstalls when current, `--changelog` prints the condensed release notes.
 
 This document is the specification both scripts implement. The decision record is `docs/adr/0040-install-and-update.md`; the requirements are `FR-INSTALL-1` through `FR-INSTALL-9` in `docs/lca-srdd.md`; the tests are `tests/install/`, gated by `scripts/install-check.sh` (gate 10 in `docs/release-policy.md`'s gate list).
 

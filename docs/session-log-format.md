@@ -166,7 +166,7 @@ The content of a file read outside the workspace, unless the user's action put i
 
 ## Export
 
-A session export produces a single file containing the metadata, the resolved record list with forks followed, and the attachments inline as base64 or as a sidecar directory.
+A session export produces a single file containing the metadata, the resolved record list with forks followed, and the attachments inline as base64 or as a sidecar directory. `lca export <id>` writes the JSON; `--html` adds the self-contained transcript page (sidebar, hidden-message toggle), `--output` relocates both. `/export` in the interface exports the current session the same way. `lca import <file.jsonl>` reads JSONL lines (one record per line, the log's own shape) into a new resumable session; `/import` does the same from the interface. A corrupt line aborts before any session exists.
 
 Export applies the same redaction as the log, and additionally strips audit-only records unless an audit flag is passed, because an export is usually shared. Audit-only: `permission`, `extension-event` (who was allowed to do what), and the v2 vocabulary's `usage` (operational accounting) and `custom` (extension internals). Everything else survives a default export: the conversation (`user`, `assistant`, `tool-call`, `tool-result`, `custom-message`), its shaping (`compaction`, `context-edit`, `label`, `model-change`, `thinking-level-change`, `fork-point`, `session-info`, `session-start`, `session-end`). An export carries `context-edit` records as written - a consumer replays them latest-wins per target exactly like assembly, rather than receiving pre-edited text.
 
