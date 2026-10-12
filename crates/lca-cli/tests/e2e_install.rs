@@ -331,3 +331,24 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
 // pane, asserting what is on screen. Unix only; a machine without tmux
 // skips rather than fails.
 // ---------------------------------------------------------------------------
+
+// Verifies: gh #250 - `ext list` names the bundled extensions
+// explicitly, marked `(built-in)`, instead of hiding them behind a
+// summary count.
+#[test]
+fn ext_list_names_builtins_explicitly() {
+    let sandbox = sandbox("ext-list-builtins");
+    let output = sandbox.run(None, &["ext", "list"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    for name in ["openai-compatible", "compaction-default", "hooks-example"] {
+        assert!(
+            text.lines().any(|line| line.contains(name) && line.contains("(built-in")),
+            "{name} listed and marked:\n{text}"
+        );
+    }
+    assert!(
+        !text.contains("available without installing"),
+        "no count-only summary remains:\n{text}"
+    );
+}

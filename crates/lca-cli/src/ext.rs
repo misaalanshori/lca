@@ -874,20 +874,14 @@ fn list(tree: &InstallTree) -> i32 {
             entry.source
         );
     }
-    if !entries.is_empty() {
-        println!(
-            "({} built-in extension{} available without installing)",
-            builtin_names().len(),
-            if builtin_names().len() == 1 { "" } else { "s" }
-        );
-    } else if builtin_names().is_empty() {
+    // Gh #250: name the bundled extensions outright, marked so they
+    // read apart from installed packages - the old count-only
+    // summary hid which ones ship with the binary.
+    for name in builtin_names() {
+        println!("{name} (built-in, abi {})", lca_session::ABI_VERSION);
+    }
+    if entries.is_empty() && builtin_names().is_empty() {
         println!("nothing installed");
-    } else {
-        println!(
-            "(no installed extensions; {} built-in extension{} available)",
-            builtin_names().len(),
-            if builtin_names().len() == 1 { "" } else { "s" }
-        );
     }
     crate::exit::OK
 }
