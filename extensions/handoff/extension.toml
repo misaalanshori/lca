@@ -1,0 +1,11 @@
+name = "handoff"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["command"]
+description = "Structured task handoff and session checkpointing command."
+
+[capabilities.completion]
+reason = "Generates a structured handoff document summarizing session progress."
+
+[capabilities.fs]
+workspace = "read-write"
