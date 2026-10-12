@@ -450,7 +450,7 @@ fn every_prefix_renders_without_an_unterminated_frame() {
                 table_open, table_close,
                 "unbalanced table frame at width {width}, prefix ending {end}\n{lines:?}"
             );
-            if !prefix.lines().any(is_table_separator) {
+            if !prefix.lines().any(super::tables::is_table_separator) {
                 assert_eq!(
                     table_open, 0,
                     "a table rendered without an intact separator at prefix ending {end}\n{lines:?}"
