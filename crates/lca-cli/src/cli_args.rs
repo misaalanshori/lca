@@ -299,6 +299,12 @@ pub enum Command {
         /// Include permission and extension-event records.
         #[arg(long)]
         audit: bool,
+        /// Also write the self-contained HTML transcript.
+        #[arg(long)]
+        html: bool,
+        /// Write the export here instead of the session directory.
+        #[arg(long, value_name = "PATH")]
+        output: Option<std::path::PathBuf>,
     },
     // The session-maintenance subcommands (D5's attachment GC).
     /// Session maintenance.

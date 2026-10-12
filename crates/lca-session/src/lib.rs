@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod cache;
+pub mod export_html;
 mod ids;
 mod lazy;
 mod migrate;
@@ -18,6 +19,7 @@ pub(crate) mod view;
 use std::path::PathBuf;
 
 pub use cache::{CacheMiss, CacheWasteTotals, collect_cache_misses, compute_cache_waste};
+pub use export_html::{HtmlImage, render_html};
 pub use lca_protocol::{PermissionDecision, ToolResultStatus, ToolSource};
 pub use migrate::{MigrateReport, VersionState};
 pub use store::{

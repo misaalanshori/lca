@@ -118,7 +118,12 @@ pub async fn run(cli: Cli) -> i32 {
         Route::Clone { session, title } => clone_command(&cwd, &session, title.as_deref()),
         Route::Rename { session, title } => rename_command(&cwd, &session, &title),
         Route::Delete { session } => delete_command(&cwd, &session),
-        Route::Export { session, audit } => export_command(&cwd, &session, audit),
+        Route::Export {
+            session,
+            audit,
+            html,
+            output,
+        } => export_command(&cwd, &session, audit, html, output.as_deref()),
         Route::Gc { session } => gc_command(&cwd, &session),
         Route::Migrate { session } => migrate_command(&cwd, &session),
         Route::Ext(cmd) => ext::run(cmd, flags.offline).await,

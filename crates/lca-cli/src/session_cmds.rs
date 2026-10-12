@@ -174,6 +174,10 @@ pub enum Route {
         session: String,
         /// Keep audit records.
         audit: bool,
+        /// Also write the HTML transcript.
+        html: bool,
+        /// Destination path override.
+        output: Option<std::path::PathBuf>,
     },
     /// Delete a session's unreferenced attachments (D5).
     Gc {
@@ -552,9 +556,16 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
         Some(Command::Delete { session }) => Route::Delete {
             session: session.clone(),
         },
-        Some(Command::Export { session, audit }) => Route::Export {
+        Some(Command::Export {
+            session,
+            audit,
+            html,
+            output,
+        }) => Route::Export {
             session: session.clone(),
             audit: *audit,
+            html: *html,
+            output: output.clone(),
         },
         Some(Command::Session { cmd }) => match cmd {
             SessionCmd::Gc { session } => Route::Gc {
@@ -689,21 +700,62 @@ pub(super) fn delete_command(cwd: &Path, id: &str) -> i32 {
     }
 }
 
-pub(super) fn export_command(cwd: &Path, id: &str, audit: bool) -> i32 {
+pub(super) fn export_command(
+    cwd: &Path,
+    id: &str,
+    audit: bool,
+    html: bool,
+    output: Option<&Path>,
+) -> i32 {
     let Ok((store, _)) = open_store() else {
         return exit::INTERNAL;
     };
     match store.session(cwd, id) {
-        Ok(session) => match store.export(&session, ExportOptions { audit }) {
-            Ok(path) => {
-                println!("{}", path.display());
-                exit::OK
+        Ok(session) => {
+            let json = match store.export(&session, ExportOptions { audit }) {
+                Ok(path) => path,
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return exit::SESSION;
+                }
+            };
+            // `--output` relocates the JSON; the HTML lands next to
+            // whichever JSON path this run reports.
+            let json = match output {
+                Some(dest) => match std::fs::copy(&json, dest) {
+                    Ok(_) => dest.to_path_buf(),
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        return exit::SESSION;
+                    }
+                },
+                None => json,
+            };
+            println!("{}", json.display());
+            if html {
+                match store.export_html(&session, ExportOptions { audit }) {
+                    Ok(path) => {
+                        let shown = match output {
+                            Some(dest) => {
+                                let sibling = dest.with_extension("html");
+                                if std::fs::copy(&path, &sibling).is_ok() {
+                                    sibling
+                                } else {
+                                    path
+                                }
+                            }
+                            None => path,
+                        };
+                        println!("{}", shown.display());
+                    }
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        return exit::SESSION;
+                    }
+                }
             }
-            Err(err) => {
-                eprintln!("error: {err}");
-                exit::SESSION
-            }
-        },
+            exit::OK
+        }
         Err(err) => {
             eprintln!("error: {err}");
             exit::SESSION
