@@ -21,6 +21,7 @@ mod label_hooks;
 mod login;
 mod pending_step;
 mod runner;
+mod session_hooks;
 mod startup;
 
 use std::path::{Path, PathBuf};

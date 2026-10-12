@@ -2,7 +2,7 @@
 //! `chat_command_tests.rs`): paint, filter, fold, labels, branches.
 //! Shares the `chat_tests` helpers.
 
-use super::{chat, options, strip, tree_row};
+use super::{options, strip, tree_row};
 use lca_tui::engine::keybindings::KeybindingsManager;
 
 use super::super::Chat;
