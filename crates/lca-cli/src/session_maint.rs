@@ -6,6 +6,38 @@ use std::path::Path;
 use super::exit;
 use super::session_cmds::open_store;
 
+/// `lca import <file>`: JSONL lines become a new session (gh #57).
+/// Prints the new session id; the transcript is resumable.
+pub(super) fn import_command(cwd: &Path, file: &Path) -> i32 {
+    let Ok((store, _)) = open_store() else {
+        return exit::INTERNAL;
+    };
+    let text = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return exit::SESSION;
+        }
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let title = file
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "imported".to_string());
+    // The store keys sessions by working directory; the import lands
+    // in this invocation's tree.
+    match store.import_jsonl(cwd, &title, &lines) {
+        Ok(session) => {
+            println!("{}", session.id());
+            exit::OK
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            exit::SESSION
+        }
+    }
+}
+
 /// `lca session migrate <id>`: forward-migrate one log (gh #98).
 /// Prints what was stamped and where the backup lives, or that the
 /// log was already current; refusals name what to fix first.

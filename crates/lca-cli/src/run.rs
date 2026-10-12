@@ -1,8 +1,9 @@
 //! Split from `lib.rs` for the workspace file ceiling (gate 11,
 //! #158). Behaviour unchanged.
 
-use super::session_cmds::{list_models_command, route_with};
-use super::session_maint::{gc_command, migrate_command};
+use super::models::list_models_command;
+use super::session_cmds::route_with;
+use super::session_maint::{gc_command, import_command, migrate_command};
 use super::{
     auth, diagnostics, doctor, ext, invoke,
     session_cmds::{
@@ -129,6 +130,20 @@ pub async fn run(cli: Cli) -> i32 {
         Route::Ext(cmd) => ext::run(cmd, flags.offline).await,
         Route::Auth(cmd) => auth::run(&cmd, &cli.allow_host),
         Route::Doctor => doctor::run(&crate::data_dir(), &cwd),
+        Route::Bug { session, output } => {
+            let out = output.clone().unwrap_or_else(|| cwd.clone());
+            match crate::bug::bundle(&crate::data_dir(), &cwd, session.as_deref(), &out) {
+                Ok(path) => {
+                    println!("{}", path.display());
+                    crate::exit::OK
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    crate::exit::SESSION
+                }
+            }
+        }
+        Route::Import { file } => import_command(&cwd, file.as_path()),
         Route::Update {
             check,
             extensions,

@@ -27,6 +27,9 @@ pub use trust::{apply_startup_trust, load_config, load_config_flags, trust_defau
 /// #72, #38).
 mod auth;
 
+/// `lca bug` and `/bug`: the local diagnostic bundle (gh #57).
+mod bug;
+
 /// `lca ext ...`: resolve, consent, store (FR-DIST-*).
 pub mod diagnostics;
 /// `lca doctor`: the diagnostics dump (gh #81).

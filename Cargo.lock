@@ -1491,6 +1491,7 @@ dependencies = [
  "toml_edit",
  "tracing",
  "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]

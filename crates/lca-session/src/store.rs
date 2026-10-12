@@ -962,6 +962,42 @@ impl SessionStore {
         Ok(sessions)
     }
 
+    /// Import JSONL lines (one record per line, the log's own shape)
+    /// as a new session (gh #57's `/import`): every line parses
+    /// before anything is created, so a corrupt line aborts with its
+    /// line number and no half-imported session exists. The first
+    /// line must open the session (`session-start`).
+    pub fn import_jsonl(
+        &self,
+        project_dir: &Path,
+        title: &str,
+        lines: &[&str],
+    ) -> std::result::Result<Session, String> {
+        let mut records = Vec::with_capacity(lines.len());
+        for (index, line) in lines.iter().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            serde_json::from_str::<lca_protocol::Record>(line)
+                .map(|record| records.push(record))
+                .map_err(|err| format!("line {}: {err}", index + 1))?;
+        }
+        match records.first() {
+            Some(lca_protocol::Record::SessionStart { .. }) => {}
+            _ => return Err("line 1: a session must open with session-start".to_string()),
+        }
+        let session = self
+            .create_session(project_dir, title)
+            .map_err(|err| format!("cannot create the session: {err}"))?;
+        // The created session stamps its own start; the file's opener
+        // only proved the shape.
+        for record in records.into_iter().skip(1) {
+            self.append(&session, record)
+                .map_err(|err| format!("cannot write the session: {err}"))?;
+        }
+        Ok(session)
+    }
+
     /// The session's own `session-start` record, for tests that need the
     /// exact stored form.
     pub fn raw_start(&self, session: &Session) -> Result<lca_protocol::Record> {

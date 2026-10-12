@@ -6,7 +6,6 @@ use lca_permissions::GrantStore;
 use lca_session::Session;
 use lca_session::{ExportOptions, SessionStore};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 /// Which session a headless run appends to (#111: `-c` continues the
 /// project's most recent session, `-r <id>` resumes that session).
@@ -121,6 +120,18 @@ pub enum Route {
     },
     /// The diagnostics dump (gh #81).
     Doctor,
+    /// The local diagnostic bundle (gh #57).
+    Bug {
+        /// Session to include; latest here when absent.
+        session: Option<String>,
+        /// Destination directory override.
+        output: Option<std::path::PathBuf>,
+    },
+    /// JSONL session import (gh #57).
+    Import {
+        /// The file to import.
+        file: std::path::PathBuf,
+    },
     /// In-app updates (gh #50, pi's `pi update`).
     Update {
         /// Report only: no install, no writes, no refetch.
@@ -515,6 +526,11 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
             no_approve: cli.no_approve,
         },
         Some(Command::Doctor) => Route::Doctor,
+        Some(Command::Bug { session, output }) => Route::Bug {
+            session: session.clone(),
+            output: output.clone(),
+        },
+        Some(Command::Import { file }) => Route::Import { file: file.clone() },
         Some(Command::Update {
             check,
             extensions,
@@ -761,117 +777,6 @@ pub(super) fn export_command(
             exit::SESSION
         }
     }
-}
-
-/// `lca --list-models [search]`: every model the configured provider
-/// offers, as `id  provider  context` lines, then exit 0 (gh #8,
-/// EFG-003's CI building block).
-///
-/// `provider` is the row's profile when it has one (gh #31 - the service
-/// that will answer), the provider extension's name otherwise; `context`
-/// is the window in tokens, `0` when the provider publishes none. The
-/// output is sorted by provider then id, so a diff of two listings says
-/// what changed. An optional pattern filters it through the same matcher
-/// `models.enabled` uses.
-pub(super) fn list_models_command(
-    cwd: &Path,
-    search: &str,
-    cli: &CliFlags,
-    allow_host: &[String],
-) -> i32 {
-    let data = data_dir();
-    let grants = match GrantStore::open(&data.join("grants.json")) {
-        Ok(grants) => std::sync::Arc::new(std::sync::Mutex::new(grants)),
-        Err(err) => {
-            eprintln!("error: cannot open the grant store: {err}");
-            return exit::INTERNAL;
-        }
-    };
-    let config = match load_config_flags(cwd, &lock(&grants), true, false, cli) {
-        Ok(config) => config,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return exit::USAGE;
-        }
-    };
-    // The gh #31 rule holds for a listing: a discovery `GET /models` is a
-    // live request to a profile endpoint, and this command cannot prompt.
-    // `--allow-host` grants the host for this run (the same session set;
-    // a listing has no session to record a `permission` answer in, and
-    // nothing has been requested yet). An ungranted host is refused with
-    // headless mode's fix rather than reached for silently.
-    for host in allow_host {
-        if let Err(err) = lock(&grants).attach_session_net_pattern(cwd, host) {
-            eprintln!("error: {err}");
-            return exit::USAGE;
-        }
-    }
-    let provider_name = config.provider().to_string();
-    // No session exists to hang a stats source on: the native set's stats
-    // source answers empty, because a listing is not a turn. Assembled
-    // before the consent check (gh #157) so the provider's manifest -
-    // not a host literal - drives the env-var lookup.
-    let stats: lca_ext_native::StatsSource = Arc::new(String::new);
-    let prompt = crate::HeadlessPrompt::default();
-    let shared_prompt = lca_permissions::SharedPrompt::default();
-    shared_prompt.set(std::sync::Arc::new(std::sync::Mutex::new(prompt.clone())));
-    // No session here (a model listing is not a turn): the system temp
-    // dir, explicitly (gh #160).
-    let (registry, _mcp, _mcp_warnings) = crate::registry::assemble(
-        cwd,
-        &config,
-        shared_prompt,
-        lca_permissions::SharedDialogs::default(),
-        &grants,
-        stats,
-        &std::env::temp_dir(),
-        cli,
-    );
-    if let Some(host) =
-        crate::net_consent::env_configured_host(&data, &provider_name, Some(&registry))
-        && crate::ungranted_host(&grants, cwd, Some(host.clone())).is_some()
-    {
-        eprintln!("{}", crate::net_consent::denied_message(&host));
-        return exit::PERMISSION;
-    }
-    let provider: Arc<dyn lca_provider::Provider> = match registry.provider(&provider_name) {
-        Some(handle) => Arc::new(lca_core::ExtensionProvider::new(handle.clone())),
-        None => {
-            eprintln!("{}", crate::no_model_message(&provider_name));
-            return exit::USAGE;
-        }
-    };
-    let mut rows = crate::models::filter_enabled(provider.list_models(), config.models_enabled());
-    let search = search.trim();
-    if !search.is_empty() {
-        rows.retain(|model| crate::models::in_scope(model, &[search.to_string()]));
-    }
-    if prompt.needed_approval() {
-        // Something the listing touched wanted a human and there is no
-        // human here: say so instead of printing a list built around the
-        // refusal.
-        eprintln!(
-            "error: listing the models needed an approval this command cannot ask for; \
-             run `lca` once interactively and approve it"
-        );
-        return exit::PERMISSION;
-    }
-    if rows.is_empty() && !search.is_empty() {
-        println!("no models matching \"{search}\"");
-        return exit::OK;
-    }
-    let service = |model: &lca_protocol::ModelInfo| {
-        model
-            .extras
-            .get("profile")
-            .cloned()
-            .unwrap_or_else(|| provider_name.clone())
-    };
-    rows.sort_by(|a, b| service(a).cmp(&service(b)).then_with(|| a.id.cmp(&b.id)));
-    for model in &rows {
-        println!("{}  {}  {}", model.id, service(model), model.context_window);
-    }
-    exit::OK
 }
 
 /// Resolve the session to open (gh #69): fork clones at the tip (with

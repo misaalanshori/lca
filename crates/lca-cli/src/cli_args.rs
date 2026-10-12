@@ -334,6 +334,21 @@ pub enum Command {
     // gh #81 (pi's diagnostics row).
     /// Print version, paths, extensions, config, sessions, crashes.
     Doctor,
+    // gh #57 (pi's `bug`, without the upload hosts).
+    /// Write a local diagnostic bundle (report, transcript, meta).
+    Bug {
+        /// The session to include; omit for the latest here.
+        session: Option<String>,
+        /// Write the bundle here instead of the working directory.
+        #[arg(long, value_name = "PATH")]
+        output: Option<std::path::PathBuf>,
+    },
+    // gh #57 (pi's `/import`).
+    /// Import JSONL lines as a new resumable session.
+    Import {
+        /// The JSONL file (one record per line).
+        file: std::path::PathBuf,
+    },
     // gh #50 (pi's `pi update`).
     /// Update the binary, extensions, and catalogs in place.
     Update {

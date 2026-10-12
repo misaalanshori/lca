@@ -222,6 +222,9 @@ impl Ui {
         match name {
             "attach" => self.command_attach(argument),
             "paste" => self.command_paste(),
+            "export" => self.command_export(argument),
+            "import" => self.command_import(argument),
+            "bug" => self.command_bug(),
             "model" => self.command_model(argument),
             // gh #43: `/skill` lists, `/skill:name [args]` (or the space
             // form) loads the body and submits it with the args as one
@@ -937,6 +940,71 @@ impl Ui {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone()
+    }
+
+    /// `/export [html]`: write the current session out (gh #57).
+    /// Plain `/export` writes the JSON; `/export html` adds the
+    /// self-contained transcript. The notice names the files.
+    fn command_export(&self, argument: &str) -> CommandEffect {
+        let session = self.session();
+        let store = self.store.clone();
+        let audit = false;
+        let json = match store.export(&session, lca_session::ExportOptions { audit }) {
+            Ok(path) => path,
+            Err(err) => return CommandEffect::ShowWidget(format!("export failed: {err}")),
+        };
+        if argument.trim() == "html" {
+            match store.export_html(&session, lca_session::ExportOptions { audit }) {
+                Ok(html) => CommandEffect::ShowWidget(format!(
+                    "exported {}\n{}",
+                    json.display(),
+                    html.display()
+                )),
+                Err(err) => CommandEffect::ShowWidget(format!("export failed: {err}")),
+            }
+        } else {
+            CommandEffect::ShowWidget(format!("exported {}", json.display()))
+        }
+    }
+
+    /// `/import <file>`: JSONL lines become a new session (gh #57).
+    /// The notice names the id; resuming it is one `/resume` away.
+    fn command_import(&self, argument: &str) -> CommandEffect {
+        let path = std::path::Path::new(argument.trim());
+        if argument.trim().is_empty() {
+            return CommandEffect::ShowWidget("usage: /import <file.jsonl>".to_string());
+        }
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(err) => return CommandEffect::ShowWidget(format!("import failed: {err}")),
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        let title = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "imported".to_string());
+        match self.store.import_jsonl(&self.cwd, &title, &lines) {
+            Ok(session) => CommandEffect::ShowWidget(format!(
+                "imported as {} (resume with /resume {})",
+                session.id(),
+                session.id()
+            )),
+            Err(err) => CommandEffect::ShowWidget(format!("import failed: {err}")),
+        }
+    }
+
+    /// `/bug`: the local diagnostic bundle (gh #57, pi's bug-report
+    /// without the upload). The notice names the zip; sharing it is
+    /// an explicit next step, and the transcript rides along.
+    fn command_bug(&self) -> CommandEffect {
+        let session = self.session();
+        match crate::bug::bundle(&crate::data_dir(), &self.cwd, Some(session.id()), &self.cwd) {
+            Ok(path) => CommandEffect::ShowWidget(format!(
+                "wrote {} (contains the transcript; share it explicitly)",
+                path.display()
+            )),
+            Err(err) => CommandEffect::ShowWidget(format!("bug failed: {err}")),
+        }
     }
 }
 
