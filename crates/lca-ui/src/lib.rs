@@ -9,11 +9,14 @@
 pub mod chat;
 mod chat_commands;
 mod chat_confirm;
+mod chat_ext_commands;
 mod chat_keys;
+mod chat_modals;
 mod chat_models;
 mod chat_mouse;
 mod chat_overlays;
 mod chat_pickers;
+mod chat_poll;
 mod chat_render;
 mod chat_search;
 mod chat_shell;
