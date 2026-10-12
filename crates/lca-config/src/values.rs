@@ -126,6 +126,12 @@ impl Config {
         self.provider_retry_base_delay_ms
     }
 
+    /// Cap for every retry sleep in milliseconds (gh #52, pi's
+    /// `retry.maxAgentDelayMs`); zero disables the cap.
+    pub fn provider_retry_max_delay_ms(&self) -> u64 {
+        self.provider_retry_max_delay_ms
+    }
+
     /// Shell command timeout in seconds (FR-TOOL-5).
     pub fn tool_timeout_seconds(&self) -> u64 {
         self.tool_timeout_seconds

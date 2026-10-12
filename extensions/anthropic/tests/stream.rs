@@ -204,3 +204,83 @@ fn a_rejected_subscription_purges_its_tokens() {
         "the trio purges"
     );
 }
+
+/// A scripted transport: 429 once, with a `retry-after` header, so the
+/// producer path is pinned without touching the mock gateway's fixed
+/// headers.
+struct ThrottledCap {
+    reads: std::sync::Mutex<u32>,
+}
+
+impl lca_protocol::ProviderCap for ThrottledCap {
+    fn net_request(
+        &self,
+        _method: &str,
+        _url: &str,
+        _headers: &[(&str, &str)],
+        _body: Option<&[u8]>,
+    ) -> Result<u32, lca_protocol::CapabilityError> {
+        Ok(1)
+    }
+    fn net_response_status(&self, _handle: u32) -> Result<u16, lca_protocol::CapabilityError> {
+        Ok(429)
+    }
+    fn net_read_body(
+        &self,
+        _handle: u32,
+        _max: usize,
+    ) -> Result<Option<Vec<u8>>, lca_protocol::CapabilityError> {
+        let mut reads = self.reads.lock().expect("reads");
+        *reads += 1;
+        if *reads == 1 {
+            Ok(Some(
+                br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#
+                    .to_vec(),
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+    fn net_close_response(&self, _handle: u32) -> Result<(), lca_protocol::CapabilityError> {
+        Ok(())
+    }
+    fn net_response_headers(
+        &self,
+        _handle: u32,
+    ) -> Result<Vec<(String, String)>, lca_protocol::CapabilityError> {
+        Ok(vec![("retry-after".to_string(), "7".to_string())])
+    }
+    fn credentials_get(&self, _key: &str) -> Option<String> {
+        None
+    }
+    fn credentials_set(
+        &self,
+        _key: &str,
+        _value: &str,
+    ) -> Result<(), lca_protocol::CapabilityError> {
+        Ok(())
+    }
+    fn credentials_delete(&self, _key: &str) -> Result<(), lca_protocol::CapabilityError> {
+        Ok(())
+    }
+}
+
+// Verifies: gh #52 - a throttled response carries the server's delay
+// on the error text (`retry-after: 7`), the token the host's retry
+// honors across the string-only WIT boundary.
+#[test]
+fn a_throttled_response_carries_its_retry_after() {
+    let cap = ThrottledCap {
+        reads: std::sync::Mutex::new(0),
+    };
+    let err = match anthropic::MessagesDriver::open(&cap, "https://mock/v1/messages", &[], b"{}") {
+        Err(err) => err,
+        Ok(_) => panic!("the 429 surfaces"),
+    };
+    assert!(err.retryable, "a 429 stays retryable");
+    assert!(
+        err.message.contains("retry-after: 7"),
+        "the server delay rides the message: {}",
+        err.message
+    );
+}

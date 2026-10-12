@@ -156,16 +156,38 @@ pub(crate) fn compaction_fires(context_tokens: u64, window: u32, reserve: u64) -
 
 /// Whether a provider failure is a context overflow (gh #36 phase 3):
 /// the provider patterns from the #36 discussion plus our own budgeted
-/// `token cap` message. Anything else (validation, auth, transport)
-/// surfaces without compacting.
+/// `token cap` message. Gh #52 adds pi's per-vendor catalog (z.ai CN
+/// and siblings); the non-overflow exclusions keep throttling and
+/// rate-limit text on the retry path, never the compact path.
+/// Anything else (validation, auth, transport) surfaces without
+/// compacting.
 pub(crate) fn is_overflow_error(message: &str) -> bool {
     let lower = message.to_lowercase();
+    // Throttling is not overflow, even when it names tokens (pi's
+    // non-overflow exclusions; a Bedrock-style wait-please stays a
+    // retry, not a compaction).
+    if lower.contains("rate limit")
+        || lower.contains("too many requests")
+        || lower.contains("throttl")
+    {
+        return false;
+    }
     lower.contains("token cap")
         || lower.contains("prompt is too long")
+        || lower.contains("prompt too long")
+        || lower.contains("prompt exceeds max length")
         || lower.contains("exceeds token limit")
+        || lower.contains("token limit exceeded")
+        || lower.contains("too many tokens")
         || lower.contains("context window")
         || lower.contains("context length")
         || lower.contains("context_length")
+        || lower.contains("model_context_window_exceeded")
+        || lower.contains("request_too_large")
+        || lower.contains("exceeds the context window")
+        || lower.contains("maximum context length")
+        || lower.contains("input is too long")
+        || lower.contains("range of input length should be")
         || (lower.contains("max_tokens") && lower.contains("exceed"))
 }
 

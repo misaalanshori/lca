@@ -66,6 +66,9 @@ pub struct AgentConfig {
     pub retry_limit: u32,
     /// First retry delay; doubles per attempt (FR-CORE-6). Tests use zero.
     pub retry_base_delay: Duration,
+    /// Cap for every retry sleep, server-requested or backoff (gh #52,
+    /// pi's `retry.maxAgentDelayMs`). Zero disables the cap.
+    pub retry_max_delay: Duration,
     /// Maximum tool-call rounds within one turn (FR-CORE-9).
     pub max_iterations: u32,
     /// System message prepended to every request.
@@ -138,6 +141,7 @@ impl std::fmt::Debug for AgentConfig {
             .field("reasoning_effort", &self.reasoning_effort)
             .field("retry_limit", &self.retry_limit)
             .field("retry_base_delay", &self.retry_base_delay)
+            .field("retry_max_delay", &self.retry_max_delay)
             .field("max_iterations", &self.max_iterations)
             .field("system_prompt", &self.system_prompt)
             .field("extensions", &self.extensions)
@@ -173,6 +177,7 @@ impl Default for AgentConfig {
             reasoning_effort: None,
             retry_limit: 3,
             retry_base_delay: Duration::from_millis(250),
+            retry_max_delay: Duration::from_secs(60),
             // 0 = unlimited, matching `lca-config`'s
             // `DEFAULT_TOOL_MAX_ITERATIONS` (docs/configuration.md's
             // `tool.max_iterations` row; FR-CORE-9's 2026-10-02 annotation

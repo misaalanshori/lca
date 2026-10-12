@@ -907,6 +907,7 @@ fn wire(
         image_policy: crate::models::image_policy_for(&provider.list_models(), &model_id),
         retry_limit: config.provider_retry_limit() as u32,
         retry_base_delay: std::time::Duration::from_millis(config.provider_retry_base_delay_ms()),
+        retry_max_delay: std::time::Duration::from_millis(config.provider_retry_max_delay_ms()),
         max_iterations: config.tool_max_iterations() as u32,
         extensions: Arc::new(registry),
         compaction_threshold: config.compaction_threshold(),

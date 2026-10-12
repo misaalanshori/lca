@@ -90,6 +90,13 @@ impl ProviderCap for GuestCap {
         net::response_status(handle).map_err(map_net)
     }
 
+    fn net_response_headers(
+        &self,
+        handle: u32,
+    ) -> Result<Vec<(String, String)>, lca_protocol::CapabilityError> {
+        net::response_headers(handle).map_err(map_net)
+    }
+
     fn net_read_body(
         &self,
         handle: u32,

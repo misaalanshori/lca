@@ -644,8 +644,23 @@ impl<'a> MessagesDriver<'a> {
             }
             let _ = cap.net_close_response(handle);
             let text = String::from_utf8_lossy(&detail);
+            // Gh #52: the host's retry honors the server's delay, which
+            // rides the error text (the WIT boundary is string-only):
+            // `retry-after: <secs>` or the raw HTTP-date, verbatim.
+            let mut message = format!("provider returned HTTP {status}: {}", error_line(&text));
+            if matches!(status, 429 | 500 | 502 | 503 | 529)
+                && let Ok(headers) = cap.net_response_headers(handle)
+                && let Some(value) = headers.iter().find_map(|(key, value)| {
+                    key.eq_ignore_ascii_case("retry-after")
+                        .then(|| value.trim())
+                        .filter(|value| !value.is_empty())
+                })
+            {
+                message.push_str(" retry-after: ");
+                message.push_str(value);
+            }
             return Err(StreamFailure {
-                message: format!("provider returned HTTP {status}: {}", error_line(&text)),
+                message,
                 class: match status {
                     401 | 403 => "auth",
                     400..=499 => "invalid",

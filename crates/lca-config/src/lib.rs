@@ -140,6 +140,7 @@ pub struct Config {
     compaction_keep_recent_tokens: u64,
     provider_retry_limit: u64,
     provider_retry_base_delay_ms: u64,
+    provider_retry_max_delay_ms: u64,
     tool_timeout_seconds: u64,
     tool_result_limit_bytes: u64,
     tool_max_iterations: u64,
@@ -237,6 +238,7 @@ impl Default for Config {
             compaction_keep_recent_tokens: 20_000,
             provider_retry_limit: 3,
             provider_retry_base_delay_ms: 250,
+            provider_retry_max_delay_ms: 60_000,
             tool_timeout_seconds: 120,
             tool_result_limit_bytes: 65536,
             // 0 = unlimited (see `DEFAULT_TOOL_MAX_ITERATIONS`): the
@@ -378,6 +380,7 @@ impl Config {
             "compaction.keep_recent_tokens",
             "provider.retry_limit",
             "provider.retry_base_delay_ms",
+            "provider.retry_max_delay_ms",
             "tool.timeout_seconds",
             "tool.result_limit_bytes",
             "tool.max_iterations",
@@ -923,6 +926,7 @@ impl Config {
                 }
                 "provider.retry_limit"
                 | "provider.retry_base_delay_ms"
+                | "provider.retry_max_delay_ms"
                 | "tool.timeout_seconds"
                 | "tool.result_limit_bytes"
                 | "tool.max_iterations"
@@ -963,6 +967,7 @@ impl Config {
             "compaction.keep_recent_tokens",
             "provider.retry_limit",
             "provider.retry_base_delay_ms",
+            "provider.retry_max_delay_ms",
             "tool.timeout_seconds",
             "tool.result_limit_bytes",
             "tool.max_iterations",
@@ -1053,6 +1058,9 @@ impl Config {
             ("provider.retry_limit", TypedValue::Count(v)) => self.provider_retry_limit = v,
             ("provider.retry_base_delay_ms", TypedValue::Count(v)) => {
                 self.provider_retry_base_delay_ms = v;
+            }
+            ("provider.retry_max_delay_ms", TypedValue::Count(v)) => {
+                self.provider_retry_max_delay_ms = v;
             }
             ("tool.timeout_seconds", TypedValue::Count(v)) => self.tool_timeout_seconds = v,
             ("tool.result_limit_bytes", TypedValue::Count(v)) => self.tool_result_limit_bytes = v,

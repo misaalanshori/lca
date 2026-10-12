@@ -24,6 +24,10 @@ impl lca_protocol::ProviderCap for Capabilities {
         Capabilities::net_response_status(self, handle)
     }
 
+    fn net_response_headers(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError> {
+        Capabilities::net_response_headers(self, handle)
+    }
+
     fn net_read_body(&self, handle: u32, max: usize) -> Result<Option<Vec<u8>>, CapabilityError> {
         Capabilities::net_read_body(self, handle, max)
     }

@@ -130,6 +130,15 @@ pub trait ProviderCap: Send + Sync {
         handle: u32,
         max: usize,
     ) -> Result<Option<Vec<u8>>, crate::CapabilityError>;
+    /// The response's headers, in receive order. Default: absent, so
+    /// providers that never read headers compile unchanged (gh #52's
+    /// `Retry-After` producer overrides it).
+    fn net_response_headers(
+        &self,
+        _handle: u32,
+    ) -> Result<Vec<(String, String)>, crate::CapabilityError> {
+        Ok(Vec::new())
+    }
     /// Release the response.
     fn net_close_response(&self, handle: u32) -> Result<(), crate::CapabilityError>;
     /// Read one credential; a denial reads as absence, exactly as the

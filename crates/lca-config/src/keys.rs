@@ -78,6 +78,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "compaction.keep_recent_tokens",
     "provider.retry_limit",
     "provider.retry_base_delay_ms",
+    "provider.retry_max_delay_ms",
     "tool.timeout_seconds",
     "tool.result_limit_bytes",
     "tool.max_iterations",
@@ -322,6 +323,8 @@ pub fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, Conf
             }
         }
         "provider.retry_limit"
+        | "provider.retry_base_delay_ms"
+        | "provider.retry_max_delay_ms"
         | "tool.timeout_seconds"
         | "tool.result_limit_bytes"
         | "tool.max_iterations"

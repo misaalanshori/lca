@@ -44,6 +44,17 @@ impl Agent<'_> {
 
     /// One completion call, with retry (FR-CORE-6) and cancellation
     /// (FR-CONC-3: dropping the producer stops the in-flight stream).
+    ///
+    /// Gh #52 (pi's `getRetryDelayMs`): a server-requested delay rides
+    /// the error text as a `retry-after` / `retry-after-ms` token the
+    /// provider guests append from the HTTP response headers; the sleep
+    /// honors it, clamped to `retry_max_delay`. No token (or an
+    /// unparseable one) falls back to exponential backoff.
+    /// ponytail: deferred-response handles (pi's poll-a-response-id
+    /// later) are a noted deferral, not a gap here: they need a new
+    /// provider-world export plus a polling loop, and the 0.6 freeze
+    /// forbids the export. Retry-After plus the cap cover the
+    /// throttle case today.
     pub(super) async fn provider_call(
         &self,
         request: CompletionRequest,
@@ -69,10 +80,17 @@ impl Agent<'_> {
                     // provider flagged the failure non-retryable.
                     let retry = retryable || lca_protocol::is_capacity_error(&message);
                     if retry && attempt < self.config.retry_limit {
-                        let delay = self
+                        let backoff = self
                             .config
                             .retry_base_delay
                             .saturating_mul(1u32 << attempt.min(6));
+                        let mut delay = retry_after_delay_ms(&message, lca_session::now_ms())
+                            .unwrap_or(backoff);
+                        // Gh #52: the max-delay cap (pi's
+                        // `maxAgentDelayMs`); zero disables it.
+                        if !self.config.retry_max_delay.is_zero() {
+                            delay = delay.min(self.config.retry_max_delay);
+                        }
                         sink.on_event(TurnEvent::RetryScheduled {
                             attempt: attempt + 1,
                             max: self.config.retry_limit,
@@ -269,9 +287,123 @@ fn note_signature(signature: &mut Option<String>, payload: &serde_json::Value) {
     }
 }
 
+/// A server-requested retry delay parsed from a provider error message
+/// (gh #52, pi's `getRetryDelayMs`): guests append the HTTP
+/// `retry-after` / `retry-after-ms` response header as a trailing
+/// `retry-after: <value>` token. Seconds (a float; `retry-after-ms`
+/// is millis) first, then an HTTP-date minus now; anything else is
+/// `None` and the caller falls back to exponential backoff (pi's NaN
+/// branch). `now_ms` is a parameter so tests pin the date math.
+fn retry_after_delay_ms(message: &str, now_ms: u64) -> Option<std::time::Duration> {
+    let lower = message.to_ascii_lowercase();
+    // `retry-after-ms` first: the shorter marker is its prefix.
+    let (raw, is_ms) = lower
+        .find("retry-after-ms:")
+        .map(|index| (lower[index + 16..].trim_start(), true))
+        .or_else(|| {
+            lower
+                .find("retry-after:")
+                .map(|index| (lower[index + 12..].trim_start(), false))
+        })?;
+    if is_ms {
+        // Already millis (pi's `retry-after-ms`): clamp negatives to
+        // due-now the way a sleep does; only non-finite falls back.
+        return first_token(raw).parse::<f64>().ok().and_then(|ms| {
+            ms.is_finite()
+                .then(|| std::time::Duration::from_millis(ms.max(0.0) as u64))
+        });
+    }
+    // Seconds are one token; an HTTP-date has spaces, so try the
+    // token first and the line remainder as a date second.
+    if let Ok(secs) = first_token(raw).parse::<f64>()
+        && let Some(delay) = millis_from_secs(secs)
+    {
+        return Some(delay);
+    }
+    let date_text = raw
+        .trim_end_matches(['\"', '\'', '}', ']', ')', '.', ','])
+        .trim_end();
+    let date_ms = http_date_ms(date_text)?;
+    Some(std::time::Duration::from_millis(
+        date_ms.saturating_sub(now_ms),
+    ))
+}
+
+/// The first whitespace-delimited token, stripped of JSON wrapping.
+fn first_token(raw: &str) -> &str {
+    raw.split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_matches(['\"', '\'', '{', '['])
+        .trim_end_matches(['\"', '\'', ',', '}', ']'])
+}
+
+/// Finite seconds to a `Duration`, clamped at zero; non-finite
+/// falls back to backoff.
+fn millis_from_secs(secs: f64) -> Option<std::time::Duration> {
+    if !secs.is_finite() {
+        return None;
+    }
+    Some(std::time::Duration::from_millis(
+        secs.max(0.0).mul_add(1000.0, 0.0) as u64,
+    ))
+}
+
+/// Parse an IMF-fixdate (`Mon, 12 Oct 2026 00:01:00 GMT`) to epoch
+/// millis. Hand-rolled (Howard Hinnant's days-from-civil): the one
+/// header format worth honoring without a date crate.
+/// ponytail: IMF-fixdate only; another date shape falls back to backoff.
+fn http_date_ms(text: &str) -> Option<u64> {
+    let mut parts = text.split_whitespace();
+    let weekday = parts.next()?;
+    if !weekday.ends_with(',') {
+        return None;
+    }
+    let day: u64 = parts.next()?.parse().ok()?;
+    let month = match parts.next()? {
+        "Jan" | "jan" => 1,
+        "Feb" | "feb" => 2,
+        "Mar" | "mar" => 3,
+        "Apr" | "apr" => 4,
+        "May" | "may" => 5,
+        "Jun" | "jun" => 6,
+        "Jul" | "jul" => 7,
+        "Aug" | "aug" => 8,
+        "Sep" | "sep" => 9,
+        "Oct" | "oct" => 10,
+        "Nov" | "nov" => 11,
+        "Dec" | "dec" => 12,
+        _ => return None,
+    };
+    let year: i64 = parts.next()?.parse().ok()?;
+    if !(1970..=9999).contains(&year) {
+        return None;
+    }
+    let time = parts.next()?;
+    let mut clock = time.split(':');
+    let hour: u64 = clock.next()?.parse().ok()?;
+    let minute: u64 = clock.next()?.parse().ok()?;
+    let second: u64 = clock.next()?.parse().ok()?;
+    if hour > 23 || minute > 59 || second > 60 || !parts.next()?.eq_ignore_ascii_case("GMT") {
+        return None;
+    }
+    if !(1..=31).contains(&day) {
+        return None;
+    }
+    let shifted = if month <= 2 { year - 1 } else { year };
+    let era = shifted.div_euclid(400);
+    let yoe = (shifted - era * 400) as u64;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era as u64 * 146097 + doe - 719468;
+    Some(days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1000)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     // Verifies: gh #52 - a `retry-after` token in the provider error
     // (seconds, pi's `retry-after` / `retry-after-ms`) sets the delay.
