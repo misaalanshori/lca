@@ -113,6 +113,7 @@ pub fn merge_catalogs(sources: &[(CatalogSource, Vec<CatalogEntry>)]) -> Vec<Mer
                 entry: entry.clone(),
                 source_id: source.id.clone(),
                 source_name: source.name.clone(),
+                source_url: source.url.clone(),
                 official: source.url.is_none(),
             });
         }
@@ -129,6 +130,9 @@ pub struct MergedEntry {
     pub source_id: String,
     /// Its catalog's display name.
     pub source_name: String,
+    /// Its catalog document URL (`None` for the in-repo official
+    /// catalog, which has no URL to fetch).
+    pub source_url: Option<String>,
     /// True for the in-repo official catalog.
     pub official: bool,
 }

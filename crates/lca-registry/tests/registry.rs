@@ -827,23 +827,34 @@ fn catalog_merging_marks_every_provenance() {
         (official, vec![entry("a"), entry("shared")]),
         (custom, vec![entry("shared"), entry("b")]),
     ]);
-    let names: Vec<(&str, &str, bool)> = merged
+    let names: Vec<(&str, &str, bool, Option<&str>)> = merged
         .iter()
         .map(|row| {
             (
                 row.entry.name.as_str(),
                 row.source_id.as_str(),
                 row.official,
+                row.source_url.as_deref(),
             )
         })
         .collect();
     assert_eq!(
         names,
         vec![
-            ("a", "official", true),
-            ("shared", "official", true),
-            ("shared", "acme", false),
-            ("b", "acme", false),
+            ("a", "official", true, None),
+            ("shared", "official", true, None),
+            (
+                "shared",
+                "acme",
+                false,
+                Some("https://example.invalid/catalog.toml")
+            ),
+            (
+                "b",
+                "acme",
+                false,
+                Some("https://example.invalid/catalog.toml")
+            ),
         ]
     );
 }
