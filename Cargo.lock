@@ -1069,6 +1069,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "handoff"
+version = "0.6.0"
+dependencies = [
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-tools",
+ "tokio",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2237,6 +2249,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "project-memory"
+version = "0.6.0"
+dependencies = [
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-tools",
+ "serde_json",
+ "tokio",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "proptest"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2457,6 +2482,18 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rules-compat"
+version = "0.6.0"
+dependencies = [
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-tools",
+ "tokio",
+ "wit-bindgen 0.41.0",
 ]
 
 [[package]]
@@ -3069,6 +3106,18 @@ dependencies = [
  "lca-tools",
  "lca-ui",
  "toml",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
+name = "ultrathink"
+version = "0.6.0"
+dependencies = [
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-tools",
+ "tokio",
  "wit-bindgen 0.41.0",
 ]
 
