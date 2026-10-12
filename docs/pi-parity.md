@@ -7,7 +7,7 @@ Harness: `tests/pi-parity/` — run `cargo nextest run -E 'test(pi_parity)'`.
 Every case carries a `// Verifies: pi:<anchor>` comment; anchors name the
 pi file and section, never pi internals.
 
-## Green pins (26)
+## Green pins (28)
 
 | Pi anchor | LCA test(s) | What matches |
 |---|---|---|
@@ -28,6 +28,8 @@ pi file and section, never pi internals.
 | `packages/coding-agent/test/agent-session-retry.test.ts` | `pi_parity_retryable_error_retries_then_succeeds`, `pi_parity_fatal_error_keeps_the_session_open` | retryable retries with an announcement; fatal errors leave the session open |
 | `packages/coding-agent/docs/compaction.md#when-it-triggers` | `pi_parity_compaction_uses_token_budget_trigger` | auto-compaction budget keys `compaction.reserve_tokens` / `keepRecentTokens` land (gh #36 phase 1) |
 | `packages/coding-agent/docs/cli.md` (`--mode rpc`) + `docs/rpc.md` | `pi_parity_rpc_mode_exists` | `--mode` flag parses with an `rpc` value; bidirectional JSONL protocol (gh #56) |
+| `packages/coding-agent/docs/compaction.md#cut-point-rules` | `pi_parity_compaction_cut_never_lands_on_a_tool_result` | the replaced range keeps tool pairs whole (gh #100) |
+| `packages/coding-agent/docs/session-format.md#contexteditentry` | `pi_parity_context_edit_omission_survives_resume_and_fork` | omission hides the target from model context, survives resume and fork (gh #100) |
 
 Two deliberate measurement differences (match here / differ here):
 
