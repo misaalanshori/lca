@@ -167,9 +167,19 @@ for key in "${extras_keys[@]}"; do
   fi
 done
 
+# User-docs link rot (#84): every `docs/*.md` link the README names
+# resolves to a file. Anchors are the author's business.
+for link in $(grep -oE '\(docs/[a-z0-9/_.-]+\.md(#[-a-z0-9]+)?\)' README.md | tr -d '()' | cut -d'#' -f1 | sort -u); do
+  if [ ! -f "$link" ]; then
+    echo "docs-consistency: README links '$link', which does not exist"
+    fail=1
+  fi
+done
+
 if [ "$fail" = 0 ]; then
   echo "docs-consistency: one gate list, two pointers, no copies"
   echo "docs-consistency: preset table and capability sections match their data"
   echo "docs-consistency: vocabulary tables match their validators"
+  echo "docs-consistency: README doc links resolve"
 fi
 exit "$fail"

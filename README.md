@@ -232,9 +232,9 @@ the wire without touching the log
 ([ADR-0015](docs/adr/0015-compaction-and-context-transform.md)).
 
 **A terminal UI with one job per row.** Two renderers, one key: the
-fullscreen (alt-screen) renderer is the default and keeps its own scroll and
-selection, while `ui.fullscreen = false` hands the terminal its native
-scrollback and selection back (`/fullscreen` flips it, and your choice
+scrollback renderer is the default and hands the terminal its native
+scroll and selection, while `/fullscreen` opts into the alt-screen
+renderer with app-owned scroll and selection (and your choice
 persists). The transcript is ported from pi's design — bands, tinted tool
 cards, syntax-highlighted code — and every state the agent can be in has a
 row of its own that says so in words
@@ -401,6 +401,8 @@ document and the index for everything else. From there:
 | [`docs/testing-plan.md`](docs/testing-plan.md) | how this is built test-first, and how CI runs it |
 | [`docs/platform-notes.md`](docs/platform-notes.md) | the easy-to-get-wrong behavior per OS |
 | [`docs/configuration.md`](docs/configuration.md), [`docs/headless.md`](docs/headless.md) | configuration keys; the scripting contract |
+| [`docs/usage.md`](docs/usage.md), [`docs/terminal-setup.md`](docs/terminal-setup.md) | the interactive tutorial; terminal quirks |
+| [`docs/security.md`](docs/security.md), [`docs/environment-variables.md`](docs/environment-variables.md), [`docs/cli-integration.md`](docs/cli-integration.md) | the user-facing security page; every variable; scripting recipes |
 | [`docs/glossary.md`](docs/glossary.md) | the overloaded terms, disambiguated |
 | [`docs/providers/`](docs/providers/README.md) | one profile per first-party provider |
 | [`docs/inspiration.md`](docs/inspiration.md) | what comes from Pi and fx, and what is novel |
