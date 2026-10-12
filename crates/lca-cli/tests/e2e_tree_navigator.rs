@@ -45,7 +45,10 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     session.wait_for("done", std::time::Duration::from_secs(25));
     session.send(&["/tree", "Enter"]);
     session.wait_for("Message branches", std::time::Duration::from_secs(15));
-    session.send(&["Enter"]);
+    // Gh #248 anchors the cursor on the live leaf: ride Home to
+    // the first row, so Enter branches at the root like before.
+    // (A missing Home fails loudly at the fork asserts below.)
+    session.send(&["Home", "Enter"]);
     session.wait_for("branched at", std::time::Duration::from_secs(20));
     session.send(&["gamma question", "Enter"]);
     session.wait_for("answer three", std::time::Duration::from_secs(25));
@@ -65,8 +68,11 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     );
 
     // Left folds the first row's subtree (connectors leave with it);
-    // Right restores them. Connectors never appear in transcript
-    // text, so their absence is the fold receipt.
+    // Right restores them. Home first: the cursor opens on the live
+    // leaf now (gh #248), and Left there would climb, not fold.
+    // Connectors never appear in transcript text, so their absence
+    // is the fold receipt.
+    session.send(&["Home"]);
     session.send(&["Left"]);
     // Content-driven: the fold lands when the connectors leave.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -120,7 +126,8 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     }
     session.send(&["/tree", "Enter"]);
     session.wait_for("Message branches", std::time::Duration::from_secs(15));
-    session.send(&["Down", "Enter"]);
+    // Home first, as above: Down from the live leaf would clamp.
+    session.send(&["Home", "Down", "Enter"]);
     session.wait_for("branched at", std::time::Duration::from_secs(20));
     session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
