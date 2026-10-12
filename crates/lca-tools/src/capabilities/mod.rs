@@ -35,7 +35,10 @@ mod proxy;
 #[cfg(test)]
 mod query_tests;
 mod store;
+mod tls;
 mod traits;
+
+use tls::proxied_stack;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows_acl;
@@ -334,25 +337,11 @@ impl Capabilities {
         let _ = std::fs::create_dir_all(&roots.private);
         let pins: Arc<Mutex<HashMap<String, Vec<SocketAddr>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let mut http = HttpConnector::new_with_resolver(PinnedResolver {
-            inner: GaiResolver::new(),
-            pins: pins.clone(),
-        });
-        // The wrapped connector must accept `https`: hyper-rustls's
-        // `build()` clears this on the connector it creates, but
-        // `wrap_connector` leaves a caller-supplied one as-is, and the
-        // default `enforce_http` rejects the scheme before TLS is even
-        // considered.
-        http.enforce_http(false);
-        // gh #145: the proxy layer sits under rustls, over the pinned
-        // connector, so direct paths keep their exact behavior and
-        // proxied ones inherit the pin/DNS discipline above.
-        let proxied = proxy::ProxyTcp::new(http, proxy::proxies_from_env());
         let https = hyper_rustls::HttpsConnectorBuilder::new()
             .with_webpki_roots()
             .https_or_http()
             .enable_http1()
-            .wrap_connector(proxied);
+            .wrap_connector(proxied_stack(&pins));
         Capabilities {
             name,
             grants,

@@ -1719,13 +1719,16 @@ dependencies = [
  "libc",
  "proptest",
  "regex",
+ "rustls",
  "serde_json",
  "sha2",
  "shell-words",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tower-service",
  "unicode-normalization",
+ "webpki-roots",
  "windows-sys 0.61.2",
 ]
 

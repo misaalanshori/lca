@@ -27,6 +27,11 @@ hyper-util.workspace = true
 tower-service.workspace = true
 http-body-util.workspace = true
 hyper-rustls.workspace = true
+# Dependency justification (SRDD closed list + gh #94): `rustls` and
+# `webpki-roots` rebuild the HTTPS connector when a test anchor is added
+# (the offline TLS rows); same line hyper-rustls drives, no new transport.
+rustls.workspace = true
+webpki-roots.workspace = true
 
 # Dependency justification (SRDD closed list + review): `regex` powers the
 # built-in grep tool. Writing a correct regex engine is a multi-year project
@@ -84,6 +89,9 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 lca-testkit = { path = "../lca-testkit" }
+# tokio-rustls is test-only (gh #94): the loopback TLS server behind
+# the offline HTTPS rows.
+tokio-rustls.workspace = true
 # Round-trip properties for the shell transport (ADR-0041): the invariants
 # that must hold for arbitrary command text, not only the corpus rows.
 proptest.workspace = true

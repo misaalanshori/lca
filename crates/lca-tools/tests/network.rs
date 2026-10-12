@@ -876,12 +876,16 @@ const TLS_SERVER_KEY_PEM: &str = include_str!("fixtures/tls/server-key.pem");
 fn canned_tls_server(body: &'static str) -> (String, std::thread::JoinHandle<()>) {
     let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("addr");
+    // from_std adopts the socket into the runtime: it must already be
+    // nonblocking, or every test fails at registration.
+    listener.set_nonblocking(true).expect("nonblocking");
     let handle = std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("tls fixture runtime");
         runtime.block_on(async move {
+            use rustls::pki_types::pem::PemObject;
             let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
                 rustls::pki_types::CertificateDer::pem_slice_iter(
                     TLS_SERVER_PEM.as_bytes(),

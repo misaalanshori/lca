@@ -107,6 +107,20 @@ hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", 
 tower-service = "0.3"
 http-body-util = "0.1"
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "ring", "webpki-roots", "logging", "tls12"] }
+# rustls + webpki-roots direct (gh #94): the engine's additive trust-anchor
+# hook rebuilds the HTTPS connector with one extra CA beside the webpki
+# roots, so the offline TLS test can trust its loopback fixture. Same
+# 0.23 line hyper-rustls drives; ring matches its crypto provider.
+# tokio-rustls is dev-only: the in-test loopback TLS server.
+# (No `ring` on the rustls line above: the graph already carries exactly
+# one crypto provider via defaults, and a second panics provider
+# resolution - found the hard way.)
+rustls = { version = "0.23", default-features = false, features = ["std", "logging", "tls12"] }
+webpki-roots = "1"
+# default-features off: its defaults add the aws-lc-rs provider beside
+# hyper-rustls's ring, and two providers panic provider resolution
+# (same reason the rustls line above skips `ring`).
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
 
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
