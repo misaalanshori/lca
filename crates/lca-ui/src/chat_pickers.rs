@@ -455,6 +455,34 @@ pub fn thinking_description(name: &str) -> &'static str {
         .unwrap_or("")
 }
 
+/// One extension-hub row (#227): an installed extension or a catalog
+/// entry, with its provenance attached. Built by the host; the hub
+/// only filters, groups, and selects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HubRow {
+    /// Extension name.
+    pub name: String,
+    /// Release version.
+    pub version: String,
+    /// Capability names for the badge row.
+    pub capabilities: Vec<String>,
+    /// One-line description.
+    pub description: String,
+    /// Where the component comes from (OCI ref or archive URL).
+    /// Empty for installed rows.
+    pub oci_ref: String,
+    /// Catalog display name (`Official (misaalanshori/lca)`, ...).
+    /// Empty for installed rows.
+    pub source_name: String,
+    /// The catalog document URL (consent shows the exact origin).
+    /// Empty for installed rows.
+    pub source_url: String,
+    /// True for the in-repo official catalog.
+    pub official: bool,
+    /// Already installed (the INSTALLED section).
+    pub installed: bool,
+}
+
 /// The `/model` picker (R9): a searchable list of the provider's models,
 /// pi's `model-selector.ts` shape (minus the catalog refresh, which the
 /// host does at startup).

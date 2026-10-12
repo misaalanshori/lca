@@ -678,6 +678,17 @@ impl Ui {
         })
     }
 
+    /// Take pending consent rows for the model picker (gh #31 review).
+    /// Login-adjacent: the endpoint consent's second step runs through
+    /// the login grant flow, so the picker helper lives here.
+    pub(super) fn take_pending_models(&self) -> Vec<lca_ui::ModelRow> {
+        self.pending_models
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .unwrap_or_default()
+    }
+
     /// Re-run the login's model discovery now that the endpoint's ad-hoc
     /// grant is stored, persist the discovered list, and hand it to the live
     /// settings cell so `/model` sees it without a restart. Best-effort: a

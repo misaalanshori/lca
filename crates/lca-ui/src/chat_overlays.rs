@@ -496,6 +496,90 @@ impl Chat {
             );
             return true;
         }
+        if let Some(consent) = &self.install_consent {
+            // #227: the install-consent step names publisher, exact
+            // origin, artifact ref, and declared capabilities before
+            // anything is written (FR-PERM-2).
+            let mut body = vec![
+                format!("{} {}", consent.name, consent.version),
+                consent.publisher.clone(),
+                format!("source: {}", consent.source_url),
+                format!("artifact: {}", consent.artifact_ref),
+                String::new(),
+            ];
+            if consent.capabilities.is_empty() {
+                body.push("requests no capabilities.".to_string());
+            } else {
+                body.push("requests:".to_string());
+                for cap in &consent.capabilities {
+                    body.push(format!("  - {cap}"));
+                }
+            }
+            body.push(String::new());
+            body.push("Approve and install? [y/n]".to_string());
+            self.picker_overlay(
+                viewport,
+                width,
+                height,
+                "install",
+                &body,
+                "y approve · n deny · esc back",
+                &self.theme,
+                None,
+            );
+            return true;
+        }
+        if let Some(hub) = &self.extension_hub {
+            let mut body = vec![format!("  filter: {}", hub.query), String::new()];
+            if hub.rows.is_empty() && hub.loading {
+                let frame = crate::separator::FRAMES
+                    .get(hub.loading_frame % crate::separator::FRAMES.len());
+                body.push(format!("  {} Loading extensions…", frame.unwrap_or(&"…")));
+            } else if hub.matches.is_empty() {
+                body.push("  (no matches)".to_string());
+            }
+            let mut last_section = String::new();
+            for (row, index) in hub.matches.iter().enumerate() {
+                let Some(entry) = hub.rows.get(*index) else {
+                    continue;
+                };
+                let section = if entry.installed {
+                    "INSTALLED".to_string()
+                } else if entry.official {
+                    format!("AVAILABLE — {} [official]", entry.source_name)
+                } else {
+                    format!("AVAILABLE — {} [third-party]", entry.source_name)
+                };
+                if section != last_section {
+                    body.push(String::new());
+                    body.push(format!("  {section}"));
+                    last_section = section;
+                }
+                let cur = if row == hub.selected { '>' } else { ' ' };
+                let mark = if entry.installed { "  ✓" } else { "  +" };
+                body.push(format!(
+                    " {cur} {}{mark} {} v{} [{}]",
+                    entry.name,
+                    entry.description,
+                    entry.version,
+                    entry.capabilities.join(", ")
+                ));
+            }
+            if !hub.matches.is_empty() {
+                body.push(format!("  ({}/{})", hub.selected + 1, hub.matches.len()));
+            }
+            self.picker_overlay(
+                viewport,
+                width,
+                height,
+                "extensions",
+                &body,
+                "type to filter · enter install · esc close",
+                &self.theme,
+                None,
+            );
+            return true;
+        }
         false
     }
 

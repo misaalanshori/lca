@@ -179,6 +179,10 @@ pub struct Chat {
     pub thinking_picker: Option<ThinkingPicker>,
     /// The open `/model` picker, when any (R9).
     pub model_picker: Option<ModelPicker>,
+    /// The open `/extensions` hub, when any (#227).
+    pub extension_hub: Option<crate::chat_hub::ExtensionHub>,
+    /// A pending install-consent step (#227): the hub stays behind it.
+    pub install_consent: Option<crate::chat_hub::InstallConsent>,
     /// The open `/grants` view, when any (S8).
     pub grants_picker: Option<GrantPicker>,
     /// The open `/tree` branch selector, when any (FR-UI-16).
@@ -325,6 +329,8 @@ impl Chat {
             settings_picker: None,
             thinking_picker: None,
             model_picker: None,
+            extension_hub: None,
+            install_consent: None,
             grants_picker: None,
             tree_picker: None,
             trust_picker: trust_prompt.then_some(TrustPicker { selected: 0 }),

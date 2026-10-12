@@ -10,6 +10,7 @@ pub mod chat;
 mod chat_commands;
 mod chat_confirm;
 mod chat_ext_commands;
+mod chat_hub;
 mod chat_keys;
 mod chat_modals;
 mod chat_models;
@@ -34,6 +35,8 @@ pub mod transcript;
 mod turn_metrics;
 
 pub use chat::{Chat, PendingMessage};
+pub use chat_hub::{ConfirmInstall, FetchExtensions, HubData, InstallConsent, InstallPoll};
+pub use chat_pickers::HubRow;
 pub use chat_pickers::ModelPicker;
 pub use chat_render::ClickOutcome;
 pub use ext_widgets::widget_lines;

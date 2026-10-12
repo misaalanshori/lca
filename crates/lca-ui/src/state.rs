@@ -669,6 +669,14 @@ pub struct UiHooks {
     pub mcp_action: Option<McpAction>,
     /// Poll a background `/mcp login` (gh #53); absent with the rest.
     pub poll_mcp: Option<McpPoll>,
+    /// Fetch hub rows: installed plus catalogs, merged (#227). The
+    /// chat runs it on a worker, never the interface thread.
+    pub fetch_extensions: Option<crate::chat_hub::FetchExtensions>,
+    /// Confirm an install the consent modal approved (#227): fire the
+    /// worker now, report through `poll_install`.
+    pub confirm_install: Option<crate::chat_hub::ConfirmInstall>,
+    /// Poll a background install: `Some` posts its notice once (#227).
+    pub poll_install: Option<crate::chat_hub::InstallPoll>,
     /// Pre-parse markdown transforms in registration order (gh #12),
     /// collected by the host from native extensions. Empty by default -
     /// no consumer, no rewriting.

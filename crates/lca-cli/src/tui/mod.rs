@@ -12,6 +12,7 @@ mod commands;
 pub(crate) use commands::{settings_text, stage_initial_attachments};
 mod display;
 mod hooks;
+mod hub;
 mod label_hooks;
 mod login;
 mod pending_step;
@@ -213,6 +214,9 @@ pub(crate) struct Ui {
     /// The background `/compact`'s state, read by the interface's
     /// `poll_compact` hook so a summarization call never blocks it.
     compact_state: Arc<Mutex<lca_ui::CompactState>>,
+    /// #227: a finished background install's notice, taken once by
+    /// the interface's `poll_install` hook.
+    hub_install: Arc<Mutex<hub::InstallSlot>>,
     /// R4: the provider handle a background step is running against, for
     /// manual-callback delivery and cancellation.
     login_handle: Arc<Mutex<Option<lca_ext_native::NativeHandle>>>,
@@ -891,6 +895,7 @@ impl Ui {
             login_pending: Arc::new(Mutex::new(None)),
             login_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             compact_state: Arc::new(Mutex::new(lca_ui::CompactState::Idle)),
+            hub_install: Arc::new(Mutex::new(hub::InstallSlot::default())),
             login_handle: Arc::new(Mutex::new(None)),
             login_manual_offered: Arc::new(Mutex::new(false)),
             login_url_shown: Arc::new(Mutex::new(None)),

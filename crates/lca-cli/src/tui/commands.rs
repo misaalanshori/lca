@@ -230,6 +230,8 @@ impl Ui {
         // gh #43: the skill command plus one entry per skill, so
         // `/skill:name` completes and forwards to the host.
         names.push("/skill".to_string());
+        // #227: the Extension Hub completes like any host command.
+        names.push("/extensions".to_string());
         for skill in lca_tools::skills::collect(&crate::skills_roots(&self.cwd, &self.flags)) {
             names.push(format!("/skill:{}", skill.name));
         }
@@ -899,14 +901,6 @@ impl Ui {
 
     /// Take the rows the endpoint consent discovered for the picker (one
     /// shot: the cell clears as the rows leave it).
-    fn take_pending_models(&self) -> Vec<lca_ui::ModelRow> {
-        self.pending_models
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
-            .unwrap_or_default()
-    }
-
     /// The picker's endpoint consent (gh #31 review): every live request
     /// to a profile endpoint runs through `endpoint_consent` first, and
     /// `/model`'s `GET /models` discovery is one. Returns whether the ask

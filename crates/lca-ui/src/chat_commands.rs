@@ -180,6 +180,12 @@ impl Chat {
                 self.open_tree_picker();
                 return Action::Continue;
             }
+            // #227: the Extension Hub opens like the model picker -
+            // host rows through hooks, never a blocking fetch here.
+            "extensions" | "marketplace" => {
+                self.dispatch_extensions();
+                return Action::Continue;
+            }
             "resume" => {
                 self.open_resume_picker();
                 return Action::Continue;
@@ -446,11 +452,6 @@ impl Chat {
 
     /// Expand a `/name args` prompt template into editor text (gh #58):
     /// `None` when no template carries the name.
-    /// Run an extension-owned slash command through the host (gh #25
-    /// keeps `<provider>.login` here too): the shared tail of
-    /// `dispatch_command` and the async model-consent path (gh #232 -
-    /// an empty discovery still reaches endpoint consent).
-
     /// Commit a tree label edit (gh #231): the hook bookmarks (or
     /// clears) by record id, then the navigator rebuilds so the mark
     /// shows on the same frame.

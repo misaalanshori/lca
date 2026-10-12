@@ -877,6 +877,19 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         if crate::chat_commands::poll_mcp(&mut chat) {
             dirty = true;
         }
+        // ...and the `/extensions` hub: catalog rows land through
+        // the loader, install results post as notices (#227).
+        if let Some(hub) = chat.extension_hub.as_mut() {
+            if hub.poll_hub() {
+                dirty = true;
+            }
+            if hub.tick() {
+                dirty = true;
+            }
+        }
+        if chat.poll_install() {
+            dirty = true;
+        }
 
         // Edge auto-scroll while a selection drag sits on a viewport edge
         // (R6).
@@ -1131,11 +1144,6 @@ impl TurnState {
         }
     }
 }
-
-/// Poll a background login/identity step (R4). Returns whether anything
-/// changed; `None` from the hook means the step is still running.
-
-/// Fire the auto-approve countdown when it expires (returns whether
 
 #[cfg(test)]
 #[path = "run_tests.rs"]

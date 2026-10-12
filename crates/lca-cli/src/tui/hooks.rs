@@ -423,6 +423,21 @@ impl Ui {
                 let mcp = self.mcp.clone();
                 Some(Arc::new(move || current_manager(&mcp).poll()) as lca_ui::McpPoll)
             },
+            // #227: the hub fetches rows on the chat-spawned worker
+            // and installs through consent; both polls below keep the
+            // interface painting while each runs.
+            fetch_extensions: {
+                let ui = self.clone();
+                Some(Arc::new(move || ui.hub_fetch()) as lca_ui::FetchExtensions)
+            },
+            confirm_install: {
+                let ui = self.clone();
+                Some(Arc::new(move |consent| ui.hub_confirm(consent)) as lca_ui::ConfirmInstall)
+            },
+            poll_install: {
+                let ui = self.clone();
+                Some(Arc::new(move || ui.hub_poll()) as lca_ui::InstallPoll)
+            },
             // R4: a background login/identity step reports back through the
             // loop's poll instead of blocking the input thread on a
             // 300-second OAuth callback; Escape cancels it.
