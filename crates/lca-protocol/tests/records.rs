@@ -636,11 +636,13 @@ fn assistant_thinking_fields_round_trip_and_old_logs_load() {
 
 // Verifies: gh #113 - a tool-result line written before `images`
 // existed still loads, with no images (backward-compatible
-// deserialization: the field defaults, no format bump needed).
+// deserialization: the field defaults, no format bump needed). The
+// line uses the real wire shape (`t` tag; variant fields keep their
+// Rust names).
 #[test]
 fn old_tool_result_lines_without_images_still_load() {
     let record: Record = serde_json::from_str(
-        r#"{"type":"tool-result","v":1,"ts":2,"id":"r1","call_id":"call-1","status":"ok","content":"done"}"#,
+        r#"{"t":"tool-result","v":1,"ts":2,"id":"r1","call_id":"call-1","status":"ok","content":"done"}"#,
     )
     .expect("old line parses");
     match record {

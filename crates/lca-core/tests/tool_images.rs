@@ -31,10 +31,7 @@ async fn a_read_image_reaches_the_model_and_survives_resume() {
             t.tool_call("read", r#"{"path":"shot.png"}"#)
                 .usage(fake_usage(100, 20, 0, 100))
         })
-        .turn(|t| {
-            t.text("a red square")
-                .usage(fake_usage(200, 30, 100, 100))
-        })
+        .turn(|t| t.text("a red square").usage(fake_usage(200, 30, 100, 100)))
         .turn(|t| {
             t.text("still a red square")
                 .usage(fake_usage(200, 30, 100, 100))
