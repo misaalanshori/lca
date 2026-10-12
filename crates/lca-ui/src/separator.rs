@@ -121,7 +121,44 @@ impl Separator {
     /// which is `borderMuted`'s own darkGray - when no level is set.
     /// [`Chat`](crate::Chat) resolves it and passes it in.
     pub fn render(&self, width: u16, theme: &Theme, border: &StyleFn) -> String {
+        self.render_inner(width as usize, theme, border)
+    }
+
+    /// The editor frame's top cap (gh #249): pi's rounded-corner
+    /// frame. `╭` + the separator's inner row narrowed by the two
+    /// corners + `╮`: idle caps plain dashes, working and retrying
+    /// embed the spinner row exactly as [`Self::render`] paints it.
+    /// Always exactly one row; narrow terminals fall back to plain
+    /// dashes rather than overflowing.
+    pub fn render_top(&self, width: u16, theme: &Theme, border: &StyleFn) -> String {
         let width = width as usize;
+        if width <= 2 {
+            return border(&"─".repeat(width));
+        }
+        format!(
+            "{}{}{}",
+            border("╭"),
+            self.render_inner(width.saturating_sub(2), theme, border),
+            border("╮")
+        )
+    }
+
+    /// The editor frame's bottom cap (gh #249): plain rounded dashes,
+    /// width-exact; no status ever lives here.
+    pub fn render_bottom(&self, width: u16, border: &StyleFn) -> String {
+        let width = width as usize;
+        if width <= 2 {
+            return border(&"─".repeat(width));
+        }
+        format!(
+            "{}{}{}",
+            border("╰"),
+            border(&"─".repeat(width.saturating_sub(2))),
+            border("╯")
+        )
+    }
+
+    fn render_inner(&self, width: usize, theme: &Theme, border: &StyleFn) -> String {
         if width == 0 {
             return String::new();
         }
@@ -335,5 +372,44 @@ mod tests {
             "thinkingOff #505050: {off:?}"
         );
         assert_eq!(strip(&off), "─".repeat(40), "still one full row");
+    }
+
+    // Verifies: gh #249 - the editor frame's top cap rounds the
+    // separator row: idle caps plain dashes, working embeds the
+    // spinner row, always exactly one width-exact row.
+    #[test]
+    fn top_cap_rounds_the_separator_row() {
+        let theme = Theme::colored();
+        let idle = Separator::new().render_top(60, &theme, &border_of(&theme));
+        let plain = strip(&idle);
+        assert_eq!(plain, format!("╭{}╮", "─".repeat(58)), "{plain:?}");
+        assert_eq!(visible_width(&idle), 60, "width-exact");
+        let mut sep = Separator::new();
+        sep.working();
+        let working = sep.render_top(60, &theme, &border_of(&theme));
+        let plain = strip(&working);
+        assert!(
+            plain.starts_with("╭") && plain.ends_with("╮") && plain.contains("Working"),
+            "the spinner row rides the cap: {plain:?}"
+        );
+        assert_eq!(visible_width(&working), 60, "width-exact while working");
+    }
+
+    // Verifies: gh #249 - the bottom cap is plain rounded dashes,
+    // width-exact, and narrow terminals never overflow.
+    #[test]
+    fn bottom_cap_is_plain_rounded_dashes() {
+        let theme = Theme::colored();
+        let row = Separator::new().render_bottom(60, &border_of(&theme));
+        assert_eq!(strip(&row), format!("╰{}╯", "─".repeat(58)));
+        assert_eq!(visible_width(&row), 60, "width-exact");
+        for width in [0, 1, 2, 3] {
+            let top = Separator::new().render_top(width, &theme, &border_of(&theme));
+            let bottom = Separator::new().render_bottom(width, &border_of(&theme));
+            assert!(
+                visible_width(&top) == width as usize && visible_width(&bottom) == width as usize,
+                "narrow-safe at {width}"
+            );
+        }
     }
 }

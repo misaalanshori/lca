@@ -458,7 +458,9 @@ impl Chat {
         let Some((top, len)) = self.editor_rect(width, height) else {
             return false;
         };
-        if row < top || row >= top.saturating_add(len) {
+        // The frame caps focus the editor too (gh #249): the top cap
+        // lands on the first text row, the bottom cap on the last.
+        if row + 1 < top || row > top.saturating_add(len) {
             return false;
         }
         if self.picker_open() {
@@ -467,10 +469,10 @@ impl Chat {
             // restores, like a keyboard cancel).
             let _ = self.handle_picker_key("", Some("escape"));
         }
-        // The dock paints the `> `/continuation marker in two columns
-        // before the editor text (gh #27a); the editor maps the rest.
-        let local_col = col.saturating_sub(2) as usize;
-        let local_row = row.saturating_sub(top) as usize;
+        // The dock paints one pad cell before the editor text (gh
+        // #249; the editor maps the rest past its own `padding_x`).
+        let local_col = col.saturating_sub(1) as usize;
+        let local_row = row.saturating_sub(top).min(len.saturating_sub(1)) as usize;
         self.editor.handle_click(local_col, local_row);
         true
     }

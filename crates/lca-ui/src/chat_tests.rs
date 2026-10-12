@@ -940,8 +940,9 @@ fn caret_row(chat: &Chat, width: u16) -> (u16, String) {
     (col, strip(&clean)[row as usize].clone())
 }
 
-// Verifies: gh #27 (a) - line 1 opens with `> ` and line 2 carries the same
-// two columns as a plain pad, so no row steps back to column 0.
+// Verifies: gh #27 (a), gh #249 - line 1 opens with the frame's
+// one-cell pad and line 2 carries the same single column, so no row
+// steps back to column 0.
 #[test]
 fn every_editor_row_starts_at_the_marker_column() {
     let mut chat = chat();
@@ -952,22 +953,22 @@ fn every_editor_row_starts_at_the_marker_column() {
     chat.editor.cursor_up();
     chat.editor.cursor_line_start();
     let (column, row) = caret_row(&chat, 40);
-    assert_eq!(column, 2, "the marker is two columns: {row:?}");
-    assert_eq!(row, "> alpha", "line 1 carries the prompt marker");
+    assert_eq!(column, 1, "the pad is one cell: {row:?}");
+    assert_eq!(row, " alpha", "line 1 carries no prompt marker");
 
     chat.editor.cursor_down();
     chat.editor.cursor_line_start();
     let (column, row) = caret_row(&chat, 40);
     assert_eq!(
-        column, 2,
-        "a continuation line starts at the marker column, not column 0: {row:?}"
+        column, 1,
+        "a continuation line starts at the pad column, not column 0: {row:?}"
     );
-    assert_eq!(row, "  beta", "line 2 carries the marker-width pad");
+    assert_eq!(row, " beta", "line 2 carries the same one-cell pad");
 }
 
-// Verifies: gh #27 (a) - the cursor marker's column is uniform across every
-// line of a multiline prompt: the same logical column reports the same raw
-// cursor column on lines 1..n.
+// Verifies: gh #27 (a), gh #249 - the cursor marker's column is
+// uniform across every line of a multiline prompt: the same logical
+// column reports the same raw cursor column on lines 1..n.
 #[test]
 fn the_cursor_column_is_uniform_across_every_editor_line() {
     let mut chat = chat();
@@ -994,8 +995,8 @@ fn the_cursor_column_is_uniform_across_every_editor_line() {
     }
     assert_eq!(
         columns,
-        vec![5, 5, 5],
-        "column 3 of the buffer, plus the two-column marker, on every line: {columns:?}"
+        vec![4, 4, 4],
+        "column 3 of the buffer, plus the one-cell pad, on every line: {columns:?}"
     );
 }
 

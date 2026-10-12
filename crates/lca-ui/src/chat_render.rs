@@ -168,7 +168,13 @@ impl Chat {
         dock.push(String::new());
         let border =
             crate::separator::separator_border(&self.theme, self.thinking_level().as_deref());
-        dock.push(self.separator.render(width, &self.theme, &border));
+        // The editor frame (gh #249): pi's rounded-corner input box.
+        // The top cap rounds the separator row (the working spinner
+        // and retry countdown ride it exactly as before); the text
+        // spans the full width with a 1-cell pad and no `>` marker, so
+        // terminal selection copies code cleanly; the bottom cap
+        // closes plain. No side pipes, by the same copying rule.
+        dock.push(self.separator.render_top(width, &self.theme, &border));
 
         if let Some(notice) = &self.world.notice {
             // A notice can be multi-line (`/help`, `/hotkeys`, a command's
@@ -232,18 +238,15 @@ impl Chat {
             }
         }
 
-        // The editor: the prompt marker on the first row, and its two
-        // columns (`>` + space) as a plain pad on every continuation row,
-        // so every row's text starts at the same visual column and the
-        // cursor marker's column reads the same on lines 1..n (gh #27a).
-        let editor_rows = self.editor.render(width.saturating_sub(2));
-        for (index, row) in editor_rows.into_iter().enumerate() {
-            dock.push(if index == 0 {
-                format!("{} {row}", (self.theme.accent)(">"))
-            } else {
-                format!("  {row}")
-            });
+        // The editor: full-width text with a 1-cell pad (gh #249).
+        // The editor widget already pads by `padding_x` and paints
+        // its own caret inside, so the dock adds exactly the frame's
+        // cell; the marker rides inside, so geometry follows it.
+        let editor_rows = self.editor.render(width.saturating_sub(1));
+        for row in editor_rows.into_iter() {
+            dock.push(format!(" {row}"));
         }
+        dock.push(self.separator.render_bottom(width, &border));
 
         // The footer.
         dock.extend(self.footer_lines(width));
@@ -277,23 +280,29 @@ impl Chat {
             return None;
         }
         let hint = usize::from(self.editor.popup_hint().is_some());
-        let editor = self.editor.render(width.saturating_sub(2)).len();
+        let editor = self.editor.render(width.saturating_sub(1)).len();
         let footer = self.footer_lines(width).len();
-        let block = rows + hint + editor + footer;
+        // Gh #249: the popup floats above the editor frame; only
+        // the bottom cap sits between them, so it alone joins the
+        // block (the top cap rides above the popup).
+        let block = rows + hint + editor + footer + 1;
         let top = (height as usize).saturating_sub(block);
         Some((top as u16, (rows + hint) as u16))
     }
 
     /// The editor's viewport rows (gh #165): `(top, len)` covering the
-    /// editor rows above the footer. Alt-screen only: the main screen
-    /// never captures the mouse, so there is nothing to hit-test.
+    /// editor text rows above the footer (the gh #249 frame caps sit
+    /// directly outside and focus through [`Self::place_editor_caret`]).
+    /// Alt-screen only: the main screen never captures the mouse, so
+    /// there is nothing to hit-test.
     pub fn editor_rect(&self, width: u16, height: u16) -> Option<(u16, u16)> {
         if !self.screen_mode {
             return None;
         }
-        let editor = self.editor.render(width.saturating_sub(2)).len().max(1);
+        let editor = self.editor.render(width.saturating_sub(1)).len().max(1);
         let footer = self.footer_lines(width).len().max(1);
-        let top = (height as usize).saturating_sub(footer + editor);
+        // Gh #249: one row down for the frame's top cap.
+        let top = (height as usize).saturating_sub(footer + editor + 1);
         Some((top as u16, editor as u16))
     }
 
@@ -379,11 +388,12 @@ impl Chat {
 
     /// Rows the picker keeps clear at the viewport bottom (gh #16): the
     /// editor plus the footer - the composer the picker anchors above,
-    /// overlaying the notice area when present.
+    /// overlaying the notice area when present. Gh #249: the frame's
+    /// two caps ride with the editor rows.
     pub(super) fn composer_height(&self, width: u16) -> usize {
-        let editor = self.editor.render(width.saturating_sub(2)).len().max(1);
+        let editor = self.editor.render(width.saturating_sub(1)).len().max(1);
         let footer = self.footer_lines(width).len().max(1);
-        editor + footer
+        editor + footer + 2
     }
 
     /// The transcript window's height for this frame (gh #35): the

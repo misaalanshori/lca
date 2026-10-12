@@ -30,7 +30,8 @@ fn the_dock_stays_pinned_while_the_transcript_scrolls() {
     let strip = |row: &str| lca_tui::engine::text::strip_terminal_sequences(row);
     let editor_row = |rows: &[String]| {
         rows.iter()
-            .rposition(|row| strip(row).trim_start().starts_with("> "))
+            .rposition(|row| strip(row).contains('╭'))
+            .map(|cap| cap + 1)
     };
     let bottom_editor = editor_row(&at_bottom).expect("the editor is on screen");
     let scrolled_editor = editor_row(&scrolled).expect("...and stays on screen");
@@ -39,11 +40,15 @@ fn the_dock_stays_pinned_while_the_transcript_scrolls() {
         &scrolled[scrolled_editor..],
         "the dock rows are byte-identical: the editor and footer did not move"
     );
-    // The separator above the editor survives too.
-    let separator = &at_bottom[bottom_editor - 1];
+    // The frame's top cap sits directly above the editor rows.
+    let cap = &at_bottom[bottom_editor - 1];
     assert!(
-        scrolled.iter().any(|row| row == separator),
-        "the separator is still there, unchanged: {separator:?}"
+        strip(cap).contains('╭'),
+        "the top cap is still there, unchanged: {cap:?}"
+    );
+    assert!(
+        scrolled.iter().any(|row| row == cap),
+        "the cap row is byte-identical too"
     );
     // And the transcript really scrolled: a different slice on top.
     assert_ne!(
@@ -299,7 +304,7 @@ fn the_popup_never_pushes_the_editor_offscreen() {
     assert!(
         frame
             .iter()
-            .any(|row| strip(row).trim_start().starts_with("> /")),
+            .any(|row| strip(row).trim_start().starts_with('/')),
         "the prompt editor is on screen"
     );
     assert!(
@@ -688,7 +693,7 @@ fn editor_rect_pins_the_composer_rows() {
         .map(|row| lca_tui::engine::text::strip_terminal_sequences(row))
         .collect();
     assert!(
-        plain[top as usize].trim_start().starts_with("> hello"),
+        plain[top as usize].trim_start().starts_with("hello"),
         "the rect opens on the prompt row: {plain:?}"
     );
     assert_eq!(len, 1, "one buffer row paints as one editor row");
@@ -705,7 +710,7 @@ fn clicking_the_editor_places_the_caret() {
     chat.editor.set_text("hello world");
     let (w, h) = (80u16, 24u16);
     let (top, _) = chat.editor_rect(w, h).expect("the editor is on screen");
-    assert!(chat.place_editor_caret(2 + 5, top, w, h), "the click lands");
+    assert!(chat.place_editor_caret(1 + 5, top, w, h), "the click lands");
     let rows = chat.editor.render(w - 2);
     let marked = rows
         .iter()
@@ -887,4 +892,51 @@ fn collapsing_a_card_anchors_the_scroll_offset() {
         "growth holds: clamp_scroll rides it next frame"
     );
     assert_eq!(anchor_scroll(0, 100, 100), 0, "no change holds");
+}
+
+// Verifies: gh #249 - the prompt editor rides a rounded frame: the
+// top cap sits directly above its first text row, the bottom cap
+// directly below its last, both width-exact, and no `>` marker
+// prefixes the text.
+#[test]
+fn editor_rides_a_rounded_frame_without_a_prompt_marker() {
+    use lca_tui::engine::text::{strip_terminal_sequences, visible_width};
+    let mut chat = chat();
+    chat.screen_mode = true;
+    for c in "let x = 1;".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    let (w, h) = (40u16, 24u16);
+    let frame = chat.viewport(w, h, 0);
+    let text: Vec<String> = frame
+        .iter()
+        .map(|row| strip_terminal_sequences(row))
+        .collect();
+    let top = text
+        .iter()
+        .position(|row| row.contains('╭'))
+        .expect("a top cap");
+    assert!(text[top].contains('╮'), "the cap closes: {:?}", text[top]);
+    assert_eq!(
+        visible_width(&frame[top]),
+        w as usize,
+        "width-exact: {:?}",
+        text[top]
+    );
+    let body = &text[top + 1];
+    assert!(
+        body.contains("let x = 1;") && !body.trim_start().starts_with('>'),
+        "text with a 1-cell pad, no marker: {body:?}"
+    );
+    let bottom = text
+        .iter()
+        .position(|row| row.contains('╰'))
+        .expect("a bottom cap");
+    assert_eq!(bottom, top + 2, "caps hug one text row: {text:?}");
+    assert_eq!(
+        visible_width(&frame[bottom]),
+        w as usize,
+        "width-exact: {:?}",
+        text[bottom]
+    );
 }
