@@ -161,3 +161,28 @@ pub(crate) fn read_image_result(
         None => passthrough(bytes),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Verifies: gh #126 - clipboard RGBA rows encode to a PNG the
+    // attachment store accepts (the mocked clipboard source: no
+    // system clipboard in tests); bad shapes refuse.
+    #[test]
+    fn clipboard_rgba_encodes_to_a_storable_png() {
+        // 2x1: red, then green, row-major RGBA.
+        let rgba = vec![255, 0, 0, 255, 0, 255, 0, 255];
+        let png = clipboard_png(2, 1, &rgba).expect("encodes");
+        assert_eq!(
+            lca_protocol::sniff_image_media_type(&png),
+            Some("image/png"),
+            "the store sniffs what the clipboard encoded"
+        );
+        assert!(clipboard_png(0, 1, &rgba).is_err(), "empty dims refuse");
+        assert!(
+            clipboard_png(2, 2, &rgba).is_err(),
+            "short rows refuse"
+        );
+    }
+}
