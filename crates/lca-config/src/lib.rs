@@ -16,10 +16,10 @@ mod toml_layer;
 mod values;
 
 pub use keys::{
-    CODEBLOCK_BORDERS, CustomCatalog, DOUBLE_ESCAPE_ACTIONS, FULLSCREEN_EXIT_OUTPUTS,
-    FULLSCREEN_SCROLLBARS, KNOWN_KEYS, MERMAID_MODES, PERMISSION_MODES, QUEUE_MODES, SHELL_TOOLS,
-    THINKING_LEVELS, THINKING_VISIBILITIES, TREE_FILTER_MODES, TRUST_DEFAULTS, TypedValue,
-    parse_typed,
+    CACHE_WARMING_MODES, CODEBLOCK_BORDERS, CustomCatalog, DOUBLE_ESCAPE_ACTIONS,
+    FULLSCREEN_EXIT_OUTPUTS, FULLSCREEN_SCROLLBARS, KNOWN_KEYS, MERMAID_MODES, PERMISSION_MODES,
+    QUEUE_MODES, SHELL_TOOLS, THINKING_LEVELS, THINKING_VISIBILITIES, TREE_FILTER_MODES,
+    TRUST_DEFAULTS, TypedValue, parse_typed,
 };
 
 mod keybindings;
@@ -146,6 +146,11 @@ pub struct Config {
     tool_max_iterations: u64,
     tool_edit_requires_read: bool,
     cache_noise_floor_tokens: u64,
+    // gh #42: off by default (no warming without opt-in); idle may
+    // refresh an eligible cache past its TTL.
+    cache_warming: String,
+    // gh #42: counted-miss notices, off by default like pi.
+    cache_miss_notices: bool,
     extensions_log_limit_bytes: u64,
     update_check: Option<bool>,
     ui_fullscreen: Option<bool>,
@@ -255,6 +260,8 @@ impl Default for Config {
             // the historical read-before-edit staleness guard.
             tool_edit_requires_read: false,
             cache_noise_floor_tokens: 1024,
+            cache_warming: "off".to_string(),
+            cache_miss_notices: false,
             extensions_log_limit_bytes: 4096,
             extensions_catalogs: Vec::new(),
             update_check: None,
@@ -396,6 +403,8 @@ impl Config {
             "tool.max_iterations",
             "tool.edit_requires_read",
             "cache.noise_floor_tokens",
+            "cache.warming",
+            "cache.miss_notices",
             "extensions.log_limit_bytes",
             "extensions.catalogs",
             "update.check",
@@ -526,6 +535,8 @@ impl Config {
             ("tool.result_limit_bytes", TypedValue::Count(v)) => self.tool_result_limit_bytes = v,
             ("tool.max_iterations", TypedValue::Count(v)) => self.tool_max_iterations = v,
             ("cache.noise_floor_tokens", TypedValue::Count(v)) => self.cache_noise_floor_tokens = v,
+            ("cache.warming", TypedValue::Text(v)) => self.cache_warming = v,
+            ("cache.miss_notices", TypedValue::Bool(v)) => self.cache_miss_notices = v,
             ("extensions.log_limit_bytes", TypedValue::Count(v)) => {
                 self.extensions_log_limit_bytes = v
             }

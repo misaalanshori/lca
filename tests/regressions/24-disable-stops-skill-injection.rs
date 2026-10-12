@@ -32,6 +32,7 @@ fn a_disabled_package_contributes_no_skills() {
         extensions,
         disabled: Vec::new(),
         extra: Vec::new(),
+        resource_selection: Default::default(),
     };
     std::fs::create_dir_all(&roots.project).expect("mkdir");
     assert!(

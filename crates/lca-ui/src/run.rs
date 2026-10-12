@@ -1061,6 +1061,19 @@ impl TurnState {
         if let Some(error) = &outcome.error {
             chat.world.notice = Some(crate::state::sanitize_text(error));
         }
+        // Gh #42: a counted miss the flag asked to surface shows
+        // once, and never over an error.
+        if chat.world.notice.is_none()
+            && let Some(report) = chat
+                .world
+                .options
+                .hooks
+                .cache_miss_notice
+                .as_ref()
+                .and_then(|hook| hook())
+        {
+            chat.world.notice = Some(crate::state::sanitize_text(&report));
+        }
         // A turn that ends without its `TurnEnded` event still rests the
         // separator.
         chat.separator.idle();

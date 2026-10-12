@@ -1,7 +1,8 @@
 //! Reference resolution and installation state for extensions
 //! (ADR-0010, FR-DIST-1..9): one lockfile, one digest-verification
-//! path, three source kinds - OCI over the existing HTTP client, a
-//! plain HTTPS zip archive, and a local path.
+//! path, four source kinds - OCI over the existing HTTP client, a
+//! plain HTTPS zip archive, a local path, and a git repository clone
+//! pinned by commit (gh #59).
 //!
 //! Everything here is bytes-in, records-out: the resolver verifies the
 //! content digest before anything is written (FR-DIST-3/4), the store

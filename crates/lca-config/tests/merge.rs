@@ -1085,3 +1085,25 @@ fn queue_modes_default_merge_and_refuse() {
     })
     .expect_err("unknown mode refuses");
 }
+
+// Verifies: gh #42 - cache warming is off unless opted in, and miss
+// notices default off like pi; both ride a project file round-trip.
+#[test]
+fn cache_warming_keys_default_off_and_round_trip() {
+    let defaults = Config::defaults();
+    assert_eq!(defaults.cache_warming(), "off");
+    assert!(!defaults.cache_miss_notices());
+    let root = scratch("cache-warming-roundtrip");
+    write(
+        &root.join("lca.toml"),
+        "cache.warming = \"idle\"\ncache.miss_notices = true\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        project_file: Some(root.join("lca.toml")),
+        trusted: true,
+        ..Default::default()
+    })
+    .expect("loads");
+    assert_eq!(config.cache_warming(), "idle");
+    assert!(config.cache_miss_notices());
+}

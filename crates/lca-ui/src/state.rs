@@ -452,6 +452,10 @@ pub type ThinkingSetter = Arc<dyn Fn(Option<&str>) -> String + Send + Sync>;
 /// The `/thinking` picker's offered levels, resolved for the current
 /// model by the host.
 pub type ThinkingOffered = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+/// A counted cache miss's notice text, if the host has news (gh #42):
+/// the loop calls it when a turn ends; `Some` shows once. Absent
+/// means silent (misses still aggregate under `/session`).
+pub type CacheMissNotice = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
 /// One row of the `/settings` selector (gh #30): the key, its current
 /// value, the layer that value won on (FR-CFG-2's column, kept from the
@@ -629,6 +633,8 @@ pub struct UiHooks {
     /// level (a host without per-model sets); unsupported levels are
     /// hidden, never merely clamped after the fact.
     pub thinking_offered: Option<ThinkingOffered>,
+    /// The counted-miss notice supplier (gh #42); `None` stays silent.
+    pub cache_miss_notice: Option<CacheMissNotice>,
     /// The `/scoped-models` checklist rows with scope flags (gh #204).
     pub scoped_models: Option<ScopedModels>,
     /// The checklist's Enter: persist the checked ids and update the

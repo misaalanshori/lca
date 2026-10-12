@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 
 use super::keys::csv;
 use super::keys::{
-    CODEBLOCK_BORDERS, DOUBLE_ESCAPE_ACTIONS, FULLSCREEN_EXIT_OUTPUTS, FULLSCREEN_SCROLLBARS,
-    MERMAID_MODES, PERMISSION_MODES, QUEUE_MODES, SHELL_TOOLS, THINKING_LEVELS,
-    THINKING_VISIBILITIES, TREE_FILTER_MODES, TRUST_DEFAULTS,
+    CACHE_WARMING_MODES, CODEBLOCK_BORDERS, DOUBLE_ESCAPE_ACTIONS, FULLSCREEN_EXIT_OUTPUTS,
+    FULLSCREEN_SCROLLBARS, MERMAID_MODES, PERMISSION_MODES, QUEUE_MODES, SHELL_TOOLS,
+    THINKING_LEVELS, THINKING_VISIBILITIES, TREE_FILTER_MODES, TRUST_DEFAULTS,
 };
 use super::{ColorMode, Config, ConfigError, MergeSource, TypedValue};
 
@@ -154,7 +154,10 @@ impl Config {
                     };
                     this.apply(key.to_string(), TypedValue::List(list), source)?;
                 }
-                "trust.default_project" | "ui.double_escape_action" | "ui.tree_filter_mode" => {
+                "trust.default_project"
+                | "ui.double_escape_action"
+                | "ui.tree_filter_mode"
+                | "cache.warming" => {
                     // The domain lives here too, not just in the
                     // flag/env parser: a file value skips that path.
                     let text = value.as_str().ok_or_else(|| {
@@ -163,6 +166,7 @@ impl Config {
                     let ok = match key {
                         "ui.double_escape_action" => DOUBLE_ESCAPE_ACTIONS.contains(&text),
                         "trust.default_project" => TRUST_DEFAULTS.contains(&text),
+                        "cache.warming" => CACHE_WARMING_MODES.contains(&text),
                         _ => TREE_FILTER_MODES.contains(&text),
                     };
                     if !ok {
@@ -360,6 +364,7 @@ impl Config {
                 "update.check"
                 | "compaction.enabled"
                 | "ui.fullscreen"
+                | "cache.miss_notices"
                 | "tool.edit_requires_read" => {
                     let flag = value.as_bool().ok_or_else(|| {
                         invalid(format!("expected a boolean, got {}", type_name(&value)))
@@ -532,6 +537,8 @@ impl Config {
             "tool.max_iterations",
             "tool.edit_requires_read",
             "cache.noise_floor_tokens",
+            "cache.warming",
+            "cache.miss_notices",
             "extensions.log_limit_bytes",
             "extensions.catalogs",
             "update.check",

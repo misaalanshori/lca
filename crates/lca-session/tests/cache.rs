@@ -234,3 +234,116 @@ fn zero_cache_turn(id: &str, ts: u64, prompt: u64) -> Record {
 fn collect(records: &[Record]) -> Vec<CacheMiss> {
     lca_session::collect_cache_misses(records, NOISE_FLOOR)
 }
+
+// Verifies: gh #42 - the warming gates: opted-in `idle` with a
+// declared lifetime, idle past the TTL but inside the safety cap,
+// and savings clearing the floor. Every other shape refuses.
+#[test]
+fn warming_eligibility_needs_every_gate() {
+    use lca_session::warming_eligible;
+    // Happy path: 300 s tier, six idle minutes, a dime at stake.
+    assert!(warming_eligible(
+        "idle",
+        Some(300),
+        None,
+        360_000,
+        0.20,
+        0.01,
+        1.0
+    ));
+    // The long tier covers when short is silent.
+    assert!(warming_eligible(
+        "idle",
+        None,
+        Some(1500),
+        1_600_000,
+        0.20,
+        0.01,
+        1.0
+    ));
+    assert!(!warming_eligible(
+        "off",
+        Some(300),
+        None,
+        360_000,
+        0.20,
+        0.01,
+        1.0
+    ));
+    assert!(!warming_eligible(
+        "streaming",
+        Some(300),
+        None,
+        360_000,
+        0.20,
+        0.01,
+        1.0
+    ));
+    assert!(!warming_eligible(
+        "idle", None, None, 360_000, 0.20, 0.01, 1.0
+    ));
+    assert!(!warming_eligible(
+        "idle",
+        Some(0),
+        None,
+        360_000,
+        0.20,
+        0.01,
+        1.0
+    ));
+    assert!(!warming_eligible(
+        "idle",
+        Some(300),
+        None,
+        299_999,
+        0.20,
+        0.01,
+        1.0
+    ));
+    assert!(!warming_eligible(
+        "idle",
+        Some(300),
+        None,
+        lca_session::MAX_IDLE_WARMING_MS + 1,
+        0.20,
+        0.01,
+        1.0
+    ));
+    assert!(!warming_eligible(
+        "idle",
+        Some(300),
+        None,
+        360_000,
+        0.04,
+        0.01,
+        1.0
+    ));
+}
+
+// Verifies: gh #42 - a `cache_warm` usage record never perturbs
+// measurement: the scan walks assistant turns only.
+#[test]
+fn cache_warm_records_do_not_perturb_measurement() {
+    let warm = Record::Usage {
+        v: FORMAT_VERSION,
+        ts: 2,
+        id: "w1".to_string(),
+        parent: None,
+        kind: "cache_warm".to_string(),
+        provider: Some("fake".to_string()),
+        model: Some("model-a".to_string()),
+        usage: Usage {
+            input: 0,
+            output: 1,
+            cache_read: 50_000,
+            ..Usage::default()
+        },
+    };
+    let records = vec![
+        clean_turn("a1", 1, 50_000, 0),
+        warm,
+        clean_turn("a2", 3, 50_000, 50_000),
+    ];
+    let totals = compute_cache_waste(&records, NOISE_FLOOR);
+    assert_eq!(totals.miss_count, 0, "the warm is not a turn: {totals:?}");
+}

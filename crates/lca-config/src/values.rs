@@ -158,6 +158,16 @@ impl Config {
         self.cache_noise_floor_tokens
     }
 
+    /// Prompt-cache warming mode (gh #42): `off` never warms.
+    pub fn cache_warming(&self) -> &str {
+        &self.cache_warming
+    }
+
+    /// Whether a counted cache miss raises a notice (gh #42).
+    pub fn cache_miss_notices(&self) -> bool {
+        self.cache_miss_notices
+    }
+
     /// Extension log messages above this many bytes are truncated (FR-EXT-10).
     pub fn extensions_log_limit_bytes(&self) -> u64 {
         self.extensions_log_limit_bytes
@@ -472,6 +482,8 @@ impl Config {
                 "cache.noise_floor_tokens",
                 self.cache_noise_floor_tokens.to_string(),
             ),
+            ("cache.warming", self.cache_warming.clone()),
+            ("cache.miss_notices", self.cache_miss_notices.to_string()),
             (
                 "extensions.log_limit_bytes",
                 self.extensions_log_limit_bytes.to_string(),

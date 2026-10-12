@@ -18,7 +18,10 @@ pub(crate) mod view;
 
 use std::path::PathBuf;
 
-pub use cache::{CacheMiss, CacheWasteTotals, collect_cache_misses, compute_cache_waste};
+pub use cache::{
+    CacheMiss, CacheWasteTotals, MAX_IDLE_WARMING_MS, WARMING_MIN_SAVINGS_DOLLARS,
+    collect_cache_misses, compute_cache_waste, warming_eligible,
+};
 pub use export_html::{HtmlImage, render_html};
 pub use lca_protocol::{PermissionDecision, ToolResultStatus, ToolSource};
 pub use migrate::{MigrateReport, VersionState};

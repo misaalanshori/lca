@@ -8,7 +8,7 @@
 //! The `git` CLI does the transport (no new dependency); tests use
 //! local-path repos, so they run fully offline.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::{Error, Resolved, manifest_declares_resources, read_resource_dir};
 

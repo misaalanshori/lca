@@ -60,6 +60,11 @@ pub const MERMAID_MODES: &[&str] = &["off", "final", "streaming"];
 /// `/tree` navigator opens on this mode.
 pub const TREE_FILTER_MODES: &[&str] = &["default", "no-tools", "user-only", "labeled-only", "all"];
 
+/// Prompt-cache warming modes (gh #42, pi's `cacheWarming` minus
+/// `streaming`: no background timers in core). `off` never warms;
+/// `idle` may refresh an eligible cache past its TTL.
+pub const CACHE_WARMING_MODES: &[&str] = &["off", "idle"];
+
 /// Pi's `defaultProjectTrust` vocabulary (gh #80): the fallback project-trust
 /// behavior when no stored decision exists. User file or environment only;
 /// a project file that granted its own trust would defeat FR-PERM-9.
@@ -89,6 +94,8 @@ pub const KNOWN_KEYS: &[&str] = &[
     "tool.max_iterations",
     "tool.edit_requires_read",
     "cache.noise_floor_tokens",
+    "cache.warming",
+    "cache.miss_notices",
     "extensions.log_limit_bytes",
     "extensions.catalogs",
     "update.check",
@@ -172,6 +179,13 @@ pub fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, Conf
                 TREE_FILTER_MODES.join(", ")
             ))),
         },
+        "cache.warming" => match raw {
+            _ if CACHE_WARMING_MODES.contains(&raw) => Ok(TypedValue::Text(raw.to_string())),
+            _ => Err(invalid(format!(
+                "expected {}, got `{raw}`",
+                CACHE_WARMING_MODES.join(", ")
+            ))),
+        },
         "ui.autocomplete_max_visible" => match raw.parse::<u64>() {
             Ok(n) if (3..=20).contains(&n) => Ok(TypedValue::Count(n)),
             _ => Err(invalid(format!("expected an integer 3-20, got `{raw}`"))),
@@ -251,7 +265,7 @@ pub fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, Conf
                 "expected true, false, or \"header\", got `{raw}`"
             ))),
         },
-        "update.check" | "ui.fullscreen" | "tool.edit_requires_read" => raw
+        "update.check" | "ui.fullscreen" | "tool.edit_requires_read" | "cache.miss_notices" => raw
             .parse::<bool>()
             .map(TypedValue::Bool)
             .map_err(|_| invalid(format!("expected a boolean, got `{raw}`"))),

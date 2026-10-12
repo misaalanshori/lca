@@ -182,6 +182,38 @@ pub(super) fn model_effect_on(
 }
 
 /// The stats story (FR-UI-19): the same numbers the footer accumulates,
+/// A counted cache miss's notice text, if there is news (gh #42):
+/// `None` when notices are off or no new miss landed since `last`,
+/// which advances past the newest miss seen. The loop calls this
+/// when a turn ends; the text points at `/session` for the numbers.
+pub(super) fn miss_notice_for(
+    store: &SessionStore,
+    session: &Session,
+    floor: u64,
+    last: &mut usize,
+    enabled: bool,
+) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    let read = store.resolved(session, ViewMode::Display).ok()?;
+    let misses = lca_session::collect_cache_misses(&read.records, floor);
+    let newest = misses.last()?;
+    if misses.len() <= *last {
+        return None;
+    }
+    *last = misses.len();
+    Some(format!(
+        "prompt cache miss: {} tokens re-billed ({}) - see /session",
+        newest.missed_tokens,
+        if newest.missed_cost > 0.0 {
+            format!("${:.4}", newest.missed_cost)
+        } else {
+            "cost unknown".to_string()
+        }
+    ))
+}
+/// The stats story (FR-UI-19): the same numbers the footer accumulates,
 /// with per-model cost and cache waste.
 pub(crate) fn session_stats(store: &SessionStore, session: &Session) -> String {
     let Ok(read) = store.read_with(session, ViewMode::Display) else {
@@ -222,6 +254,28 @@ pub(crate) fn session_stats(store: &SessionStore, session: &Session) -> String {
                 }
             }
             _ => {}
+        }
+    }
+    // Gh #42: refresh usage counts toward session totals (pi's
+    // rule), bucketed by its own provider/model when named.
+    for record in &read.records {
+        if let Record::Usage {
+            provider,
+            model,
+            usage,
+            ..
+        } = record
+        {
+            input += usage.input;
+            output += usage.output;
+            cache_read += usage.cache_read;
+            cache_write += usage.cache_write;
+            cost += usage.cost;
+            let entry = per_model
+                .entry(model_label_for(provider.as_deref(), model.as_deref()))
+                .or_insert((0, 0));
+            entry.0 += usage.input + usage.cache_read + usage.cache_write;
+            entry.1 += usage.output;
         }
     }
     let waste = lca_session::compute_cache_waste(&read.records, 1024);
@@ -368,6 +422,14 @@ pub(super) fn setting_meta(key: &str) -> (String, String) {
             "Cache noise floor",
             "Cache misses below this are not counted",
         ),
+        "cache.warming" => known(
+            "Cache warming",
+            "Idle prompt-cache refresh: off, or idle past the TTL",
+        ),
+        "cache.miss_notices" => known(
+            "Cache miss notices",
+            "Notice when a counted cache miss lands",
+        ),
         "extensions.log_limit_bytes" => known("Extension log cap", "Extension log truncation size"),
         "update.check" => known("Update check", "Daily background version check"),
         _ => {
@@ -442,7 +504,8 @@ pub(super) fn settings_rows(
         // pickers; table keys (`models.thinking_levels`,
         // `permissions.proposals`) have no row shape.
         use lca_config::{
-            CODEBLOCK_BORDERS, FULLSCREEN_EXIT_OUTPUTS, FULLSCREEN_SCROLLBARS, MERMAID_MODES,
+            CACHE_WARMING_MODES, CODEBLOCK_BORDERS, FULLSCREEN_EXIT_OUTPUTS, FULLSCREEN_SCROLLBARS,
+            MERMAID_MODES,
         };
         vec![
             row("Display & Appearance", "ui.theme", &[]),
@@ -533,6 +596,8 @@ pub(super) fn settings_rows(
             row("Terminal & Execution", "markdown.code_block_indent", &[]),
             row("Terminal & Execution", "markdown.mermaid", MERMAID_MODES),
             row("Data & Updates", "cache.noise_floor_tokens", &[]),
+            row("Data & Updates", "cache.warming", CACHE_WARMING_MODES),
+            row("Data & Updates", "cache.miss_notices", &["false", "true"]),
             row("Data & Updates", "extensions.log_limit_bytes", &[]),
             row("Data & Updates", "update.check", &["false", "true"]),
         ]
@@ -833,6 +898,43 @@ mod tests {
 }
 
 #[cfg(test)]
+// Verifies: gh #42 - a `cache_warm` refresh counts toward session
+// totals (pi's rule) without joining model context.
+#[test]
+fn stats_count_cache_warm_refreshes() {
+    let root = lca_testkit::scratch_path("lca-stats-warm");
+    let _ = std::fs::remove_dir_all(&root);
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).expect("mkdir");
+    let store = SessionStore::new(root.join("data"));
+    let session = store.create_session(&project, "test").expect("session");
+    store
+        .append(
+            &session,
+            lca_protocol::Record::Usage {
+                v: lca_protocol::FORMAT_VERSION,
+                ts: 1,
+                id: "w1".to_string(),
+                parent: None,
+                kind: "cache_warm".to_string(),
+                provider: Some("test".to_string()),
+                model: Some("warmer".to_string()),
+                usage: lca_protocol::Usage {
+                    output: 1,
+                    cache_read: 50_000,
+                    cost: 0.01,
+                    ..Default::default()
+                },
+            },
+        )
+        .expect("append");
+    let text = session_stats(&store, &session);
+    assert!(text.contains("50000"), "the refresh counts:\n{text}");
+    assert!(text.contains("$0.0100"), "its cost counts:\n{text}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(test)]
 mod setting_meta_tests {
     use super::setting_meta;
 
@@ -895,4 +997,64 @@ mod setting_meta_tests {
             ("New key".to_string(), String::new())
         );
     }
+}
+
+// Verifies: gh #42 - miss notices fire once per new counted miss
+// when enabled, and stay silent when off or when nothing is new.
+#[test]
+fn miss_notices_fire_once_per_new_miss() {
+    let root = lca_testkit::scratch_path("lca-miss-notice");
+    let _ = std::fs::remove_dir_all(&root);
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).expect("mkdir");
+    let store = SessionStore::new(root.join("data"));
+    let session = store.create_session(&project, "test").expect("session");
+    let assistant =
+        |id: &str, ts: u64, usage: lca_protocol::Usage| lca_protocol::Record::Assistant {
+            v: lca_protocol::FORMAT_VERSION,
+            ts,
+            id: id.to_string(),
+            parent: None,
+            content: vec![],
+            reasoning: None,
+            reasoning_signature: None,
+            provider_thinking_level: None,
+            model: Some("m".to_string()),
+            provider: Some("test".to_string()),
+            usage: Some(usage),
+        };
+    // The first turn reports cache activity (FR-CACHE-4: an endpoint
+    // that never reports caching has nothing to measure).
+    let cached = lca_protocol::Usage {
+        input: 1_000,
+        cache_write: 49_000,
+        ..Default::default()
+    };
+    let rebilled = lca_protocol::Usage {
+        input: 50_000,
+        ..Default::default()
+    };
+    store
+        .append(&session, assistant("a1", 1, cached))
+        .expect("append");
+    let mut last = 0usize;
+    assert!(
+        miss_notice_for(&store, &session, 1024, &mut last, true).is_none(),
+        "one turn is no miss"
+    );
+    // A second turn re-billing the same 50k prompt is a counted miss.
+    store
+        .append(&session, assistant("a2", 2, rebilled))
+        .expect("append");
+    let notice = miss_notice_for(&store, &session, 1024, &mut last, true).expect("a notice");
+    assert!(notice.contains("/session"), "{notice}");
+    assert!(
+        miss_notice_for(&store, &session, 1024, &mut last, true).is_none(),
+        "the same miss never repeats"
+    );
+    assert!(
+        miss_notice_for(&store, &session, 1024, &mut 0, false).is_none(),
+        "off stays silent"
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }

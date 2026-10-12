@@ -70,6 +70,7 @@ fn every_shipped_resource_kind_is_declared_by_its_own_manifest() {
         source: "extensions/openai-compatible".to_string(),
         manifest,
         component,
+        commit: String::new(),
         resources: resources.clone(),
     })
     .expect("the real package installs with its real bag");

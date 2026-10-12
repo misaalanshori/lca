@@ -82,6 +82,8 @@ Network and retry inventory (gh #83, pi's "Network and retries"): attempts, base
 | `ui.double_escape_action` | `tree` \| `fork` \| `none` | `tree` | What Esc Esc with an empty editor does (gh #132, pi's `doubleEscapeAction`): opens the branch tree, the fork picker, or nothing. Cycled in `/settings`. |
 | `ui.tree_filter_mode` | `default` \| `no-tools` \| `user-only` \| `labeled-only` \| `all` | `default` | The `/tree` navigator's opening filter (gh #231, pi's `treeFilterMode`): `default` hides tool rows, `no-tools` also hides textless tool-call assistants, `user-only` keeps prompts, `labeled-only` keeps bookmarks, `all` shows everything. `f` cycles from it inside the navigator. |
 | `cache.noise_floor_tokens` | integer | `1024` | Cache misses below this are not counted (FR-CACHE-3). |
+| `cache.warming` | `off` \| `idle` | `off` | Idle prompt-cache refresh (gh #42): `off` never warms; `idle` may refresh an eligible cache past its TTL. Cycled in `/settings`. |
+| `cache.miss_notices` | boolean | `false` | Notice when a counted cache miss lands (gh #42); aggregates always live under `/session`. |
 | `extensions.log_limit_bytes` | integer | `4096` | Extension log messages above this are truncated (FR-EXT-10). |
 | `extensions.catalogs` | list of `{id, name, url}` tables | unset | User-configured custom extension catalogs (#227), merged behind the official catalog with their own provenance in `/extensions`. File-only: no flag or environment form.
 | `update.check` | boolean | `true` interactive, `false` headless | Daily background version check (FR-CFG-6). |
@@ -153,8 +155,7 @@ yields no entries (an optional file must not break sign-in); an absent
 file changes nothing. `$VAR`/`${VAR}` values read the environment. A
 leading `!command` never executes — pi loads keys from shell commands,
 and running arbitrary commands from a config file turns the permission
-model inside out (documented divergence). The lifetimes ride along for
-the cache-warming epic; nothing acts on them yet.
+model inside out (documented divergence). The lifetimes feed the cache-warming eligibility gate (gh #42); the refresh request itself is 0.7 work.
 
 ## Prompt files and context discovery
 

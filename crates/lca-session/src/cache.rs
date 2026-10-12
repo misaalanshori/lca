@@ -179,3 +179,42 @@ pub fn compute_cache_waste(records: &[Record], noise_floor: u64) -> CacheWasteTo
 pub fn collect_cache_misses(records: &[Record], noise_floor: u64) -> Vec<CacheMiss> {
     scan(records, noise_floor).1
 }
+
+/// Idle prompt-cache warming's safety cap (gh #42, pi's
+/// `MAX_IDLE_WARMING_AGE_MS`): never warm a session idle longer.
+pub const MAX_IDLE_WARMING_MS: u64 = 1_800_000;
+
+/// The refresh economics floor (gh #42, pi's guardrail): a refresh
+/// fires only when it is expected to save at least this much.
+pub const WARMING_MIN_SAVINGS_DOLLARS: f64 = 0.05;
+
+/// Whether an idle cache refresh should fire (gh #42): every gate
+/// must pass - the mode is opted into `idle` (never by default),
+/// the model declares a cache lifetime, the session sat idle past
+/// the TTL but inside the safety cap, and the expected savings
+/// clear the floor. Pure, so the warmer (and its tests) decide
+/// without timers or network. Lifetimes come from the model's
+/// `prompt_cache` metadata (`models.toml`, gh #64); the short tier
+/// wins when both declare.
+#[allow(clippy::too_many_arguments)]
+pub fn warming_eligible(
+    mode: &str,
+    short_secs: Option<u64>,
+    long_secs: Option<u64>,
+    idle_ms: u64,
+    miss_cost: f64,
+    warm_cost: f64,
+    p_continue: f64,
+) -> bool {
+    if mode != "idle" {
+        return false;
+    }
+    let Some(ttl_secs) = short_secs.or(long_secs).filter(|ttl| *ttl > 0) else {
+        return false;
+    };
+    let ttl_ms = ttl_secs.saturating_mul(1_000);
+    if idle_ms < ttl_ms || idle_ms > MAX_IDLE_WARMING_MS {
+        return false;
+    }
+    p_continue * miss_cost - warm_cost >= WARMING_MIN_SAVINGS_DOLLARS
+}

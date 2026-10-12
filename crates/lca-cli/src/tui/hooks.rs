@@ -187,6 +187,22 @@ impl Ui {
                     )
                 }))
             },
+            // Gh #42: the loop asks after every turn; the helper
+            // reports only a NEW counted miss, so quiet turns stay
+            // quiet. The last-seen count lives in the closure.
+            cache_miss_notice: {
+                let ui = self.clone();
+                let last = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+                Some(std::sync::Arc::new(move || {
+                    let config = crate::lock(&ui.config);
+                    let enabled = config.cache_miss_notices();
+                    let floor = config.cache_noise_floor_tokens();
+                    drop(config);
+                    let session = crate::lock(&ui.current_session).clone();
+                    let mut last = last.lock().unwrap_or_else(|poison| poison.into_inner());
+                    super::display::miss_notice_for(&ui.store, &session, floor, &mut last, enabled)
+                }))
+            },
             set_thinking: {
                 let ui = self.clone();
                 Some(Arc::new(move |level: Option<&str>| {

@@ -1025,7 +1025,10 @@ async fn git_source_resolves_a_pinned_commit() {
     let resolved = lca_registry::resolve(&source, None)
         .await
         .expect("git resolves");
-    assert_eq!(resolved.digest, lca_registry::Resolved::digest_of(b"v2-bytes-longer"));
+    assert_eq!(
+        resolved.digest,
+        lca_registry::Resolved::digest_of(b"v2-bytes-longer")
+    );
     assert_eq!(resolved.commit, sha, "the HEAD commit pins the install");
     assert!(resolved.source.starts_with("git+"), "{}", resolved.source);
     assert!(resolved.manifest.contains("word-count"));
@@ -1048,6 +1051,9 @@ async fn git_source_pins_an_explicit_rev() {
     let resolved = lca_registry::resolve(&format!("git+{}#{first}", repo.display()), None)
         .await
         .expect("resolves");
-    assert_eq!(resolved.digest, lca_registry::Resolved::digest_of(b"v1-bytes"));
+    assert_eq!(
+        resolved.digest,
+        lca_registry::Resolved::digest_of(b"v1-bytes")
+    );
     assert_eq!(resolved.commit, first);
 }
