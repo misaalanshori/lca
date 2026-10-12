@@ -137,3 +137,33 @@ fn open_tooltip_tracks_within_the_tipped_area() {
     chat.note_hover(0, 0, w, h, 0);
     assert!(chat.tooltip.is_none(), "exit dismisses");
 }
+
+// Verifies: gh #244 - hovering the footer's `[YOLO]` badge explains
+// itself; anywhere else on the footer stays quiet.
+#[test]
+fn yolo_badge_hover_explains_itself() {
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.footer.yolo = true;
+    let (w, h) = (80u16, 24u16);
+    let frame = super::strip(&chat.viewport(w, h, 0));
+    let (row, col) = frame
+        .iter()
+        .enumerate()
+        .find_map(|(row, line)| line.find("[YOLO]").map(|col| (row as u16, col as u16)))
+        .expect("a badge cell");
+    let tip = chat.tooltip_at(col, row, w, h, 0).expect("a tip");
+    assert!(
+        tip.contains("auto-approved"),
+        "names the semantics: {tip:?}"
+    );
+    assert!(
+        chat.tooltip_at(0, row, w, h, 0).is_none(),
+        "the path beside it stays quiet"
+    );
+    chat.footer.yolo = false;
+    assert!(
+        chat.tooltip_at(col, row, w, h, 0).is_none(),
+        "no badge, no tip"
+    );
+}

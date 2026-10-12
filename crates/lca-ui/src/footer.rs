@@ -131,17 +131,15 @@ impl Footer {
             location.push_str(&(theme.footer)(" • "));
             location.push_str(&(theme.footer)(&self.session));
         }
-        let mut lines = vec![truncate_to_width(&location, width, "…", false)];
-        // ADR-0042: yolo is never quiet. Its own line, error role, every
-        // frame, for as long as the mode is on.
+        // ADR-0042: yolo is never quiet, but it no longer costs a
+        // whole row (gh #244): a compact error-role badge rides the
+        // location line every frame while the mode is on, with the
+        // full explanation one hover away.
         if self.yolo {
-            lines.push(truncate_to_width(
-                &(theme.error)("YOLO: every permission prompt auto-approved (--yolo)"),
-                width,
-                "…",
-                false,
-            ));
+            location.push_str(&(theme.footer)(" • "));
+            location.push_str(&(theme.error)("[YOLO]"));
         }
+        let mut lines = vec![truncate_to_width(&location, width, "…", false)];
 
         // Stats line.
         let u = &self.usage;
@@ -414,8 +412,9 @@ mod tests {
         assert!(out[1].contains("p/m • high"), "{}", out[1]);
     }
 
-    // Verifies: FR-PERM-26 (ADR-0042) - yolo is loud: its own footer line, error role,
-    // every frame while the mode is on, and absent when it is off.
+    // Verifies: FR-PERM-26 (ADR-0042) - yolo is loud without costing
+    // a row: the `[YOLO]` badge rides the location line every frame
+    // while the mode is on, and is absent when it is off (gh #244).
     #[test]
     fn the_footer_shows_the_yolo_marker_only_when_yolo_is_on() {
         let theme = Theme::plain();
@@ -426,10 +425,20 @@ mod tests {
         };
         let lines = footer.render(80, &theme);
         assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("YOLO: every permission prompt auto-approved")),
+            lines.iter().any(|line| line.contains("[YOLO]")),
             "{lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("every permission prompt")),
+            "no dedicated banner line: {lines:?}"
+        );
+        let styled = footer.render(80, &Theme::colored());
+        let error = Theme::colored().error.clone();
+        assert!(
+            styled.iter().any(|line| line.contains(&error("[YOLO]"))),
+            "the badge wears the error role: {styled:?}"
         );
         footer.yolo = false;
         let lines = footer.render(80, &theme);

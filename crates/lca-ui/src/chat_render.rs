@@ -511,7 +511,38 @@ impl Chat {
         lines
     }
 
-    /// The scroll extent for this frame (gh #164): `(content, window)`
+    /// The viewport cells of the footer's `[YOLO]` badge (gh #244),
+    /// if it painted: `(row, first_col, one_past_last_col)`. Lives
+    /// beside `sections` (the one dock-layout rule) so the hover
+    /// cannot drift from the paint: the footer block ends the dock
+    /// (tabs pin below it in scrollback only), and the badge rides
+    /// the block's first line.
+    pub(crate) fn yolo_badge_cells(&self, width: u16, height: u16) -> Option<(u16, u16, u16)> {
+        if !self.screen_mode || !self.footer.yolo {
+            return None;
+        }
+        let footer = self.footer_lines(width);
+        let (_, dock) = self.sections(width);
+        let tabs = if self.screen_mode {
+            0
+        } else {
+            self.tab_bar_main(width).len()
+        };
+        let row = (height as usize)
+            .saturating_sub(dock.len())
+            .saturating_add(dock.len().saturating_sub(tabs).saturating_sub(footer.len()));
+        let stripped: Vec<String> = footer
+            .iter()
+            .map(|line| lca_tui::engine::text::strip_terminal_sequences(line))
+            .collect();
+        let at = stripped.first()?.find("[YOLO]")?;
+        let start = lca_tui::engine::text::visible_width(&stripped[0][..at]) as u16;
+        Some((
+            row as u16,
+            start,
+            start.saturating_add("[YOLO]".len() as u16),
+        ))
+    }
     /// rows - the transcript length against the rows it paints into.
     /// The scrollbar geometry, the drag math, and the hit-test all read
     /// this one rule, so they can never disagree.

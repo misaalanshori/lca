@@ -775,6 +775,15 @@ impl Chat {
             return None;
         }
         let (content, window) = self.scroll_extent(width, height);
+        // Gh #244: the footer's `[YOLO]` badge explains itself on
+        // hover (the dock rows below own no other tips).
+        if let Some((badge_row, first, past_last)) = self.yolo_badge_cells(width, height)
+            && row == badge_row
+            && col >= first
+            && col < past_last
+        {
+            return Some("every permission prompt auto-approved (--yolo)".to_string());
+        }
         if window == 0 || row as usize >= window {
             return None;
         }
