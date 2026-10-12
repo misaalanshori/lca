@@ -910,6 +910,7 @@ fn command_help(command: &str) -> &'static str {
         "/model" => "list or switch the session's model",
         "/compact" => "summarize the session to free context",
         "/attach" => "attach an image to the next message",
+        "/paste" => "paste the clipboard image to the next message",
         "/trust" => "trust the project folder (auto-approve in-workspace commands)",
         "/permissions" => "manage allow/deny rules (session, project, global)",
         "/grants" => "review this project's grants and rules",

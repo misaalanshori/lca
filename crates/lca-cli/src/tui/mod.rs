@@ -7,9 +7,11 @@
 //! runner. The closures are methods on `Ui` (`commands`, `hooks`, `login`),
 //! so `run` is orchestration and its helpers stay under the line budget.
 
+mod attach;
 mod close;
 mod commands;
-pub(crate) use commands::{settings_text, stage_initial_attachments};
+pub(crate) use attach::stage_initial_attachments;
+pub(crate) use commands::settings_text;
 mod display;
 mod hooks;
 mod hub;
@@ -73,8 +75,8 @@ pub(crate) use display::session_stats;
 /// The built-in slash slots the interface itself claims; the spec's
 /// sixth built-in, `/stats`, arrives from the native hooks extension
 /// that holds the stats source (ADR-0013).
-const BUILTIN_SLOTS: [&str; 7] = [
-    "login", "logout", "usage", "model", "compact", "attach", "session",
+const BUILTIN_SLOTS: [&str; 8] = [
+    "login", "logout", "usage", "model", "compact", "attach", "paste", "session",
 ];
 
 /// The session's live model: the runner reads it per turn, the
@@ -1181,11 +1183,14 @@ mod tests {
     }
 
     // SRDD's interface section: the built-in slots, of which the five
-    // spec-named ones live in this list alongside `/attach`, and /stats
-    // arrives from the native hooks extension that holds the stats source.
+    // spec-named ones live in this list alongside `/attach`, `/paste`,
+    // and /stats arrives from the native hooks extension that holds
+    // the stats source.
     #[test]
     fn the_spec_named_builtins_are_claimed() {
-        for slot in ["login", "logout", "usage", "model", "compact", "attach"] {
+        for slot in [
+            "login", "logout", "usage", "model", "compact", "attach", "paste",
+        ] {
             assert!(
                 BUILTIN_SLOTS.contains(&slot),
                 "/{slot} is a built-in the interface claims"

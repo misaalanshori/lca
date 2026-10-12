@@ -49,6 +49,7 @@ use lca_protocol::{ToolCall, ToolResult, ToolResultStatus};
 
 pub use image::{
     IMAGE_RESIZE_EXTRA, IMAGE_VISION_EXTRA, ImagePolicy, ImageResize, ImageVision, NO_VISION_NOTE,
+    clipboard_png,
 };
 
 /// Cooperative cancellation for one turn's work (FR-CONC-3).

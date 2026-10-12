@@ -62,6 +62,7 @@ serde_json.workspace = true
 serde.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+arboard = "3.6.1"
 
 # gh #19: `signal(SIGPIPE, SIG_DFL)` - std installs Rust's ignore handler
 # and exposes no way to undo it, and hand-rolling the syscall would be more

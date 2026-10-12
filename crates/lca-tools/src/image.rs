@@ -162,6 +162,31 @@ pub(crate) fn read_image_result(
     }
 }
 
+/// Encode clipboard RGBA rows as PNG (gh #126): the clipboard hands
+/// raw row-major bytes; the attachment store wants a real image file.
+/// Dimensions must be non-zero and match the row length, or the paste
+/// refuses instead of storing a corrupt file. PNG always, never the
+/// clipboard's own format: one stored shape keeps the sniff/resize
+/// path single, and PNG is lossless.
+pub fn clipboard_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 {
+        return Err("the clipboard image has no size".to_string());
+    }
+    if rgba.len() != width as usize * height as usize * 4 {
+        return Err(format!(
+            "the clipboard rows ({} bytes) do not fill {width}x{height} RGBA",
+            rgba.len()
+        ));
+    }
+    let pixels = image::RgbaImage::from_raw(width, height, rgba.to_vec())
+        .ok_or_else(|| "the clipboard bytes are not RGBA rows".to_string())?;
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(pixels)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|err| format!("cannot encode the clipboard image: {err}"))?;
+    Ok(png)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,9 +205,6 @@ mod tests {
             "the store sniffs what the clipboard encoded"
         );
         assert!(clipboard_png(0, 1, &rgba).is_err(), "empty dims refuse");
-        assert!(
-            clipboard_png(2, 2, &rgba).is_err(),
-            "short rows refuse"
-        );
+        assert!(clipboard_png(2, 2, &rgba).is_err(), "short rows refuse");
     }
 }

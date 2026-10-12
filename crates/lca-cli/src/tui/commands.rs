@@ -2,8 +2,7 @@
 //! `/model`/`/attach`/`/compact`/`/settings`/`/session`/identity slots were
 //! one closure capturing `run`'s locals; they are a method on [`Ui`] now.
 
-use lca_session::Session;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use lca_config::ColorMode;
 use lca_protocol::CommandEffect;
@@ -13,33 +12,6 @@ use lca_ui::UiOptions;
 use super::BUILTIN_SLOTS;
 use super::Ui;
 use super::display::model_effect_on;
-
-/// Stage opener `@file` images into the pending attachments (gh
-/// #71): they ride with the first submission exactly like `/attach`
-/// does. A file that will not stage warns and drops - the interface
-/// stays usable, and the warning names the path.
-pub(crate) fn stage_initial_attachments(
-    store: &lca_session::SessionStore,
-    session: &Arc<Mutex<Session>>,
-    paths: &[std::path::PathBuf],
-) -> Vec<lca_core::StagedAttachment> {
-    let Ok(session) = session.lock() else {
-        return Vec::new();
-    };
-    // gh #122: staging is content - it materializes a pending
-    // session (meta and session-start land with the attachments).
-    if !paths.is_empty() {
-        let _ = store.ensure_materialized(&session);
-    }
-    let mut staged = Vec::new();
-    for path in paths {
-        match lca_core::stage_image(&session, path) {
-            Ok(attachment) => staged.push(attachment),
-            Err(err) => eprintln!("warning: @{}: {err}", path.display()),
-        }
-    }
-    staged
-}
 
 /// Pick the model a provider switch lands on (gh #236): keep the
 /// session's model when the new provider offers it, else that
@@ -249,6 +221,7 @@ impl Ui {
     fn dispatch_command(self: &Arc<Self>, name: &str, argument: &str) -> CommandEffect {
         match name {
             "attach" => self.command_attach(argument),
+            "paste" => self.command_paste(),
             "model" => self.command_model(argument),
             // gh #43: `/skill` lists, `/skill:name [args]` (or the space
             // form) loads the body and submits it with the args as one
@@ -540,37 +513,6 @@ impl Ui {
                 }
                 CommandEffect::SubmitPrompt(text)
             }
-        }
-    }
-
-    fn command_attach(&self, argument: &str) -> CommandEffect {
-        let session = self.session();
-        let path = std::path::Path::new(argument.trim());
-        match lca_core::stage_image(&session, path) {
-            Ok(staged) => {
-                let note = format!(
-                    "attached {} - it goes with your next message",
-                    &staged.hash[..8]
-                );
-                self.pending_attachments
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .push(staged);
-                // Show the image placeholder at once (FR-UI-13); fall back to
-                // the note when the bytes are gone.
-                match std::fs::read(path).ok().and_then(|bytes| {
-                    lca_protocol::sniff_image_media_type(&bytes)
-                        .map(|media_type| (media_type.to_string(), bytes))
-                }) {
-                    Some((media_type, bytes)) => CommandEffect::AttachImage {
-                        media_type,
-                        bytes,
-                        note,
-                    },
-                    None => CommandEffect::ShowWidget(note),
-                }
-            }
-            Err(err) => CommandEffect::ShowWidget(format!("attach failed: {err}")),
         }
     }
 
