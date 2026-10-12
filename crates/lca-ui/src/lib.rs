@@ -34,6 +34,7 @@ pub mod state;
 pub mod theme;
 pub mod transcript;
 mod turn_metrics;
+pub mod ui_state;
 
 pub use chat::{Chat, PendingMessage};
 pub use chat_extman::{
