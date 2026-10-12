@@ -1133,6 +1133,10 @@ mod label_tests;
 #[path = "chat_queue_tests.rs"]
 mod queue_tests;
 
+#[cfg(test)]
+#[path = "chat_extman_tests.rs"]
+mod extman_tests;
+
 #[path = "chat_tab_tests.rs"]
 mod tab_tests;
 

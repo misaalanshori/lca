@@ -52,6 +52,11 @@ impl FakeExt {
         self
     }
 
+    fn with_compaction(mut self) -> FakeExt {
+        self.worlds.push(World::Compaction);
+        self
+    }
+
     fn with_command(mut self, leaf: &str) -> FakeExt {
         self.worlds.push(World::Command);
         self.commands.push(CommandSpec {
@@ -748,5 +753,38 @@ fn annotations_ride_spec_extras() {
             .and_then(|hints| hints.read_only_hint),
         None,
         "extras do not merge into explicit annotations"
+    );
+}
+
+// Verifies: gh #3 - a preferred compaction strategy wins over
+// registration order; an unknown or disabled name falls back to the
+// first enabled strategy.
+#[test]
+fn preferred_compaction_strategy_wins_and_falls_back() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(FakeExt::new("first").with_compaction()));
+    registry.register(Arc::new(FakeExt::new("second").with_compaction()));
+    assert_eq!(
+        registry.compaction_strategy().map(|handle| handle.name().to_string()),
+        Some("first".to_string())
+    );
+    registry.set_preferred_compaction(Some("second".to_string()));
+    assert_eq!(
+        registry.compaction_strategy().map(|handle| handle.name().to_string()),
+        Some("second".to_string()),
+        "the preferred strategy wins"
+    );
+    registry.set_preferred_compaction(Some("ghost".to_string()));
+    assert_eq!(
+        registry.compaction_strategy().map(|handle| handle.name().to_string()),
+        Some("first".to_string()),
+        "an unknown name falls back"
+    );
+    registry.set_enabled("second", false);
+    registry.set_preferred_compaction(Some("second".to_string()));
+    assert_eq!(
+        registry.compaction_strategy().map(|handle| handle.name().to_string()),
+        Some("first".to_string()),
+        "a disabled preferred strategy falls back"
     );
 }
