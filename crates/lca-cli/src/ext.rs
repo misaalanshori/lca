@@ -587,6 +587,13 @@ fn parse_manifest_strict(
     Ok((parsed.name, parsed.version, parsed.abi, description))
 }
 
+/// `lca update --extensions`: every installed extension, yes to
+/// capability widening alike (gh #50 reuses the non-interactive
+/// `ext update --all` path).
+pub async fn update_all(tree: &InstallTree) -> i32 {
+    update(tree, None, true, true).await
+}
+
 async fn update(tree: &InstallTree, name: Option<String>, all: bool, yes: bool) -> i32 {
     let names: Vec<String> = if all {
         match tree.list() {

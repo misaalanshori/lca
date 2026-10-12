@@ -49,6 +49,7 @@ mod rpc;
 pub use persist::{persist_setting, persist_setting_list};
 mod registry;
 mod session_cmds;
+mod session_maint;
 /// Restoring `SIGPIPE`'s default disposition (GitHub issue #19).
 pub mod sigpipe;
 

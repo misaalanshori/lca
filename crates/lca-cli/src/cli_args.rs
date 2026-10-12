@@ -328,6 +328,28 @@ pub enum Command {
     // gh #81 (pi's diagnostics row).
     /// Print version, paths, extensions, config, sessions, crashes.
     Doctor,
+    // gh #50 (pi's `pi update`).
+    /// Update the binary, extensions, and catalogs in place.
+    Update {
+        /// Report only: no install, no writes, no refetch.
+        #[arg(long)]
+        check: bool,
+        /// Installed extensions (`ext update --all`).
+        #[arg(long)]
+        extensions: bool,
+        /// Catalog documents (provider/model metadata).
+        #[arg(long)]
+        models: bool,
+        /// The binary plus both catalog jobs.
+        #[arg(long)]
+        all: bool,
+        /// Reinstall even when current.
+        #[arg(long)]
+        force: bool,
+        /// Print the condensed release notes.
+        #[arg(long)]
+        changelog: bool,
+    },
 }
 
 /// `lca auth ...`: pi's credential commands, minus the printers (gh

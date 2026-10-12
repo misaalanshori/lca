@@ -2,11 +2,12 @@
 //! #158). Behaviour unchanged.
 
 use super::session_cmds::{list_models_command, route_with};
+use super::session_maint::{gc_command, migrate_command};
 use super::{
     auth, diagnostics, doctor, ext, invoke,
     session_cmds::{
-        clone_command, config_command, delete_command, export_command, fork_command, gc_command,
-        migrate_command, rename_command, resume_list,
+        clone_command, config_command, delete_command, export_command, fork_command,
+        rename_command, resume_list,
     },
 };
 use crate::{Cli, CliFlags, OutputMode, Route, check_flag_contradictions, exit, headless, rpc};
@@ -123,5 +124,18 @@ pub async fn run(cli: Cli) -> i32 {
         Route::Ext(cmd) => ext::run(cmd, flags.offline).await,
         Route::Auth(cmd) => auth::run(&cmd, &cli.allow_host),
         Route::Doctor => doctor::run(&crate::data_dir(), &cwd),
+        Route::Update {
+            check,
+            extensions,
+            models,
+            all,
+            force,
+            changelog,
+        } => {
+            crate::update::run(crate::update::plan(
+                check, extensions, models, all, force, changelog,
+            ))
+            .await
+        }
     }
 }

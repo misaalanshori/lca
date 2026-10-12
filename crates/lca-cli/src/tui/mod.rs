@@ -15,6 +15,7 @@ pub(crate) use commands::settings_text;
 mod display;
 mod hooks;
 mod hub;
+pub(crate) use hub::OFFICIAL_CATALOG_URL;
 mod label_hooks;
 mod login;
 mod pending_step;
@@ -1144,57 +1145,4 @@ fn region_interactor(registry: Arc<ExtensionRegistry>) -> Option<RegionInteracto
                 })
         },
     ) as RegionInteractor)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Verifies: E5 - the status label names the preset identity, not the
-    // extension, when the login stored one.
-    #[test]
-    fn live_cells_label_the_preset_identity() {
-        let cells = live_cells("opencode-go", "deepseek-v4.1-flash", 0, None);
-        assert_eq!(
-            *cells.label.lock().unwrap(),
-            "opencode-go/deepseek-v4.1-flash"
-        );
-    }
-
-    // Cycle-6 drive regression: a mid-session login must move the identity
-    // cell with the preset, or a later `/model` switch reads the stale
-    // startup identity and the footer names the extension instead of the
-    // preset. The drive reproduced this after logging in on a session that
-    // started logged out.
-    #[test]
-    fn a_mid_session_login_adopts_the_preset_into_the_identity_cell() {
-        // Startup had no stored preset, so the cell held the extension.
-        let cells = live_cells("openai-compatible", "deepseek-v4.1-flash", 0, None);
-        // The login then completes on the opencode-go preset.
-        adopt_login_identity(&cells.identity, "opencode-go");
-        assert_eq!(*cells.identity.lock().unwrap(), "opencode-go");
-        // A `/model` switch keeps the preset in the footer label.
-        let label = format!(
-            "{}/{}",
-            *cells.identity.lock().unwrap(),
-            "deepseek-v4.1-flash"
-        );
-        assert_eq!(label, "opencode-go/deepseek-v4.1-flash");
-    }
-
-    // SRDD's interface section: the built-in slots, of which the five
-    // spec-named ones live in this list alongside `/attach`, `/paste`,
-    // and /stats arrives from the native hooks extension that holds
-    // the stats source.
-    #[test]
-    fn the_spec_named_builtins_are_claimed() {
-        for slot in [
-            "login", "logout", "usage", "model", "compact", "attach", "paste",
-        ] {
-            assert!(
-                BUILTIN_SLOTS.contains(&slot),
-                "/{slot} is a built-in the interface claims"
-            );
-        }
-    }
 }

@@ -121,6 +121,21 @@ pub enum Route {
     },
     /// The diagnostics dump (gh #81).
     Doctor,
+    /// In-app updates (gh #50, pi's `pi update`).
+    Update {
+        /// Report only: no install, no writes, no refetch.
+        check: bool,
+        /// Installed extensions.
+        extensions: bool,
+        /// Catalog documents.
+        models: bool,
+        /// The binary plus both catalog jobs.
+        all: bool,
+        /// Reinstall even when current.
+        force: bool,
+        /// Print the condensed release notes.
+        changelog: bool,
+    },
     /// An extension-management subcommand (FR-DIST-*).
     Ext(ext::ExtCmd),
     /// A credential subcommand (gh #72, pi's `auth`).
@@ -496,6 +511,21 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
             no_approve: cli.no_approve,
         },
         Some(Command::Doctor) => Route::Doctor,
+        Some(Command::Update {
+            check,
+            extensions,
+            models,
+            all,
+            force,
+            changelog,
+        }) => Route::Update {
+            check: *check,
+            extensions: *extensions,
+            models: *models,
+            all: *all,
+            force: *force,
+            changelog: *changelog,
+        },
         Some(Command::Resume { id }) => match id {
             None => Route::ResumeList,
             Some(id) => Route::Interactive {
@@ -674,78 +704,6 @@ pub(super) fn export_command(cwd: &Path, id: &str, audit: bool) -> i32 {
                 exit::SESSION
             }
         },
-        Err(err) => {
-            eprintln!("error: {err}");
-            exit::SESSION
-        }
-    }
-}
-
-/// `lca session migrate <id>`: forward-migrate one log (gh #98).
-/// Prints what was stamped and where the backup lives, or that the
-/// log was already current; refusals name what to fix first.
-pub(super) fn migrate_command(cwd: &Path, id: &str) -> i32 {
-    let Ok((store, _)) = open_store() else {
-        return exit::INTERNAL;
-    };
-    let session = match store.session(cwd, id) {
-        Ok(session) => session,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return exit::SESSION;
-        }
-    };
-    match store.migrate(&session) {
-        Ok(report) => {
-            if report.already_current {
-                println!("already current");
-            } else {
-                println!(
-                    "migrated {} record{} (backup {})",
-                    report.stamped,
-                    if report.stamped == 1 { "" } else { "s" },
-                    report
-                        .backup
-                        .map(|path| path.display().to_string())
-                        .unwrap_or_default(),
-                );
-            }
-            for warning in report.warnings {
-                println!("note: {warning}");
-            }
-            exit::OK
-        }
-        Err(err) => {
-            eprintln!("error: {err}");
-            exit::SESSION
-        }
-    }
-}
-
-/// `lca session gc <id>`: mark-and-sweep over the session's fork tree (D5).
-/// Prints one deleted hash per line, or a line saying nothing was collected.
-pub(super) fn gc_command(cwd: &Path, id: &str) -> i32 {
-    let Ok((store, _)) = open_store() else {
-        return exit::INTERNAL;
-    };
-    let session = match store.session(cwd, id) {
-        Ok(session) => session,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return exit::SESSION;
-        }
-    };
-    match store.gc(&session) {
-        Ok(deleted) => {
-            if deleted.is_empty() {
-                println!("no unreferenced attachments");
-            } else {
-                for hash in deleted {
-                    println!("{hash}");
-                }
-            }
-            exit::OK
-        }
         Err(err) => {
             eprintln!("error: {err}");
             exit::SESSION

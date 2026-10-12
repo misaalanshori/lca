@@ -129,3 +129,257 @@ pub fn spawn(enabled: bool, notify: Option<Arc<OnceLock<String>>>) {
         }
     });
 }
+
+/// What `lca update` runs (gh #50, pi's `pi update` flags): the plan is
+/// pure so every flag combination is a unit row; the jobs below run it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdatePlan {
+    /// Report only: no install, no extension writes, no refetch.
+    pub check_only: bool,
+    /// The binary itself, through the installer path.
+    pub this_binary: bool,
+    /// Installed extensions (`ext update --all`).
+    pub extensions: bool,
+    /// Catalog documents (provider/model metadata), refetched.
+    pub models: bool,
+    /// Reinstall even when no newer release compares.
+    pub force: bool,
+    /// Print the condensed release notes.
+    pub changelog: bool,
+}
+
+/// Route the flags to jobs: bare `update` is the binary itself,
+/// `--all` adds both catalog jobs, `--check` reports everywhere.
+pub fn plan(
+    check: bool,
+    extensions: bool,
+    models: bool,
+    all: bool,
+    force: bool,
+    changelog: bool,
+) -> UpdatePlan {
+    let scoped = extensions || models || all;
+    UpdatePlan {
+        check_only: check,
+        this_binary: !scoped || all,
+        extensions: extensions || all,
+        models: models || all,
+        force,
+        changelog,
+    }
+}
+
+/// The installer the self job runs (docs/installation.md's one-liner
+/// source): fetched fresh, then executed, so verification is the
+/// installer's own verify-then-move path, never the binary's.
+#[cfg(unix)]
+const INSTALLER_URL: &str = "https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh";
+/// Windows takes the PowerShell installer the same way.
+#[cfg(windows)]
+const INSTALLER_URL: &str = "https://raw.githubusercontent.com/misaalanshori/lca/main/install.ps1";
+
+/// The latest release's tag and notes body (the check and the
+/// condensed changelog read the same answer).
+async fn latest_release() -> Result<(String, String), String> {
+    let body = lca_registry::plain_get(RELEASES)
+        .await
+        .map_err(|err| format!("cannot reach the release feed: {err}"))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|_| "the release feed is not JSON".to_string())?;
+    let tag = value
+        .get("tag_name")
+        .and_then(|tag| tag.as_str())
+        .ok_or_else(|| "the release feed names no tag".to_string())?;
+    let notes = value
+        .get("body")
+        .and_then(|body| body.as_str())
+        .unwrap_or_default();
+    Ok((tag.to_string(), notes.to_string()))
+}
+
+/// The condensed notes (gh #50's condensed-changelog option): the
+/// first twelve non-empty lines, capped, for `--changelog`.
+pub fn condense_notes(body: &str) -> String {
+    body.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(12)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .take(1500)
+        .collect()
+}
+
+/// Run the plan: check, self, extensions, models, in that order. The
+/// install step shells out to the installer (verification stays the
+/// installer's verify-then-move path); every other job reuses the
+/// in-process paths (`ext update --all`, catalog refetch).
+pub async fn run(plan: UpdatePlan) -> i32 {
+    let mut code = crate::exit::OK;
+    if plan.this_binary
+        && let Err(failure) = run_self(plan).await
+    {
+        eprintln!("error: {failure}");
+        code = crate::exit::INTERNAL;
+    }
+    if plan.extensions {
+        code = run_extensions().await.max(code);
+    }
+    if plan.models {
+        code = run_models().await.max(code);
+    }
+    code
+}
+
+async fn run_self(plan: UpdatePlan) -> Result<(), String> {
+    let current = env!("CARGO_PKG_VERSION");
+    let (tag, body) = latest_release().await?;
+    let tag = lca_ui::sanitize_text(&tag);
+    if plan.changelog {
+        let notes = condense_notes(&body);
+        if notes.is_empty() {
+            println!("lca {tag}: no notes");
+        } else {
+            println!("lca {tag}:\n{notes}");
+        }
+    }
+    if plan.check_only {
+        if is_newer(&tag, current) {
+            println!("update available: lca {current} -> {tag}");
+        } else {
+            println!("lca {current} is current");
+        }
+        return Ok(());
+    }
+    if !plan.force && !is_newer(&tag, current) {
+        println!("lca {current} is current");
+        return Ok(());
+    }
+    install_binary().await?;
+    Ok(())
+}
+
+/// Fetch the installer and execute it with inherited stdio: the
+/// `lca <old> -> <new>` line and the checksum verification are the
+/// installer's own (gate 10 covers that script, not this caller).
+async fn install_binary() -> Result<(), String> {
+    let script = lca_registry::plain_get(INSTALLER_URL)
+        .await
+        .map_err(|err| format!("cannot fetch the installer: {err}"))?;
+    let path = std::env::temp_dir().join(format!("lca-update-{}", std::process::id()));
+    std::fs::write(&path, &script).map_err(|err| format!("cannot stage the installer: {err}"))?;
+    #[cfg(unix)]
+    let status = std::process::Command::new("sh")
+        .arg(&path)
+        .status()
+        .map_err(|err| format!("cannot run the installer: {err}"))?;
+    #[cfg(windows)]
+    let status = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&path)
+        .status()
+        .map_err(|err| format!("cannot run the installer: {err}"))?;
+    let _ = std::fs::remove_file(&path);
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the installer exited {}",
+            status
+                .code()
+                .map_or("?".to_string(), |code| code.to_string())
+        ))
+    }
+}
+
+async fn run_extensions() -> i32 {
+    let tree = lca_registry::InstallTree::new(crate::data_dir().join("extensions"));
+    crate::ext::update_all(&tree).await
+}
+
+async fn run_models() -> i32 {
+    // Gh #50: LCA keeps no versioned models catalog on disk (provider
+    // lists are live); what refreshes is the catalog documents the
+    // provider metadata rides: the official document plus configured
+    // customs, refetched past the read cache. This also warms the
+    // `/extensions` hub cache.
+    let data = crate::data_dir();
+    let user_file = data.join("config.toml");
+    let customs = match lca_config::Config::load(&lca_config::LoadInput {
+        user_file: user_file.is_file().then_some(user_file),
+        ..Default::default()
+    }) {
+        Ok(config) => config.extensions_catalogs().to_vec(),
+        Err(err) => {
+            eprintln!("error: cannot read the configuration: {err}");
+            return crate::exit::INTERNAL;
+        }
+    };
+    let mut sources = vec![lca_registry::CatalogSource {
+        id: "official".to_string(),
+        name: "Official".to_string(),
+        url: Some(crate::tui::OFFICIAL_CATALOG_URL.to_string()),
+    }];
+    sources.extend(customs.iter().map(|custom| lca_registry::CatalogSource {
+        id: custom.id.clone(),
+        name: custom.name.clone(),
+        url: Some(custom.url.clone()),
+    }));
+    let mut code = crate::exit::OK;
+    for source in &sources {
+        let cache = lca_registry::cache_path(&data, &source.id);
+        match lca_registry::fetch_catalog(source, &cache, true).await {
+            Ok(entries) => println!("{}: {} entries", source.name, entries.len()),
+            Err(err) => {
+                eprintln!("error: {}: {err}", source.name);
+                code = crate::exit::INTERNAL;
+            }
+        }
+    }
+    code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Verifies: gh #50 - every flag combination routes to its jobs;
+    // bare `update` is the binary itself, `--all` is everything.
+    #[test]
+    fn update_flags_route_to_their_jobs() {
+        assert_eq!(
+            plan(false, false, false, false, false, false),
+            UpdatePlan {
+                check_only: false,
+                this_binary: true,
+                extensions: false,
+                models: false,
+                force: false,
+                changelog: false,
+            }
+        );
+        assert!(plan(false, true, false, false, false, false).extensions);
+        assert!(
+            !plan(false, true, false, false, false, false).this_binary,
+            "a scoped update leaves the binary alone"
+        );
+        let all = plan(false, false, false, true, false, false);
+        assert!(all.this_binary && all.extensions && all.models);
+        let scoped = plan(false, true, true, false, false, false);
+        assert!(!scoped.this_binary && scoped.extensions && scoped.models);
+        assert!(plan(true, false, false, false, false, false).check_only);
+        assert!(plan(false, false, false, false, true, false).force);
+        assert!(plan(false, false, false, false, false, true).changelog);
+    }
+
+    // Verifies: gh #50 - the condensed notes are the first lines,
+    // capped; an empty body says so by being empty.
+    #[test]
+    fn condensed_notes_take_the_head_and_cap() {
+        let body = "\n# 0.7.0\n\n- one\n- two\n";
+        assert_eq!(condense_notes(body), "# 0.7.0\n- one\n- two");
+        assert!(condense_notes("").is_empty());
+        assert!(condense_notes(&"x\n".repeat(2000)).len() <= 1500);
+    }
+}
