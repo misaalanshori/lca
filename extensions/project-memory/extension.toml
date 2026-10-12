@@ -1,0 +1,9 @@
+name = "project-memory"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["tool", "context-transform"]
+description = "Curated file-based long-term memory via the learn tool."
+
+[capabilities.fs]
+workspace = "read-write"
+private = "read-write"
