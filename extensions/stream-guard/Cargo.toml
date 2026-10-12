@@ -1,0 +1,33 @@
+[package]
+name = "stream-guard"
+description = "Time-traveling stream rules: regex guardrails over streaming deltas, observe-only (gh #194)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+lca-protocol = { path = "../../crates/lca-protocol" }
+regex.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lca-ext-abi = { path = "../../crates/lca-ext-abi" }
+lca-tools = { path = "../../crates/lca-tools" }
+lca-permissions = { path = "../../crates/lca-permissions" }
+tokio.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = "0.41"
+
+[dev-dependencies]
+lca-protocol = { path = "../../crates/lca-protocol" }
+
+[lints]
+workspace = true

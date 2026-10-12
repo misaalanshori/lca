@@ -1,0 +1,12 @@
+name = "stream-guard"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["tool"]
+description = "Time-traveling stream rule guard: scan text against regex guardrails."
+
+[capabilities.fs]
+workspace = "read"
+private = "read"
+
+[capabilities.ui]
+regions = ["status-line"]

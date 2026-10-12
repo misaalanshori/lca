@@ -2792,6 +2792,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "stream-guard"
+version = "0.6.0"
+dependencies = [
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-tools",
+ "regex",
+ "serde_json",
+ "tokio",
+ "toml",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
