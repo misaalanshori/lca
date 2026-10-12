@@ -478,6 +478,34 @@ pub struct SettingRow {
     pub values: Vec<String>,
 }
 
+impl SettingRow {
+    /// The value the `/settings` painter shows (gh #246): human words,
+    /// never stored primitives. `ui.fullscreen` reads scrollback /
+    /// fullscreen; a two-option true/false row reads off / on;
+    /// everything else (numbers, enums, placeholders) passes through.
+    /// Display-only: cycling, editing, and persisting keep the raw
+    /// value, so the stored TOML never sees these words.
+    pub fn display_value(&self) -> String {
+        if self.key == "ui.fullscreen" {
+            return match self.value.as_str() {
+                "true" => "fullscreen".to_string(),
+                "false" => "scrollback".to_string(),
+                _ => self.value.clone(),
+            };
+        }
+        let mut sorted = self.values.clone();
+        sorted.sort();
+        if sorted == ["false", "true"] {
+            return match self.value.as_str() {
+                "true" => "on".to_string(),
+                "false" => "off".to_string(),
+                _ => self.value.clone(),
+            };
+        }
+        self.value.clone()
+    }
+}
+
 /// The rows `/settings` offers, re-read after every edit so value and
 /// source move with it. `None` keeps the host's read-only dump.
 pub type SettingsRows = Arc<dyn Fn() -> Vec<SettingRow> + Send + Sync>;

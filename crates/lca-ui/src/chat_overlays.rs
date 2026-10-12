@@ -416,7 +416,9 @@ impl Chat {
                 } else {
                     body.push(format!(
                         " {cur} {} = {} [{}]",
-                        row.label, row.value, row.source
+                        row.label,
+                        row.display_value(),
+                        row.source
                     ));
                 }
             }
