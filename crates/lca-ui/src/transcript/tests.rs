@@ -551,19 +551,22 @@ fn thinking_visibility_full_and_hidden_are_settings() {
 #[test]
 fn the_thinking_toggle_only_changes_the_latest_run() {
     let mut t = Transcript::new();
+    t.begin_assistant();
     t.append_reasoning("first run");
     t.append_text("answer one");
     t.finish_assistant();
+    t.begin_assistant();
     t.append_reasoning("second run");
     t.append_text("answer two");
     t.finish_assistant();
     t.toggle_thinking_expanded();
     let lines = strip(&t.render(40, &plain()));
-    // The second run's reasoning is now shown as-is; the first run's
-    // still shows as a snippet (one line, so no marker).
+    // The second run's reasoning is now hidden (a one-line run
+    // skips full, gh #245); the first run's still shows as a
+    // snippet (one line, so no marker).
     assert_eq!(
         lines.iter().filter(|l| l.contains("second run")).count(),
-        1,
+        0,
         "{lines:?}"
     );
     assert_eq!(
@@ -921,5 +924,74 @@ fn tool_body_rows_hit_the_card() {
         t.entry_at_row(60, &theme, header_row),
         Some(EntryHit::ToolHeader(0)),
         "the header still hits the header"
+    );
+}
+
+// Verifies: gh #245 - a short run (at most the snippet's own three
+// lines) skips the redundant snippet state: snippet and full render
+// the same text, so the cycle runs hidden <-> full from here on.
+#[test]
+fn short_thinking_runs_skip_the_snippet_state() {
+    let mut t = Transcript::new();
+    t.begin_assistant();
+    t.append_reasoning("one\ntwo");
+    t.append_text("the answer");
+    t.finish_assistant();
+    let snippet = strip(&t.render(60, &plain()));
+    assert!(
+        snippet.iter().any(|l| l.contains("two")) && !snippet.iter().any(|l| l.contains('+')),
+        "snippet shows the whole short run with no marker: {snippet:?}"
+    );
+    assert!(t.toggle_entry_thinking(0), "the run toggles");
+    let hidden = strip(&t.render(60, &plain()));
+    assert!(
+        hidden.iter().any(|l| l.contains("Thinking…")) && !hidden.iter().any(|l| l.contains("two")),
+        "first toggle hides, skipping full: {hidden:?}"
+    );
+    assert!(t.toggle_entry_thinking(0), "the run toggles again");
+    let full = strip(&t.render(60, &plain()));
+    assert!(
+        full.iter().any(|l| l.contains("two")),
+        "second toggle shows full: {full:?}"
+    );
+    assert!(t.toggle_entry_thinking(0), "the run toggles a third time");
+    let hidden_again = strip(&t.render(60, &plain()));
+    assert!(
+        hidden_again.iter().any(|l| l.contains("Thinking…")),
+        "full toggles back to hidden, never snippet: {hidden_again:?}"
+    );
+}
+
+// Verifies: gh #245 - a long run keeps the full three-state cycle:
+// snippet (`+N lines`) -> full -> hidden -> snippet.
+#[test]
+fn long_thinking_runs_keep_snippet_full_hidden() {
+    let mut t = Transcript::new();
+    t.begin_assistant();
+    t.append_reasoning("one\ntwo\nthree\nfour\nfive");
+    t.append_text("the answer");
+    t.finish_assistant();
+    let snippet = strip(&t.render(60, &plain()));
+    assert!(
+        snippet.iter().any(|l| l.contains("+2 lines")),
+        "snippet counts the rest: {snippet:?}"
+    );
+    assert!(t.toggle_entry_thinking(0), "the run toggles");
+    let full = strip(&t.render(60, &plain()));
+    assert!(
+        full.iter().any(|l| l.contains("five")) && !full.iter().any(|l| l.contains('+')),
+        "full shows every line with no marker: {full:?}"
+    );
+    assert!(t.toggle_entry_thinking(0), "the run toggles again");
+    let hidden = strip(&t.render(60, &plain()));
+    assert!(
+        hidden.iter().any(|l| l.contains("Thinking…")),
+        "then hidden: {hidden:?}"
+    );
+    assert!(t.toggle_entry_thinking(0), "the run toggles a third time");
+    let back = strip(&t.render(60, &plain()));
+    assert!(
+        back.iter().any(|l| l.contains("+2 lines")),
+        "hidden returns to snippet: {back:?}"
     );
 }

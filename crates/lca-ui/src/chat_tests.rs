@@ -174,7 +174,9 @@ fn ctrl_c_needs_two_taps_to_exit() {
 #[test]
 fn reasoning_and_answer_are_separated() {
     let mut chat = chat();
-    chat.on_turn_event(TurnEvent::ReasoningDelta("thinking".into()));
+    chat.on_turn_event(TurnEvent::ReasoningDelta(
+        "line one\nline two\nline three\nline four".into(),
+    ));
     chat.on_turn_event(TurnEvent::TextDelta("the answer".into()));
     chat.on_turn_event(TurnEvent::TurnEnded {
         status: TurnStatus::Ok,
@@ -183,9 +185,9 @@ fn reasoning_and_answer_are_separated() {
     // R8: thinking is collapsed by default; expand to see it.
     chat.transcript.toggle_thinking_expanded();
     let text = strip(&chat.render(60)).join("\n");
-    assert!(text.contains("thinking"));
+    assert!(text.contains("line four"));
     assert!(text.contains("the answer"));
-    assert!(!text.contains("thinkingthe answer"));
+    assert!(!text.contains("line fourthe answer"));
 }
 
 #[test]

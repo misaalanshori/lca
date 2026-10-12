@@ -244,6 +244,10 @@ impl Transcript {
     /// → hidden → snippet, starting from the run's effective state.
     /// Only an assistant entry carrying reasoning cycles; anything else
     /// reports `false` and moves nothing.
+    /// Gh #245: a run no longer than the snippet itself (three lines)
+    /// renders snippet and full identically, so it skips the redundant
+    /// state instead - snippet jumps straight to hidden, and hidden
+    /// returns straight to full.
     pub fn toggle_entry_thinking(&mut self, index: usize) -> bool {
         let current = self.thinking;
         let Some(Entry::Assistant {
@@ -258,9 +262,19 @@ impl Transcript {
             return false;
         }
         let effective = thinking_override.unwrap_or(current);
+        // The snippet shows the first three non-blank lines (render's
+        // `SNIPPET_LINES` rule): a run that short has no snippet worth
+        // collapsing to, so it cycles hidden <-> full (gh #245).
+        let short = reasoning
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+            <= 3;
         *thinking_override = Some(match effective {
+            ThinkingVisibility::Snippet if short => ThinkingVisibility::Hidden,
             ThinkingVisibility::Snippet => ThinkingVisibility::Full,
             ThinkingVisibility::Full => ThinkingVisibility::Hidden,
+            ThinkingVisibility::Hidden if short => ThinkingVisibility::Full,
             ThinkingVisibility::Hidden => ThinkingVisibility::Snippet,
         });
         self.invalidate_cache();
