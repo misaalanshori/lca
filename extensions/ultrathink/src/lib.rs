@@ -110,7 +110,7 @@ mod native {
     /// The native handle. `on-pre-turn` is observe-only under ABI 0.6
     /// (it receives no prompt and returns no override), so the hook
     /// body is a pass-through: when #45 lands, it calls
-    /// [`should_boost`] on the turn's prompt and returns the max
+    /// [`crate::should_boost`] on the turn's prompt and returns the max
     /// override for that turn only.
     pub struct Ultrathink {
         _cap: Arc<lca_tools::Capabilities>,
