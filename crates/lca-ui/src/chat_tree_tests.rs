@@ -2,7 +2,7 @@
 //! `chat_command_tests.rs`): paint, filter, fold, labels, branches.
 //! Shares the `chat_tests` helpers.
 
-use super::{options, strip, tree_row};
+use super::{chat, options, strip, tree_row};
 use lca_tui::engine::keybindings::KeybindingsManager;
 
 use super::super::Chat;
@@ -30,7 +30,7 @@ fn tree_paints_connectors_and_role_markers() {
         ],
         TreeFilter::Default,
     );
-    let painted = picker.paint_rows().join("\n");
+    let painted = strip(&picker.paint_rows(&crate::theme::Theme::plain())).join("\n");
     assert!(painted.contains("user: first"), "role markers:\n{painted}");
     assert!(
         painted.contains("assistant: reply"),
@@ -64,8 +64,7 @@ fn tree_filters_by_kind_and_label() {
         row("c", TreeRowKind::Assistant, "(tool call)", None),
     ];
     let texts = |filter: TreeFilter| {
-        TreePicker::new(rows.clone(), filter)
-            .paint_rows()
+        strip(&TreePicker::new(rows.clone(), filter).paint_rows(&crate::theme::Theme::plain()))
             .join("\n")
     };
     let default = texts(TreeFilter::Default);
@@ -287,5 +286,153 @@ fn tree_browses_entry_branches_and_selection_branches_there() {
             .contains("forked at 1"),
         "{:?}",
         chat.world.notice
+    );
+}
+
+// Verifies: gh #248 - tree rows carry pi's semantic roles: dim
+// gutters and connectors, accent user markers, success assistant
+// markers, muted tools, warning bookmarks, border-accent compactions.
+#[test]
+fn tree_rows_carry_role_colors() {
+    use crate::chat_pickers::{TreeFilter, TreePicker};
+    use crate::state::{TreeRow, TreeRowKind};
+    use crate::theme::{Role, Theme};
+    let theme = Theme::colored();
+    let row = |id: &str, depth: usize, kind: TreeRowKind, text: &str| TreeRow {
+        id: id.to_string(),
+        depth,
+        kind,
+        text: text.to_string(),
+        label: None,
+        live: false,
+    };
+    let picker = TreePicker::new(
+        vec![
+            row("u1", 0, TreeRowKind::User, "first"),
+            row("a1", 1, TreeRowKind::Assistant, "reply"),
+            row("t1", 1, TreeRowKind::Tool, "read"),
+            row("c1", 0, TreeRowKind::Compaction, "summary"),
+        ],
+        TreeFilter::All,
+    );
+    let painted = picker.paint_rows(&theme).join("\n");
+    assert!(
+        painted.contains(&theme.role(Role::Accent)("user: ")),
+        "user markers read accent:\n{painted}"
+    );
+    assert!(
+        painted.contains(&theme.role(Role::Success)("assistant: ")),
+        "assistant markers read success:\n{painted}"
+    );
+    assert!(
+        painted.contains(&theme.role(Role::Dim)("├─ ")),
+        "connectors read dim:\n{painted}"
+    );
+    assert!(
+        painted.contains(&theme.role(Role::BorderAccent)("compaction: summary")),
+        "compactions read border-accent:\n{painted}"
+    );
+}
+
+// Verifies: gh #248 - rows on the live chain carry pi's active-path
+// marker (`• ` in accent); history off the chain carries none.
+#[test]
+fn tree_marks_the_active_path() {
+    use crate::chat_pickers::{TreeFilter, TreePicker};
+    use crate::state::{TreeRow, TreeRowKind};
+    use crate::theme::{Role, Theme};
+    use lca_tui::engine::text::strip_terminal_sequences;
+    let theme = Theme::colored();
+    let row = |id: &str, depth: usize, live: bool| TreeRow {
+        id: id.to_string(),
+        depth,
+        kind: TreeRowKind::User,
+        text: id.to_string(),
+        label: None,
+        live,
+    };
+    let picker = TreePicker::new(
+        vec![row("a", 0, true), row("b", 1, true), row("c", 1, false)],
+        TreeFilter::All,
+    );
+    let painted = picker.paint_rows(&theme);
+    let mark = theme.role(Role::Accent)("• ");
+    let live_lines: Vec<String> = painted
+        .iter()
+        .filter(|line| strip_terminal_sequences(line).contains("• "))
+        .cloned()
+        .collect();
+    assert_eq!(live_lines.len(), 2, "the live chain marks:\n{painted:?}");
+    for line in &live_lines {
+        assert!(line.contains(&mark), "the mark reads accent:\n{line}");
+    }
+}
+
+// Verifies: gh #248 - opening `/tree` anchors the cursor on the live
+// leaf (the deepest live row), not row 0; no live row keeps row 0.
+#[test]
+fn tree_opens_on_the_live_leaf() {
+    use crate::chat_pickers::{TreeFilter, TreePicker};
+    use crate::state::{TreeRow, TreeRowKind};
+    let row = |id: &str, depth: usize, live: bool| TreeRow {
+        id: id.to_string(),
+        depth,
+        kind: TreeRowKind::User,
+        text: id.to_string(),
+        label: None,
+        live,
+    };
+    let picker = TreePicker::new(
+        vec![row("a", 0, true), row("b", 1, true), row("c", 1, false)],
+        TreeFilter::All,
+    );
+    assert_eq!(
+        picker.selected_id().as_deref(),
+        Some("b"),
+        "the cursor rides the live leaf"
+    );
+    let bare = TreePicker::new(
+        vec![row("a", 0, false), row("b", 0, false)],
+        TreeFilter::All,
+    );
+    assert_eq!(bare.selected, 0, "no live row keeps row 0");
+}
+
+// Verifies: gh #248 - the open `/tree` modal paints styled rows
+// into the viewport (raw SGR reaches the frame) with the cursor on
+// the live leaf, and no row touches the box's left edge.
+#[test]
+fn tree_modal_paints_styled_rows_with_cursor_on_live() {
+    use crate::state::{TreeRow, TreeRowKind};
+    let row = |id: &str, depth: usize, live: bool| TreeRow {
+        id: id.to_string(),
+        depth,
+        kind: TreeRowKind::User,
+        text: format!("prompt {id}"),
+        label: None,
+        live,
+    };
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.tree_picker = Some(crate::chat_pickers::TreePicker::new(
+        vec![row("a", 0, true), row("b", 1, true)],
+        crate::chat_pickers::TreeFilter::All,
+    ));
+    let frame = chat.viewport(100, 30, 0);
+    let raw = frame.join("\n");
+    let text = strip(&frame).join("\n");
+    assert!(text.contains("prompt b"), "the rows paint:\n{text}");
+    assert!(raw.contains("\x1b["), "styled rows reach the frame");
+    let cursor = text
+        .lines()
+        .find(|line| line.contains("prompt b"))
+        .expect("the live leaf row");
+    assert!(
+        cursor.contains('>'),
+        "the cursor rides the live leaf:\n{text}"
+    );
+    assert!(
+        text.contains(" Message branches"),
+        "the header insets one cell:\n{text}"
     );
 }

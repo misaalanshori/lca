@@ -125,3 +125,77 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
 }
+
+// Verifies: gh #248 - pi-styled `/tree` in a real terminal: role
+// colors reach the pane as SGR, the live chain carries `• `, and
+// the cursor opens on the live leaf (the latest prompt), not row 0.
+#[cfg(unix)]
+#[test]
+fn tree_pi_styling_reaches_the_pane_with_cursor_on_live() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(sse_text_with_usage("answer one", 20, 0)),
+        Reply::Sse(sse_text_with_usage("answer two", 20, 0)),
+    ]));
+    let sandbox = sandbox("tree-pi-style");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+
+    let session = Tmux::new("tree-pi-style");
+    session.spawn(&sandbox, Some(&mock), true, &[], &[]);
+    session.wait_for(
+        "openai-compatible/test-model",
+        std::time::Duration::from_secs(20),
+    );
+
+    // Two turns, each awaited to `done`: the tree reads a quiescent
+    // log, never a mid-stream one (gh #231).
+    session.send(&["alpha question", "Enter"]);
+    session.wait_for("answer one", std::time::Duration::from_secs(25));
+    session.wait_for("done", std::time::Duration::from_secs(25));
+    session.send(&["beta question", "Enter"]);
+    session.wait_for("answer two", std::time::Duration::from_secs(25));
+    session.wait_for("done", std::time::Duration::from_secs(25));
+
+    session.send(&["/tree", "Enter"]);
+    let pane = session.wait_for("Message branches", std::time::Duration::from_secs(15));
+    assert!(pane.contains("• "), "the live chain marks:\n{pane}");
+    // The cursor rides the live leaf: exactly one tree row carries
+    // `>`, and it names the session's latest entry (pi's `realLeafId`
+    // anchoring) - the last assistant reply here, not row 0.
+    let cursor_rows: Vec<&str> = pane
+        .lines()
+        .filter(|line| line.contains("user:") || line.contains("assistant:"))
+        .filter(|line| line.contains('>'))
+        .collect();
+    assert_eq!(cursor_rows.len(), 1, "one cursor row in the tree:\n{pane}");
+    assert!(
+        cursor_rows[0].contains("answer two"),
+        "the cursor opens on the live leaf, not row 0:\n{pane}"
+    );
+    // Raw SGR receipt: a color escape opens ahead of the role text.
+    let sgr = session.capture_e();
+    let at = sgr.find("user:").expect("a role marker in SGR:\n{sgr}");
+    assert!(
+        sgr[at.saturating_sub(30)..at].contains("\x1b["),
+        "role colors reach the pane"
+    );
+    session.send(&["Escape"]);
+    // The modal must be gone before `/exit` types: otherwise the
+    // picker eats the command (Enter would branch in place).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if !session.capture().contains("Message branches") {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("the tree modal never closed");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    session.send(&["/exit", "Enter"]);
+    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+}

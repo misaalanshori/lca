@@ -128,6 +128,16 @@ impl TreePicker {
             visible: Vec::new(),
         };
         picker.rebuild();
+        // Gh #248: the cursor opens on the live leaf (pi's
+        // `realLeafId` anchoring), never row 0 - the deepest live
+        // row wins; no live row keeps the top.
+        if let Some(at) = picker
+            .visible
+            .iter()
+            .rposition(|shown| picker.rows[shown.index].live)
+        {
+            picker.selected = at;
+        }
         picker
     }
 
@@ -223,38 +233,65 @@ impl TreePicker {
 
     /// The painted body rows: gutters, connectors, role markers,
     /// bookmark and live marks (gh #231).
-    pub fn paint_rows(&self) -> Vec<String> {
+    /// Paint every visible row (gh #231's connectors and markers,
+    /// gh #248's pi roles): dim gutters, a per-kind role prefix,
+    /// the warning bookmark, pi's accent `• ` on the live chain, and
+    /// the live leaf's `◀`. `Theme::plain()` renders byte-identical
+    /// to the old unstyled rows, so unit asserts read through `strip`.
+    pub fn paint_rows(&self, theme: &crate::theme::Theme) -> Vec<String> {
         use crate::state::TreeRowKind;
+        use crate::theme::Role;
+        let dim = theme.role(Role::Dim);
         self.visible
             .iter()
             .map(|shown| {
                 let row = &self.rows[shown.index];
                 let mut line = String::new();
+                let mut gutters = String::new();
                 for gutter in &shown.gutters {
-                    line.push_str(if *gutter { "\u{2502} " } else { "  " });
+                    gutters.push_str(if *gutter { "\u{2502} " } else { "  " });
                 }
                 match shown.last {
-                    Some(true) => line.push_str("\u{2514}\u{2500} "),
-                    Some(false) => line.push_str("\u{251c}\u{2500} "),
+                    Some(true) => gutters.push_str("\u{2514}\u{2500} "),
+                    Some(false) => gutters.push_str("\u{251c}\u{2500} "),
                     None => {
                         if shown.depth > 0 {
-                            line.push_str("  ");
+                            gutters.push_str("  ");
                         }
                     }
                 }
-                let marker = match row.kind {
-                    TreeRowKind::User => "user: ",
-                    TreeRowKind::Assistant => "assistant: ",
-                    TreeRowKind::Tool => "tool: ",
-                    TreeRowKind::Summary => "summary: ",
-                    TreeRowKind::Compaction => "compaction: ",
-                    TreeRowKind::Custom => "custom: ",
-                    TreeRowKind::CustomMessage => "message: ",
+                line.push_str(&dim(&gutters));
+                // Pi's active-path marker sits between the connectors
+                // and the entry text.
+                if row.live {
+                    line.push_str(&theme.role(Role::Accent)("• "));
+                }
+                let content = match row.kind {
+                    TreeRowKind::User => {
+                        format!("{}{}", theme.role(Role::Accent)("user: "), row.text)
+                    }
+                    TreeRowKind::Assistant => {
+                        format!("{}{}", theme.role(Role::Success)("assistant: "), row.text)
+                    }
+                    TreeRowKind::Tool => theme.role(Role::Muted)(&format!("tool: {}", row.text)),
+                    TreeRowKind::Summary => {
+                        format!("{}{}", theme.role(Role::Warning)("summary: "), row.text)
+                    }
+                    TreeRowKind::Compaction => {
+                        theme.role(Role::BorderAccent)(&format!("compaction: {}", row.text))
+                    }
+                    TreeRowKind::Custom => theme.role(Role::Dim)(&format!("custom: {}", row.text)),
+                    TreeRowKind::CustomMessage => {
+                        format!(
+                            "{}{}",
+                            theme.role(Role::CustomMessageLabel)("message: "),
+                            row.text
+                        )
+                    }
                 };
-                line.push_str(marker);
-                line.push_str(&row.text);
+                line.push_str(&content);
                 if let Some(label) = &row.label {
-                    line.push_str(&format!(" [{label}]"));
+                    line.push_str(&theme.role(Role::Warning)(&format!(" [{label}]")));
                 }
                 if row.live {
                     line.push_str(" \u{25c0}");

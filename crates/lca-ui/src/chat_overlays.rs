@@ -151,15 +151,17 @@ impl Chat {
         if let Some(picker) = &self.tree_picker {
             // gh #231: the DAG navigator paints connectors and role
             // markers on S37C's rolling-window chrome; the header
-            // names the filter, the hint the navigator keys.
+            // names the filter, the hint the navigator keys. Gh #248:
+            // the header insets one cell like every row, so no modal
+            // content touches the box's left edge.
             let mut body = vec![
-                format!("Message branches ({})", picker.filter.name()),
+                format!(" Message branches ({})", picker.filter.name()),
                 String::new(),
             ];
             if picker.visible_len() == 0 {
                 body.push("  (no matches)".to_string());
             }
-            for (row, line) in picker.paint_rows().iter().enumerate() {
+            for (row, line) in picker.paint_rows(&self.theme).iter().enumerate() {
                 let cur = if row == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {line}"));
             }
