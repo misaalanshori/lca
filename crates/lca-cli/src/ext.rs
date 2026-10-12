@@ -463,25 +463,39 @@ fn set_enabled(name: &str, enabled: bool) -> i32 {
 /// The testable core of [`set_enabled`]: the data dir and project are
 /// injected so a test never touches the real store or the process cwd.
 fn set_enabled_in(data: &std::path::Path, cwd: &std::path::Path, name: &str, enabled: bool) -> i32 {
+    match set_extension_enabled(data, cwd, name, enabled) {
+        Ok(notice) => {
+            println!("{notice}");
+            crate::exit::OK
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            crate::exit::INTERNAL
+        }
+    }
+}
+
+/// Toggle one extension without printing (gh #3, the TUI manager):
+/// persist per project in the grant store; the caller applies it live.
+/// Returns the notice to show.
+pub fn set_extension_enabled(
+    data: &std::path::Path,
+    cwd: &std::path::Path,
+    name: &str,
+    enabled: bool,
+) -> Result<String, String> {
     // gh #139: `builtin:` is pi's spelling for a first-party extension,
     // not a second record — the loader reads the plain name.
     let name = name.strip_prefix("builtin:").unwrap_or(name);
-    let mut store = match lca_permissions::GrantStore::open(&data.join("grants.json")) {
-        Ok(store) => store,
-        Err(err) => {
-            eprintln!("error: cannot open the grant store: {err}");
-            return crate::exit::INTERNAL;
-        }
-    };
-    if let Err(err) = store.set_extension_enabled(cwd, name, enabled) {
-        eprintln!("error: {err}");
-        return crate::exit::INTERNAL;
-    }
-    println!(
+    let mut store = lca_permissions::GrantStore::open(&data.join("grants.json"))
+        .map_err(|err| format!("cannot open the grant store: {err}"))?;
+    store
+        .set_extension_enabled(cwd, name, enabled)
+        .map_err(|err| err.to_string())?;
+    Ok(format!(
         "{} {name} for this project",
         if enabled { "enabled" } else { "disabled" }
-    );
-    crate::exit::OK
+    ))
 }
 
 /// Validate, show consent, then write (FR-DIST-4's delete never needs

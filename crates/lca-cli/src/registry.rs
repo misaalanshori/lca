@@ -135,6 +135,9 @@ pub(crate) fn assemble(
             .map(|handle| handle.name().to_string())
             .collect(),
     );
+    // gh #3: the preferred compaction strategy rides the registry
+    // from configuration (the manager moves it live later).
+    registry.set_preferred_compaction(config.compaction_strategy().map(str::to_string));
     (registry, manager, warnings)
 }
 

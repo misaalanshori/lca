@@ -344,7 +344,7 @@ fn an_unknown_active_provider_resolves_to_nothing() {
 // stays a supported state.
 #[test]
 fn a_disabled_provider_leaves_zero_enabled() {
-    let mut registry = two_providers();
+    let registry = two_providers();
     registry.set_enabled("alpha", false);
     registry.set_enabled("beta", false);
     assert!(registry.provider_names().is_empty());

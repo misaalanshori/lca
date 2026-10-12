@@ -78,6 +78,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "models.enabled",
     "compaction.threshold",
     "compaction.enabled",
+    "compaction.strategy",
     "compaction.reserve_tokens",
     "compaction.keep_recent_tokens",
     "provider.retry_limit",
@@ -298,6 +299,18 @@ pub fn parse_typed(key: &str, raw: &str, label: &str) -> Result<TypedValue, Conf
             .parse::<bool>()
             .map(TypedValue::Bool)
             .map_err(|_| invalid(format!("expected a boolean, got `{raw}`"))),
+        // gh #3: any non-empty extension name; an unknown name falls
+        // back to automatic at selection time, so validation stays
+        // syntactic here.
+        "compaction.strategy" => {
+            if raw.trim().is_empty() {
+                Err(invalid(
+                    "expected an extension name, got an empty string".to_string(),
+                ))
+            } else {
+                Ok(TypedValue::Text(raw.to_string()))
+            }
+        }
         "permissions.mode" => {
             if PERMISSION_MODES.contains(&raw) {
                 Ok(TypedValue::Text(raw.to_string()))

@@ -677,6 +677,13 @@ pub struct UiHooks {
     pub confirm_install: Option<crate::chat_hub::ConfirmInstall>,
     /// Poll a background install: `Some` posts its notice once (#227).
     pub poll_install: Option<crate::chat_hub::InstallPoll>,
+    /// List managed extensions plus the strategy (gh #3): the
+    /// manager reads local state, so the fetch is synchronous.
+    pub list_managed: Option<crate::chat_extman::ListManaged>,
+    /// Toggle one managed extension, persist + apply (gh #3).
+    pub toggle_managed: Option<crate::chat_extman::ToggleManaged>,
+    /// Pick the compaction strategy (gh #3).
+    pub set_managed_strategy: Option<crate::chat_extman::SetManagedStrategy>,
     /// Pre-parse markdown transforms in registration order (gh #12),
     /// collected by the host from native extensions. Empty by default -
     /// no consumer, no rewriting.

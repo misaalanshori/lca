@@ -580,6 +580,69 @@ impl Chat {
             );
             return true;
         }
+        if let Some(manager) = &self.extension_manager {
+            let mut body = vec![String::new()];
+            let mut last_section = String::new();
+            for (row, entry) in manager.rows.iter().enumerate() {
+                let (section, line) = match entry {
+                    crate::chat_extman::ManagedRow::Strategy { name, active } => {
+                        let label = name.as_deref().unwrap_or("Automatic");
+                        let mark = if *active { "  ●" } else { "  ○" };
+                        (
+                            "STRATEGY".to_string(),
+                            format!(
+                                "{} {}{}",
+                                if row == manager.selected { '>' } else { ' ' },
+                                label,
+                                mark
+                            ),
+                        )
+                    }
+                    crate::chat_extman::ManagedRow::Extension {
+                        name,
+                        enabled,
+                        compaction,
+                    } => {
+                        let mark = if *enabled { "  ✓" } else { "  ✗" };
+                        let kind = if *compaction { " [compaction]" } else { "" };
+                        (
+                            "EXTENSIONS".to_string(),
+                            format!(
+                                "{} {}{}{}",
+                                if row == manager.selected { '>' } else { ' ' },
+                                name,
+                                mark,
+                                kind
+                            ),
+                        )
+                    }
+                };
+                if section != last_section {
+                    body.push(String::new());
+                    body.push(format!("  {section}"));
+                    last_section = section;
+                }
+                body.push(format!(" {line}"));
+            }
+            if !manager.rows.is_empty() {
+                body.push(format!(
+                    "  ({}/{})",
+                    manager.selected + 1,
+                    manager.rows.len()
+                ));
+            }
+            self.picker_overlay(
+                viewport,
+                width,
+                height,
+                "extensions",
+                &body,
+                "enter toggle/pick · esc close",
+                &self.theme,
+                None,
+            );
+            return true;
+        }
         false
     }
 

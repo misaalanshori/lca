@@ -36,6 +36,23 @@ pub(crate) fn stage_initial_attachments(
 }
 
 impl Ui {
+    /// Resolve an attachment hash against the *current* session (a fork's
+    /// images live in its ancestor's directory, store.attachment_path walks
+    /// the chain), so a replayed message shows its image (FR-UI-13).
+    pub(super) fn load_attachment(&self) -> lca_ui::state::LoadAttachment {
+        let store = self.store.clone();
+        let session_cell = self.current_session.clone();
+        Arc::new(move |hash: &str| {
+            let session = session_cell
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            let path = store.attachment_path(&session, hash)?;
+            let bytes = std::fs::read(path).ok()?;
+            let media = lca_protocol::sniff_image_media_type(&bytes)?.to_string();
+            Some((media, bytes))
+        })
+    }
     /// `/attach <path>`: stage an image for the next turn (ADR-0029). The
     /// bytes land in the session's attachment store; the stub text rides
     /// the next submission, and the placeholder renders at once.

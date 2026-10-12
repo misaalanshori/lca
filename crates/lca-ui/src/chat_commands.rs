@@ -186,6 +186,12 @@ impl Chat {
                 self.dispatch_extensions();
                 return Action::Continue;
             }
+            // gh #3: the extension manager (enable/disable plus the
+            // compaction-strategy picker) - the Hub discovers.
+            "ext" => {
+                self.dispatch_ext();
+                return Action::Continue;
+            }
             "resume" => {
                 self.open_resume_picker();
                 return Action::Continue;
@@ -911,6 +917,7 @@ fn command_help(command: &str) -> &'static str {
         "/compact" => "summarize the session to free context",
         "/attach" => "attach an image to the next message",
         "/paste" => "paste the clipboard image to the next message",
+        "/ext" => "manage extensions (enable/disable, compaction strategy)",
         "/export" => "write the session out (add html for the transcript page)",
         "/import" => "import JSONL lines as a new session",
         "/bug" => "write a local diagnostic bundle",

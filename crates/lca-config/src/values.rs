@@ -83,6 +83,12 @@ impl Config {
         self.compaction_enabled
     }
 
+    /// `compaction.strategy`: the preferred compaction extension (gh
+    /// #3); `None` is automatic (first enabled).
+    pub fn compaction_strategy(&self) -> Option<&str> {
+        self.compaction_strategy.as_deref()
+    }
+
     /// Whether `edit` demands a prior fresh `read` (gh #117): off is
     /// pi parity (the model edits right after `grep`), on keeps LCA's
     /// staleness guard. The `/settings` row cycles it live.

@@ -3,24 +3,27 @@
 //! strategy. Uses the `chat_tests` fixtures like the other journeys.
 
 use super::chat;
-use crate::chat_extman::{ManagedData, ManagedRow};
+use crate::chat_extman::{ManagedData, ManagedEntry};
 use std::sync::{Arc, Mutex};
 
-fn managed_chat() -> (
+/// The recorded host calls a manager journey makes.
+type ProbeCalls = (
     crate::chat::Chat,
     Arc<Mutex<Vec<(String, bool)>>>,
     Arc<Mutex<Vec<Option<String>>>>,
-) {
+);
+
+fn managed_chat() -> ProbeCalls {
     let mut chat = chat();
     let toggles = Arc::new(Mutex::new(Vec::new()));
     let strategies = Arc::new(Mutex::new(Vec::new()));
     let rows = vec![
-        ManagedRow::Extension {
+        ManagedEntry {
             name: "alpha".to_string(),
             enabled: true,
             compaction: false,
         },
-        ManagedRow::Extension {
+        ManagedEntry {
             name: "compacter".to_string(),
             enabled: true,
             compaction: true,
@@ -32,26 +35,35 @@ fn managed_chat() -> (
     }));
     let seen_toggles = toggles.clone();
     chat.world.options.hooks.toggle_managed = Some(Arc::new(move |name, enabled| {
-        seen_toggles.lock().expect("toggles").push((name.clone(), enabled));
+        seen_toggles
+            .lock()
+            .expect("toggles")
+            .push((name.clone(), enabled));
         format!("{} {}", name, if enabled { "enabled" } else { "disabled" })
     }));
     let seen_strategies = strategies.clone();
     chat.world.options.hooks.set_managed_strategy = Some(Arc::new(move |name| {
-        seen_strategies.lock().expect("strategies").push(name.clone());
+        seen_strategies
+            .lock()
+            .expect("strategies")
+            .push(name.clone());
         "strategy set".to_string()
     }));
     (chat, toggles, strategies)
 }
 
 // Verifies: gh #3 - `/ext` lists installed extensions with their
-// states; Enter on a row toggles it through the host hook and the
-// row updates.
+// states; Enter on an extension row toggles it through the host hook
+// and the row updates.
 #[test]
 fn toggle_calls_host_and_updates_the_row() {
     let (mut chat, toggles, _) = managed_chat();
     chat.open_extension_manager();
     assert!(chat.ext_manager_open());
-    // First row is alpha (enabled): Enter disables it.
+    // Rows lead with the strategy section (Automatic, compacter),
+    // then the extensions: two steps down reaches alpha (enabled).
+    chat.handle_extension_manager_key("", Some("down"));
+    chat.handle_extension_manager_key("", Some("down"));
     chat.handle_extension_manager_key("", Some("enter"));
     assert_eq!(
         *toggles.lock().expect("toggles"),

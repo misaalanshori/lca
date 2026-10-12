@@ -136,6 +136,7 @@ pub struct Config {
     model: Option<String>,
     compaction_threshold: f64,
     compaction_enabled: bool,
+    compaction_strategy: Option<String>,
     compaction_reserve_tokens: u64,
     compaction_keep_recent_tokens: u64,
     provider_retry_limit: u64,
@@ -237,6 +238,7 @@ impl Default for Config {
             model: None,
             compaction_threshold: 0.8,
             compaction_enabled: true,
+            compaction_strategy: None,
             // 0 = derive the reserve from the threshold fraction (gh
             // #36 phase 1): the stopgap's fraction behavior stays the
             // default, an absolute token budget is opt-in.
@@ -384,6 +386,7 @@ impl Config {
             "thinking.budgets",
             "compaction.threshold",
             "compaction.enabled",
+            "compaction.strategy",
             "compaction.reserve_tokens",
             "compaction.keep_recent_tokens",
             "provider.retry_limit",
@@ -855,6 +858,17 @@ impl Config {
                     }
                     this.apply(key.to_string(), TypedValue::Number(number), source)?;
                 }
+                "compaction.strategy" => {
+                    let text = value.as_str().ok_or_else(|| {
+                        invalid(format!("expected a string, got {}", type_name(&value)))
+                    })?;
+                    if text.trim().is_empty() {
+                        return Err(invalid(
+                            "expected an extension name, got an empty string".to_string(),
+                        ));
+                    }
+                    this.apply(key.to_string(), TypedValue::Text(text.to_string()), source)?;
+                }
                 "ui.color" => {
                     let text = value.as_str().ok_or_else(|| {
                         invalid(format!("expected a string, got {}", type_name(&value)))
@@ -985,6 +999,7 @@ impl Config {
             "thinking.budgets",
             "compaction.threshold",
             "compaction.enabled",
+            "compaction.strategy",
             "compaction.reserve_tokens",
             "compaction.keep_recent_tokens",
             "provider.retry_limit",
@@ -1073,6 +1088,7 @@ impl Config {
             ("thinking.budgets", TypedValue::Budgets(v)) => self.thinking_budgets = v,
             ("compaction.threshold", TypedValue::Number(v)) => self.compaction_threshold = v,
             ("compaction.enabled", TypedValue::Bool(v)) => self.compaction_enabled = v,
+            ("compaction.strategy", TypedValue::Text(v)) => self.compaction_strategy = Some(v),
             ("compaction.reserve_tokens", TypedValue::Count(v)) => {
                 self.compaction_reserve_tokens = v;
             }

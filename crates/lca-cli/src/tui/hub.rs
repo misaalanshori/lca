@@ -308,6 +308,26 @@ impl super::Ui {
         );
     }
 
+    /// The hub hooks (gh #227): fetch on the chat-spawned worker,
+    /// install through consent. `Arc` self like the manager hooks:
+    /// the closures share the live wiring instead of cloning it.
+    pub(super) fn hub_hooks(
+        self: &Arc<Self>,
+    ) -> (
+        lca_ui::FetchExtensions,
+        lca_ui::ConfirmInstall,
+        lca_ui::InstallPoll,
+    ) {
+        let fetch = self.clone();
+        let confirm = self.clone();
+        let poll = self.clone();
+        (
+            Arc::new(move || fetch.hub_fetch()) as lca_ui::FetchExtensions,
+            Arc::new(move |consent| confirm.hub_confirm(consent)) as lca_ui::ConfirmInstall,
+            Arc::new(move || poll.hub_poll()) as lca_ui::InstallPoll,
+        )
+    }
+
     /// Take a finished background install notice, once.
     pub(super) fn hub_poll(&self) -> Option<String> {
         crate::lock(&self.hub_install).finished.take()

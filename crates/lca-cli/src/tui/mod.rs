@@ -13,6 +13,7 @@ mod commands;
 pub(crate) use attach::stage_initial_attachments;
 pub(crate) use commands::settings_text;
 mod display;
+mod extman;
 mod hooks;
 mod hub;
 pub(crate) use hub::OFFICIAL_CATALOG_URL;

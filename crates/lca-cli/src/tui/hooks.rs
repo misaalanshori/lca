@@ -423,20 +423,35 @@ impl Ui {
                 let mcp = self.mcp.clone();
                 Some(Arc::new(move || current_manager(&mcp).poll()) as lca_ui::McpPoll)
             },
+            // gh #3: the `/ext` manager reads local state (registry +
+            // grant store + config), so every hook is synchronous.
+            // Built beside the row assembly; assigned here.
+            list_managed: {
+                let (list, _, _) = self.extman_hooks();
+                Some(list)
+            },
+            toggle_managed: {
+                let (_, toggle, _) = self.extman_hooks();
+                Some(toggle)
+            },
+            set_managed_strategy: {
+                let (_, _, strategy) = self.extman_hooks();
+                Some(strategy)
+            },
             // #227: the hub fetches rows on the chat-spawned worker
             // and installs through consent; both polls below keep the
             // interface painting while each runs.
             fetch_extensions: {
-                let ui = self.clone();
-                Some(Arc::new(move || ui.hub_fetch()) as lca_ui::FetchExtensions)
+                let (fetch, _, _) = self.hub_hooks();
+                Some(fetch)
             },
             confirm_install: {
-                let ui = self.clone();
-                Some(Arc::new(move |consent| ui.hub_confirm(consent)) as lca_ui::ConfirmInstall)
+                let (_, confirm, _) = self.hub_hooks();
+                Some(confirm)
             },
             poll_install: {
-                let ui = self.clone();
-                Some(Arc::new(move || ui.hub_poll()) as lca_ui::InstallPoll)
+                let (_, _, poll) = self.hub_hooks();
+                Some(poll)
             },
             // R4: a background login/identity step reports back through the
             // loop's poll instead of blocking the input thread on a
@@ -837,24 +852,6 @@ impl Ui {
         })
     }
 
-    /// Resolve an attachment hash against the *current* session (a fork's
-    /// images live in its ancestor's directory, store.attachment_path walks
-    /// the chain), so a replayed message shows its image (FR-UI-13).
-    fn load_attachment(&self) -> lca_ui::state::LoadAttachment {
-        let store = self.store.clone();
-        let session_cell = self.current_session.clone();
-        Arc::new(move |hash: &str| {
-            let session = session_cell
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone();
-            let path = store.attachment_path(&session, hash)?;
-            let bytes = std::fs::read(path).ok()?;
-            let media = lca_protocol::sniff_image_media_type(&bytes)?.to_string();
-            Some((media, bytes))
-        })
-    }
-
     /// Fork at the nth user message (FR-UI-16, gh #203): the report
     /// carries the new id so the interface switches in-process.
     fn fork_at(&self) -> lca_ui::state::ForkAt {
@@ -997,7 +994,7 @@ fn run_through_shell(command: &str) -> std::io::Result<std::process::ExitStatus>
 
 /// Persist a `/theme`/`/thinking` pick to the config file (E2); a write
 /// failure is a warning the user can still act on, never a crash.
-fn persist_ui_setting(key: &str, value: Option<String>) {
+pub(super) fn persist_ui_setting(key: &str, value: Option<String>) {
     if let Err(err) = crate::persist_setting(key, value.as_deref()) {
         tracing::warn!("could not persist {key}: {err}");
     }

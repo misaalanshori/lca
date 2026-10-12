@@ -94,13 +94,25 @@ pub struct CollisionReport {
 struct Registered {
     handle: Arc<dyn ExtensionDispatch>,
     /// Disabled for the session (duplicate identity, FR-EXT-11).
-    enabled: bool,
+    /// Atomic: the TUI manager flips it live through the shared
+    /// registry (gh #3) while turns hold the same `Arc`.
+    enabled: std::sync::atomic::AtomicBool,
+}
+
+impl Registered {
+    /// Session-enabled, read atomically (gh #3's live toggle).
+    fn is_enabled(&self) -> bool {
+        self.enabled.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 /// Every loaded extension plus its resolved names.
 #[derive(Default)]
 pub struct ExtensionRegistry {
     entries: Vec<Registered>,
+    /// The preferred compaction strategy (gh #3): an extension name
+    /// the manager picked. Empty means automatic (first enabled).
+    preferred_compaction: std::sync::Mutex<Option<String>>,
     pub(crate) active: std::sync::Mutex<ActiveSet>,
     /// The running turn's nested-call server (gh #77), if any. The
     /// turn installs it around the run and clears it after; the
@@ -128,6 +140,12 @@ impl std::fmt::Debug for ExtensionRegistry {
     }
 }
 
+/// Manager support (gh #3): the compaction preference and the row
+/// listing live beside the table so this file stays under the
+/// ceiling.
+#[path = "registry_manage.rs"]
+mod manage;
+
 impl ExtensionRegistry {
     /// An empty table.
     pub fn new() -> ExtensionRegistry {
@@ -149,7 +167,7 @@ impl ExtensionRegistry {
             });
             self.entries.push(Registered {
                 handle,
-                enabled: false,
+                enabled: std::sync::atomic::AtomicBool::new(false),
             });
             return;
         }
@@ -179,7 +197,7 @@ impl ExtensionRegistry {
         }
         self.entries.push(Registered {
             handle,
-            enabled: true,
+            enabled: std::sync::atomic::AtomicBool::new(true),
         });
     }
 
@@ -331,7 +349,7 @@ impl ExtensionRegistry {
     pub fn provider_names(&self) -> Vec<String> {
         self.entries
             .iter()
-            .filter(|entry| entry.enabled && entry.handle.worlds().contains(&World::Provider))
+            .filter(|entry| entry.is_enabled() && entry.handle.worlds().contains(&World::Provider))
             .map(|entry| entry.handle.name().to_string())
             .collect()
     }
@@ -343,7 +361,7 @@ impl ExtensionRegistry {
     pub fn handles(&self) -> Vec<Arc<dyn ExtensionDispatch>> {
         self.entries
             .iter()
-            .filter(|entry| entry.enabled)
+            .filter(|entry| entry.is_enabled())
             .map(|entry| entry.handle.clone())
             .collect()
     }
@@ -355,7 +373,7 @@ impl ExtensionRegistry {
         self.entries
             .iter()
             .find(|entry| {
-                entry.enabled
+                entry.is_enabled()
                     && entry.handle.name() == name
                     && entry.handle.worlds().contains(&World::Provider)
             })
@@ -365,10 +383,12 @@ impl ExtensionRegistry {
     /// Enable or disable one registered extension for the session
     /// (FR-PROV-9's disable knob; enablement itself lives in the grant
     /// store, per `docs/configuration.md`).
-    pub fn set_enabled(&mut self, name: &str, enabled: bool) {
-        for entry in &mut self.entries {
+    pub fn set_enabled(&self, name: &str, enabled: bool) {
+        for entry in &self.entries {
             if entry.handle.name() == name {
-                entry.enabled = enabled;
+                entry
+                    .enabled
+                    .store(enabled, std::sync::atomic::Ordering::SeqCst);
             }
         }
     }
@@ -512,7 +532,7 @@ impl ExtensionRegistry {
     pub fn enabled(&self) -> impl Iterator<Item = &Arc<dyn ExtensionDispatch>> {
         self.entries
             .iter()
-            .filter(|entry| entry.enabled)
+            .filter(|entry| entry.is_enabled())
             .map(|entry| &entry.handle)
     }
 
@@ -521,7 +541,7 @@ impl ExtensionRegistry {
     pub fn is_enabled(&self, name: &str) -> bool {
         self.entries
             .iter()
-            .any(|entry| entry.handle.name() == name && entry.enabled)
+            .any(|entry| entry.handle.name() == name && entry.is_enabled())
     }
 
     /// The extension that registered a bare tool name, if any.
@@ -554,7 +574,11 @@ impl ExtensionRegistry {
         let enabled = self
             .tools
             .get(name)
-            .map(|index| self.entries[*index].enabled)
+            .map(|index| {
+                self.entries[*index]
+                    .enabled
+                    .load(std::sync::atomic::Ordering::SeqCst)
+            })
             .unwrap_or(false);
         if !enabled {
             return false;
@@ -676,7 +700,11 @@ impl ExtensionRegistry {
             .filter(|(name, _)| {
                 self.tools
                     .get(*name)
-                    .map(|index| self.entries[*index].enabled)
+                    .map(|index| {
+                        self.entries[*index]
+                            .enabled
+                            .load(std::sync::atomic::Ordering::SeqCst)
+                    })
                     .unwrap_or(false)
             })
             .map(|(_, spec)| spec.clone())
@@ -703,23 +731,16 @@ impl ExtensionRegistry {
                 (*entry, &self.entries[*entry].handle)
             }
         };
-        if !self.entries[entry].enabled {
+        if !self.entries[entry]
+            .enabled
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return None;
         }
         match route {
             Route::World { leaf, .. } => handle.invoke_command(leaf, argument).ok(),
             Route::Identity { op, .. } => Some(self.identity_effect(handle, *op)),
         }
-    }
-
-    /// The first enabled `compaction` strategy (FR-SESS-5): compaction
-    /// only ever happens through this world, and only one extension
-    /// owns a given turn's compact.
-    pub fn compaction_strategy(&self) -> Option<&Arc<dyn ExtensionDispatch>> {
-        self.entries
-            .iter()
-            .find(|entry| entry.enabled && entry.handle.worlds().contains(&World::Compaction))
-            .map(|entry| &entry.handle)
     }
 
     /// Apply every enabled `context-transform` extension in

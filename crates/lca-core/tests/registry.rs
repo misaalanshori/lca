@@ -765,25 +765,33 @@ fn preferred_compaction_strategy_wins_and_falls_back() {
     registry.register(Arc::new(FakeExt::new("first").with_compaction()));
     registry.register(Arc::new(FakeExt::new("second").with_compaction()));
     assert_eq!(
-        registry.compaction_strategy().map(|handle| handle.name().to_string()),
+        registry
+            .compaction_strategy()
+            .map(|handle| handle.name().to_string()),
         Some("first".to_string())
     );
     registry.set_preferred_compaction(Some("second".to_string()));
     assert_eq!(
-        registry.compaction_strategy().map(|handle| handle.name().to_string()),
+        registry
+            .compaction_strategy()
+            .map(|handle| handle.name().to_string()),
         Some("second".to_string()),
         "the preferred strategy wins"
     );
     registry.set_preferred_compaction(Some("ghost".to_string()));
     assert_eq!(
-        registry.compaction_strategy().map(|handle| handle.name().to_string()),
+        registry
+            .compaction_strategy()
+            .map(|handle| handle.name().to_string()),
         Some("first".to_string()),
         "an unknown name falls back"
     );
     registry.set_enabled("second", false);
     registry.set_preferred_compaction(Some("second".to_string()));
     assert_eq!(
-        registry.compaction_strategy().map(|handle| handle.name().to_string()),
+        registry
+            .compaction_strategy()
+            .map(|handle| handle.name().to_string()),
         Some("first".to_string()),
         "a disabled preferred strategy falls back"
     );
