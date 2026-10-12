@@ -107,3 +107,33 @@ fn due_tooltips_paint_into_the_frame() {
     let plain: String = lca_tui::engine::text::strip_terminal_sequences(&frame);
     assert!(plain.contains("Expand output"), "the tip paints: {plain:?}");
 }
+
+// Verifies: #229 - an open tooltip follows the pointer within the
+// tipped area: same text repositions instead of freezing at the cell
+// where it first showed. Leaving the area still dismisses.
+#[test]
+fn open_tooltip_tracks_within_the_tipped_area() {
+    use crate::transcript::ToolStatus;
+    use std::time::{Duration, Instant};
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.transcript.start_tool("bash", "ls");
+    chat.transcript
+        .finish_tool(ToolStatus::Ok, Some("a\nb\nc\nd\ne\nf".to_string()));
+    let (w, h) = (80u16, 24u16);
+    let then = Instant::now() - Duration::from_millis(300);
+    chat.hover_at = Some((4, 3, then));
+    assert!(chat.poll_tooltip(w, h, 0, Instant::now()), "due shows");
+    let first = chat.tooltip.as_ref().map(|tip| (tip.col, tip.row));
+    // Same header row, different column: the same tip text.
+    chat.note_hover(10, 3, w, h, 0);
+    let moved = chat.tooltip.as_ref().map(|tip| (tip.col, tip.row));
+    assert!(moved.is_some(), "the tip stays open within the area");
+    assert_ne!(
+        moved, first,
+        "the tip repositions instead of freezing: {moved:?} vs {first:?}"
+    );
+    // Leaving the tipped area still dismisses.
+    chat.note_hover(0, 0, w, h, 0);
+    assert!(chat.tooltip.is_none(), "exit dismisses");
+}
