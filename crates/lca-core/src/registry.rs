@@ -727,10 +727,27 @@ impl ExtensionRegistry {
     /// first rejection - or host-level failure, which must not let
     /// unreviewed messages through either - stops the chain
     /// (FR-CTX-3).
+    ///
+    /// Gh #46 (pi's `restoreSystemMessages`): the `context` handlers
+    /// own the conversation, not the prompt. After every handler the
+    /// host re-attaches the leading system message when the handler
+    /// dropped it, so a filter/slice cannot lose the prompt or the
+    /// tool declarations and every later handler still sees the full
+    /// transcript (pi's `context_with_system` visibility). An edited
+    /// system head is honored - only a missing one is restored.
     pub async fn transform(
         &self,
         mut messages: Vec<ChatMessage>,
     ) -> Result<Vec<ChatMessage>, String> {
+        // The prompt head the handlers must not lose: the leading
+        // system run. Snapshotted once (pi replays the current head
+        // per handler; the head cannot change mid-chain except through
+        // a handler edit, which the per-output check below honors).
+        let head: Vec<ChatMessage> = messages
+            .iter()
+            .take_while(|message| message.role == lca_protocol::MessageRole::System)
+            .cloned()
+            .collect();
         for handle in self
             .enabled()
             .filter(|handle| handle.worlds().contains(&World::ContextTransform))
@@ -738,7 +755,20 @@ impl ExtensionRegistry {
             // The clone keeps the input alive for a Disabled skip;
             // every other arm replaces or returns it anyway.
             match handle.transform_messages(messages.clone()).await {
-                Ok(Ok(list)) => messages = list,
+                Ok(Ok(list)) => {
+                    messages = list;
+                    if !head.is_empty()
+                        && !messages
+                            .first()
+                            .is_some_and(|first| first.role == lca_protocol::MessageRole::System)
+                    {
+                        tracing::warn!(
+                            extension = handle.name(),
+                            "context transform dropped the leading system message; the prompt was restored"
+                        );
+                        messages.splice(..0, head.iter().cloned());
+                    }
+                }
                 Ok(Err(reason)) => return Err(reason),
                 // A handle that just disabled itself (trapped, hit its
                 // limits) drops out of the chain the same way the hooks
