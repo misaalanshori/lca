@@ -822,7 +822,12 @@ impl Chat {
         let shown = self.tooltip.as_ref().map(|tip| tip.lines.join("\n"));
         if now.is_some() && shown.as_deref() == now.as_deref() {
             if let Some(tip) = self.tooltip.as_mut() {
-                let wide = tip.lines.iter().map(|line| visible_width(line)).max().unwrap_or(0);
+                let wide = tip
+                    .lines
+                    .iter()
+                    .map(|line| visible_width(line))
+                    .max()
+                    .unwrap_or(0);
                 let (x, y) = tooltip_place(width, height, col, row, wide, tip.lines.len());
                 tip.col = x;
                 tip.row = y;

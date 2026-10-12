@@ -18,15 +18,15 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-mod http;
 mod catalog;
+mod http;
 
-pub use http::plain_get;
 pub use catalog::{
     CATALOG_FORMAT, CATALOG_TTL, CatalogEntry, CatalogSource, MergedEntry, abi_supported,
     cache_fresh, cache_path, fetch_catalog, merge_catalogs, official_source, parse_catalog,
     read_cache, write_cache,
 };
+pub use http::plain_get;
 use http::{fetch_bytes, fetch_oci, http_client};
 
 /// The lockfile format version.

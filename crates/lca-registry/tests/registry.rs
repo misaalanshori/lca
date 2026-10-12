@@ -793,8 +793,10 @@ capabilities = ["net", "credentials"]
     assert_eq!(entry.capabilities, vec!["net", "credentials"]);
     assert!(lca_registry::parse_catalog("no toml [[[[").is_err());
     assert!(lca_registry::parse_catalog("[version]\nformat = 99\n").is_err());
-    assert!(lca_registry::parse_catalog("[version]\nformat = 1\n[[extension]]\nname = \"x\"\n")
-        .is_err());
+    assert!(
+        lca_registry::parse_catalog("[version]\nformat = 1\n[[extension]]\nname = \"x\"\n")
+            .is_err()
+    );
 }
 
 // Verifies: #227 - provenance merging: official rows lead, each custom
@@ -894,7 +896,11 @@ fn shipped_catalog_parses_with_every_row_loadable() {
             entry.name,
             entry.oci_ref
         );
-        assert!(!entry.description.is_empty(), "{} carries a line", entry.name);
+        assert!(
+            !entry.description.is_empty(),
+            "{} carries a line",
+            entry.name
+        );
     }
     let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
     for expected in [
@@ -934,9 +940,7 @@ fn catalog_cache_distinguishes_fresh_from_stale() {
         "a minute is fresh"
     );
     assert!(
-        !lca_registry::cache_fresh(
-            lca_registry::CATALOG_TTL + std::time::Duration::from_secs(1)
-        ),
+        !lca_registry::cache_fresh(lca_registry::CATALOG_TTL + std::time::Duration::from_secs(1)),
         "past the TTL is stale"
     );
 }

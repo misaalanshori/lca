@@ -179,9 +179,7 @@ pub async fn fetch_catalog(
     cache_path: &Path,
     force_refresh: bool,
 ) -> Result<Vec<CatalogEntry>, Error> {
-    if !force_refresh
-        && let Some((entries, true)) = read_cache(cache_path)
-    {
+    if !force_refresh && let Some((entries, true)) = read_cache(cache_path) {
         return Ok(entries);
     }
     let Some(url) = source.url.as_deref() else {
@@ -199,7 +197,9 @@ pub async fn fetch_catalog(
             let _ = write_cache(cache_path, &text);
             Ok(entries)
         }
-        Err(err) => read_cache(cache_path).map(|(entries, _)| entries).ok_or(err),
+        Err(err) => read_cache(cache_path)
+            .map(|(entries, _)| entries)
+            .ok_or(err),
     }
 }
 
