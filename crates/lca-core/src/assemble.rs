@@ -6,7 +6,7 @@
 //! fingerprint helpers in order.
 
 use lca_protocol::{ChatMessage, ContentBlock, MessageRole, Record, Usage};
-use lca_session::Session;
+use lca_session::{Session, SessionStore};
 
 /// The resolved message list plus the stable-prefix boundary (FR-CACHE-5).
 #[derive(Debug, Clone)]
@@ -132,6 +132,46 @@ fn write_attachment(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
     file.write_all(bytes)
         .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
     Ok(())
+}
+
+/// Every attachment hash the records reference (gh #153): user
+/// attachments plus tool-result images, deduplicated in first-seen
+/// order. The async turn pre-reads exactly these through `tokio::fs`
+/// and hands assembly a map lookup, so no request assembly blocks a
+/// runtime thread on the filesystem.
+pub fn attachment_hashes(records: &[Record]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut hashes = Vec::new();
+    for record in records {
+        let list: &[String] = match record {
+            Record::User { attachments, .. } => attachments,
+            Record::ToolResult { images, .. } => images,
+            _ => continue,
+        };
+        for hash in list {
+            if seen.insert(hash.clone()) {
+                hashes.push(hash.clone());
+            }
+        }
+    }
+    hashes
+}
+
+/// Read one stored attachment through `tokio::fs` (gh #153): the
+/// async half of the prefetch pair. A missing file or non-image
+/// resolves to `None`, exactly like the sync closure it replaces.
+pub async fn read_attachment_async(
+    store: &SessionStore,
+    session: &Session,
+    hash: &str,
+) -> Option<Attachment> {
+    let path = store.attachment_path(session, hash)?;
+    let bytes = tokio::fs::read(path).await.ok()?;
+    let media_type = lca_protocol::sniff_image_media_type(&bytes)?;
+    Some(Attachment {
+        media_type: media_type.to_string(),
+        bytes,
+    })
 }
 
 /// Build the outbound message list from a session's resolved (display-view)

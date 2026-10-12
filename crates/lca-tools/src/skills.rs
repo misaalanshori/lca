@@ -255,6 +255,266 @@ pub fn skill_matches(skill: &Skill, latest_user: &str) -> bool {
     skill.match_words.iter().any(|word| haystack.contains(word))
 }
 
+/// One fingerprinted spot: a path plus its mtime millis (`None` when
+/// the path is absent) and, for directories, the child count (an
+/// add/remove changes the count even on coarse-mtime filesystems).
+/// Sorted by path, so equality is order-free.
+type Fingerprint = Vec<(PathBuf, Option<u128>, Option<usize>)>;
+
+/// The scan cache (gh #153): per-round `collect` walks the same trees
+/// the turn just walked. The fingerprint (mtimes plus child counts,
+/// no file reads) decides freshness; a stale cache re-scans off the
+/// runtime threads via `spawn_blocking`.
+#[derive(Debug, Default)]
+pub struct SkillCache {
+    fingerprint: Fingerprint,
+    skills: Vec<Skill>,
+}
+
+impl SkillCache {
+    /// An empty cache: the first collect always scans.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether the cache matches the trees right now (blocking stat
+    /// calls: tests and sync callers; the async turn uses
+    /// [`SkillCache::collect_cached`], whose freshness probe runs on
+    /// `tokio::fs`).
+    pub fn is_fresh(&self, roots: &SkillsRoots) -> bool {
+        self.fingerprint == fingerprint_sync(roots)
+    }
+
+    /// The cached skills when fresh, else a re-scan: the turn's
+    /// per-round entry point. Freshness probes run on `tokio::fs`; the
+    /// scan itself runs on the blocking pool, never a runtime thread.
+    pub async fn collect_cached(
+        cache: &std::sync::Mutex<SkillCache>,
+        roots: &SkillsRoots,
+    ) -> Vec<Skill> {
+        let fingerprint = fingerprint_async(roots).await;
+        {
+            let guard = cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if guard.fingerprint == fingerprint {
+                return guard.skills.clone();
+            }
+        }
+        let owned = roots.clone();
+        let skills = tokio::task::spawn_blocking(move || collect(&owned))
+            .await
+            .unwrap_or_default();
+        if let Ok(mut guard) = cache.lock() {
+            guard.fingerprint = fingerprint;
+            guard.skills = skills.clone();
+        }
+        skills
+    }
+}
+fn candidate_dirs(roots: &SkillsRoots) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for path in &roots.extra {
+        dirs.push(path.clone());
+    }
+    if !roots.project.as_os_str().is_empty() {
+        dirs.push(roots.project.join(".lca/skills"));
+    }
+    if !roots.user.as_os_str().is_empty() {
+        dirs.push(roots.user.clone());
+    }
+    if !roots.extensions.as_os_str().is_empty() {
+        // Package skill dirs, mirroring `collect`'s traversal minus
+        // the file reads (a blocking `read_dir` here would defeat
+        // the cache; the sync twin below walks the same list).
+        if let Ok(entries) = std::fs::read_dir(&roots.extensions) {
+            let mut names: Vec<String> = entries
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            for name in names {
+                if roots.disabled.iter().any(|disabled| disabled == &name) {
+                    continue;
+                }
+                dirs.push(
+                    roots
+                        .extensions
+                        .join(&name)
+                        .join("resources")
+                        .join("skills"),
+                );
+            }
+        }
+    }
+    dirs
+}
+
+/// Fingerprint one tree: its own stat plus every entry's name and
+/// stat (file content changes move file mtimes; adds/removes move
+/// the dir mtime and count).
+fn fingerprint_sync(roots: &SkillsRoots) -> Fingerprint {
+    let mut fingerprint = Vec::new();
+    for dir in candidate_dirs(roots) {
+        fingerprint.push((dir.clone(), mtime_sync(&dir), count_sync(&dir)));
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            let mut names: Vec<String> = entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            for name in names {
+                let path = dir.join(&name);
+                fingerprint.push((path.clone(), mtime_sync(&path), count_sync(&path)));
+                // Skill bodies are one level down (`<name>/SKILL.md`).
+                if path.is_dir()
+                    && let Ok(inner) = std::fs::read_dir(&path)
+                {
+                    let mut files: Vec<String> = inner
+                        .filter_map(|entry| entry.ok())
+                        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                        .collect();
+                    files.sort();
+                    for file in files {
+                        let child = path.join(&file);
+                        fingerprint.push((child.clone(), mtime_sync(&child), None));
+                    }
+                }
+            }
+        }
+    }
+    fingerprint
+}
+
+fn mtime_sync(path: &Path) -> Option<u128> {
+    std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|age| age.as_millis())
+}
+
+fn count_sync(path: &Path) -> Option<usize> {
+    if !path.is_dir() {
+        return None;
+    }
+    Some(
+        std::fs::read_dir(path)
+            .map(|entries| entries.count())
+            .unwrap_or(0),
+    )
+}
+
+/// The async twin of [`fingerprint_sync`], on `tokio::fs`: same
+/// paths, same shape, no blocking call. The two must not drift: both
+/// walk `candidate_dirs` plus two levels, dir counts included.
+async fn fingerprint_async(roots: &SkillsRoots) -> Fingerprint {
+    let mut fingerprint = Vec::new();
+    for dir in candidate_dirs_async(roots).await {
+        fingerprint.push((
+            dir.clone(),
+            mtime_async(&dir).await,
+            count_async(&dir).await,
+        ));
+        if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+            let mut names = Vec::new();
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                names.push(entry.file_name().to_string_lossy().into_owned());
+            }
+            names.sort();
+            for name in names {
+                let path = dir.join(&name);
+                fingerprint.push((
+                    path.clone(),
+                    mtime_async(&path).await,
+                    count_async(&path).await,
+                ));
+                if count_async(&path).await.is_some()
+                    && let Ok(mut inner) = tokio::fs::read_dir(&path).await
+                {
+                    let mut files = Vec::new();
+                    while let Ok(Some(entry)) = inner.next_entry().await {
+                        files.push(entry.file_name().to_string_lossy().into_owned());
+                    }
+                    files.sort();
+                    for file in files {
+                        let child = path.join(&file);
+                        fingerprint.push((child.clone(), mtime_async(&child).await, None));
+                    }
+                }
+            }
+        }
+    }
+    fingerprint
+}
+
+/// The async twin of [`candidate_dirs`]: same list, but the
+/// extensions packages list through `tokio::fs`.
+async fn candidate_dirs_async(roots: &SkillsRoots) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for path in &roots.extra {
+        dirs.push(path.clone());
+    }
+    if !roots.project.as_os_str().is_empty() {
+        dirs.push(roots.project.join(".lca/skills"));
+    }
+    if !roots.user.as_os_str().is_empty() {
+        dirs.push(roots.user.clone());
+    }
+    if !roots.extensions.as_os_str().is_empty()
+        && let Ok(mut entries) = tokio::fs::read_dir(&roots.extensions).await
+    {
+        let mut names = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry.file_type().await.is_ok_and(|kind| kind.is_dir()) {
+                names.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        names.sort();
+        for name in names {
+            if roots.disabled.iter().any(|disabled| disabled == &name) {
+                continue;
+            }
+            dirs.push(
+                roots
+                    .extensions
+                    .join(&name)
+                    .join("resources")
+                    .join("skills"),
+            );
+        }
+    }
+    dirs
+}
+
+async fn mtime_async(path: &Path) -> Option<u128> {
+    tokio::fs::metadata(path)
+        .await
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|age| age.as_millis())
+}
+
+async fn count_async(path: &Path) -> Option<usize> {
+    // `is_dir` would block: list instead, and read absence as not-a-dir.
+    match tokio::fs::read_dir(path).await {
+        Ok(mut entries) => {
+            let mut count = 0;
+            while let Ok(Some(_)) = entries.next_entry().await {
+                count += 1;
+            }
+            Some(count)
+        }
+        Err(_) => None,
+    }
+}
+
 /// The skill catalog: one advertised line per model-invocable skill -
 /// name, one-line description, source attribution. Bodies never ride it
 /// (gh #43: advertise by default, load bodies on demand). The model's

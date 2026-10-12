@@ -21,8 +21,11 @@ fn read_source(name: &str) -> String {
 /// comments so unbalanced braces in text cannot fool the balance.
 fn async_fn_body(source: &str, name: &str) -> Option<String> {
     let marker = format!("async fn {name}");
-    let mut rest = source.split(&marker).nth(1)?;
-    rest = rest.split('{').nth(1)?;
+    let rest = source.split(&marker).nth(1)?;
+    // Balance from the opening brace (a split would stop at the
+    // second brace instead of the matching close).
+    let open = rest.find('{')?;
+    let rest = &rest[open + 1..];
     let mut depth = 1usize;
     let mut body = String::new();
     let bytes = rest.as_bytes();
@@ -42,7 +45,7 @@ fn async_fn_body(source: &str, name: &str) -> Option<String> {
             let start = index + if hashes > 0 { hashes + 1 } else { 1 };
             let closer: Vec<u8> = if hashes > 0 {
                 let mut c = vec![b'"'];
-                c.extend(std::iter::repeat(b'#').take(hashes));
+                c.extend(std::iter::repeat_n(b'#', hashes));
                 c
             } else {
                 vec![b'"']
@@ -64,7 +67,24 @@ fn async_fn_body(source: &str, name: &str) -> Option<String> {
             continue;
         }
         if byte == b'\'' {
-            // Lifetimes and char literals: consume through the closer.
+            // Lifetimes (`'a`, `'static`) versus char literals (`'{'`):
+            // consume identifier chars; a closing quote right after
+            // means it was a char literal after all.
+            if index + 1 < bytes.len()
+                && (bytes[index + 1].is_ascii_alphabetic() || bytes[index + 1] == b'_')
+            {
+                let mut j = index + 1;
+                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b'\'' {
+                    j += 1;
+                }
+                body.push_str(&rest[index..j]);
+                index = j;
+                continue;
+            }
+            // Other char literals: consume through the closer.
             let mut j = index + 1;
             if j < bytes.len() && bytes[j] == b'\\' {
                 j += 2;
@@ -122,7 +142,7 @@ fn no_blocking_fs_in_the_named_async_paths() {
         "assemble_request blocks on the filesystem"
     );
     let assemble = read_source("assemble.rs");
-    for name in ["store_image_bytes_async"] {
+    for name in ["store_image_bytes_async", "read_attachment_async"] {
         let span = async_fn_body(&assemble, name).expect("async fn exists");
         assert!(
             !span.contains("std::fs::"),

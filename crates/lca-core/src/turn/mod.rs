@@ -15,9 +15,7 @@ use lca_provider::{CompletionRequest, ProtocolError};
 use lca_session::ViewMode;
 use lca_tools::{CancelFlag, ToolExecutor};
 
-use super::assemble::{
-    Attachment, assemble_with, message_text, stable_fingerprint, usage_prompt_tokens,
-};
+use super::assemble::{assemble_with, message_text, stable_fingerprint, usage_prompt_tokens};
 use super::compact::compact_candidate;
 use super::{Agent, TurnSink};
 
@@ -435,15 +433,22 @@ impl Agent<'_> {
                 }
             };
         }
-        let assembled = assemble_with(&records, &self.config.system_prompt, &|hash| {
-            let path = self.store.attachment_path(self.session, hash)?;
-            let bytes = std::fs::read(path).ok()?;
-            let media_type = lca_protocol::sniff_image_media_type(&bytes)?;
-            Some(Attachment {
-                media_type: media_type.to_string(),
-                bytes,
+        let assembled = {
+            // Gh #153: attachments pre-read through `tokio::fs` (never
+            // a blocking read inside assembly); the resolver below is a
+            // map lookup.
+            let mut table = std::collections::HashMap::new();
+            for hash in super::assemble::attachment_hashes(&records) {
+                if let Some(attachment) =
+                    super::assemble::read_attachment_async(self.store, self.session, &hash).await
+                {
+                    table.insert(hash, attachment);
+                }
+            }
+            assemble_with(&records, &self.config.system_prompt, &|hash| {
+                table.get(hash).cloned()
             })
-        });
+        };
         let stable_cap = self.stable_cap(&assembled, input);
         // FR-CTX-2: every enabled transform, in installation order, before
         // every provider call; a rejection ends the turn here, with no call
@@ -472,9 +477,15 @@ impl Agent<'_> {
         // FR-CTX-2 / ADR-0030: the host's own three-source skills merge
         // (project > user > extension resources), appended after the
         // extension transforms as a system message, so the stable cache
-        // prefix is untouched by construction.
+        // prefix is untouched by construction. Gh #153: the scan is
+        // cached (re-scans only when the trees change, off the runtime
+        // threads), so per-round assembly never walks the filesystem.
         let messages = {
-            let skills = lca_tools::skills::collect(&self.config.skills_roots);
+            let skills = lca_tools::skills::SkillCache::collect_cached(
+                &self.config.skills_cache,
+                &self.config.skills_roots,
+            )
+            .await;
             lca_tools::skills::transform(messages, &skills, self.config.skills_inject_matched)
         };
         let stable_prefix = self.narrow_stable_prefix(&messages, stable_cap, sink);

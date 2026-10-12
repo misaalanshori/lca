@@ -22,8 +22,8 @@ mod turn;
 pub mod ext_provider;
 pub mod pricing;
 pub use assemble::{
-    Assembled, Attachment, StagedAttachment, assemble, assemble_with, stage_image,
-    store_image_bytes, store_image_bytes_async,
+    Assembled, Attachment, StagedAttachment, assemble, assemble_with, attachment_hashes,
+    read_attachment_async, stage_image, store_image_bytes, store_image_bytes_async,
 };
 pub use compact::{MAX_TRACKED_FILES, SYSTEM_PROMPT_CHANGE_TYPE, compact_now, compaction_reserve};
 pub use ext_provider::ExtensionProvider;
@@ -34,7 +34,7 @@ pub use turn::effective_context_window;
 // The turn types live in the protocol layer so the interface and the
 // embedding SDK can render them without depending on this crate.
 pub use lca_protocol::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
-pub use lca_tools::skills::{Skill, SkillSource, SkillsRoots};
+pub use lca_tools::skills::{Skill, SkillCache, SkillSource, SkillsRoots};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -112,6 +112,11 @@ pub struct AgentConfig {
     /// Host-side skill sources (FR-CTX-2, ADR-0030). Empty paths collect
     /// nothing.
     pub skills_roots: SkillsRoots,
+    /// The skill-scan cache (gh #153): per-round `collect` walks are
+    /// the turn's hottest filesystem reads, so assembly reuses scans
+    /// until the trees change. The fingerprint keys the roots, so
+    /// sharing across turns is safe.
+    pub skills_cache: Arc<std::sync::Mutex<SkillCache>>,
     /// Whether matched skill text injects into the prompt (gh #43).
     /// Default off: the catalog advertises either way.
     pub skills_inject_matched: bool,
@@ -207,6 +212,7 @@ impl Default for AgentConfig {
             completion_backend: None,
             sent_stable: Arc::new(std::sync::Mutex::new(None)),
             skills_roots: SkillsRoots::default(),
+            skills_cache: Arc::new(std::sync::Mutex::new(SkillCache::new())),
             skills_inject_matched: false,
             edit_requires_read: false,
             auto_resize_images: true,
