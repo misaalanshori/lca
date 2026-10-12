@@ -17,6 +17,8 @@ repository.workspace = true
 #   a header check.
 # zip - reads (and, for tests and authors, packs) the ADR-0010 archive;
 #   DEFLATE must not be hand-written - SRDD "Dependencies need a reason".
+# lca-ext-abi - the ABI-window rule the catalog filter shares with the
+#   manifest check (single source, no duplicated version logic).
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -28,6 +30,7 @@ http-body-util.workspace = true
 hyper-rustls.workspace = true
 tokio.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }
+lca-ext-abi = { path = "../lca-ext-abi" }
 
 [dev-dependencies]
 lca-testkit = { path = "../lca-testkit" }

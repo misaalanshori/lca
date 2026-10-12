@@ -342,21 +342,7 @@ impl Manifest {
     /// Whether the declared ABI line is inside the supported window
     /// (NFR-19, FR-EXT-8).
     pub fn abi_in_window(&self) -> bool {
-        let Some((declared_major, declared_minor)) = parse_abi(&self.abi) else {
-            return false;
-        };
-        let Some((current_major, current_minor)) = parse_abi(lca_ext_abi::ABI_VERSION) else {
-            return false;
-        };
-        if declared_major == current_major {
-            return declared_minor == current_minor
-                || (current_minor > 0 && declared_minor == current_minor - 1);
-        }
-        // The 1.0 freeze line's amnesty: an extension installed against the
-        // 1.0-freeze host declares `1.0`, and it keeps loading while the
-        // 0.x development window is open, exactly as the pre-freeze 0.1
-        // line kept loading on a 1.0 host.
-        (declared_major, declared_minor) == (1, 0) && current_major == 0
+        lca_ext_abi::abi_in_window(&self.abi)
     }
 }
 
@@ -391,11 +377,6 @@ fn manifest_limits(value: &toml::Value) -> Result<Option<ExtensionLimits>, LoadE
         fuel_per_call: (fuel as u64).min(MAX_FUEL_PER_CALL),
         log_limit_bytes: 0, // log stays the host's (config key)
     }))
-}
-
-fn parse_abi(value: &str) -> Option<(u64, u64)> {
-    let (major, minor) = value.split_once('.')?;
-    Some((major.parse().ok()?, minor.parse().ok()?))
 }
 
 /// Something wrong with loading (not with a call).

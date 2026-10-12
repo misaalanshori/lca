@@ -20,6 +20,33 @@ pub const ABI_VERSION: &str = "0.6";
 /// The WIT package name that crosses every manifest and registry tag.
 pub const PACKAGE: &str = "lca:ext";
 
+/// Whether an extension declaring `abi` loads on this host (NFR-19):
+/// the current minor line and the one before it, plus the 1.0 freeze
+/// line while the 0.x development window is open. The single source
+/// for the window rule; the host's manifest check and the catalog
+/// filter both answer through it.
+pub fn abi_in_window(declared: &str) -> bool {
+    fn parse_abi(value: &str) -> Option<(u64, u64)> {
+        let (major, minor) = value.split_once('.')?;
+        Some((major.parse().ok()?, minor.parse().ok()?))
+    }
+    let Some((declared_major, declared_minor)) = parse_abi(declared) else {
+        return false;
+    };
+    let Some((current_major, current_minor)) = parse_abi(ABI_VERSION) else {
+        return false;
+    };
+    if declared_major == current_major {
+        return declared_minor == current_minor
+            || (current_minor > 0 && declared_minor == current_minor - 1);
+    }
+    // The 1.0 freeze line's amnesty: an extension installed against the
+    // 1.0-freeze host declares `1.0`, and it keeps loading while the
+    // 0.x development window is open, exactly as the pre-freeze 0.1
+    // line kept loading on a 1.0 host.
+    (declared_major, declared_minor) == (1, 0) && current_major == 0
+}
+
 /// One implemented world; additive as worlds land (ADR-0019).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum World {

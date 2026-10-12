@@ -1,0 +1,125 @@
+# The authoritative first-party extension catalog (#227): what the
+# `/extensions` hub lists under Official provenance, and what
+# `lca ext search` queries. Versions track the manifests; refs name
+# the `abi-0.6` line tags (the host filters by its own ABI window at
+# read time, so a stale entry never offers).
+
+[version]
+format = 1
+
+[[extension]]
+name = "openai-compatible"
+version = "1.0.0"
+abi = "0.6"
+category = "provider"
+description = "Any OpenAI-compatible chat completions endpoint. Configurable base URL and key."
+oci_ref = "ghcr.io/misaalanshori/lca/openai-compatible:abi-0.6"
+capabilities = ["net", "credentials"]
+
+[[extension]]
+name = "anthropic"
+version = "0.1.0"
+abi = "0.6"
+category = "provider"
+description = "Anthropic Claude models via API key or Claude Pro/Max subscription."
+oci_ref = "ghcr.io/misaalanshori/lca/anthropic:abi-0.6"
+capabilities = ["net", "oauth", "credentials"]
+
+[[extension]]
+name = "antigravity"
+version = "1.0.1"
+abi = "0.6"
+category = "provider"
+description = "Google Antigravity models, including image generation, via subscription login."
+oci_ref = "ghcr.io/misaalanshori/lca/antigravity:abi-0.6"
+capabilities = ["net", "oauth", "credentials"]
+
+[[extension]]
+name = "codex"
+version = "0.1.0"
+abi = "0.6"
+category = "provider"
+description = "OpenAI Codex models via ChatGPT subscription login."
+oci_ref = "ghcr.io/misaalanshori/lca/codex:abi-0.6"
+capabilities = ["net", "oauth", "credentials"]
+
+[[extension]]
+name = "github-copilot"
+version = "0.1.0"
+abi = "0.6"
+category = "provider"
+description = "GitHub Copilot subscription provider."
+oci_ref = "ghcr.io/misaalanshori/lca/github-copilot:abi-0.6"
+capabilities = ["net", "credentials"]
+
+[[extension]]
+name = "grok"
+version = "0.1.0"
+abi = "0.6"
+category = "provider"
+description = "xAI Grok models via SuperGrok / X subscription."
+oci_ref = "ghcr.io/misaalanshori/lca/grok:abi-0.6"
+capabilities = ["net", "oauth", "credentials"]
+
+[[extension]]
+name = "kimi-coding"
+version = "0.1.0"
+abi = "0.6"
+category = "provider"
+description = "Moonshot Kimi models via Kimi Code subscription."
+oci_ref = "ghcr.io/misaalanshori/lca/kimi-coding:abi-0.6"
+capabilities = ["net", "credentials"]
+
+[[extension]]
+name = "llama"
+version = "0.1.0"
+abi = "0.6"
+category = "provider"
+description = "Local llama-server router models via chat completions and load/unload commands."
+oci_ref = "ghcr.io/misaalanshori/lca/llama:abi-0.6"
+capabilities = ["net-local", "credentials"]
+
+[[extension]]
+name = "meta"
+version = "0.1.0"
+abi = "0.6"
+category = "provider"
+description = "Meta Llama and Muse models via Meta account subscription."
+oci_ref = "ghcr.io/misaalanshori/lca/meta:abi-0.6"
+capabilities = ["net", "credentials"]
+
+[[extension]]
+name = "openrouter"
+version = "0.1.0"
+abi = "0.6"
+category = "provider"
+description = "OpenRouter multi-model provider with one-click browser OAuth sign-in."
+oci_ref = "ghcr.io/misaalanshori/lca/openrouter:abi-0.6"
+capabilities = ["net", "oauth", "credentials"]
+
+[[extension]]
+name = "compaction-default"
+version = "1.0.0"
+abi = "0.6"
+category = "compaction"
+description = "The default compaction strategy: summarize the old range through the active provider, with a mechanical fallback."
+oci_ref = "ghcr.io/misaalanshori/lca/compaction-default:abi-0.6"
+capabilities = ["completion"]
+
+[[extension]]
+name = "mcp"
+version = "0.1.0"
+abi = "0.6"
+category = "bridge"
+description = "MCP bridge (gh #53 phase 1): external MCP servers over stdio, one tool suite."
+oci_ref = "ghcr.io/misaalanshori/lca/mcp:abi-0.6"
+capabilities = ["fs", "process"]
+
+[[extension]]
+name = "skills"
+version = "1.0.0"
+abi = "0.6"
+category = "context-transform"
+description = "Match a project skill against the latest user message and inject its instructions before the model sees the turn."
+oci_ref = "ghcr.io/misaalanshori/lca/skills:abi-0.6"
+capabilities = ["fs"]
