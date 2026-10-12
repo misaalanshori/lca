@@ -7,7 +7,9 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use lca_core::{Agent, AgentConfig, ExtensionRegistry, TurnEvent, TurnOutcome, TurnSink, TurnStatus};
+use lca_core::{
+    Agent, AgentConfig, ExtensionRegistry, TurnEvent, TurnOutcome, TurnSink, TurnStatus,
+};
 use lca_ext_abi::{DeliveryMode, DispatchFuture, ExtensionDispatch, World};
 use lca_permissions::{Decision, GrantStore, PermissionPrompt, ProposalDiff, ScopeRoots};
 use lca_protocol::{
@@ -176,9 +178,7 @@ async fn an_interrupt_only_extension_cannot_latch_cancellation() {
     registry.register(Arc::clone(&double) as Arc<dyn ExtensionDispatch>);
     // The host knows this handle's engine (gh #97's host-side reset):
     // noting it is registration bookkeeping, not implementor behavior.
-    // RED: the noting API lands with the fix; until then the latch
-    // below is unopposed.
-    // registry.note_engine("interrupt-only", &cap);
+    registry.note_engine("interrupt-only", &cap);
 
     let store = lca_session::SessionStore::new(root.join("data"));
     let session = store.create_session(&project, "test").expect("session");

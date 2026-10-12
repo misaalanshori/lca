@@ -408,6 +408,10 @@ impl<'a> Agent<'a> {
         for handle in &handles {
             handle.turn_started();
         }
+        // Gh #97's host-side half: every noted native engine resets
+        // here too, so a handle that implements only `interrupt` cannot
+        // latch the session. Idempotent beside the handles' own resets.
+        self.config.extensions.reset_noted_engines();
         // A plain thread, not a task: a synchronous WASM call blocks the
         // runtime thread it runs on, and cancellation must still reach a
         // spinning instance from a thread that is definitely running

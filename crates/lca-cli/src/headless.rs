@@ -866,6 +866,8 @@ fn wire(
             temp,
         );
         cap.set_completion(backend.clone());
+        // Gh #97: note the engine for the host-side turn-boundary reset.
+        registry.note_engine("compaction-default", &cap);
         registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
         Some(backend)
     };

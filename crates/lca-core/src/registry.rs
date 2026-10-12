@@ -120,6 +120,13 @@ pub struct ExtensionRegistry {
     nested: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<lca_ext_abi::NestedCall>>>,
     /// Bare tool name -> entry index.
     tools: HashMap<String, usize>,
+    /// Native capability engines the host resets at the turn boundary
+    /// (gh #97): extension name -> weak engine handle. Noting an engine
+    /// is registration bookkeeping — the host created the engine and
+    /// hands it to the native constructor — never an implementor
+    /// burden, which is what makes an interrupt-only native safe. Weak
+    /// so a rebuilt registry never keeps a dead engine alive.
+    engines: std::sync::Mutex<HashMap<String, std::sync::Weak<lca_tools::Capabilities>>>,
     /// The kept spec per registered tool name, so arguments can be validated
     /// against the schema the model saw before `execute` runs.
     pub(crate) tool_schemas: HashMap<String, ToolSpec>,
@@ -136,6 +143,7 @@ impl std::fmt::Debug for ExtensionRegistry {
             .field("tools", &self.tools.keys().collect::<Vec<_>>())
             .field("commands", &self.commands.keys().collect::<Vec<_>>())
             .field("collisions", &self.collisions)
+            .field("engines", &crate::lock(&self.engines).len())
             .finish()
     }
 }

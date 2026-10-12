@@ -65,4 +65,28 @@ impl ExtensionRegistry {
             })
             .collect()
     }
+
+    /// Note one native handle's capability engine for the turn-boundary
+    /// reset (gh #97). Call it where the host builds the engine and the
+    /// handle together; the handle itself never cooperates, which is
+    /// the whole point. Re-noting a name replaces the engine.
+    pub fn note_engine(&self, name: &str, cap: &Arc<lca_tools::Capabilities>) {
+        crate::lock(&self.engines).insert(name.to_string(), Arc::downgrade(cap));
+    }
+
+    /// Clear every noted engine's leftover cancellation (gh #97): the
+    /// host-side half of the turn boundary, beside each handle's own
+    /// `turn_started`. Idempotent and safe for engines whose extension
+    /// is disabled or gone — a reset touches no in-flight work because
+    /// the boundary runs between turns — and dead entries are dropped.
+    pub(crate) fn reset_noted_engines(&self) {
+        crate::lock(&self.engines).retain(|_, weak| {
+            if let Some(cap) = weak.upgrade() {
+                cap.reset_cancellation();
+                true
+            } else {
+                false
+            }
+        });
+    }
 }

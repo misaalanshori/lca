@@ -99,8 +99,8 @@ pub(crate) fn assemble(
     let manifest = lca_ext_host::Manifest::parse(openai_compatible::MANIFEST)
         .expect("the bundled openai-compatible manifest parses");
     #[cfg(feature = "bundled-openai-compat")]
-    registry.register(Arc::new(openai_compatible::OpenAiCompat::with_settings(
-        crate::provider_capabilities(
+    {
+        let cap = crate::provider_capabilities(
             cwd,
             "openai-compatible",
             &manifest,
@@ -108,13 +108,20 @@ pub(crate) fn assemble(
             shared_prompt,
             grants.clone(),
             temp,
-        ),
-        openai_compatible::Settings {
-            model_overrides: std::fs::read_to_string(crate::data_dir().join("models.toml"))
-                .unwrap_or_default(),
-            ..Default::default()
-        },
-    )));
+        );
+        // Gh #97: the host notes the engine it just built, so the
+        // turn boundary resets it even though the handle's own
+        // `turn_started` already does (belt and suspenders).
+        registry.note_engine("openai-compatible", &cap);
+        registry.register(Arc::new(openai_compatible::OpenAiCompat::with_settings(
+            cap,
+            openai_compatible::Settings {
+                model_overrides: std::fs::read_to_string(crate::data_dir().join("models.toml"))
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+        )));
+    }
     #[cfg(not(feature = "bundled-openai-compat"))]
     let _ = shared_prompt;
     crate::apply_enablement(&mut registry, |name| {
@@ -170,6 +177,8 @@ pub(crate) fn register_compaction(
         temp,
     );
     cap.set_completion(backend.clone());
+    // Gh #97: note the engine for the host-side turn-boundary reset.
+    registry.note_engine("compaction-default", &cap);
     registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
     Some(backend)
 }
