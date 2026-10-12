@@ -892,3 +892,34 @@ fn bare_tool_cards_ignore_clicks() {
     t.start_tool("bash", "sleep 60");
     assert!(!t.toggle_entry_tool(0), "nothing to expand");
 }
+
+// Verifies: gh #247 - rows inside an expanded tool card's body hit
+// the card (not nothing): a body click collapses like a header one.
+#[test]
+fn tool_body_rows_hit_the_card() {
+    use super::EntryHit;
+    let mut t = Transcript::new();
+    t.start_tool("bash", "ls");
+    t.finish_tool(ToolStatus::Ok, Some("a\nb\nc\nd\ne\nf".to_string()));
+    assert!(t.toggle_entry_tool(0), "the card expands");
+    let theme = plain();
+    let lines = t.render(60, &theme);
+    let body_row = lines
+        .iter()
+        .position(|line| strip_terminal_sequences(line).trim() == "f")
+        .expect("the body renders");
+    assert_eq!(
+        t.entry_at_row(60, &theme, body_row),
+        Some(EntryHit::ToolBody(0)),
+        "a body row hits the card"
+    );
+    let header_row = lines
+        .iter()
+        .position(|line| strip_terminal_sequences(line).contains("bash"))
+        .expect("the header renders");
+    assert_eq!(
+        t.entry_at_row(60, &theme, header_row),
+        Some(EntryHit::ToolHeader(0)),
+        "the header still hits the header"
+    );
+}

@@ -803,11 +803,13 @@ impl Chat {
                 "Cycle thinking · {}",
                 key_text("app.thinking.toggle")
             )),
-            Some(EntryHit::ToolHeader(index)) => match self.transcript.tool_card_expanded(index) {
-                Some(true) => Some("Collapse output".to_string()),
-                Some(false) => Some("Expand output".to_string()),
-                None => None,
-            },
+            Some(EntryHit::ToolHeader(index) | EntryHit::ToolBody(index)) => {
+                match self.transcript.tool_card_expanded(index) {
+                    Some(true) => Some("Collapse output".to_string()),
+                    Some(false) => Some("Expand output".to_string()),
+                    None => None,
+                }
+            }
             None => None,
         }
     }

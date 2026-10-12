@@ -184,3 +184,232 @@ fn drawer_tab_and_panel_tint_reach_the_pane() {
     // #122): the dead pane is the receipt.
     wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
+
+// A card-body row in a real pane: the first whitespace-separated
+// token is the bare output number (`seq` lines). `trim() == "40"`
+// never holds on tmux: every row pads to the full width with the
+// scrollbar glyph riding the end, so only the head is bare.
+#[cfg(unix)]
+fn body_number(line: &str) -> Option<u32> {
+    if line.contains("extensions") {
+        return None;
+    }
+    line.split_whitespace().next()?.parse::<u32>().ok()
+}
+
+// Verifies: gh #247 - a real terminal receipt: clicking a tool card's
+// body collapses it, and the collapse keeps the card in view instead
+// of throwing the viewport at the history's top.
+#[cfg(unix)]
+#[test]
+fn tool_body_click_collapses_without_scroll_jump() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let filler: String = (1..=35)
+        .map(|n| format!("filler-line-{n}"))
+        .collect::<Vec<_>>()
+        .join("\\n");
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::Sse(format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{filler}\"}}}}]}}\n\ndata: [DONE]\n\n"
+        )),
+        Reply::Sse(sse_tool_call("shell", r#"{"command":"seq 1 40"}"#)),
+        Reply::Sse(sse_text_with_usage("all done", 20, 0)),
+    ]));
+    let sandbox = sandbox("polish-toolclick");
+    sandbox.approve_loopback_net(serde_json::json!({}));
+    let session = Tmux::new("polish-toolclick");
+    session.spawn(&sandbox, Some(&mock), true, &[], &["--yolo"]);
+    session.wait_for("YOLO MODE", std::time::Duration::from_secs(20));
+
+    session.send(&["first filler turn", "Enter"]);
+    session.wait_for("filler-line-35", std::time::Duration::from_secs(25));
+    // True idle, never the `done`-in-`all done` substring: the status
+    // line reads exactly `done` when the turn (including its tail
+    // records) has settled, so later frames cannot shift rows under
+    // the mouse.
+    session.send(&["run the numbers", "Enter"]);
+    session.wait_for("all done", std::time::Duration::from_secs(25));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let pane = session.capture();
+        if pane.lines().any(|line| line.trim() == "done") || std::time::Instant::now() > deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    assert!(
+        session.capture().lines().any(|line| line.trim() == "done"),
+        "the turn settled before the mouse moves"
+    );
+
+    // Fullscreen captures the mouse; the collapsed card previews.
+    // Gate on the fullscreen marker itself: the preview text also
+    // renders in scrollback, where no mouse event can arrive.
+    session.send(&["/fullscreen", "Enter"]);
+    session.wait_for("app-owned screen", std::time::Duration::from_secs(15));
+    session.wait_for("more lines", std::time::Duration::from_secs(15));
+    // Expand through the header first. The 40-line body overflows the
+    // pane, so the receipt is the full body reaching the scrollback
+    // history - never a single viewport row, which the bottom-anchored
+    // view keeps wherever the fold falls.
+    // Converge to the expanded state from wherever the card is: a
+    // late turn-finalization frame can flip the preview on its own,
+    // so a missing header is recovered, never fatal. One click gets
+    // a long poll window - re-clicking faster than the render lands
+    // would collapse the card the first click just opened.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    let expanded = loop {
+        let pane = session.capture();
+        let header = pane
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| line.contains("seq 1 40").then_some(row));
+        let marker = pane.contains("more lines");
+        let body = pane.lines().any(|line| body_number(line).is_some());
+        if !marker && body {
+            break true;
+        }
+        if std::time::Instant::now() > deadline {
+            break false;
+        }
+        match (header, marker) {
+            // Collapsed and aimed: click once, then poll the tail
+            // patiently before even thinking of another click.
+            (Some(row), true) => {
+                let line = pane.lines().nth(row).unwrap_or_default();
+                let col = line.find("seq 1 40").unwrap_or(2) as u16 + 2;
+                session.send_literal(&format!("\x1b[<0;{};{}M", col + 1, row as u16 + 1));
+                session.send_literal(&format!("\x1b[<0;{};{}m", col + 1, row as u16 + 1));
+                let inner = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                let mut done = false;
+                while std::time::Instant::now() < inner {
+                    let pane = session.capture();
+                    if !pane.contains("more lines")
+                        && pane.lines().any(|line| body_number(line) == Some(40))
+                    {
+                        done = true;
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                if done {
+                    break true;
+                }
+            }
+            // Header off-view: ease back toward the live bottom,
+            // where the collapsed card previews.
+            _ => {
+                session.send_literal("\x1b[<65;70;20M");
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+        }
+    };
+    let finale = session.capture();
+    assert!(expanded, "the card expanded:\n{finale}");
+    // Scroll up into the card: the collapse defect only bites away
+    // from the live bottom (at scroll 0 old and new agree). Alt+wheel
+    // climbs fast; the loop stops when the header shows above the
+    // fold with body rows under it.
+    let wheel = |bits: u16| {
+        session.send_literal(&format!("\x1b[<{bits};70;20M"));
+        std::thread::sleep(std::time::Duration::from_millis(120));
+    };
+    for _ in 0..4 {
+        wheel(72);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let pane = loop {
+        let pane = session.capture();
+        let header = pane
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| line.contains("seq 1 40").then_some(row));
+        let body_below = header.is_some_and(|at| {
+            pane.lines()
+                .skip(at + 1)
+                .any(|line| body_number(line).is_some())
+        });
+        if body_below || std::time::Instant::now() > deadline {
+            break pane;
+        }
+        // Too far up: the header left through the top. Ease back.
+        wheel(65);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+    };
+    let header_row = pane
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| line.contains("seq 1 40").then_some(row))
+        .expect("the header stays in view");
+    // A body click collapses: the preview marker returns and the
+    // clicked tail line leaves. Click the deepest visible body
+    // line: the collapsed preview keeps lines 1-5, so only a tail
+    // number proves the collapse.
+    // Collapse through the body: re-aim fresh each round, since a
+    // frame can land between the read and the click. One click gets
+    // a patient poll: re-clicking faster than the render lands would
+    // re-expand the card just collapsed. The preview marker's return
+    // is the receipt.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+    let mut clicked = 0u32;
+    // The collapse keeps the card in view: the pre-fix clamp threw
+    // the viewport at the log's top, leaving the header below the
+    // fold (the `expect` below is the no-jump receipt). Exact-row
+    // stationarity rides the unit-pinned `anchor_scroll`, not tmux
+    // timing.
+    let pane = loop {
+        let pane = session.capture();
+        if pane.contains("more lines") || std::time::Instant::now() > deadline {
+            break pane;
+        }
+        let live_header = pane
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| line.contains("seq 1 40").then_some(row))
+            .unwrap_or(header_row);
+        if let Some((n, col, row)) = pane
+            .lines()
+            .enumerate()
+            .skip(live_header + 1)
+            .filter_map(|(row, line)| body_number(line).map(|n| (n, 6u16, row as u16)))
+            .max_by_key(|(n, _, _)| *n)
+        {
+            clicked = n;
+            session.send_literal(&format!("\x1b[<0;{};{}M", col + 1, row + 1));
+            session.send_literal(&format!("\x1b[<0;{};{}m", col + 1, row + 1));
+            let inner = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut done = false;
+            while std::time::Instant::now() < inner {
+                if session.capture().contains("more lines") {
+                    done = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            if done {
+                break session.capture();
+            }
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
+    };
+    assert!(
+        pane.contains("more lines"),
+        "the body click collapsed the card:\n{pane}"
+    );
+    assert!(
+        !pane.lines().any(|line| body_number(line) == Some(clicked)),
+        "the clicked body line left:\n{pane}"
+    );
+    let landed = pane
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| line.contains("seq 1 40").then_some(row))
+        .expect("the header stays in view");
+    session.send(&["/exit", "Enter"]);
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
+}

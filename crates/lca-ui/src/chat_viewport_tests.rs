@@ -834,3 +834,57 @@ fn the_jump_indicator_isolates_sgr_state_over_italic_rows() {
         "the band closes: {row:?}"
     );
 }
+
+// Verifies: gh #247 - clicking a tool card's body (not just its
+// header) toggles that card's expansion.
+#[test]
+fn clicking_a_tool_body_collapses_that_card() {
+    use crate::chat_render::ClickOutcome;
+    use crate::transcript::ToolStatus;
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.transcript.start_tool("bash", "ls");
+    chat.transcript
+        .finish_tool(ToolStatus::Ok, Some("a\nb\nc\nd\ne\nf".to_string()));
+    let (w, h) = (80u16, 24u16);
+    let frame = chat.viewport(w, h, 0);
+    let strip = |row: &String| lca_tui::engine::text::strip_terminal_sequences(row);
+    let header = frame
+        .iter()
+        .position(|line| strip(line).contains("bash"))
+        .expect("the card header renders") as u16;
+    assert!(matches!(
+        chat.click_at(4, header, 0, w, h),
+        ClickOutcome::ToolToggled
+    ));
+    let frame = chat.viewport(w, h, 0);
+    let body = frame
+        .iter()
+        .position(|line| strip(line).trim() == "f")
+        .expect("the expanded body renders") as u16;
+    assert!(matches!(
+        chat.click_at(4, body, 0, w, h),
+        ClickOutcome::ToolToggled
+    ));
+    let collapsed = strip(&chat.viewport(w, h, 0).join("\n"));
+    assert!(
+        !collapsed.lines().any(|line| line.trim() == "f"),
+        "the body click collapsed the card: {collapsed:?}"
+    );
+}
+
+// Verifies: gh #247 - collapsing a card keeps the clicked card
+// stationary: the height delta rides the scroll offset instead of
+// clamping the view at the log's top.
+#[test]
+fn collapsing_a_card_anchors_the_scroll_offset() {
+    use crate::chat_render::anchor_scroll;
+    assert_eq!(anchor_scroll(50, 200, 151), 1, "collapse sheds the delta");
+    assert_eq!(anchor_scroll(5, 200, 151), 0, "the bottom saturates");
+    assert_eq!(
+        anchor_scroll(10, 151, 200),
+        10,
+        "growth holds: clamp_scroll rides it next frame"
+    );
+    assert_eq!(anchor_scroll(0, 100, 100), 0, "no change holds");
+}

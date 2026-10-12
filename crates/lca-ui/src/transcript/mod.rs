@@ -147,6 +147,9 @@ pub enum EntryHit {
     Thinking(usize),
     /// The first row of a tool card (by entry index).
     ToolHeader(usize),
+    /// A row inside an expanded tool card's output (by entry index,
+    /// gh #247): clicks here toggle like header clicks.
+    ToolBody(usize),
 }
 
 /// The transcript: an ordered list of entries.
@@ -737,9 +740,14 @@ impl Transcript {
                 }
                 // A tool card paints as a state band: a blank band row,
                 // then the header, then the output (`render_tool` owns
-                // this shape, so the header is always row 1).
-                if row - line == 1 && matches!(self.entries.get(i), Some(Entry::Tool { .. })) {
-                    return Some(EntryHit::ToolHeader(i));
+                // this shape, so the header is always row 1). Body rows
+                // hit the card too (gh #247), so a click anywhere on
+                // an expanded card collapses it.
+                if matches!(self.entries.get(i), Some(Entry::Tool { .. })) {
+                    if row - line == 1 {
+                        return Some(EntryHit::ToolHeader(i));
+                    }
+                    return Some(EntryHit::ToolBody(i));
                 }
                 return None;
             }

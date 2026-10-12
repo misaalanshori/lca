@@ -624,18 +624,29 @@ fn handle_input(
                     Some(_) => {
                         let _ = screen.take_clicked_link();
                     }
-                    None => match chat.click_at(col, row, screen.scroll(), width, height) {
-                        ClickOutcome::ThinkingToggled | ClickOutcome::ToolToggled => {
-                            let _ = screen.take_clicked_link();
+                    None => {
+                        let scrolled = screen.scroll();
+                        let before = chat.scroll_extent(width, height).0;
+                        match chat.click_at(col, row, scrolled, width, height) {
+                            ClickOutcome::ThinkingToggled | ClickOutcome::ToolToggled => {
+                                let _ = screen.take_clicked_link();
+                                // Gh #247: the height delta rides the scroll
+                                // offset, so a collapse keeps the clicked card
+                                // stationary instead of clamping at the top.
+                                let after = chat.scroll_extent(width, height).0;
+                                screen.set_scroll(crate::chat_render::anchor_scroll(
+                                    scrolled, before, after,
+                                ));
+                            }
+                            ClickOutcome::JumpBottom => screen.set_scroll(0),
+                            // Gh #173: stepper clicks only set the target; the
+                            // loop pins it on the next frame like a key jump.
+                            ClickOutcome::PreviousPrompt => chat.jump_prompt(-1),
+                            ClickOutcome::NextPrompt => chat.jump_prompt(1),
+                            ClickOutcome::SuggestionAccepted => {}
+                            ClickOutcome::Ignored => {}
                         }
-                        ClickOutcome::JumpBottom => screen.set_scroll(0),
-                        // Gh #173: stepper clicks only set the target; the
-                        // loop pins it on the next frame like a key jump.
-                        ClickOutcome::PreviousPrompt => chat.jump_prompt(-1),
-                        ClickOutcome::NextPrompt => chat.jump_prompt(1),
-                        ClickOutcome::SuggestionAccepted => {}
-                        ClickOutcome::Ignored => {}
-                    },
+                    }
                 }
             }
         }
