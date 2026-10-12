@@ -863,3 +863,158 @@ impl Drop for ProxyEnv {
         }
     }
 }
+
+// The offline TLS rows (gh #94): the `net` capability's HTTPS path
+// against a loopback TLS server, no network beyond the machine. The
+// server speaks one canned HTTP/1.1 response over a tokio-rustls
+// session with the fixture certificate; the client side is the
+// capability engine itself.
+const TLS_CA_PEM: &str = include_str!("fixtures/tls/ca.pem");
+const TLS_SERVER_PEM: &str = include_str!("fixtures/tls/server.pem");
+const TLS_SERVER_KEY_PEM: &str = include_str!("fixtures/tls/server-key.pem");
+
+fn canned_tls_server(body: &'static str) -> (String, std::thread::JoinHandle<()>) {
+    let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let handle = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tls fixture runtime");
+        runtime.block_on(async move {
+            let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+                rustls::pki_types::CertificateDer::pem_slice_iter(
+                    TLS_SERVER_PEM.as_bytes(),
+                )
+                .collect::<Result<_, _>>()
+                .expect("fixture server cert");
+            let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(
+                TLS_SERVER_KEY_PEM.as_bytes(),
+            )
+            .expect("fixture server key");
+            let config = rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(certs, key)
+                .expect("fixture server config");
+            let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+            let listener = tokio::net::TcpListener::from_std(listener).expect("adopt");
+            let (tcp, _) = listener.accept().await.expect("accept");
+            let mut tls = acceptor.accept(tcp).await.expect("handshake");
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut seen = Vec::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                let n = tls.read(&mut buf).await.expect("request bytes");
+                if n == 0 {
+                    break;
+                }
+                seen.extend_from_slice(&buf[..n]);
+                if seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            tls.write_all(response.as_bytes()).await.expect("response");
+            tls.shutdown().await.expect("close");
+        });
+    });
+    (format!("https://{addr}"), handle)
+}
+
+fn adhoc_tls_caps(sandbox: &Sandbox, base: &str) -> Capabilities {
+    let host_port = base.trim_start_matches("https://127.0.0.1:");
+    let mut caps = sandbox.caps(CapabilityGrants {
+        adhoc_net: vec![
+            lca_permissions::parse_net_pattern(&format!("127.0.0.1:{host_port}"))
+                .expect("literal with port"),
+        ],
+        ..CapabilityGrants::default()
+    });
+    // The fixture CA is the only trust the offline server can offer:
+    // webpki roots never sign loopback, so the engine learns this one
+    // anchor for the test (gh #94's additive host hook).
+    caps.add_trust_anchor(TLS_CA_PEM.as_bytes())
+        .expect("fixture CA parses");
+    caps
+}
+
+// Verifies: gh #94 (the `net` engine's HTTPS path works offline). A full
+// TLS handshake, an HTTP response over the session, and the body drains
+// through `net_read_body` - the path the env-gated smoke used to own.
+#[test]
+fn https_through_net_completes_a_loopback_handshake_offline() {
+    let _env = ProxyEnv::set(&[]);
+    let (base, server) = canned_tls_server("tls-ok");
+    let sandbox = Sandbox::new("tls-positive");
+    let caps = adhoc_tls_caps(&sandbox, &base);
+    let url = format!("{base}/tls");
+    let handle = caps
+        .net_request("GET", &url, &[], None)
+        .expect("https through net reaches the loopback server");
+    assert_eq!(drain_body(&caps, handle), "tls-ok");
+    server.join().expect("server");
+}
+
+// Verifies: gh #94 (an untrusted certificate is a clean error, never a
+// panic and never silent acceptance). Without the anchor the fixture
+// server's chain does not verify; the failure must surface as an
+// `Io`-class capability error naming the certificate problem.
+#[test]
+fn an_untrusted_loopback_certificate_fails_cleanly_not_silently() {
+    let _env = ProxyEnv::set(&[]);
+    let (base, server) = canned_tls_server("unreachable");
+    let host_port = base.trim_start_matches("https://127.0.0.1:");
+    let sandbox = Sandbox::new("tls-negative");
+    let caps = sandbox.caps(CapabilityGrants {
+        adhoc_net: vec![
+            lca_permissions::parse_net_pattern(&format!("127.0.0.1:{host_port}"))
+                .expect("literal with port"),
+        ],
+        ..CapabilityGrants::default()
+    });
+    let url = format!("{base}/tls");
+    let err = caps
+        .net_request("GET", &url, &[], None)
+        .expect_err("no anchor trusts the fixture server");
+    assert!(
+        !matches!(err, CapabilityError::Permission(_)),
+        "a TLS failure is not a permission refusal: {err}"
+    );
+    let text = err.to_string().to_lowercase();
+    assert!(
+        text.contains("certificate") || text.contains("tls") || text.contains("ssl"),
+        "the error names the certificate problem: {err}"
+    );
+    drop(server);
+}
+
+// Verifies: gh #94 (the `enforce_http` class stays pinned). Speaking
+// HTTPS at a plain-HTTP server fails in the TLS layer - the scheme
+// still routes to TLS instead of downgrading or misrouting.
+#[test]
+fn https_to_a_plain_http_server_fails_in_tls_not_in_routing() {
+    let _env = ProxyEnv::set(&[]);
+    let (base, server) = canned_server("plain");
+    let host_port = base.trim_start_matches("http://127.0.0.1:");
+    let sandbox = Sandbox::new("tls-mismatch");
+    let caps = sandbox.caps(CapabilityGrants {
+        adhoc_net: vec![
+            lca_permissions::parse_net_pattern(&format!("127.0.0.1:{host_port}"))
+                .expect("literal with port"),
+        ],
+        ..CapabilityGrants::default()
+    });
+    let url = format!("https://127.0.0.1:{host_port}/tls");
+    let err = caps
+        .net_request("GET", &url, &[], None)
+        .expect_err("plain http is not TLS");
+    assert!(
+        !matches!(err, CapabilityError::Permission(_)),
+        "past the scheme check, into TLS: {err}"
+    );
+    server.join().expect("server");
+}
