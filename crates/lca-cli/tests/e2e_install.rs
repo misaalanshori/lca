@@ -343,7 +343,8 @@ fn ext_list_names_builtins_explicitly() {
     let text = stdout(&output);
     for name in ["openai-compatible", "compaction-default", "hooks-example"] {
         assert!(
-            text.lines().any(|line| line.contains(name) && line.contains("(built-in")),
+            text.lines()
+                .any(|line| line.contains(name) && line.contains("(built-in")),
             "{name} listed and marked:\n{text}"
         );
     }
