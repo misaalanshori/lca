@@ -1023,3 +1023,28 @@ fn custom_extension_catalogs_parse_and_refuse_junk() {
         "a non-list catalogs value is refused"
     );
 }
+
+// Verifies: gh #52 - `provider.retry_max_delay_ms` caps every retry
+// sleep (pi's `retry.maxAgentDelayMs`, 60s default); a configured
+// value merges like the other retry keys.
+#[test]
+fn retry_max_delay_merges_and_defaults_to_sixty_seconds() {
+    let dir = scratch("retry-max-delay");
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: None,
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.provider_retry_max_delay_ms(), 60_000);
+
+    write(
+        &dir.join("user.toml"),
+        "provider.retry_max_delay_ms = 5000\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.provider_retry_max_delay_ms(), 5_000);
+}

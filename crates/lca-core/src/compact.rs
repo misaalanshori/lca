@@ -877,6 +877,9 @@ mod cut_tests {
     // Verifies: gh #36 phase 3 - the overflow patterns from the #36
     // discussion plus our budgeted cap message trigger recovery;
     // anything else surfaces without compacting.
+    // Verifies: gh #52 - per-vendor overflow strings (z.ai CN and
+    // siblings, pi's overflow catalog) recover; rate-limit text never
+    // does, even when it names tokens (pi's non-overflow exclusions).
     #[test]
     fn overflow_errors_match_the_documented_patterns() {
         for message in [
@@ -886,6 +889,14 @@ mod cut_tests {
             "max_tokens 100 exceeds model maximum",
             "input exceeds the context window",
             "CONTEXT_LENGTH exceeded",
+            "{\"code\":\"1261\",\"message\":\"Prompt too long\"}",
+            "{\"code\":\"1261\",\"message\":\"Prompt exceeds max length\"}",
+            "model_context_window_exceeded",
+            "request_too_large: Request exceeds the maximum size",
+            "This model's maximum context length is 8192 tokens",
+            "input is too long for requested model",
+            "Range of input length should be [1, 200000]",
+            "token limit exceeded for this model",
         ] {
             assert!(is_overflow_error(message), "recovers: {message}");
         }
@@ -894,6 +905,9 @@ mod cut_tests {
             "max_tokens must be positive",
             "connection reset by peer",
             "invalid api key",
+            "provider returned HTTP 429: slow down",
+            "rate limit exceeded, retry after 20s",
+            "ThrottlingException: Too many tokens, please wait before trying again",
         ] {
             assert!(!is_overflow_error(message), "surfaces: {message}");
         }

@@ -268,3 +268,58 @@ fn note_signature(signature: &mut Option<String>, payload: &serde_json::Value) {
         *signature = Some(bytes.to_string());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Verifies: gh #52 - a `retry-after` token in the provider error
+    // (seconds, pi's `retry-after` / `retry-after-ms`) sets the delay.
+    #[test]
+    fn retry_after_seconds_are_honored() {
+        assert_eq!(
+            retry_after_delay_ms("provider returned HTTP 429: busy retry-after: 2", 0),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            retry_after_delay_ms("provider returned HTTP 503: busy retry-after-ms: 1500", 0),
+            Some(Duration::from_millis(1500))
+        );
+    }
+
+    // Verifies: gh #52 - an HTTP-date `retry-after` sleeps until the
+    // named instant (pi's `Date.parse` branch); a past date is due now.
+    #[test]
+    fn retry_after_http_date_is_honored() {
+        // 2026-10-12T00:01:00Z: 60s after the 00:00:00Z fixture now.
+        let now_ms = 1_791_763_200_000u64; // 2026-10-12T00:00:00Z
+        assert_eq!(
+            retry_after_delay_ms(
+                "provider returned HTTP 429: busy retry-after: Mon, 12 Oct 2026 00:01:00 GMT",
+                now_ms
+            ),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            retry_after_delay_ms(
+                "provider returned HTTP 429: busy retry-after: Mon, 12 Oct 2026 00:00:00 GMT",
+                now_ms + 5_000
+            ),
+            Some(Duration::ZERO)
+        );
+    }
+
+    // Verifies: gh #52 - an unparseable `retry-after` (pi's NaN branch)
+    // is not a delay: the caller falls back to exponential backoff.
+    #[test]
+    fn unparseable_retry_after_falls_back_to_backoff() {
+        assert_eq!(
+            retry_after_delay_ms("provider returned HTTP 429: busy retry-after: soon", 0),
+            None
+        );
+        assert_eq!(
+            retry_after_delay_ms("provider returned HTTP 429: busy", 0),
+            None
+        );
+    }
+}
