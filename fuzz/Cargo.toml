@@ -11,6 +11,10 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 lca-protocol = { path = "../crates/lca-protocol" }
+lca-provider = { path = "../crates/lca-provider" }
+lca-core = { path = "../crates/lca-core" }
+lca-wire-openai = { path = "../crates/lca-wire-openai" }
+lca-cli = { path = "../crates/lca-cli" }
 lca-ext-host = { path = "../crates/lca-ext-host" }
 lca-registry = { path = "../crates/lca-registry" }
 wasmtime = { version = "49.0.0", default-features = false, features = [
@@ -39,3 +43,11 @@ path = "fuzz_targets/archive.rs"
 [[bin]]
 name = "abi_decode"
 path = "fuzz_targets/abi_decode.rs"
+
+[[bin]]
+name = "provider_stream"
+path = "fuzz_targets/provider_stream.rs"
+
+[[bin]]
+name = "headless_envelope"
+path = "fuzz_targets/headless_envelope.rs"

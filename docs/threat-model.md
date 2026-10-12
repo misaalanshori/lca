@@ -82,7 +82,7 @@ absolute path, NUL, or symlink escape (FR-PERM-6/7), so a hostile package
 cannot read a sibling's bag even when it tries. That is why the three rows
 above are about content, not reach.
 
-Outside the import table: the manifest parser, the session log reader, the OCI client, the HTTPS archive resolver, and the canonical ABI decode path all read input an attacker can influence. These are the fuzz targets.
+Outside the import table: the manifest parser, the session log reader, the OCI client, the HTTPS archive resolver, the canonical ABI decode path, the provider SSE/event stream, and the headless JSON envelope serializer all read input an attacker can influence. These are the fuzz targets.
 
 ## Scenarios
 
@@ -209,7 +209,7 @@ An update resolves the ABI line tag to a new digest, which is a trust decision a
 
 A crafted session log or a manifest with pathological content triggers a parser bug.
 
-Mitigated by fuzzing. The manifest parser, the session log reader, and the canonical ABI decode path are the three fuzz targets, chosen because they are the three places untrusted bytes are parsed.
+Mitigated by fuzzing. The manifest parser, the session log reader, the canonical ABI decode path, the provider stream parser, and the headless envelope serializer are the fuzz targets, chosen because they are the places untrusted bytes are parsed.
 
 The session reader also fails safely by design: it stops at the first unparseable record, keeps what came before, and reports truncation.
 
@@ -267,7 +267,7 @@ Digest verification runs before instantiation, not after.
 
 The `net` capability's resolved-address check rejects a connection whose resolved address falls in a loopback or private-use range even when the hostname pattern matched, and records the attempt as a rebinding case rather than an ordinary denial.
 
-The fuzz targets (four: manifest, session log, archive, ABI decode) have run long enough to be meaningful, and their corpora are checked in.
+The fuzz targets (six: manifest, session log, archive, ABI decode, provider stream, headless envelope) have run long enough to be meaningful, and their corpora are checked in.
 
 Denial recording cannot be suppressed by the extension that triggered it.
 

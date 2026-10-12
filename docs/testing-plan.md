@@ -50,7 +50,7 @@ Ten categories. Each has a home in the crate layout, a tool, and a place in the 
 
 **Property-based tests**, using `proptest`, verify an invariant across a generated range of inputs rather than one hand-picked example. This project has several state-machine-shaped invariants well suited to it: session log round-tripping, compaction never dropping a record outside its replaced range, the context-transform chain preserving message order except where a transform explicitly changes it, and the permission store's proposal-hash comparison detecting any single-byte change to the approved set.
 
-**Fuzz targets** verify that a parser handling attacker-influenced input never panics or produces undefined behavior, following the threat model's own list: the manifest parser, the session log reader, the HTTPS-archive resolver, and the canonical ABI decode path.
+**Fuzz targets** verify that a parser handling attacker-influenced input never panics or produces undefined behavior, following the threat model's own list: the manifest parser, the session log reader, the HTTPS-archive resolver, the canonical ABI decode path, the provider SSE/event-accumulation stream (FR-PROV-7/8), and the headless `--json` envelope serializer.
 
 **Snapshot tests** verify that a piece of generated output, a rendered terminal frame or an assembled request, matches a reviewed golden file, so a change to either shows up as a diff a human approves rather than as a passing test that silently started asserting something different. Section 10 covers the specific and unusual use of this technique for catching cache-breaking regressions.
 
