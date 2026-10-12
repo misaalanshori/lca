@@ -748,6 +748,9 @@ fn info(tree: &InstallTree, query: &str) -> i32 {
             let manifest = tree.manifest(&name).unwrap_or_default();
             println!("{name} {} (abi {})", entry.version, entry.abi);
             println!("source:   {}", entry.source);
+            if !entry.commit.is_empty() {
+                println!("commit:   {}", entry.commit);
+            }
             println!("digest:   {}", entry.digest);
             println!("grants:   {}", entry.grant_hash);
             match lca_registry::consent_lines(&manifest) {

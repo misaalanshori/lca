@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 mod catalog;
+mod git;
 mod http;
 
 pub use catalog::{
@@ -26,6 +27,7 @@ pub use catalog::{
     cache_fresh, cache_path, fetch_catalog, merge_catalogs, official_source, parse_catalog,
     read_cache, write_cache,
 };
+pub use git::{parse_git_source, resolve_git};
 pub use http::plain_get;
 use http::{fetch_bytes, fetch_oci, http_client};
 
@@ -39,9 +41,14 @@ pub struct LockEntry {
     /// `sha256:<hex>` of the component bytes; every later load uses it
     /// and never re-resolves a moving tag (FR-DIST-8).
     pub digest: String,
-    /// What it was resolved from: an OCI reference, an HTTPS URL, or a
-    /// local path (ADR-0010: same machinery, different string).
+    /// What it was resolved from: an OCI reference, an HTTPS URL, a
+    /// local path, or a `git+...` source (ADR-0010: same machinery,
+    /// different string).
     pub source: String,
+    /// The pinned commit for git sources (gh #59); empty otherwise.
+    /// Old lockfiles load with empty (never pinned by commit).
+    #[serde(default)]
+    pub commit: String,
     /// Hash of the manifest-declared grant set the user approved
     /// (FR-DIST-7's comparison basis; ad hoc grants live in the user
     /// grant store, not here).
@@ -115,6 +122,10 @@ pub struct Resolved {
     pub digest: String,
     /// The reference the digest was resolved from.
     pub source: String,
+    /// The pinned commit for git sources (gh #59): empty otherwise.
+    /// The lockfile keeps the typed ref (branches advance on update)
+    /// and this pin separately, mirroring OCI's ref-plus-digest split.
+    pub commit: String,
     /// The package's `resources/` bag (ADR-0030): `(relative path, bytes)`.
     /// Empty when the package ships none.
     pub resources: Vec<(String, Vec<u8>)>,
@@ -445,6 +456,7 @@ impl InstallTree {
         let entry = LockEntry {
             digest: resolved.digest.clone(),
             source: resolved.source.clone(),
+            commit: resolved.commit.clone(),
             grant_hash: grant_hash(&manifest)?,
             version: value
                 .get("version")
@@ -708,7 +720,7 @@ pub fn read_archive(bytes: &[u8]) -> Result<Archive, Error> {
 
 /// Whether a manifest declares a non-empty `resources` bag (the data-only
 /// extension marker, ADR-0030).
-fn manifest_declares_resources(manifest: &str) -> bool {
+pub(crate) fn manifest_declares_resources(manifest: &str) -> bool {
     manifest
         .parse::<toml::Value>()
         .ok()
@@ -796,6 +808,9 @@ pub async fn resolve(source: &str, local_manifest: Option<&Path>) -> Result<Reso
     if source.starts_with("http://") || source.starts_with("https://") {
         return resolve_archive(source).await;
     }
+    if source.starts_with("git+") {
+        return resolve_git(source);
+    }
     let path = Path::new(source);
     if path.exists() {
         return resolve_local(path, local_manifest);
@@ -818,6 +833,7 @@ pub fn resolve_local(component: &Path, manifest_path: Option<&Path>) -> Result<R
         return Ok(Resolved {
             digest,
             source: component.display().to_string(),
+            commit: String::new(),
             manifest,
             component: Vec::new(),
             resources,
@@ -838,6 +854,7 @@ pub fn resolve_local(component: &Path, manifest_path: Option<&Path>) -> Result<R
     };
     Ok(Resolved {
         digest: Resolved::digest_of(&component_bytes),
+        commit: String::new(),
         source: component.display().to_string(),
         manifest,
         component: component_bytes,
@@ -847,7 +864,7 @@ pub fn resolve_local(component: &Path, manifest_path: Option<&Path>) -> Result<R
 
 /// Read a package's `resources/` directory into `(relative path, bytes)`.
 /// A missing directory is an empty bag, not an error.
-fn read_resource_dir(dir: &Path) -> Result<Vec<(String, Vec<u8>)>, Error> {
+pub(crate) fn read_resource_dir(dir: &Path) -> Result<Vec<(String, Vec<u8>)>, Error> {
     if !dir.is_dir() {
         return Ok(Vec::new());
     }
@@ -910,6 +927,8 @@ pub async fn resolve_archive(url: &str) -> Result<Resolved, Error> {
     Ok(Resolved {
         digest,
         source: url.to_string(),
+        commit: String::new(),
+
         manifest: archive.manifest,
         component: archive.component,
         resources: archive.resources,
@@ -1053,6 +1072,7 @@ pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
 
     Ok(Resolved {
         digest: Resolved::digest_of(&component),
+        commit: String::new(),
         source: reference.to_string(),
         manifest: extension_toml,
         component,

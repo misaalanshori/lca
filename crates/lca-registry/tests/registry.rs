@@ -84,6 +84,7 @@ fn install_refuses_a_manifest_name_that_escapes_the_tree() {
     let resolved = lca_registry::Resolved {
         digest: lca_registry::Resolved::digest_of(&component),
         source: "https://example.invalid/evil.zip".to_string(),
+        commit: String::new(),
         manifest: MANIFEST.replace("word-count", "../../escape"),
         component,
         resources: Vec::new(),
@@ -115,6 +116,7 @@ fn install_records_by_digest_and_roundtrips() {
         component: component(),
         digest: digest.clone(),
         source: "ghcr.io/example/word-count:abi-0.4".to_string(),
+        commit: String::new(),
         resources: Vec::new(),
     };
     let entry = tree.install(resolved).expect("install");
@@ -351,6 +353,7 @@ async fn an_interrupted_download_leaves_the_installed_version_working() {
     tree.install(lca_registry::Resolved {
         digest: digest.clone(),
         source: "https://example.invalid/word-count.zip".to_string(),
+        commit: String::new(),
         manifest: MANIFEST.to_string(),
         component: component(),
         resources: Vec::new(),
@@ -642,6 +645,7 @@ fn install_writes_declared_resources_and_refuses_an_undeclared_kind() {
         .install(lca_registry::Resolved {
             digest: lca_registry::Resolved::digest_of(&component()),
             source: "https://example.invalid/word-count.zip".to_string(),
+            commit: String::new(),
             manifest: MANIFEST_WITH_RESOURCES.to_string(),
             component: component(),
             resources: resources.clone(),
@@ -662,6 +666,7 @@ fn install_writes_declared_resources_and_refuses_an_undeclared_kind() {
         .install(lca_registry::Resolved {
             digest: lca_registry::Resolved::digest_of(&component()),
             source: "https://example.invalid/word-count.zip".to_string(),
+            commit: String::new(),
             manifest: MANIFEST_WITH_RESOURCES.to_string(),
             component: component(),
             resources: vec![("wads/doom.wad".to_string(), b"x".to_vec())],
@@ -727,6 +732,7 @@ resources = ["skills"]
     tree.install(lca_registry::Resolved {
         digest: lca_registry::Resolved::digest_of(&[]),
         source: "https://example.invalid/skill-pack.zip".to_string(),
+        commit: String::new(),
         manifest: DATA_MANIFEST.to_string(),
         component: Vec::new(),
         resources: resources.clone(),
@@ -954,4 +960,94 @@ fn catalog_cache_distinguishes_fresh_from_stale() {
         !lca_registry::cache_fresh(lca_registry::CATALOG_TTL + std::time::Duration::from_secs(1)),
         "past the TTL is stale"
     );
+}
+
+// Gh #59 helpers: a local git repo with two commits (v1 then v2 of
+// one component package), so git-source tests run offline. `None`
+// when git is missing: the resolver names the fix instead.
+fn git_repo(name: &str) -> Option<std::path::PathBuf> {
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return None;
+    }
+    let root = lca_testkit::scratch_path(&format!("lca-registry-{name}"));
+    let _ = std::fs::remove_dir_all(&root);
+    let dir = root.join("repo");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "git {args:?}: {:?}", out.stderr);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(dir.join("extension.toml"), MANIFEST).expect("manifest");
+    std::fs::write(dir.join("word-count.wasm"), b"v1-bytes").expect("component");
+    git(&["add", "."]);
+    git(&["commit", "-qm", "v1"]);
+    std::fs::write(dir.join("word-count.wasm"), b"v2-bytes-longer").expect("component");
+    git(&["add", "."]);
+    git(&["commit", "-qm", "v2"]);
+    Some(dir)
+}
+
+fn head_sha(dir: &std::path::Path) -> String {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .expect("git runs");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+// Verifies: gh #59 - `git+<path>` resolves the checkout like any
+// other source: digest-verified bytes, consent-ready manifest, and
+// the pinned commit recorded.
+#[tokio::test]
+async fn git_source_resolves_a_pinned_commit() {
+    let Some(repo) = git_repo("git-pin") else {
+        eprintln!("skip: git is not installed");
+        return;
+    };
+    let sha = head_sha(&repo);
+    let source = format!("git+{}", repo.display());
+    let resolved = lca_registry::resolve(&source, None)
+        .await
+        .expect("git resolves");
+    assert_eq!(resolved.digest, lca_registry::Resolved::digest_of(b"v2-bytes-longer"));
+    assert_eq!(resolved.commit, sha, "the HEAD commit pins the install");
+    assert!(resolved.source.starts_with("git+"), "{}", resolved.source);
+    assert!(resolved.manifest.contains("word-count"));
+}
+
+// Verifies: gh #59 - an explicit `#rev` pins that commit, not the
+// floating HEAD: the older digest comes back.
+#[tokio::test]
+async fn git_source_pins_an_explicit_rev() {
+    let Some(repo) = git_repo("git-rev") else {
+        eprintln!("skip: git is not installed");
+        return;
+    };
+    let out = std::process::Command::new("git")
+        .args(["rev-list", "--max-parents=0", "HEAD"])
+        .current_dir(&repo)
+        .output()
+        .expect("git runs");
+    let first = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let resolved = lca_registry::resolve(&format!("git+{}#{first}", repo.display()), None)
+        .await
+        .expect("resolves");
+    assert_eq!(resolved.digest, lca_registry::Resolved::digest_of(b"v1-bytes"));
+    assert_eq!(resolved.commit, first);
 }
