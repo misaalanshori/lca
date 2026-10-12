@@ -274,6 +274,18 @@ pub(crate) fn skills_roots(cwd: &Path, flags: &CliFlags) -> lca_tools::skills::S
     // gh #70: `--no-skills` empties discovery (explicit `--skill` paths
     // still load - pi's shape).
     let empty = std::path::PathBuf::new();
+    // Gh #59: per-package resource selections narrow which skill
+    // dirs load. Unparseable rules fall back to unfiltered (the
+    // `ext config` seam validates on write; hand edits that break
+    // parsing must not break discovery).
+    let resource_selection = crate::ext::read_all_selections(cwd)
+        .into_iter()
+        .filter_map(|(name, rules)| {
+            lca_tools::skills::parse_resource_selection(&rules)
+                .ok()
+                .map(|selection| (name, selection))
+        })
+        .collect();
     lca_tools::skills::SkillsRoots {
         project: if flags.no_skills {
             empty.clone()
@@ -292,6 +304,7 @@ pub(crate) fn skills_roots(cwd: &Path, flags: &CliFlags) -> lca_tools::skills::S
         },
         disabled,
         extra: flags.skill.clone(),
+        resource_selection,
     }
 }
 

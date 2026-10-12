@@ -335,6 +335,13 @@ resources = ["provider-presets", "skills"]
 
 The installer refuses a kind the manifest does not declare and shows the counts at consent. A kind is the first segment of the resource's path inside the bag: a folder's name (`skills` for `resources/skills/<name>/SKILL.md`), and for a file sitting directly in `resources/` its whole file name — `resources/provider-presets.toml` declares `"provider-presets.toml"`. The host reads `resources/skills/<name>/SKILL.md` (standard Claude format) into the prompt with attribution; other kinds are the extension's own business.
 
+Per project, `lca ext config <name>` narrows which resources load (gh #59, pi's package resource narrowing): `+path` includes a file exactly or a directory subtree, `-path` excludes the same shapes, `!pattern` excludes glob matches (`*` stays in its segment). With no `+` rules everything loads unless a `-`/`!` rule hits; with `+` rules a path must sit under one. The selection persists in the project's `.lca/extensions.toml` and never exposes a path the package does not ship:
+
+```
+lca ext config word-count            # show the current selection
+lca ext config word-count +skills -skills/private
+```
+
 For mutable, non-secret data, use `lca:host/state` - `read`/`write`/`delete`/`list-keys`, keyed by your own identity, size-capped, wiped on uninstall. Secrets go in `credentials`, never `state`.
 
 A state key is 1-200 characters of ASCII letters, digits, `.`, `_`, or `-`, because the host stores one file per key under your own namespace and a path separator would be a path surface. A key outside that set is refused with an `invalid` error naming the rule, not silently sanitized. The value is opaque bytes: up to 4 MB per key, 16 MB per namespace.
@@ -471,6 +478,8 @@ lca ext install ghcr.io/yourname/word-count:abi-0.2
 ```
 
 An OCI registry is not the only option. Any HTTPS host works: zip the component and `extension.toml` together with nothing else added, publish two URLs the same way, one for the fixed version and one that always points at the current release, and a user installs with `lca ext install https://yourhost.example/word-count-abi-0.2.zip`. The update mechanics are identical either way; see ADR-0010.
+
+A git repository works too (gh #59): `lca ext install git+https://git.example.com/team/pack` clones the repo, checks out the default branch, and pins the commit in the lockfile like an OCI digest pins bytes. Append `#<rev>` for a branch, tag, or commit (`git+https://...#v1.2.0`); the lockfile keeps the typed ref (branches advance on `ext update`) and the resolved commit separately. The checkout reads like a local package directory: one top-level `extension.toml`, at most one top-level `*.wasm`, `resources/**` below it — anything else a repo carries (README, CI configs) is ignored. The `git` command must be on PATH.
 
 ## Project-local extensions
 

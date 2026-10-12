@@ -188,6 +188,7 @@ fn skills_collect_extra_and_validate_paths() {
         extensions: std::path::PathBuf::new(),
         disabled: Vec::new(),
         extra: vec![root.join("my-skill"), root.join("solo.md")],
+        resource_selection: Default::default(),
     };
     let skills = lca_tools::skills::collect(&roots);
     let names: Vec<_> = skills.iter().map(|skill| skill.name.as_str()).collect();

@@ -211,6 +211,31 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
     assert!(text.contains(&reference), "{text}");
     assert!(text.contains(&url), "{text}");
 
+    // --- ext config: per-project resource selection (gh #59).
+    let output = sandbox.run(
+        Some(&model),
+        &["ext", "config", "skills", "+skills", "-skills/private"],
+    );
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("2 resource rules set"),
+        "{}",
+        stdout(&output)
+    );
+    let selection = std::fs::read_to_string(sandbox.project().join(".lca/extensions.toml"))
+        .expect("selection file");
+    assert!(selection.contains("+skills"), "{selection}");
+    let output = sandbox.run(Some(&model), &["ext", "config", "skills"]);
+    assert!(
+        stdout(&output).contains("-skills/private"),
+        "{}",
+        stdout(&output)
+    );
+    let output = sandbox.run(Some(&model), &["ext", "config", "no-such-ext"]);
+    assert_ne!(output.status.code(), Some(0), "unknown refuses");
+    let output = sandbox.run(Some(&model), &["ext", "config", "skills", "bogus"]);
+    assert_ne!(output.status.code(), Some(0), "bad rules refuse");
+
     // --- ext info: digest, consent, denial count (FR-EXT-9). No
     // denial yet: nothing has tried anything.
     let output = sandbox.run(Some(&model), &["ext", "info", "openai-compatible"]);

@@ -61,6 +61,17 @@ pub enum ExtCmd {
         #[command(subcommand)]
         cmd: StateCmd,
     },
+    /// Show or set an installed extension's per-project resource
+    /// selection (gh #59): `+path` includes, `-path` excludes,
+    /// `!glob` excludes matches. No filters prints the current set.
+    Config {
+        /// The installed extension to configure.
+        name: String,
+        /// The new filter list, replacing the current one. Leading
+        /// dashes are values here, not flags (`-skills/x` filters).
+        #[arg(allow_hyphen_values = true)]
+        filters: Vec<String>,
+    },
     /// List installed extensions.
     List,
 }
@@ -401,6 +412,7 @@ pub async fn run(cmd: ExtCmd, offline: bool) -> i32 {
         ExtCmd::Info { name } => info(&tree, &name),
         ExtCmd::Enable { name } => set_enabled(&name, true),
         ExtCmd::Disable { name } => set_enabled(&name, false),
+        ExtCmd::Config { name, filters } => config(&tree, &name, &filters),
         ExtCmd::State { cmd } => match cmd {
             StateCmd::Clear { name } => clear_state(&name),
         },
@@ -496,6 +508,172 @@ pub fn set_extension_enabled(
         "{} {name} for this project",
         if enabled { "enabled" } else { "disabled" }
     ))
+}
+
+/// One package's resource selection file (gh #59): project-scoped
+/// `.lca/extensions.toml`, `[extensions."<name>"] resources = [...]`.
+/// Missing file, missing package, or malformed TOML all mean
+/// unfiltered (an optional file must not break discovery).
+fn selection_path(project: &std::path::Path) -> std::path::PathBuf {
+    project.join(".lca").join("extensions.toml")
+}
+
+/// The raw rule strings for `name`, or empty when unfiltered.
+pub(crate) fn read_selection(project: &std::path::Path, name: &str) -> Vec<String> {
+    let text = std::fs::read_to_string(selection_path(project)).unwrap_or_default();
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    text.parse::<toml::Value>()
+        .ok()
+        .and_then(|value| {
+            value
+                .get("extensions")?
+                .get(name)?
+                .get("resources")?
+                .as_array()
+                .cloned()
+        })
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every package's raw rule strings for a project (gh #59): the map
+/// the skill roots builder parses into selections.
+pub(crate) fn read_all_selections(
+    project: &std::path::Path,
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    let text = std::fs::read_to_string(selection_path(project)).unwrap_or_default();
+    if text.trim().is_empty() {
+        return Default::default();
+    }
+    text.parse::<toml::Value>()
+        .ok()
+        .and_then(|value| value.get("extensions")?.as_table().cloned())
+        .map(|tables| {
+            tables
+                .into_iter()
+                .filter_map(|(name, table)| {
+                    table.get("resources")?.as_array().cloned().map(|items| {
+                        (
+                            name,
+                            items
+                                .iter()
+                                .filter_map(|item| item.as_str().map(str::to_string))
+                                .collect(),
+                        )
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Show or set one installed package's resource selection (gh #59):
+/// the working directory owns the project scope. Unknown packages
+/// refuse like the other project-scoped commands do.
+fn config(tree: &InstallTree, name: &str, filters: &[String]) -> i32 {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(err) => {
+            eprintln!("error: cannot read the working directory: {err}");
+            return crate::exit::INTERNAL;
+        }
+    };
+    match tree.entry(name) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            not_installed(tree, name);
+            return crate::exit::USAGE;
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            return crate::exit::INTERNAL;
+        }
+    }
+    config_in(&cwd, name, filters)
+}
+
+/// Show (`filters` empty) or replace (`filters` given) one package's
+/// resource selection, validating rules before anything is written.
+/// The testable core of `ExtCmd::Config`: the project is injected.
+fn config_in(project: &std::path::Path, name: &str, filters: &[String]) -> i32 {
+    if filters.is_empty() {
+        match read_selection(project, name) {
+            rules if rules.is_empty() => {
+                println!("{name}: no selection (everything loads)")
+            }
+            rules => {
+                println!("{name} resource selection:");
+                for rule in rules {
+                    println!("  {rule}");
+                }
+            }
+        }
+        return crate::exit::OK;
+    }
+    if let Err(err) = lca_tools::skills::parse_resource_selection(filters) {
+        eprintln!("error: {err}");
+        return crate::exit::USAGE;
+    }
+    let path = selection_path(project);
+    let mut value: toml::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| text.parse().ok())
+        .unwrap_or(toml::Value::Table(Default::default()));
+    if !value.is_table() {
+        value = toml::Value::Table(Default::default());
+    }
+    let table = value.as_table_mut().expect("tabled above");
+    let extensions = table
+        .entry("extensions".to_string())
+        .or_insert_with(|| toml::Value::Table(Default::default()));
+    if !extensions.is_table() {
+        *extensions = toml::Value::Table(Default::default());
+    }
+    let extensions = extensions.as_table_mut().expect("tabled above");
+    extensions.insert(
+        name.to_string(),
+        toml::Value::Table(
+            [(
+                "resources".to_string(),
+                toml::Value::Array(
+                    filters
+                        .iter()
+                        .map(|rule| toml::Value::String(rule.clone()))
+                        .collect(),
+                ),
+            )]
+            .into_iter()
+            .collect(),
+        ),
+    );
+    let text = toml::to_string_pretty(&value).unwrap_or_default();
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            eprintln!("error: cannot write {}", path.display());
+            return crate::exit::INTERNAL;
+        }
+    }
+    match std::fs::write(&path, text) {
+        Ok(()) => {
+            println!(
+                "{name}: {} resource rule{} set",
+                filters.len(),
+                if filters.len() == 1 { "" } else { "s" }
+            );
+            crate::exit::OK
+        }
+        Err(err) => {
+            eprintln!("error: cannot write {}: {err}", path.display());
+            crate::exit::INTERNAL
+        }
+    }
 }
 
 /// Validate, show consent, then write (FR-DIST-4's delete never needs
@@ -892,7 +1070,7 @@ fn list(tree: &InstallTree) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::parse_manifest_strict;
-    use super::{clear_state_in, installed_environment, state_bytes};
+    use super::{clear_state_in, config_in, installed_environment, read_selection, state_bytes};
 
     const VALID: &str = r#"name = "word-count"
 version = "1.0.0"
@@ -1121,5 +1299,45 @@ redirect_path = "/callback"
         // Clearing an absent bag is not an error.
         assert_eq!(clear_state_in(&root, "alpha"), crate::exit::OK);
         assert_eq!(state_bytes(&root, "beta"), 1);
+    }
+
+    // Verifies: gh #59 - resource selections persist per project and
+    // round-trip; bad rules never reach the file.
+    #[test]
+    fn extension_resource_selection_round_trips() {
+        let root = lca_testkit::scratch_path("ext-config-roundtrip");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        assert!(
+            read_selection(&root, "pack").is_empty(),
+            "missing file means unfiltered"
+        );
+        assert_eq!(
+            config_in(
+                &root,
+                "pack",
+                &["+skills".to_string(), "-skills/drop".to_string()]
+            ),
+            crate::exit::OK
+        );
+        assert_eq!(
+            read_selection(&root, "pack"),
+            vec!["+skills".to_string(), "-skills/drop".to_string()]
+        );
+        // A second package's rules land beside the first.
+        assert_eq!(
+            config_in(&root, "other", &["!skills/tmp*/**".to_string()]),
+            crate::exit::OK
+        );
+        assert_eq!(read_selection(&root, "pack").len(), 2, "untouched");
+        assert_eq!(
+            config_in(&root, "pack", &["bogus".to_string()]),
+            crate::exit::USAGE,
+            "a rule without a sigil refuses"
+        );
+        assert_eq!(
+            read_selection(&root, "pack").len(),
+            2,
+            "the refused write changed nothing"
+        );
     }
 }

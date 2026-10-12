@@ -28,6 +28,7 @@ fn roots(name: &str) -> (std::path::PathBuf, SkillsRoots) {
             extensions,
             disabled: Vec::new(),
             extra: Vec::new(),
+            resource_selection: Default::default(),
         },
     )
 }

@@ -534,6 +534,7 @@ fn skilled_executor(ws: &Path) -> ToolExecutor {
         extensions: ws.join("extensions"),
         disabled: Vec::new(),
         extra: Vec::new(),
+        resource_selection: Default::default(),
     }));
     exec
 }

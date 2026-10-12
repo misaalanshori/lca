@@ -37,6 +37,77 @@ pub struct SkillsRoots {
     /// One-run `--skill` paths (gh #70): files or directories, highest
     /// precedence (explicit beats discovered).
     pub extra: Vec<PathBuf>,
+    /// Per-package resource selections for this project (gh #59):
+    /// extension name -> its `+path`/`-path`/`!glob` rules. Absent
+    /// means unfiltered; only package skills consult it.
+    pub resource_selection: std::collections::BTreeMap<String, ResourceSelection>,
+}
+
+/// One package's resource selection (gh #59, pi's `packages.md`
+/// resource narrowing): rules over resource rel-paths
+/// (`skills/foo/SKILL.md`). `+path` includes a file exactly or a
+/// directory subtree, `-path` excludes the same shapes, `!pattern`
+/// excludes glob matches (`*` stays in its segment, via
+/// [`crate::glob_matcher`]).
+#[derive(Debug, Clone, Default)]
+pub struct ResourceSelection {
+    include: Vec<String>,
+    exclude: Vec<String>,
+    exclude_globs: Vec<globset::GlobMatcher>,
+}
+
+/// Parse rule strings; `Err` names the bad rule (the `ext config`
+/// seam refuses it before anything is written).
+pub fn parse_resource_selection(rules: &[String]) -> Result<ResourceSelection, String> {
+    let mut selection = ResourceSelection::default();
+    for rule in rules {
+        let mut chars = rule.chars();
+        let Some(sigil) = chars.next() else {
+            return Err("empty resource rule".to_string());
+        };
+        let path = chars.as_str();
+        if path.is_empty() {
+            return Err(format!("empty resource rule `{rule}`"));
+        }
+        match sigil {
+            '+' => selection.include.push(path.to_string()),
+            '-' => selection.exclude.push(path.to_string()),
+            '!' => selection.exclude_globs.push(
+                crate::glob_matcher(path).map_err(|err| format!("bad glob `{rule}`: {err}"))?,
+            ),
+            _ => {
+                return Err(format!(
+                    "resource rule `{rule}` needs a `+`, `-`, or `!` prefix"
+                ));
+            }
+        }
+    }
+    Ok(selection)
+}
+
+/// Whether resource `path` loads under `selection`: with no `+`
+/// rules, everything loads unless a `-`/`!` rule hits; with `+`
+/// rules, a path must sit under one (then still dodge `-`/`!`). A
+/// rule names a file exactly or a directory subtree (`+skills` opens
+/// the whole kind); `!` globs match whole paths.
+/// Filters narrow the package manifest: they never expose a path
+/// the package does not ship.
+pub fn resource_allowed(selection: &ResourceSelection, path: &str) -> bool {
+    fn under(rule: &str, path: &str) -> bool {
+        path == rule || path.starts_with(&format!("{rule}/"))
+    }
+    if selection.exclude.iter().any(|rule| under(rule, path))
+        || selection
+            .exclude_globs
+            .iter()
+            .any(|glob| glob.is_match(path))
+    {
+        return false;
+    }
+    if selection.include.is_empty() {
+        return true;
+    }
+    selection.include.iter().any(|rule| under(rule, path))
 }
 
 /// Where a skill came from, for attribution.
@@ -209,7 +280,33 @@ pub fn collect(roots: &SkillsRoots) -> Vec<Skill> {
                 .join("resources")
                 .join("skills");
             let source = SkillSource::Extension(name.clone());
-            add(skills_in(&dir, |_| source.clone()), &mut seen);
+            // Gh #59: the project's per-package selection narrows
+            // which skill files load, decided on the full `SKILL.md`
+            // path: `+skills` opens a kind, `+skills/foo` a subtree,
+            // `-`/`!` punch holes through either shape.
+            let selected = roots.resource_selection.get(&name);
+            let mut skills: Vec<String> = std::fs::read_dir(&dir)
+                .map(|entries| {
+                    entries
+                        .filter_map(|entry| entry.ok())
+                        .filter(|entry| entry.path().is_dir())
+                        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                        .filter(|skill| {
+                            selected.is_none_or(|rules| {
+                                resource_allowed(rules, &format!("skills/{skill}/SKILL.md"))
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            skills.sort();
+            for skill in skills {
+                let text = std::fs::read_to_string(dir.join(&skill).join("SKILL.md")).ok();
+                if let Some(text) = text {
+                    add(vec![parse_skill(&skill, source.clone(), &text)], &mut seen);
+                }
+            }
+            continue;
         }
     }
     skills
@@ -573,4 +670,47 @@ pub fn transform(
         messages.push(injection);
     }
     messages
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rules(list: &[&str]) -> ResourceSelection {
+        parse_resource_selection(&list.iter().map(|rule| rule.to_string()).collect::<Vec<_>>())
+            .expect("valid rules")
+    }
+
+    // Verifies: gh #59 - rule parsing: `+`/`-` exact paths, `!` globs;
+    // anything else is a named error for the `ext config` seam.
+    #[test]
+    fn resource_rules_parse_and_reject() {
+        assert!(parse_resource_selection(&[]).is_ok());
+        assert!(parse_resource_selection(&["x".to_string()]).is_err());
+        assert!(parse_resource_selection(&["".to_string()]).is_err());
+        assert!(parse_resource_selection(&["+".to_string()]).is_err());
+        assert!(parse_resource_selection(&["![invalid".to_string()]).is_err());
+        let parsed = rules(&["+skills/keep", "-skills/drop", "!skills/tmp*"]);
+        assert_eq!(parsed.include, vec!["skills/keep".to_string()]);
+        assert_eq!(parsed.exclude, vec!["skills/drop".to_string()]);
+        assert_eq!(parsed.exclude_globs.len(), 1);
+    }
+
+    // Verifies: gh #59 - matching: unfiltered loads all; `+` narrows
+    // to exact paths; `-`/`!` punch holes through either shape.
+    #[test]
+    fn resource_rules_allow_and_deny() {
+        let open = rules(&[]);
+        assert!(resource_allowed(&open, "skills/a/SKILL.md"));
+        let narrowed = rules(&["+skills/a", "+skills/b/SKILL.md"]);
+        assert!(resource_allowed(&narrowed, "skills/a/SKILL.md"));
+        assert!(resource_allowed(&narrowed, "skills/b/SKILL.md"));
+        assert!(!resource_allowed(&narrowed, "skills/c/SKILL.md"));
+        let holed = rules(&["-skills/a/SKILL.md", "!skills/tmp*/**"]);
+        assert!(!resource_allowed(&holed, "skills/a/SKILL.md"));
+        assert!(!resource_allowed(&holed, "skills/tmp-1/SKILL.md"));
+        assert!(resource_allowed(&holed, "skills/b/SKILL.md"));
+        let both = rules(&["+skills/a", "-skills/a/SKILL.md"]);
+        assert!(!resource_allowed(&both, "skills/a/SKILL.md"));
+    }
 }
