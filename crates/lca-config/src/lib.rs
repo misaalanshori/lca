@@ -15,9 +15,10 @@ mod keys;
 mod values;
 
 pub use keys::{
-    CODEBLOCK_BORDERS, DOUBLE_ESCAPE_ACTIONS, FULLSCREEN_EXIT_OUTPUTS, FULLSCREEN_SCROLLBARS,
-    KNOWN_KEYS, MERMAID_MODES, PERMISSION_MODES, SHELL_TOOLS, THINKING_LEVELS,
-    THINKING_VISIBILITIES, TREE_FILTER_MODES, TRUST_DEFAULTS, TypedValue, parse_typed,
+    CODEBLOCK_BORDERS, CustomCatalog, DOUBLE_ESCAPE_ACTIONS, FULLSCREEN_EXIT_OUTPUTS,
+    FULLSCREEN_SCROLLBARS, KNOWN_KEYS, MERMAID_MODES, PERMISSION_MODES, SHELL_TOOLS,
+    THINKING_LEVELS, THINKING_VISIBILITIES, TREE_FILTER_MODES, TRUST_DEFAULTS, TypedValue,
+    parse_typed,
 };
 
 use keys::csv;
@@ -197,6 +198,9 @@ pub struct Config {
     // overrides; empty means pi's built-in budgets (see
     // `DEFAULT_THINKING_BUDGETS`).
     thinking_budgets: BTreeMap<String, u64>,
+    // #227: user-configured custom extension catalogs, merged
+    // behind the official catalog with their own provenance.
+    extensions_catalogs: Vec<crate::keys::CustomCatalog>,
     sources: BTreeMap<String, MergeSource>,
 }
 
@@ -243,6 +247,7 @@ impl Default for Config {
             tool_edit_requires_read: false,
             cache_noise_floor_tokens: 1024,
             extensions_log_limit_bytes: 4096,
+            extensions_catalogs: Vec::new(),
             update_check: None,
             ui_fullscreen: None,
             ui_quiet_startup: "false".to_string(),
@@ -379,6 +384,7 @@ impl Config {
             "tool.edit_requires_read",
             "cache.noise_floor_tokens",
             "extensions.log_limit_bytes",
+            "extensions.catalogs",
             "update.check",
             "ui.fullscreen",
             "ui.quiet_startup",
@@ -524,6 +530,36 @@ impl Config {
                         map.insert(model.clone(), parsed);
                     }
                     this.apply(key.to_string(), TypedValue::ThinkingLevels(map), source)?;
+                }
+                "extensions.catalogs" => {
+                    let list = value.as_array().ok_or_else(|| {
+                        invalid(format!(
+                            "expected a list of catalog tables, got {}",
+                            type_name(&value)
+                        ))
+                    })?;
+                    let mut catalogs = Vec::new();
+                    for entry in list {
+                        let table = entry.as_table().ok_or_else(|| {
+                            invalid(format!(
+                                "each catalog must be a table, got {}",
+                                type_name(entry)
+                            ))
+                        })?;
+                        let field = |name: &str| {
+                            table
+                                .get(name)
+                                .and_then(|value| value.as_str())
+                                .map(str::to_string)
+                                .ok_or_else(|| invalid(format!("each catalog needs `{name}`")))
+                        };
+                        catalogs.push(crate::keys::CustomCatalog {
+                            id: field("id")?,
+                            name: field("name")?,
+                            url: field("url")?,
+                        });
+                    }
+                    this.apply(key.to_string(), TypedValue::Catalogs(catalogs), source)?;
                 }
                 "thinking.budgets" => {
                     let table = value.as_table().ok_or_else(|| {
@@ -933,6 +969,7 @@ impl Config {
             "tool.edit_requires_read",
             "cache.noise_floor_tokens",
             "extensions.log_limit_bytes",
+            "extensions.catalogs",
             "update.check",
             "ui.fullscreen",
             "ui.quiet_startup",
@@ -1024,6 +1061,7 @@ impl Config {
             ("extensions.log_limit_bytes", TypedValue::Count(v)) => {
                 self.extensions_log_limit_bytes = v
             }
+            ("extensions.catalogs", TypedValue::Catalogs(v)) => self.extensions_catalogs = v,
             ("update.check", TypedValue::Bool(v)) => self.update_check = Some(v),
             ("tool.edit_requires_read", TypedValue::Bool(v)) => self.tool_edit_requires_read = v,
             ("ui.fullscreen", TypedValue::Bool(v)) => self.ui_fullscreen = Some(v),

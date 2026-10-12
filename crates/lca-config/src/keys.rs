@@ -18,6 +18,20 @@ pub const SHELL_TOOLS: &[&str] = &["auto", "bash", "pwsh", "powershell", "cmd"];
 /// The `permissions.mode` vocabulary (ADR-0042).
 pub const PERMISSION_MODES: &[&str] = &["ask", "yolo"];
 
+/// One user-configured custom extension catalog (#227): an id, a
+/// display name, and the catalog document URL. Parsed from the
+/// `extensions.catalogs` array; the hub merges these behind the
+/// official catalog with their own provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomCatalog {
+    /// Stable id (`acme`); names the TTL cache file.
+    pub id: String,
+    /// Display name (`Acme Corp`).
+    pub name: String,
+    /// The catalog document URL.
+    pub url: String,
+}
+
 /// The shapes `markdown.codeblock_border` accepts (gh #32).
 pub const CODEBLOCK_BORDERS: &[&str] = &["full", "horizontal", "none"];
 
@@ -52,6 +66,8 @@ pub const TRUST_DEFAULTS: &[&str] = &["ask", "always", "never"];
 /// form because they are tables, not single values: `models.thinking_levels`
 /// (per-model lists), `thinking.budgets` (per-level token counts), and
 /// `permissions.proposals`.
+/// `extensions.catalogs` (custom catalog list) likewise has no flag or
+/// environment form: it is file-only.
 pub const KNOWN_KEYS: &[&str] = &[
     "provider",
     "model",
@@ -68,6 +84,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "tool.edit_requires_read",
     "cache.noise_floor_tokens",
     "extensions.log_limit_bytes",
+    "extensions.catalogs",
     "update.check",
     "ui.fullscreen",
     "ui.quiet_startup",
@@ -333,6 +350,9 @@ pub enum TypedValue {
     ThinkingLevels(BTreeMap<String, Vec<String>>),
     /// Per-level token-budget overrides (`thinking.budgets`).
     Budgets(BTreeMap<String, u64>),
+    /// User-configured custom extension catalogs
+    /// (`extensions.catalogs`, file-only).
+    Catalogs(Vec<CustomCatalog>),
     /// A validated non-negative integer.
     Count(u64),
     /// A validated floating-point number.

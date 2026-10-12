@@ -969,3 +969,57 @@ fn default_project_trust_defaults_to_ask_and_refuses_project_files() {
     .expect_err("project-file trust fallback is refused");
     assert!(err.to_string().contains("user file"), "{err}");
 }
+
+// Verifies: #227 - custom extension catalogs parse from the user file
+// as id/name/url tables; a missing field or a non-table entry is
+// refused at load. Empty by default.
+#[test]
+fn custom_extension_catalogs_parse_and_refuse_junk() {
+    assert!(
+        Config::defaults().extensions_catalogs().is_empty(),
+        "no custom catalogs by default"
+    );
+    let dir = scratch("extension-catalogs");
+    write(
+        &dir.join("user.toml"),
+        "[[extensions.catalogs]]\nid = \"acme\"\nname = \"Acme Corp\"\nurl = \"https://example.invalid/catalog.toml\"\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(
+        config.extensions_catalogs(),
+        &[lca_config::CustomCatalog {
+            id: "acme".to_string(),
+            name: "Acme Corp".to_string(),
+            url: "https://example.invalid/catalog.toml".to_string(),
+        }],
+        "the catalog reads back with all three fields"
+    );
+    write(
+        &dir.join("user.toml"),
+        "[[extensions.catalogs]]\nid = \"acme\"\nname = \"Acme Corp\"\n",
+    );
+    assert!(
+        Config::load(&lca_config::LoadInput {
+            user_file: Some(dir.join("user.toml")),
+            ..Default::default()
+        })
+        .is_err(),
+        "a catalog without a url is refused"
+    );
+    write(
+        &dir.join("user.toml"),
+        "[extensions]\ncatalogs = \"nope\"\n",
+    );
+    assert!(
+        Config::load(&lca_config::LoadInput {
+            user_file: Some(dir.join("user.toml")),
+            ..Default::default()
+        })
+        .is_err(),
+        "a non-list catalogs value is refused"
+    );
+}

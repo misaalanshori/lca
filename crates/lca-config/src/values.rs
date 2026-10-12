@@ -151,6 +151,13 @@ impl Config {
         self.extensions_log_limit_bytes
     }
 
+    /// User-configured custom extension catalogs
+    /// (`extensions.catalogs`): merged behind the official catalog
+    /// with their own provenance (#227).
+    pub fn extensions_catalogs(&self) -> &[crate::keys::CustomCatalog] {
+        &self.extensions_catalogs
+    }
+
     /// Fullscreen (alt-screen) renderer (`ui.fullscreen`), or `None` when
     /// neither the config nor the caller names one (gh #112).
     pub fn ui_fullscreen(&self) -> Option<bool> {
