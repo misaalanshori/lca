@@ -1178,3 +1178,26 @@ fn ctrl_c_clears_text_first_and_exits_when_empty() {
     assert_eq!(chat.handle_key("\x03"), Action::Continue);
     assert_eq!(chat.handle_key("\x03"), Action::Exit);
 }
+
+// Verifies: gh #76 - `one-at-a-time` follow-ups pop one per turn end
+// (today's behavior, pinned); `all` flushes every pending follow-up
+// as one joined submission, in order.
+#[test]
+fn follow_up_modes_flush_one_or_all() {
+    let mut chat = chat();
+    chat.follow_up_mode = lca_protocol::QueueMode::OneAtATime;
+    chat.queue_submit("first".into(), lca_protocol::SubmitMode::FollowUp);
+    chat.queue_submit("second".into(), lca_protocol::SubmitMode::FollowUp);
+    assert_eq!(chat.take_next_pending().as_deref(), Some("first"));
+    assert_eq!(chat.take_next_pending().as_deref(), Some("second"));
+
+    let mut chat = chat();
+    chat.follow_up_mode = lca_protocol::QueueMode::All;
+    chat.queue_submit("first".into(), lca_protocol::SubmitMode::FollowUp);
+    chat.queue_submit("second".into(), lca_protocol::SubmitMode::FollowUp);
+    assert_eq!(
+        chat.take_next_pending().as_deref(),
+        Some("first\n\nsecond")
+    );
+    assert!(chat.take_next_pending().is_none());
+}

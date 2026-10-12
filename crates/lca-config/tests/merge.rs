@@ -1048,3 +1048,37 @@ fn retry_max_delay_merges_and_defaults_to_sixty_seconds() {
     .expect("load");
     assert_eq!(config.provider_retry_max_delay_ms(), 5_000);
 }
+
+// Verifies: gh #76 - `queue.steering_mode` defaults to `all`
+// (today's flush) and `queue.follow_up_mode` to `one-at-a-time`
+// (today's one-per-turn); both merge, anything else refuses.
+#[test]
+fn queue_modes_default_merge_and_refuse() {
+    let dir = scratch("queue-modes");
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: None,
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.queue_steering_mode(), "all");
+    assert_eq!(config.queue_follow_up_mode(), "one-at-a-time");
+
+    write(
+        &dir.join("user.toml"),
+        "queue.steering_mode = \"one-at-a-time\"\nqueue.follow_up_mode = \"all\"\n",
+    );
+    let config = Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect("load");
+    assert_eq!(config.queue_steering_mode(), "one-at-a-time");
+    assert_eq!(config.queue_follow_up_mode(), "all");
+
+    write(&dir.join("user.toml"), "queue.steering_mode = \"sometimes\"\n");
+    Config::load(&lca_config::LoadInput {
+        user_file: Some(dir.join("user.toml")),
+        ..Default::default()
+    })
+    .expect_err("unknown mode refuses");
+}
