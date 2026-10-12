@@ -162,19 +162,14 @@ impl Chat {
 
         let mut dock = Vec::new();
 
-        // A separator above the dock: border dashes, with pi's spinner set
-        // into them while work runs (R2). The dashes carry the thinking
-        // level, the way pi colors its editor border.
+        // Air above the dock; the separator row itself moved down to
+        // cap the editor frame (gh #249), so spinner and dashes hug
+        // the text they belong to instead of floating over notices.
         dock.push(String::new());
         let border =
             crate::separator::separator_border(&self.theme, self.thinking_level().as_deref());
-        // The editor frame (gh #249): pi's rounded-corner input box.
-        // The top cap rounds the separator row (the working spinner
-        // and retry countdown ride it exactly as before); the text
-        // spans the full width with a 1-cell pad and no `>` marker, so
-        // terminal selection copies code cleanly; the bottom cap
-        // closes plain. No side pipes, by the same copying rule.
-        dock.push(self.separator.render_top(width, &self.theme, &border));
+        // (Separator air above; the top cap moved down to hug the
+        // editor, gh #249.)
 
         if let Some(notice) = &self.world.notice {
             // A notice can be multi-line (`/help`, `/hotkeys`, a command's
@@ -238,7 +233,14 @@ impl Chat {
             }
         }
 
-        // The editor: full-width text with a 1-cell pad (gh #249).
+        // The editor frame (gh #249): pi's rounded-corner input box
+        // hugging the text. The top cap rounds the separator row (the
+        // working spinner and retry countdown ride it exactly as
+        // before); the text spans the full width with a 1-cell pad
+        // and no `>` marker, so terminal selection copies code
+        // cleanly; the bottom cap closes plain. No side pipes, by the
+        // same copying rule.
+        dock.push(self.separator.render_top(width, &self.theme, &border));
         // The editor widget already pads by `padding_x` and paints
         // its own caret inside, so the dock adds exactly the frame's
         // cell; the marker rides inside, so geometry follows it.
@@ -282,10 +284,10 @@ impl Chat {
         let hint = usize::from(self.editor.popup_hint().is_some());
         let editor = self.editor.render(width.saturating_sub(1)).len();
         let footer = self.footer_lines(width).len();
-        // Gh #249: the popup floats above the editor frame; only
-        // the bottom cap sits between them, so it alone joins the
-        // block (the top cap rides above the popup).
-        let block = rows + hint + editor + footer + 1;
+        // Gh #249: the popup floats above the editor frame; both
+        // caps sit between it and the footer, so both join the block
+        // (the top cap rides directly under the popup).
+        let block = rows + hint + editor + footer + 2;
         let top = (height as usize).saturating_sub(block);
         Some((top as u16, (rows + hint) as u16))
     }
