@@ -946,8 +946,43 @@ pub async fn resolve_archive(url: &str) -> Result<Resolved, Error> {
     })
 }
 
+/// The official first-party repository: bare install names land here.
+const OFFICIAL_REGISTRY_HOST: &str = "ghcr.io";
+/// The official organization prefix bare names expand under.
+const OFFICIAL_REGISTRY_ORG: &str = "misaalanshori/lca";
+
+/// Expand an official shorthand (gh #252, Docker-style): `name` and
+/// `name:tag` (no slash) become `ghcr.io/misaalanshori/lca/name[:tag]`,
+/// the tag defaulting to the current ABI line. Anything with a slash
+/// (explicit OCI refs, archive URLs, git sources, local paths) — and
+/// digest pins (`@`), which never had shorthand — passes through
+/// untouched.
+pub fn expand_shorthand(source: &str) -> String {
+    if source.contains('/') || source.contains('\\') || source.contains('@') {
+        return source.to_string();
+    }
+    let (name, tag) = match source.split_once(':') {
+        Some((name, tag)) => (name, tag),
+        None => (source, ""),
+    };
+    // No image name (`:tag`): leave it for the reference parser's
+    // own error rather than inventing a path.
+    if name.is_empty() {
+        return source.to_string();
+    }
+    let tag = if tag.is_empty() {
+        format!("abi-{}", lca_ext_abi::ABI_VERSION)
+    } else {
+        tag.to_string()
+    };
+    format!("{OFFICIAL_REGISTRY_HOST}/{OFFICIAL_REGISTRY_ORG}/{name}:{tag}")
+}
+
 /// Split `host/repo/name:tag` (the tag comes after the last colon that
 /// sits past the last slash, so `host:5000/repo/name` parses right).
+/// Gh #252: a reference with no slash is an official first-party
+/// shorthand — it expands here first (see [`expand_shorthand`]), so
+/// this still only ever sees full references.
 fn split_oci_reference(reference: &str) -> Result<(&str, &str, &str), Error> {
     let slash = reference.find('/').ok_or_else(|| {
         Error::Invalid(format!(
@@ -981,7 +1016,9 @@ const WASM_LAYER: &str = "application/wasm";
 /// (the risk table's decision: authenticated registry support is the
 /// part that may slip, the HTTPS archive covers distribution meanwhile).
 pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
-    let (host, name, tag) = split_oci_reference(reference)?;
+    // Gh #252: bare names expand to the official repository first.
+    let expanded = expand_shorthand(reference);
+    let (host, name, tag) = split_oci_reference(&expanded)?;
     let tag = if tag.is_empty() { "latest" } else { tag };
     let client = http_client()?;
     let scheme = if host.starts_with("localhost") || host.starts_with("127.0.0.1") {

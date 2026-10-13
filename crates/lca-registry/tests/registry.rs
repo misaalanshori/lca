@@ -499,6 +499,8 @@ async fn oci_resolution_verifies_both_digests() {
 
 // Verifies: reference splitting survives registry hosts with ports and
 // untagged names (the update path rebuilds tags from these parts).
+// Gh #252: bare names now expand instead of erroring, so the error
+// case is the nameless `:tag`.
 #[test]
 fn oci_references_split_host_name_and_tag() {
     // Exercised through resolve_local's absence here: the splitter is
@@ -508,8 +510,8 @@ fn oci_references_split_host_name_and_tag() {
         .enable_all()
         .build()
         .expect("runtime")
-        .block_on(async { resolve_oci("no-slash-no-host").await })
-        .expect_err("no host");
+        .block_on(async { resolve_oci(":tag").await })
+        .expect_err("no name");
     assert!(err.to_string().contains("not an OCI reference"), "{err}");
 }
 
@@ -1056,4 +1058,31 @@ async fn git_source_pins_an_explicit_rev() {
         lca_registry::Resolved::digest_of(b"v1-bytes")
     );
     assert_eq!(resolved.commit, first);
+}
+
+// Verifies: gh #252 - bare names expand to the official repository
+// (default tag tracks the ABI line); explicit refs pass through.
+#[test]
+fn bare_names_expand_to_the_official_repository() {
+    assert_eq!(
+        lca_registry::expand_shorthand("antigravity"),
+        "ghcr.io/misaalanshori/lca/antigravity:abi-0.6"
+    );
+    assert_eq!(
+        lca_registry::expand_shorthand("antigravity:unstable"),
+        "ghcr.io/misaalanshori/lca/antigravity:unstable"
+    );
+    assert_eq!(
+        lca_registry::expand_shorthand("antigravity:1.0.1"),
+        "ghcr.io/misaalanshori/lca/antigravity:1.0.1"
+    );
+    for untouched in [
+        "ghcr.io/misaalanshori/lca/antigravity:abi-0.6",
+        "quay.io/team/ext:1.0",
+        "https://example.invalid/ext.zip",
+        "./path/to/ext.wasm",
+        "git+https://example.invalid/repo",
+    ] {
+        assert_eq!(lca_registry::expand_shorthand(untouched), untouched);
+    }
 }

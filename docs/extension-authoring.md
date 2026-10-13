@@ -477,6 +477,13 @@ Users install with the reference.
 lca ext install ghcr.io/yourname/word-count:abi-0.2
 ```
 
+First-party extensions take the shorthand (gh #252): a bare name
+(`lca ext install antigravity`) or name-plus-tag
+(`lca ext install antigravity:unstable`) expands to the official
+repository (`ghcr.io/misaalanshori/lca/<name>[:tag]`), the tag
+defaulting to the current ABI line. Anything with a slash stays
+exact.
+
 An OCI registry is not the only option. Any HTTPS host works: zip the component and `extension.toml` together with nothing else added, publish two URLs the same way, one for the fixed version and one that always points at the current release, and a user installs with `lca ext install https://yourhost.example/word-count-abi-0.2.zip`. The update mechanics are identical either way; see ADR-0010.
 
 A git repository works too (gh #59): `lca ext install git+https://git.example.com/team/pack` clones the repo, checks out the default branch, and pins the commit in the lockfile like an OCI digest pins bytes. Append `#<rev>` for a branch, tag, or commit (`git+https://...#v1.2.0`); the lockfile keeps the typed ref (branches advance on `ext update`) and the resolved commit separately. The checkout reads like a local package directory: one top-level `extension.toml`, at most one top-level `*.wasm`, `resources/**` below it — anything else a repo carries (README, CI configs) is ignored. The `git` command must be on PATH.
