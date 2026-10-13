@@ -33,6 +33,7 @@ openai-compatible = { path = "../../extensions/openai-compatible" }
 lca-ext-native = { path = "../lca-ext-native" }
 lca-testkit = { path = "../lca-testkit" }
 tokio.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

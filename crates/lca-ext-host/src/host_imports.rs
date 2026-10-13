@@ -252,17 +252,41 @@ impl provider_host::net::Host for HostState {
         headers: Vec<(String, String)>,
         body: Option<Vec<u8>>,
     ) -> Result<u32, provider_host::net::Error> {
+        // Gh #258: method plus redacted URL (never headers or body).
+        lca_debug::wasm::event(
+            "import.net.request",
+            &format!("{} {}", method, lca_debug::redact::redact_url(&url)),
+        );
+        let started = std::time::Instant::now();
         let refs: Vec<(&str, &str)> = headers
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
             .collect();
-        self.cap
+        let outcome = self
+            .cap
             .net_request(&method, &url, &refs, body.as_deref())
-            .map_err(net_error)
+            .map_err(net_error);
+        lca_debug::wasm::event(
+            "import.net.done",
+            &format!(
+                "ms={} ok={}",
+                started.elapsed().as_millis(),
+                outcome.is_ok()
+            ),
+        );
+        outcome
     }
 
     fn response_status(&mut self, handle: u32) -> Result<u16, provider_host::net::Error> {
-        self.cap.net_response_status(handle).map_err(net_error)
+        // Gh #258: handle plus status (bodies stay behind their own read).
+        let status = self.cap.net_response_status(handle).map_err(net_error);
+        if let Ok(code) = status {
+            lca_debug::wasm::event(
+                "import.net.status",
+                &format!("handle={handle} status={code}"),
+            );
+        }
+        status
     }
 
     fn response_headers(
@@ -315,16 +339,25 @@ impl provider_host::credentials::Host for HostState {
     fn get(&mut self, key: String) -> Option<String> {
         // Denial reads as absence (capability catalog): checking for an
         // existing login needs no denial/absence distinction.
-        self.cap.credentials_get(&key).unwrap_or(None)
+        let value = self.cap.credentials_get(&key).unwrap_or(None);
+        // Gh #258: the key name plus a prefix (never the secret).
+        lca_debug::wasm::event(
+            "import.credentials.get",
+            &lca_debug::redact::redact_credential(&key, value.as_deref()),
+        );
+        value
     }
 
     fn set(&mut self, key: String, value: String) -> Result<(), provider_host::credentials::Error> {
+        // Gh #258: the key name only (never the value).
+        lca_debug::wasm::event("import.credentials.set", &format!("key={key}"));
         self.cap
             .credentials_set(&key, &value)
             .map_err(credentials_error)
     }
 
     fn delete(&mut self, key: String) -> Result<(), provider_host::credentials::Error> {
+        lca_debug::wasm::event("import.credentials.delete", &format!("key={key}"));
         self.cap.credentials_delete(&key).map_err(credentials_error)
     }
 }
@@ -480,7 +513,16 @@ pub(super) fn from_wit_identity(outcome: wit_identity::IdentityOutcome) -> Ident
 
 impl lca_ext_abi::host::tool::lca::host::fs::Host for HostState {
     fn read(&mut self, scope: String, path: String) -> Result<Vec<u8>, FsError> {
-        self.cap.fs_read(&scope, &path).map_err(fs_error)
+        // Gh #258: scope and path plus the byte count (never bytes).
+        let result = self.cap.fs_read(&scope, &path).map_err(fs_error);
+        lca_debug::wasm::event(
+            "import.fs.read",
+            &format!(
+                "scope={scope} path={path} bytes={}",
+                result.as_deref().map(|bytes| bytes.len()).unwrap_or(0)
+            ),
+        );
+        result
     }
 
     fn write(&mut self, scope: String, path: String, bytes: Vec<u8>) -> Result<(), FsError> {
@@ -510,6 +552,12 @@ impl lca_ext_abi::host::tool::lca::host::process::Host for HostState {
         args: Vec<String>,
         cwd_scope: String,
     ) -> Result<u32, ProcessError> {
+        // Gh #258: the program plus the argument count (arguments
+        // themselves may carry tokens).
+        lca_debug::wasm::event(
+            "import.process.spawn",
+            &format!("program={program} args={} scope={cwd_scope}", args.len()),
+        );
         self.cap
             .process_spawn(&program, &args, &cwd_scope)
             .map_err(process_error)

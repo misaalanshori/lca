@@ -99,6 +99,12 @@ pub fn parse_catalog(text: &str) -> Result<Vec<CatalogEntry>, Error> {
                 .unwrap_or_default(),
         });
     }
+    // Gh #258: the parse (entry count, never catalog text).
+    lca_debug::emit(
+        lca_debug::Domain::Registry,
+        "catalog.parse",
+        &format!("entries={}", entries.len()),
+    );
     Ok(entries)
 }
 

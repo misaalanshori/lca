@@ -199,6 +199,18 @@ impl Capabilities {
         headers: &[(&str, &str)],
         body: Option<&[u8]>,
     ) -> Result<u32, CapabilityError> {
+        // Gh #258: the wire tap (method + redacted URL + body length;
+        // headers and bodies stay out — extensions set secrets there).
+        lca_debug::net::event(
+            "http.request",
+            &format!(
+                "{} {} body_bytes={}",
+                method,
+                lca_debug::redact::redact_url(url),
+                body.map(|body| body.len()).unwrap_or(0)
+            ),
+        );
+        let started = std::time::Instant::now();
         let http_method = hyper::Method::from_bytes(method.as_bytes())
             .map_err(|err| CapabilityError::Invalid(format!("bad method {method}: {err}")))?;
         let mut builder = hyper::Request::builder().method(http_method).uri(url);
@@ -245,6 +257,12 @@ impl Capabilities {
             Err(cancelled) => return Err(cancelled),
         };
         let status = response.status().as_u16();
+        // Gh #258: status plus latency (headers and body stay out;
+        // bodies stream and may carry secrets).
+        lca_debug::net::event(
+            "http.response",
+            &format!("status={status} ms={}", started.elapsed().as_millis()),
+        );
         let response_headers = response
             .headers()
             .iter()

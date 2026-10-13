@@ -38,6 +38,7 @@ lca-ext-abi = { path = "../lca-ext-abi" }
 
 [dev-dependencies]
 lca-testkit = { path = "../lca-testkit" }
+tracing.workspace = true
 
 [lints]
 workspace = true

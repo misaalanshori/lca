@@ -831,6 +831,16 @@ pub fn resolve_local(component: &Path, manifest_path: Option<&Path>) -> Result<R
         let manifest = std::fs::read_to_string(&manifest_path)?;
         let resources = read_resource_dir(&component.join("resources"))?;
         let digest = Resolved::digest_of_package(&manifest, &resources);
+        // Gh #258: the resolution (digest prefix, never content).
+        lca_debug::emit(
+            lca_debug::Domain::Registry,
+            "resolve.local",
+            &format!(
+                "digest={} path={}",
+                digest.chars().take(12).collect::<String>(),
+                component.display()
+            ),
+        );
         return Ok(Resolved {
             digest,
             source: component.display().to_string(),

@@ -93,6 +93,7 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 lca-testkit = { path = "../lca-testkit" }
+tracing.workspace = true
 # tokio-rustls is test-only (gh #94): the loopback TLS server behind
 # the offline HTTPS rows.
 tokio-rustls.workspace = true

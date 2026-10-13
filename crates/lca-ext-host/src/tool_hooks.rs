@@ -54,10 +54,23 @@ pub(super) fn execute_work(
         extras: Vec::new(),
     };
     let _inside_guest = inner.in_flight_guard();
+    // Gh #258: the guest-export crossing (name and timing, never
+    // arguments or results — both cross trust boundaries).
+    let tool_name = guest_call.name.clone();
+    lca_debug::wasm::event("export.tools.execute", &format!("name={tool_name}"));
+    let started = std::time::Instant::now();
     let guest_result = instance
         .lca_ext_execute()
         .call_run(&mut store, &guest_call)
         .map_err(|err| inner.classify(err))?;
+    lca_debug::wasm::event(
+        "export.tools.done",
+        &format!(
+            "name={tool_name} ms={} status={}",
+            started.elapsed().as_millis(),
+            guest_result.status
+        ),
+    );
     inner.checkin_tool(store, instance);
     Ok(lca_protocol::ToolResult {
         call_id: guest_result.call_id,

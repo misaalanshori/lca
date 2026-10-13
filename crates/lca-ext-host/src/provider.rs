@@ -17,6 +17,19 @@ pub(super) fn provider_models_work(
     settings: &[(String, String)],
 ) -> Result<Vec<ModelInfo>, CallError> {
     let (mut store, instance) = inner.checkout_provider()?;
+    // Gh #258: the guest-export crossing (setting names, never values).
+    lca_debug::wasm::event(
+        "export.models.list",
+        &format!(
+            "settings=[{}]",
+            settings
+                .iter()
+                .map(|(key, _)| key.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+    );
+    let started = std::time::Instant::now();
     // The same opaque settings `complete` gets in its request `extras`
     // (ADR-0035): one source of truth for the extension's configuration.
     let pairs: Vec<wit_models::ExtraPair> = settings
@@ -30,6 +43,14 @@ pub(super) fn provider_models_work(
         .lca_ext_provider_models()
         .call_list_models(&mut store, &pairs)
         .map_err(|err| inner.classify(err))?;
+    lca_debug::wasm::event(
+        "export.models.done",
+        &format!(
+            "count={} ms={}",
+            models.len(),
+            started.elapsed().as_millis()
+        ),
+    );
     inner.checkin_provider(store, instance);
     Ok(models
         .into_iter()
