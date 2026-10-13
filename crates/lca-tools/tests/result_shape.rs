@@ -2,7 +2,7 @@
 //! what an executed tool records and how oversized output reads.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use lca_protocol::{ToolCall, ToolResultStatus};
