@@ -708,6 +708,7 @@ The dependency list stays short on purpose. Each entry below states what it does
 | globset | `*`-stays-in-segment glob matching for the `glob` tool (#119) | The hand-rolled matcher knew no character classes; aho-corasick/bstr footprint |
 | criterion | Benchmark harness for the NFR-1 through NFR-7 and NFR-29 performance gates, and the cache-hit-ratio benchmark | Custom timing harness over `std::time` |
 | cargo-deny | License and advisory checks | `cargo audit` |
+| html2md | HTML-to-Markdown conversion for the webfetch tool (gh #222) | A correct converter needs a real HTML parser (tag soup, entities, nested lists/tables); hand-rolling is a correctness trap. Footprint: html5ever, markup5ever_rcdom, percent-encoding (regex already in tree). Proven wasm32-wasip2-clean; script/style/chrome stripping stays a hand-rolled pre-pass (html2md does not strip). |
 
 Build-time tools do not ship in the binary. Only the library crates in the top half of the table become part of the release artifact.
 
