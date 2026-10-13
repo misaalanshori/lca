@@ -281,3 +281,11 @@ mod gh212_panel_toggle_traps_exit;
 // GitHub #81: an induced panic writes the crash file with its rows.
 #[path = "gh81-crash-log-writes-a-file.rs"]
 mod gh81_crash_log_writes_a_file;
+// GitHub #253: a compacted session survives the Display read (live
+// drive: turns + /compact + /rename listed "No sessions yet").
+#[path = "253-display-read-of-compacted-log.rs"]
+mod display_read_of_compacted_log;
+// GitHub #255: the export document imports back (export wrote a JSON
+// document, import wanted raw JSONL).
+#[path = "255-export-import-round-trip.rs"]
+mod export_import_round_trip;

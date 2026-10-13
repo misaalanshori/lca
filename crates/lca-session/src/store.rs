@@ -69,7 +69,9 @@ pub struct SessionSummary {
     pub created_ms: u64,
     /// Last modification, epoch milliseconds.
     pub modified_ms: u64,
-    /// Number of user and assistant messages in this session's own log.
+    /// Number of user and assistant messages in this session's own log
+    /// (compaction summaries count too: they are resumable content,
+    /// gh #253).
     pub message_count: usize,
     /// Parent session, when forked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -906,6 +908,13 @@ impl SessionStore {
                             r,
                             lca_protocol::Record::User { .. }
                                 | lca_protocol::Record::Assistant { .. }
+                                // gh #253: a compaction summary is resumable
+                                // content — continuing the session appends
+                                // after it. Counting only User/Assistant
+                                // skipped compacted sessions with nothing
+                                // after the compaction (count 0) even though
+                                // their summary lists and resumes.
+                                | lca_protocol::Record::Compaction { .. }
                         )
                     })
                     .count();
@@ -962,17 +971,33 @@ impl SessionStore {
         Ok(sessions)
     }
 
-    /// Import JSONL lines (one record per line, the log's own shape)
-    /// as a new session (gh #57's `/import`): every line parses
-    /// before anything is created, so a corrupt line aborts with its
-    /// line number and no half-imported session exists. The first
-    /// line must open the session (`session-start`).
-    pub fn import_jsonl(
-        &self,
-        project_dir: &Path,
-        title: &str,
+    /// Parse an import file's records in either accepted shape (gh #255):
+    /// Parse an import file's records in either accepted shape (gh #255):
+    /// the export document (`{"records": [...]}`) or raw JSONL lines.
+    /// Returns the records plus the position word error messages use
+    /// (`"line"` for JSONL, `"record"` for the document, whose pretty
+    /// printing makes line numbers meaningless). Detection is strict:
+    /// the whole file must parse as an object with a `records` array to
+    /// take the document path, else every line must parse as a record —
+    /// a half-document shape fails loudly rather than half-importing.
+    fn parse_import_records(
         lines: &[&str],
-    ) -> std::result::Result<Session, String> {
+    ) -> std::result::Result<(Vec<lca_protocol::Record>, &'static str), String> {
+        let joined = lines.join("\n");
+        if let Ok(document) = serde_json::from_str::<serde_json::Value>(&joined)
+            && let Some(array) = document.get("records").and_then(|value| value.as_array())
+        {
+            let mut records = Vec::with_capacity(array.len());
+            for (index, entry) in array.iter().enumerate() {
+                match serde_json::from_value::<lca_protocol::Record>(entry.clone()) {
+                    Ok(record) => records.push(record),
+                    Err(err) => {
+                        return Err(format!("record {}: {err}", index + 1));
+                    }
+                }
+            }
+            return Ok((records, "record"));
+        }
         let mut records = Vec::with_capacity(lines.len());
         for (index, line) in lines.iter().enumerate() {
             if line.trim().is_empty() {
@@ -982,9 +1007,32 @@ impl SessionStore {
                 .map(|record| records.push(record))
                 .map_err(|err| format!("line {}: {err}", index + 1))?;
         }
+        Ok((records, "line"))
+    }
+
+    /// Import sessions from a file (gh #57's `/import`, gh #255): raw
+    /// JSONL lines (one record per line, the log's own shape) or the
+    /// export document this store writes. Every record parses before
+    /// anything is created, so a corrupt entry aborts with its
+    /// position and no half-imported session exists. The first
+    /// record must open the session (`session-start`).
+    ///
+    /// Attachments travel as path references, not bytes, so hashes
+    /// the new session cannot resolve stay dangling exactly like a
+    /// raw-JSONL import of the same records; restoring bytes is out
+    /// of scope.
+    pub fn import_jsonl(
+        &self,
+        project_dir: &Path,
+        title: &str,
+        lines: &[&str],
+    ) -> std::result::Result<Session, String> {
+        let (records, shape) = Self::parse_import_records(lines)?;
         match records.first() {
             Some(lca_protocol::Record::SessionStart { .. }) => {}
-            _ => return Err("line 1: a session must open with session-start".to_string()),
+            _ => {
+                return Err(format!("{shape} 1: a session must open with session-start"));
+            }
         }
         let session = self
             .create_session(project_dir, title)
