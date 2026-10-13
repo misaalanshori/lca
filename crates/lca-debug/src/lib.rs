@@ -4,7 +4,8 @@
 //! off (the stable line) every emitter compiles to an empty inline
 //! body and neither `tracing` nor `tracing-subscriber` links in. With
 //! it on (unstable and development builds) the domain emitters write
-//! structured events to the two rotating debug files (see [`init`]).
+//! structured events to the two rotating debug files (see `init`,
+//! available with the feature).
 //!
 //! Nothing emits a secret: every value crossing into a trace goes
 //! through [`redact`] first (AGENTS.md Rule 6).
