@@ -1336,6 +1336,7 @@ dependencies = [
  "compaction-default",
  "lca-config",
  "lca-core",
+ "lca-debug",
  "lca-ext-abi",
  "lca-ext-host",
  "lca-ext-native",
@@ -1375,17 +1376,26 @@ dependencies = [
 name = "lca-core"
 version = "0.6.0"
 dependencies = [
+ "lca-debug",
  "lca-ext-abi",
  "lca-permissions",
  "lca-protocol",
  "lca-provider",
  "lca-session",
  "lca-tools",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "lca-debug"
+version = "0.6.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -1402,6 +1412,7 @@ name = "lca-ext-host"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "lca-debug",
  "lca-ext-abi",
  "lca-permissions",
  "lca-protocol",
@@ -1445,11 +1456,13 @@ name = "lca-permissions"
 version = "0.6.0"
 dependencies = [
  "ipnet",
+ "lca-debug",
  "lca-protocol",
  "serde",
  "serde_json",
  "sha2",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -1479,6 +1492,7 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "lca-debug",
  "lca-ext-abi",
  "serde",
  "serde_json",
@@ -1493,6 +1507,7 @@ dependencies = [
 name = "lca-session"
 version = "0.6.0"
 dependencies = [
+ "lca-debug",
  "lca-ext-abi",
  "lca-protocol",
  "serde",
@@ -1511,6 +1526,7 @@ dependencies = [
  "hyper-util",
  "ignore",
  "image",
+ "lca-debug",
  "lca-ext-abi",
  "lca-permissions",
  "lca-protocol",
