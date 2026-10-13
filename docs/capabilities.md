@@ -98,6 +98,12 @@ Resolution goes through preopened directory handles. The host never joins a gues
 
 Consent text names the scope in plain words: "Read files in this project. Read and write its own private data directory. Read your configuration directory."
 
+Scope grants are unchanged by the sensitive-read escalation (gh #215):
+that escalation lives in the model tool-call permission path, where
+credential filenames (`.env`, private keys, tokens) prompt even
+in-workspace. Extension scope reads carry the install-time grant as
+before.
+
 On denial: the call returns a permission error. A path escape attempt is recorded separately from an ordinary denial, because it indicates either a defect or an attack.
 
 Beyond the four scopes, a user can attach an additional path as an ad hoc grant, outside the vocabulary entirely, at install time or later through the extension's settings. The manifest cannot request this; it is something the user adds, deliberately, when a specific extension needs a specific path the fixed vocabulary doesn't name. The consent screen for an ad hoc grant names the exact path and mode, never a pattern, since there is no vocabulary entry to summarize it under.

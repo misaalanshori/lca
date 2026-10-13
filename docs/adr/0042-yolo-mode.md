@@ -108,3 +108,14 @@ quieter. Evidence that the read cut leaks something a user cared about,
 which would argue for narrowing it to in-project-plus-temp rather than
 reinstating the prompt. A request for per-path read rules would be a rule
 feature (already present), not a mode.
+
+## Annotation 2026-10-13 (gh #215): the read cut leaked credentials
+
+The second revisit condition fired: credential filenames (`.env`, private
+keys, tokens) read without prompting under the fatigue cut, so the cut
+now excludes the sensitive inventory and those reads prompt even
+in-workspace. Yolo semantics are unchanged — yolo answers the new
+prompts as "always, for this exact pattern" like any other — except
+that each auto-approved sensitive read writes a security notice to
+`lca.log`, because credentials reaching a provider on a mode flag deserve
+a paper trail. Deny rules still outrank the mode, as before.

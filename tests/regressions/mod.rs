@@ -289,3 +289,7 @@ mod display_read_of_compacted_log;
 // document, import wanted raw JSONL).
 #[path = "255-export-import-round-trip.rs"]
 mod export_import_round_trip;
+// GitHub #215: credential filenames read silently under the fatigue
+// cut (live risk: `.env` exfiltrated with no confirmation).
+#[path = "215-sensitive-read-escalation.rs"]
+mod sensitive_read_escalation;

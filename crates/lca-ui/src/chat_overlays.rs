@@ -18,6 +18,16 @@ const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
 const HINT_SETTINGS: &str = "↑↓ move · enter/←→ change · q/esc close";
 const HINT_SETTINGS_EDIT: &str = "type the value · enter apply · esc cancel";
 const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
+
+/// The sensitive filename in a permission modal's action text, if the
+/// modal asks for a sensitive read (gh #215): the action text is the
+/// permission action's own display (`read <path>`), so the `read `
+/// prefix peels exactly and the file name decides.
+pub(crate) fn sensitive_read_name(action: &str) -> Option<String> {
+    let path = std::path::Path::new(action.strip_prefix("read ")?);
+    let name = path.file_name()?.to_str()?;
+    lca_permissions::sensitive::is_sensitive(path).then(|| name.to_string())
+}
 const HINT_SCOPED_MODELS: &str = "↑↓ move · space toggle · a all · enter save · esc close";
 
 /// The modal's title from one rendered line (gh #172): a bordered box
@@ -837,6 +847,15 @@ impl Chat {
                 format!("  {}", modal.action),
                 String::new(),
             ];
+            // Gh #215: a sensitive read names its security boundary —
+            // allowing it exposes the file's contents to the active
+            // model provider.
+            if let Some(name) = sensitive_read_name(&modal.action) {
+                body.push(format!(
+                    "  ⚠️ Sensitive file read requested ({name}) — allowing this exposes its contents to the active model provider."
+                ));
+                body.push(String::new());
+            }
             if let Some(deadline) = modal.deadline {
                 let seconds = deadline
                     .saturating_duration_since(std::time::Instant::now())

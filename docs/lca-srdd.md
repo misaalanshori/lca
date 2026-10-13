@@ -440,6 +440,8 @@ FR-PERM-26. WHILE yolo mode is active, the agent SHALL show a persistent status 
 
 FR-PERM-27. The agent SHALL NOT prompt for a read, list, glob, or grep outside the workspace root in any mode, and SHALL write no `permission` record for one; a deny rule SHALL still refuse it (ADR-0042).
 
+Annotation, 2026-10-13 (gh #215), on FR-PERM-27: the fatigue cut no longer covers credential filenames. A read whose file name matches the sensitive inventory (`*.env`, `*.env.*`, `.envrc`, `*.pem`, `*.key`, `*.pkcs12`, `*.pfx`, `*.p12`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `id_dsa*`, `credentials.json`, `service-account*.json`, `.npmrc`, `.pypirc`, `.netrc` — `crates/lca-permissions/src/sensitive.rs`) prompts even in-workspace, unless exempt (`*.env.example`, `*.env.sample`, `*.env.template`, `*.env.dist`) or covered by an explicit allow rule. Deny rules still win silently; yolo auto-approves and logs a security notice in `lca.log`; the modal badges the read with its security boundary.
+
 FR-PERM-24. WHEN the user runs the trust command, the agent SHALL offer remembering the decision for the project or applying it only for the session, and SHALL show a trust prompt at startup only when the project carries a `.lca/config.toml` that is not yet trusted.
 
 ### Providers

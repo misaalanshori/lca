@@ -13,6 +13,7 @@ mod action;
 mod net;
 mod rules;
 mod scope;
+pub mod sensitive;
 pub mod shell;
 mod trust;
 
@@ -579,7 +580,13 @@ impl GrantStore {
                     }
                 }
                 Action::WritePath { path } | Action::ReadPath { path } => {
-                    if inside(path) {
+                    // Gh #215: folder trust never covers credential
+                    // filenames — a sensitive read falls through to the
+                    // prompt (or yolo/log) below, even in-workspace.
+                    if inside(path)
+                        && !matches!(action, Action::ReadPath { .. }
+                            if sensitive::is_sensitive(path))
+                    {
                         return true;
                     }
                 }
@@ -950,8 +957,10 @@ pub fn authorize(
 
     // R3's fatigue cut: a read outside the workspace never prompts. The
     // model needs to find its bearings, and a deny rule has already had its
-    // say above. Nothing is recorded: no user decision was made.
-    if matches!(action, Action::ReadPath { .. }) {
+    // say above. Nothing is recorded: no user decision was made. Gh #215:
+    // sensitive filenames skip the cut — credential reads prompt even
+    // in-workspace, falling through to yolo or the modal below.
+    if matches!(action, Action::ReadPath { path } if !sensitive::is_sensitive(path)) {
         return Ok(Outcome {
             allowed: true,
             prompted: false,
@@ -968,6 +977,15 @@ pub fn authorize(
     // had approved each action. `yolo: true` tells the caller to record it.
     if store.permission_mode() == PermissionMode::Yolo {
         let pattern = action.suggested_pattern();
+        // Gh #215: yolo auto-approves sensitive reads like any other
+        // prompt, but the approval is loud in the log — credentials
+        // reaching a provider on a mode flag deserve a paper trail.
+        if matches!(action, Action::ReadPath { path } if sensitive::is_sensitive(path)) {
+            tracing::warn!(
+                "yolo auto-approved a sensitive file read: {}",
+                action.display()
+            );
+        }
         match action {
             Action::Net { .. } => store.approve_net_pattern(project_dir, &pattern)?,
             _ => store.approve_pattern(project_dir, pattern.clone())?,
