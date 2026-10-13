@@ -11,8 +11,8 @@
 //! * Missing or unreadable files are errors, never silent empties.
 //! * Unset variables substitute empty (OpenCode's rule).
 //! * Resolved secrets are never logged: only the dotted keys that
-//!   substituted are reported (see [`Config::substituted`]), never
-//!   their values.
+//!   substituted are reported (see [`crate::Config::substituted`]),
+//!   never their values.
 
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
