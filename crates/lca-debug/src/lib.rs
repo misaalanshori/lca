@@ -10,11 +10,18 @@
 //! through [`redact`] first (AGENTS.md Rule 6).
 
 pub mod core;
+#[cfg(feature = "debug-trace")]
+mod init;
+#[cfg(feature = "debug-trace")]
+pub use init::{init, subscriber, DebugConfig};
+pub mod logfiles;
 pub mod net;
 pub mod permissions;
 pub mod redact;
 pub mod session;
 pub mod wasm;
+
+pub use logfiles::{DebugPaths, RotatingWriter, FILE_CAP_BYTES};
 
 /// A trace domain: one `tracing` target, one of the two debug files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

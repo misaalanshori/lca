@@ -1650,6 +1650,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lca-debug"
+version = "0.6.0"
+dependencies = [
+ "lca-testkit",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lca-ext-abi"
 version = "0.6.0"
 dependencies = [
