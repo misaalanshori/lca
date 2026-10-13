@@ -7,7 +7,11 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+debug-trace = ["lca-debug/debug-trace"]
+
 [dependencies]
+lca-debug = { path = "../lca-debug" }
 lca-protocol = { path = "../lca-protocol" }
 # gh #58: shell-like argument splitting for prompt templates (the same
 # splitter the CLI uses for `$EDITOR`; already on the vetted list).

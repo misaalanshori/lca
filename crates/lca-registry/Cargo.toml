@@ -7,7 +7,11 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+debug-trace = ["lca-debug/debug-trace"]
+
 [dependencies]
+lca-debug = { path = "../lca-debug" }
 # Dependency justifications (the SRDD's closed list and its rule):
 # sha2 - digest verification (listed).
 # hyper/hyper-util/hyper-rustls - the existing HTTP client; the OCI

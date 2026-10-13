@@ -106,8 +106,7 @@ where
     let targets: Vec<String> = targets.iter().map(|target| target.to_string()).collect();
     tracing_subscriber::filter::dynamic_filter_fn(move |meta: &tracing::Metadata<'_>, cx| {
         let scoped = targets.iter().any(|target| {
-            meta.target() == target
-                || meta.target().starts_with(&format!("{target}::"))
+            meta.target() == target || meta.target().starts_with(&format!("{target}::"))
         });
         scoped && Filter::enabled(&env, meta, cx)
     })

@@ -21,9 +21,22 @@ default = [
 # under `scripts/wasm-check.sh`.
 bundled-openai-compat = ["dep:openai-compatible"]
 bundled-compaction-default = ["dep:compaction-default"]
+# Full-stack observability (gh #258): forwards to every instrumented
+# crate's pass-through. Stable builds leave it off (zero overhead);
+# unstable and development builds turn it on with `--debug` at runtime.
+debug-trace = [
+    "lca-debug/debug-trace",
+    "lca-core/debug-trace",
+    "lca-session/debug-trace",
+    "lca-registry/debug-trace",
+    "lca-ext-host/debug-trace",
+    "lca-permissions/debug-trace",
+    "lca-tools/debug-trace",
+]
 
 [dependencies]
 compaction-default = { path = "../../extensions/compaction-default", optional = true }
+lca-debug = { path = "../lca-debug" }
 lca-protocol = { path = "../lca-protocol" }
 lca-config = { path = "../lca-config" }
 lca-session = { path = "../lca-session" }

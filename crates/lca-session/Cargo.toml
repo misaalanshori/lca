@@ -7,7 +7,11 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+debug-trace = ["lca-debug/debug-trace"]
+
 [dependencies]
+lca-debug = { path = "../lca-debug" }
 lca-protocol = { path = "../lca-protocol" }
 # The session log records the extension ABI version in its `session-start`
 # record; source it from the one contract crate so it cannot drift from the
