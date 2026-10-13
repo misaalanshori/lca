@@ -910,7 +910,6 @@ impl GrantStore {
     }
 }
 
-
 /// Canonical key for a project: the working copy's canonical path
 /// (ADR-0006: two checkouts are two projects).
 pub fn canonical_key(project_dir: &Path) -> String {
