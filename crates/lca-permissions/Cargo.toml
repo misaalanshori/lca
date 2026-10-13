@@ -7,7 +7,11 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+debug-trace = ["lca-debug/debug-trace"]
+
 [dependencies]
+lca-debug = { path = "../lca-debug" }
 lca-protocol = { path = "../lca-protocol" }
 serde.workspace = true
 serde_json.workspace = true

@@ -6,6 +6,7 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use tracing_subscriber::layer::Filter;
 use tracing_subscriber::layer::Layer;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -77,15 +78,39 @@ impl<'a> fmt::MakeWriter<'a> for FileWriter {
     }
 }
 
-/// Resolve the effective directives: an explicit filter wins outright
-/// (the user takes control of both files); otherwise the per-file
-/// defaults. Unparseable input falls back to the default rather than
-/// failing startup — a typo must not silence the binary.
+/// Resolve the effective directives: an explicit filter appends to
+/// the defaults (a repeated target takes the user's value), and
+/// unparseable input falls back to the default rather than failing
+/// startup — a typo must not silence the binary.
 fn resolve_filter(explicit: Option<&str>, default: &str) -> EnvFilter {
     match explicit {
-        Some(filter) => EnvFilter::try_new(filter).unwrap_or_else(|_| EnvFilter::new(default)),
+        Some(filter) => EnvFilter::try_new(format!("{default},{filter}"))
+            .unwrap_or_else(|_| EnvFilter::new(default)),
         None => EnvFilter::new(default),
     }
+}
+
+/// One file's gate: only its domains pass, and only when the
+/// effective directives enable them. The target list holds under an
+/// explicit filter too, so `LCA_LOG=lca_core=trace` never lands core
+/// events in the wire file.
+fn scoped<S>(
+    explicit: Option<&str>,
+    default: &str,
+    targets: &[&str],
+) -> impl Filter<S> + Clone + Send + Sync + 'static
+where
+    S: tracing::Subscriber,
+{
+    let env = resolve_filter(explicit, default);
+    let targets: Vec<String> = targets.iter().map(|target| target.to_string()).collect();
+    tracing_subscriber::filter::dynamic_filter_fn(move |meta: &tracing::Metadata<'_>, cx| {
+        let scoped = targets.iter().any(|target| {
+            meta.target() == target
+                || meta.target().starts_with(&format!("{target}::"))
+        });
+        scoped && Filter::enabled(&env, meta, cx)
+    })
 }
 
 /// Build the subscriber: the internal layer writes `debug.log`, the
@@ -100,11 +125,19 @@ pub fn subscriber(config: &DebugConfig) -> std::io::Result<impl tracing::Subscri
     let internal = fmt::layer()
         .with_ansi(false)
         .with_writer(log)
-        .with_filter(resolve_filter(config.filter.as_deref(), INTERNAL_FILTER));
+        .with_filter(scoped(
+            config.filter.as_deref(),
+            INTERNAL_FILTER,
+            &["lca_core", "lca_session", "lca_permissions", "lca_registry"],
+        ));
     let wire_layer = fmt::layer()
         .with_ansi(false)
         .with_writer(wire)
-        .with_filter(resolve_filter(config.filter.as_deref(), WIRE_FILTER));
+        .with_filter(scoped(
+            config.filter.as_deref(),
+            WIRE_FILTER,
+            &["lca_net", "lca_wasm"],
+        ));
     Ok(tracing_subscriber::registry()
         .with(internal)
         .with(wire_layer))

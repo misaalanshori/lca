@@ -50,7 +50,7 @@ fn explicit_filter_overrides_and_silences() {
         lca_debug::core::event("turn.start", "id=1");
         lca_debug::net::event("http.request", "GET https://x.test/");
     });
-    let log = std::fs::read_to_string(&paths.log).expect("log");
+    let log = std::fs::read_to_string(&paths.log).unwrap_or_default();
     let wire = std::fs::read_to_string(&paths.wire).expect("wire");
     assert!(!log.contains("turn.start"), "off wins:\n{log}");
     assert!(wire.contains("http.request"), "trace passes:\n{wire}");

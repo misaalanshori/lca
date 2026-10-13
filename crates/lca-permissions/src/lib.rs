@@ -932,6 +932,16 @@ pub fn authorize(
     }
 
     if store.is_allowed(project_dir, action) {
+        // Gh #258: the pipeline path, cheapest first (rule, trust,
+        // or stored pattern — the detail names the action shape).
+        let via = if store.rule_decision(project_dir, action) == RuleMatch::Allow {
+            "rule.allow"
+        } else if store.is_trusted_here(project_dir) {
+            "trust.allow"
+        } else {
+            "pattern.allow"
+        };
+        lca_debug::permissions::event(via, &action.display());
         return Ok(Outcome {
             allowed: true,
             prompted: false,
@@ -945,6 +955,7 @@ pub fn authorize(
     // in yolo mode too: the user's own words outrank a mode that answers
     // prompts, ADR-0042).
     if store.rule_denied(project_dir, action) {
+        lca_debug::permissions::event("rule.deny", &action.display());
         return Ok(Outcome {
             allowed: false,
             prompted: false,
@@ -961,6 +972,7 @@ pub fn authorize(
     // sensitive filenames skip the cut — credential reads prompt even
     // in-workspace, falling through to yolo or the modal below.
     if matches!(action, Action::ReadPath { path } if !sensitive::is_sensitive(path)) {
+        lca_debug::permissions::event("read.cut", &action.display());
         return Ok(Outcome {
             allowed: true,
             prompted: false,
@@ -969,6 +981,11 @@ pub fn authorize(
             denied_by_rule: false,
             yolo: false,
         });
+    }
+    // Gh #258: the escalation itself is the event (the prompt's
+    // answer lands below as a prompt.* event).
+    if matches!(action, Action::ReadPath { .. }) {
+        lca_debug::permissions::event("sensitive.ask", &action.display());
     }
 
     // ADR-0042: yolo answers the remaining prompts as "always, for this
@@ -990,6 +1007,10 @@ pub fn authorize(
             Action::Net { .. } => store.approve_net_pattern(project_dir, &pattern)?,
             _ => store.approve_pattern(project_dir, pattern.clone())?,
         }
+        lca_debug::permissions::event(
+            "yolo.approve",
+            &format!("{} pattern={pattern}", action.display()),
+        );
         return Ok(Outcome {
             allowed: true,
             prompted: false,
@@ -1000,7 +1021,9 @@ pub fn authorize(
         });
     }
 
-    match prompt.ask_annotated(action, annotations) {
+    // Gh #258: the prompt's answer, whatever it was — the one event
+    // per evaluation that always fires when a human (or yolo) decides.
+    let outcome = match prompt.ask_annotated(action, annotations) {
         Decision::Denied => Ok(Outcome {
             allowed: false,
             prompted: true,
@@ -1058,7 +1081,18 @@ pub fn authorize(
                 yolo: false,
             })
         }
+    };
+    if let Ok(done) = &outcome {
+        lca_debug::permissions::event(
+            if done.allowed {
+                "prompt.allow"
+            } else {
+                "prompt.deny"
+            },
+            &action.display(),
+        );
     }
+    outcome
 }
 
 /// Canonical key for a project: the working copy's canonical path
