@@ -162,6 +162,20 @@ impl Agent<'_> {
         // preceding its `tool-result` (docs/headless.md).
         sink.on_event(TurnEvent::ToolStarted(effective.clone()));
 
+        // Gh #258: resolution and verdict (names, never arguments).
+        lca_debug::core::event(
+            "tool.call",
+            &format!(
+                "name={} verdict={}",
+                effective.name,
+                match action {
+                    HookAction::Deny(_) => "deny",
+                    HookAction::Replace(_) => "replace",
+                    HookAction::Allow => "allow",
+                }
+            ),
+        );
+        let started = std::time::Instant::now();
         let result = match action {
             HookAction::Deny(reason) => {
                 // No permission prompt: the hook already answered
@@ -181,6 +195,16 @@ impl Agent<'_> {
         // Gh #45's composition runs over the executed result: the
         // composed text is what the log keeps and the model sees.
         let result = registry.compose_tool_result(&effective, result).await;
+        // Gh #258: timing and status (never the result text).
+        lca_debug::core::event(
+            "tool.done",
+            &format!(
+                "name={} ms={} status={:?}",
+                effective.name,
+                started.elapsed().as_millis(),
+                result.status
+            ),
+        );
         Ok((effective, result))
     }
 

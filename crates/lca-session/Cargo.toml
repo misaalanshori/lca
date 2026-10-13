@@ -24,6 +24,7 @@ thiserror.workspace = true
 [dev-dependencies]
 lca-testkit = { path = "../lca-testkit" }
 proptest.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

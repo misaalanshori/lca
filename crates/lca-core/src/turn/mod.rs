@@ -361,6 +361,8 @@ impl Agent<'_> {
         };
         for message in steered {
             let marker = message.mode.marker().to_string();
+            // Gh #258: the drain (counts and markers, never text).
+            lca_debug::core::event("steer.drain", &format!("marker={marker}"));
             if let Err(err) = self.store.append(
                 self.session,
                 Record::User {
@@ -828,6 +830,14 @@ impl Agent<'_> {
         if !super::compact::compaction_fires(last_prompt, window, reserve) {
             return false;
         }
+        // Gh #258: the trigger (reason + distance-to-threshold
+        // inputs, never prompt text).
+        lca_debug::core::event(
+            "compact.trigger",
+            &format!(
+                "reason=threshold prompt_tokens={last_prompt} window={window} reserve={reserve}"
+            ),
+        );
         self.compact_before_turn(records, turn_record_id, sink, "threshold")
             .await
     }

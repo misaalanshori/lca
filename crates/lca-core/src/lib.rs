@@ -435,9 +435,25 @@ impl<'a> Agent<'a> {
                 }
             }))
         };
+        // Gh #258: the turn's envelope (lengths, never content).
+        lca_debug::core::event(
+            "turn.start",
+            &format!(
+                "input_len={} queue={}",
+                input.len(),
+                queue.map(|mode| mode.marker()).unwrap_or("direct")
+            ),
+        );
         let outcome = self
             .turn_body(input, queue, attachments, sink, cancel)
             .await;
+        lca_debug::core::event(
+            "turn.end",
+            &format!(
+                "status={:?} stop={:?} cost={:.4}",
+                outcome.status, outcome.stop_reason, outcome.usage.cost
+            ),
+        );
         shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(watcher) = watcher {
             let _ = watcher.join();

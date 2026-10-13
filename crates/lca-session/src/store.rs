@@ -379,7 +379,45 @@ impl SessionStore {
         file.write_all(line.as_bytes())?;
         file.write_all(b"\n")?;
         file.flush()?;
+        // Gh #258: the write (type + id + bytes, never content).
+        lca_debug::session::event(
+            "record.append",
+            &format!(
+                "type={} id={} bytes={}",
+                Self::record_type_name(&record),
+                record.id().unwrap_or("?"),
+                line.len()
+            ),
+        );
         Ok(())
+    }
+
+    /// The record's type name for debug traces (gh #258):
+    /// content-free, so appends stay inspectable without leaking.
+    fn record_type_name(record: &lca_protocol::Record) -> &'static str {
+        use lca_protocol::Record::*;
+        match record {
+            SessionStart { .. } => "session-start",
+            User { .. } => "user",
+            Assistant { .. } => "assistant",
+            ToolCall { .. } => "tool-call",
+            ToolResult { .. } => "tool-result",
+            Permission { .. } => "permission",
+            ExtensionEvent { .. } => "extension-event",
+            Compaction { .. } => "compaction",
+            ForkPoint { .. } => "fork-point",
+            ModelChange { .. } => "model-change",
+            ThinkingLevelChange { .. } => "thinking-level-change",
+            Usage { .. } => "usage",
+            Label { .. } => "label",
+            SessionInfo { .. } => "session-info",
+            Custom { .. } => "custom",
+            CustomMessage { .. } => "custom-message",
+            ContextEdit { .. } => "context-edit",
+            BranchPoint { .. } => "branch-point",
+            BranchSummary { .. } => "branch-summary",
+            SessionEnd { .. } => "session-end",
+        }
     }
 
     /// Write the clean-exit `session-end` marker (`docs/session-log-format.md`:

@@ -97,6 +97,17 @@ impl Agent<'_> {
                             delay_ms: delay.as_millis() as u64,
                             error: message.clone(),
                         });
+                        // Gh #258: the backoff (class and delay, never
+                        // the error text — providers echo requests).
+                        lca_debug::core::event(
+                            "retry.attempt",
+                            &format!(
+                                "attempt={} max={} delay_ms={} retryable={retry}",
+                                attempt + 1,
+                                self.config.retry_limit,
+                                delay.as_millis()
+                            ),
+                        );
                         if !delay.is_zero() {
                             tokio::select! {
                                 _ = tokio::time::sleep(delay) => {}
