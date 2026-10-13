@@ -356,6 +356,8 @@ FR-TOOL-6. WHERE the host operating system is Windows, the agent SHALL run shell
 
 FR-TOOL-7. The agent SHALL truncate a tool result that exceeds the configured size limit and mark it as truncated.
 
+Annotation, 2026-10-14 (gh #216): truncation is head-and-tail — roughly 40% head (invocation, flags, first errors) and 60% tail (summary, exit state), whole lines, with a middle-omission marker reporting line counts and the attachment holding the full text. The total emitted bytes never exceed the limit.
+
 FR-TOOL-8. The agent SHALL resolve the `shell` tool's interpreter from `shell.path`, then `shell.tool`, then the platform ladder in `docs/platform-notes.md`; IF a configured interpreter cannot be found, THEN it SHALL fail every shell call with the locations searched rather than substituting another interpreter; and it SHALL name the resolved interpreter and its dialect in the tool's description.
 
 FR-TOOL-9. WHERE the host is Windows, the agent SHALL deliver a shell command through a per-call script file whose contents are the command text unaltered, so quotes, newlines, metacharacters, and multi-line commands reach the interpreter exactly as written and every line executes; the POSIX `sh -c` argv transport is unchanged.

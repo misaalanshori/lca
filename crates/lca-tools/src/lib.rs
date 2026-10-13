@@ -22,6 +22,7 @@ mod pty;
 pub mod shell;
 pub mod skills;
 mod specs;
+pub mod truncate;
 
 pub use bridge::{BridgeError, bridge_stream};
 pub use capabilities::CompletionBackend;
@@ -525,7 +526,8 @@ impl ToolExecutor {
             );
         }
         let numbered = numbered_window(&lines, offset, end);
-        let (content, byte_truncated) = truncate_head(&numbered, self.result_limit_bytes);
+        let (content, byte_truncated) =
+            truncate::truncate_head_tail(&numbered, self.result_limit_bytes, READ_MAX_LINES, None);
         let mut out = content;
         let truncated = line_capped || byte_truncated;
         if line_capped {
@@ -617,7 +619,10 @@ impl ToolExecutor {
                 limit * 2
             ));
         }
-        let (content, truncated) = truncate_head(&out, self.result_limit_bytes);
+        // Gh #216: balanced head + tail (the spill note below still cites
+        // the attachment; the marker carries counts, the ref when known).
+        let (content, truncated) =
+            truncate::truncate_head_tail(&out, self.result_limit_bytes, READ_MAX_LINES, None);
         self.spilled(
             &call.call_id,
             &out,
@@ -681,7 +686,10 @@ impl ToolExecutor {
                 limit * 2
             ));
         }
-        let (content, truncated) = truncate_head(&out, self.result_limit_bytes);
+        // Gh #216: balanced head + tail (the spill note below still cites
+        // the attachment; the marker carries counts, the ref when known).
+        let (content, truncated) =
+            truncate::truncate_head_tail(&out, self.result_limit_bytes, READ_MAX_LINES, None);
         self.spilled(
             &call.call_id,
             &out,
@@ -835,7 +843,8 @@ impl ToolExecutor {
                 "\n[Match limit of {limit} reached. Narrow the pattern or the path.]\n"
             ));
         }
-        let (content, bytes_truncated) = truncate_head(&out, self.result_limit_bytes);
+        let (content, bytes_truncated) =
+            truncate::truncate_head_tail(&out, self.result_limit_bytes, READ_MAX_LINES, None);
         self.spilled(
             &call.call_id,
             &out,
@@ -892,7 +901,10 @@ impl ToolExecutor {
             }
         };
         let full_text = String::from_utf8_lossy(&full);
-        let (content, truncated) = truncate_tail(&full_text, self.result_limit_bytes);
+        // Gh #216: shell keeps invocation flags (head) and the failure
+        // summary (tail); bytes alone bound it, as before.
+        let (content, truncated) =
+            truncate::truncate_head_tail(&full_text, self.result_limit_bytes, usize::MAX, None);
         let (status, content, exit_code) = match outcome {
             ExecOutcome::Exit { code: 0 } => (
                 ToolResultStatus::Ok,
@@ -950,45 +962,6 @@ fn numbered_window(lines: &[&str], offset: usize, end: usize) -> String {
     numbered
 }
 
-fn truncate_head(content: &str, limit: usize) -> (String, bool) {
-    if content.len() <= limit {
-        return (content.to_string(), false);
-    }
-    let mut cut = limit;
-    while cut > 0 && !content.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    if let Some(newline) = content[..cut].rfind('\n') {
-        cut = newline;
-    }
-    (content[..cut].trim_end().to_string(), true)
-}
-
-/// Truncate at a line boundary, keeping the tail: errors and final results
-/// live at the end of command output.
-fn truncate_tail(content: &str, limit: usize) -> (String, bool) {
-    if content.len() <= limit {
-        return (content.to_string(), false);
-    }
-    let mut cut = content.len() - limit;
-    while cut < content.len() && !content.is_char_boundary(cut) {
-        cut += 1;
-    }
-    if let Some(newline) = content[cut..].find('\n') {
-        cut += newline + 1;
-    }
-    let kept = &content[cut..];
-    let line_total = content.lines().count();
-    let shown = kept.lines().count();
-    (
-        format!(
-            "[Output truncated: showing last {shown} of {line_total} lines ({} limit)]\n{kept}",
-            format_bytes(limit)
-        ),
-        true,
-    )
-}
-
 fn truncate_line(line: &str, max_chars: usize) -> String {
     if line.chars().count() <= max_chars {
         line.to_string()
@@ -1037,25 +1010,8 @@ pub fn glob_matcher(pattern: &str) -> Result<globset::GlobMatcher, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{glob_matcher, is_inside, resolve_target, truncate_head, truncate_tail};
+    use super::{glob_matcher, is_inside, resolve_target};
     use std::path::Path;
-
-    #[test]
-    fn head_truncation_keeps_a_clean_line_boundary() {
-        let (text, truncated) = truncate_head("a\nbb\nccc\n", 5);
-        assert!(truncated);
-        assert!(text.len() <= 5);
-        assert!(!text.ends_with('\n'));
-    }
-
-    #[test]
-    fn tail_truncation_keeps_the_end() {
-        let content = format!("{}\nKEEP\n", "x".repeat(100));
-        let (text, truncated) = truncate_tail(&content, 10);
-        assert!(truncated);
-        assert!(text.contains("KEEP"), "{text}");
-        assert!(text.contains("truncated"));
-    }
 
     #[test]
     fn glob_matches_segments_and_double_star() {

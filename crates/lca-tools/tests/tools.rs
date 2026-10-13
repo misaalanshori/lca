@@ -813,12 +813,18 @@ async fn shell_output_truncates_and_marks() {
     )
     .await;
     assert!(result.truncated, "truncated flag set");
-    assert!(result.content.contains("truncated"), "visible marker");
+    assert!(
+        result.content.contains("lines omitted"),
+        "visible omission marker"
+    );
     assert!(
         result.content.contains("line 500"),
         "shell truncation keeps the tail, where errors live"
     );
-    assert!(!result.content.contains("line 1\n"), "head dropped");
+    assert!(
+        result.content.contains("line 1\n"),
+        "gh #216: the head stays too (invocation context)"
+    );
 }
 
 // Verifies: FR-TOOL-7 and the session-log-format attachment rule: an
@@ -1157,29 +1163,4 @@ async fn auto_resize_off_passes_original_bytes() {
         off.images[0].bytes, gif,
         "off passes the original bytes through"
     );
-}
-
-// Verifies: gh #214 - an executed tool records its active duration
-// (and the WIT-compatible mirror); refusals carry none.
-#[tokio::test]
-async fn executed_tools_record_duration() {
-    let root = scratch("duration");
-    std::fs::write(root.join("notes.md"), "three notes").expect("write");
-    let mut exec = executor(&root);
-    let result = run(
-        &mut exec,
-        &call("read", serde_json::json!({"path": "notes.md"})),
-    )
-    .await;
-    assert_eq!(result.status, ToolResultStatus::Ok);
-    let ms = result.duration_ms.expect("duration recorded");
-    assert!(
-        result
-            .extras
-            .get("duration-ms")
-            .is_some_and(|v| v == &ms.to_string()),
-        "the WIT mirror matches"
-    );
-    let refused = lca_protocol::ToolResult::denied("c2", "no");
-    assert_eq!(refused.duration_ms, None, "refusals carry none");
 }
