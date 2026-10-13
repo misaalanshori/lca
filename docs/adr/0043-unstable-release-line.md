@@ -98,3 +98,28 @@ stays put; the release's assets are the channel.
   for `--unstable` with `--version`.
 - Build history for the line is CI run artifacts (90-day retention) plus
   git; there is deliberately no release-per-commit record.
+
+## Addendum 2026-10-13 (gh #251): the unstable extension channel
+
+The rolling line above covers the native binary only; extensions
+shipped separately on manual dispatches, so an unstable-binary user
+could not install the matching extension build. The `unstable`
+workflow now carries a parallel `extensions` job on every green
+main commit: it builds the curated first-party set (the same eight
+`publish-extensions.yml` ships — bundled providers and the skills
+zip already ride the binary line) for `wasm32-wasip2` and publishes
+each to ghcr.io under two tags.
+
+- `:unstable` is the rolling channel tag, clobbered in place — the
+same channel-pointer semantics as the binary line: the tag names
+the channel, never a pin.
+- `:b<sha7>` is the immutable commit pin, for reproducible bug
+reports and bisecting.
+- The published manifest's `version` is stamped
+`<base>-unstable.b<sha7>` at publish time (a staged copy, never a
+rewritten repo file), so `lca ext list` and `lca ext info` display
+exact commit provenance.
+
+The job runs parallel to the binary matrix with no `needs` edge,
+so it cannot delay binary publishing; stable tags are untouched
+(the manual release flow still owns `abi-*` and version tags).

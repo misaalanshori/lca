@@ -36,6 +36,77 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  extensions:
+    # The unstable extension channel (gh #251, ADR-0043 addendum
+    # 2026-10-13): every green main commit builds the curated
+    # first-party set and publishes `:unstable` (rolling) plus
+    # `:b<sha7>` (immutable pin) to ghcr.io. Same curated set as
+    # publish-extensions.yml; a later release edits that list, and
+    # this list follows it (the issue proposed 13; bundled providers
+    # and the skills zip already ride the binary line, so 8 ship here).
+    # workflow_run fires for every conclusion; only green builds ship.
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit CI proved green, not whatever main moved to since.
+          ref: ${{ env.BUILD_SHA }}
+      - name: Install the pinned toolchain and WASM target
+        run: |
+          rustup set profile minimal
+          rustup target add wasm32-wasip2
+      - name: Build the first-party extension set
+        run: |
+          cargo build --release --target wasm32-wasip2 \
+            -p antigravity -p anthropic -p openrouter -p github-copilot \
+            -p meta -p kimi-coding -p llama -p mcp
+      - name: Publish unstable OCI artifacts (:unstable and :b<sha7>)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LCA_OCI_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          short_sha="${BUILD_SHA:0:7}"
+          publish_unstable() {
+            local image="$1" wasm="$2" manifest_src="$3"
+            local staging_dir="/tmp/unstable-ext/${image}"
+            mkdir -p "$staging_dir"
+            # Read the base version and stamp -unstable.b<sha7>: the
+            # installed manifest reports exact commit provenance.
+            local base_ver
+            base_ver=$(python3 -c "import tomllib; print(tomllib.load(open('$manifest_src', 'rb'))['version'])")
+            local unstable_ver="${base_ver}-unstable.b${short_sha}"
+            # Synthesize a staged manifest with the baked version.
+            bash scripts/stage-unstable-manifest.sh "$manifest_src" "$staging_dir/extension.toml" "$unstable_ver"
+            echo "Publishing ${image} version ${unstable_ver}..."
+            # 1. The rolling channel tag (clobbered in place).
+            bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "unstable" "$wasm" "$staging_dir/extension.toml"
+            # 2. The immutable commit pin.
+            bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "b${short_sha}" "$wasm" "$staging_dir/extension.toml"
+          }
+          publish_unstable antigravity target/wasm32-wasip2/release/antigravity.wasm extensions/antigravity/extension.toml
+          publish_unstable anthropic target/wasm32-wasip2/release/anthropic.wasm extensions/anthropic/extension.toml
+          publish_unstable openrouter target/wasm32-wasip2/release/openrouter.wasm extensions/openrouter/extension.toml
+          publish_unstable github-copilot target/wasm32-wasip2/release/github_copilot.wasm extensions/github-copilot/extension.toml
+          publish_unstable meta target/wasm32-wasip2/release/meta.wasm extensions/meta/extension.toml
+          publish_unstable kimi-coding target/wasm32-wasip2/release/kimi_coding.wasm extensions/kimi-coding/extension.toml
+          publish_unstable llama target/wasm32-wasip2/release/llama.wasm extensions/llama/extension.toml
+          publish_unstable mcp target/wasm32-wasip2/release/mcp.wasm extensions/mcp/extension.toml
+      # Best effort: repo-scoped packages follow the public repo's
+      # visibility, this just makes it explicit when the API allows.
+      - name: Ensure the packages are public
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for image in antigravity anthropic openrouter github-copilot meta kimi-coding llama mcp; do
+            gh api --method PATCH "/user/packages/container/lca%2F${image}" -f visibility=public || true
+          done
+
   artifacts:
     # workflow_run fires for every conclusion; only green builds ship.
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
