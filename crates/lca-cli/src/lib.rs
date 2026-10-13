@@ -30,6 +30,8 @@ mod auth;
 /// `lca bug` and `/bug`: the local diagnostic bundle (gh #57).
 mod bug;
 
+/// Debug tracing setup (gh #258): `--debug` / `--debug-wire`.
+pub mod debug;
 /// `lca ext ...`: resolve, consent, store (FR-DIST-*).
 pub mod diagnostics;
 /// `lca doctor`: the diagnostics dump (gh #81).

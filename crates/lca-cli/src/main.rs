@@ -19,6 +19,13 @@ fn main() {
     if let Err(err) = lca_cli::init_diagnostics(cli.verbose) {
         eprintln!("warning: diagnostics disabled: {err}");
     }
+    // gh #258: before the first instrumented call, so no trace
+    // evaporates. A setup failure warns, never fails the run.
+    if let Err(err) =
+        lca_cli::debug::init_debug_trace(cli.debug, cli.debug_wire, &lca_cli::data_dir())
+    {
+        eprintln!("warning: {err}");
+    }
     let code = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

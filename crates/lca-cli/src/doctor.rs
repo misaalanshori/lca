@@ -14,6 +14,14 @@ pub fn report(data_dir: &Path, cwd: &Path) -> String {
     row(&mut out, "data dir", &data_dir.display().to_string());
     let log = crate::diagnostics::log_dir(data_dir).join("lca.log");
     row(&mut out, "log file", &sized(&log));
+    // gh #258: the two debug files (absent until `--debug` runs once).
+    let logs = crate::diagnostics::log_dir(data_dir);
+    row(&mut out, "debug log", &sized(&logs.join("debug.log")));
+    row(
+        &mut out,
+        "debug wire log",
+        &sized(&logs.join("debug-wire.log")),
+    );
     row(
         &mut out,
         "user config",

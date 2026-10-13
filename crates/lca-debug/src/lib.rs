@@ -13,7 +13,7 @@ pub mod core;
 #[cfg(feature = "debug-trace")]
 mod init;
 #[cfg(feature = "debug-trace")]
-pub use init::{init, subscriber, DebugConfig};
+pub use init::{init, subscriber, DebugConfig, INTERNAL_FILTER, WIRE_FILTER};
 pub mod logfiles;
 pub mod net;
 pub mod permissions;

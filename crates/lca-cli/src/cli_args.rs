@@ -79,6 +79,16 @@ pub struct Cli {
     /// Print diagnostic logs to stderr as well as the log file.
     #[arg(long)]
     pub verbose: bool,
+    // gh #258: full debug tracing across core and extensions
+    // (`~/.lca/logs/debug.log` + `debug-wire.log`). Stable builds
+    // leave this unbuilt: the flag then names the missing feature.
+    /// Enable debug tracing (unstable/dev builds; needs `debug-trace`).
+    #[arg(long)]
+    pub debug: bool,
+    // gh #258: the wire tap only (outbound HTTP + WASM crossings).
+    /// Enable wire tracing only (needs `debug-trace`).
+    #[arg(long = "debug-wire")]
+    pub debug_wire: bool,
     // ADR-0029: attach an image to the one-shot turn.
     /// Attach an image file to the turn (repeat for several).
     #[arg(long = "attach", value_name = "PATH")]
