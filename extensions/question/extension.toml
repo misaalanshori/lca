@@ -1,0 +1,5 @@
+name = "question"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["tool"]
+description = "Allows the model to ask structured clarification questions during turn execution."
