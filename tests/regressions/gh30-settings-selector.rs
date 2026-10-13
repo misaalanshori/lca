@@ -45,6 +45,7 @@ fn rows_hook(writes: Writes) -> UiHooks {
             } else {
                 "default".to_string()
             },
+            masked: false,
             values: values.iter().map(|v| v.to_string()).collect(),
         };
         vec![
