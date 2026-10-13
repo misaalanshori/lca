@@ -61,6 +61,7 @@ impl Ui {
         );
         out.extend(crate::login::override_presets(
             &self.preset_overrides,
+            &self.data,
             "openai-compatible",
             needs.as_ref(),
         ));

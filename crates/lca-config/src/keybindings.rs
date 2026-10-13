@@ -17,7 +17,8 @@ use super::{ConfigError, read_table, type_name};
 /// TOML, or holds a non-string entry.
 pub fn load_keybindings_file(path: &Path) -> Result<BTreeMap<String, Vec<String>>, ConfigError> {
     const LABEL: &str = "user keybindings";
-    let table = read_table(path, LABEL)?;
+    // Keybindings name actions, never secrets: no substitution.
+    let (table, _) = read_table(path, LABEL, false)?;
     let mut bindings = BTreeMap::new();
     flatten_keybindings(&table, String::new(), LABEL, &mut bindings)?;
     Ok(bindings)

@@ -115,6 +115,7 @@ fn settings_paging_keys_jump_and_step_selection() {
                 description: String::new(),
                 value: "v".to_string(),
                 source: "default".to_string(),
+                masked: false,
                 section: String::new(),
                 values: Vec::new(),
             })
@@ -176,6 +177,7 @@ fn settings_rows_paint_labels_and_a_description() {
         description: description.to_string(),
         value: "0".to_string(),
         source: "default".to_string(),
+        masked: false,
         values: vec![],
     };
     let mut chat = chat();
@@ -213,6 +215,7 @@ fn settings_rows_show_human_values() {
         description: String::new(),
         value: value.to_string(),
         source: "default".to_string(),
+        masked: false,
         values: values.iter().map(|value| value.to_string()).collect(),
     };
     assert_eq!(
@@ -261,6 +264,7 @@ fn settings_painter_shows_scrollback_not_false() {
             description: "Terminal scrollback or app-owned fullscreen".to_string(),
             value: "false".to_string(),
             source: "default".to_string(),
+            masked: false,
             section: String::new(),
             values: vec!["false".to_string(), "true".to_string()],
         }],

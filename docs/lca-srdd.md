@@ -594,6 +594,8 @@ FR-CFG-4. WHERE telemetry is added after 1.0, the agent SHALL make it opt-in and
 
 FR-CFG-5. The agent SHALL NOT write credentials to the session log.
 
+Annotation, 2026-10-14 (gh #218): config and preset strings may reference secrets via `{env:VAR}` / `{file:path}` instead of containing them. Substitution refuses credential stores (`credentials/`, `sessions/`, `grants`), never executes, fails loudly, and substituted values display masked (`lca config`, `/settings`).
+
 FR-CFG-6. WHILE running interactively, the agent SHALL check for a newer version at most once per day and SHALL NOT block startup on the check; headless mode SHALL make no such request unless the user enables it.
 
 FR-CFG-7. `trust.default_project` SHALL accept `ask`/`always`/`never` defaulting to `ask`, and SHALL be refused when set in a project file: only the user file (or environment) may set a trust fallback, since a project file that granted its own trust would defeat FR-PERM-9 (gh #80).

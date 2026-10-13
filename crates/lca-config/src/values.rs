@@ -422,6 +422,13 @@ impl Config {
             .unwrap_or(MergeSource::Default)
     }
 
+    /// Whether the key's file value resolved a `{env:}` or `{file:}`
+    /// token (gh #218): displays mask such keys (`********`), because
+    /// the resolved text may be a secret.
+    pub fn substituted(&self, key: &str) -> bool {
+        self.substituted.contains(key)
+    }
+
     /// Every resolved key with its display value and source (FR-CFG-2).
     pub fn resolved(&self) -> impl Iterator<Item = (&str, String, MergeSource)> + '_ {
         let values: BTreeMap<&str, String> = [

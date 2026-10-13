@@ -493,6 +493,8 @@ pub(super) fn settings_rows(
                 label,
                 description,
                 value,
+                // Gh #218: substituted values may be secrets.
+                masked: config.substituted(key),
                 source,
                 values: values.iter().map(|value| value.to_string()).collect(),
             }

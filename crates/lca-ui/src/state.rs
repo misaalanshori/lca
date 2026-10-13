@@ -478,6 +478,10 @@ pub struct SettingRow {
     /// Where it won: `flag`, `environment`, `project file`, `user file`,
     /// `default`, or `ui.json` for the one setting that lives there.
     pub source: String,
+    /// Gh #218: the value resolved a `{env:}`/`{file:}` token and may
+    /// be a secret - painters show `********`, while `value` keeps the
+    /// real text for cycling and saving.
+    pub masked: bool,
     /// The values left/right and Enter cycle through.
     pub values: Vec<String>,
 }
@@ -490,6 +494,10 @@ impl SettingRow {
     /// Display-only: cycling, editing, and persisting keep the raw
     /// value, so the stored TOML never sees these words.
     pub fn display_value(&self) -> String {
+        // Gh #218: a substituted secret never reaches the screen.
+        if self.masked {
+            return "********".to_string();
+        }
         if self.key == "ui.fullscreen" {
             return match self.value.as_str() {
                 "true" => "fullscreen".to_string(),

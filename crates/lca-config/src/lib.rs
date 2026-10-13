@@ -9,9 +9,11 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 mod keys;
+pub mod substitute;
 mod toml_layer;
 mod values;
 
@@ -97,6 +99,17 @@ pub enum ConfigError {
         /// The underlying parse error, boxed to keep the error enum small.
         #[source]
         source: Box<toml::de::Error>,
+    },
+    /// A `{env:}`/`{file:}` substitution failed (gh #218): loud, with
+    /// the token and the layer that referenced it.
+    #[error("cannot resolve {token} in {label}: {reason}")]
+    Substitution {
+        /// The offending token (`{file:...}` or `{env:...}`).
+        token: String,
+        /// Which layer referenced it.
+        label: String,
+        /// Why it failed (refused, missing, unreadable).
+        reason: String,
     },
     /// A key held a value of the wrong type.
     #[error("{key} in {label} is invalid: {reason}")]
@@ -214,6 +227,10 @@ pub struct Config {
     // behind the official catalog with their own provenance.
     extensions_catalogs: Vec<crate::keys::CustomCatalog>,
     sources: BTreeMap<String, MergeSource>,
+    // gh #218: dotted keys whose file values resolved a `{env:}` or
+    // `{file:}` token. Displays mask these (values never logged); the
+    // set holds keys only, never secrets.
+    substituted: BTreeSet<String>,
 }
 
 /// The default `tool.max_iterations` (docs/configuration.md): **0 =
@@ -311,6 +328,7 @@ impl Default for Config {
             models_thinking_levels: BTreeMap::new(),
             thinking_budgets: BTreeMap::new(),
             sources: BTreeMap::new(),
+            substituted: BTreeSet::new(),
         }
     }
 }
@@ -361,18 +379,32 @@ fn type_name(value: &toml::Value) -> &'static str {
     }
 }
 
-fn read_table(path: &Path, label: &'static str) -> Result<toml::Table, ConfigError> {
+fn read_table(
+    path: &Path,
+    label: &'static str,
+    substitute: bool,
+) -> Result<(toml::Table, BTreeSet<String>), ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
         label,
         path: path.to_path_buf(),
         source,
     })?;
-    text.parse::<toml::Table>()
+    let mut table = text
+        .parse::<toml::Table>()
         .map_err(|source| ConfigError::Parse {
             label,
             path: path.to_path_buf(),
             source: Box::new(source),
-        })
+        })?;
+    // gh #218: substitution resolves between parse and apply, so only
+    // TOML strings interpolate and the substituted keys are known.
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let substituted = if substitute {
+        substitute::substitute_table(&mut table, dir, &format!("{label} {}", path.display()))?
+    } else {
+        BTreeSet::new()
+    };
+    Ok((table, substituted))
 }
 
 impl Config {
@@ -449,8 +481,9 @@ impl Config {
         }
 
         if let Some(path) = &input.user_file {
-            let layer = read_table(path, "user file")?;
+            let (layer, substituted) = read_table(path, "user file", true)?;
             config.apply_toml_layer(&layer, MergeSource::UserFile)?;
+            config.substituted.extend(substituted);
         }
 
         // The project file participates only for a trusted project:
@@ -458,8 +491,9 @@ impl Config {
         if input.trusted
             && let Some(path) = &input.project_file
         {
-            let layer = read_table(path, "project file")?;
+            let (layer, substituted) = read_table(path, "project file", true)?;
             config.apply_toml_layer(&layer, MergeSource::ProjectFile)?;
+            config.substituted.extend(substituted);
             // gh #80 (FR-CFG-7): a project file that granted its own
             // trust would defeat FR-PERM-9 - refused loudly, like any
             // other key the host will not honor.

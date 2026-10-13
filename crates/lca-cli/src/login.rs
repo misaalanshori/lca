@@ -437,6 +437,7 @@ mod tests {
 /// optional convenience file must not stop the user signing in.
 pub(crate) fn override_presets(
     text: &str,
+    dir: &std::path::Path,
     provider: &str,
     needs: Option<&crate::provider_needs::ProviderNeeds>,
 ) -> Vec<(String, LoginOption)> {
@@ -458,7 +459,17 @@ pub(crate) fn override_presets(
         models: Vec<String>,
     }
 
-    let Ok(file) = toml::from_str::<File>(text) else {
+    // Gh #218: preset strings resolve `{env:}`/`{file:}` against the
+    // presets file's directory. Any failure (bad TOML, missing secret
+    // file) yields no entries: the file stays best-effort, and the
+    // login flow prompts for whatever it still needs.
+    let Ok(mut table) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    if lca_config::substitute::substitute_table(&mut table, dir, "provider presets").is_err() {
+        return Vec::new();
+    }
+    let Ok(file) = table.try_into::<File>() else {
         return Vec::new();
     };
     file.preset
@@ -605,6 +616,7 @@ mod override_tests {
             "[[preset]]\nid = \"my-proxy\"\nname = \"My Proxy\"\n\
              base_url = \"https://llm.example.com/v1\"\nauth = \"bearer\"\n\
              models = [\"a\", \"b\"]\n",
+            std::path::Path::new("."),
             "openai-compatible",
             Some(&test_needs()),
         );
@@ -625,6 +637,7 @@ mod override_tests {
     fn a_local_user_preset_has_no_key_step() {
         let entries = override_presets(
             "[[preset]]\nid = \"box\"\nbase_url = \"http://localhost:1234/v1\"\nauth = \"none\"\n",
+            std::path::Path::new("."),
             "openai-compatible",
             Some(&test_needs()),
         );
@@ -633,11 +646,26 @@ mod override_tests {
 
     #[test]
     fn a_malformed_override_file_yields_nothing_rather_than_an_error() {
-        assert!(override_presets("not toml [[[", "openai-compatible", None).is_empty());
-        assert!(override_presets("", "openai-compatible", None).is_empty());
         assert!(
-            override_presets("[[preset]]\nname = \"no id\"\n", "openai-compatible", None)
-                .is_empty(),
+            override_presets(
+                "not toml [[[",
+                std::path::Path::new("."),
+                "openai-compatible",
+                None
+            )
+            .is_empty()
+        );
+        assert!(
+            override_presets("", std::path::Path::new("."), "openai-compatible", None).is_empty()
+        );
+        assert!(
+            override_presets(
+                "[[preset]]\nname = \"no id\"\n",
+                std::path::Path::new("."),
+                "openai-compatible",
+                None
+            )
+            .is_empty(),
             "an entry with no id is dropped"
         );
     }
@@ -670,5 +698,35 @@ mod device_code_tests {
             split_device_code("https://example.test/cb#code="),
             ("https://example.test/cb#code=".to_string(), None)
         );
+    }
+}
+
+#[cfg(test)]
+mod subst_tests {
+    // Verifies: gh #218 (preset strings resolve `{env:}`; a refused or
+    // missing `{file:}` yields no entries, never an error).
+    // SAFETY: unique process env var, no other thread reads it.
+    #[allow(unsafe_code)]
+    #[test]
+    fn preset_strings_substitute_env() {
+        // SAFETY: unique var name, no other thread reads it.
+        unsafe { std::env::set_var("LCA_TEST_PRESET_HOST", "llm.example.com") };
+        let entries = super::override_presets(
+            "[[preset]]\nid = \"p\"\nbase_url = \"https://{env:LCA_TEST_PRESET_HOST}/v1\"\n",
+            std::path::Path::new("."),
+            "openai-compatible",
+            None,
+        );
+        // SAFETY: same unique var.
+        unsafe { std::env::remove_var("LCA_TEST_PRESET_HOST") };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1.host, "llm.example.com");
+        let refused = super::override_presets(
+            "[[preset]]\nid = \"p\"\nbase_url = \"{file:credentials/x}\"\n",
+            std::path::Path::new("."),
+            "openai-compatible",
+            None,
+        );
+        assert!(refused.is_empty(), "credential refs yield nothing");
     }
 }

@@ -799,7 +799,13 @@ pub(crate) fn settings_text(
             text.push_str(&format!("  ui.theme = {live} [session]\n"));
             continue;
         }
-        text.push_str(&format!("  {key} = {value} [{source}]\n"));
+        // Gh #218: substituted values may be secrets - the source
+        // column stays honest, the value never prints.
+        if config.substituted(key) {
+            text.push_str(&format!("  {key} = ******** [{source}]\n"));
+        } else {
+            text.push_str(&format!("  {key} = {value} [{source}]\n"));
+        }
     }
     // ADR-0041: the key rows above are what was asked for; this row is what
     // the ladder actually resolved, which is the thing the model's tool
@@ -901,5 +907,25 @@ mod tests {
         let config = config_with("lca-settings-theme", "");
         let text = settings_text(&config, None, Some("light"), None, None);
         assert!(text.contains("ui.theme = light [session]"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod subst_tests {
+    // Verifies: gh #218 (`lca config` masks substituted secrets: the
+    // source prints, the value never does).
+    #[test]
+    fn settings_mask_substituted_secrets() {
+        let dir = lca_testkit::scratch_path("lca-settings-mask");
+        std::fs::write(dir.join("token.txt"), "s3cr3t\n").expect("seed");
+        std::fs::write(dir.join("config.toml"), "model = \"{file:token.txt}\"\n").expect("seed");
+        let config = lca_config::Config::load(&lca_config::LoadInput {
+            user_file: Some(dir.join("config.toml")),
+            ..Default::default()
+        })
+        .expect("load");
+        let text = super::settings_text(&config, None, None, None, None);
+        assert!(text.contains("model = ******** [user file]"), "{text}");
+        assert!(!text.contains("s3cr3t"), "the secret never prints: {text}");
     }
 }
