@@ -930,3 +930,47 @@ fn a_model_without_reasoning_gets_a_notice_not_a_picker() {
         "the notice names the gap: {notice:?}"
     );
 }
+
+// Verifies: gh #254 - Enter on open forks immediately at a forkable
+// message. After an `all`-mode flush (one joined record), the default
+// cursor is index 0 — before the fix the phantom second entry made
+// Enter fork index 1, and the host answered "no user message at
+// index 1".
+#[test]
+fn fork_enter_on_open_forks_the_latest_record() {
+    use std::sync::Mutex;
+    let mut opts = options();
+    let forked_at = Arc::new(Mutex::new(Vec::new()));
+    let seen = forked_at.clone();
+    opts.hooks.fork_at = Some(Arc::new(move |n: usize| {
+        seen.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(n);
+        crate::state::ForkReport {
+            id: Some("forked-id".to_string()),
+            notice: format!("✓ Forked from turn {n} (session: forked-id)"),
+        }
+    }));
+    opts.hooks.switch_session = Some(Arc::new(|_id: &str| Some(Vec::new())));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    chat.follow_up_mode = lca_protocol::QueueMode::All;
+    chat.queue_submit("first".into(), lca_protocol::SubmitMode::FollowUp);
+    chat.queue_submit("second".into(), lca_protocol::SubmitMode::FollowUp);
+    assert_eq!(chat.take_next_pending().as_deref(), Some("first\n\nsecond"));
+    for c in "/fork".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    let picker = chat.fork_picker.as_ref().expect("picker opens");
+    assert_eq!(picker.selected, 0, "the one record is the default");
+    chat.handle_key("\r");
+    assert_eq!(
+        forked_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_slice(),
+        &[0],
+        "Enter on open forks index 0"
+    );
+    assert_eq!(chat.editor.text(), "first\n\nsecond", "the text restores");
+}

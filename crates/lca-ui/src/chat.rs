@@ -960,11 +960,15 @@ impl Chat {
         let mode = drained.first().map(|next| next.mode);
         let mut texts = Vec::new();
         for next in &drained {
-            self.transcript.push_user(next.text.clone());
             texts.push(next.text.clone());
         }
+        // Gh #254: one joined submission writes one turn record, so
+        // the transcript carries one user entry — one entry per
+        // drained message forked phantom indexes the host cannot map.
+        let joined = texts.join("\n\n");
+        self.transcript.push_user(joined.clone());
         self.submitted_queue = mode;
-        Some(texts.join("\n\n"))
+        Some(joined)
     }
 
     /// Restore the queued messages to the editor, in order (FR-CORE-12).
