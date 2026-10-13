@@ -590,8 +590,7 @@ impl Chat {
     pub fn toast(&mut self, text: impl Into<String>) {
         self.toasts.push(Toast {
             text: text.into(),
-            until: std::time::Instant::now()
-                + std::time::Duration::from_secs(TOAST_SECS),
+            until: std::time::Instant::now() + std::time::Duration::from_secs(TOAST_SECS),
         });
         while self.toasts.len() > TOAST_MAX {
             self.toasts.remove(0);
