@@ -11,23 +11,7 @@ use lca_ui::UiOptions;
 
 use super::BUILTIN_SLOTS;
 use super::Ui;
-use super::display::model_effect_on;
-
-/// Pick the model a provider switch lands on (gh #236): keep the
-/// session's model when the new provider offers it, else that
-/// provider's default, else its first listed model (a switch whose
-/// current id exists nowhere still moves).
-fn pick_model<'a>(
-    listed: &'a [lca_protocol::ModelInfo],
-    current: &str,
-    default_id: &str,
-) -> Option<&'a lca_protocol::ModelInfo> {
-    listed
-        .iter()
-        .find(|model| model.id == current)
-        .or_else(|| listed.iter().find(|model| model.id == default_id))
-        .or_else(|| listed.first())
-}
+use super::model_select::pick_model;
 
 impl Ui {
     /// Every model this session offers: every enabled provider's list
@@ -41,10 +25,20 @@ impl Ui {
     /// read this one list, so what a user can see is what the keys can
     /// reach; an empty scope is no restriction.
     pub(super) fn offered_models(&self) -> Vec<lca_protocol::ModelInfo> {
-        crate::models::filter_enabled(
+        let models = crate::models::filter_enabled(
             self.all_models(),
             crate::lock(&self.config).models_enabled(),
-        )
+        );
+        // The pick path's memo (gh #240): every enumeration refreshes
+        // it, so a picker Enter right after happily skips its own.
+        // Lock order is registry-then-cache everywhere (the pick path
+        // clones the Arc first too): std Mutex is not reentrant.
+        let registry = self.registry();
+        self.offered_cache
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .fill(&registry, models.clone());
+        models
     }
 
     /// Every model every ready provider offers, unfiltered (gh #204):
@@ -356,6 +350,15 @@ impl Ui {
         if self.registry().provider_names().is_empty() {
             return CommandEffect::ShowWidget(crate::no_model_message(&self.live_name()));
         }
+        // Gh #240: login/logout flip provider readiness, which the
+        // model memo cannot see — clear eagerly (a stale miss only
+        // re-enumerates once; `usage` changes nothing).
+        if matches!(name, "login" | "logout") {
+            self.offered_cache
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clear();
+        }
         let step = super::pending_step::PendingStep::wrap(
             self.login_pending.clone(),
             self.login_generation.clone(),
@@ -522,265 +525,6 @@ impl Ui {
         }
     }
 
-    /// `/model`: the picker, or a named switch that moves the live cell, the
-    /// footer window, and the compaction backend together.
-    fn command_model(self: &Arc<Self>, argument: &str) -> CommandEffect {
-        let models = self.offered_models();
-        // EFG-041: `/model sonnet:high` names the level with the model.
-        // The suffix splits before resolution (an id that matches as a
-        // whole keeps its colons); what it - and a model switch - does to
-        // the session's level is decided below, once the target model is
-        // known, because the clamp is against *that* model's set.
-        let (argument, suffix_level) = {
-            let (base, level) = crate::models::split_thinking(argument.trim());
-            (base.to_string(), level.map(str::to_string))
-        };
-        let argument = argument.as_str();
-        let resolves = crate::models::resolve_pattern(argument, &models)
-            .is_ok_and(|resolved| models.iter().any(|model| model.id == resolved.id));
-        // An empty list with an env-configured endpoint means live
-        // discovery is about to happen (gh #31 review): consent first,
-        // off this thread so the modal can render. The list arrives
-        // through `pending_models` once the answer lands, so the picker
-        // opens then; until then this says what is happening instead of
-        // the misleading "no models".
-        if models.is_empty() && argument.trim().is_empty() && self.start_model_consent() {
-            let registry = self.registry();
-            let host = crate::net_consent::env_configured_host(
-                &self.data,
-                &self.live_name(),
-                Some(registry.as_ref()),
-            )
-            .unwrap_or_default();
-            return CommandEffect::ShowWidget(format!(
-                "{host} is not granted yet - approve the prompt to list its models"
-            ));
-        }
-        // Gh #177: a pick from another ready provider swaps the whole
-        // generation (provider, model, backend, record), not just the
-        // cell - the pick IS the confirmation, the way pi switches on
-        // selection.
-        if resolves
-            && let Ok(resolved) = crate::models::resolve_pattern(argument, &models)
-            && let Some(picked) = models.iter().find(|model| model.id == resolved.id)
-            && picked
-                .extras
-                .get("provider")
-                .is_some_and(|owner| *owner != self.live_name())
-        {
-            let target = picked.extras.get("provider").cloned().unwrap_or_default();
-            return self.command_model_switch(
-                &target,
-                &picked.id,
-                picked.context_window,
-                picked.extras.get("profile").cloned(),
-                suffix_level.as_deref(),
-            );
-        }
-        // E5: the label keeps the preset identity across a model switch.
-        let identity = self
-            .identity_cell
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
-        // The model the session ran on before this command: gh #8's
-        // `model-change` record names it, and only a *change* appends one.
-        let previous = self
-            .model_cell
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .id
-            .clone();
-        let effect = model_effect_on(
-            &models,
-            &identity,
-            &self.live_name(),
-            argument,
-            Some(&self.model_cell),
-            Some(&self.label_cell),
-            self.provider_backend.as_ref(),
-        );
-        // Keep the footer's window in step with the choice.
-        let chosen = self
-            .model_cell
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
-        *self
-            .context_window_cell
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = chosen.window as u64;
-        // gh #8 phase 4: the session's thinking follows the model it runs
-        // on. An explicit `:level` is the user's choice, clamped into what
-        // the model accepts; a model *switch* applies the new model's
-        // configured default (pi's per-model precedence), else keeps the
-        // session's level, clamped. A pattern that resolved to nothing
-        // changes neither model nor level.
-        if resolves {
-            let current = self
-                .thinking_cell
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone();
-            let effective = match suffix_level.as_deref() {
-                Some(level) => crate::lock(&self.config).clamp_thinking(Some(level), &chosen.id),
-                None if chosen.id != previous => {
-                    crate::lock(&self.config).switch_thinking(current.as_deref(), &chosen.id)
-                }
-                None => current,
-            };
-            *self.thinking_cell.lock().unwrap_or_else(|p| p.into_inner()) = effective;
-        }
-        // ADR-0024: a switch moves the model everywhere it is read, and
-        // `meta.json` is one of those readers' source (gh #20) - written
-        // the moment the model is chosen, so a session that switches and
-        // then closes says what it ran on. gh #8: the same moment appends
-        // a `model-change` record, but only when the model actually
-        // changed - reopening the picker or re-picking the active model is
-        // no change.
-        if !argument.trim().is_empty() && !chosen.id.is_empty() {
-            let session = self.session();
-            if chosen.id != previous {
-                let profile = models
-                    .iter()
-                    .find(|model| model.id == chosen.id)
-                    .and_then(|model| model.extras.get("profile").cloned());
-                let record = crate::models::model_change_record(
-                    Some(&previous),
-                    &chosen.id,
-                    &self.live_name(),
-                    profile.as_deref(),
-                );
-                if let Err(err) = self.store.append(&session, record) {
-                    return CommandEffect::ShowWidget(format!(
-                        "cannot record the model change: {err}"
-                    ));
-                }
-            }
-            if let Err(err) = self
-                .store
-                .record_model_used(&session, &self.live_name(), &chosen.id)
-            {
-                return CommandEffect::ShowWidget(format!(
-                    "cannot update the session metadata: {err}"
-                ));
-            }
-        }
-        effect
-    }
-
-    /// A `/model` pick from another ready provider (gh #177): swap the
-    /// live generation - name, provider, agent config - then follow with
-    /// the compaction backend and every cell, the thinking level, the
-    /// `model-change` record carrying both sides, and `meta.json`. The
-    /// pick is explicit, so no further confirmation asks.
-    fn command_model_switch(
-        self: &Arc<Self>,
-        target: &str,
-        model_id: &str,
-        window: u32,
-        profile: Option<String>,
-        suffix_level: Option<&str>,
-    ) -> CommandEffect {
-        match self.apply_provider_switch(target, model_id, window, profile, suffix_level) {
-            Ok(notice) => CommandEffect::ShowWidget(notice),
-            Err(err) => CommandEffect::ShowWidget(err),
-        }
-    }
-
-    /// Move this session to another provider (gh #177): the one routine
-    /// both `/model` and the `/login` switch confirmation share. Returns
-    /// the notice naming what now answers, or the refusal.
-    fn apply_provider_switch(
-        &self,
-        target: &str,
-        model_id: &str,
-        window: u32,
-        profile: Option<String>,
-        suffix_level: Option<&str>,
-    ) -> Result<String, String> {
-        let Some(handle) = self.registry().provider(target).cloned() else {
-            return Err(format!("no provider named `{target}`"));
-        };
-        let previous = self
-            .model_cell
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .id
-            .clone();
-        let previous_provider = self.live_name();
-        let provider = Arc::new(lca_core::ExtensionProvider::new_with_settings(
-            handle,
-            self.settings_cell.clone(),
-        ));
-        let listed = provider.list_models();
-        if !listed.iter().any(|model| model.id == model_id) {
-            return Err(format!("no model named `{model_id}` for {target}"));
-        }
-        // The new generation's identity reads like startup's (E5): the
-        // stored login preset when one is known, else the extension.
-        let identity =
-            crate::stored_provider_preset(&self.data, target).unwrap_or_else(|| target.to_string());
-        super::adopt_login_identity(&self.identity_cell, &identity);
-        *self.model_cell.lock().unwrap_or_else(|p| p.into_inner()) = super::ModelChoice {
-            id: model_id.to_string(),
-            window,
-        };
-        *self
-            .context_window_cell
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = u64::from(window);
-        *self.label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
-            format!("{identity}/{model_id}");
-        if let Some(backend) = self.provider_backend.as_ref() {
-            backend.set_provider(provider.clone());
-            backend.set_model(model_id.to_string());
-        }
-        {
-            let mut live = crate::lock(&self.live);
-            live.name = target.to_string();
-            live.provider = provider.clone();
-            live.agent_config.provider = target.to_string();
-            live.agent_config.model = model_id.to_string();
-            live.agent_config.model_context_window = window;
-            live.agent_config.image_policy = crate::models::image_policy_for(&listed, model_id);
-        }
-        // The session's thinking follows the model it runs on (gh #8
-        // phase 4, same rule as a same-provider switch).
-        let current = self
-            .thinking_cell
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
-        let effective = match suffix_level {
-            Some(level) => crate::lock(&self.config).clamp_thinking(Some(level), model_id),
-            None if model_id != previous => {
-                crate::lock(&self.config).switch_thinking(current.as_deref(), model_id)
-            }
-            None => current,
-        };
-        *self.thinking_cell.lock().unwrap_or_else(|p| p.into_inner()) = effective;
-        // The log's witness carries both sides (gh #8, gh #177); only an
-        // actual change appends one. `meta.json` follows, the way a
-        // same-provider switch writes it (ADR-0024).
-        let session = self.session();
-        if model_id != previous || target != previous_provider {
-            let record = crate::models::model_change_record(
-                Some(&previous),
-                model_id,
-                target,
-                profile.as_deref(),
-            );
-            if let Err(err) = self.store.append(&session, record) {
-                return Err(format!("cannot record the model change: {err}"));
-            }
-        }
-        if let Err(err) = self.store.record_model_used(&session, target, model_id) {
-            return Err(format!("cannot update the session metadata: {err}"));
-        }
-        Ok(format!("model for this session: {target}/{model_id}"))
-    }
-
     /// Answer the provider-switch confirmation after a `/login` (gh
     /// #177): keep the session's model when the new provider offers
     /// it, else fall back to that provider's default the way startup
@@ -811,7 +555,7 @@ impl Ui {
                 pick.context_window,
                 pick.extras.get("profile").cloned(),
             );
-            match ui.apply_provider_switch(provider, &id, window, profile, None) {
+            match ui.apply_provider_switch(provider, &id, window, profile, None, None) {
                 Ok(notice) => notice,
                 Err(err) => err,
             }
@@ -858,7 +602,7 @@ impl Ui {
     /// painting for the modal to appear - the same reason a turn's consent
     /// is not answered on the loop's thread. A granted host never gets
     /// here: `endpoint_consent` itself costs one grant-store read.
-    fn start_model_consent(self: &Arc<Self>) -> bool {
+    pub(super) fn start_model_consent(self: &Arc<Self>) -> bool {
         let registry = self.registry();
         let Some(host) = crate::net_consent::env_configured_host(
             &self.data,
@@ -1157,39 +901,5 @@ mod tests {
         let config = config_with("lca-settings-theme", "");
         let text = settings_text(&config, None, Some("light"), None, None);
         assert!(text.contains("ui.theme = light [session]"), "{text}");
-    }
-}
-
-#[cfg(test)]
-mod pick_tests {
-    use super::pick_model;
-
-    fn models() -> Vec<lca_protocol::ModelInfo> {
-        ["b-one", "a-two"]
-            .iter()
-            .map(|id| lca_protocol::ModelInfo {
-                id: id.to_string(),
-                name: id.to_string(),
-                context_window: 0,
-                max_tokens: 0,
-                extras: Default::default(),
-            })
-            .collect()
-    }
-
-    // Verifies: gh #236 - a switch keeps the current model when
-    // offered, else the provider default, else the first listed model
-    // (a current id that exists nowhere still moves).
-    #[test]
-    fn switch_pick_prefers_current_then_default_then_first() {
-        let listed = models();
-        assert_eq!(pick_model(&listed, "a-two", "b-one").unwrap().id, "a-two");
-        assert_eq!(pick_model(&listed, "missing", "b-one").unwrap().id, "b-one");
-        assert_eq!(
-            pick_model(&listed, "missing", "also-missing").unwrap().id,
-            "b-one",
-            "first listed, not 'offers no models'"
-        );
-        assert!(pick_model(&[], "x", "y").is_none());
     }
 }

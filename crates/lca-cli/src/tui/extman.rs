@@ -39,6 +39,12 @@ impl Ui {
         match crate::ext::set_extension_enabled(&crate::data_dir(), &self.cwd, &name, enabled) {
             Ok(notice) => {
                 self.registry().set_enabled(&name, enabled);
+                // Gh #240: enabling/disabling flips enumeration
+                // membership under the memo's feet — clear it.
+                self.offered_cache
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .clear();
                 notice
             }
             Err(err) => format!("could not toggle {name}: {err}"),

@@ -12,6 +12,7 @@ mod close;
 mod commands;
 pub(crate) use attach::stage_initial_attachments;
 pub(crate) use commands::settings_text;
+pub(crate) use model_select::OfferedCache;
 mod display;
 mod extman;
 mod hooks;
@@ -19,6 +20,7 @@ mod hub;
 pub(crate) use hub::OFFICIAL_CATALOG_URL;
 mod label_hooks;
 mod login;
+mod model_select;
 mod pending_step;
 mod runner;
 mod session_hooks;
@@ -192,6 +194,16 @@ pub(crate) struct Ui {
     /// Rows discovered after the endpoint consent landed, for the picker
     /// to open with (`None`: nothing pending).
     pending_models: Arc<Mutex<Option<Vec<lca_ui::ModelRow>>>>,
+    /// The last model enumeration, for the pick path (gh #240): a
+    /// picker Enter carries only the row id, and re-enumerating every
+    /// provider (WASM calls, credential probes, live `GET /models`)
+    /// on selection froze the interface for seconds. The memo serves
+    /// exact-id hits with zero enumeration; anything else falls back
+    /// to the fresh listing. Invalidation is structural, never timed:
+    /// the registry Arc changes on `/reload`, and membership flips
+    /// (login/logout/toggle) clear eagerly at the command site —
+    /// both directions are safe (a stale miss just re-enumerates).
+    offered_cache: Mutex<OfferedCache>,
     /// Whether the picker's endpoint consent is already asking, so a
     /// second `/model` while it waits does not ask again.
     consent_in_flight: Arc<std::sync::atomic::AtomicBool>,
@@ -892,6 +904,7 @@ impl Ui {
             prompt_slot,
             dialog_slot,
             pending_models: Arc::new(Mutex::new(None)),
+            offered_cache: Mutex::new(OfferedCache::default()),
             consent_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_regions,
             ui_events,
