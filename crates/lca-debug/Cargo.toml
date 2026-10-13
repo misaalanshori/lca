@@ -1,0 +1,21 @@
+[package]
+name = "lca-debug"
+version = "0.6.0"
+edition = "2021"
+description = "Internal lifecycle tracing and boundary inspection (gh #258). Always a dependency; emission is a no-op unless the `debug-trace` feature is on."
+license = "MIT"
+
+[features]
+default = []
+# Full-stack observability: links tracing + tracing-subscriber and arms
+# every domain emitter. Off (stable line): every emit call compiles to
+# nothing, and neither crate links in.
+debug-trace = ["dep:tracing", "dep:tracing-subscriber"]
+
+[dependencies]
+serde_json.workspace = true
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+
+[lints]
+workspace = true
