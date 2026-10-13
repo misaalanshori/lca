@@ -57,7 +57,7 @@ The `v` field is per record, not per file. A file written across a format upgrad
 
 `tool-call` holds one call the model requested. Fields: `id`, `call_id`, `name`, `arguments` as a JSON string, and `source` naming whether the tool is built in or comes from an extension.
 
-`tool-result` holds the outcome. Fields: `id`, `call_id` matching the call (a nested call carries `<parent id>/<n>` with `parent_call_id` on the call), `status` of ok, error, denied, or timeout, `content` or an attachment hash, `truncated` as a boolean, and (gh #40) `exit_code` plus `full_output_path` when the tool ran a command and spilled: the process exit code and the session-attachments path holding the untruncated output. Non-shell tools leave both absent. `nested` (gh #77) is the bounded
+`tool-result` holds the outcome. Fields: `id`, `call_id` matching the call (a nested call carries `<parent id>/<n>` with `parent_call_id` on the call), `status` of ok, error, denied, or timeout, `content` or an attachment hash, `truncated` as a boolean, `duration_ms` (gh #214) with the worker's active execution time in milliseconds — never the permission-prompt wait — absent on old lines and non-executed results, and (gh #40) `exit_code` plus `full_output_path` when the tool ran a command and spilled: the process exit code and the session-attachments path holding the untruncated output. Non-shell tools leave both absent. `nested` (gh #77) is the bounded
 nested-call record: one entry per directly nested call (`name`,
 `status`, `content_head` capped at 500 characters), the first twenty
 winning; calls that nested nothing carry none. Nested calls never

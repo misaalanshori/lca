@@ -451,10 +451,11 @@ impl Chat {
                 // gh #9: the tool's structured diff rides into the card
                 // (`extras` is the carrier; display text is never
                 // re-parsed to recover a change).
-                self.transcript.finish_tool_with_diff(
+                self.transcript.finish_tool_full(
                     status,
                     Some(result.content.clone()),
                     result.extras.get("diff").cloned(),
+                    result.duration_ms,
                 );
                 // R5: a tool that read an image shows it through the ladder.
                 for image in &result.images {

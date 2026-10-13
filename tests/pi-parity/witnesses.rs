@@ -220,6 +220,7 @@ fn pi_parity_compaction_cut_never_lands_on_a_tool_result() {
         content: Some("out".to_string()),
         attachment: None,
         truncated: false,
+        duration_ms: None,
         exit_code: None,
         images: vec![],
         full_output_path: None,

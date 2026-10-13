@@ -741,6 +741,9 @@ pub fn outcome_to_result(call_id: &str, outcome: ModeOutcome) -> ToolResult {
         truncated: false,
         images: Vec::new(),
         extras: outcome.extras,
+        // Gh #214: stamped by the turn's dispatch timer (native
+        // handles run inside it).
+        duration_ms: None,
         exit_code: None,
         full_output_path: None,
         nested: Vec::new(),

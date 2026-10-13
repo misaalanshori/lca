@@ -65,6 +65,7 @@ fn arb_record(n: u32) -> impl Strategy<Value = Record> {
             content: Some(content),
             attachment: None,
             truncated,
+            duration_ms: None,
             exit_code: None,
             nested: Vec::new(),
             full_output_path: None,

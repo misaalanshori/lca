@@ -140,6 +140,7 @@ fn sample_records() -> Vec<(Record, &'static str)> {
                 content: None,
                 attachment: None,
                 truncated: false,
+                duration_ms: None,
                 exit_code: None,
                 nested: Vec::new(),
                 full_output_path: None,
@@ -649,4 +650,22 @@ fn old_tool_result_lines_without_images_still_load() {
         Record::ToolResult { images, .. } => assert!(images.is_empty()),
         other => panic!("a tool result, not {}", other.type_tag()),
     }
+}
+
+// Verifies: gh #214 - old `tool-result` lines without `duration_ms`
+// load with `None` (no format bump); new ones round-trip it.
+#[test]
+fn tool_result_duration_is_backward_compatible() {
+    let old: Record = serde_json::from_str(
+        r#"{"v":1,"t":"tool-result","ts":1,"id":"r1","call_id":"c1","status":"ok","content":"out","truncated":false}"#,
+    )
+    .expect("old lines parse");
+    let lca_protocol::Record::ToolResult { duration_ms, .. } = old else {
+        panic!("parsed as tool-result");
+    };
+    assert_eq!(duration_ms, None);
+    let result = ToolResult::ok("c1", "out");
+    assert_eq!(result.duration_ms, None, "constructors default to none");
+    let json = serde_json::to_string(&result).expect("serialize");
+    assert!(!json.contains("duration_ms"), "absent serializes absent");
 }

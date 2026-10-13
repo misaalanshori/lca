@@ -72,6 +72,15 @@ pub(super) fn execute_work(
         ),
     );
     inner.checkin_tool(store, instance);
+    // Gh #214: active execution time (the prompt resolved before
+    // dispatch, so waits never inflate it) plus the WIT mirror.
+    let ms = started.elapsed().as_millis() as u64;
+    let mut extras: std::collections::BTreeMap<String, String> = guest_result
+        .extras
+        .into_iter()
+        .map(|pair| (pair.key, pair.value))
+        .collect();
+    extras.insert("duration-ms".to_string(), ms.to_string());
     Ok(lca_protocol::ToolResult {
         call_id: guest_result.call_id,
         status: match guest_result.status.as_str() {
@@ -85,11 +94,8 @@ pub(super) fn execute_work(
         images: Vec::new(),
         // #49: structured side data rides through verbatim; the
         // model reads `content`, programs read `extras`.
-        extras: guest_result
-            .extras
-            .into_iter()
-            .map(|pair| (pair.key, pair.value))
-            .collect(),
+        extras,
+        duration_ms: Some(ms),
         exit_code: None,
         full_output_path: None,
         nested: Vec::new(),
@@ -324,6 +330,10 @@ fn map_guest_result(
             .into_iter()
             .map(|pair| (pair.key, pair.value))
             .collect(),
+        // Gh #214: nested calls run inside the parent's timed window;
+        // the parent's stamp covers them (their own `duration-ms`
+        // extra, if a guest set one, still rides through verbatim).
+        duration_ms: None,
         exit_code: None,
         full_output_path: None,
         nested: Vec::new(),

@@ -995,3 +995,24 @@ fn long_thinking_runs_keep_snippet_full_hidden() {
         "hidden returns to snippet: {back:?}"
     );
 }
+
+// Verifies: gh #214 - a finished card renders its recorded duration
+// (`Took 45ms`, `Took 1.4s`); a card without one renders no timing.
+#[test]
+fn finished_cards_render_their_recorded_duration() {
+    let mut t = Transcript::new();
+    t.start_tool("shell", "echo hi");
+    t.finish_tool_full(ToolStatus::Ok, Some("hi".into()), None, Some(45));
+    t.start_tool("shell", "sleep 1 && echo done");
+    t.finish_tool_full(ToolStatus::Ok, Some("done".into()), None, Some(1400));
+    t.start_tool("read", "a.txt");
+    t.finish_tool(ToolStatus::Denied, None);
+    let text = strip(&t.render(60, &plain())).join("\n");
+    assert!(text.contains("Took 45ms"), "millis render:\n{text}");
+    assert!(text.contains("Took 1.4s"), "seconds render:\n{text}");
+    assert_eq!(
+        text.matches("Took ").count(),
+        2,
+        "refusals render none:\n{text}"
+    );
+}

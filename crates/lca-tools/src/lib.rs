@@ -309,6 +309,7 @@ impl ToolExecutor {
             exit_code,
             full_output_path,
             nested: Vec::new(),
+            duration_ms: None,
         };
         if let Some(hash) = attachment {
             result.extras.insert("attachment".to_string(), hash);
@@ -370,6 +371,9 @@ impl ToolExecutor {
     }
 
     /// Run one call and return its result (FR-TOOL-7 marks truncation).
+    /// Gh #214: the timer starts here — after the turn authorized, so
+    /// permission-prompt waits never inflate it — and stamps
+    /// `duration_ms` plus the WIT-compatible `extras["duration-ms"]`.
     pub async fn execute(
         &mut self,
         call: &ToolCall,
@@ -382,7 +386,8 @@ impl ToolExecutor {
                 return ToolResult::error(call.call_id.clone(), format!("bad arguments: {err}"));
             }
         };
-        match call.name.as_str() {
+        let started = std::time::Instant::now();
+        let mut result = match call.name.as_str() {
             "read" => self.read(call, &args).await,
             "skill" => self.skill(call, &args).await,
             "write" => self.write(call, &args).await,
@@ -392,7 +397,13 @@ impl ToolExecutor {
             "grep" => self.grep(call, &args).await,
             "shell" => self.shell(call, &args, on_output, cancel).await,
             other => ToolResult::error(call.call_id.clone(), format!("unknown tool `{other}`")),
-        }
+        };
+        let ms = started.elapsed().as_millis() as u64;
+        result.duration_ms = Some(ms);
+        result
+            .extras
+            .insert("duration-ms".to_string(), ms.to_string());
+        result
     }
 
     /// The `skill` tool (gh #43): load one skill's full instructions by

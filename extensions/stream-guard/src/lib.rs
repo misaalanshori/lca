@@ -354,6 +354,7 @@ mod native {
                     exit_code: None,
                     full_output_path: None,
                     nested: Vec::new(),
+                    duration_ms: None,
                     images: Vec::new(),
                     extras: Default::default(),
                 })

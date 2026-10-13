@@ -126,6 +126,7 @@ fn a_complete_turn_is_unchanged() {
             content: Some("ok".into()),
             attachment: None,
             truncated: false,
+            duration_ms: None,
             exit_code: None,
             nested: Vec::new(),
             full_output_path: None,

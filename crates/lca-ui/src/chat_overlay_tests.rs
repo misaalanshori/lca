@@ -451,6 +451,7 @@ fn a_replayed_session_renders_like_the_live_one() {
             content: Some("line one".into()),
             attachment: None,
             truncated: false,
+            duration_ms: None,
             exit_code: None,
             nested: Vec::new(),
             full_output_path: None,

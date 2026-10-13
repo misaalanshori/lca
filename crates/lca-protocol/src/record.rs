@@ -159,6 +159,11 @@ pub enum Record {
         /// Whether the content was truncated (FR-TOOL-7).
         #[serde(default)]
         truncated: bool,
+        /// Active execution time in milliseconds (gh #214): what the
+        /// worker spent, excluding permission-prompt waits. Absent on
+        /// old lines and non-executed results; readers skip it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
         /// Process exit code, when the tool ran a command (gh #40).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,

@@ -692,6 +692,7 @@ mod vocabulary_tests {
                 content: Some("ok".into()),
                 attachment: None,
                 truncated: false,
+                duration_ms: None,
                 exit_code: None,
                 nested: Vec::new(),
                 full_output_path: None,

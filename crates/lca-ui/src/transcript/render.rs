@@ -392,6 +392,7 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
         diff,
         manual,
         expanded: card_expanded,
+        duration_ms,
     } = entry
     else {
         return;
@@ -436,6 +437,16 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
     };
     let header = format!("{} {title}{args_span} {status_text}", (theme.tool)(">"));
     let mut rows = vec![truncate_to_width(&header, inner, "…", false)];
+    // Gh #214: the recorded execution time rides under the header —
+    // `None` (refusals, old replays) renders no timing line.
+    if let Some(ms) = duration_ms {
+        let took = if *ms < 1000 {
+            format!("Took {ms}ms")
+        } else {
+            format!("Took {:.1}s", *ms as f64 / 1000.0)
+        };
+        rows.push(format!("  {}", (theme.role(Role::Muted))(&took)));
+    }
     // gh #9 / EFG-016: a structured diff renders as pi's diff card -
     // the diff's own line kinds in the two diff roles, bounded like
     // every other preview, inside the same state band. The diff came

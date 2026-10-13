@@ -32,6 +32,21 @@ pub(super) fn tool_search_spec() -> lca_protocol::ToolSpec {
     }
 }
 
+/// Fill a missing execution duration from the dispatch timer (gh
+/// #214): paths with their own stamp (built-ins, WASM guests) keep
+/// theirs; native handles and discovery get the dispatch window.
+/// Refusals never reach here, so `None` stays impossible past this.
+fn stamp_duration(mut result: ToolResult, started: std::time::Instant) -> ToolResult {
+    if result.duration_ms.is_none() {
+        let ms = started.elapsed().as_millis() as u64;
+        result.duration_ms = Some(ms);
+        result
+            .extras
+            .insert("duration-ms".to_string(), ms.to_string());
+    }
+    result
+}
+
 /// How deep tools may nest (gh #77): the host assigns
 /// `<parent>/<n>` ids, and past this depth the call fails as an
 /// error result instead of recursing (pi never rejects: unknown
@@ -378,6 +393,7 @@ impl Agent<'_> {
                 content: Some(result.content.clone()),
                 attachment: result.extras.get("attachment").cloned(),
                 truncated: result.truncated,
+                duration_ms: result.duration_ms,
                 exit_code: result.exit_code,
                 full_output_path: result.full_output_path.clone(),
                 nested: result.nested.clone(),
@@ -464,7 +480,9 @@ impl Agent<'_> {
         // Deferred discovery (gh #77): search, activate the hits, and
         // report them. The next request declares the newly active.
         if call.name == crate::registry::TOOL_SEARCH_NAME {
-            return Ok(self.run_tool_search(call, registry));
+            let started = std::time::Instant::now();
+            let result = Ok(self.run_tool_search(call, registry));
+            return result.map(|result| stamp_duration(result, started));
         }
 
         // Extension tool or built-in: one dispatch table, no mode
@@ -473,11 +491,15 @@ impl Agent<'_> {
         // execution drains the nested server while it runs (gh #77);
         // built-ins never nest, so they run straight through.
         if let Some(handle) = registry.tool_owner(&call.name).cloned() {
+            // Gh #214: the dispatch timer backstops paths without
+            // their own stamp (native handles); self-stamped results
+            // (WASM, built-ins) keep theirs.
+            let started = std::time::Instant::now();
             let executed = self
                 .execute_with_nested(handle.execute_tool(call), depth, sink, cancel, server)
                 .await;
             return Ok(match executed {
-                Ok(result) => result,
+                Ok(result) => stamp_duration(result, started),
                 Err(err) => {
                     let event = match err {
                         DispatchError::Disabled => "disabled",

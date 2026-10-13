@@ -35,6 +35,7 @@ fn fixture_records() -> Vec<Record> {
             content: Some("[image image/png, 4 bytes]".to_string()),
             attachment: None,
             truncated: false,
+            duration_ms: None,
             exit_code: None,
             nested: Vec::new(),
             full_output_path: None,

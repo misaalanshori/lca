@@ -80,6 +80,7 @@ fn canonical_records() -> Vec<Record> {
             content: Some("main.rs\nlib.rs\n".into()),
             attachment: None,
             truncated: false,
+            duration_ms: None,
             exit_code: None,
             nested: Vec::new(),
             full_output_path: None,

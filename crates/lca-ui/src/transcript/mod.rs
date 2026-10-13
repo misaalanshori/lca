@@ -66,6 +66,9 @@ pub enum Entry {
         status: ToolStatus,
         /// Result preview, once finished.
         result: Option<String>,
+        /// Active execution time in milliseconds (gh #214); `None`
+        /// for refusals and old replays that never recorded one.
+        duration_ms: Option<u64>,
         /// The structured diff the tool returned in `extras["diff"]`
         /// (gh #9): `Some` renders the card as pi's diff card - its own
         /// line kinds in `toolDiffAdded`/`toolDiffRemoved` - instead of
@@ -441,6 +444,7 @@ impl Transcript {
             diff: None,
             manual: false,
             expanded: None,
+            duration_ms: None,
         });
     }
 
@@ -455,6 +459,7 @@ impl Transcript {
             diff: None,
             manual: true,
             expanded: None,
+            duration_ms: None,
         });
     }
 
@@ -473,12 +478,25 @@ impl Transcript {
         result: Option<String>,
         diff: Option<String>,
     ) {
+        self.finish_tool_full(status, result, diff, None);
+    }
+
+    /// Finish with the recorded execution time (gh #214): the card
+    /// renders it as `Took …`; `None` renders no timing line.
+    pub fn finish_tool_full(
+        &mut self,
+        status: ToolStatus,
+        result: Option<String>,
+        diff: Option<String>,
+        duration_ms: Option<u64>,
+    ) {
         self.invalidate_cache();
         for entry in self.entries.iter_mut().rev() {
             if let Entry::Tool {
                 status: s,
                 result: r,
                 diff: d,
+                duration_ms: ms,
                 ..
             } = entry
                 && *s == ToolStatus::Running
@@ -486,6 +504,7 @@ impl Transcript {
                 *s = status;
                 *r = result;
                 *d = diff;
+                *ms = duration_ms;
                 return;
             }
         }
@@ -641,7 +660,10 @@ impl Transcript {
                     name, arguments, ..
                 } => self.start_tool(name.clone(), arguments.clone()),
                 Record::ToolResult {
-                    status, content, ..
+                    status,
+                    content,
+                    duration_ms,
+                    ..
                 } => {
                     let status = match status {
                         lca_protocol::ToolResultStatus::Ok => ToolStatus::Ok,
@@ -649,7 +671,9 @@ impl Transcript {
                         lca_protocol::ToolResultStatus::Denied => ToolStatus::Denied,
                         lca_protocol::ToolResultStatus::Timeout => ToolStatus::Timeout,
                     };
-                    self.finish_tool(status, content.clone());
+                    // Gh #214: replays show the recorded duration;
+                    // old lines without one show no timing line.
+                    self.finish_tool_full(status, content.clone(), None, *duration_ms);
                 }
                 Record::Compaction {
                     summary, strategy, ..
@@ -689,6 +713,7 @@ impl Transcript {
             diff: None,
             manual: false,
             expanded: None,
+            duration_ms: None,
         });
     }
 

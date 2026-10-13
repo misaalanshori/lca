@@ -213,6 +213,12 @@ pub struct ToolResult {
     /// in the event, not a message-shape change.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageContent>,
+    /// Wall-clock active execution time in milliseconds (gh #214):
+    /// strictly the worker's time, excluding permission-prompt waits.
+    /// `None` for cached, instant, or pre-execution results (denied,
+    /// refused, schema-invalid). Optional so older session files load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     /// Reserved map for non-structural extensions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: BTreeMap<String, String>,
@@ -231,6 +237,7 @@ impl ToolResult {
             exit_code: None,
             full_output_path: None,
             nested: Vec::new(),
+            duration_ms: None,
         }
     }
 
@@ -246,6 +253,7 @@ impl ToolResult {
             exit_code: None,
             full_output_path: None,
             nested: Vec::new(),
+            duration_ms: None,
         }
     }
 
@@ -261,6 +269,7 @@ impl ToolResult {
             exit_code: None,
             full_output_path: None,
             nested: Vec::new(),
+            duration_ms: None,
         }
     }
 
@@ -276,6 +285,7 @@ impl ToolResult {
             exit_code: None,
             full_output_path: None,
             nested: Vec::new(),
+            duration_ms: None,
         }
     }
 }
