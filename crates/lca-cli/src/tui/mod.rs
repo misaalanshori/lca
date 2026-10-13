@@ -536,6 +536,16 @@ fn agent_config_for(
         completion_backend,
         system_prompt,
         skills_roots: crate::skills_roots(cwd, flags),
+        // Gh #217: the startup prompt sources, re-scanned every turn
+        // for unified-diff updates (empty with `-nc`; the trust rule
+        // matches the prompt build above).
+        instruction_sources: crate::prompt::context_sources(
+            &crate::data_dir(),
+            cwd,
+            trusted,
+            flags.no_context_files,
+        ),
+        instruction_baseline: Default::default(),
         skills_inject_matched: config.skills_inject_matched(),
         edit_requires_read: config.tool_edit_requires_read(),
         auto_resize_images: config.images_auto_resize(),

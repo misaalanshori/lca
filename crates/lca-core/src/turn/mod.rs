@@ -501,8 +501,26 @@ impl Agent<'_> {
             .await;
             lca_tools::skills::transform(messages, &skills, self.config.skills_inject_matched)
         };
+        let mut messages = messages;
+        messages.extend(self.instruction_deltas(first_round).await);
         let stable_prefix = self.narrow_stable_prefix(&messages, stable_cap, sink);
         Ok(self.build_request(messages, stable_prefix))
+    }
+
+    /// Gh #217's turn-boundary instruction check: re-scan the
+    /// startup snapshotted sources on the first round and append any
+    /// deltas as trailing system messages (the skills-merge position),
+    /// so `messages[0]` stays byte-identical and the stable prefix
+    /// advances naturally instead of collapsing.
+    async fn instruction_deltas(&self, first_round: bool) -> Vec<ChatMessage> {
+        if !first_round || self.config.instruction_sources.is_empty() {
+            return Vec::new();
+        }
+        crate::instructions::check_instructions(
+            &self.config.instruction_sources,
+            &self.config.instruction_baseline,
+        )
+        .await
     }
 
     /// The stable-prefix boundary base (FR-CACHE-5): everything through the

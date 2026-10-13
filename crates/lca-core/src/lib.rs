@@ -16,6 +16,7 @@
 mod active_set;
 mod assemble;
 mod compact;
+pub mod instructions;
 mod quota;
 mod registry;
 mod turn;
@@ -110,6 +111,13 @@ pub struct AgentConfig {
     /// The full message list sent on the previous provider call, for
     /// FR-CACHE-6's divergence check (`None` before the first call).
     pub sent_stable: Arc<std::sync::Mutex<Option<Vec<String>>>>,
+    /// Instruction sources snapshotted at startup (gh #217): prompt
+    /// files whose mid-session changes append unified diffs at the
+    /// turn boundary. Empty disables the check.
+    pub instruction_sources: Vec<std::path::PathBuf>,
+    /// The session's instruction baseline (gh #217): shared across
+    /// per-generation config rebuilds, so one session primes once.
+    pub instruction_baseline: crate::instructions::SharedBaseline,
     /// Host-side skill sources (FR-CTX-2, ADR-0030). Empty paths collect
     /// nothing.
     pub skills_roots: SkillsRoots,
@@ -160,6 +168,9 @@ impl std::fmt::Debug for AgentConfig {
             .field("compaction_threshold", &self.compaction_threshold)
             .field("model_context_window", &self.model_context_window)
             .field("completion_backend", &self.completion_backend.is_some())
+            // Gh #217: paths only - the baseline holds file bodies,
+            // which never reach a log line.
+            .field("instruction_sources", &self.instruction_sources)
             .finish()
     }
 }
@@ -215,6 +226,10 @@ impl Default for AgentConfig {
             image_policy: lca_tools::ImagePolicy::unknown(),
             completion_backend: None,
             sent_stable: Arc::new(std::sync::Mutex::new(None)),
+            instruction_sources: Vec::new(),
+            instruction_baseline: Arc::new(std::sync::Mutex::new(
+                crate::instructions::InstructionBaseline::default(),
+            )),
             skills_roots: SkillsRoots::default(),
             skills_cache: Arc::new(std::sync::Mutex::new(SkillCache::new())),
             skills_inject_matched: false,

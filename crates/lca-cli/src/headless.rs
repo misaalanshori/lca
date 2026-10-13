@@ -944,6 +944,16 @@ fn wire(
         // clamped into what this model accepts.
         reasoning_effort,
         thinking_budget,
+        // Gh #217: the startup prompt sources, re-scanned every turn
+        // for unified-diff updates (empty with `-nc`; the trust rule
+        // matches the prompt build above).
+        instruction_sources: crate::prompt::context_sources(
+            &crate::data_dir(),
+            cwd,
+            crate::lock(grants).is_trusted(cwd),
+            flags.no_context_files,
+        ),
+        instruction_baseline: Default::default(),
         ..AgentConfig::default()
     };
     Ok((agent_config, provider))

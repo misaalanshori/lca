@@ -340,6 +340,8 @@ FR-CACHE-5. The agent SHALL pass the current stable-prefix boundary, computed fr
 
 FR-CACHE-6. IF the post-transform content within the stable-prefix boundary differs from what was sent to the provider on the previous turn, THEN the agent SHALL narrow the boundary reported for that turn to end before the earliest differing message and SHALL record the divergence as an extension event rather than rejecting the turn.
 
+Annotation, 2026-10-14 (gh #217): mid-session instruction edits append unified diffs as trailing system messages (past the boundary, OpenCode's `renderUpdate` shape), so `messages[0]` stays byte-identical and the boundary advances instead of collapsing. Deltas cap at 16 KiB; the full text replaces the diff when shorter.
+
 ### Tools
 
 FR-TOOL-1. The agent SHALL provide built-in tools for read, write, edit, list, glob, grep, shell, and skill. (Amended 2026-10-06, gh #43: the `skill` tool loads one skill's full instructions by name for model invocation; the catalog advertises, bodies lazy-load.)
@@ -715,6 +717,7 @@ The dependency list stays short on purpose. Each entry below states what it does
 | criterion | Benchmark harness for the NFR-1 through NFR-7 and NFR-29 performance gates, and the cache-hit-ratio benchmark | Custom timing harness over `std::time` |
 | cargo-deny | License and advisory checks | `cargo audit` |
 | html2md | HTML-to-Markdown conversion for the webfetch tool (gh #222) | A correct converter needs a real HTML parser (tag soup, entities, nested lists/tables); hand-rolling is a correctness trap. Footprint: html5ever, markup5ever_rcdom, percent-encoding (regex already in tree). Proven wasm32-wasip2-clean; script/style/chrome stripping stays a hand-rolled pre-pass (html2md does not strip). |
+| similar | Unified diffs for mid-session instruction updates (gh #217) | A correct line diff needs Myers/LCS over line interning; hand-rolling is a correctness trap. Footprint: none (dependency-free). |
 
 Build-time tools do not ship in the binary. Only the library crates in the top half of the table become part of the release artifact.
 

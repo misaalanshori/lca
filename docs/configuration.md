@@ -204,6 +204,10 @@ files load when the project is trusted at startup - session trust
 counts, so `-a`, an `always` fallback, and a mid-session `/trust`
 followed by `/reload` all open them without a restart.
 
+Mid-session edits (gh #217): the startup sources re-scan every turn;
+a change appends a unified diff as a trailing system message while
+`messages[0]` stays byte-identical, so the provider cache survives.
+
 Subfolder discovery (gh #219): when a `read` or `list` lands under a
 subdirectory carrying its own instruction file (same names and
 override rule), the first such read injects it once — `Loaded
