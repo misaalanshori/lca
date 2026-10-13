@@ -220,7 +220,7 @@ fn tree_label_edit_commits_through_the_hook() {
         "the hook bookmarks by record id"
     );
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("bookmarked 'mine'"),
         "the hook's notice shows"
     );
@@ -270,22 +270,21 @@ fn tree_browses_entry_branches_and_selection_branches_there() {
     chat.handle_key("j");
     chat.handle_key("\r");
     assert!(
-        chat.world.notice.as_deref().unwrap().contains("branched"),
+        chat.last_notice().as_deref().unwrap().contains("branched"),
         "{:?}",
-        chat.world.notice
+        chat.last_notice()
     );
     for c in "/fork 1".chars() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap()
             .contains("forked at 1"),
         "{:?}",
-        chat.world.notice
+        chat.last_notice()
     );
 }
 

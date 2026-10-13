@@ -180,12 +180,11 @@ fn the_selector_shows_key_value_and_source_and_q_closes_it() {
     assert!(plain.settings_picker.is_none(), "no rows, no selector");
     assert!(
         plain
-            .world
-            .notice
+            .last_notice()
             .as_deref()
             .is_some_and(|notice| notice.contains("key = value [source]")),
         "the dump is what a hookless host gets: {:?}",
-        plain.world.notice
+        plain.last_notice()
     );
 }
 
@@ -217,7 +216,7 @@ fn cycling_a_row_persists_through_the_one_seam_and_the_source_moves() {
         picker.rows[1].source, "user file",
         "the winning source moved with it"
     );
-    let notice = chat.world.notice.clone().unwrap_or_default();
+    let notice = chat.last_notice().unwrap_or_default();
     assert!(
         notice.contains("applies to the next session"),
         "honest about the no-live-seam keys: {notice}"

@@ -22,7 +22,8 @@ fn say_lands_in_the_transcript() {
 #[test]
 fn toast_floats_top_right_and_fades() {
     let mut chat = chat();
-    chat.transcript.push_user("a prompt with a very long line of text here");
+    chat.transcript
+        .push_user("a prompt with a very long line of text here");
     chat.toast("✓ Copied to clipboard");
     let viewport = strip(&chat.viewport(100, 30, 0)).join("\n");
     let row = viewport
@@ -32,11 +33,7 @@ fn toast_floats_top_right_and_fades() {
         .expect("toast paints");
     assert!(row.0 >= 1 && row.0 <= 3, "toast floats near the top");
     let toast_col = row.1.find("Copied").unwrap_or(0);
-    assert!(
-        toast_col > 50,
-        "toast rides on the right half:\n{}",
-        row.1
-    );
+    assert!(toast_col > 50, "toast rides on the right half:\n{}", row.1);
     // Faded toasts leave the frame on tick.
     for toast in &mut chat.toasts {
         toast.until = std::time::Instant::now() - std::time::Duration::from_secs(1);

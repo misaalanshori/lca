@@ -34,7 +34,7 @@ fn clone_duplicates_the_tip_and_switches() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
-    let notice = chat.world.notice.as_deref().unwrap_or("");
+    let notice = chat.last_notice().unwrap_or_default();
     assert!(
         notice.contains("new-id") && notice.contains("experimental"),
         "the notice names the clone: {notice}"
@@ -90,7 +90,7 @@ fn open_resume_picker_lists_sessions_or_says_none() {
     chat.open_resume_picker();
     assert!(chat.resume_picker.is_none(), "no entries, no picker");
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("no sessions yet"),
         "the empty case says so"
     );
@@ -115,7 +115,7 @@ fn reload_applies_the_host_report() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
-    let notice = chat.world.notice.as_deref().unwrap_or("");
+    let notice = chat.last_notice().unwrap_or_default();
     assert!(notice.contains("reloaded:"), "the hook names it: {notice}");
     assert!(
         chat.world.options.themes.contains(&"fresh".to_string()),
@@ -138,7 +138,7 @@ fn bare_fork_lists_user_messages_for_picking() {
     }
     chat.handle_key("\r");
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("No messages to fork from"),
         "empty transcript names it"
     );
@@ -179,7 +179,7 @@ fn fork_choice_switches_and_restores_the_text() {
     chat.handle_key("\r"); // fork + switch
     assert!(chat.fork_picker.is_none(), "the picker closes");
     assert_eq!(chat.editor.text(), "branch me", "the text restores");
-    let notice = chat.world.notice.as_deref().unwrap_or("");
+    let notice = chat.last_notice().unwrap_or_default();
     assert!(
         notice.contains("Forked from turn 0") && notice.contains("forked-id"),
         "the switch names the fork: {notice}"
@@ -204,13 +204,12 @@ fn fork_index_switches_in_process() {
     chat.handle_key("\r");
     assert_eq!(chat.editor.text(), "direct branch", "the text restores");
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap_or("")
             .contains("Forked from turn 0"),
         "the switch names the fork: {:?}",
-        chat.world.notice
+        chat.last_notice()
     );
 }
 
@@ -291,7 +290,7 @@ fn scoped_models_toggle_saves_and_escape_discards() {
         "the checked set saves"
     );
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("scope saved"),
         "the save names it"
     );
@@ -330,13 +329,12 @@ fn scoped_models_empty_scope_refuses_to_save() {
     chat.handle_key("\r"); // refuse
     assert!(chat.scoped_models_picker.is_some(), "the picker stays open");
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap_or("")
             .contains("at least one"),
         "the refusal names the rule: {:?}",
-        chat.world.notice
+        chat.last_notice()
     );
 }
 
@@ -401,9 +399,9 @@ fn a_prompt_template_expands_into_the_editor() {
         "the expansion lands in the editor"
     );
     assert!(
-        chat.world.notice.is_none(),
+        chat.last_notice().is_none(),
         "no notice, no submit: {:?}",
-        chat.world.notice
+        chat.last_notice()
     );
 }
 
@@ -439,7 +437,7 @@ fn a_prompt_template_completes_and_unknown_names_refuse() {
     }
     chat.handle_key("\r");
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("unknown command /nope"),
         "no template, no command"
     );
@@ -456,9 +454,9 @@ fn changelog_shows_the_latest_released_section() {
     chat.handle_key("\r");
     // gh #234: the section rides the transcript now, not the dock.
     assert!(
-        chat.world.notice.is_none(),
+        chat.toasts.is_empty(),
         "the dock stays clean: {:?}",
-        chat.world.notice
+        chat.toasts
     );
     let text: String = chat
         .transcript
@@ -542,26 +540,24 @@ fn tree_selection_and_rename_refuse_without_a_host() {
     ));
     chat.handle_key("\r");
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap()
             .contains("not available in this host"),
         "{:?}",
-        chat.world.notice
+        chat.last_notice()
     );
     for c in "/rename new name".chars() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap()
             .contains("not available in this host"),
         "{:?}",
-        chat.world.notice
+        chat.last_notice()
     );
 }
 
@@ -580,13 +576,12 @@ fn rename_names_the_session_through_the_host() {
     }
     chat.handle_key("\r");
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap()
             .contains("fresh title"),
         "{:?}",
-        chat.world.notice
+        chat.last_notice()
     );
 }
 
@@ -738,9 +733,9 @@ fn informational_outputs_route_to_the_transcript_not_the_dock() {
         chat.handle_key("\r");
     }
     assert!(
-        chat.world.notice.is_none(),
+        chat.toasts.is_empty(),
         "the dock stays clean: {:?}",
-        chat.world.notice
+        chat.toasts
     );
     let text: String = chat
         .transcript
@@ -757,10 +752,11 @@ fn informational_outputs_route_to_the_transcript_not_the_dock() {
     }
 }
 
-// Verifies: gh #234 - short confirmations and errors stay dock
-// notices; only unbounded outputs move to the transcript.
+// Verifies: gh #239 - the dock catch-all is retired: short
+// confirmations and errors land in the transcript like every other
+// status line (pi's `showStatus`), superseding #234's dock split.
 #[test]
-fn short_confirmations_stay_dock_notices() {
+fn short_confirmations_land_in_the_transcript() {
     let mut opts = options();
     opts.hooks.list_labels = Some(Arc::new(Vec::new));
     let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
@@ -769,23 +765,23 @@ fn short_confirmations_stay_dock_notices() {
     }
     chat.handle_key("\r");
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("no bookmarks yet; /label <name> marks the latest message"),
-        "the one-line hint stays a notice"
+        "the one-line hint lands in history"
     );
     assert_eq!(
         chat.transcript.entries().len(),
-        1,
-        "nothing scrollable was said (the seed hint line stands alone)"
+        2,
+        "the seed hint line plus the labels hint"
     );
     for c in "/nope".chars() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("unknown command /nope"),
-        "errors stay notices"
+        "errors land in history"
     );
 }
 
@@ -910,7 +906,7 @@ fn slash_name_renames_through_the_host() {
     }
     chat.handle_key("\r");
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("renamed to 'my title'"),
         "the host seam answers"
     );
@@ -924,7 +920,7 @@ fn a_model_without_reasoning_gets_a_notice_not_a_picker() {
     chat.world.options.hooks.thinking_offered = Some(std::sync::Arc::new(Vec::new));
     chat.open_thinking_picker();
     assert!(chat.thinking_picker.is_none(), "no picker opens");
-    let notice = chat.world.notice.clone().unwrap_or_default();
+    let notice = chat.last_notice().unwrap_or_default();
     assert!(
         notice.contains("does not support thinking"),
         "the notice names the gap: {notice:?}"

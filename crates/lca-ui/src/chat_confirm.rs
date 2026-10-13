@@ -15,10 +15,10 @@ impl Chat {
                     || "nothing was changed".to_string(),
                     |confirm| confirm(&prompt.provider, &prompt.host),
                 );
-                self.world.notice = Some(crate::state::sanitize_block(&message));
+                self.say(crate::state::sanitize_block(&message));
             }
             Some("n" | "N" | "escape") => {
-                self.world.notice = Some(format!("kept {} without the ad hoc grant", prompt.host));
+                self.say(format!("kept {} without the ad hoc grant", prompt.host));
             }
             _ => self.world.grant = Some(prompt),
         }
@@ -34,10 +34,10 @@ impl Chat {
                     || "nothing was changed".to_string(),
                     |confirm| confirm(&prompt.provider),
                 );
-                self.world.notice = Some(crate::state::sanitize_block(&message));
+                self.say(crate::state::sanitize_block(&message));
             }
             Some("n" | "N" | "escape") => {
-                self.world.notice = Some("staying with the current provider".to_string());
+                self.say("staying with the current provider".to_string());
             }
             _ => self.world.switch_confirm = Some(prompt),
         }

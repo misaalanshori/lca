@@ -75,7 +75,7 @@ fn ctrl_t_without_a_host_names_the_absence() {
     chat.handle_key("\x14");
     assert_eq!(chat.tabs.len(), 1, "the seed tab stands, no tab invented");
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("opening a tab is not available in this host")
     );
 }
@@ -123,7 +123,7 @@ fn close_returns_to_previous_and_collapses() {
     );
     chat.handle_key("\x17");
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("only one tab open"),
         "the last tab refuses"
     );
@@ -146,12 +146,11 @@ fn tab_moves_refuse_mid_turn() {
     chat.handle_key("\x14");
     assert_eq!(chat.tabs.len(), 1, "no tab opened past the seed");
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .is_some_and(|notice| notice.contains("before opening a tab")),
         "it names the turn: {:?}",
-        chat.world.notice
+        chat.toasts
     );
     chat.turn_running = false;
     chat.handle_key("\x14"); // tab two first, then the turn starts
@@ -159,12 +158,11 @@ fn tab_moves_refuse_mid_turn() {
     chat.turn_running = true;
     chat.handle_key("\x1b1");
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .is_some_and(|notice| notice.contains("before switching tabs")),
         "it names the turn: {:?}",
-        chat.world.notice
+        chat.toasts
     );
 }
 

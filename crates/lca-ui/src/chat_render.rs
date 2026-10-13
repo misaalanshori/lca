@@ -171,19 +171,22 @@ impl Chat {
         // (Separator air above; the top cap moved down to hug the
         // editor, gh #249.)
 
-        if let Some(notice) = &self.world.notice {
-            // A notice can be multi-line (`/help`, `/hotkeys`, a command's
-            // block output); render each line rather than embedding a
-            // newline in one line string (which corrupts the screen).
-            for (i, line) in notice.split('\n').enumerate() {
-                let prefix = if i == 0 { "• " } else { "  " };
-                for wrapped in lca_tui::engine::text::wrap_text_with_ansi(
-                    &format!("{prefix}{line}"),
-                    width as usize,
-                ) {
-                    dock.push((self.theme.warn)(&wrapped));
-                }
-            }
+        // The search readout (gh #239, FR-UI-12): editor chrome
+        // rendered from state — the query and match count live here,
+        // never in history, and the catch-all notice row is gone.
+        if let Some(query) = &self.search {
+            let counts = if query.is_empty() {
+                String::new()
+            } else if self.search_matches.is_empty() {
+                "  (no matches)".to_string()
+            } else {
+                format!(
+                    "  [{}/{}]",
+                    self.search_index + 1,
+                    self.search_matches.len()
+                )
+            };
+            dock.push((self.theme.dim)(&format!("  /{query}{counts}")));
         }
 
         // The pending-messages band (ADR-0038): queued commands show as
@@ -545,7 +548,8 @@ impl Chat {
             let Some(row) = viewport.get_mut(i + 1) else {
                 break;
             };
-            let cell = (self.theme.accent)(&truncate_to_width(&toast.text, max_w, "\u{2026}", false));
+            let cell =
+                (self.theme.accent)(&truncate_to_width(&toast.text, max_w, "\u{2026}", false));
             let col = (width as usize).saturating_sub(visible_width(&cell) + 2);
             let before = slice_by_column(row, 0, col, false);
             let pad = " ".repeat(col.saturating_sub(visible_width(&before)));

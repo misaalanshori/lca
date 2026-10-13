@@ -188,7 +188,7 @@ impl Chat {
     /// the interface thread on a fetch).
     pub(crate) fn open_extension_hub(&mut self) {
         let Some(fetch) = self.world.options.hooks.fetch_extensions.clone() else {
-            self.world.notice = Some("extensions are not available in this host".to_string());
+            self.say("extensions are not available in this host".to_string());
             return;
         };
         let mut hub = ExtensionHub::loading(Vec::new());
@@ -233,8 +233,7 @@ impl Chat {
                 self.extension_hub = Some(hub);
                 match next {
                     Some(row) if row.installed => {
-                        self.world.notice =
-                            Some(format!("{} {} is already installed", row.name, row.version));
+                        self.say(format!("{} {} is already installed", row.name, row.version));
                     }
                     Some(row) => {
                         self.install_consent = Some(hub_install_consent(&row));
@@ -274,10 +273,10 @@ impl Chat {
             return;
         }
         let Some(confirm) = self.world.options.hooks.confirm_install.clone() else {
-            self.world.notice = Some("installing is not available in this host".to_string());
+            self.say("installing is not available in this host".to_string());
             return;
         };
-        self.world.notice = Some(format!("installing {}…", consent.name));
+        self.say(format!("installing {}…", consent.name));
         confirm(consent);
     }
 
@@ -307,14 +306,16 @@ impl Chat {
     }
 
     /// Collect a finished background install. Returns `true` when a
-    /// notice landed (the loop repaints).
+    /// toast landed (the loop repaints).
     pub(crate) fn poll_install(&mut self) -> bool {
         let Some(poll) = self.world.options.hooks.poll_install.clone() else {
             return false;
         };
         match poll() {
             Some(notice) => {
-                self.world.notice = Some(notice);
+                // A background install finishes away from the
+                // conversation; its confirmation floats and fades.
+                self.toast(notice);
                 true
             }
             None => false,
@@ -427,12 +428,13 @@ mod tests {
     }
 
     // Verifies: #227 - the consent carries publisher, exact origin,
-    // artifact ref, and declared capabilities, badged by provenance.
+    // artifact ref, and declared capabilities, badged by provenance
+    // (gh #256: one bracketed word, the hub list's vocabulary).
     #[test]
     fn install_consent_badges_provenance() {
         let rows = fixture_rows();
         let official = hub_install_consent(&rows[1]);
-        assert!(official.publisher.contains("First-Party Verified"));
+        assert!(official.publisher.contains("[official]"));
         assert_eq!(
             official.artifact_ref,
             "ghcr.io/misaalanshori/lca/openrouter:abi-0.6"
@@ -440,6 +442,6 @@ mod tests {
         assert_eq!(official.capabilities, vec!["net", "oauth"]);
         assert_eq!(official.source_url, "https://example.invalid/official.toml");
         let custom = hub_install_consent(&rows[2]);
-        assert!(custom.publisher.contains("Third-Party"));
+        assert!(custom.publisher.contains("[third-party]"));
     }
 }

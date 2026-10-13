@@ -78,12 +78,11 @@ fn the_picker_box_sits_directly_above_the_composer() {
     }
     chat.handle_key("\r");
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .is_some_and(|n| n.contains("unknown command")),
         "the notice is up: {:?}",
-        chat.world.notice
+        chat.last_notice()
     );
     for c in "/model".chars() {
         chat.handle_key(&c.to_string());

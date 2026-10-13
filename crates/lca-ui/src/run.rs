@@ -659,7 +659,7 @@ fn handle_input(
                 .open_url
                 .as_ref()
                 .map(|open| open(&url));
-            chat.world.notice = Some(link_notice(&url, outcome));
+            chat.toast(link_notice(&url, outcome));
         }
         // Copy on release (issue #2): prefer a verified native
         // clipboard (R6); OSC 52 is the honest fallback, and the
@@ -675,7 +675,7 @@ fn handle_input(
                         Some(&mut send),
                     )
                 };
-                chat.world.notice = Some(report.notice());
+                chat.toast(report.notice());
             }
         }
         return InputResult::Continue;
@@ -704,7 +704,7 @@ fn handle_input(
                     matches!(screen, Screen::Alt(_)).then(|| &mut send as &mut dyn FnMut(&str)),
                 )
             };
-            chat.world.notice = Some(match report {
+            chat.toast(match report {
                 CopyReport::Native if from_wait => {
                     "\u{2713} Copied sign-in URL to clipboard".to_string()
                 }
@@ -806,7 +806,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     }
     // gh #66: a bad keybindings file is loud from the first frame.
     if let Some(notice) = keybinding_notice {
-        chat.world.notice = Some(notice);
+        chat.say(notice);
     }
     if !initial_messages.is_empty() {
         let first = initial_messages.remove(0);
@@ -925,7 +925,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                     .map(|session| session())
                     .unwrap_or_default();
                 if let Some(hint) = exit_hint(&tuning, &id) {
-                    chat.world.notice = Some(hint);
+                    chat.say(hint);
                 }
             }
             dirty = true;
@@ -1059,20 +1059,20 @@ impl TurnState {
         // turns (the picker's endpoint consent) must still find it.
         self.cancel = None;
         if let Some(error) = &outcome.error {
-            chat.world.notice = Some(crate::state::sanitize_text(error));
+            chat.say(crate::state::sanitize_text(error));
         }
         // Gh #42: a counted miss the flag asked to surface shows
-        // once, and never over an error.
-        if chat.world.notice.is_none()
-            && let Some(report) = chat
-                .world
-                .options
-                .hooks
-                .cache_miss_notice
-                .as_ref()
-                .and_then(|hook| hook())
+        // once, as a toast — a diagnostic, not history — beside any
+        // error, which keeps the transcript to itself.
+        if let Some(report) = chat
+            .world
+            .options
+            .hooks
+            .cache_miss_notice
+            .as_ref()
+            .and_then(|hook| hook())
         {
-            chat.world.notice = Some(crate::state::sanitize_text(&report));
+            chat.toast(crate::state::sanitize_text(&report));
         }
         // A turn that ends without its `TurnEnded` event still rests the
         // separator.

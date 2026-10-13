@@ -133,7 +133,7 @@ fn plain_mode_never_paints_color() {
     let mut chat = chat(true);
     chat.transcript.push_user("a question");
     chat.transcript.append_text("an answer");
-    chat.world.notice = Some("a notice".into());
+    chat.say("a notice");
     for line in chat.render(80) {
         // The CURSOR_MARKER is the renderer's side channel, not color.
         let cleaned = line.replace(CURSOR_MARKER, "");

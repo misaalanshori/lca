@@ -103,7 +103,7 @@ impl Chat {
     /// Open the manager over a synchronous host fetch.
     pub(crate) fn open_extension_manager(&mut self) {
         let Some(list) = self.world.options.hooks.list_managed.clone() else {
-            self.world.notice = Some("extensions are not available in this host".to_string());
+            self.say("extensions are not available in this host".to_string());
             return;
         };
         self.extension_manager = Some(ExtensionManager::ready(list()));
@@ -169,7 +169,7 @@ impl Chat {
         let Some(toggle) = self.world.options.hooks.toggle_managed.clone() else {
             return;
         };
-        self.world.notice = Some(toggle(name.to_string(), enabled));
+        self.say(toggle(name.to_string(), enabled));
         self.refresh_extension_manager();
     }
 
@@ -179,7 +179,7 @@ impl Chat {
         let Some(set) = self.world.options.hooks.set_managed_strategy.clone() else {
             return;
         };
-        self.world.notice = Some(set(name));
+        self.say(set(name));
         self.refresh_extension_manager();
     }
 

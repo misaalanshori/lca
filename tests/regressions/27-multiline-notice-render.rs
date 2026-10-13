@@ -63,7 +63,7 @@ fn chat() -> Chat {
 #[test]
 fn a_multiline_notice_renders_one_visual_line_per_line() {
     let mut chat = chat();
-    chat.world.notice = Some("first line\nsecond line\nthird line".into());
+    chat.say("first line\nsecond line\nthird line");
     let lines = chat.render(60);
     assert!(
         lines.iter().all(|l| !l.contains('\n')),

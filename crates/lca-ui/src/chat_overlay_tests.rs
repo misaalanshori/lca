@@ -44,13 +44,12 @@ fn resume_picker_searches_sessions() {
     assert!(viewport.contains("docs pass"), "{viewport}");
     chat.handle_key("\r");
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap_or("")
             .contains("lca --resume b"),
         "{:?}",
-        chat.world.notice
+        chat.last_notice()
     );
     chat.handle_key("\x1b");
     assert!(chat.resume_picker.is_none());
@@ -89,13 +88,12 @@ fn tree_selection_branches_in_place() {
     let text = strip(&chat.render(80)).join("\n");
     assert!(text.contains("branched"), "{text}");
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap_or("")
             .contains("branched at r2"),
         "{:?}",
-        chat.world.notice
+        chat.last_notice()
     );
 }
 
@@ -357,12 +355,11 @@ fn escape_cancels_the_login_wait_through_the_hook() {
         "the waiting state is gone"
     );
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .is_some_and(|n| n.contains("cancelled")),
         "the user is told: {:?}",
-        chat.world.notice
+        chat.toasts
     );
 }
 
@@ -386,7 +383,7 @@ fn a_finished_login_result_lands_when_the_poll_returns_it() {
         chat.apply_login_next(next);
     }
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("signed in via `antigravity`")
     );
     assert!(chat.world.login_waiting.is_none(), "the wait is over");
@@ -634,18 +631,15 @@ fn a_background_compaction_drives_the_working_state() {
     assert!(!chat.poll_compact());
     assert_eq!(chat.separator.state(), &crate::SeparatorState::Idle);
 
-    // The command starts summarizing.
+    // The command starts summarizing: the separator's working
+    // spinner says so (gh #239 — no transcript line for the start).
     *state.lock().unwrap() = CompactState::Running;
     assert!(chat.poll_compact(), "the start is a repaint");
     assert_eq!(chat.separator.state(), &crate::SeparatorState::Working);
     assert!(
-        chat.world
-            .notice
-            .as_deref()
-            .unwrap_or_default()
-            .contains("compacting"),
-        "the interface says what is happening: {:?}",
-        chat.world.notice
+        chat.last_notice().is_none() && chat.toasts.is_empty(),
+        "the start stays out of history: {:?}",
+        chat.toasts
     );
     assert!(!chat.poll_compact(), "still running: no repaint storm");
 
@@ -654,13 +648,12 @@ fn a_background_compaction_drives_the_working_state() {
     assert!(chat.poll_compact());
     assert_eq!(chat.separator.state(), &crate::SeparatorState::Idle);
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap_or_default()
             .contains("compacted: 42 tokens"),
         "{:?}",
-        chat.world.notice
+        chat.last_notice()
     );
     assert!(!chat.poll_compact(), "the result is consumed");
 }
@@ -722,7 +715,7 @@ fn the_namespaced_login_reaches_the_host_command_dispatch() {
         "the preset-picker seam never sees a namespaced login: {:?}",
         targets.lock().unwrap_or_else(|p| p.into_inner())
     );
-    assert_eq!(chat.world.notice.as_deref(), Some("identity flow started"));
+    assert_eq!(chat.last_notice().as_deref(), Some("identity flow started"));
 }
 
 // Verifies: gh #178 - the OAuth receipt case: a 200+ character sign-in

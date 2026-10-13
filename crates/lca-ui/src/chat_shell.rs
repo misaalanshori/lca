@@ -16,7 +16,7 @@ impl Chat {
             return Action::Continue;
         }
         let Some(run_shell) = self.world.options.hooks.run_shell.clone() else {
-            self.world.notice = Some("shell mode is not available in this host".to_string());
+            self.say("shell mode is not available in this host".to_string());
             return Action::Continue;
         };
         // The command card is visible either way; the host records the
@@ -33,7 +33,7 @@ impl Chat {
             command: command.to_string(),
             excluded,
         });
-        self.world.notice = Some(if excluded {
+        self.say(if excluded {
             format!("running `{command}` (excluded from context)")
         } else {
             format!("running `{command}`")
@@ -80,7 +80,7 @@ impl Chat {
                     ""
                 };
                 let code = code.map_or("signalled".to_string(), |c| format!("exit {c}"));
-                self.world.notice = Some(format!("ran `{}` - {code}{suffix}", shell.command));
+                self.say(format!("ran `{}` - {code}{suffix}", shell.command));
             }
         }
         changed

@@ -24,7 +24,7 @@ fn label_bookmarks_the_latest_message_by_default() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
-    let notice = chat.world.notice.clone().unwrap_or_default();
+    let notice = chat.last_notice().unwrap_or_default();
     assert!(
         notice.contains("checkpoint") && notice.contains("r-abc"),
         "{notice}"
@@ -49,9 +49,12 @@ fn label_with_index_bookmarks_the_nth_message() {
     }
     chat.handle_key("\r");
     assert!(
-        chat.world.notice.as_deref().unwrap().contains("first mark"),
+        chat.last_notice()
+            .as_deref()
+            .unwrap()
+            .contains("first mark"),
         "{:?}",
-        chat.world.notice
+        chat.last_notice()
     );
 }
 
@@ -65,13 +68,12 @@ fn label_verbs_refuse_without_a_host() {
         }
         chat.handle_key("\r");
         assert!(
-            chat.world
-                .notice
+            chat.last_notice()
                 .as_deref()
                 .unwrap()
                 .contains("not available in this host"),
             "{command}: {:?}",
-            chat.world.notice
+            chat.toasts
         );
         chat.editor.set_text("");
     }
@@ -125,7 +127,7 @@ fn jump_forks_at_the_bookmark_and_switches() {
         chat.handle_key(&c.to_string());
     }
     chat.handle_key("\r");
-    let notice = chat.world.notice.clone().unwrap_or_default();
+    let notice = chat.last_notice().unwrap_or_default();
     assert!(
         notice.contains("here") && notice.contains("newbranch"),
         "{notice}"
@@ -147,9 +149,9 @@ fn jump_names_an_unknown_bookmark() {
     }
     chat.handle_key("\r");
     assert!(
-        chat.world.notice.as_deref().unwrap().contains("nowhere"),
+        chat.last_notice().as_deref().unwrap().contains("nowhere"),
         "{:?}",
-        chat.world.notice
+        chat.last_notice()
     );
 }
 

@@ -230,7 +230,8 @@ impl Chat {
                 Some("escape") => {}
                 Some("enter") => {
                     if let Some(entry) = picker.entries.get(picker.selected).cloned() {
-                        self.world.notice = Some(self.revoke_grant(&entry));
+                        let report = self.revoke_grant(&entry);
+                        self.say(report);
                         if let Some(list) = self.world.options.hooks.grants.as_ref()
                             && let Ok(entries) =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| list()))
@@ -329,7 +330,7 @@ impl Chat {
                         2 => TrustChoice::Persist(false),
                         _ => TrustChoice::Session(false),
                     };
-                    self.world.notice = Some(match &self.world.options.hooks.trust_apply {
+                    self.say(match &self.world.options.hooks.trust_apply {
                         Some(apply) => apply(choice),
                         None => "trust is not configurable in this host".to_string(),
                     });
@@ -371,8 +372,7 @@ impl Chat {
                         // and says so - a level this model refuses becomes
                         // its default, never a request that ignores it.
                         Some(set) => {
-                            self.world.notice =
-                                Some(crate::state::sanitize_block(&set(level.as_deref())));
+                            self.say(crate::state::sanitize_block(&set(level.as_deref())));
                         }
                         // A host without the seam behaves as it always did.
                         None => {
@@ -388,7 +388,7 @@ impl Chat {
                             if let Some(persist) = &self.world.options.hooks.persist_setting {
                                 persist("thinking", level.clone());
                             }
-                            self.world.notice = Some(match level {
+                            self.say(match level {
                                 Some(level) => format!("thinking: {level}"),
                                 None => "thinking: provider default".to_string(),
                             });
@@ -444,7 +444,7 @@ impl Chat {
                             } else {
                                 self.apply_setting(&row.key, buffer.trim())
                             };
-                            self.world.notice = Some(crate::state::sanitize_block(&notice));
+                            self.say(crate::state::sanitize_block(&notice));
                         }
                         // Re-read like the cycle path, so value and
                         // source show what actually won.
@@ -520,7 +520,7 @@ impl Chat {
                                 self.settings_picker = Some(picker);
                             } else {
                                 let notice = self.cycle_setting(&mut picker, forward);
-                                self.world.notice = Some(crate::state::sanitize_block(&notice));
+                                self.say(crate::state::sanitize_block(&notice));
                                 self.settings_picker = Some(picker);
                             }
                         }
@@ -607,15 +607,14 @@ impl Chat {
                 }
                 Some("enter") => {
                     if picker.checked.is_empty() {
-                        self.world.notice = Some("keep at least one model in rotation".to_string());
+                        self.say("keep at least one model in rotation".to_string());
                         self.scoped_models_picker = Some(picker);
                     } else if let Some(save) = self.world.options.hooks.save_scoped_models.clone() {
                         // gh #233: the rotation scope shapes the offered set.
                         self.invalidate_models();
-                        self.world.notice = Some(save(picker.checked.clone()));
+                        self.say(save(picker.checked.clone()));
                     } else {
-                        self.world.notice =
-                            Some("scoped models are not available in this host".to_string());
+                        self.say("scoped models are not available in this host".to_string());
                     }
                 }
                 _ => {
@@ -743,8 +742,7 @@ impl Chat {
                 // its floor.
                 Some("ctrl+d") => {
                     if self.world.options.hooks.delete_session.is_none() {
-                        self.world.notice =
-                            Some("deleting sessions is not available in this host".to_string());
+                        self.say("deleting sessions is not available in this host".to_string());
                         self.resume_picker = Some(picker);
                         return Some(Action::Continue);
                     }
@@ -761,8 +759,7 @@ impl Chat {
                         .and_then(|index| picker.entries.get(*index));
                     match target {
                         Some(entry) if current.as_deref() == Some(entry.id.as_str()) => {
-                            self.world.notice =
-                                Some("that session is open here - switch away first".to_string());
+                            self.say("that session is open here - switch away first".to_string());
                             self.resume_picker = Some(picker);
                         }
                         Some(_) => {
@@ -809,7 +806,7 @@ impl Chat {
                                 "saving a default model is not available in this host".to_string()
                             }
                         };
-                        self.world.notice = Some(crate::state::sanitize_block(&notice));
+                        self.say(crate::state::sanitize_block(&notice));
                     }
                     self.model_picker = Some(picker);
                 }
@@ -820,9 +817,9 @@ impl Chat {
                         // reaches this path (G2).
                         match (self.world.options.invoke_command)("model", &id) {
                             lca_protocol::CommandEffect::ShowWidget(text) => {
-                                self.world.notice = Some(crate::state::sanitize_block(&text));
+                                self.say(crate::state::sanitize_block(&text));
                             }
-                            _ => self.world.notice = Some(format!("model: {id}")),
+                            _ => self.say(format!("model: {id}")),
                         }
                     }
                 }

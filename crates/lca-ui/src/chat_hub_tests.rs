@@ -93,13 +93,12 @@ fn hub_filter_enter_consent_and_approve() {
     assert_eq!(confirmed.len(), 1);
     assert_eq!(confirmed[0], consent);
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap_or("")
             .contains("acme-deploy"),
         "progress shows: {:?}",
-        chat.world.notice
+        chat.last_notice()
     );
 }
 
@@ -145,13 +144,12 @@ fn hub_enter_on_installed_reports() {
             .is_empty()
     );
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap_or("")
             .contains("already installed"),
         "the notice says so: {:?}",
-        chat.world.notice
+        chat.toasts
     );
 }
 

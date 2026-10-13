@@ -903,15 +903,17 @@ pub fn key_input(key: &str) -> lca_protocol::UiInput {
 
 /// Apply the CLI's next login step: one modal at a time, and a
 /// [`LoginNext::Secret`] mid-flow is the next field of a multi-field
-/// login, not a refusal.
-pub fn apply_login_next(state: &mut UiState, next: LoginNext) {
+/// login, not a refusal. Returns a message for history when the step
+/// says something (gh #239: the dock catch-all is gone, so login
+/// progress lands in the transcript).
+pub fn apply_login_next(state: &mut UiState, next: LoginNext) -> Option<String> {
     // One step owns the screen at a time: entering one clears the others.
     // `Waiting` is the exception that must not clear a manual-callback
     // secret field, so it only sets the waiting label.
     match next {
         LoginNext::Message(text) => {
             state.login_waiting = None;
-            state.notice = Some(sanitize_block(&text));
+            Some(sanitize_block(&text))
         }
         LoginNext::Secret {
             provider,
@@ -925,21 +927,24 @@ pub fn apply_login_next(state: &mut UiState, next: LoginNext) {
                 input: String::new(),
                 masked,
             });
+            None
         }
         LoginNext::Picker { options } => {
             state.login_waiting = None;
             if options.is_empty() {
-                state.notice = Some("nothing to sign in to".to_string());
+                Some("nothing to sign in to".to_string())
             } else {
                 state.picker = Some(PickerPrompt {
                     options,
                     selected: 0,
                 });
+                None
             }
         }
         LoginNext::ConfirmSwitch { provider, prompt } => {
             state.login_waiting = None;
             state.switch_confirm = Some(SwitchPrompt { provider, prompt });
+            None
         }
         LoginNext::Grant {
             provider,
@@ -952,9 +957,11 @@ pub fn apply_login_next(state: &mut UiState, next: LoginNext) {
                 host,
                 prompt,
             });
+            None
         }
         LoginNext::Waiting { label } => {
             state.login_waiting = Some(sanitize_block(&label));
+            None
         }
     }
 }

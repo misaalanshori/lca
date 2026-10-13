@@ -11,8 +11,6 @@ use crate::state::{
 pub struct UiState {
     /// Static inputs.
     pub options: UiOptions,
-    /// A transient notice (command results, unknown commands).
-    pub notice: Option<String>,
     /// The open permission modal, if any.
     pub permission: Option<PermissionModal>,
     /// The open masked secret prompt, if any (`/login`).
@@ -55,7 +53,6 @@ impl UiState {
         options.workspace = workspace;
         UiState {
             options,
-            notice: None,
             permission: None,
             secret: None,
             picker: None,

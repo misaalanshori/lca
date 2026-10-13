@@ -62,7 +62,7 @@ impl Chat {
             return self.open_thinking_picker_with(thinking_offered_all(), current);
         };
         if offered.is_empty() {
-            self.world.notice = Some(format!(
+            self.say(format!(
                 "Current model ({}) does not support thinking",
                 self.model_label()
             ));
@@ -109,14 +109,13 @@ impl Chat {
             // hand-editable, and `/reload` re-reads them.
             "mcp" => {
                 let Some(act) = self.world.options.hooks.mcp_action.clone() else {
-                    self.world.notice =
-                        Some("no MCP servers configured (see the authoring guide)".to_string());
+                    self.say("no MCP servers configured (see the authoring guide)".to_string());
                     return Action::Continue;
                 };
                 let mut words = argument.splitn(2, ' ');
                 let verb = words.next().unwrap_or("").to_string();
                 let target = words.next().unwrap_or("").trim().to_string();
-                self.world.notice = Some(act(&verb, &target));
+                self.say(act(&verb, &target));
                 return Action::Continue;
             }
             "help" => {
@@ -139,7 +138,7 @@ impl Chat {
                 if let Some(persist) = &self.world.options.hooks.persist_screen_mode {
                     persist(self.screen_mode);
                 }
-                self.world.notice = Some(format!(
+                self.say(format!(
                     "screen mode: {}",
                     if self.screen_mode {
                         "app-owned screen (fullscreen)"
@@ -213,12 +212,12 @@ impl Chat {
             }
             "grants" => {
                 let Some(list) = self.world.options.hooks.grants.as_ref() else {
-                    self.world.notice = Some("grants are not available in this host".to_string());
+                    self.say("grants are not available in this host".to_string());
                     return Action::Continue;
                 };
                 let entries = list();
                 if entries.is_empty() {
-                    self.world.notice = Some("no grants recorded for this project".to_string());
+                    self.say("no grants recorded for this project".to_string());
                 } else {
                     self.grants_picker = Some(crate::chat_pickers::GrantPicker {
                         entries,
@@ -232,12 +231,11 @@ impl Chat {
             // between a turn's declare and its dispatch.
             "reload" => {
                 if self.turn_running {
-                    self.world.notice =
-                        Some("a turn is running; finish or cancel it before reloading".to_string());
+                    self.say("a turn is running; finish or cancel it before reloading".to_string());
                     return Action::Continue;
                 }
                 let Some(reload) = self.world.options.hooks.reload.clone() else {
-                    self.world.notice = Some("reloading is not available in this host".to_string());
+                    self.say("reloading is not available in this host".to_string());
                     return Action::Continue;
                 };
                 let report = reload();
@@ -249,7 +247,7 @@ impl Chat {
                 self.keybindings =
                     Arc::new(KeybindingsManager::with_user_bindings(report.key_bindings));
                 self.world.options.keybinding_error = report.keybinding_error;
-                self.world.notice = Some(report.notice);
+                self.say(report.notice);
                 return Action::Continue;
             }
             // Gh #203: bare `/fork` opens the user-message picker;
@@ -261,9 +259,7 @@ impl Chat {
                 } else {
                     match argument.trim().parse::<usize>() {
                         Ok(index) => self.fork_and_switch(index),
-                        Err(_) => {
-                            self.world.notice = Some("usage: /fork <message-index>".to_string())
-                        }
+                        Err(_) => self.say("usage: /fork <message-index>".to_string()),
                     }
                 }
                 return Action::Continue;
@@ -272,7 +268,7 @@ impl Chat {
             // picker). The hook duplicates; the switch path replays.
             "clone" => {
                 let Some(clone) = self.world.options.hooks.clone_session.clone() else {
-                    self.world.notice = Some("cloning is not available in this host".to_string());
+                    self.say("cloning is not available in this host".to_string());
                     return Action::Continue;
                 };
                 let name = argument.trim();
@@ -285,10 +281,10 @@ impl Chat {
                         let running = self.turn_running;
                         self.switch_or_announce(&id);
                         if !running {
-                            self.world.notice = Some(format!("cloned session as '{title}' ({id})"));
+                            self.say(format!("cloned session as '{title}' ({id})"));
                         }
                     }
-                    Err(err) => self.world.notice = Some(err),
+                    Err(err) => self.say(err),
                 }
                 return Action::Continue;
             }
@@ -296,7 +292,7 @@ impl Chat {
             // <name>), defaulting to the latest (`/label <name>`).
             "label" => {
                 let Some(set_label) = self.world.options.hooks.set_label.clone() else {
-                    self.world.notice = Some("labeling is not available in this host".to_string());
+                    self.say("labeling is not available in this host".to_string());
                     return Action::Continue;
                 };
                 let users = self
@@ -316,26 +312,26 @@ impl Chat {
                     None => (users.saturating_sub(1), argument.trim().to_string()),
                 };
                 if users == 0 || name.is_empty() {
-                    self.world.notice = Some("usage: /label [message-index] <name>".to_string());
+                    self.say("usage: /label [message-index] <name>".to_string());
                     return Action::Continue;
                 }
                 match set_label(index, &name) {
                     Ok(target) => {
-                        self.world.notice = Some(format!("bookmarked '{name}' at {target}"));
+                        self.say(format!("bookmarked '{name}' at {target}"));
                     }
-                    Err(err) => self.world.notice = Some(err),
+                    Err(err) => self.say(err),
                 }
                 return Action::Continue;
             }
             // Gh #37: list every live bookmark, oldest name first.
             "labels" => {
                 let Some(list_labels) = self.world.options.hooks.list_labels.clone() else {
-                    self.world.notice = Some("labeling is not available in this host".to_string());
+                    self.say("labeling is not available in this host".to_string());
                     return Action::Continue;
                 };
                 let marks = list_labels();
                 if marks.is_empty() {
-                    self.world.notice = Some(
+                    self.say(
                         "no bookmarks yet; /label <name> marks the latest message".to_string(),
                     );
                 } else {
@@ -356,7 +352,7 @@ impl Chat {
                     self.world.options.hooks.list_labels.clone(),
                     self.world.options.hooks.fork_record.clone(),
                 ) else {
-                    self.world.notice = Some("labeling is not available in this host".to_string());
+                    self.say("labeling is not available in this host".to_string());
                     return Action::Continue;
                 };
                 let name = argument.trim();
@@ -367,7 +363,7 @@ impl Chat {
                     .into_iter()
                     .find_map(|(mark, target)| (mark == name).then_some(target));
                 let Some(target) = target else {
-                    self.world.notice = Some(format!("no bookmark named '{name}'"));
+                    self.say(format!("no bookmark named '{name}'"));
                     return Action::Continue;
                 };
                 let report = fork_record(&target);
@@ -376,11 +372,10 @@ impl Chat {
                         let running = self.turn_running;
                         self.switch_or_announce(id);
                         if !running {
-                            self.world.notice =
-                                Some(format!("branched at '{name}' (session: {id})"));
+                            self.say(format!("branched at '{name}' (session: {id})"));
                         }
                     }
-                    None => self.world.notice = Some(report.notice),
+                    None => self.say(report.notice),
                 }
                 return Action::Continue;
             }
@@ -389,17 +384,17 @@ impl Chat {
             // Gh #75: pi's `/name` is the same verb under its own name.
             "rename" | "name" => {
                 let Some(rename) = self.world.options.hooks.rename_session.clone() else {
-                    self.world.notice = Some("renaming is not available in this host".to_string());
+                    self.say("renaming is not available in this host".to_string());
                     return Action::Continue;
                 };
                 let name = argument.trim();
                 if name.is_empty() {
-                    self.world.notice = Some("usage: /rename <name>".to_string());
+                    self.say("usage: /rename <name>".to_string());
                     return Action::Continue;
                 }
                 match rename(name) {
-                    Ok(notice) => self.world.notice = Some(notice),
-                    Err(err) => self.world.notice = Some(err),
+                    Ok(notice) => self.say(notice),
+                    Err(err) => self.say(err),
                 }
                 return Action::Continue;
             }
@@ -408,13 +403,12 @@ impl Chat {
             // escape discards.
             "scoped-models" => {
                 let Some(list) = self.world.options.hooks.scoped_models.clone() else {
-                    self.world.notice =
-                        Some("scoped models are not available in this host".to_string());
+                    self.say("scoped models are not available in this host".to_string());
                     return Action::Continue;
                 };
                 let rows = list();
                 if rows.is_empty() {
-                    self.world.notice = Some("no models to scope".to_string());
+                    self.say("no models to scope".to_string());
                 } else {
                     self.scoped_models_picker =
                         Some(crate::chat_pickers::ScopedModelsPicker::new(rows));
@@ -425,7 +419,7 @@ impl Chat {
             "changelog" => {
                 let section = latest_changelog_section();
                 if section.is_empty() {
-                    self.world.notice = Some("no released changes yet".to_string());
+                    self.say("no released changes yet".to_string());
                 } else {
                     self.push_output(section);
                 }
@@ -465,7 +459,7 @@ impl Chat {
             self.editor.insert_str(&expanded);
             return Action::Continue;
         }
-        self.world.notice = Some(crate::state::sanitize_text(&format!(
+        self.say(crate::state::sanitize_text(&format!(
             "unknown command /{name}"
         )));
         Action::Continue
@@ -478,12 +472,12 @@ impl Chat {
     /// shows on the same frame.
     pub(crate) fn commit_tree_label(&mut self, id: &str, name: &str) {
         let Some(label) = self.world.options.hooks.label_record.clone() else {
-            self.world.notice = Some("labeling is not available in this host".to_string());
+            self.say("labeling is not available in this host".to_string());
             return;
         };
         match label(id, name) {
             Ok(notice) => {
-                self.world.notice = Some(notice);
+                self.say(notice);
                 let rows = self
                     .world
                     .options
@@ -501,7 +495,7 @@ impl Chat {
                     picker.restore(selected);
                 }
             }
-            Err(err) => self.world.notice = Some(err),
+            Err(err) => self.say(err),
         }
     }
 
@@ -518,7 +512,7 @@ impl Chat {
             .map(|tree| tree())
             .unwrap_or_default();
         if rows.is_empty() {
-            self.world.notice = Some("no branches yet".to_string());
+            self.say("no branches yet".to_string());
         } else {
             let mode = self
                 .world
@@ -572,7 +566,7 @@ impl Chat {
     /// really gone (not just hidden).
     pub(crate) fn commit_resume_delete(&mut self, at: Option<usize>) {
         let Some(delete) = self.world.options.hooks.delete_session.clone() else {
-            self.world.notice = Some("deleting sessions is not available in this host".to_string());
+            self.say("deleting sessions is not available in this host".to_string());
             return;
         };
         let id = at.and_then(|selected| {
@@ -585,7 +579,7 @@ impl Chat {
         };
         match delete(&id) {
             Ok(notice) => {
-                self.world.notice = Some(notice);
+                self.say(notice);
                 if let Some(list) = self.world.options.hooks.session_list.clone() {
                     let rows = list();
                     if let Some(picker) = self.resume_picker.as_mut() {
@@ -596,7 +590,7 @@ impl Chat {
                     }
                 }
             }
-            Err(err) => self.world.notice = Some(err),
+            Err(err) => self.say(err),
         }
     }
 
@@ -612,7 +606,7 @@ impl Chat {
             .map(|list| list())
             .unwrap_or_default();
         if entries.is_empty() {
-            self.world.notice = Some("no sessions yet".to_string());
+            self.say("no sessions yet".to_string());
         } else {
             self.resume_picker = Some(crate::resume::ResumePicker::new(entries));
         }
@@ -631,7 +625,7 @@ impl Chat {
             })
             .collect();
         if messages.is_empty() {
-            self.world.notice = Some("No messages to fork from".to_string());
+            self.say("No messages to fork from".to_string());
         } else {
             self.fork_picker = Some(crate::chat_pickers::ForkPicker::new(messages));
         }
@@ -646,7 +640,7 @@ impl Chat {
     /// switch replays the fork over the transcript.
     pub(crate) fn fork_and_switch(&mut self, index: usize) {
         let Some(fork_at) = self.world.options.hooks.fork_at.clone() else {
-            self.world.notice = Some("forking is not available in this host".to_string());
+            self.say("forking is not available in this host".to_string());
             return;
         };
         let text = self
@@ -667,10 +661,10 @@ impl Chat {
                     // The host's notice names the fork; the editor
                     // carries the message for immediate re-prompting.
                     self.editor.set_text(&text);
-                    self.world.notice = Some(report.notice);
+                    self.say(report.notice);
                 }
             }
-            _ => self.world.notice = Some(report.notice),
+            _ => self.say(report.notice),
         }
     }
 
@@ -701,15 +695,16 @@ impl Chat {
                     false
                 } else {
                     self.compacting = true;
+                    // The separator's working spinner says it; a
+                    // transcript line for the start would double it.
                     self.separator.working();
-                    self.world.notice = Some("compacting this session…".to_string());
                     true
                 }
             }
             crate::state::CompactState::Done(notice) => {
                 self.compacting = false;
                 self.separator.idle();
-                self.world.notice = Some(notice);
+                self.say(notice);
                 true
             }
         }
@@ -729,8 +724,7 @@ impl Chat {
     /// its stream must not be swapped mid-flight.
     pub(crate) fn switch_or_announce(&mut self, id: &str) {
         if self.turn_running {
-            self.world.notice =
-                Some("a turn is running; finish or cancel it before switching".to_string());
+            self.say("a turn is running; finish or cancel it before switching".to_string());
             return;
         }
         // gh #233: a switch can change provider readiness.
@@ -739,12 +733,12 @@ impl Chat {
             Some(switch) => match switch(id) {
                 Some(records) => {
                     self.replay_records(&records);
-                    self.world.notice = Some(format!("switched to session {id}"));
+                    self.say(format!("switched to session {id}"));
                 }
-                None => self.world.notice = Some(format!("cannot open session {id}")),
+                None => self.say(format!("cannot open session {id}")),
             },
             None => {
-                self.world.notice = Some(format!("resume this branch with: lca --resume {id}"));
+                self.say(format!("resume this branch with: lca --resume {id}"));
             }
         }
     }
@@ -764,19 +758,18 @@ impl Chat {
     /// branch. Refused while a turn runs, like a session switch.
     pub(crate) fn branch_and_replay(&mut self, record_id: &str) {
         if self.turn_running {
-            self.world.notice =
-                Some("a turn is running; finish or cancel it before switching".to_string());
+            self.say("a turn is running; finish or cancel it before switching".to_string());
             return;
         }
         match self.world.options.hooks.branch_here.as_ref() {
             Some(branch) => match branch(record_id) {
                 Some(records) => {
                     self.replay_records(&records);
-                    self.world.notice = Some(format!("branched at {record_id}; type to continue"));
+                    self.say(format!("branched at {record_id}; type to continue"));
                 }
-                None => self.world.notice = Some(format!("cannot branch at {record_id}")),
+                None => self.say(format!("cannot branch at {record_id}")),
             },
-            None => self.world.notice = Some("branching is not available in this host".to_string()),
+            None => self.say("branching is not available in this host".to_string()),
         }
     }
 }
@@ -1177,7 +1170,7 @@ pub(crate) fn poll_mcp(chat: &mut Chat) -> bool {
     };
     match poll() {
         Some(notice) => {
-            chat.world.notice = Some(notice);
+            chat.say(notice);
             true
         }
         None => false,

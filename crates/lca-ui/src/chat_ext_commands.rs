@@ -11,7 +11,7 @@ impl Chat {
     pub(crate) fn dispatch_extension_command(&mut self, name: &str, argument: &str) -> Action {
         match (self.world.options.invoke_command)(name, argument) {
             CommandEffect::ShowWidget(text) => {
-                self.world.notice = Some(crate::state::sanitize_block(&text));
+                self.say(crate::state::sanitize_block(&text));
             }
             CommandEffect::AttachImage {
                 media_type,
@@ -20,7 +20,7 @@ impl Chat {
             } => {
                 let info = lca_tui::widgets::image::ImageInfo::new(&media_type, &bytes);
                 self.transcript.push_image(info, bytes);
-                self.world.notice = Some(crate::state::sanitize_block(&note));
+                self.say(crate::state::sanitize_block(&note));
             }
             CommandEffect::InsertText(text) => {
                 self.editor.insert_str(&crate::state::sanitize_block(&text));

@@ -69,7 +69,12 @@ fn toggle_calls_host_and_updates_the_row() {
         *toggles.lock().expect("toggles"),
         vec![("alpha".to_string(), false)]
     );
-    assert!(chat.world.notice.as_deref().unwrap_or("").contains("alpha"));
+    assert!(
+        chat.last_notice()
+            .as_deref()
+            .unwrap_or("")
+            .contains("alpha")
+    );
 }
 
 // Verifies: gh #3 - the strategy section picks the compaction

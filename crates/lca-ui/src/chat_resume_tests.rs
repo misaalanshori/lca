@@ -55,7 +55,7 @@ fn resume_delete_confirms_and_trashes() {
     chat.handle_key("\x1b[B"); // to beta
     chat.handle_key("\x04"); // Ctrl+D on the live session refuses
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("that session is open here - switch away first"),
         "the live session refuses"
     );
@@ -82,7 +82,7 @@ fn resume_delete_confirms_and_trashes() {
         "y trashes by id"
     );
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("trashed 'a'"),
         "the hook's notice shows"
     );

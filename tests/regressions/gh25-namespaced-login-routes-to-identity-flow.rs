@@ -153,7 +153,7 @@ fn namespaced_login_reaches_the_host_command_dispatch() {
         seams.options_args()
     );
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("identity flow started"),
         "the identity handler's answer is what the user sees"
     );
@@ -211,7 +211,7 @@ fn an_unknown_namespaced_login_reports_an_unknown_command() {
     run(&mut chat, "/bogus.login");
 
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.last_notice().as_deref(),
         Some("unknown command /bogus.login")
     );
     assert!(

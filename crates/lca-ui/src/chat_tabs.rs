@@ -57,16 +57,15 @@ impl Chat {
     /// mid-turn; without a host hook it names the absence.
     pub(crate) fn open_tab(&mut self) {
         if self.turn_running {
-            self.world.notice =
-                Some("a turn is running; finish or cancel it before opening a tab".to_string());
+            self.say("a turn is running; finish or cancel it before opening a tab".to_string());
             return;
         }
         let Some(create) = self.world.options.hooks.new_session.clone() else {
-            self.world.notice = Some("opening a tab is not available in this host".to_string());
+            self.say("opening a tab is not available in this host".to_string());
             return;
         };
         let Some(id) = create() else {
-            self.world.notice = Some("the host could not open a session".to_string());
+            self.say("the host could not open a session".to_string());
             return;
         };
         self.save_tab();
@@ -90,8 +89,7 @@ impl Chat {
             return;
         }
         if self.turn_running {
-            self.world.notice =
-                Some("a turn is running; finish or cancel it before switching tabs".to_string());
+            self.say("a turn is running; finish or cancel it before switching tabs".to_string());
             return;
         }
         self.save_tab();
@@ -117,12 +115,11 @@ impl Chat {
     /// running stream. Lands on the previously active tab.
     pub(crate) fn close_tab(&mut self) {
         if self.turn_running {
-            self.world.notice =
-                Some("a turn is running; finish or cancel it before closing tabs".to_string());
+            self.say("a turn is running; finish or cancel it before closing tabs".to_string());
             return;
         }
         if self.tabs.len() < 2 {
-            self.world.notice = Some("only one tab open".to_string());
+            self.say("only one tab open".to_string());
             return;
         }
         self.tabs.remove(self.active_tab);
@@ -140,22 +137,22 @@ impl Chat {
     fn enter_tab_session(&mut self, id: &str) {
         // gh #233: a tab can run another provider's session.
         self.invalidate_models();
-        // A switch lands with a clean dock: pickers, search, and the
-        // old notice belong to the tab left behind.
+        // A switch lands with a clean dock: pickers, search, and
+        // toasts belong to the tab left behind.
         self.close_pickers();
-        self.world.notice = None;
+        self.toasts.clear();
         match self.world.options.hooks.switch_session.as_ref() {
             Some(switch) => match switch(id) {
                 Some(records) => {
                     self.replay_records(&records);
                 }
                 None => {
-                    self.world.notice = Some(format!("cannot open session {id}"));
+                    self.say(format!("cannot open session {id}"));
                     return;
                 }
             },
             None => {
-                self.world.notice = Some(format!("resume this branch with: lca --resume {id}"));
+                self.say(format!("resume this branch with: lca --resume {id}"));
                 return;
             }
         }

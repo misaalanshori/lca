@@ -75,6 +75,7 @@ pub const TOAST_SECS: u64 = 5;
 /// is one line, not a wall).
 pub const TOAST_MAX: usize = 3;
 
+/// The interactive chat.
 pub struct Chat {
     /// The transcript.
     pub transcript: Transcript,
@@ -274,7 +275,7 @@ impl Chat {
         let theme_name = theme.name.clone();
         let theme_auto =
             !world.options.plain && matches!(theme_setting.as_str(), "" | "auto" | "system");
-        world.notice = theme_notice;
+        let chat_head = theme_notice;
         let mut editor = Editor::new();
         editor.set_keybindings(keybindings.clone());
         editor.set_autocomplete(Arc::new(provider_for(&world.options)));
@@ -392,6 +393,11 @@ impl Chat {
         // gh #209: the first tab seeds here, so every later tab op
         // finds it.
         chat.seed_tabs();
+        // S5: an invalid custom theme keeps the last-good palette and
+        // says so in history, never in editor chrome.
+        if let Some(notice) = chat_head {
+            chat.say(notice);
+        }
         chat
     }
 
@@ -481,7 +487,7 @@ impl Chat {
                 // The separator counts the backoff down (chrome.md's
                 // `RetryStatusIndicator`); the error text stays a notice.
                 self.separator.retrying(attempt, max, delay_ms);
-                self.world.notice = Some(format!("retry {attempt}/{max} after: {error}"));
+                self.say(format!("retry {attempt}/{max} after: {error}"));
             }
             TurnEvent::Error { message, .. } => {
                 self.transcript.push_error(message);
@@ -501,7 +507,9 @@ impl Chat {
                 event,
                 detail,
             } => {
-                self.world.notice = Some(format!("[{extension}] {event}: {detail}"));
+                // Host diagnostics (cache divergence, sync notes)
+                // float and fade; they are not conversation.
+                self.toast(format!("[{extension}] {event}: {detail}"));
             }
             TurnEvent::TurnEnded {
                 status,
@@ -542,7 +550,6 @@ impl Chat {
         self.turn_status = Some(TurnStatusLine {
             text: "running...".into(),
         });
-        self.world.notice = None;
         self.transcript.begin_assistant();
     }
 
@@ -605,6 +612,19 @@ impl Chat {
         self.toasts.len() != before
     }
 
+    /// The latest transcript notice (gh #239: command results land
+    /// in history, so readers — including tests — look them up here
+    /// instead of in editor chrome, which no longer carries text).
+    pub fn last_notice(&self) -> Option<String> {
+        self.transcript.entries().iter().rev().find_map(|entry| {
+            if let crate::transcript::Entry::Notice(text) = entry {
+                Some(text.clone())
+            } else {
+                None
+            }
+        })
+    }
+
     /// Advance the separator's spinner. Returns `true` when the frame
     /// moved, so the loop repaints; idle never wakes the renderer.
     pub fn tick(&mut self) -> bool {
@@ -648,7 +668,7 @@ impl Chat {
             && let Some(shell) = self.shell.as_ref()
         {
             (shell.cancel)();
-            self.world.notice = Some(format!("cancelling `{}`", shell.command));
+            self.say(format!("cancelling `{}`", shell.command));
             return Action::Continue;
         }
 
@@ -675,7 +695,7 @@ impl Chat {
             self.search = Some(String::new());
             self.search_matches.clear();
             self.search_index = 0;
-            self.world.notice = Some("search: ".to_string());
+            // The readout renders from state in the dock (gh #239).
             return Action::Continue;
         }
         // gh #8 (EFG-003): pi's model cycle - Ctrl+P forward, Ctrl+Shift+P
@@ -685,13 +705,12 @@ impl Chat {
             || self.keybindings.matches(data, "app.model.cycleBackward")
         {
             let forward = self.keybindings.matches(data, "app.model.cycleForward");
-            self.world.notice =
-                Some(crate::state::sanitize_block(
-                    &match &self.world.options.hooks.cycle_model {
-                        Some(cycle) => cycle(forward),
-                        None => "model cycling is not available in this host".to_string(),
-                    },
-                ));
+            self.say(crate::state::sanitize_block(
+                &match &self.world.options.hooks.cycle_model {
+                    Some(cycle) => cycle(forward),
+                    None => "model cycling is not available in this host".to_string(),
+                },
+            ));
             return Action::Continue;
         }
         // Ctrl+X Ctrl+E opens the external editor (FR-UI-15).
@@ -754,7 +773,9 @@ impl Chat {
         // with the name for the same reason.
         self.theme_setting = name.to_string();
         self.theme_auto = name == "system";
-        self.world.notice = notice;
+        if let Some(notice) = notice {
+            self.say(notice);
+        }
     }
 
     /// Apply a terminal color-scheme detection (R10): only while the theme
@@ -889,7 +910,9 @@ impl Chat {
         // gh #233: every login/logout step can change credentials, so
         // what providers offer may have changed with it.
         self.invalidate_models();
-        crate::state::apply_login_next(&mut self.world, next);
+        if let Some(message) = crate::state::apply_login_next(&mut self.world, next) {
+            self.say(message);
+        }
     }
 
     /// Handle a submitted editor buffer.
@@ -915,7 +938,7 @@ impl Chat {
         // A turn needs a model; say so rather than failing deep in the
         // provider with a transport error.
         if self.model_label().trim().is_empty() {
-            self.world.notice = Some(
+            self.say(
                 "No model is active. Use /login to sign in, or /model to choose one.".to_string(),
             );
             return Action::Continue;

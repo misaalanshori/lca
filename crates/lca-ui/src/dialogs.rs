@@ -20,7 +20,7 @@ pub fn drain_dialog(chat: &mut Chat, dialog_rx: &Receiver<DialogExchange>) -> bo
         && let Ok(exchange) = dialog_rx.try_recv()
     {
         if let lca_protocol::UiDialog::Notify { message, .. } = &exchange.dialog {
-            chat.world.notice = Some(message.clone());
+            chat.say(message.clone());
             let _ = exchange.respond.send(lca_protocol::DialogAnswer::Notify);
         } else {
             // A select opens with every option matched (an empty

@@ -163,7 +163,7 @@ fn ctrl_x_copies_the_last_assistant_message_through_the_ladder() {
         "the message, base64 (`copy me`): {out:?}"
     );
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.toasts.last().map(|toast| toast.text.as_str()),
         Some("copied (if your terminal blocked the clipboard, nothing was copied)"),
         "the honest unverified notice"
     );
@@ -207,7 +207,7 @@ fn a_mouse_selection_still_copies_on_release_through_the_ladder() {
         "the selection (`hello`, base64) went out over OSC 52: {out:?}"
     );
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.toasts.last().map(|toast| toast.text.as_str()),
         Some("copied (if your terminal blocked the clipboard, nothing was copied)"),
         "the same notice the mouse path always gave"
     );
@@ -607,7 +607,7 @@ fn ctrl_x_copies_the_oauth_url_with_the_named_notice() {
         "the exact URL reaches the clipboard"
     );
     assert_eq!(
-        chat.world.notice.as_deref(),
+        chat.toasts.last().map(|toast| toast.text.as_str()),
         Some("\u{2713} Copied sign-in URL to clipboard"),
         "the named confirmation"
     );

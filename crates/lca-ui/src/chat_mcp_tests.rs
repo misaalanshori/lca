@@ -24,16 +24,16 @@ fn mcp_verbs_route_through_the_hooks() {
     }
     assert_eq!(chat.handle_key("\r"), Action::Continue);
     assert!(
-        chat.world.notice.as_deref().unwrap().contains("connected"),
+        chat.last_notice().as_deref().unwrap().contains("connected"),
         "{:?}",
-        chat.world.notice
+        chat.last_notice()
     );
     for c in "/mcp disable echo".chars() {
         chat.handle_key(&c.to_string());
     }
     assert_eq!(chat.handle_key("\r"), Action::Continue);
     assert_eq!(
-        chat.world.notice.as_deref().unwrap(),
+        chat.last_notice().as_deref().unwrap(),
         "verb=disable target=echo"
     );
 }
@@ -48,8 +48,7 @@ fn mcp_without_a_host_names_the_guide() {
     }
     assert_eq!(chat.handle_key("\r"), Action::Continue);
     assert!(
-        chat.world
-            .notice
+        chat.last_notice()
             .as_deref()
             .unwrap()
             .contains("authoring guide")

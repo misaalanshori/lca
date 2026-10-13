@@ -15,7 +15,6 @@ impl Chat {
             Some("escape") => {
                 self.search = None;
                 self.search_matches.clear();
-                self.world.notice = None;
                 return Action::Continue;
             }
             Some("enter") => {
@@ -34,18 +33,8 @@ impl Chat {
         }
         self.search = Some(query.clone());
         self.refresh_search();
-        self.world.notice = Some(format!(
-            "search: {query}{}",
-            if self.search_matches.is_empty() {
-                "  (no matches)".to_string()
-            } else {
-                format!(
-                    "  [{}/{}]",
-                    self.search_index + 1,
-                    self.search_matches.len()
-                )
-            }
-        ));
+        // The readout renders from state in the dock (gh #239);
+        // nothing lands in history per keystroke.
         Action::Continue
     }
 

@@ -86,7 +86,8 @@ mod release_targets_gate;
 #[path = "26-net-read-body-streams.rs"]
 mod net_read_body_streams;
 // tui-port2 P6: a multi-line notice wrote embedded newlines to the
-// terminal and corrupted the screen.
+// terminal and corrupted the screen. Notices ride the transcript
+// since gh #239; the one-visual-line-per-line rule rides with them.
 #[path = "27-multiline-notice-render.rs"]
 mod multiline_notice_render;
 // audit: a steer left the assistant before it with a streaming marker.
@@ -162,10 +163,10 @@ mod shipped_bag_kinds_match_the_manifest;
 // (`| head`) made every `println!` panic with a broken pipe.
 #[path = "gh19-sigpipe-does-not-panic.rs"]
 mod gh19_sigpipe_does_not_panic;
-// Open-line defect (GitHub issue #18): a modal close that shrank the frame
-// while the notice changed could leave the old notice row on the pane.
-#[path = "gh18-stale-notice-row.rs"]
-mod gh18_stale_notice_row;
+// Open-line defect (GitHub issue #18): retired with gh #239 — its
+// subject, the dock notice row, no longer exists. Transient
+// confirmations float as toasts and fade on `tick` (covered in
+// `chat_toast_tests`); history appends, so no row can go stale.
 // Released-line defects (GitHub issue #27): a multiline prompt stepped back
 // to column 0 on every line after the first, and spaces were dropped at wrap
 // boundaries.
@@ -289,6 +290,10 @@ mod display_read_of_compacted_log;
 // document, import wanted raw JSONL).
 #[path = "255-export-import-round-trip.rs"]
 mod export_import_round_trip;
+// GitHub #239: the dock catch-all is retired — command results land
+// in the transcript, transient confirmations float as toasts.
+#[path = "239-dock-notice-retired.rs"]
+mod dock_notice_retired;
 // GitHub #215: credential filenames read silently under the fatigue
 // cut (live risk: `.env` exfiltrated with no confirmation).
 #[path = "215-sensitive-read-escalation.rs"]

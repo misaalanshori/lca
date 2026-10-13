@@ -22,7 +22,7 @@ impl Chat {
                     cancel();
                 }
                 self.world.login_waiting = None;
-                self.world.notice = Some("login cancelled".to_string());
+                self.say("login cancelled".to_string());
             }
             return Some(Action::Continue);
         }
@@ -51,7 +51,7 @@ impl Chat {
     fn handle_login_picker(&mut self, key: Option<&str>) -> Option<Action> {
         let mut prompt = self.world.picker.take()?;
         match key {
-            Some("escape") => self.world.notice = Some("login cancelled".to_string()),
+            Some("escape") => self.say("login cancelled".to_string()),
             Some("up" | "k") => {
                 prompt.selected = prompt.selected.saturating_sub(1);
                 self.world.picker = Some(prompt);
@@ -85,11 +85,11 @@ impl Chat {
             return Some(Action::Continue);
         }
         match key {
-            Some("escape") => self.world.notice = Some("login cancelled".to_string()),
+            Some("escape") => self.say("login cancelled".to_string()),
             Some("enter") => {
                 let typed = std::mem::take(&mut prompt.input);
                 if typed.is_empty() {
-                    self.world.notice = Some("nothing was entered".to_string());
+                    self.say("nothing was entered".to_string());
                 } else if let Some(complete) = self.world.options.complete_login.clone() {
                     let next = complete(&prompt.provider, &typed);
                     self.apply_login_next(next);
@@ -205,7 +205,7 @@ impl Chat {
                 Action::Continue
             }
             UiEffect::ShowNotice(text) => {
-                self.world.notice = Some(crate::state::sanitize_block(&text));
+                self.say(crate::state::sanitize_block(&text));
                 Action::Continue
             }
             UiEffect::InsertText(text) => {
