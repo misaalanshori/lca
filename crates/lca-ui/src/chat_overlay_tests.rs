@@ -1188,4 +1188,3 @@ fn scoped_models_click_toggles_instead_of_saving() {
         "the row unchecked"
     );
 }
-
