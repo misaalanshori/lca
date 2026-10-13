@@ -85,3 +85,91 @@ fn head_tail_truncation_keeps_both_ends() {
     let (same, truncated) = truncate_head_tail("short", 4096, 200, None);
     assert_eq!((same.as_str(), truncated), ("short", false));
 }
+
+// Verifies: gh #219 - reading a file under a subfolder AGENTS.md
+// injects its instructions once per session, nearest first.
+#[tokio::test]
+async fn subfolder_agents_load_on_read() {
+    let root = scratch("agents-disc");
+    std::fs::create_dir_all(root.join("sub/deep")).expect("mkdir");
+    std::fs::write(root.join("AGENTS.md"), "root rules").expect("write");
+    std::fs::write(root.join("sub/AGENTS.md"), "sub rules").expect("write");
+    std::fs::write(root.join("sub/deep/note.md"), "hello").expect("write");
+    let mut exec = executor(&root);
+    let first = run(
+        &mut exec,
+        &call("read", serde_json::json!({"path": "sub/deep/note.md"})),
+    )
+    .await;
+    assert_eq!(first.status, ToolResultStatus::Ok);
+    assert!(first.content.contains("sub rules"), "{}", first.content);
+    assert!(
+        !first.content.contains("root rules"),
+        "the root file already loaded at startup: {}",
+        first.content
+    );
+    let second = run(
+        &mut exec,
+        &call("read", serde_json::json!({"path": "sub/deep/note.md"})),
+    )
+    .await;
+    assert!(
+        !second.content.contains("sub rules"),
+        "injected at most once: {}",
+        second.content
+    );
+}
+
+// Verifies: gh #219 - paths outside the workspace never inject.
+#[tokio::test]
+async fn outside_paths_never_inject() {
+    let root = scratch("agents-outside");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let outside = lca_testkit::scratch_path("agents-outside-ext");
+    std::fs::create_dir_all(&outside).expect("mkdir");
+    std::fs::write(outside.join("AGENTS.md"), "evil rules").expect("write");
+    std::fs::write(outside.join("note.md"), "hello").expect("write");
+    let mut exec = executor(&root);
+    let result = run(
+        &mut exec,
+        &call(
+            "read",
+            serde_json::json!({"path": outside.join("note.md").to_string_lossy()}),
+        ),
+    )
+    .await;
+    assert_eq!(result.status, ToolResultStatus::Ok);
+    assert!(!result.content.contains("evil rules"), "{}", result.content);
+}
+
+// Verifies: gh #219 - nested instruction files inject nearest first,
+// and a directory listing discovers its own directory.
+#[tokio::test]
+async fn nested_agents_inject_nearest_first() {
+    let root = scratch("agents-nest");
+    std::fs::create_dir_all(root.join("sub/deep")).expect("mkdir");
+    std::fs::write(root.join("sub/AGENTS.md"), "sub rules").expect("write");
+    std::fs::write(root.join("sub/deep/AGENTS.md"), "deep rules").expect("write");
+    std::fs::write(root.join("sub/deep/note.md"), "hello").expect("write");
+    let mut exec = executor(&root);
+    let result = run(
+        &mut exec,
+        &call("read", serde_json::json!({"path": "sub/deep/note.md"})),
+    )
+    .await;
+    let deep = result.content.find("deep rules").expect("deep injects");
+    let sub = result.content.find("sub rules").expect("sub injects");
+    assert!(deep < sub, "nearest first:\n{}", result.content);
+    let mut fresh = executor(&root);
+    let listed = run(
+        &mut fresh,
+        &call("list", serde_json::json!({"path": "sub/deep"})),
+    )
+    .await;
+    assert_eq!(listed.status, ToolResultStatus::Ok);
+    assert!(
+        listed.content.contains("deep rules"),
+        "a listing discovers its own directory:\n{}",
+        listed.content
+    );
+}

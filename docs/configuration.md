@@ -204,6 +204,14 @@ files load when the project is trusted at startup - session trust
 counts, so `-a`, an `always` fallback, and a mid-session `/trust`
 followed by `/reload` all open them without a restart.
 
+Subfolder discovery (gh #219): when a `read` or `list` lands under a
+subdirectory carrying its own instruction file (same names and
+override rule), the first such read injects it once — `Loaded
+localized instructions from <dir>/AGENTS.md:` — nearest directory
+first, walking up to the workspace root. The walk never leaves the
+workspace, so untrusted directories cannot inject; each file injects
+at most once per session.
+
 ## Prompt templates
 
 Markdown files become `/` commands (gh #58, pi's prompt templates):

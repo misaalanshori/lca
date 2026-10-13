@@ -170,6 +170,10 @@ pub struct ToolExecutor {
     /// The host's skill sources for the `skill` tool (gh #43); `None`
     /// answers "no skills" rather than reading somewhere unconfigured.
     skills_roots: Option<crate::skills::SkillsRoots>,
+    /// Subfolder instruction files already injected this session
+    /// (gh #219): the executor lives as long as the session, so this
+    /// set is the at-most-once record.
+    loaded_instructions: std::collections::HashSet<std::path::PathBuf>,
 }
 
 impl ToolExecutor {
@@ -205,6 +209,7 @@ impl ToolExecutor {
             spill_dir: None,
             skills_roots: None,
             session_env: None,
+            loaded_instructions: std::collections::HashSet::new(),
         }
     }
 
@@ -404,7 +409,42 @@ impl ToolExecutor {
         result
             .extras
             .insert("duration-ms".to_string(), ms.to_string());
+        // Gh #219: a successful read/list injects newly discovered
+        // subfolder instructions (nearest first, once per session).
+        if result.status == lca_protocol::ToolResultStatus::Ok
+            && (call.name == "read" || call.name == "list")
+        {
+            self.inject_local_instructions(&args, &mut result);
+        }
         result
+    }
+
+    /// Append undiscovered subfolder instructions to a read/list
+    /// result (gh #219): the walk stays inside the workspace (outside
+    /// paths inject nothing), each file caps at 8 KiB, and loaded
+    /// files record so a session hears each once.
+    fn inject_local_instructions(&mut self, args: &serde_json::Value, result: &mut ToolResult) {
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let target = crate::paths::resolve_target(&self.cwd, std::path::Path::new(path));
+        let root =
+            std::fs::canonicalize(&self.workspace).unwrap_or_else(|_| self.workspace.clone());
+        for file in crate::paths::discover_instructions(&target, &root, &self.loaded_instructions) {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let text = text.trim();
+            if text.is_empty() {
+                self.loaded_instructions.insert(file);
+                continue;
+            }
+            let (capped, _) = crate::truncate::truncate_head_tail(text, 8192, usize::MAX, None);
+            let rel = file.strip_prefix(&root).unwrap_or(&file);
+            result.content.push_str(&format!(
+                "\n\nLoaded localized instructions from {}:\n{capped}\n",
+                rel.display()
+            ));
+            self.loaded_instructions.insert(file);
+        }
     }
 
     /// The `skill` tool (gh #43): load one skill's full instructions by
