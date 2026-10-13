@@ -482,7 +482,10 @@ fn model_listing_reads_the_catalog_or_falls_back() {
     let models = antigravity::list_models(cap.as_ref());
     let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
     assert_eq!(ids, vec!["gemini-2.5-flash", "gemini-2.5-pro"]);
-    assert_eq!(models[1].name, "Gemini 2.5 Pro");
+    // Gh #241B: virtualized names carry the family plus the product
+    // suffix (pi-antigravity `publicModelName`), not the raw display
+    // string.
+    assert_eq!(models[1].name, "Gemini 2.5 Pro (Antigravity)");
     assert!(!requests_of(&mock, "fetchAvailableModels").is_empty());
 
     // No login: the static fallback, no panic (the picker still works).
