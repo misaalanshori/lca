@@ -35,6 +35,13 @@ async fn turn_reading_dotenv_prompts() {
         "the prompt names the file: {:?}",
         prompt.asked
     );
+    let read = h.store.read(&h.session).expect("read log");
+    assert!(
+        read.records
+            .iter()
+            .any(|r| matches!(r, lca_protocol::Record::Permission { .. })),
+        "the prompt decision is recorded"
+    );
 }
 
 // Verifies: gh #215 — a turn reading an ordinary file stays silent.
