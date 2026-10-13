@@ -123,3 +123,25 @@ exact commit provenance.
 The job runs parallel to the binary matrix with no `needs` edge,
 so it cannot delay binary publishing; stable tags are untouched
 (the manual release flow still owns `abi-*` and version tags).
+
+## Addendum 2026-10-13 (gh #257): unstable prune and stable `:latest`
+
+A rolling channel leaves a superseded manifest per commit behind,
+so the `extensions` job ends with a prune step
+(`scripts/prune-unstable-ghcr.sh`, `--execute --keep 2`): the live
+`:unstable` carrier plus one rollback spare stay, older
+`:unstable` carriers, stale `:b<sha7>` pins, and untagged orphans
+go. The unit of safety is the tag-name guard, checked first and
+unconditionally — a version carrying any semver (`X.Y.Z...`),
+`abi-*`, or `latest` tag is never a deletion candidate, whatever
+else it carries. The script defaults to `--dry-run`, and
+`--execute` refuses unless `GITHUB_ACTIONS=true`, so a dev
+machine can list but never prune; its `selftest` (fake version
+lists in, only eligible ids out) runs as a CI gate. Prune
+failures warn, never fail the publish.
+
+Stable releases publish the canonical `:latest` tag alongside
+`abi-*` and the version tag (both `publish.yml` and
+`publish-extensions.yml`), so plain OCI clients resolving the
+default tag stop 404ing. `:latest` is itself a protected tag
+under the prune guard, and the unstable job never pushes it.

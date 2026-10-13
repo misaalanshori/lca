@@ -271,6 +271,15 @@ jobs:
       - name: gate-list consistency (#106)
         shell: bash
         run: bash scripts/docs-consistency.sh
+      # Verifies: gh #257 - the GHCR prune guards hold offline (fake
+      # version lists in, only eligible ids out; protected tags never
+      # candidates; --execute refuses off CI) and the touched workflow
+      # files still parse. The prune step itself runs in CI only.
+      - name: ghcr prune guards and workflow syntax (#257)
+        shell: bash
+        run: |
+          bash scripts/prune-unstable-ghcr.sh selftest
+          python3 -c "import yaml,sys; [yaml.safe_load(open(f)) for f in ['.github/workflows/unstable.yml', '.github/workflows/publish.yml', '.github/workflows/publish-extensions.yml', '.github/workflows/ci.yml']]; print('workflows parse')"
       # Verifies: FR-PROV-9 (#92, QA-017) - the binary builds and its unit
       # tests pass with no bundled provider compiled in, so the TUI opens
       # into the zero-provider state instead of refusing at compile time.

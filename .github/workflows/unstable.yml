@@ -106,6 +106,21 @@ jobs:
           for image in antigravity anthropic openrouter github-copilot meta kimi-coding llama mcp; do
             gh api --method PATCH "/user/packages/container/lca%2F${image}" -f visibility=public || true
           done
+      # Hygiene (gh #257): the rolling channel leaves a superseded
+      # manifest per commit behind; keep the channel plus one spare
+      # and prune the rest. The script's tag-name guard runs first —
+      # semver, abi-*, and latest tags are never deletion candidates —
+      # and --execute refuses off CI, so a dry run is the most a dev
+      # machine can do. Best effort: prune failures warn, never fail
+      # the channel publish.
+      - name: Prune old unstable versions on GHCR
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for image in antigravity anthropic openrouter github-copilot meta kimi-coding llama mcp; do
+            bash scripts/prune-unstable-ghcr.sh "$image" --execute --keep 2 || echo "warn: prune of ${image} failed, continuing"
+          done
 
   artifacts:
     # workflow_run fires for every conclusion; only green builds ship.

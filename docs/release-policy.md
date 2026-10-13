@@ -60,6 +60,8 @@ After 1.0, minor releases are cut when there is something worth shipping, and pa
 
 Annotation, 2026-10-02 (ADR-0043), on the tag rule above: `unstable` is the exception. It is a channel pointer, not a release announcement. The tag is created once and never moved; what rolls is the release it heads — its assets are replaced — so the tag's target SHA is explicitly *not* the provenance of the binaries currently behind it, which is what the attestation and the baked version are for. `releases/latest` never resolves to it, because it is marked `prerelease` and `--latest=false`, which is exactly what keeps the stable installers' redirect path true. Every other tag stays as immutable as it was.
 
+Annotation, 2026-10-13 (gh #257), on extension tags: stable extension releases publish `:latest` alongside `abi-*` and the version tag, so default-tag OCI pulls resolve. The unstable extension channel prunes superseded `:unstable` carriers, stale `:b<sha7>` pins, and untagged orphans down to the live carrier plus one spare after each green commit — and its tag-name guard shields every semver, `abi-*`, and `latest` tag from deletion, unconditionally. Full rule in ADR-0043's second addendum.
+
 ## Artifact matrix
 
 Every release builds six native targets. The seventh row is deferred with NFR-11 (`scripts/deferred-requirements.txt`): until the web target ships, a release publishes no npm package.

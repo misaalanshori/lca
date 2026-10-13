@@ -109,6 +109,9 @@ jobs:
             abi=$(python3 -c "import sys;v=dict(l.split(' = ') for l in open(sys.argv[1]) if ' = ' in l)['abi'];print(v.strip().strip('\"'))" "$manifest")
             bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "abi-${abi}" "$wasm" "$manifest"
             bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "${version}" "$wasm" "$manifest"
+            # The canonical rolling-stable tag (gh #257): plain OCI
+            # clients default to :latest, which 404'd before this line.
+            bash scripts/publish-oci.sh "misaalanshori/lca/${image}" "latest" "$wasm" "$manifest"
           }
           publish openai-compatible extensions/openai-compatible/fixtures/component.wasm extensions/openai-compatible/extension.toml
           publish skills extensions/skills/fixtures/component.wasm extensions/skills/extension.toml
