@@ -4,7 +4,8 @@
 //! change appends a unified diff as a trailing system message while
 //! `messages[0]` stays byte-identical (FR-CACHE-5, ADR-0017).
 //!
-//! The baseline lives behind an `Arc<Mutex<..>>` in [`AgentConfig`],
+//! The baseline lives behind an `Arc<Mutex<..>>` in
+//! [`crate::AgentConfig`],
 //! so hosts that rebuild the config per generation keep one session
 //! baseline without extra state.
 
@@ -23,7 +24,7 @@ pub struct InstructionBaseline {
     bodies: HashMap<PathBuf, String>,
 }
 
-/// The shareable baseline handle [`AgentConfig`] carries.
+/// The shareable baseline handle [`crate::AgentConfig`] carries.
 pub type SharedBaseline = Arc<Mutex<InstructionBaseline>>;
 
 /// Re-scan `sources` against the baseline, returning one trailing
