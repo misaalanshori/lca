@@ -96,3 +96,29 @@ fn the_driver_yields_an_event_before_the_body_ends() {
     );
     assert!(driver.next_event().is_none(), "the stream ends");
 }
+
+// Verifies: gh #241A - a bare JSON error body (no SSE framing, as
+// gateways and proxies return rejections) surfaces as an Error event
+// instead of an empty silent end (pi-antigravity's stray-line rule:
+// non-`data:` lines accumulate, and an `{"error": ...}` envelope
+// throws rather than vanishing).
+#[test]
+fn bare_error_bodies_surface_instead_of_ending_silently() {
+    for body in [
+        "{\"error\":{\"code\":403,\"message\":\"denied by policy\"}}\n\n",
+        "{\"error\":{\"code\":403,\"message\":\"denied by policy\"}}",
+    ] {
+        let cap = ChunkedCap {
+            chunks: Mutex::new(VecDeque::from(vec![Some(body.as_bytes().to_vec()), None])),
+            reads: AtomicUsize::new(0),
+        };
+        let mut driver = StreamDriver::open(&cap, &CompletionRequest::default()).expect("open");
+        let event = driver.next_event().expect("an event, not silence");
+        match event {
+            Ok(lca_protocol::StreamEvent::Error { message, .. }) => {
+                assert!(message.contains("denied by policy"), "{message}")
+            }
+            other => panic!("an Error event, got {other:?}"),
+        }
+    }
+}

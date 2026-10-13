@@ -615,6 +615,11 @@ pub struct StreamDriver<'a> {
     open_calls: Vec<String>,
     pending: std::collections::VecDeque<lca_protocol::StreamEvent>,
     finished: bool,
+    /// Non-`data:` lines accumulate here (pi-antigravity's stray
+    /// rule): gateways return rejections without SSE framing, and an
+    /// `{"error": ...}` envelope among them must surface, never
+    /// vanish into an empty end.
+    stray: String,
 }
 
 impl<'a> StreamDriver<'a> {
@@ -698,6 +703,7 @@ impl<'a> StreamDriver<'a> {
             open_calls: Vec::new(),
             pending: std::collections::VecDeque::new(),
             finished: false,
+            stray: String::new(),
         })
     }
 
@@ -715,7 +721,16 @@ impl<'a> StreamDriver<'a> {
                     self.buffer.push_str(&String::from_utf8_lossy(&chunk));
                     self.drain_frames();
                 }
-                Ok(None) => self.finished = true,
+                Ok(None) => {
+                    // EOF with a buffered fragment: a bare error body
+                    // rarely ends in `\n\n`. Flush the tail through
+                    // the same line rules before ending.
+                    if !self.buffer.is_empty() {
+                        let tail: String = std::mem::take(&mut self.buffer);
+                        self.process_lines(tail.lines());
+                    }
+                    self.finished = true;
+                }
                 Err(err) => {
                     self.finished = true;
                     return Some(Err(StreamFailure::from(err)));
@@ -731,25 +746,71 @@ impl<'a> StreamDriver<'a> {
                 return;
             };
             let frame: String = self.buffer.drain(..end + 2).collect();
-            let mut events = Vec::new();
-            for line in frame.lines() {
-                let line = line.trim_end_matches('\r');
-                let Some(payload) = line.strip_prefix("data:").map(str::trim) else {
-                    continue;
-                };
-                if payload.is_empty() || payload == "[DONE]" {
-                    continue;
-                }
-                let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
-                    continue;
-                };
-                handle_chunk(&value, &mut self.open_calls, &mut |event| {
-                    events.push(event);
-                    true
-                });
+            self.process_lines(frame.lines());
+            if self.finished {
+                return;
             }
-            self.pending.extend(events);
         }
+    }
+
+    /// One frame's (or the EOF tail's) lines: `data:` payloads decode
+    /// as chunks; anything else accumulates as stray, and a stray
+    /// JSON error envelope emits exactly like a framed one.
+    fn process_lines<'b>(&mut self, lines: impl Iterator<Item = &'b str>) {
+        let mut events = Vec::new();
+        for line in lines {
+            let line = line.trim_end_matches('\r');
+            let Some(payload) = line.strip_prefix("data:").map(str::trim) else {
+                self.consume_stray(line, &mut events);
+                continue;
+            };
+            if payload.is_empty() || payload == "[DONE]" {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+                continue;
+            };
+            handle_chunk(&value, &mut self.open_calls, &mut |event| {
+                events.push(event);
+                true
+            });
+        }
+        self.pending.extend(events);
+    }
+
+    /// pi-antigravity's stray rule (`consumeStray`): blank lines and
+    /// SSE comments never accumulate; the rest joins the buffer, and
+    /// the first parseable `{"error": ...}` envelope becomes an
+    /// Error event and ends the stream (a rejection is terminal).
+    fn consume_stray(&mut self, line: &str, events: &mut Vec<lca_protocol::StreamEvent>) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with(':') {
+            return;
+        }
+        if !self.stray.is_empty() {
+            self.stray.push('\n');
+        }
+        self.stray.push_str(trimmed);
+        let Some(start) = self.stray.find('{') else {
+            return;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.stray[start..]) else {
+            return;
+        };
+        let Some(error) = value.get("error") else {
+            return;
+        };
+        let message = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("vendor error")
+            .to_string();
+        events.push(lca_protocol::StreamEvent::Error {
+            message: message.clone(),
+            retryable: lca_protocol::is_capacity_error(&message),
+        });
+        self.stray.clear();
+        self.finished = true;
     }
 }
 
