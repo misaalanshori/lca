@@ -31,6 +31,7 @@ pub mod resume;
 pub mod run;
 pub mod separator;
 pub mod state;
+mod status;
 pub mod theme;
 pub mod transcript;
 mod turn_metrics;

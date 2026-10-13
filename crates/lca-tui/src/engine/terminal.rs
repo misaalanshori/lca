@@ -21,6 +21,11 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use super::keys::set_kitty_protocol_active;
+use super::program_status::{
+    PROGRAM_STATUS_QUERY, ProgramState, ProgramStatusMode, format_program_status,
+    is_program_status_reply, is_program_status_traffic, multiplexer_strips_osc,
+    program_status_mode,
+};
 use super::stdin_buffer::{StdinBuffer, StdinEvent};
 use super::sys;
 
@@ -68,6 +73,18 @@ pub trait Terminal: Send {
     fn set_title(&mut self, title: &str);
     /// Drive the taskbar progress indicator.
     fn set_progress(&mut self, active: bool);
+    /// Report a lifecycle state over OSC 7501 (gh #213): working,
+    /// blocked, done, error, idle, and clear on shutdown. Reports only
+    /// when the terminal opted in (see `program_status`); otherwise a
+    /// silent no-op.
+    fn set_program_status(&mut self, state: ProgramState);
+}
+
+/// Read one process environment variable as an injected-`env` reader:
+/// `program_status` takes `impl Fn`, and a bare function item satisfies
+/// it without a closure at each call site.
+fn env_var(key: &str) -> Option<String> {
+    std::env::var(key).ok()
 }
 
 /// Resolve the lone-ESC reassembly window: SSH-aware, env-overridable.
@@ -136,6 +153,9 @@ struct Shared {
     resize: Mutex<ResizeHandler>,
     kitty: AtomicBool,
     modify_other_keys: AtomicBool,
+    /// An OSC 7501 support reply arrived (gh #213): auto-mode
+    /// reporting may flow.
+    program_status: AtomicBool,
     cols: AtomicU16,
     rows: AtomicU16,
     shutdown: AtomicBool,
@@ -189,6 +209,7 @@ impl ProcessTerminal {
                 resize: Mutex::new(Box::new(|| {})),
                 kitty: AtomicBool::new(false),
                 modify_other_keys: AtomicBool::new(false),
+                program_status: AtomicBool::new(false),
                 cols: AtomicU16::new(cols),
                 rows: AtomicU16::new(rows),
                 shutdown: AtomicBool::new(false),
@@ -251,9 +272,19 @@ impl Terminal for ProcessTerminal {
         self.keyboard_protocol_pushed = true;
         let query = KITTY_QUERY.to_string();
         self.raw_write(&query);
+        // Gh #213: ask about OSC 7501 beside the Kitty negotiation -
+        // an unaware terminal ignores the unknown OSC. Skipped when
+        // reporting is forced off, forced on (no detection needed), or
+        // stripped by the multiplexer.
+        if program_status_mode(env_var).needs_query() && !multiplexer_strips_osc(env_var) {
+            self.raw_write(PROGRAM_STATUS_QUERY);
+        }
     }
 
     fn stop(&mut self) {
+        // Gh #213: reset the tab badge when reporting flowed (a
+        // no-op when it never did).
+        self.set_program_status(ProgramState::Clear);
         if self.progress.swap(false, Ordering::SeqCst) {
             self.raw_write(PROGRESS_CLEAR);
         }
@@ -376,6 +407,12 @@ impl Terminal for ProcessTerminal {
         } else {
             self.progress.store(false, Ordering::SeqCst);
             self.raw_write(PROGRESS_CLEAR);
+        }
+    }
+
+    fn set_program_status(&mut self, state: ProgramState) {
+        if program_status_active(&self.shared) {
+            self.raw_write(&format_program_status(state));
         }
     }
 }
@@ -545,6 +582,15 @@ fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
 fn dispatch(shared: &Shared, event: StdinEvent, out: &mut dyn FnMut(&str)) {
     match event {
         StdinEvent::Data(seq) => {
+            // Gh #213: OSC 7501 traffic is negotiation, never input -
+            // the support reply arms auto-mode reporting, and unknown
+            // future revisions are swallowed, not typed.
+            if is_program_status_traffic(&seq) {
+                if is_program_status_reply(&seq) {
+                    shared.program_status.store(true, Ordering::SeqCst);
+                }
+                return;
+            }
             if apply_negotiation(shared, &seq, out) {
                 return;
             }
@@ -593,140 +639,26 @@ fn apply_negotiation(shared: &Shared, seq: &str, out: &mut dyn FnMut(&str)) -> b
     }
 }
 
+/// Whether an OSC 7501 report may flow (gh #213): forced off never,
+/// forced on always, auto only after the support reply and never
+/// under a stripping multiplexer.
+fn program_status_active(shared: &Shared) -> bool {
+    match program_status_mode(env_var) {
+        ProgramStatusMode::ForcedOff => false,
+        ProgramStatusMode::ForcedOn => true,
+        ProgramStatusMode::Auto => {
+            !multiplexer_strips_osc(env_var) && shared.program_status.load(Ordering::SeqCst)
+        }
+    }
+}
+
 fn write_stdout(data: &str) {
     let mut out = std::io::stdout();
     let _ = out.write_all(data.as_bytes());
     let _ = out.flush();
 }
 
-/// In-memory terminal for tests and golden harnesses.
-#[derive(Default)]
-pub struct FakeTerminal {
-    output: Arc<Mutex<String>>,
-    cols: u16,
-    rows: u16,
-    kitty: bool,
-    buffer: StdinBuffer,
-    input: Option<InputHandler>,
-    resize: Option<ResizeHandler>,
-}
-
-impl FakeTerminal {
-    /// A fake terminal of the given size.
-    pub fn new(cols: u16, rows: u16) -> Self {
-        Self {
-            cols,
-            rows,
-            ..Default::default()
-        }
-    }
-
-    /// Feed raw input bytes as if typed.
-    pub fn feed(&mut self, data: &str) {
-        let events = self.buffer.process(data);
-        for event in events {
-            match event {
-                StdinEvent::Data(seq) => {
-                    if let Some(handler) = self.input.as_mut() {
-                        handler(seq);
-                    }
-                }
-                StdinEvent::Paste(content) => {
-                    if let Some(handler) = self.input.as_mut() {
-                        handler(format!("\x1b[200~{content}\x1b[201~"));
-                    }
-                }
-            }
-        }
-    }
-
-    /// Fire a resize event.
-    pub fn resize(&mut self, cols: u16, rows: u16) {
-        self.cols = cols;
-        self.rows = rows;
-        if let Some(handler) = self.resize.as_mut() {
-            handler();
-        }
-    }
-
-    /// Take everything written so far.
-    pub fn take_output(&self) -> String {
-        let mut out = self.output.lock().unwrap_or_else(|p| p.into_inner());
-        std::mem::take(&mut *out)
-    }
-
-    /// Peek at everything written so far.
-    pub fn output(&self) -> String {
-        self.output
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-    }
-}
-
-impl Terminal for FakeTerminal {
-    fn start(&mut self, on_input: InputHandler, on_resize: ResizeHandler) {
-        self.input = Some(on_input);
-        self.resize = Some(on_resize);
-    }
-
-    fn stop(&mut self) {}
-
-    fn drain_input(&mut self, _max_ms: u64, _idle_ms: u64) {}
-
-    fn write(&mut self, data: &str) {
-        self.output
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .push_str(data);
-    }
-
-    fn columns(&self) -> u16 {
-        self.cols
-    }
-
-    fn rows(&self) -> u16 {
-        self.rows
-    }
-
-    fn kitty_protocol_active(&self) -> bool {
-        self.kitty
-    }
-
-    fn move_by(&mut self, lines: i32) {
-        if lines > 0 {
-            self.write(&format!("\x1b[{lines}B"));
-        } else if lines < 0 {
-            self.write(&format!("\x1b[{}A", -lines));
-        }
-    }
-
-    fn hide_cursor(&mut self) {
-        self.write("\x1b[?25l");
-    }
-
-    fn show_cursor(&mut self) {
-        self.write("\x1b[?25h");
-    }
-
-    fn clear_line(&mut self) {
-        self.write("\x1b[K");
-    }
-
-    fn clear_from_cursor(&mut self) {
-        self.write("\x1b[J");
-    }
-
-    fn clear_screen(&mut self) {
-        self.write("\x1b[2J\x1b[H");
-    }
-
-    fn set_title(&mut self, title: &str) {
-        self.write(&format!("\x1b]0;{title}\x07"));
-    }
-
-    fn set_progress(&mut self, _active: bool) {}
-}
+pub use super::fake_terminal::FakeTerminal;
 
 /// Whether the terminal forwards OSC 8 hyperlinks (pi's capability ladder,
 /// `terminal-image.ts` `detectCapabilitiesFromEnvironment` +
@@ -897,6 +829,27 @@ mod tests {
             vec!["\x1b[A".to_string(), "x".to_string()]
         );
         assert_eq!(term.take_output(), "hello");
+    }
+
+    // Verifies: gh #213 - OSC 7501 traffic never reaches input, and
+    // status reports encode to exact bytes on the fake terminal.
+    #[test]
+    fn fake_terminal_swallows_program_status_traffic() {
+        let mut term = FakeTerminal::new(80, 24);
+        let got = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = got.clone();
+        term.start(
+            Box::new(move |s| sink.lock().unwrap().push(s)),
+            Box::new(|| {}),
+        );
+        term.feed("\x1b]7501;?\x1b\\x");
+        assert_eq!(*got.lock().unwrap(), vec!["x".to_string()]);
+        term.set_program_status(ProgramState::Working);
+        term.set_program_status(ProgramState::Clear);
+        assert_eq!(
+            term.take_output(),
+            "\x1b]7501;state=working:app=lca\x1b\\\x1b]7501;state=clear\x1b\\"
+        );
     }
 
     #[test]

@@ -30,12 +30,17 @@ terminal lacks corrupts rendering.
 | Inline images | Kitty and iTerm2 protocols detected | `terminal.show_images=false` drops image rows; `terminal.image_width_cells` caps the width (default 60); `images.auto_resize=false` sends originals |
 | Truecolor | Detected | `ui.color=never` forces plain text |
 | Taskbar progress (OSC 9;4) | On around turns | `terminal.show_progress=false` silences it |
+| Tab status (OSC 7501, gh #213) | On after the terminal answers the support query; off under `screen` | `LCA_PROGRAM_STATUS=1` forces reports, `=0` silences them |
 
 `terminal.hyperlinks`, `terminal.images`, and `terminal.true_color`
 exist as accepted-but-inert keys (pi's names, gh #82): detection
 lives below config's reach, so they parse and do nothing. The
 environment variable (hyperlinks) and the keys above are the real
 controls.
+
+### Tab status (gh #213)
+
+LCA reports its lifecycle over the [Program Status Protocol (OSC 7501)](https://www.superlogical.com/rex/docs/build/program-status) — `working` while a turn runs, `blocked` while a modal waits for you, `done` / `error` when the turn settles, `idle` while the editor waits, `clear` on shutdown — so tab bars and dashboards can badge it. Reports carry only the state and `app=lca`, never prompt text or output. Unknown 7501 traffic arriving on stdin is swallowed, never typed.
 
 ## Keys and pasting
 

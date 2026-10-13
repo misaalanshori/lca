@@ -937,6 +937,9 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             dirty = true;
         }
 
+        // Gh #213: the tab badge follows the lifecycle, on change only.
+        turns.sync_program_status(&chat, &mut terminal);
+
         if dirty {
             let width = terminal.columns();
             let height = terminal.rows();
@@ -1018,6 +1021,10 @@ struct TurnState {
     prompt_tx: std::sync::mpsc::SyncSender<PromptRequest>,
     cancel: Option<lca_tools::CancelFlag>,
     aborted: bool,
+    /// The last reported tab-badge state (gh #213, change-only emits).
+    program_status: Option<lca_tui::engine::program_status::ProgramState>,
+    /// The finished turn's outcome (`None` pre-first-turn and post-abort).
+    last_ok: Option<bool>,
 }
 
 impl TurnState {
@@ -1035,6 +1042,8 @@ impl TurnState {
             dialog_rx,
             cancel: None,
             aborted: false,
+            program_status: None,
+            last_ok: None,
         }
     }
 
@@ -1078,6 +1087,9 @@ impl TurnState {
         // separator.
         chat.separator.idle();
         chat.usage.cost += outcome.usage.cost;
+        // Gh #213: the resting badge follows the outcome (read before
+        // the aborted branch below overwrites it for cancels).
+        self.last_ok = Some(outcome.error.is_none());
         chat.turn_running = false;
         chat.current_steer = None;
         // Gh #82: OSC 9;4 progress is current behavior; the key
@@ -1087,13 +1099,27 @@ impl TurnState {
         }
         // Steering lifecycle (ADR-0038): an aborted turn returns its queue
         // to the editor; a completed turn runs the queued messages in order.
+        // Gh #213: the resting badge follows the outcome (an abort
+        // rests idle, like startup).
         if self.aborted {
+            self.last_ok = None;
             chat.restore_pending();
             self.aborted = false;
         } else if let Some(next) = chat.take_next_pending() {
             chat.submitted = Some(next);
         }
         true
+    }
+
+    /// Mirror the lifecycle to the tab badge (gh #213).
+    fn sync_program_status(&mut self, chat: &Chat, terminal: &mut dyn Terminal) {
+        crate::status::sync_badge(
+            chat,
+            chat.turn_running,
+            self.last_ok,
+            &mut self.program_status,
+            terminal,
+        );
     }
 
     /// Start a submitted turn (returns whether one started).

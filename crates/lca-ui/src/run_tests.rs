@@ -709,3 +709,33 @@ fn pending_models_delivery_invalidates_the_snapshot() {
     chat.drain_model_refresh();
     assert_eq!(calls.load(Ordering::SeqCst), 2, "delivery invalidates");
 }
+
+// Verifies: gh #213 - the tab badge follows idle, working, blocked,
+// and done, emitting on change only (repeats stay silent).
+#[test]
+fn program_status_follows_the_lifecycle() {
+    let (prompt_tx, prompt_rx) = std::sync::mpsc::sync_channel(4);
+    let (_dialog_tx, dialog_rx) = std::sync::mpsc::sync_channel(4);
+    let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx);
+    let mut chat = chat();
+    let mut term = FakeTerminal::new(80, 24);
+    turns.sync_program_status(&chat, &mut term);
+    chat.turn_running = true;
+    turns.sync_program_status(&chat, &mut term);
+    turns.sync_program_status(&chat, &mut term);
+    chat.world.modal_open = true;
+    turns.sync_program_status(&chat, &mut term);
+    chat.world.modal_open = false;
+    chat.turn_running = false;
+    turns.last_ok = Some(true);
+    turns.sync_program_status(&chat, &mut term);
+    assert_eq!(
+        term.take_output(),
+        concat!(
+            "\x1b]7501;state=idle:app=lca\x1b\\",
+            "\x1b]7501;state=working:app=lca\x1b\\",
+            "\x1b]7501;state=blocked:app=lca\x1b\\",
+            "\x1b]7501;state=done:app=lca\x1b\\",
+        )
+    );
+}
