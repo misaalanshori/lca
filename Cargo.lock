@@ -1640,6 +1640,7 @@ dependencies = [
  "lca-tools",
  "mcp",
  "proptest",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",
