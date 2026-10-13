@@ -2323,6 +2323,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "question"
+version = "0.6.0"
+dependencies = [
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "serde_json",
+ "tokio",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
