@@ -583,7 +583,6 @@ pub(crate) async fn setup(
         return Err(exit::PERMISSION);
     }
     let (agent_config, provider) = match wire(
-
         cwd,
         &config,
         model_override,
@@ -925,12 +924,8 @@ fn wire(
         compaction_keep_recent_tokens: config.compaction_keep_recent_tokens(),
         model_context_window,
         completion_backend,
-        system_prompt: match crate::prompt::agent_system_prompt(
-            cwd,
-            &model_id,
-            flags,
-            trusted_now,
-        ) {
+        system_prompt: match crate::prompt::agent_system_prompt(cwd, &model_id, flags, trusted_now)
+        {
             Ok(prompt) => prompt,
             Err(err) => {
                 eprintln!("error: {err}");
