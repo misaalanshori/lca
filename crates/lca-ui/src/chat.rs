@@ -57,6 +57,24 @@ fn startup_hint() -> String {
 }
 
 /// The interactive chat.
+/// A transient toast (gh #239): a confirmation or host diagnostic
+/// that floats top-right and fades after five seconds, never
+/// stealing transcript rows or landing in history.
+#[derive(Debug, Clone)]
+pub struct Toast {
+    /// The line to float.
+    pub text: String,
+    /// When it fades.
+    pub until: std::time::Instant,
+}
+
+/// How long a toast floats (gh #239, pi's transient-note shape).
+pub const TOAST_SECS: u64 = 5;
+
+/// How many toasts stack (older ones drop — a flood of confirmations
+/// is one line, not a wall).
+pub const TOAST_MAX: usize = 3;
+
 pub struct Chat {
     /// The transcript.
     pub transcript: Transcript,
@@ -118,6 +136,9 @@ pub struct Chat {
     /// (gh #164, pi's `grabOffset`): motion maps pointer Y to scroll
     /// while set, and text selection stays off.
     pub scroll_drag: Option<u16>,
+    /// The floating toast stack (gh #239): transient confirmations and
+    /// host diagnostics, newest last, fading on `tick`.
+    pub toasts: Vec<Toast>,
     /// An in-progress picker press (gh #167, pi's `mousePressedIndex`):
     /// a release on the same item confirms it, anywhere else just moves
     /// the highlight. `None` means no press owns the gesture.
@@ -314,6 +335,7 @@ impl Chat {
             last_escape: None,
             scrollbar_hover: false,
             scroll_drag: None,
+            toasts: Vec::new(),
             picker_press: None,
             picker_window: std::cell::Cell::new((0, usize::MAX, 0)),
             drawer_hover: false,
@@ -555,6 +577,35 @@ impl Chat {
             .clone()
     }
 
+    /// Say it in history (gh #239, pi's `showStatus`): an
+    /// informational line lands as a transcript notice — visible,
+    /// scrollable, and permanent — never in editor chrome.
+    pub fn say(&mut self, text: impl Into<String>) {
+        self.transcript.push_notice(text);
+    }
+
+    /// Float it top-right (gh #239): a transient confirmation or
+    /// host diagnostic, fading after [`TOAST_SECS`] seconds. Newest
+    /// last; past [`TOAST_MAX`] the oldest drops.
+    pub fn toast(&mut self, text: impl Into<String>) {
+        self.toasts.push(Toast {
+            text: text.into(),
+            until: std::time::Instant::now()
+                + std::time::Duration::from_secs(TOAST_SECS),
+        });
+        while self.toasts.len() > TOAST_MAX {
+            self.toasts.remove(0);
+        }
+    }
+
+    /// Drop faded toasts. Returns `true` when the frame changed.
+    pub fn expire_toasts(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        let before = self.toasts.len();
+        self.toasts.retain(|toast| toast.until > now);
+        self.toasts.len() != before
+    }
+
     /// Advance the separator's spinner. Returns `true` when the frame
     /// moved, so the loop repaints; idle never wakes the renderer.
     pub fn tick(&mut self) -> bool {
@@ -565,7 +616,7 @@ impl Chat {
             Some(picker) => picker.tick(),
             None => false,
         };
-        separator || loading
+        separator || loading || self.expire_toasts()
     }
 
     /// Handle one keypress: the modal first, then the pickers, the

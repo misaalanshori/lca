@@ -425,6 +425,12 @@ impl Chat {
         if !self.screen_mode {
             let mut lines = self.render(width);
             self.compose_overlays_bottom_anchored(&mut lines, width, height);
+            self.paint_toasts(&mut lines, width);
+            return lines;
+        }
+        if !self.screen_mode {
+            let mut lines = self.render(width);
+            self.compose_overlays_bottom_anchored(&mut lines, width, height);
             return lines;
         }
         let (transcript, dock) = self.sections(width);
@@ -518,9 +524,36 @@ impl Chat {
             lines.resize(height as usize, String::new());
         }
         self.compose_overlays(&mut lines, width, height);
+        // Gh #239: toasts float above the transcript but below the
+        // tooltip — visible during pickers, never hiding the cursor's
+        // own hint.
+        self.paint_toasts(&mut lines, width);
         // Gh #210: the tooltip rides over everything, last.
         self.paint_tooltip(&mut lines);
         lines
+    }
+
+    /// Float the toast stack top-right (gh #239): one accent line
+    /// per toast at viewport rows 1.., right-aligned, spliced over
+    /// the transcript beneath (ANSI-aware, like the dialog seams).
+    /// Row 0 stays the tab bar's. No toast steals a transcript row —
+    /// the text underneath simply shows again when they fade.
+    pub(crate) fn paint_toasts(&self, viewport: &mut [String], width: u16) {
+        use lca_tui::engine::text::{slice_by_column, truncate_to_width, visible_width};
+        let max_w = (width as usize).saturating_sub(4).min(60);
+        for (i, toast) in self.toasts.iter().enumerate() {
+            let Some(row) = viewport.get_mut(i + 1) else {
+                break;
+            };
+            let cell = (self.theme.accent)(&truncate_to_width(&toast.text, max_w, "\u{2026}", false));
+            let col = (width as usize).saturating_sub(visible_width(&cell) + 2);
+            let before = slice_by_column(row, 0, col, false);
+            let pad = " ".repeat(col.saturating_sub(visible_width(&before)));
+            *row = format!(
+                "{before}{pad}{}  {cell}",
+                lca_tui::engine::core::SEGMENT_RESET,
+            );
+        }
     }
 
     /// The viewport cells of the footer's `[YOLO]` badge (gh #244),

@@ -1117,6 +1117,10 @@ mod overlay_tests;
 mod permission_tests;
 
 #[cfg(test)]
+#[path = "chat_toast_tests.rs"]
+mod toast_tests;
+
+#[cfg(test)]
 #[path = "chat_picker_scroll_tests.rs"]
 mod picker_scroll_tests;
 
