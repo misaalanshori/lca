@@ -351,11 +351,19 @@ impl ToolExecutor {
             // FR-TOOL-3 reads "a tool call targets a path outside the
             // workspace root", not just a write; a read/list/grep outside the
             // workspace asks first too. `glob` walks only the workspace, so it
-            // owns no out-of-workspace path.
+            // owns no out-of-workspace path. Gh #215: credential filenames
+            // ask even in-workspace, or the turn never authorizes and the
+            // sensitive escalation never fires.
             "read" | "list" | "grep" => {
                 let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
                 let target = resolve_target(&self.cwd, Path::new(path));
-                (!is_inside(&target, &self.workspace)).then_some(Action::ReadPath { path: target })
+                if !is_inside(&target, &self.workspace)
+                    || lca_permissions::sensitive::is_sensitive(&target)
+                {
+                    Some(Action::ReadPath { path: target })
+                } else {
+                    None
+                }
             }
             _ => None,
         }
