@@ -814,6 +814,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "formatter"
+version = "0.6.0"
+dependencies = [
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-tools",
+ "serde_json",
+ "tokio",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
 name = "fs-set-times"
 version = "0.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

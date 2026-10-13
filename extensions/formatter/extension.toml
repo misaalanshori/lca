@@ -1,0 +1,11 @@
+name = "formatter"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["hooks-tool-result", "command"]
+description = "Automatically formats files modified by edit and write tool calls."
+
+[capabilities.process]
+reason = "Execute project formatters (rustfmt, prettier, ruff, gofmt) on modified files."
+
+[capabilities.fs]
+workspace = "read-write"
