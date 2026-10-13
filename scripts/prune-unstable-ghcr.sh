@@ -46,7 +46,14 @@ SEMVER = re.compile(r"^\d+\.\d+\.\d+")
 def tags_of(version):
     meta = version.get("metadata") or {}
     container = meta.get("container") or {}
-    return [t for t in (tag.get("name", "") for tag in container.get("tags") or []) if t]
+    raw = container.get("tags") or []
+    # The live API returns plain strings; accept {name:} objects too.
+    names = [
+        t if isinstance(t, str) else t.get("name", "")
+        for t in raw
+        if isinstance(t, (str, dict))
+    ]
+    return [t for t in names if t]
 
 
 def protected(tags):
@@ -114,6 +121,12 @@ selftest() {
         fi
         printf '{"id": %s, "created_at": "%s", "metadata": {"container": {"tags": %s}}}' "$id" "$created" "$jsontags"
     }
+    s() { # <id> <created> <tags-csv>: the live API shape (plain strings)
+        local id="$1" created="$2" tags="$3"
+        local jsontags
+        jsontags=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1].split(',')))" "$tags")
+        printf '{"id": %s, "created_at": "%s", "metadata": {"container": {"tags": %s}}}' "$id" "$created" "$jsontags"
+    }
 
     # The live channel plus history: the newest unstable (1) is the
     # channel, the next newest unprotected version (2) is the rollback
@@ -142,6 +155,12 @@ selftest() {
     check "keep 1 deletes every superseded version" \
         "[$(v 1 2026-10-13T06:00:00Z unstable),$(v 2 2026-10-12T06:00:00Z b0000000)]" \
         1 "2"
+    # The live GHCR shape: tags are plain strings, not {name:} objects
+    # (first live run 38367474568 crashed on the object assumption;
+    # the best-effort wrapper contained it, this pins the shape).
+    check "live string-tag shape selects identically" \
+        "[$(s 1 2026-10-13T06:00:00Z unstable),$(s 5 2026-10-09T06:00:00Z 1.0.1),$(s 6 2026-10-08T06:00:00Z abi-0.6),$(s 2 2026-10-12T06:00:00Z b0000000),$(s 3 2026-10-11T06:00:00Z b2222222)]" \
+        2 "3"
     check "garbage input deletes nothing" "not json" 2 ""
     check "empty list deletes nothing" "[]" 2 ""
 
