@@ -583,6 +583,7 @@ pub(crate) async fn setup(
         return Err(exit::PERMISSION);
     }
     let (agent_config, provider) = match wire(
+
         cwd,
         &config,
         model_override,
@@ -902,6 +903,10 @@ fn wire(
         None => config.switch_thinking(config.thinking().map(str::to_string).as_deref(), &model_id),
     };
     let thinking_budget = config.budget_for_level(reasoning_effort.as_deref());
+    // Gh #217: read trust once, up front - the `system_prompt` match
+    // below holds its scrutinee guard through the whole literal, so a
+    // second `lock(grants)` inside it would self-deadlock.
+    let trusted_now = lock(grants).is_trusted(cwd);
     let agent_config = AgentConfig {
         provider: provider_name.to_string(),
         model: model_id.clone(),
@@ -924,7 +929,7 @@ fn wire(
             cwd,
             &model_id,
             flags,
-            lock(grants).is_trusted(cwd),
+            trusted_now,
         ) {
             Ok(prompt) => prompt,
             Err(err) => {
@@ -950,7 +955,7 @@ fn wire(
         instruction_sources: crate::prompt::context_sources(
             &crate::data_dir(),
             cwd,
-            crate::lock(grants).is_trusted(cwd),
+            trusted_now,
             flags.no_context_files,
         ),
         instruction_baseline: Default::default(),
