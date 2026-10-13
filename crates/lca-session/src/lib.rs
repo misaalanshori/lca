@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod cache;
+pub(crate) mod debug;
 pub mod export_html;
 mod ids;
 mod lazy;

@@ -20,7 +20,7 @@ Three variables stand outside the scheme:
 | Variable | Meaning |
 |---|---|
 | `LCA_HYPERLINKS` | `1` forces OSC 8 hyperlinks on, `0` forces the `text (url)` fallback; unset leaves the capability ladder ([terminal setup](terminal-setup.md)) |
-| `LCA_LOG` | Tracing directives (`tracing-subscriber` filter syntax); then `RUST_LOG`, then `warn` (`debug` under `--verbose`). Logs land in `~/.lca/logs/lca.log`, bounded at 1 MiB with one spare |
+| `LCA_LOG` | Tracing directives (`tracing-subscriber` filter syntax); then `RUST_LOG`, then `warn` (`debug` under `--verbose`). Logs land in `~/.lca/logs/lca.log`, bounded at 1 MiB with one spare. With the `debug-trace` feature (unstable/dev builds) the same variable drives the debug files instead: `LCA_LOG="lca_core=trace"` masters domains `lca_core`, `lca_session`, `lca_permissions`, `lca_registry` (into `debug.log`) and `lca_net`, `lca_wasm` (into `debug-wire.log`), each 5 MiB with one spare; `--debug` / `--debug-wire` enable them without the variable. Secrets never land: values emit redacted (prefix plus `[REDACTED]`) |
 | `LCA_OFFLINE` | `1` silences automatic network for the run (update checks, catalog refreshes, remote installs); model traffic still flows. Same as `--offline` |
 
 ## Provider credentials (`OPENAI_` shape)
