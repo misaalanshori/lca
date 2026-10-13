@@ -266,6 +266,9 @@ fn documented_extras_keys_match_their_constants() {
     assert_eq!(IMAGE_RESIZE_EXTRA, "image.resize");
     assert_eq!(PROMPT_CACHE_EXTRA, "prompt_cache");
     assert_eq!(THINKING_LEVELS_EXTRA, "thinking_levels");
+    assert_eq!(lca_protocol::QUOTA_GROUPS_EXTRA, "quota-groups");
+    assert_eq!(lca_protocol::QUOTA_PLAN_EXTRA, "quota-plan");
+    assert_eq!(lca_protocol::QUOTA_ERROR_EXTRA, "quota-error");
 }
 
 // Verifies: gh #108 - the documented `net` pattern shapes

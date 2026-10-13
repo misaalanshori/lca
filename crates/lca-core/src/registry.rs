@@ -10,7 +10,7 @@ use std::sync::Arc;
 use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};
 use lca_protocol::{
     ChatMessage, CommandEffect, DispatchError, HookAction, IdentityOutcome, PostToolObservation,
-    ToolAnnotations, ToolCall, ToolExposure, ToolSpec, Usage,
+    ToolAnnotations, ToolCall, ToolExposure, ToolSpec,
 };
 
 /// A namespace and the tools grouped under it (gh #77's grouping:
@@ -43,14 +43,6 @@ pub const TOOL_SEARCH_NAME: &str = "tool_search";
 
 /// Built-in slash command names, reserved the same way (SRDD's list).
 pub const BUILTIN_COMMANDS: &[&str] = &["login", "logout", "usage", "model", "compact", "stats"];
-
-/// The standard usage shape the generic `/usage` prints (ADR-0012).
-fn format_usage(usage: &Usage) -> String {
-    format!(
-        "input {}, output {}, cache read {}, cache write {}, cost ${:.4}",
-        usage.input, usage.output, usage.cache_read, usage.cache_write, usage.cost
-    )
-}
 
 /// One of ADR-0012's three identity exports, which the host namespaces
 /// under the extension's own name with no work by the author.
@@ -450,7 +442,7 @@ impl ExtensionRegistry {
                     Err(err) => CommandEffect::ShowWidget(format!("logout failed: {err}")),
                 },
                 IdentityCommand::Usage => match handle.identity_usage().await {
-                    Ok(Ok(usage)) => CommandEffect::ShowWidget(format_usage(&usage)),
+                    Ok(Ok(usage)) => CommandEffect::ShowWidget(crate::quota::format_usage(&usage)),
                     Ok(Err(IdentityOutcome::NotSupported)) => {
                         // Gh #243: a bare refusal leaves users asking
                         // whether usage exists at all - name the missing

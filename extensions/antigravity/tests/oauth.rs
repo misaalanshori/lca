@@ -582,9 +582,17 @@ fn usage_answers_in_the_standard_shape() {
         .expect("seed");
     cap.credentials_set("project", "p").expect("seed");
     let usage = antigravity::run_usage(cap.as_ref()).expect("usage");
-    let summary = usage.extras.get("quota-summary").expect("summary carried");
-    assert!(summary.contains("remainingPercent"), "{summary}");
+    // Gh #241C: normalized groups (empty against the tiers-shaped
+    // default payload), not the truncated blob; both endpoints called.
+    assert_eq!(
+        usage
+            .extras
+            .get(lca_protocol::QUOTA_GROUPS_EXTRA)
+            .map(String::as_str),
+        Some("[]")
+    );
     assert!(!requests_of(&mock, "retrieveUserQuotaSummary").is_empty());
+    assert!(!requests_of(&mock, "loadCodeAssist").is_empty());
 }
 
 // Verifies: `logout` revokes server-side where the API supports it and
@@ -908,5 +916,43 @@ fn multi_turn_labels_carry_last_execution_id() {
         bodies[1].contains("last_execution_id"),
         "later steps carry one: {}",
         bodies[1]
+    );
+}
+
+// Verifies: gh #241C - usage carries the normalized quota picture
+// (plan label plus groups/buckets) instead of a truncated JSON blob,
+// from scripted loadCodeAssist + quota payloads.
+#[test]
+fn usage_carries_the_normalized_quota_picture() {
+    let mock = mock_server();
+    let cap = sandbox("usage-quota", &mock);
+    cap.credentials_set("access", "live-access").expect("seed");
+    cap.credentials_set("expires", &format!("{}", u64::MAX - 60))
+        .expect("seed");
+    cap.credentials_set("project", "p").expect("seed");
+    mock.fail_once(
+        "loadCodeAssist",
+        200,
+        Some(r#"{"currentTier":{"id":"free-tier","name":"Free"},"paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}"#),
+    );
+    mock.fail_once(
+        "retrieveUserQuotaSummary",
+        200,
+        Some(r#"{"groups":[{"displayName":"Quota group","buckets":[{"displayName":"Limit","remainingFraction":0.8,"resetTime":"2030-01-01T02:15:00Z"}]}]}"#),
+    );
+    let usage = antigravity::run_usage(cap.as_ref()).expect("usage");
+    assert_eq!(
+        usage.extras.get("quota-plan").map(String::as_str),
+        Some("Google AI Pro (g1-pro-tier)")
+    );
+    let groups = usage
+        .extras
+        .get(lca_protocol::QUOTA_GROUPS_EXTRA)
+        .expect("groups carried");
+    assert!(groups.contains("\"remaining\":0.8"), "{groups}");
+    assert!(groups.contains("2030-01-01T02:15:00Z"), "{groups}");
+    assert!(
+        !usage.extras.contains_key("quota-summary"),
+        "no truncated blob"
     );
 }

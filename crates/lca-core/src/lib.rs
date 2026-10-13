@@ -16,6 +16,7 @@
 mod active_set;
 mod assemble;
 mod compact;
+mod quota;
 mod registry;
 mod turn;
 

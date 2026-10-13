@@ -26,6 +26,17 @@ pub const PROMPT_CACHE_EXTRA: &str = "prompt_cache";
 /// but empty means the model does not reason at all; absent means
 /// unknown, and the picker offers everything as before.
 pub const THINKING_LEVELS_EXTRA: &str = "thinking_levels";
+/// Normalized quota groups for the host's quota renderer (gh #241C):
+/// a JSON array of `{name, buckets: [{name, remaining 0-1,
+/// reset}]}`. Written by providers whose usage is a subscription
+/// picture rather than token counts; read by the generic `/usage`
+/// formatter. Absent means token accounting.
+pub const QUOTA_GROUPS_EXTRA: &str = "quota-groups";
+/// The plan line for the quota renderer (`Name (id)`), if known.
+pub const QUOTA_PLAN_EXTRA: &str = "quota-plan";
+/// Why the quota picture is empty (`subscription-required` for the
+/// paid-gated endpoint); the renderer degrades plainly from it.
+pub const QUOTA_ERROR_EXTRA: &str = "quota-error";
 
 /// A per-model image profile: pi's `ModelImageResizeOptions` shape.
 /// `max_bytes` bounds the encoded payload. Vendor-sourced when present;
