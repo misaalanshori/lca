@@ -68,6 +68,7 @@ fuzz_target!(|data: &[u8]| {
             full_output_path: None,
             nested: Vec::new(),
             extras: Default::default(),
+            duration_ms: None,
         }),
         8 => TurnEvent::ToolOutputChunk {
             call_id: text(rest),
