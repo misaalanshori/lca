@@ -245,18 +245,14 @@ pub fn fetch_all(
                 Vec::new()
             }
         };
-        merged.extend(
-            entries
-                .into_iter()
-                .filter(lca_registry::abi_supported)
-                .map(|entry| lca_registry::MergedEntry {
-                    entry,
-                    source_id: source.id.clone(),
-                    source_name: source.name.clone(),
-                    source_url: source.url.clone(),
-                    official: source.url.is_none(),
-                }),
-        );
+        // Gh #256: merge through the shared helper — officialness is
+        // the source id, and hand-rolling it here once misclassified
+        // every official row (the runtime source carries a fetch URL).
+        let entries: Vec<_> = entries
+            .into_iter()
+            .filter(lca_registry::abi_supported)
+            .collect();
+        merged.extend(lca_registry::merge_catalogs(&[(source.clone(), entries)]));
     }
     let rows = assemble_rows(installed, &merged);
     let notice = if merged.is_empty() && !failed.is_empty() {

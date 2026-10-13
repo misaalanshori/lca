@@ -81,7 +81,7 @@ fn hub_filter_enter_consent_and_approve() {
     chat.handle_extension_hub_key("", Some("enter"));
     let consent = chat.install_consent.clone().expect("consent opens");
     assert_eq!(consent.name, "acme-deploy");
-    assert!(consent.publisher.contains("Third-Party"));
+    assert!(consent.publisher.contains("[third-party]"));
     assert_eq!(consent.artifact_ref, "ghcr.io/acme/deploy:1.2.0");
     assert_eq!(consent.capabilities, vec!["process"]);
     // Approve fires the host install with the same data.
@@ -153,4 +153,34 @@ fn hub_enter_on_installed_reports() {
         "the notice says so: {:?}",
         chat.world.notice
     );
+}
+
+// Verifies: gh #256 - one source, one label. An official row's
+// consent publisher never names third-party/custom, and a custom
+// row's never claims official — the live drive showed both
+// contradictions at once (`Official (misaalanshori/lca) (Custom /
+// Third-Party)`).
+#[test]
+fn provenance_labels_never_contradict() {
+    for row in crate::chat_hub::fixture_rows() {
+        let consent = crate::chat_hub::hub_install_consent(&row);
+        if row.official {
+            assert!(
+                consent.publisher.contains("[official]"),
+                "official row names its provenance: {}",
+                consent.publisher
+            );
+            assert!(
+                !consent.publisher.contains("Third-Party") && !consent.publisher.contains("Custom"),
+                "official row contradicts itself: {}",
+                consent.publisher
+            );
+        } else {
+            assert!(
+                !consent.publisher.contains("Official"),
+                "custom row claims official: {}",
+                consent.publisher
+            );
+        }
+    }
 }

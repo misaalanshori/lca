@@ -35,8 +35,10 @@ pub struct InstallConsent {
     pub name: String,
     /// Release version.
     pub version: String,
-    /// Publisher line (`Official LCA (First-Party Verified)` or the
-    /// custom source's name).
+    /// Publisher line: the source name carries the provenance itself
+    /// (`Official (misaalanshori/lca)` vs a vendor name), with one
+    /// bracketed word — `[official]` or `[third-party]`, the same
+    /// vocabulary as the hub list header — so one source has one label.
     pub publisher: String,
     /// The exact catalog document the row came from.
     pub source_url: String,
@@ -327,9 +329,9 @@ pub fn hub_install_consent(row: &HubRow) -> InstallConsent {
         name: row.name.clone(),
         version: row.version.clone(),
         publisher: if row.official {
-            format!("Official LCA (First-Party Verified) · {}", row.source_name)
+            format!("{} [official]", row.source_name)
         } else {
-            format!("{} (Custom / Third-Party)", row.source_name)
+            format!("{} [third-party]", row.source_name)
         },
         source_url: row.source_url.clone(),
         artifact_ref: row.oci_ref.clone(),

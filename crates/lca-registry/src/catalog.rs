@@ -43,7 +43,8 @@ pub struct CatalogSource {
     /// Display name (`Official (misaalanshori/lca)`, ...).
     pub name: String,
     /// The catalog URL. `None` is the in-repo official catalog,
-    /// which the binary reads from its own tree.
+    /// which the binary reads from its own tree. (Officialness is
+    /// the source id, not URL absence — gh #256.)
     pub url: Option<String>,
 }
 
@@ -114,7 +115,11 @@ pub fn merge_catalogs(sources: &[(CatalogSource, Vec<CatalogEntry>)]) -> Vec<Mer
                 source_id: source.id.clone(),
                 source_name: source.name.clone(),
                 source_url: source.url.clone(),
-                official: source.url.is_none(),
+                // Gh #256: officialness is the stable source id. The
+                // runtime official source carries a fetch URL (the
+                // binary never bakes the catalog in), so URL absence
+                // misclassified every official row as third-party.
+                official: source.id == "official",
             });
         }
     }
@@ -219,4 +224,46 @@ fn required_str(entry: &toml::Value, key: &str) -> Result<String, Error> {
         .and_then(|value| value.as_str())
         .map(str::to_string)
         .ok_or_else(|| Error::Invalid(format!("catalog entry lacks `{key}`")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(name: &str) -> CatalogEntry {
+        CatalogEntry {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            abi: "0.6".to_string(),
+            category: "provider".to_string(),
+            description: format!("{name} does things."),
+            oci_ref: format!("ghcr.io/example/{name}:abi-0.6"),
+            capabilities: Vec::new(),
+        }
+    }
+
+    // Verifies: gh #256 - the official source carries a fetch URL at
+    // runtime (the binary never bakes the catalog in), so officialness
+    // must come from the stable source id, not URL absence. A
+    // URL-carrying official source still merges official rows.
+    #[test]
+    fn official_source_with_a_url_still_merges_official() {
+        let official = CatalogSource {
+            id: "official".to_string(),
+            name: "Official (misaalanshori/lca)".to_string(),
+            url: Some("https://example.invalid/catalog.toml".to_string()),
+        };
+        let custom = CatalogSource {
+            id: "acme".to_string(),
+            name: "Acme Corp".to_string(),
+            url: Some("https://example.invalid/acme.toml".to_string()),
+        };
+        let merged = merge_catalogs(&[
+            (official, vec![entry("anthropic")]),
+            (custom, vec![entry("acme-deploy")]),
+        ]);
+        assert_eq!(merged.len(), 2);
+        assert!(merged[0].official, "official id stays official with a URL");
+        assert!(!merged[1].official, "custom id stays custom");
+    }
 }
