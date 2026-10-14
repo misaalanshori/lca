@@ -145,3 +145,15 @@ Stable releases publish the canonical `:latest` tag alongside
 `publish-extensions.yml`), so plain OCI clients resolving the
 default tag stop 404ing. `:latest` is itself a protected tag
 under the prune guard, and the unstable job never pushes it.
+
+## Addendum 2026-10-14 (gh #258): debug-trace in unstable binaries
+
+The full-stack observability crate (`crates/lca-debug`, gh #258) is
+compiled into the rolling unstable release binaries via
+`--features debug-trace`. This enables `--debug`, `--debug-wire`,
+and `LCA_LOG` domain tracing at runtime on the unstable line,
+allowing developers and testers to inspect wire traffic and WASM
+boundaries without building from source. Stable releases continue
+to omit the feature, preserving the 25.0 MB size ceiling (NFR-1)
+and zero runtime overhead.
+

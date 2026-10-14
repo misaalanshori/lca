@@ -191,13 +191,13 @@ jobs:
           fi
           for target in ${{ matrix.targets }}; do
             if [[ "$target" == *musl ]]; then
-              cargo zigbuild --release --target "$target" -p lca-cli
+              cargo zigbuild --release --target "$target" -p lca-cli --features debug-trace
               cp "target/$target/release/lca" "dist/lca-$target"
             elif [[ "$target" == *windows-msvc ]]; then
-              cargo xwin build --release --target "$target" -p lca-cli
+              cargo xwin build --release --target "$target" -p lca-cli --features debug-trace
               cp "target/$target/release/lca.exe" "dist/lca-$target.exe"
             else
-              cargo build --release --target "$target" -p lca-cli
+              cargo build --release --target "$target" -p lca-cli --features debug-trace
               cp "target/$target/release/lca" "dist/lca-$target"
             fi
           done
