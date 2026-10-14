@@ -434,6 +434,8 @@ FR-PERM-20. WHILE a project is trusted, persistently or for the session, and a s
 
 FR-PERM-21. The agent SHALL support allow and deny rules, matched as globs, at session, project, and global scope. A deny rule SHALL refuse a matching action without prompting, and SHALL take precedence over an allow rule.
 
+Annotation, 2026-10-14 (gh #259): rules apply to in-workspace reads too — every read/list/grep routes through `authorize()` for rule matching. No matching rule stays exactly as silent as before (trust fast path / R3 cut, no modal, no record); an allow rule allows and records (`Once`), a deny rule refuses and records (`Denied`). Sensitive paths keep #215 behavior.
+
 FR-PERM-22. Session-scoped trust and session-scoped rules SHALL NOT persist; only an explicit persistent trust or a project/global rule survives the process.
 
 FR-PERM-23. WHEN the agent asks the user to approve a sensitive action, it SHALL offer trusting the current project folder for the session as one answer (ADR-0039).

@@ -298,3 +298,7 @@ mod dock_notice_retired;
 // cut (live risk: `.env` exfiltrated with no confirmation).
 #[path = "215-sensitive-read-escalation.rs"]
 mod sensitive_read_escalation;
+// GitHub #259: allow/deny rules never applied to in-workspace reads
+// (live proof: a stored deny watched the read run `ok` with no record).
+#[path = "259-rules-apply-to-in-workspace-reads.rs"]
+mod rules_apply_to_in_workspace_reads;

@@ -35,7 +35,9 @@ pub fn authorize(
     if store.is_allowed(project_dir, action) {
         // Gh #258: the pipeline path, cheapest first (rule, trust,
         // or stored pattern — the detail names the action shape).
-        let via = if store.rule_decision(project_dir, action) == RuleMatch::Allow {
+        // Gh #259: an allow rule's allowance is flagged for the log.
+        let allowed_by_rule = store.rule_decision(project_dir, action) == RuleMatch::Allow;
+        let via = if allowed_by_rule {
             "rule.allow"
         } else if store.is_trusted_here(project_dir) {
             "trust.allow"
@@ -49,6 +51,7 @@ pub fn authorize(
             reviewed,
             stored_pattern: None,
             denied_by_rule: false,
+            allowed_by_rule,
             yolo: false,
         });
     }
@@ -63,6 +66,7 @@ pub fn authorize(
             reviewed,
             stored_pattern: None,
             denied_by_rule: true,
+            allowed_by_rule: false,
             yolo: false,
         });
     }
@@ -80,6 +84,7 @@ pub fn authorize(
             reviewed,
             stored_pattern: None,
             denied_by_rule: false,
+            allowed_by_rule: false,
             yolo: false,
         });
     }
@@ -118,6 +123,7 @@ pub fn authorize(
             reviewed,
             stored_pattern: Some(pattern),
             denied_by_rule: false,
+            allowed_by_rule: false,
             yolo: true,
         });
     }
@@ -131,6 +137,7 @@ pub fn authorize(
             reviewed,
             stored_pattern: None,
             denied_by_rule: false,
+            allowed_by_rule: false,
             yolo: false,
         }),
         Decision::Once => {
@@ -151,6 +158,7 @@ pub fn authorize(
                 reviewed,
                 stored_pattern: None,
                 denied_by_rule: false,
+                allowed_by_rule: false,
                 yolo: false,
             })
         }
@@ -162,6 +170,7 @@ pub fn authorize(
                 reviewed,
                 stored_pattern: None,
                 denied_by_rule: false,
+                allowed_by_rule: false,
                 yolo: false,
             })
         }
@@ -179,6 +188,7 @@ pub fn authorize(
                 reviewed,
                 stored_pattern: Some(pattern),
                 denied_by_rule: false,
+                allowed_by_rule: false,
                 yolo: false,
             })
         }

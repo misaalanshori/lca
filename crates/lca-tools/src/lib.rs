@@ -360,17 +360,14 @@ impl ToolExecutor {
             // workspace asks first too. `glob` walks only the workspace, so it
             // owns no out-of-workspace path. Gh #215: credential filenames
             // ask even in-workspace, or the turn never authorizes and the
-            // sensitive escalation never fires.
+            // sensitive escalation never fires. Gh #259: every read routes
+            // through `authorize()` for rule matching — the trust fast path
+            // and the R3 cut keep the no-rule case exactly as silent as
+            // today, while allow/deny rules finally apply in-workspace.
             "read" | "list" | "grep" => {
                 let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
                 let target = resolve_target(&self.cwd, Path::new(path));
-                if !is_inside(&target, &self.workspace)
-                    || lca_permissions::sensitive::is_sensitive(&target)
-                {
-                    Some(Action::ReadPath { path: target })
-                } else {
-                    None
-                }
+                Some(Action::ReadPath { path: target })
             }
             _ => None,
         }

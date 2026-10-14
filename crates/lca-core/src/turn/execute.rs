@@ -631,8 +631,9 @@ impl Agent<'_> {
         };
         // A prompted answer and a yolo answer both belong in the log; a
         // rule denial is recorded too (ADR-0042: approve everything must
-        // never mean forget everything).
-        if outcome.prompted || outcome.denied_by_rule || outcome.yolo {
+        // never mean forget everything). Gh #259: an allow rule's silent
+        // allowance records the same way — the rule is the decision.
+        if outcome.prompted || outcome.denied_by_rule || outcome.yolo || outcome.allowed_by_rule {
             let record = Record::Permission {
                 v: FORMAT_VERSION,
                 ts: lca_session::now_ms(),

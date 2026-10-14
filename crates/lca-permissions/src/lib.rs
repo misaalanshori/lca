@@ -296,6 +296,10 @@ pub struct Outcome {
     pub stored_pattern: Option<String>,
     /// Whether a deny rule refused the action (no prompt was shown).
     pub denied_by_rule: bool,
+    /// Whether an allow rule allowed the action (gh #259): no prompt
+    /// was shown, but the caller records it — a rule decision belongs
+    /// in the log even when nobody was asked.
+    pub allowed_by_rule: bool,
     /// Whether yolo mode answered for the user (ADR-0042). The caller
     /// records these like a human "always" answer, so the audit trail is
     /// complete even though no prompt was shown.

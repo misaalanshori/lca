@@ -387,8 +387,16 @@ fn permission_surface_matches_the_requirement() {
     );
 
     // FR-TOOL-3 covers any tool call outside the workspace, not only writes.
+    // Gh #259: every read routes through authorize for rule matching
+    // (the trust fast path keeps the no-rule case silent).
     let read_in = call("read", serde_json::json!({"path": "ok.txt"}));
-    assert!(exec.required_permission(&read_in).is_none());
+    assert!(
+        matches!(
+            exec.required_permission(&read_in),
+            Some(Action::ReadPath { .. })
+        ),
+        "in-workspace reads surface for rule matching"
+    );
     let read_out = call("read", serde_json::json!({"path": "../neighbor/notes.md"}));
     assert!(
         matches!(
