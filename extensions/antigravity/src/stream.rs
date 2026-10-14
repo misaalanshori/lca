@@ -513,7 +513,8 @@ fn handle_chunk(
     emit: &mut dyn FnMut(lca_protocol::StreamEvent) -> bool,
 ) -> bool {
     use lca_protocol::StreamEvent as E;
-    if let Some(error) = value.get("error") {
+    let data = value.get("response").unwrap_or(value);
+    if let Some(error) = data.get("error").or_else(|| value.get("error")) {
         let message = error
             .get("message")
             .and_then(|m| m.as_str())
@@ -526,7 +527,7 @@ fn handle_chunk(
             retryable: lca_protocol::is_capacity_error(&message),
         });
     }
-    if let Some(candidate) = value
+    if let Some(candidate) = data
         .get("candidates")
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("content"))
@@ -582,7 +583,10 @@ fn handle_chunk(
             }
         }
     }
-    if let Some(usage) = value.get("usageMetadata") {
+    if let Some(usage) = data
+        .get("usageMetadata")
+        .or_else(|| value.get("usageMetadata"))
+    {
         let count = |key: &str| usage.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
         let cache_read = count("cachedContentTokenCount");
         let prompt = count("promptTokenCount");

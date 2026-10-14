@@ -122,3 +122,38 @@ fn bare_error_bodies_surface_instead_of_ending_silently() {
         }
     }
 }
+
+// Verifies: Google Cloud Code / Antigravity returns stream chunks
+// wrapped in a top-level `{"response": {"candidates": [...], "usageMetadata": ...}}`
+// envelope; both candidates and usage must unwrap and emit properly.
+#[test]
+fn wrapped_cloud_code_response_envelopes_decode_text_deltas_and_usage() {
+    let chunk1 = b"data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello\"}]}}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":2}}}\n\n".to_vec();
+    let chunk2 = b"data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" world\"}]}}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":4}}}\n\n".to_vec();
+    let cap = ChunkedCap {
+        chunks: Mutex::new(VecDeque::from(vec![
+            Some(chunk1),
+            Some(chunk2),
+            Some(b"data: [DONE]\n\n".to_vec()),
+            None,
+        ])),
+        reads: AtomicUsize::new(0),
+    };
+    let mut driver = StreamDriver::open(&cap, &CompletionRequest::default()).expect("open");
+    let ev1 = driver.next_event().expect("ev1").expect("ok");
+    assert_eq!(
+        ev1,
+        StreamEvent::TextDelta {
+            delta: "Hello".into()
+        }
+    );
+    let ev2 = driver.next_event().expect("ev2").expect("ok");
+    assert!(matches!(ev2, StreamEvent::Usage { .. }));
+    let ev3 = driver.next_event().expect("ev3").expect("ok");
+    assert_eq!(
+        ev3,
+        StreamEvent::TextDelta {
+            delta: " world".into()
+        }
+    );
+}
