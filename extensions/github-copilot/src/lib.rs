@@ -387,6 +387,22 @@ pub fn build_request(
     let base = api_base(cap);
     let url = format!("{}/chat/completions", base.trim_end_matches('/'));
     let bearer = format!("Bearer {token}");
+    let initiator = request
+        .messages
+        .last()
+        .map(|m| {
+            if m.role == lca_protocol::MessageRole::User {
+                "user"
+            } else {
+                "agent"
+            }
+        })
+        .unwrap_or("user");
+    let has_images = request.messages.iter().any(|m| {
+        m.content
+            .iter()
+            .any(|block| matches!(block, lca_protocol::ContentBlock::Image { .. }))
+    });
     let mut headers: Vec<(String, String)> = vec![
         ("content-type".to_string(), "application/json".to_string()),
         ("authorization".to_string(), bearer),
@@ -394,7 +410,15 @@ pub fn build_request(
             "X-GitHub-Api-Version".to_string(),
             COPILOT_API_VERSION.to_string(),
         ),
+        ("X-Initiator".to_string(), initiator.to_string()),
+        (
+            "Openai-Intent".to_string(),
+            "conversation-edits".to_string(),
+        ),
     ];
+    if has_images {
+        headers.push(("Copilot-Vision-Request".to_string(), "true".to_string()));
+    }
     for (key, value) in copilot_headers() {
         headers.push((key.to_string(), value.to_string()));
     }

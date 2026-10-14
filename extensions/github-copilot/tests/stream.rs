@@ -87,5 +87,7 @@ fn a_turn_streams_typed_events_over_the_copilot_shape() {
     assert!(call.contains("vscode-chat"), "the integration id rides");
     assert!(call.contains("2026-06-01"), "the API version rides: {call}");
     assert!(call.contains("gpt-4o"), "the model rides");
+    assert!(call.contains("x-initiator"), "the initiator header rides");
+    assert!(call.contains("openai-intent"), "the intent header rides");
     assert!(cap.denials().is_empty(), "everything was granted");
 }
