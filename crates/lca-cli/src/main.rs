@@ -14,17 +14,23 @@ fn main() {
     // leaves a usable terminal instead of a hidden cursor in alt screen.
     lca_tui::install_panic_hook();
     let cli = lca_cli::Cli::parse();
-    // #152: before anything that can warn, so no diagnostic evaporates.
-    // A diagnostics failure is reported, never fatal.
-    if let Err(err) = lca_cli::init_diagnostics(cli.verbose) {
-        eprintln!("warning: diagnostics disabled: {err}");
-    }
-    // gh #258: before the first instrumented call, so no trace
-    // evaporates. A setup failure warns, never fails the run.
-    if let Err(err) =
-        lca_cli::debug::init_debug_trace(cli.debug, cli.debug_wire, &lca_cli::data_dir())
-    {
-        eprintln!("warning: {err}");
+    // gh #258: when debug tracing is requested, it installs the
+    // subscriber with the debug and wire layers; otherwise ordinary
+    // diagnostics install (tracing allows only one global subscriber).
+    let debug_active =
+        match lca_cli::debug::init_debug_trace(cli.debug, cli.debug_wire, &lca_cli::data_dir()) {
+            Ok(active) => active,
+            Err(err) => {
+                eprintln!("warning: {err}");
+                false
+            }
+        };
+    if !debug_active {
+        // #152: before anything that can warn, so no diagnostic evaporates.
+        // A diagnostics failure is reported, never fatal.
+        if let Err(err) = lca_cli::init_diagnostics(cli.verbose) {
+            eprintln!("warning: diagnostics disabled: {err}");
+        }
     }
     let code = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
