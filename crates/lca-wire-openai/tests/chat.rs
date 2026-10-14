@@ -77,6 +77,24 @@ fn maps_usage_with_cache_fields_from_cached_tokens() {
 }
 
 #[test]
+fn maps_openrouter_cost_field_when_present() {
+    let body = concat!(
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50,\"total_tokens\":150,\"cost\":0.003425}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let usage = events_of(body)
+        .iter()
+        .find_map(|e| match e {
+            StreamEvent::Usage { usage } => Some(usage.clone()),
+            _ => None,
+        })
+        .expect("usage event");
+    assert_eq!(usage.input, 100);
+    assert_eq!(usage.output, 50);
+    assert!((usage.cost - 0.003425).abs() < 1e-9);
+}
+
+#[test]
 fn ignores_heartbeats_malformed_lines_and_vendor_noise() {
     let body = concat!(
         ": keep-alive\n\n",

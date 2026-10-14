@@ -244,6 +244,11 @@ pub fn build_request(
         vec![
             ("content-type".to_string(), "application/json".to_string()),
             ("authorization".to_string(), format!("Bearer {key}")),
+            (
+                "HTTP-Referer".to_string(),
+                "https://github.com/misaalanshori/lca".to_string(),
+            ),
+            ("X-Title".to_string(), "LCA".to_string()),
         ],
         body_bytes,
     ))

@@ -225,15 +225,20 @@ pub fn map_usage(value: &serde_json::Value) -> Usage {
         .and_then(|d| d.get("cache_creation_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    // Gateways like OpenRouter report cost directly on the usage envelope;
+    // direct endpoints report none and cost defaults to 0.0.
+    let cost = value
+        .get("cost")
+        .or_else(|| value.get("total_cost"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
     Usage {
         input: prompt.saturating_sub(cache_read),
         output,
         cache_read,
         cache_write,
         cache_write_1h: 0,
-        // OpenAI-shaped endpoints report no pricing; cost stays 0 and
-        // cache-waste dollar cost is 0 until a provider reports buckets.
-        cost: 0.0,
+        cost,
         cost_input: 0.0,
         cost_cache_read: 0.0,
         cost_cache_write: 0.0,
