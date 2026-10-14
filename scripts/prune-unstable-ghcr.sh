@@ -29,7 +29,7 @@ KEEP_DEFAULT=2
 # ---------------------------------------------------------------------------
 select_ids() {
     local keep="$1"
-    python3 /dev/fd/3 "$keep" 3<<'PY'
+    python3 -c '
 import json
 import re
 import sys
@@ -92,7 +92,7 @@ for version in versions:
     if spare_kept < keep:
         continue
     print(vid)
-PY
+' "$keep"
 }
 
 # ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ selftest() {
         shift 3
         local expected="$*"
         local got
-        got=$(echo "$payload" | select_ids "$keep" | tr '\n' ' ' | sed 's/ *$//')
+        got=$(echo "$payload" | select_ids "$keep" | tr -d '\r' | tr '\n' ' ' | sed 's/ *$//')
         if [ "$got" == "$expected" ]; then
             echo "ok: $name"
         else
