@@ -1097,7 +1097,7 @@ mod tests {
             "import sys\npath = sys.argv[1]\nopen(path, \"w\", encoding=\"utf-8\").write(\"flagged\\n\")\n",
         )
         .expect("write mock editor");
-        let editor = format!("{} {}", python_on_path(), script.display());
+        let editor = format!("{} \"{}\"", python_on_path(), script.display());
         let edited = external_editor_with(&editor, "hello", &root).expect("editor runs");
         assert!(
             edited.contains("flagged"),
