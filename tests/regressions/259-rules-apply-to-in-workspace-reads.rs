@@ -140,7 +140,7 @@ fn tool_statuses(sink: &Sink) -> Vec<ToolResultStatus> {
     sink.0
         .iter()
         .filter_map(|event| match event {
-            TurnEvent::ToolFinished(result) => Some(result.status.clone()),
+            TurnEvent::ToolFinished(result) => Some(result.status),
             _ => None,
         })
         .collect()
