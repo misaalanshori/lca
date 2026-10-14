@@ -139,6 +139,11 @@ fn a_turn_streams_typed_events_over_the_messages_shape() {
         call.contains("oauth-2025-04-20"),
         "the subscription identity rides: {call}"
     );
+    assert!(call.contains("x-app"), "the x-app header rides: {call}");
+    assert!(
+        call.contains("claude-cli"),
+        "the claude-cli user agent rides: {call}"
+    );
     assert!(call.contains("cache_control"), "breakpoints plant: {call}");
     assert!(call.contains("max_tokens"), "a budget rides: {call}");
     assert!(cap.denials().is_empty(), "everything was granted");
@@ -170,6 +175,10 @@ fn an_api_key_turn_carries_no_subscription_identity() {
     assert!(
         !calls[0].contains("oauth-2025-04-20"),
         "no subscription identity on a key call"
+    );
+    assert!(
+        !calls[0].contains("x-app"),
+        "api key turn carries no subscription x-app"
     );
 }
 

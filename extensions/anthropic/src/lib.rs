@@ -483,7 +483,7 @@ fn headers(token: &str, oauth: bool) -> Vec<(String, String)> {
     } else {
         ANTHROPIC_BETAS.to_string()
     };
-    vec![
+    let mut h = vec![
         ("x-api-key".to_string(), token.to_string()),
         (
             "anthropic-version".to_string(),
@@ -492,7 +492,16 @@ fn headers(token: &str, oauth: bool) -> Vec<(String, String)> {
         ("anthropic-beta".to_string(), betas),
         ("content-type".to_string(), "application/json".to_string()),
         ("accept".to_string(), "text/event-stream".to_string()),
-    ]
+    ];
+    if oauth {
+        h.push(("user-agent".to_string(), "claude-cli/0.2.29".to_string()));
+        h.push(("x-app".to_string(), "cli".to_string()));
+        h.push((
+            "anthropic-dangerous-direct-browser-access".to_string(),
+            "true".to_string(),
+        ));
+    }
+    h
 }
 
 /// The token budget: the turn's explicit budget first, then the
