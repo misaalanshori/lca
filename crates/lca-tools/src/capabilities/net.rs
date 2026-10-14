@@ -199,17 +199,7 @@ impl Capabilities {
         headers: &[(&str, &str)],
         body: Option<&[u8]>,
     ) -> Result<u32, CapabilityError> {
-        // Gh #258: the wire tap (method + redacted URL + body length;
-        // headers and bodies stay out — extensions set secrets there).
-        lca_debug::net::event(
-            "http.request",
-            &format!(
-                "{} {} body_bytes={}",
-                method,
-                lca_debug::redact::redact_url(url),
-                body.map(|body| body.len()).unwrap_or(0)
-            ),
-        );
+        log_http_request(method, url, headers, body);
         let started = std::time::Instant::now();
         let http_method = hyper::Method::from_bytes(method.as_bytes())
             .map_err(|err| CapabilityError::Invalid(format!("bad method {method}: {err}")))?;
@@ -257,12 +247,6 @@ impl Capabilities {
             Err(cancelled) => return Err(cancelled),
         };
         let status = response.status().as_u16();
-        // Gh #258: status plus latency (headers and body stay out;
-        // bodies stream and may carry secrets).
-        lca_debug::net::event(
-            "http.response",
-            &format!("status={status} ms={}", started.elapsed().as_millis()),
-        );
         let response_headers = response
             .headers()
             .iter()
@@ -273,6 +257,7 @@ impl Capabilities {
                 )
             })
             .collect::<Vec<_>>();
+        log_http_response(status, started.elapsed().as_millis(), &response_headers);
         // The head arrives before the body does: nothing is buffered
         // here, the reader pulls frames as the server sends them
         // (capability catalog: streaming body reader).
@@ -440,6 +425,7 @@ impl Capabilities {
         if collected.is_empty() {
             Ok(None)
         } else {
+            log_response_body_chunk(handle, &collected);
             Ok(Some(collected))
         }
     }
@@ -687,5 +673,95 @@ connection: close
         flow.tx
             .send(params)
             .map_err(|_| CapabilityError::NotFound(format!("oauth flow {id} is no longer waiting")))
+    }
+}
+
+#[cfg(feature = "debug-trace")]
+fn truncate_chars(s: &str, max_chars: usize) -> (&str, usize) {
+    if let Some((idx, _)) = s.char_indices().nth(max_chars) {
+        (&s[..idx], s.len() - idx)
+    } else {
+        (s, 0)
+    }
+}
+
+fn log_http_request(method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>) {
+    #[cfg(feature = "debug-trace")]
+    {
+        let redacted_url = lca_debug::redact::redact_url(url);
+        let header_lines = headers
+            .iter()
+            .map(|(k, v)| lca_debug::redact::redact_header(k, v))
+            .collect::<Vec<_>>()
+            .join("; ");
+        lca_debug::net::event(
+            "http.request",
+            &format!(
+                "{method} {redacted_url} headers=[{header_lines}] body_bytes={}",
+                body.map(|b| b.len()).unwrap_or(0)
+            ),
+        );
+        if let Some(b) = body
+            && !b.is_empty()
+        {
+            let text = String::from_utf8_lossy(b);
+            let redacted = lca_debug::redact::redact_json(&text);
+            let (head, extra) = truncate_chars(&redacted, 4096);
+            let preview = if extra > 0 {
+                format!("{head}... [+{extra} bytes]")
+            } else {
+                head.to_string()
+            };
+            lca_debug::net::event("http.request.body", &preview);
+        }
+    }
+    #[cfg(not(feature = "debug-trace"))]
+    {
+        let _ = (method, url, headers, body);
+    }
+}
+
+fn log_http_response(status: u16, elapsed_ms: u128, headers: &[(String, String)]) {
+    #[cfg(feature = "debug-trace")]
+    {
+        let resp_header_lines = headers
+            .iter()
+            .map(|(k, v)| lca_debug::redact::redact_header(k, v))
+            .collect::<Vec<_>>()
+            .join("; ");
+        lca_debug::net::event(
+            "http.response",
+            &format!("status={status} ms={elapsed_ms} headers=[{resp_header_lines}]"),
+        );
+    }
+    #[cfg(not(feature = "debug-trace"))]
+    {
+        let _ = (status, elapsed_ms, headers);
+    }
+}
+
+fn log_response_body_chunk(handle: u32, chunk: &[u8]) {
+    #[cfg(feature = "debug-trace")]
+    {
+        if chunk.is_empty() {
+            return;
+        }
+        let text = String::from_utf8_lossy(chunk);
+        let redacted = if text.trim_start().starts_with('{') {
+            lca_debug::redact::redact_json(&text)
+        } else {
+            text.to_string()
+        };
+        let (head, extra) = truncate_chars(&redacted, 2048);
+        let preview = if extra > 0 {
+            format!("{head}... [+{extra} bytes]")
+        } else {
+            head.to_string()
+        };
+        lca_debug::net::event("http.response.body", &format!("handle={handle} {preview}"));
+    }
+    #[cfg(not(feature = "debug-trace"))]
+    {
+        let _ = (handle, chunk);
     }
 }
