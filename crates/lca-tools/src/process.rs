@@ -23,6 +23,28 @@ enum Tree {
     Job(crate::ops::windows_job::Job),
 }
 
+/// Signal a whole process group, sharing the one correct argv shape.
+/// The `--` is load-bearing, not style: without it procps `/bin/kill`
+/// (before 4.0.5, e.g. Ubuntu 24.04's 4.0.2) truncates `-<pgid>` to its
+/// first digit, so a pgid starting with `1` becomes `kill(-1, SIGKILL)`
+/// - every process of our uid, including the test runner and the CI
+/// agent itself (silent 30-minute cancel, 2026-10-15). The `pgid > 1`
+/// guard keeps `-0` (own group) and `-1` (everyone) unreachable.
+#[cfg(unix)]
+pub(crate) fn kill_process_group(pgid: u32) {
+    if pgid > 1 {
+        let _ = std::process::Command::new("/bin/kill")
+            .args(kill_group_argv(pgid))
+            .status();
+    }
+}
+
+/// The argv `kill_process_group` passes: `kill -9 -- -PGID`.
+#[cfg(any(unix, test))]
+fn kill_group_argv(pgid: u32) -> [String; 3] {
+    ["-9".to_string(), "--".to_string(), format!("-{pgid}")]
+}
+
 /// A spawned child plus its pipes and tree identity.
 pub struct TreeChild {
     child: std::process::Child,
@@ -71,9 +93,7 @@ impl TreeChild {
             // everything it forked. `/bin/kill` exists on every POSIX
             // target we ship; avoids a `libc` dependency here.
             // ponytail: swap to libc::killpg if a platform lacks /bin/kill.
-            let _ = std::process::Command::new("/bin/kill")
-                .args(["-9", &format!("-{pgid}")])
-                .status();
+            kill_process_group(pgid);
         }
         #[cfg(windows)]
         {
@@ -198,8 +218,31 @@ pub fn write_all(writer: &mut impl Write, bytes: &[u8]) -> std::io::Result<u64> 
 
 #[cfg(test)]
 mod tests {
-    use super::{read_up_to, without_verbatim};
+    use super::{kill_group_argv, read_up_to, without_verbatim};
     use std::path::Path;
+
+    // Verifies: the group-kill operand is unambiguous on every procps.
+    // Without the `--` separator procps `/bin/kill` before 4.0.5 (Ubuntu
+    // 24.04's 4.0.2) truncates `-<pgid>` to its first digit, so a pgid
+    // starting with `1` becomes `kill(-1, SIGKILL)` - every process of
+    // our uid, including the test runner and the CI agent (silent
+    // 30-minute cancel, 2026-10-15). The `pgid > 1` guard in
+    // `kill_process_group` keeps `-0`/`-1` unreachable.
+    #[test]
+    fn group_kill_argv_separates_the_negative_pgid() {
+        assert_eq!(
+            kill_group_argv(12345),
+            [
+                "-9".to_string(),
+                "--".to_string(),
+                "-12345".to_string()
+            ]
+        );
+        assert_eq!(
+            kill_group_argv(488),
+            ["-9".to_string(), "--".to_string(), "-488".to_string()]
+        );
+    }
 
     // A regression here breaks every child spawn on Windows at once:
     // cmd.exe reads `\\?\C:\...` as a UNC path and refuses it.

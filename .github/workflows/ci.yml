@@ -213,7 +213,9 @@ jobs:
           # no CI edit. Anything else is a build error, never a skip.
           extra=()
           if [ "${{ matrix.group }}" = "shell-cli" ]; then
-            extra=(--lib)
+            # `--bins` covers future `src/main.rs` unit tests the way
+            # `--lib` covers the lib: nothing new runs nowhere.
+            extra=(--lib --bins)
             for f in crates/lca-cli/tests/*.rs; do
               b=$(basename "$f" .rs)
               case "$b" in e2e*|mod|main|lib) ;; *) extra+=(--test "$b");; esac
@@ -240,7 +242,10 @@ jobs:
             fi ) &
           watchdog=$!
           wait "$runner" 2>/dev/null
-          kill "$watchdog" 2>/dev/null
+          # Group-kill the watchdog itself: `kill $watchdog` leaves its
+          # `sleep` orphaned at the end of every job (seen as pid 6351
+          # in the run artifacts, 2026-10-15).
+          kill -TERM -- "-$watchdog" 2>/dev/null || kill "$watchdog" 2>/dev/null || true
           wait "$watchdog" 2>/dev/null || true
           status=$(cat "$statusfile" 2>/dev/null || echo 124)
           rm -f "$statusfile"

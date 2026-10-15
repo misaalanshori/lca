@@ -421,9 +421,7 @@ fn kill_group(pgid: u32) {
     // group stops the shell and everything it forked. `/bin/kill` exists on
     // every POSIX platform we target; using it avoids a `libc` dependency.
     // ponytail: swap to `libc::killpg` if a platform ships no /bin/kill.
-    let _ = std::process::Command::new("/bin/kill")
-        .args(["-9", "--", &format!("-{pgid}")])
-        .status();
+    crate::process::kill_process_group(pgid);
 }
 
 /// The backstop: signal every surviving member by its own pid. The

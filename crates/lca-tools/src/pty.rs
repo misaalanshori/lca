@@ -287,9 +287,7 @@ fn wait_impl(inner: &mut Inner) -> std::io::Result<i32> {
 #[cfg(unix)]
 fn kill_impl(inner: &mut Inner) {
     // Group kill first: the child may have forked (platform notes).
-    let _ = std::process::Command::new("/bin/kill")
-        .args(["-9", &format!("-{}", inner.pgid)])
-        .status();
+    crate::process::kill_process_group(inner.pgid);
     let _ = inner.child.kill();
     let _ = inner.child.wait();
 }
