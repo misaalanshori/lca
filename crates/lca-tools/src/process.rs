@@ -27,7 +27,7 @@ enum Tree {
 /// The `--` is load-bearing, not style: without it procps `/bin/kill`
 /// (before 4.0.5, e.g. Ubuntu 24.04's 4.0.2) truncates `-<pgid>` to its
 /// first digit, so a pgid starting with `1` becomes `kill(-1, SIGKILL)`
-/// - every process of our uid, including the test runner and the CI
+/// and ends every process of our uid, including the test runner and the CI
 /// agent itself (silent 30-minute cancel, 2026-10-15). The `pgid > 1`
 /// guard keeps `-0` (own group) and `-1` (everyone) unreachable.
 #[cfg(unix)]
@@ -232,11 +232,7 @@ mod tests {
     fn group_kill_argv_separates_the_negative_pgid() {
         assert_eq!(
             kill_group_argv(12345),
-            [
-                "-9".to_string(),
-                "--".to_string(),
-                "-12345".to_string()
-            ]
+            ["-9".to_string(), "--".to_string(), "-12345".to_string()]
         );
         assert_eq!(
             kill_group_argv(488),
