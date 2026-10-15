@@ -374,12 +374,43 @@ pub fn build_request(
                     }));
                 }
             }
+            // The host persists the streamed thoughtSignature as a
+            // Reasoning block (gh #41 via assemble); Gemini's
+            // generateContent API requires it echoed inside replayed
+            // functionCall parts or the call fails HTTP 400. One run
+            // carries one signature, so the message's applies to all
+            // of its calls.
+            let thought_signature: Option<&str> =
+                message.content.iter().find_map(|block| match block {
+                    lca_protocol::ContentBlock::Reasoning {
+                        signature: Some(signature),
+                        ..
+                    } => Some(signature.as_str()),
+                    _ => None,
+                });
             for call in &message.tool_calls {
                 let args: serde_json::Value = serde_json::from_str(&call.arguments)
                     .unwrap_or_else(|_| serde_json::json!({ "arguments": call.arguments }));
-                parts.push(serde_json::json!({
-                    "functionCall": { "id": call.call_id, "name": call.name, "args": args }
-                }));
+                let mut part = serde_json::Map::new();
+                part.insert(
+                    "functionCall".to_string(),
+                    serde_json::json!({
+                        "id": call.call_id,
+                        "name": call.name,
+                        "args": args,
+                    }),
+                );
+                // The signature rides as a SIBLING of functionCall on
+                // the part — the exact shape the stream delivers it in.
+                // Nested inside functionCall, this gateway rejects it
+                // as an unknown field (camelCase and snake_case both).
+                if let Some(signature) = thought_signature {
+                    part.insert(
+                        "thoughtSignature".to_string(),
+                        serde_json::Value::String(signature.to_string()),
+                    );
+                }
+                parts.push(serde_json::Value::Object(part));
             }
         }
         if parts.is_empty() {
@@ -535,6 +566,19 @@ fn handle_chunk(
         .and_then(|p| p.as_array())
     {
         for part in candidate {
+            // The signature rides on ANY part shape: a functionCall
+            // sibling, a thought text part, or a standalone part with
+            // empty text (all three observed on the wire). Capture it
+            // before anything else so no shape drops it; the host
+            // persists the latest for replay (gh #41's channel).
+            if let Some(sig) = part.get("thoughtSignature").and_then(|s| s.as_str())
+                && !emit(E::VendorEvent {
+                    kind: lca_protocol::THINKING_SIGNATURE_KIND.to_string(),
+                    payload: serde_json::json!({ "signature": sig }),
+                })
+            {
+                return false;
+            }
             if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                 if part.get("thought").and_then(|t| t.as_bool()) == Some(true) {
                     if !emit(E::ReasoningDelta {
@@ -821,5 +865,108 @@ impl<'a> StreamDriver<'a> {
 impl Drop for StreamDriver<'_> {
     fn drop(&mut self) {
         let _ = self.cap.net_close_response(self.handle);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lca_protocol::StreamEvent as E;
+
+    fn collect(value: &serde_json::Value) -> Vec<lca_protocol::StreamEvent> {
+        let mut events = Vec::new();
+        let mut open_calls = Vec::new();
+        handle_chunk(value, &mut open_calls, &mut |event| {
+            events.push(event);
+            true
+        });
+        events
+    }
+
+    // Verifies: thought_signature fix — a functionCall part's signature
+    // is captured through gh #41's thinking-signature channel so the
+    // host persists it for replay; the call events themselves are intact.
+    #[test]
+    fn a_function_call_thought_signature_is_captured_as_a_vendor_event() {
+        let value = serde_json::json!({
+            "candidates": [{
+                "content": { "parts": [
+                    { "functionCall": {
+                        "name": "default_api:list",
+                        "args": {}
+                      },
+                      "thoughtSignature": "sig-abc-123"
+                    }
+                ] }
+            }]
+        });
+        let events = collect(&value);
+        let signature = events.iter().find_map(|event| match event {
+            E::VendorEvent { kind, payload } if kind == lca_protocol::THINKING_SIGNATURE_KIND => {
+                payload.get("signature").and_then(|s| s.as_str())
+            }
+            _ => None,
+        });
+        assert_eq!(signature, Some("sig-abc-123"));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, E::ToolCallStart { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, E::ToolCallEnd { .. }))
+        );
+    }
+
+    // Verifies: thought_signature fix — a standalone signature part
+    // with empty text (the exact Cloud Code wire shape) is captured
+    // even though it carries no thought flag and no functionCall.
+    #[test]
+    fn a_standalone_empty_text_signature_part_is_captured() {
+        let value = serde_json::json!({
+            "candidates": [{
+                "content": { "parts": [
+                    { "thoughtSignature": "sig-standalone-1", "text": "" }
+                ] }
+            }]
+        });
+        let events = collect(&value);
+        let signature = events.iter().find_map(|event| match event {
+            E::VendorEvent { kind, payload } if kind == lca_protocol::THINKING_SIGNATURE_KIND => {
+                payload.get("signature").and_then(|s| s.as_str())
+            }
+            _ => None,
+        });
+        assert_eq!(signature, Some("sig-standalone-1"));
+    }
+
+    // Verifies: thought_signature fix — thought text parts carry the
+    // run's signature the same way functionCall parts do.
+    #[test]
+    fn a_thought_text_part_signature_is_captured_as_a_vendor_event() {
+        let value = serde_json::json!({
+            "candidates": [{
+                "content": { "parts": [
+                    { "text": "reasoning…",
+                      "thought": true,
+                      "thoughtSignature": "sig-thought-9" }
+                ] }
+            }]
+        });
+        let events = collect(&value);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, E::ReasoningDelta { .. }))
+        );
+        let signature = events.iter().find_map(|event| match event {
+            E::VendorEvent { kind, payload } if kind == lca_protocol::THINKING_SIGNATURE_KIND => {
+                payload.get("signature").and_then(|s| s.as_str())
+            }
+            _ => None,
+        });
+        assert_eq!(signature, Some("sig-thought-9"));
     }
 }

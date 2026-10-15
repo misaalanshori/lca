@@ -272,6 +272,18 @@ impl CompletionGuest for AntigravityWasm {
                             }
                         }
                     })
+                    .chain(message.extras.iter().filter_map(|pair| {
+                        // The host cannot carry Reasoning blocks over the
+                        // frozen content-block variant, so a run's replay
+                        // signature rides the reserved map; rebuild it here
+                        // so functionCall replay carries thoughtSignature.
+                        (pair.key == lca_protocol::THINKING_SIGNATURE_EXTRA).then(|| {
+                            lca_protocol::ContentBlock::Reasoning {
+                                reasoning: String::new(),
+                                signature: Some(pair.value.clone()),
+                            }
+                        })
+                    }))
                     .collect(),
                 tool_calls: message
                     .tool_calls
@@ -285,7 +297,11 @@ impl CompletionGuest for AntigravityWasm {
                     .collect(),
                 tool_call_id: message.tool_call_id.clone(),
                 usage: None,
-                extras: Default::default(),
+                extras: message
+                    .extras
+                    .iter()
+                    .map(|pair| (pair.key.clone(), pair.value.clone()))
+                    .collect(),
             })
             .collect();
         let tools = request

@@ -428,7 +428,32 @@ pub(super) fn to_wit_request(request: &CompletionRequest) -> wit_completion::Com
                     )
                     .collect(),
                 tool_call_id: message.tool_call_id.clone(),
-                extras: Vec::new(),
+                // The content-block variant has no reasoning case
+                // (frozen), so a run's replay signature rides the
+                // reserved map under THINKING_SIGNATURE_EXTRA and the
+                // guest rebuilds the Reasoning block from it; message
+                // extras cross verbatim (the reserved-map contract).
+                extras: {
+                    let mut pairs: Vec<wit_completion::ExtraPair> = extra_pairs(&message.extras);
+                    if !pairs
+                        .iter()
+                        .any(|pair| pair.key == lca_protocol::THINKING_SIGNATURE_EXTRA)
+                        && let Some(signature) =
+                            message.content.iter().find_map(|block| match block {
+                                lca_protocol::ContentBlock::Reasoning {
+                                    signature: Some(signature),
+                                    ..
+                                } => Some(signature),
+                                _ => None,
+                            })
+                    {
+                        pairs.push(wit_completion::ExtraPair {
+                            key: lca_protocol::THINKING_SIGNATURE_EXTRA.to_string(),
+                            value: signature.clone(),
+                        });
+                    }
+                    pairs
+                },
             })
             .collect(),
         tools: request

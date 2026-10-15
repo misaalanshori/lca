@@ -938,4 +938,67 @@ mod tests {
         assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
         assert_eq!(parts[1]["inlineData"]["data"], "AQID");
     }
+
+    fn assistant_with_call(signature: Option<&str>) -> lca_protocol::ChatMessage {
+        lca_protocol::ChatMessage {
+            role: lca_protocol::MessageRole::Assistant,
+            content: vec![lca_protocol::ContentBlock::Reasoning {
+                reasoning: "thinking…".to_string(),
+                signature: signature.map(str::to_string),
+            }],
+            tool_calls: vec![lca_protocol::ToolCall {
+                call_id: "call-5".to_string(),
+                name: "default_api:list".to_string(),
+                arguments: "{}".to_string(),
+                parent_call_id: None,
+            }],
+            tool_call_id: None,
+            usage: None,
+            extras: Default::default(),
+        }
+    }
+
+    fn function_call_part(body: &serde_json::Value) -> serde_json::Value {
+        body["request"]["contents"][0]["parts"]
+            .as_array()
+            .expect("parts")
+            .iter()
+            .find(|part| part.get("functionCall").is_some())
+            .expect("functionCall part")
+            .clone()
+    }
+
+    // Verifies: thought_signature fix — the persisted Reasoning
+    // signature is echoed inside replayed functionCall parts, which is
+    // what Gemini's generateContent API requires (HTTP 400 otherwise).
+    #[test]
+    fn a_signed_reasoning_block_echoes_thought_signature_on_function_calls() {
+        let request = lca_protocol::CompletionRequest {
+            messages: vec![assistant_with_call(Some("sig-abc-123"))],
+            tools: Vec::new(),
+            model: "gemini".to_string(),
+            stable_prefix: 0,
+            extras: Default::default(),
+        };
+        let body = build_request(&request, "sys", "mock-project", "gemini-3.8-flash-low");
+        let part = function_call_part(&body);
+        assert_eq!(part["thoughtSignature"], "sig-abc-123");
+        assert_eq!(part["functionCall"]["name"], "default_api:list");
+    }
+
+    // Verifies: thought_signature fix — unsigned history sends no
+    // thoughtSignature key at all (never an empty one).
+    #[test]
+    fn an_unsigned_reasoning_block_sends_no_thought_signature() {
+        let request = lca_protocol::CompletionRequest {
+            messages: vec![assistant_with_call(None)],
+            tools: Vec::new(),
+            model: "gemini".to_string(),
+            stable_prefix: 0,
+            extras: Default::default(),
+        };
+        let body = build_request(&request, "sys", "mock-project", "gemini-3.8-flash-low");
+        let part = function_call_part(&body);
+        assert!(part.get("thoughtSignature").is_none());
+    }
 }

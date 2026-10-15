@@ -37,6 +37,14 @@ pub const QUOTA_PLAN_EXTRA: &str = "quota-plan";
 /// Why the quota picture is empty (`subscription-required` for the
 /// paid-gated endpoint); the renderer degrades plainly from it.
 pub const QUOTA_ERROR_EXTRA: &str = "quota-error";
+/// A thinking run's replay signature on a message extras map: the
+/// host's WIT bridge cannot carry `ContentBlock::Reasoning` (the
+/// content-block variant has no reasoning case, frozen), so the
+/// signature rides this reserved-map key instead and the guest
+/// rebuilds the Reasoning block from it. Same string as the
+/// `thinking-signature` stream-event kind: one vocabulary entry, two
+/// channels (gh #108 pins the exact string).
+pub const THINKING_SIGNATURE_EXTRA: &str = "thinking-signature";
 
 /// A per-model image profile: pi's `ModelImageResizeOptions` shape.
 /// `max_bytes` bounds the encoded payload. Vendor-sourced when present;

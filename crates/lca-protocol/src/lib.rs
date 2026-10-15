@@ -29,7 +29,8 @@ pub use message::{ChatMessage, ContentBlock, MessageRole, base64_encode, sniff_i
 pub use provider::{
     CompletionRequest, EventSink, IMAGE_RESIZE_EXTRA, IMAGE_VISION_EXTRA, IdentityOutcome,
     ImageResize, ModelInfo, OauthCap, PROMPT_CACHE_EXTRA, ProviderCap, QUOTA_ERROR_EXTRA,
-    QUOTA_GROUPS_EXTRA, QUOTA_PLAN_EXTRA, THINKING_LEVELS_EXTRA, is_capacity_error,
+    QUOTA_GROUPS_EXTRA, QUOTA_PLAN_EXTRA, THINKING_LEVELS_EXTRA, THINKING_SIGNATURE_EXTRA,
+    is_capacity_error,
 };
 pub use record::{
     FORMAT_VERSION, NestedCallRecord, PREVIOUS_SUMMARY_TYPE, PermissionDecision, Record,

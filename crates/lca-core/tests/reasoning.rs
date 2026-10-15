@@ -215,3 +215,37 @@ async fn the_thinking_budget_rides_the_request_extras() {
         "the budget rides beside the level"
     );
 }
+
+// Verifies: thought_signature fix — an assistant record carrying a
+// thinking signature but no thought text (Gemini's Cloud Code stream
+// signs function calls without sending thought parts) still assembles
+// a Reasoning block, so signature-requiring vendors get their replay.
+#[test]
+fn a_signature_without_thought_text_still_assembles_a_reasoning_block() {
+    use lca_protocol::{ContentBlock, Record};
+    let records = vec![Record::Assistant {
+        v: lca_protocol::FORMAT_VERSION,
+        ts: 0,
+        id: "a1".to_string(),
+        parent: None,
+        content: vec![],
+        reasoning: None,
+        reasoning_signature: Some("sig-only".to_string()),
+        provider_thinking_level: None,
+        model: None,
+        provider: None,
+        usage: None,
+    }];
+    let assembled = lca_core::assemble(&records, "sys");
+    let message = assembled
+        .messages
+        .iter()
+        .find(|m| m.role == lca_protocol::MessageRole::Assistant);
+    let signature = message.and_then(|m| {
+        m.content.iter().find_map(|block| match block {
+            ContentBlock::Reasoning { signature, .. } => signature.clone(),
+            _ => None,
+        })
+    });
+    assert_eq!(signature.as_deref(), Some("sig-only"));
+}

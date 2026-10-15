@@ -334,11 +334,17 @@ pub fn assemble_with(
                     usage: None,
                     extras: Default::default(),
                 };
-                if let Some(reasoning) = reasoning {
+                // A signature without text still earns its block:
+                // Gemini's Cloud Code stream signs function calls but
+                // sends no thought text, and vendors that require
+                // signatures reject transcripts that drop them (gh #41:
+                // empty+signature travels as redacted_thinking where
+                // that shape exists, and is inert elsewhere).
+                if reasoning.is_some() || reasoning_signature.is_some() {
                     message.content.insert(
                         0,
                         ContentBlock::Reasoning {
-                            reasoning: reasoning.clone(),
+                            reasoning: reasoning.clone().unwrap_or_default(),
                             // gh #41: the signature rides the block so
                             // replay resends it verbatim (vendors that
                             // require signatures reject transcripts that
