@@ -128,25 +128,32 @@ jobs:
         include:
           - group: core
             packages: '-p lca-protocol -p lca-permissions -p lca-session -p lca-config -p lca-provider -p lca-testkit -p lca-ext-abi'
+            threads: 2
             args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
           - group: engines
             packages: '-p lca-tools -p lca-core -p lca-ext-host -p lca-ext-native'
+            threads: 2
             args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
           # The step derives shell-cli's target list from the filesystem
           # (lib plus every non-`e2e_*` test file); see the run step.
           - group: shell-libs
             packages: '-p lca-tui -p lca-registry -p lca-sdk'
+            threads: 2
             args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
           - group: shell-cli
             packages: '-p lca-cli'
+            threads: 2
             args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
           - group: shell-e2e
             packages: '-p lca-cli -p lca-regressions'
-            # ISOLATION EXPERIMENT (branch only, do not merge): restrict
-            # to the two tree_navigator tests the ubuntu freeze follows.
-            args: "-E 'binary(/e2e_tree_navigator/)'"
+            # ISOLATION EXPERIMENT (branch only, do not merge): whole e2e
+            # set, single thread - collapses all concurrency ambiguity so
+            # the streamed log names the exact hanging test in total order.
+            args: "-E '(binary(/e2e/) or binary(/^(regressions|pi-parity|vocabulary)$/)) and not test(/nfr|instantiation|hook|epoch/)'"
+            threads: 1
           - group: extensions
             packages: '-p antigravity -p compaction-default -p conformance -p hooks-example -p openai-compatible -p skills -p ui-example'
+            threads: 2
             args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
     steps:
       - uses: actions/checkout@v4
@@ -190,7 +197,7 @@ jobs:
           # hung test's orphans hold the log pipe open into a silent
           # 30-minute cancel with no log, 2026-10-15.)
           set -m
-          echo "[$(date -u +%FT%TZ)] run start (group ${{ matrix.group }}, two threads)"
+          echo "[$(date -u +%FT%TZ)] run start (group ${{ matrix.group }}, ${{ matrix.threads }} threads)"
           # #104: a missing tmux is a named failure on CI, never a
           # silent skip (local runs leave the var unset and keep the
           # soft skip).
@@ -221,7 +228,7 @@ jobs:
           # records the runner's own status (not `tee`'s) for the exit.
           ( set -o pipefail
             cargo nextest run ${{ matrix.packages }} "${extra[@]}" ${{ matrix.args }} --no-fail-fast \
-              --test-threads=2 --failure-output immediate \
+              --test-threads=${{ matrix.threads }} --failure-output immediate \
               2>&1 | tee "nextest-${{ matrix.group }}.log"
             echo "${PIPESTATUS[0]}" > "$statusfile" ) &
           runner=$!
