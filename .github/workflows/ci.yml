@@ -162,37 +162,45 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          # Job control on: each background job becomes its own process
+          # group, so the watchdog below can reap a hung run as one unit.
+          # (`timeout` only signals its direct child, which once let a
+          # hung test's orphans hold the log pipe open into a silent
+          # 30-minute cancel with no log, 2026-10-15.)
+          set -m
           echo "[$(date -u +%FT%TZ)] run start (group ${{ matrix.group }}, two threads)"
-          # Outer bound shorter than the job timeout where the platform has
-          # `timeout`: a step that overruns dies with its own process tree
-          # printed rather than as an anonymous agent that stops answering.
-          # macOS has no `timeout` by default; nextest's slow-timeout and the
-          # job timeout cover it there.
-          if command -v timeout >/dev/null 2>&1; then
-            WRAP=(timeout -k 30s 22m)
-          else
-            WRAP=()
-          fi
           # #104: a missing tmux is a named failure on CI, never a
           # silent skip (local runs leave the var unset and keep the
           # soft skip).
           export LCA_REQUIRE_TMUX=1
-          # The log goes to a file, never a `| tee` pipe: `timeout`
-          # only signals its direct child (`cargo`), so a hung test can
-          # leave `nextest` alive holding a pipe open and turn a bounded
-          # 22-minute failure into a 30-minute silent cancel with no log
-          # (seen twice on the ubuntu shell group, 2026-10-15). With a
-          # file the step ends when `cargo` exits, and the stragglers
-          # are reaped below by name.
-          "${WRAP[@]}" cargo nextest run ${{ matrix.packages }} --no-fail-fast \
-            --test-threads=2 --failure-output immediate \
-            -E 'not test(/nfr|instantiation|hook|epoch/)' \
-            > "nextest-${{ matrix.group }}.log" 2>&1
-          status=$?
+          statusfile=$(mktemp)
+          # Live output streams through `tee` as before; the subshell
+          # records the runner's own status (not `tee`'s) for the exit.
+          ( set -o pipefail
+            cargo nextest run ${{ matrix.packages }} --no-fail-fast \
+              --test-threads=2 --failure-output immediate \
+              -E 'not test(/nfr|instantiation|hook|epoch/)' \
+              2>&1 | tee "nextest-${{ matrix.group }}.log"
+            echo "${PIPESTATUS[0]}" > "$statusfile" ) &
+          runner=$!
+          # Group-kill watchdog: TERM the run's group at 22 minutes
+          # (below the 30-minute job timeout), KILL 30 s later. Takes
+          # cargo, nextest, tee, and every test child together; the tmux
+          # server daemonizes out of the group and is reaped by its own
+          # tests' Drop. Skips entirely when the run already finished.
+          ( sleep 1320
+            if [ -n "$runner" ] && kill -0 "$runner" 2>/dev/null; then
+              kill -TERM "-$runner" 2>/dev/null
+              sleep 30
+              kill -0 "$runner" 2>/dev/null && kill -KILL "-$runner" 2>/dev/null
+            fi ) &
+          watchdog=$!
+          wait "$runner" 2>/dev/null
+          kill "$watchdog" 2>/dev/null
+          wait "$watchdog" 2>/dev/null || true
+          status=$(cat "$statusfile" 2>/dev/null || echo 124)
+          rm -f "$statusfile"
           echo "[$(date -u +%FT%TZ)] run end (status $status)"
-          pkill -f 'nextest run' || true
-          sleep 5
-          tail -n 30 "nextest-${{ matrix.group }}.log" || true
           if [ "$status" -ne 0 ] && [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             echo "== process tree, oldest first (a stuck test shows its package by name) =="
             ps -eo pid,ppid,etime,stat,cmd --sort=-etime | head -80 || true
