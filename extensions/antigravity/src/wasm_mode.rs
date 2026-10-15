@@ -234,7 +234,15 @@ impl ModelsGuest for AntigravityWasm {
                 name: model.name,
                 context_window: model.context_window,
                 max_tokens: model.max_tokens,
-                extras: Vec::new(),
+                // Forward per-model metadata (thinking_levels, image
+                // profiles, cache lifetimes): the /thinking picker and
+                // image policy read it, and dropping it strands WASM
+                // guests without advertised capabilities (gh #242).
+                extras: model
+                    .extras
+                    .into_iter()
+                    .map(|(key, value)| ExtraPair { key, value })
+                    .collect(),
             })
             .collect()
     }
