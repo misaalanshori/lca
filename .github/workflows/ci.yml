@@ -142,11 +142,9 @@ jobs:
             args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
           - group: shell-e2e
             packages: '-p lca-cli -p lca-regressions'
-            # The regression binaries ride here (not in shell-libs):
-            # they drive the built `lca` binary through
-            # `CARGO_BIN_EXE_lca`, which Cargo only sets when lca-cli's
-            # bins are in the same build.
-            args: "-E '(binary(/e2e/) or binary(/^(regressions|pi-parity|vocabulary)$/)) and not test(/nfr|instantiation|hook|epoch/)'"
+            # ISOLATION EXPERIMENT (branch only, do not merge): restrict
+            # to the two tree_navigator tests the ubuntu freeze follows.
+            args: "-E 'binary(/e2e_tree_navigator/)'"
           - group: extensions
             packages: '-p antigravity -p compaction-default -p conformance -p hooks-example -p openai-compatible -p skills -p ui-example'
             args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
