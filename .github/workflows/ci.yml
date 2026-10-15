@@ -146,11 +146,11 @@ jobs:
             args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
           - group: shell-e2e
             packages: '-p lca-cli -p lca-regressions'
+            watchdog: 600
             # ISOLATION EXPERIMENT (branch only, do not merge): whole e2e
-            # set, single thread - collapses all concurrency ambiguity so
-            # the streamed log names the exact hanging test in total order.
+            # set, two threads (the original freeze conditions).
             args: "-E '(binary(/e2e/) or binary(/^(regressions|pi-parity|vocabulary)$/)) and not test(/nfr|instantiation|hook|epoch/)'"
-            threads: 1
+            threads: 2
           - group: extensions
             packages: '-p antigravity -p compaction-default -p conformance -p hooks-example -p openai-compatible -p skills -p ui-example'
             threads: 2
@@ -232,12 +232,18 @@ jobs:
               2>&1 | tee "nextest-${{ matrix.group }}.log"
             echo "${PIPESTATUS[0]}" > "$statusfile" ) &
           runner=$!
-          # Group-kill watchdog: TERM the run's group at 22 minutes
+          # Group-kill watchdog: TERM the run's group after WATCHDOG_SECS
           # (below the 30-minute job timeout), KILL 30 s later. Takes
           # cargo, nextest, tee, and every test child together; the tmux
           # server daemonizes out of the group and is reaped by its own
           # tests' Drop. Skips entirely when the run already finished.
-          ( sleep 1320
+          # The ARMED/FIRING markers prove in the live log that the
+          # watchdog itself ran (branch experiment, 2026-10-15).
+          WATCHDOG_SECS="${{ matrix.watchdog }}"
+          : "${WATCHDOG_SECS:=1320}"
+          ( echo "WATCHDOG-ARMED (fires in $WATCHDOG_SECS s)"
+            sleep "$WATCHDOG_SECS"
+            echo "WATCHDOG-FIRING"
             if [ -n "$runner" ] && kill -0 "$runner" 2>/dev/null; then
               kill -TERM "-$runner" 2>/dev/null
               sleep 30
