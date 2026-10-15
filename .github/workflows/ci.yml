@@ -135,14 +135,18 @@ jobs:
           # The step derives shell-cli's target list from the filesystem
           # (lib plus every non-`e2e_*` test file); see the run step.
           - group: shell-libs
-            packages: '-p lca-tui -p lca-registry -p lca-sdk -p lca-regressions'
+            packages: '-p lca-tui -p lca-registry -p lca-sdk'
             args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
           - group: shell-cli
             packages: '-p lca-cli'
             args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
           - group: shell-e2e
-            packages: '-p lca-cli'
-            args: "-E 'binary(/e2e/) and not test(/nfr|instantiation|hook|epoch/)'"
+            packages: '-p lca-cli -p lca-regressions'
+            # The regression binaries ride here (not in shell-libs):
+            # they drive the built `lca` binary through
+            # `CARGO_BIN_EXE_lca`, which Cargo only sets when lca-cli's
+            # bins are in the same build.
+            args: "-E '(binary(/e2e/) or binary(/^(regressions|pi-parity|vocabulary)$/)) and not test(/nfr|instantiation|hook|epoch/)'"
           - group: extensions
             packages: '-p antigravity -p compaction-default -p conformance -p hooks-example -p openai-compatible -p skills -p ui-example'
             args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
