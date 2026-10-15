@@ -173,6 +173,13 @@ jobs:
           # silent skip (local runs leave the var unset and keep the
           # soft skip).
           export LCA_REQUIRE_TMUX=1
+          # No core dumps: a crashing test binary must fail loud, not
+          # fill the runner disk into a silent wedge (2026-10-15).
+          ulimit -c 0 2>/dev/null || true
+          # Runner disk state while output still flows: if a later run
+          # freezes again, this line tells whether the disk was already
+          # under pressure before the first test started.
+          df -h "$PWD" /tmp 2>/dev/null | head -n 8 || true
           statusfile=$(mktemp)
           # Live output streams through `tee` as before; the subshell
           # records the runner's own status (not `tee`'s) for the exit.
