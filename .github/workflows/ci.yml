@@ -177,12 +177,22 @@ jobs:
           # silent skip (local runs leave the var unset and keep the
           # soft skip).
           export LCA_REQUIRE_TMUX=1
+          # The log goes to a file, never a `| tee` pipe: `timeout`
+          # only signals its direct child (`cargo`), so a hung test can
+          # leave `nextest` alive holding a pipe open and turn a bounded
+          # 22-minute failure into a 30-minute silent cancel with no log
+          # (seen twice on the ubuntu shell group, 2026-10-15). With a
+          # file the step ends when `cargo` exits, and the stragglers
+          # are reaped below by name.
           "${WRAP[@]}" cargo nextest run ${{ matrix.packages }} --no-fail-fast \
             --test-threads=2 --failure-output immediate \
             -E 'not test(/nfr|instantiation|hook|epoch/)' \
-            2>&1 | tee "nextest-${{ matrix.group }}.log"
-          status=${PIPESTATUS[0]}
+            > "nextest-${{ matrix.group }}.log" 2>&1
+          status=$?
           echo "[$(date -u +%FT%TZ)] run end (status $status)"
+          pkill -f 'nextest run' || true
+          sleep 5
+          tail -n 30 "nextest-${{ matrix.group }}.log" || true
           if [ "$status" -ne 0 ] && [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             echo "== process tree, oldest first (a stuck test shows its package by name) =="
             ps -eo pid,ppid,etime,stat,cmd --sort=-etime | head -80 || true
