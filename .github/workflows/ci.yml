@@ -65,6 +65,9 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps
       # Verifies: NFR-12 (the suite runs on Linux, macOS, and Windows).
+      # The timing exclusion is scoped to lca-ext-host (the only home of
+      # microsecond timing rows, which run release-serial in the gates
+      # jobs); hook-named tests elsewhere run here like everywhere else.
       - name: tests (nextest)
         # bash, not the runner's default shell: `set -o pipefail` and
         # `tee` do not exist in PowerShell, and a shell-level error
@@ -73,7 +76,7 @@ jobs:
         run: |
           set -o pipefail
           cargo nextest run --workspace --no-fail-fast \
-            -E 'not test(/nfr|instantiation|hook|epoch/)' \
+            -E 'not (package(lca-ext-host) and test(/nfr|instantiation|hook|epoch/))' \
             2>&1 | tee nextest-output.log
           status=${PIPESTATUS[0]}
           exit $status
@@ -100,22 +103,18 @@ jobs:
             nfr-gates-output.log
           if-no-files-found: ignore
 
-  # The test suite, split by package group, on Linux and macOS. Each job:
-  # build its test binaries as its own timestamped phase, run one bounded
-  # nextest invocation at two threads (inside an outer `timeout` where the
-  # platform has one), dump the process tree if that timeout (or the test
-  # run) fails, and always keep the log. Linux is split because a monolithic
-  # nextest step aged past forty-five minutes and lost its runner agent;
-  # macOS runs the same groups so the heavy WASM and loopback packages do not
-  # compete with the whole suite for a three-core runner. The old `shell`
-  # group is itself three jobs: `shell-e2e` carries the real-terminal e2e
-  # binaries (one shared tmux server, the heaviest single job), `shell-cli`
-  # carries the lib plus every other lca-cli test file (derived from the
-  # filesystem at run time), `shell-libs` the small crates. A new test
-  # file lands in a job with no CI edit: name it `e2e_*` for the terminal
-  # job, anything else for the unit job. Smaller jobs survive a wedged
-  # runner leg with a named failure instead of a silent whole-group
-  # cancel (2026-10-15).
+  # Gate 2 (test suite) runs per OS: Windows carries the whole workspace
+  # in one job; Linux and macOS split it into package groups so the heavy
+  # WASM and loopback packages do not compete with the whole suite on
+  # small runners, and so one wedged leg fails named instead of cancelling
+  # silently (history, kept short: a monolithic step once aged past 45
+  # minutes and lost its runner agent; a group-kill bug once murdered the
+  # agent and read as a silent 30-minute cancel - both now guarded by the
+  # bounded run step below). Coverage is by package selection plus one
+  # timing exclusion; `scripts/ci-coverage.sh` (ubuntu gates) proves no
+  # test-bearing package runs nowhere. Test writers think about nothing:
+  # a new test file runs wherever its package runs; the only name that
+  # matters is the timing set the gates job owns (see the `-E` below).
   test-split:
     name: test (${{ matrix.os }}, ${{ matrix.group }})
     runs-on: ${{ matrix.os }}
@@ -124,32 +123,31 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        group: [core, engines, shell-libs, shell-cli, shell-e2e, extensions]
+        group: [core, engines, shell, extensions]
         include:
+          # One timing exclusion for every group: the microsecond NFR
+          # rows plus the conformance/epoch rows the name-filter catches
+          # live in lca-ext-host and run release-serial in the gates job.
+          # Scoped to that package so hook-named tests elsewhere (lca-cli
+          # hook units, gh96, redaction e2e, lca-core hook lifecycles)
+          # run in their home jobs instead of nowhere.
           - group: core
             packages: '-p lca-protocol -p lca-permissions -p lca-session -p lca-config -p lca-provider -p lca-testkit -p lca-ext-abi'
-            args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
+            args: "-E 'not (package(lca-ext-host) and test(/nfr|instantiation|hook|epoch/))'"
           - group: engines
-            packages: '-p lca-tools -p lca-core -p lca-ext-host -p lca-ext-native'
-            args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
-          # The step derives shell-cli's target list from the filesystem
-          # (lib plus every non-`e2e_*` test file); see the run step.
-          - group: shell-libs
-            packages: '-p lca-tui -p lca-registry -p lca-sdk'
-            args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
-          - group: shell-cli
-            packages: '-p lca-cli'
-            args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
-          - group: shell-e2e
-            packages: '-p lca-cli -p lca-regressions'
-            # The regression binaries ride here (not in shell-libs):
-            # they drive the built `lca` binary through
-            # `CARGO_BIN_EXE_lca`, which Cargo only sets when lca-cli's
-            # bins are in the same build.
-            args: "-E '(binary(/e2e/) or binary(/^(regressions|pi-parity|vocabulary)$/)) and not test(/nfr|instantiation|hook|epoch/)'"
+            packages: '-p lca-tools -p lca-core -p lca-ext-host -p lca-ext-native -p lca-debug -p lca-subscription -p lca-wire-anthropic -p lca-wire-mcp -p lca-wire-openai'
+            args: "-E 'not (package(lca-ext-host) and test(/nfr|instantiation|hook|epoch/))'"
+          - group: shell
+            packages: '-p lca-cli -p lca-tui -p lca-registry -p lca-sdk -p lca-regressions -p lca-ui'
+            args: "-E 'not (package(lca-ext-host) and test(/nfr|instantiation|hook|epoch/))'"
+          # Every extension crate runs here, not just the first seven:
+          # a provider or tool extension whose tests only ran on Windows
+          # is a Linux break nobody sees (2026-10-15 audit). Crates with
+          # no test targets today (tool-legacy) are listed anyway so
+          # their first test lands in a job with no CI edit.
           - group: extensions
-            packages: '-p antigravity -p compaction-default -p conformance -p hooks-example -p openai-compatible -p skills -p ui-example'
-            args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
+            packages: '-p anthropic -p antigravity -p codex -p compaction-default -p conformance -p formatter -p github-copilot -p grok -p handoff -p hash-edit -p hooks-example -p kimi-coding -p llama -p mcp -p meta -p openai-compatible -p openrouter -p project-memory -p question -p rules-compat -p skills -p stream-guard -p tool-legacy -p ui-example -p ultrathink -p webfetch'
+            args: "-E 'not (package(lca-ext-host) and test(/nfr|instantiation|hook|epoch/))'"
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
@@ -200,41 +198,31 @@ jobs:
           # No core dumps: a crashing test binary must fail loud, not
           # fill the runner disk into a silent wedge (2026-10-15).
           ulimit -c 0 2>/dev/null || true
-          # Runner disk state while output still flows: if a later run
+          # Runner disk state while output still flows: if a run ever
           # freezes again, this line tells whether the disk was already
           # under pressure before the first test started.
-          df -h "$PWD" /tmp 2>/dev/null | head -n 8 || true
+          df -h 2>/dev/null | head -n 8 || true
           statusfile=$(mktemp)
-          # Test writers think about nothing: coverage is structural.
-          # `shell-e2e` takes every lca-cli binary whose file is named
-          # `e2e_*` (the `binary(/e2e/)` selector); `shell-cli` below
-          # takes the lib plus every OTHER `tests/*.rs` file, derived
-          # here from the filesystem so a new file lands in a job with
-          # no CI edit. Anything else is a build error, never a skip.
-          extra=()
-          if [ "${{ matrix.group }}" = "shell-cli" ]; then
-            # `--bins` covers future `src/main.rs` unit tests the way
-            # `--lib` covers the lib: nothing new runs nowhere.
-            extra=(--lib --bins)
-            for f in crates/lca-cli/tests/*.rs; do
-              b=$(basename "$f" .rs)
-              case "$b" in e2e*|mod|main|lib) ;; *) extra+=(--test "$b");; esac
-            done
-          fi
           # Live output streams through `tee` as before; the subshell
           # records the runner's own status (not `tee`'s) for the exit.
           ( set -o pipefail
-            cargo nextest run ${{ matrix.packages }} "${extra[@]}" ${{ matrix.args }} --no-fail-fast \
+            cargo nextest run ${{ matrix.packages }} ${{ matrix.args }} --no-fail-fast \
               --test-threads=2 --failure-output immediate \
               2>&1 | tee "nextest-${{ matrix.group }}.log"
             echo "${PIPESTATUS[0]}" > "$statusfile" ) &
           runner=$!
-          # Group-kill watchdog: TERM the run's group at 22 minutes
+          # Group-kill watchdog: TERM the run's group after 22 minutes
           # (below the 30-minute job timeout), KILL 30 s later. Takes
           # cargo, nextest, tee, and every test child together; the tmux
           # server daemonizes out of the group and is reaped by its own
           # tests' Drop. Skips entirely when the run already finished.
-          ( sleep 1320
+          # The ARMED/FIRING markers prove in the live log that the
+          # watchdog itself ran: if output stops with ARMED but no
+          # FIRING, the stall is below userspace (kernel/host), not in
+          # the tests (2026-10-15).
+          ( echo "WATCHDOG-ARMED (fires in 1320 s)"
+            sleep 1320
+            echo "WATCHDOG-FIRING"
             if [ -n "$runner" ] && kill -0 "$runner" 2>/dev/null; then
               kill -TERM "-$runner" 2>/dev/null
               sleep 30
@@ -261,7 +249,7 @@ jobs:
         # #104: the receipt — a leg that silently skips the terminal
         # contract is the bug. Counts executed real-terminal rows in
         # the group log; zero is a failure even when nextest is green.
-        if: matrix.os == 'macos-latest' && matrix.group == 'shell-e2e'
+        if: matrix.os == 'macos-latest' && matrix.group == 'shell'
         shell: bash
         run: |
           count=$(grep -cE "PASS.*e2e_terminal" "nextest-${{ matrix.group }}.log" || true)
@@ -327,6 +315,13 @@ jobs:
       - name: requirements traceability (NFR-30)
         shell: bash
         run: bash scripts/traceability.sh
+      # Verifies: gate-2 machinery (no silent holes) - every workspace
+      # member is selected by a test-split group, so a new crate cannot
+      # land running nowhere on Linux/macOS while Windows --workspace
+      # masks it (25 packages once did, 2026-10-15 audit).
+      - name: test-split coverage
+        shell: bash
+        run: bash scripts/ci-coverage.sh
       # Gate 11: the workspace's 1,200-line per-file ceiling, twice
       # breached by hand before this check existed (see testing plan 13).
       - name: file-size ceiling (gate 11)
