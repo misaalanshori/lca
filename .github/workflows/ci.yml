@@ -107,7 +107,15 @@ jobs:
   # run) fails, and always keep the log. Linux is split because a monolithic
   # nextest step aged past forty-five minutes and lost its runner agent;
   # macOS runs the same groups so the heavy WASM and loopback packages do not
-  # compete with the whole suite for a three-core runner.
+  # compete with the whole suite for a three-core runner. The old `shell`
+  # group is itself three jobs: `shell-e2e` carries the real-terminal e2e
+  # binaries (one shared tmux server, the heaviest single job), `shell-cli`
+  # carries the lib plus every other lca-cli test file (derived from the
+  # filesystem at run time), `shell-libs` the small crates. A new test
+  # file lands in a job with no CI edit: name it `e2e_*` for the terminal
+  # job, anything else for the unit job. Smaller jobs survive a wedged
+  # runner leg with a named failure instead of a silent whole-group
+  # cancel (2026-10-15).
   test-split:
     name: test (${{ matrix.os }}, ${{ matrix.group }})
     runs-on: ${{ matrix.os }}
@@ -116,16 +124,28 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        group: [core, engines, shell, extensions]
+        group: [core, engines, shell-libs, shell-cli, shell-e2e, extensions]
         include:
           - group: core
             packages: '-p lca-protocol -p lca-permissions -p lca-session -p lca-config -p lca-provider -p lca-testkit -p lca-ext-abi'
+            args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
           - group: engines
             packages: '-p lca-tools -p lca-core -p lca-ext-host -p lca-ext-native'
-          - group: shell
-            packages: '-p lca-cli -p lca-tui -p lca-registry -p lca-sdk -p lca-regressions'
+            args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
+          # The step derives shell-cli's target list from the filesystem
+          # (lib plus every non-`e2e_*` test file); see the run step.
+          - group: shell-libs
+            packages: '-p lca-tui -p lca-registry -p lca-sdk -p lca-regressions'
+            args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
+          - group: shell-cli
+            packages: '-p lca-cli'
+            args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
+          - group: shell-e2e
+            packages: '-p lca-cli'
+            args: "-E 'binary(/e2e/) and not test(/nfr|instantiation|hook|epoch/)'"
           - group: extensions
             packages: '-p antigravity -p compaction-default -p conformance -p hooks-example -p openai-compatible -p skills -p ui-example'
+            args: "-E 'not test(/nfr|instantiation|hook|epoch/)'"
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
@@ -181,12 +201,25 @@ jobs:
           # under pressure before the first test started.
           df -h "$PWD" /tmp 2>/dev/null | head -n 8 || true
           statusfile=$(mktemp)
+          # Test writers think about nothing: coverage is structural.
+          # `shell-e2e` takes every lca-cli binary whose file is named
+          # `e2e_*` (the `binary(/e2e/)` selector); `shell-cli` below
+          # takes the lib plus every OTHER `tests/*.rs` file, derived
+          # here from the filesystem so a new file lands in a job with
+          # no CI edit. Anything else is a build error, never a skip.
+          extra=()
+          if [ "${{ matrix.group }}" = "shell-cli" ]; then
+            extra=(--lib)
+            for f in crates/lca-cli/tests/*.rs; do
+              b=$(basename "$f" .rs)
+              case "$b" in e2e*|mod|main|lib) ;; *) extra+=(--test "$b");; esac
+            done
+          fi
           # Live output streams through `tee` as before; the subshell
           # records the runner's own status (not `tee`'s) for the exit.
           ( set -o pipefail
-            cargo nextest run ${{ matrix.packages }} --no-fail-fast \
+            cargo nextest run ${{ matrix.packages }} "${extra[@]}" ${{ matrix.args }} --no-fail-fast \
               --test-threads=2 --failure-output immediate \
-              -E 'not test(/nfr|instantiation|hook|epoch/)' \
               2>&1 | tee "nextest-${{ matrix.group }}.log"
             echo "${PIPESTATUS[0]}" > "$statusfile" ) &
           runner=$!
@@ -219,7 +252,7 @@ jobs:
         # #104: the receipt — a leg that silently skips the terminal
         # contract is the bug. Counts executed real-terminal rows in
         # the group log; zero is a failure even when nextest is green.
-        if: matrix.os == 'macos-latest' && matrix.group == 'shell'
+        if: matrix.os == 'macos-latest' && matrix.group == 'shell-e2e'
         shell: bash
         run: |
           count=$(grep -cE "PASS.*e2e_terminal" "nextest-${{ matrix.group }}.log" || true)
