@@ -20,6 +20,22 @@ Dates are UTC.
   line); no WIT or schema change.
 
 ### Security
+- **`logout` left preset profile secrets on disk (gh #293).**
+  `openai-compatible`'s `run_logout` deleted only the bare
+  `api_key`/`base_url`, while the login path also writes
+  `profile.<id>.api_key`, `profile.<id>.base_url`, and the cached
+  `models`/`model`/`preset` settings. A user who ran `/logout` or
+  `lca auth logout openai-compatible` believed their keys were gone
+  while every preset profile secret stayed in
+  `<data>/credentials/openai-compatible.json` and `auth status` kept
+  reporting ready. `run_logout` is now the exact inverse of the write
+  paths: it purges the bare keys, the cached settings, and every
+  `profile.<id>.<field>` for each preset in the merged table, with the
+  per-profile field list hoisted to one shared constant so login and
+  logout cannot drift apart again. A `profile.<id>.*` key whose preset
+  id has vanished from the table cannot be enumerated (the capability
+  surface has no credential listing) and survives; the `ponytail:`
+  upgrade path is a `credentials_list` interface on the ABI.
 - **Debug-log secret hygiene (gh #343, #342).** Two defects in
   `lca-debug`'s `~/.lca/logs/` write path.
   - **gh #343:** `redact_url`/`redact_json`/`redact_cookie` matched

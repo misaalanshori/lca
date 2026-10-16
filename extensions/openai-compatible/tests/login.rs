@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use lca_protocol::{CapabilityError, LoginAnswer, ProviderCap};
-use openai_compatible::{Settings, login_options, login_submit, parse_presets, run_login};
+use openai_compatible::{
+    Settings, login_options, login_submit, parse_presets, run_login, run_logout,
+};
 
 const PRESETS: &[u8] = include_bytes!("../resources/provider-presets.toml");
 
@@ -370,6 +372,88 @@ fn a_credential_free_endpoint_signs_in_without_a_key() {
     assert!(
         cap.credentials_get("api_key").is_none(),
         "no key is invented where none is needed"
+    );
+}
+
+// Verifies: gh #293 - logout is the inverse of login. The login path
+// writes `profile.<id>.api_key`, `profile.<id>.base_url`, plus `models`,
+// `model`, and `preset`; the old `run_logout` deleted only bare
+// `api_key`/`base_url`, leaving every profile secret on disk.
+#[test]
+fn logout_purges_every_key_login_wrote() {
+    use lca_protocol::IdentityOutcome;
+    let cap = cap();
+    // A login into a named preset, as the host persists it (the extension's
+    // `login_submit` writes the profile key; the host persists the rest).
+    cap.credentials_set("profile.deepseek.api_key", "FAKESECRET-293-DEEP")
+        .expect("seed");
+    cap.credentials_set("profile.deepseek.base_url", "https://api.deepseek.com/v1")
+        .expect("seed");
+    cap.credentials_set("profile.groq.api_key", "FAKESECRET-293-GROQ")
+        .expect("seed");
+    cap.credentials_set("models", "m1@deepseek,m2@groq")
+        .expect("seed");
+    cap.credentials_set("model", "m1").expect("seed");
+    cap.credentials_set("preset", "deepseek").expect("seed");
+    cap.credentials_set("api_key", "FAKESECRET-293-BARE")
+        .expect("seed");
+    cap.credentials_set("base_url", "https://api.deepseek.com/v1")
+        .expect("seed");
+
+    assert!(matches!(run_logout(&cap), IdentityOutcome::Ok));
+
+    let remaining = cap.creds.lock().expect("creds").clone();
+    assert!(
+        remaining.is_empty(),
+        "every key class is gone, not just the bare pair: {remaining:?}"
+    );
+}
+
+// Verifies: gh #293 - logout is harmless when nothing is stored (a
+// keyless `auth = "none"` preset, e.g. a local endpoint).
+#[test]
+fn logout_of_an_empty_store_is_ok() {
+    use lca_protocol::IdentityOutcome;
+    let cap = cap();
+    assert!(matches!(run_logout(&cap), IdentityOutcome::Ok));
+}
+
+// Verifies: gh #293 - a leftover `profile.<id>.api_key` whose preset id
+// has since vanished from the merged table cannot be enumerated and is the
+// documented ceiling; a preset that IS in the table is always purged.
+#[test]
+fn logout_purges_a_preset_that_is_still_in_the_table() {
+    use lca_protocol::IdentityOutcome;
+    let cap = cap();
+    // `openrouter` ships in the resource, so logout must reach its keys.
+    cap.credentials_set("profile.openrouter.api_key", "FAKESECRET-293-OR")
+        .expect("seed");
+    assert!(matches!(run_logout(&cap), IdentityOutcome::Ok));
+    assert!(
+        cap.credentials_get("profile.openrouter.api_key").is_none(),
+        "a shipped preset's profile key is purged"
+    );
+}
+
+// Verifies: gh #293 AC2 - after logout the provider is unconfigured: a
+// bearer endpoint with no environment key is not ready, because no stored
+// key survives (the old logout left `profile.<id>.api_key` and the
+// provider stayed ready).
+#[test]
+fn the_provider_is_unconfigured_after_logout() {
+    use lca_protocol::IdentityOutcome;
+    let cap = cap();
+    cap.credentials_set("profile.deepseek.api_key", "FAKESECRET-293-RDY")
+        .expect("seed");
+    cap.credentials_set("models", "m@deepseek").expect("seed");
+    assert!(matches!(run_logout(&cap), IdentityOutcome::Ok));
+
+    // The readiness path resolves a key from the store; with nothing left
+    // and no environment key, a bearer endpoint is not ready.
+    let settings = settings_for("https://api.deepseek.com/v1", None);
+    assert!(
+        matches!(run_login(&cap, &settings), IdentityOutcome::Failed(_)),
+        "after logout the provider reports unconfigured"
     );
 }
 

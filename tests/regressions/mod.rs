@@ -325,3 +325,7 @@ mod debug_redaction_oauth_keys;
 // GitHub #342: debug logs were created world-readable (umask 022).
 #[path = "342-debug-log-owner-only.rs"]
 mod debug_log_owner_only;
+// GitHub #293: `run_logout` left preset profile secrets and cached
+// models on disk; it must be the exact inverse of the login writes.
+#[path = "293-logout-purges-profile-secrets.rs"]
+mod logout_purges_profile_secrets;

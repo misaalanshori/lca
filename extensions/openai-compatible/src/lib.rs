@@ -396,10 +396,40 @@ fn store_base_url(cap: &dyn ProviderCap, base_url: &str) -> IdentityOutcome {
     IdentityOutcome::Ok
 }
 
-/// `logout`: clears the stored key and endpoint (the ad hoc `net` grant
-/// survives, per `docs/providers/openai-compatible.md`).
+/// `logout`: the exact inverse of every write path (gh #293). The login
+/// path stores the bare `api_key`/`base_url`, a per-profile
+/// `profile.<id>.<field>` for each login, plus the cached `models`,
+/// `model`, and `preset` settings; logout must remove all of them, or
+/// the user believes their keys are gone while preset profile secrets
+/// stay on disk. The ad hoc `net` grant survives, per
+/// `docs/providers/openai-compatible.md`.
+/// ponytail: no credentials enumeration in the capability surface, so the
+/// profile keys are reached by enumerating the merged preset table; a
+/// `profile.<id>.*` key whose preset id has vanished from the table cannot
+/// be enumerated and survives. If a second consumer needs to list stored
+/// keys, add `credentials_list` to the `credentials` ABI interface.
 pub fn run_logout(cap: &dyn ProviderCap) -> IdentityOutcome {
-    for key in ["api_key", "base_url"] {
+    // The bare keys the login path writes for the default profile
+    // (gh #188's custom endpoint) plus the cached settings the login
+    // flow persists (gh #31/#157): `models` keeps `auth status`
+    // reporting ready, `model`/`preset` are what the picker and footer
+    // read back.
+    let mut keys: Vec<String> = vec![
+        "api_key".to_string(),
+        "base_url".to_string(),
+        "model".to_string(),
+        "models".to_string(),
+        "preset".to_string(),
+    ];
+    // Every per-profile field the login path writes, for every preset id
+    // in the merged table (the shipped resource plus user extras). The
+    // field list is shared with login so the two cannot drift again.
+    for preset in load_presets(cap) {
+        for field in profiles::PROFILE_CREDENTIAL_FIELDS {
+            keys.push(profiles::credential_key(&Some(preset.id.clone()), field));
+        }
+    }
+    for key in &keys {
         // A missing key is already the desired end state.
         if let Err(err) = cap.credentials_delete(key)
             && !matches!(err, lca_protocol::CapabilityError::NotFound(_))
@@ -835,13 +865,16 @@ pub fn login_submit(
     if let Some(key) = answer.value("api-key")
         && !key.is_empty()
     {
-        cap.credentials_set(&profiles::credential_key(&profile, "api_key"), key)
-            .map_err(|err| format!("cannot store the key: {err}"))?;
+        cap.credentials_set(
+            &profiles::credential_key(&profile, profiles::API_KEY_FIELD),
+            key,
+        )
+        .map_err(|err| format!("cannot store the key: {err}"))?;
     }
     // The base URL rides back as an opaque pair the host persists under
     // the same profile key - the host never parses it (ADR-0031).
     let mut settings = vec![(
-        profiles::credential_key(&profile, "base_url"),
+        profiles::credential_key(&profile, profiles::BASE_URL_FIELD),
         base_url.clone(),
     )];
     // D2: the endpoint's own model list when it answers, the preset's

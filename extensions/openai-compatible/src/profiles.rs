@@ -40,6 +40,18 @@ pub fn credential_key(profile: &Profile, field: &str) -> String {
     }
 }
 
+/// Every per-profile field a login writes (gh #293). ONE list, so the
+/// login path and `run_logout` can never drift apart again — that drift
+/// (login writing `profile.<id>.api_key` while logout deleted only the
+/// bare pair) was the root cause of the logout leak.
+pub const PROFILE_CREDENTIAL_FIELDS: &[&str] = &[API_KEY_FIELD, BASE_URL_FIELD];
+
+/// The API-key field name (`profile.<id>.api_key`).
+pub const API_KEY_FIELD: &str = "api_key";
+
+/// The base-URL field name (`profile.<id>.base_url`).
+pub const BASE_URL_FIELD: &str = "base_url";
+
 /// The key one *named* profile's field lives under.
 fn scoped_key(id: &str, field: &str) -> String {
     format!("profile.{id}.{field}")
