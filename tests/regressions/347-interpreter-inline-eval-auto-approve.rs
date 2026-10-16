@@ -180,3 +180,35 @@ async fn a_trusted_folder_still_auto_approves_a_python_script() {
     assert_eq!(prompt.actions.len(), 0, "a script file stays silent");
     assert_eq!(tool_statuses(&sink), vec![ToolResultStatus::Ok]);
 }
+
+// Verifies: gh #347 fix-up - the attached short-flag idiom
+// (`perl -e'print 1'`, which tokenizes to `-eprint 1` after quote
+// stripping) must prompt; the exact-token match let it auto-approve.
+#[tokio::test]
+async fn a_trusted_folder_prompts_for_an_attached_short_eval_flag() {
+    let mut f = fixture("perl -e'print 1'");
+    let (sink, prompt) = run_turn(&mut f, "run perl inline").await;
+    assert_eq!(
+        prompt.actions.len(),
+        1,
+        "the shell action must reach the prompt, not the trust fast path"
+    );
+    assert!(
+        matches!(&prompt.actions[0], Action::Shell { command, .. }
+            if command.contains("perl -e")),
+        "{:?}",
+        prompt.actions[0]
+    );
+    assert_eq!(tool_statuses(&sink), vec![ToolResultStatus::Denied]);
+    assert_eq!(permission_records(&f).len(), 1, "the denial is recorded");
+}
+
+// Verifies: gh #347 fix-up - a versioned interpreter name
+// (`python3.12`) must prompt too; the exact-basename match let it through.
+#[tokio::test]
+async fn a_trusted_folder_prompts_for_a_versioned_interpreter() {
+    let mut f = fixture("python3.12 -c 'print(1)'");
+    let (sink, prompt) = run_turn(&mut f, "run versioned python inline").await;
+    assert_eq!(prompt.actions.len(), 1, "must prompt");
+    assert_eq!(tool_statuses(&sink), vec![ToolResultStatus::Denied]);
+}

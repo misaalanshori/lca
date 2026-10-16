@@ -14,6 +14,11 @@
 
 use std::path::{Path, PathBuf};
 
+/// Executable extensions stripped from a program name before matching
+/// (gh #347 fix-up). Windows spellings carry one; a file genuinely named
+/// `x.bat` in the workspace is reached through `path_ok`, not this table.
+const EXECUTABLE_SUFFIXES: &[&str] = &[".exe", ".cmd", ".bat", ".com", ".ps1"];
+
 /// Programs that are never auto-approved under folder trust. They either
 /// escalate privilege, can destroy the machine without a path argument, or
 /// hide an arbitrary command behind themselves.
@@ -344,14 +349,56 @@ fn git_subcommand(args: &[String]) -> Option<&str> {
 fn interpreter_inline_eval(program: &str, args: &[String]) -> bool {
     let Some((_, flags)) = INTERPRETER_EVAL_FLAGS
         .iter()
-        .find(|(name, _)| *name == program)
+        .find(|(name, _)| interpreter_name_matches(program, name))
     else {
         return false;
     };
-    args.iter().any(|token| {
-        let base = token.split_once('=').map(|(base, _)| base).unwrap_or(token);
-        flags.iter().any(|flag| base.eq_ignore_ascii_case(flag))
-    })
+    args.iter()
+        .any(|token| flags.iter().any(|flag| eval_flag_matches(token, flag)))
+}
+
+/// Whether a program name is `name` or `name` with a version suffix
+/// (gh #347 fix-up): `python3.12`, `python2.7`, `pypy3.10`, `python3.13t`
+/// all match their base runtime, but `node_modules` or `python3x` do not.
+/// The suffix class is tight on purpose - digits, dots, and one trailing
+/// `t` (free-threaded CPython) - so a same-prefix non-interpreter can
+/// never match.
+fn interpreter_name_matches(program: &str, name: &str) -> bool {
+    if program == name {
+        return true;
+    }
+    let Some(rest) = program.strip_prefix(name) else {
+        return false;
+    };
+    // A version suffix: digits and dots, optionally a trailing `t`
+    // (free-threaded CPython). Anything else - `_modules`, `x`, `-config` -
+    // is a different program.
+    let body = rest.strip_suffix('t').unwrap_or(rest);
+    !body.is_empty() && body.chars().all(|c| c.is_ascii_digit() || c == '.')
+}
+
+/// Whether a token carries `flag` (gh #347 fix-up): exact, `=`-attached
+/// (`--eval=x`), or - for a single-letter flag - the glued short form the
+/// real idioms use (`-c'print(1)'` tokenizes to `-cprint(1)`, `-eprint 1`).
+/// A long flag is never matched by prefix, and `--`-prefixed tokens never
+/// take the glued path.
+fn eval_flag_matches(token: &str, flag: &str) -> bool {
+    if let Some((base, _)) = token.split_once('=') {
+        return base.eq_ignore_ascii_case(flag);
+    }
+    if token.eq_ignore_ascii_case(flag) {
+        return true;
+    }
+    // The glued short form: a one-letter flag (`-c`) followed by its
+    // argument in the same token. Only single-dash, exactly-two-char flags.
+    flag.len() == 2
+        && flag.starts_with('-')
+        && token.starts_with('-')            // not `--…`
+        && !token.starts_with("--")
+        && token
+            .get(..2)
+            .is_some_and(|head| head.eq_ignore_ascii_case(flag))
+        && token.len() > 2
 }
 
 /// A package tool doing a publish or a global install (network/global state).
@@ -390,11 +437,22 @@ fn is_assignment(token: &str) -> bool {
 }
 
 fn basename(program: &str) -> String {
-    program
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(program)
-        .to_ascii_lowercase()
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    // Strip a known executable extension before matching (gh #347 fix-up):
+    // on Windows every spelling that exists there carries one (`python.exe`,
+    // `bash.exe`, `node.exe`), and the pre-fix code let them miss both the
+    // eval table and `DENY_PROGRAMS`. Case-insensitive, like the rest of
+    // the name matching; a name with no extension is returned unchanged.
+    let stem = EXECUTABLE_SUFFIXES
+        .iter()
+        .find_map(|suffix| {
+            name.len()
+                .checked_sub(suffix.len())
+                .filter(|_| name.to_ascii_lowercase().ends_with(suffix))
+                .map(|cut| &name[..cut])
+        })
+        .unwrap_or(name);
+    stem.to_ascii_lowercase()
 }
 
 /// If `token` is a redirection operator, its target: attached (`>file`) or the
@@ -681,6 +739,76 @@ mod tests {
         ] {
             assert!(ok(command), "should be scoped: {command}");
         }
+    }
+
+    // Verifies: gh #347 fix-up - the table matched the interpreter by exact
+    // basename, so a versioned name (python3.12) never matched. The hole was
+    // silent scope shrink against acceptance criterion 1.
+    #[test]
+    fn versioned_interpreter_names_still_review() {
+        for command in [
+            "python3.12 -c 'print(1)'",
+            "python2.7 -m http.server",
+            "pypy3.10 -c 'print(1)'",
+            "python3.13t -c 'print(1)'",
+            "python3.12.1 -c 'print(1)'",
+        ] {
+            assert!(!ok(command), "should review: {command}");
+        }
+        // The version-suffix class stays tight: a name that merely starts
+        // with an interpreter name but continues with a non-[0-9.] character
+        // is not treated as that interpreter (so `node_modules` cannot match).
+        assert!(!interpreter_inline_eval(
+            "node_modules",
+            &["-e".to_string()]
+        ));
+        assert!(!interpreter_inline_eval("python3x", &["-c".to_string()]));
+        assert!(!interpreter_inline_eval(
+            "python-config",
+            &["-c".to_string()]
+        ));
+        // A genuine version suffix still matches.
+        assert!(interpreter_inline_eval("python3.12", &["-c".to_string()]));
+    }
+
+    // Verifies: gh #347 fix-up - `basename()` never stripped an executable
+    // extension, so on Windows (a first-class platform) every spelling that
+    // exists there (`python.exe`, `bash.exe`) missed both the eval table and
+    // `DENY_PROGRAMS`.
+    #[test]
+    fn executable_suffixes_still_review() {
+        for command in [
+            "python.exe -c 'print(1)'",
+            "node.exe -e 'x'",
+            "bash.exe -c 'id'",
+            "sh.exe -c 'id'",
+            "python.EXE -c 'print(1)'",
+            "cmd.exe /c whoami",
+        ] {
+            assert!(!ok(command), "should review: {command}");
+        }
+    }
+
+    // Verifies: gh #347 fix-up - a single-letter flag with a glued argument
+    // (`-cprint(1)`, exactly how `python3 -c'print(1)'` is tokenized after
+    // quote stripping) has no `=`, so the base was the whole token and the
+    // exact match failed.
+    #[test]
+    fn attached_short_eval_flags_still_review() {
+        for command in [
+            "python3 -c'print(1)'",
+            "perl -e'print 1'",
+            "ruby -e'puts 1'",
+            "node -p'1'",
+            "python3 -mhttp.server",
+            "php -r'echo 1;'",
+            "lua -e'print(1)'",
+        ] {
+            assert!(!ok(command), "should review: {command}");
+        }
+        // The `=`-attached long form keeps working, and a long flag is never
+        // matched by prefix.
+        assert!(!ok("node --eval=1"));
     }
 
     // Verifies: gh #346 - a workspace symlink pointing outside must review,

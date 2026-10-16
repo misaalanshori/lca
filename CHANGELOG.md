@@ -47,7 +47,15 @@ Dates are UTC.
     be reasoned about. A new `INTERPRETER_EVAL_FLAGS` table refuses
     inline eval/module flags per runtime; script-file invocations
     (`python3 scripts/run.py`) stay scoped. Known trade:
-    `python3 -m pytest` now reviews.
+    `python3 -m pytest` now reviews. **Fix-up (same day):** the table
+    matched by exact basename and exact token, so three ordinary evasion
+    forms still auto-approved — versioned names (`python3.12`),
+    Windows executable suffixes (`python.exe`, `bash.exe`), and the glued
+    short-flag idiom (`python3 -c'print(1)'` tokenizes to `-cprint(1)`).
+    `basename` now strips `.exe`/`.cmd`/`.bat`/`.com`/`.ps1`, the name
+    match accepts a tight `[0-9.]t?` version suffix, and a single-letter
+    eval flag matches its glued form; the first also closes the same
+    bypass in `DENY_PROGRAMS`.
 
 ### Fixed
 - **Antigravity model listing on real payloads (gh #236).** The

@@ -153,7 +153,13 @@ the shape change; the decision itself is unchanged.
   (`python3 scripts/run.py`) stay scoped — trusting a folder trusts the
   code in it, which is still the contract. Known trade: `python3 -m
   pytest` now reviews, because module code lives outside the
-  workspace.
+  workspace. **Fix-up (same day):** exact basename and exact-token
+  matching left three ordinary forms open — a versioned name
+  (`python3.12`), a Windows executable suffix (`python.exe`, `bash.exe`),
+  and the glued short flag (`python3 -c'print(1)'`). `basename` strips
+  known executable suffixes, the interpreter name accepts a tight
+  version suffix, and a single-letter flag matches its attached argument;
+  the suffix strip also closes the same gap in `DENY_PROGRAMS`.
 
 None of the three is an ABI change. Guards live in the analyzer's own
 unit matrices plus turn-level regression files
