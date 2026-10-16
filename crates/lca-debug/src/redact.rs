@@ -45,6 +45,8 @@ fn is_sensitive_key(key: &str) -> bool {
         "sessid",
         "sessionid",
         "apikey",
+        // A bare JWT is a credential by shape (gh #343 fix-up).
+        "jwt",
     ];
     const SUFFIXES: &[&str] = &[
         "token",
@@ -154,39 +156,40 @@ pub fn redact_json(text: &str) -> String {
 }
 
 /// Recursively mask sensitive object values.
-fn mask_json(value: &mut serde_json::Value) {
+///
+/// When `within_sensitive` is true (we are inside — or at — a sensitive
+/// key), EVERY scalar leaf masks; keys and structure stay visible, so the
+/// schema contract holds while no leaf under a sensitive container can
+/// leak (gh #343 fix-up: a container's innocuous child names like `value`,
+/// `id`, or `bearer` used to pass through).
+fn mask_json_at(value: &mut serde_json::Value, within_sensitive: bool) {
     match value {
         serde_json::Value::Object(map) => {
             for (key, val) in map.iter_mut() {
-                if is_sensitive_key(key) {
-                    match val {
-                        serde_json::Value::String(text) => {
-                            *val = serde_json::Value::String(redact_secret(text));
-                        }
-                        // A container under a sensitive name (e.g. `auth`)
-                        // keeps its schema: recurse rather than blank the
-                        // whole subtree, matching the module's "schema and
-                        // keys survive at every depth" contract. Any secret
-                        // nested inside is masked by the recursion.
-                        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
-                            mask_json(val);
-                        }
-                        _ => {
-                            *val = serde_json::Value::String("[REDACTED]".to_string());
-                        }
-                    }
-                } else {
-                    mask_json(val);
-                }
+                mask_json_at(val, within_sensitive || is_sensitive_key(key));
             }
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                mask_json(item);
+                mask_json_at(item, within_sensitive);
             }
         }
-        _ => {}
+        serde_json::Value::String(text) => {
+            if within_sensitive {
+                *text = redact_secret(text);
+            }
+        }
+        other => {
+            if within_sensitive {
+                *other = serde_json::Value::String("[REDACTED]".to_string());
+            }
+        }
     }
+}
+
+/// Entry point: nothing is sensitive until a key says so.
+fn mask_json(value: &mut serde_json::Value) {
+    mask_json_at(value, false);
 }
 
 /// One credential-store lookup line: the key name in full, the value

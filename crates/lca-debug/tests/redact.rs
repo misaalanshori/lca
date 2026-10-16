@@ -199,3 +199,63 @@ fn no_query_and_non_json_pass_through() {
     assert_eq!(redact_url("https://x.test/plain"), "https://x.test/plain");
     assert_eq!(redact_json("plain text"), "plain text");
 }
+
+// Verifies: gh #343 fix-up - a CONTAINER under a sensitive key masks every
+// leaf inside it, even when the child names look innocuous. The prior
+// recursion kept `{"token":{"value":"SECRET"}}` visible because `value`
+// is not itself a sensitive name; keys and structure stay visible, the
+// leaves do not.
+#[test]
+fn a_sensitive_container_masks_every_leaf() {
+    // (1) token.value
+    let out = redact_json(r#"{"token":{"value":"FAKESECRET-CONTAINER-1"}}"#);
+    assert!(!out.contains("FAKESECRET-CONTAINER-1"), "leaked: {out}");
+    assert!(
+        out.contains("token") && out.contains("value"),
+        "keys survive: {out}"
+    );
+
+    // (2) credentials.AccessKeyId + SecretAccessKey (both leaves masked)
+    let out = redact_json(
+        r#"{"credentials":{"AccessKeyId":"AKIA-FAKE-1","SecretAccessKey":"FAKESECRET-AK-1"}}"#,
+    );
+    assert!(!out.contains("AKIA-FAKE-1"), "leaked: {out}");
+    assert!(!out.contains("FAKESECRET-AK-1"), "leaked: {out}");
+    assert!(
+        out.contains("AccessKeyId") && out.contains("SecretAccessKey"),
+        "keys survive: {out}"
+    );
+
+    // (3) auth.bearer
+    let out = redact_json(r#"{"auth":{"bearer":"eyJhbGciOi.FAKE-1"}}"#);
+    assert!(!out.contains("eyJhbGciOi.FAKE-1"), "leaked: {out}");
+    assert!(out.contains("bearer"), "keys survive: {out}");
+
+    // (4) session.id
+    let out = redact_json(r#"{"session":{"id":"sess-FAKE-1"}}"#);
+    assert!(!out.contains("sess-FAKE-1"), "leaked: {out}");
+    assert!(out.contains("id"), "keys survive: {out}");
+
+    // Non-string leaves inside a sensitive container also mask.
+    let out = redact_json(r#"{"token":{"issued_at":1758326400123,"live":true}}"#);
+    assert!(!out.contains("1758326400123"), "leaked: {out}");
+    assert!(
+        out.contains("issued_at") && out.contains("live"),
+        "keys survive: {out}"
+    );
+}
+
+// Verifies: gh #343 fix-up - a container under a NON-sensitive key recurses
+// normally, so only genuinely sensitive children mask.
+#[test]
+fn a_non_sensitive_container_only_masks_sensitive_children() {
+    let out = redact_json(r#"{"meta":{"model":"m","api_key":"FAKESECRET-META-1"}}"#);
+    assert!(
+        out.contains("\"model\":\"m\""),
+        "an innocent field survives: {out}"
+    );
+    assert!(
+        !out.contains("FAKESECRET-META-1"),
+        "a sensitive child masks: {out}"
+    );
+}

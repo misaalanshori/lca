@@ -30,10 +30,14 @@ Dates are UTC.
     `is_sensitive_key` over a normalized name (lowercase, `_`/`-`
     stripped; exact + suffix), so `access_token`, `accessToken`,
     `Access-Token`, `client_secret`, `device_code`, and `authorization`
-    all mask. Usage counters (`max_tokens`, `input_tokens`,
-    `prompt_tokens`) and `token_type` deliberately stay visible; the
-    accepted over-mask (`monkey`, `zip_code`) is documented — a false
-    mask costs a debug line, a false pass leaks a credential.
+    all mask. A **container** under a sensitive key (e.g. `token`,
+    `credentials`, `auth`, `session`) masks every leaf inside it — keys
+    and structure stay visible, but an innocuous child name (`value`,
+    `id`, `bearer`, `AccessKeyId`) no longer lets a leaf through.
+    Usage counters (`max_tokens`, `input_tokens`, `prompt_tokens`) and
+    `token_type` deliberately stay visible; the accepted over-mask
+    (`monkey`, `zip_code`) is documented — a false mask costs a debug
+    line, a false pass leaks a credential.
   - **gh #342:** `RotatingWriter` opened the debug files with the
     default mode (umask 022 → `0644`), world-readable to any local
     user. New opens use `0600` and repair a pre-existing `0644` file

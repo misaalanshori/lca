@@ -65,3 +65,43 @@ fn an_oauth_payload_never_reaches_the_wire_log_unmasked() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// Verifies: gh #343 fix-up - a secret nested under a sensitive CONTAINER
+// never reaches the produced log, even when the leaf name is innocuous
+// (`token.value`, `credentials.AccessKeyId`, `auth.bearer`, `session.id`).
+// The prior recursion preserved those keys but let the leaves through.
+#[test]
+fn a_secret_under_a_sensitive_container_never_reaches_the_log_unmasked() {
+    let root = lca_testkit::scratch_path("regression-343-container");
+    let _ = std::fs::remove_dir_all(&root);
+    let paths = DebugPaths::in_dir(&root);
+    let mut writer = RotatingWriter::open(&paths.wire).expect("open");
+
+    let payload = r#"{"token":{"value":"FAKESECRET-CT-TVAL"},"credentials":{"AccessKeyId":"AKIA-FAKECT","SecretAccessKey":"FAKESECRET-CT-AK"},"auth":{"bearer":"eyJhbGciOi.FAKECT"},"session":{"id":"sess-FAKECT"},"meta":{"model":"m"}}"#;
+    let line = format!("{}\n", redact_json(payload));
+    writer.write_all(line.as_bytes()).expect("write");
+    writer.flush().expect("flush");
+
+    let logged = std::fs::read_to_string(&paths.wire).expect("read log");
+    for secret in [
+        "FAKESECRET-CT-TVAL",
+        "AKIA-FAKECT",
+        "FAKESECRET-CT-AK",
+        "eyJhbGciOi.FAKECT",
+        "sess-FAKECT",
+    ] {
+        assert!(
+            !logged.contains(secret),
+            "{secret} reached the wire log:\n{logged}"
+        );
+    }
+    // Schema and non-sensitive siblings survive.
+    for key in ["token", "value", "AccessKeyId", "bearer", "id"] {
+        assert!(logged.contains(key), "the key {key} survives");
+    }
+    assert!(
+        logged.contains("\"model\":\"m\""),
+        "an innocent leaf survives"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
