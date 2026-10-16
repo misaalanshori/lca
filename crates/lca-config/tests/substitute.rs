@@ -211,11 +211,13 @@ fn a_plain_path_into_the_state_directory_is_refused() {
     let dir = scratch("subst-341-plain-project");
     std::fs::create_dir_all(&dir).expect("mkdir");
     // `{file:<absolute path into ~/.lca>}` with no lexical protected name.
+    // A TOML literal (single-quoted) string, so a Windows path's
+    // backslashes are not read as TOML escapes.
     let target = state.join("ui.json");
     let err = load_user(
         &dir,
         "user.toml",
-        &format!("model = \"{{file:{}}}\"\n", target.display()),
+        &format!("model = '{{file:{}}}'\n", target.display()),
     )
     .expect_err("a state-dir path refuses however it is spelled");
     let text = err.to_string();
