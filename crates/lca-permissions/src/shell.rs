@@ -467,11 +467,30 @@ fn path_ok(token: &str, cwd: &Path, workspace: &Path) -> bool {
     } else {
         cwd.join(raw)
     };
-    // One fs probe per path-like token, at authorize time only - never on
-    // the per-turn path. `workspace` arrives already canonicalized (its root
-    // exists), so this comparison is apples to apples.
-    let resolved = crate::scope::canonicalize_deepest(&joined);
-    resolved == workspace || resolved.starts_with(workspace)
+    // Containment is decided in two steps, and the canonical step may only
+    // ever narrow the allow set, never widen it.
+    //
+    // Step 1, lexical: the same rule the analyzer used before gh #346. This
+    // is the necessary condition and keeps the drive-relative and synthetic
+    // cases (which the lexical tests pin) exactly as they were.
+    let normalized = crate::scope::lexical_normalize(&joined);
+    if normalized != workspace && !normalized.starts_with(workspace) {
+        return false;
+    }
+    // Step 2, canonical: only meaningful on a real filesystem. In production
+    // the workspace always exists, so this always runs and closes the
+    // symlink hole (gh #346): a link inside the workspace pointing outside
+    // fails the prefix test here. When the workspace does not exist (the
+    // synthetic-path unit tests), there is no real root to compare against,
+    // so the lexical answer stands. One fs probe per path-like token, at
+    // authorize time only - never on the per-turn path.
+    if let Ok(real_root) = std::fs::canonicalize(workspace) {
+        let resolved = crate::scope::canonicalize_deepest(&joined);
+        if resolved != real_root && !resolved.starts_with(&real_root) {
+            return false;
+        }
+    }
+    true
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -696,6 +715,39 @@ mod tests {
         for command in ["cat src/main.rs", "ls src/../src", "mkdir -p target/debug"] {
             assert!(scoped(command), "should be scoped: {command}");
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: gh #346 - canonicalization only ever narrows. `path_ok` must
+    // keep the pre-#346 lexical verdict for a real, existing workspace when
+    // the token is inside it, so the fix cannot over-refuse ordinary work
+    // (the class CI exposed on Windows, where a drive-relative token
+    // canonicalizes against the process cwd).
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_workspace_still_scopes_its_own_paths() {
+        let root = lca_testkit::scratch_path("lca-shell-existing-ws");
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = root.join("proj");
+        std::fs::create_dir_all(ws.join("src")).expect("mkdir");
+        std::fs::write(ws.join("src/main.rs"), "fn main() {}").expect("write");
+        for command in [
+            "cat src/main.rs",
+            "ls src/../src",
+            "mkdir -p target/debug",
+            "rm -f target/x",
+        ] {
+            assert!(
+                workspace_scoped(command, &ws, &ws),
+                "should be scoped: {command}"
+            );
+        }
+        // And the same root still refuses a link out of it.
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).expect("mkdir");
+        std::fs::write(outside.join("secret"), "x").expect("write");
+        std::os::unix::fs::symlink(&outside, ws.join("link")).expect("symlink");
+        assert!(!workspace_scoped("cat ./link/secret", &ws, &ws));
         let _ = std::fs::remove_dir_all(&root);
     }
 
