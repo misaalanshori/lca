@@ -26,7 +26,7 @@ model = "{file:~/.secrets/model-name}"
 * `{env:VAR}` expands the process environment (unset substitutes empty).
 * `{file:path}` reads the file and trims trailing whitespace. `~/` grows from the home directory, relative paths root at the referencing file's directory, absolute paths stand as written.
 * There is no execution hook: `!command` is inert text.
-* Credential stores refuse loudly: any `{file:}` touching `credentials/`, `sessions/`, or `grants` is an error, as is a missing or unreadable file.
+* Credential stores refuse loudly: any `{file:}` touching `credentials/`, `sessions/`, or `grants` is an error, as is a missing or unreadable file. The refusal is by **where the path resolves**, not how it is spelled (gh #341): the path is canonicalized first, so a symlink into `~/.lca/credentials/` is refused exactly like a literal one, and any path resolving into the agent state directory `~/.lca` (sessions, extensions, credentials, grants, private, state, tmp, themes, `ui.json`) is refused wholesale.
 * `lca config` and `/settings` print substituted values as `********`; only the fact that a key substituted is recorded, never the secret.
 
 `LCA_HYPERLINKS` is the one host variable outside that scheme: `1` forces OSC 8 terminal hyperlinks on, `0` forces the `text (url)` fallback, and unset leaves it to the capability ladder (the tmux client's own features, `screen` off, known-capable terminals on, unknown off), which is pi's `PI_HYPERLINKS` shape.

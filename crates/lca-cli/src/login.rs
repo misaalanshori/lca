@@ -729,4 +729,27 @@ mod subst_tests {
         );
         assert!(refused.is_empty(), "credential refs yield nothing");
     }
+
+    // Verifies: gh #341 (the `login.rs`/`provider-presets.toml` caller shares
+    // the one seam, so a symlink into the state directory is refused here
+    // too — the preset list comes back empty, never the secret).
+    #[cfg(unix)]
+    #[test]
+    fn a_preset_symlink_into_the_state_directory_yields_nothing() {
+        let env = lca_testkit::TestEnv::new("gh341-preset-symlink");
+        let state = env.home().join(".lca");
+        std::fs::create_dir_all(state.join("credentials")).expect("mkdir");
+        std::fs::write(state.join("credentials/x.json"), "FAKESECRET-PRESET-1").expect("write");
+        let dir = lca_testkit::scratch_path("gh341-preset-dir");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::os::unix::fs::symlink(state.join("credentials/x.json"), dir.join("key_link"))
+            .expect("symlink");
+        let entries = super::override_presets(
+            "[[preset]]\nid = \"p\"\nbase_url = \"https://example.com/{file:key_link}\"\n",
+            &dir,
+            "openai-compatible",
+            None,
+        );
+        assert!(entries.is_empty(), "a state-dir symlink yields nothing");
+    }
 }

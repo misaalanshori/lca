@@ -314,3 +314,7 @@ mod symlink_escape_auto_approve;
 // code under folder trust.
 #[path = "347-interpreter-inline-eval-auto-approve.rs"]
 mod interpreter_inline_eval_auto_approve;
+// GitHub #341: `{file:}` substitution followed symlinks, so a workspace
+// link into `~/.lca/credentials/` read the secret at config-load time.
+#[path = "341-file-substitution-symlink-bypass.rs"]
+mod file_substitution_symlink_bypass;

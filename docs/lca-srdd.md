@@ -602,6 +602,8 @@ FR-CFG-5. The agent SHALL NOT write credentials to the session log.
 
 Annotation, 2026-10-14 (gh #218): config and preset strings may reference secrets via `{env:VAR}` / `{file:path}` instead of containing them. Substitution refuses credential stores (`credentials/`, `sessions/`, `grants`), never executes, fails loudly, and substituted values display masked (`lca config`, `/settings`).
 
+Annotation, 2026-10-16 (gh #341): the refusal is by RESOLVED location, not lexical spelling. `{file:}` canonicalizes the path before the credential-store check re-runs, so a symlink pointing into `credentials/`, `sessions/`, or `grants` is refused like a literal path, and any resolved path inside the agent state directory (`~/.lca`) is refused wholesale — sessions, extensions, credentials, grants, private, state, tmp, themes, `ui.json`. A dangling link refuses like a missing file; legitimate relative, absolute, and `~/` references are unchanged.
+
 FR-CFG-6. WHILE running interactively, the agent SHALL check for a newer version at most once per day and SHALL NOT block startup on the check; headless mode SHALL make no such request unless the user enables it.
 
 FR-CFG-7. `trust.default_project` SHALL accept `ask`/`always`/`never` defaulting to `ask`, and SHALL be refused when set in a project file: only the user file (or environment) may set a trust fallback, since a project file that granted its own trust would defeat FR-PERM-9 (gh #80).

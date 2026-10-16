@@ -147,20 +147,51 @@ fn read_secret_file(
         dir.join(expanded)
     };
     let normalized = normalize(&resolved);
-    if normalized.components().any(|component| {
-        matches!(
-            component,
-            Component::Normal(name)
-                if matches!(
-                    name.to_str(),
-                    Some("credentials" | "sessions" | "grants" | "grants.json")
-                )
-        )
-    }) {
+    if touches_credential_store(&normalized) {
         return Err(fail(format!(
             "refused: {arg} touches a credential store (credentials/, sessions/, grants)"
         )));
     }
+    // Gh #341: the lexical check above is the fast, always-works belt, but
+    // `read_to_string` follows symlinks. Resolve the path first and re-run
+    // the refusal on the REAL location, plus refuse anything under the
+    // agent's state directory `~/.lca` wholesale (the SRDD exclusion the
+    // `fs` scope uses). A `{file:}` must name a file that exists to be
+    // read, so plain `canonicalize` is exactly sufficient here.
+    let canonical = match std::fs::canonicalize(&resolved) {
+        Ok(path) => path,
+        Err(err) => {
+            return Err(if err.kind() == std::io::ErrorKind::NotFound {
+                fail(format!(
+                    "file referenced by {token} does not exist: {}",
+                    normalized.display()
+                ))
+            } else {
+                fail(format!("cannot read {}: {err}", normalized.display()))
+            });
+        }
+    };
+    if touches_credential_store(&canonical) {
+        return Err(fail(format!(
+            "refused: {arg} resolves into a credential store (credentials/, sessions/, grants): {}",
+            canonical.display()
+        )));
+    }
+    if let Some(state) = state_root() {
+        // Compare against canonicalized state so Windows `\\?\` verbatim
+        // prefixes match on both sides (the resolved path is canonical).
+        let state = std::fs::canonicalize(&state).unwrap_or(state);
+        if canonical == state || canonical.starts_with(&state) {
+            return Err(fail(format!(
+                "refused: {arg} resolves into the agent state directory: {}",
+                canonical.display()
+            )));
+        }
+    }
+    // ponytail: check-then-read has a TOCTOU window (a link swapped between
+    // canonicalize and read_to_string). The threat is a local attacker
+    // mutating the victim's filesystem during config load; the upgrade path
+    // is an open-then-`fstat`-compare, or `openat2` where available.
     std::fs::read_to_string(&resolved)
         .map(|text| text.trim_end().to_string())
         .map_err(|err| {
@@ -173,6 +204,29 @@ fn read_secret_file(
                 fail(format!("cannot read {}: {err}", normalized.display()))
             }
         })
+}
+
+/// Whether a (normalized or canonical) path carries a protected store name
+/// component: `credentials`, `sessions`, `grants`, or `grants.json`. The
+/// lexical and the canonical check use exactly this rule (gh #341).
+fn touches_credential_store(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            Component::Normal(name)
+                if matches!(
+                    name.to_str(),
+                    Some("credentials" | "sessions" | "grants" | "grants.json")
+                )
+        )
+    })
+}
+
+/// The agent's state directory root, `~/.lca` (the SRDD data home). `None`
+/// when the home directory cannot be resolved; the canonical check then
+/// falls back to the named-store rule alone.
+fn state_root() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".lca"))
 }
 
 /// The home directory without a new dependency: `HOME` on Unix,

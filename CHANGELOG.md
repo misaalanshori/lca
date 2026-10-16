@@ -20,6 +20,21 @@ Dates are UTC.
   line); no WIT or schema change.
 
 ### Security
+- **`{file:}` substitution bypassed the credential store through a
+  symlink (gh #341).** `read_secret_file` refused protected stores on
+  the lexical path only, then `std::fs::read_to_string` followed
+  symlinks, so a workspace link `key-link ->
+  ~/.lca/credentials/anthropic.json` read a plaintext API key or
+  refresh token into a config value at load time — the
+  untrusted-project attacker reading the credential store. The path is
+  now canonicalized before the refusal re-runs, so a link into
+  `credentials/`, `sessions/`, or `grants` refuses by its resolved
+  location, and any path resolving into the state directory `~/.lca`
+  refuses wholesale (the SRDD state-directory exclusion). A dangling
+  link refuses like a missing file; legitimate relative, absolute, and
+  `~/` files are unchanged. Both callers route through the one
+  function (`lca-config` config layers and the `provider-presets.toml`
+  login path).
 - **Folder-trust shell analyzer escape hatches closed (gh #345,
   #346, #347).** Three `p1-high` defects let a hostile repository
   run network egress, arbitrary inline code, and out-of-workspace

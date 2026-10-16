@@ -108,3 +108,117 @@ fn bang_commands_are_inert_text() {
     assert_eq!(config.model(), Some("{!echo pwned}"));
     assert!(!config.substituted("model"));
 }
+
+// ---------------------------------------------------------------------------
+// gh #341: the credential refusal ran on the lexical path only, then
+// `read_to_string` followed symlinks, so a workspace link into
+// `~/.lca/credentials/` read the secret. The refusal now re-runs on the
+// canonical path, and any canonical path inside `~/.lca` is refused
+// wholesale (the SRDD state-directory exclusion).
+// ---------------------------------------------------------------------------
+
+// Verifies: gh #341 - the refusal is by WHERE IT RESOLVES, not "is a
+// symlink": a link into the credential store, the sessions dir, or the
+// grants store is refused; a link to a plain scratch sibling still
+// substitutes (that is a legitimate use of a link).
+#[cfg(unix)]
+#[test]
+fn a_symlink_into_the_credential_store_is_refused_by_resolved_location() {
+    let env = lca_testkit::TestEnv::new("subst-341-symlink");
+    // A scratch state dir shaped like the production `~/.lca`.
+    let state = env.home().join(".lca");
+    write(&state.join("credentials/anthropic.json"), "FAKESECRET-AK-1");
+    write(&state.join("sessions/s1/log.jsonl"), "FAKESECRET-SESS-1");
+    write(&state.join("grants.json"), "FAKESECRET-GRANT-1");
+
+    let dir = scratch("subst-341-project");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+
+    for (link, target) in [
+        ("cred_link", state.join("credentials/anthropic.json")),
+        ("sess_link", state.join("sessions/s1/log.jsonl")),
+        ("grant_link", state.join("grants.json")),
+    ] {
+        let link_path = dir.join(link);
+        let _ = std::fs::remove_file(&link_path);
+        std::os::unix::fs::symlink(&target, &link_path).expect("symlink");
+        let err = load_user(&dir, "user.toml", &format!("model = \"{{file:{link}}}\"\n"))
+            .expect_err("symlink into the state dir must refuse");
+        let text = err.to_string();
+        assert!(text.contains("refused"), "{link}: {text}");
+        // The secret value must never appear in the error.
+        assert!(!text.contains("FAKESECRET"), "{link} leaked: {text}");
+    }
+
+    // A link to a plain scratch file OUTSIDE the state dir still works.
+    write(&dir.join("sibling.txt"), "plain-value");
+    let legit_link = dir.join("legit_link");
+    let _ = std::fs::remove_file(&legit_link);
+    std::os::unix::fs::symlink(dir.join("sibling.txt"), &legit_link).expect("symlink");
+    let config = load_user(&dir, "user.toml", "model = \"{file:legit_link}\"\n").expect("load");
+    assert_eq!(config.model(), Some("plain-value"));
+}
+
+// Verifies: gh #341 - any canonical path inside `~/.lca` refuses, not just
+// the named stores (state dir excluded wholesale).
+#[cfg(unix)]
+#[test]
+fn a_symlink_into_any_part_of_the_state_directory_is_refused() {
+    let env = lca_testkit::TestEnv::new("subst-341-state");
+    let state = env.home().join(".lca");
+    // A file with no protected name component, under the state dir.
+    write(&state.join("themes/secret.txt"), "FAKESECRET-THEME-1");
+
+    let dir = scratch("subst-341-state-project");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let link_path = dir.join("theme_link");
+    std::os::unix::fs::symlink(state.join("themes/secret.txt"), &link_path).expect("symlink");
+    let err = load_user(&dir, "user.toml", "model = \"{file:theme_link}\"\n")
+        .expect_err("any state-dir path refuses");
+    let text = err.to_string();
+    assert!(text.contains("refused"), "{text}");
+    assert!(!text.contains("FAKESECRET"), "leaked: {text}");
+}
+
+// Verifies: gh #341 - a dangling symlink refuses with the missing-file
+// shape (a broken link is not a readable file).
+#[cfg(unix)]
+#[test]
+fn a_dangling_symlink_refuses_like_a_missing_file() {
+    let dir = scratch("subst-341-dangling");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let link_path = dir.join("dangling");
+    std::os::unix::fs::symlink(dir.join("nowhere.txt"), &link_path).expect("symlink");
+    let err = load_user(&dir, "user.toml", "model = \"{file:dangling}\"\n")
+        .expect_err("dangling link refuses");
+    let text = err.to_string();
+    assert!(
+        text.contains("does not exist") || text.contains("cannot read"),
+        "{text}"
+    );
+}
+
+// Verifies: gh #341 (Windows): symlink creation needs privilege, so the
+// resolved-location rule is pinned portably through the `\\?\`-safe
+// canonical comparison using real scratch directories (a plain file
+// inside `~/.lca` referenced directly, not via a link).
+#[test]
+fn a_plain_path_into_the_state_directory_is_refused() {
+    let env = lca_testkit::TestEnv::new("subst-341-plain");
+    let state = env.home().join(".lca");
+    write(&state.join("ui.json"), "FAKESECRET-UI-1");
+
+    let dir = scratch("subst-341-plain-project");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    // `{file:<absolute path into ~/.lca>}` with no lexical protected name.
+    let target = state.join("ui.json");
+    let err = load_user(
+        &dir,
+        "user.toml",
+        &format!("model = \"{{file:{}}}\"\n", target.display()),
+    )
+    .expect_err("a state-dir path refuses however it is spelled");
+    let text = err.to_string();
+    assert!(text.contains("refused"), "{text}");
+    assert!(!text.contains("FAKESECRET"), "leaked: {text}");
+}
