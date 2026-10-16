@@ -212,6 +212,43 @@ fn private_resolves_under_the_state_dir_and_home_config_still_cannot_reach_it() 
     );
 }
 
+// Verifies: gh #346 (RCA edge) - `canonicalize_deepest` re-appended the
+// not-yet-existing tail verbatim, so a `..` in the tail survived and
+// `starts_with` over-allowed. `<root>/newdir/../../evil` with `newdir`
+// missing folded lexically to `<root>/../evil` but compared as inside.
+#[test]
+fn a_tail_parent_dir_from_a_missing_dir_is_refused() {
+    let sandbox = Sandbox::new("taildotdot");
+    let roots = sandbox.roots();
+    let grants = sandbox.granted(&[("workspace", FsMode::ReadWrite)]);
+
+    // `newdir` does not exist, so canonicalization stops at the workspace
+    // and the `..` components have to be folded lexically to catch the
+    // escape the kernel would perform at open time.
+    let err = roots
+        .resolve(&grants, "workspace", "newdir/../../evil", true)
+        .expect_err("tail `..` escapes the workspace");
+    assert!(
+        matches!(err.kind, ScopeViolationKind::Escape),
+        "got {err:?}"
+    );
+
+    // A non-existent tail with no `..` still resolves (the write case).
+    assert!(
+        roots
+            .resolve(&grants, "workspace", "newdir/sub/file.txt", true)
+            .is_ok(),
+        "a plain non-existent tail still resolves"
+    );
+    // A `.`/`..` tail that stays inside folds and passes.
+    assert!(
+        roots
+            .resolve(&grants, "workspace", "src/../src/main.rs", false)
+            .is_ok(),
+        "a `..` that folds back inside resolves"
+    );
+}
+
 // Deny by default: a scope absent from the granted set cannot be reached,
 // whatever the manifest (or component) says (NFR-13, capability catalog).
 #[test]

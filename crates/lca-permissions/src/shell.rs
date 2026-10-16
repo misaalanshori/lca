@@ -12,7 +12,7 @@
 //! build scripts and proc macros. The analyzer polices the *filesystem
 //! boundary* and a small high-risk set, not "can this run code".
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 /// Programs that are never auto-approved under folder trust. They either
 /// escalate privilege, can destroy the machine without a path argument, or
@@ -437,6 +437,12 @@ fn looks_like_path(token: &str) -> bool {
 }
 
 /// Whether a path token resolves inside `workspace` (base `cwd`).
+///
+/// Gh #346: the resolution is canonical as far as the path exists, so a
+/// symlink inside the workspace that points outside (or into `.git/`) is
+/// caught here, not just by the lexical join. This is the same
+/// `canonicalize_deepest` the `fs` scope uses (ADR-0005), so the two
+/// boundaries agree on what "inside" means.
 fn path_ok(token: &str, cwd: &Path, workspace: &Path) -> bool {
     let token = token.trim_matches(['"', '\'']);
     if token.is_empty() {
@@ -461,27 +467,15 @@ fn path_ok(token: &str, cwd: &Path, workspace: &Path) -> bool {
     } else {
         cwd.join(raw)
     };
-    let normalized = lexical_normalize(&joined);
-    normalized == workspace || normalized.starts_with(workspace)
-}
-
-/// Normalize `.`/`..` lexically (a non-existent path cannot be canonicalized).
-fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
+    // One fs probe per path-like token, at authorize time only - never on
+    // the per-turn path. `workspace` arrives already canonicalized (its root
+    // exists), so this comparison is apples to apples.
+    let resolved = crate::scope::canonicalize_deepest(&joined);
+    resolved == workspace || resolved.starts_with(workspace)
 }
 
 fn canonical(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| lexical_normalize(path))
+    std::fs::canonicalize(path).unwrap_or_else(|_| crate::scope::lexical_normalize(path))
 }
 
 #[cfg(test)]
@@ -668,6 +662,41 @@ mod tests {
         ] {
             assert!(ok(command), "should be scoped: {command}");
         }
+    }
+
+    // Verifies: gh #346 - a workspace symlink pointing outside must review,
+    // not auto-approve. `path_ok` normalized lexically only, so a link's
+    // location (not its target) decided containment. Real symlinks need a
+    // real filesystem; unix-only, like the scope.rs equivalent.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_escapes_in_path_tokens_review() {
+        let root = lca_testkit::scratch_path("lca-shell-symlink");
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = root.join("proj");
+        std::fs::create_dir_all(ws.join("src")).expect("mkdir");
+        std::fs::write(ws.join("src/main.rs"), "fn main() {}").expect("write");
+        // An outside directory and three links: a dir, a git one, a dangling.
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).expect("mkdir");
+        std::fs::write(outside.join("passwd"), "root:x:0").expect("write");
+        std::os::unix::fs::symlink(&outside, ws.join("etc_link")).expect("symlink");
+        std::os::unix::fs::symlink(&outside, ws.join("gitlink")).expect("symlink");
+        std::os::unix::fs::symlink(root.join("nowhere"), ws.join("dangling")).expect("symlink");
+
+        let scoped = |command: &str| workspace_scoped(command, &ws, &ws);
+        for command in [
+            "cat ./etc_link/passwd",
+            "cat ./gitlink/config",
+            "cat ./dangling/x",
+            "ls newdir/../../evil",
+        ] {
+            assert!(!scoped(command), "should review: {command}");
+        }
+        for command in ["cat src/main.rs", "ls src/../src", "mkdir -p target/debug"] {
+            assert!(scoped(command), "should be scoped: {command}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

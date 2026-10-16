@@ -194,12 +194,22 @@ impl ScopeRoots {
 }
 
 /// Canonicalize as far as the path exists, expanding every symlink met on
-/// the way, then re-append the not-yet-existing tail. A dangling link is
-/// expanded through `read_link`, so a link planted after the grant still
-/// reveals where it points (capability catalog: symlink-after-grant).
+/// the way, then re-append the not-yet-existing tail folded lexically. A
+/// dangling link is expanded through `read_link`, so a link planted after
+/// the grant still reveals where it points (capability catalog:
+/// symlink-after-grant).
+///
+/// The final fold is what closes the tail-`..` hole (gh #346): the earlier
+/// version re-appended the tail verbatim, so `<root>/newdir/../../evil` with
+/// `newdir` missing came back as `<root>/newdir/../../evil`, which
+/// `Path::starts_with` (component-wise, never folding `..`) read as inside.
+/// Folding only affects the non-existent tail - the canonical prefix never
+/// contains `..` - and the direction is free: it can over-refuse a `..` that
+/// crosses a symlink, which the analyzer's contract accepts ("a false review
+/// costs one prompt").
 /// ponytail: symlink expansion is capped at40 hops; a loop degrades to
 /// the pop path below rather than hanging.
-fn canonicalize_deepest(path: &Path) -> PathBuf {
+pub(crate) fn canonicalize_deepest(path: &Path) -> PathBuf {
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     let mut current = path.to_path_buf();
     let mut expansions = 0usize;
@@ -209,7 +219,7 @@ fn canonicalize_deepest(path: &Path) -> PathBuf {
             for part in tail.iter().rev() {
                 out.push(part);
             }
-            return out;
+            return lexical_normalize(&out);
         }
         let is_symlink = std::fs::symlink_metadata(&current)
             .map(|meta| meta.file_type().is_symlink())
@@ -244,10 +254,26 @@ fn canonicalize_deepest(path: &Path) -> PathBuf {
                 for part in tail.iter().rev() {
                     out.push(part);
                 }
-                return out;
+                return lexical_normalize(&out);
             }
         }
     }
+}
+
+/// Normalize `.`/`..` lexically (a non-existent path cannot be canonicalized).
+/// Shared with `shell::path_ok` (gh #346): one implementation, no duplication.
+pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 impl From<ScopeViolation> for lca_protocol::CapabilityError {
