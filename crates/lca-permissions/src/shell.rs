@@ -123,6 +123,28 @@ const SENSITIVE_VARS: &[&str] = &[
 /// Paths that are safe redirection/read targets anywhere.
 const DEV_SAFE: &[&str] = &["/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"];
 
+/// Inline-evaluation/module flags on language runtimes (gh #347). The code
+/// they carry is not in the workspace, so nothing about it can be reasoned
+/// about; a match sends the whole segment to review. Script-file
+/// invocations (`python3 scripts/run.py`) stay scoped - the folder's own
+/// code is trusted by the folder-trust contract.
+const INTERPRETER_EVAL_FLAGS: &[(&str, &[&str])] = &[
+    ("python", &["-c", "-m"]),
+    ("python3", &["-c", "-m"]),
+    ("pypy", &["-c", "-m"]),
+    ("pypy3", &["-c", "-m"]),
+    ("node", &["-e", "--eval", "-p", "--print"]),
+    ("nodejs", &["-e", "--eval", "-p", "--print"]),
+    ("bun", &["-e", "--eval", "-p", "--print"]),
+    ("deno", &["-e", "--eval", "-p", "--print"]),
+    ("perl", &["-e", "-E"]),
+    ("ruby", &["-e"]),
+    ("php", &["-r"]),
+    ("lua", &["-e"]),
+    ("pwsh", &["-c", "-command", "-encodedcommand"]),
+    ("powershell", &["-c", "-command", "-encodedcommand"]),
+];
+
 /// Whether `command`, run with `cwd`, provably stays inside `workspace`.
 pub fn workspace_scoped(command: &str, cwd: &Path, workspace: &Path) -> bool {
     if command.trim().is_empty() {
@@ -180,6 +202,9 @@ fn segment_ok(segment: &str, cwd: &Path, workspace: &Path) -> bool {
     }
     let name = basename(program);
     if DENY_PROGRAMS.contains(&name.as_str()) {
+        return false;
+    }
+    if interpreter_inline_eval(&name, &toks[i + 1..]) {
         return false;
     }
     if name == "git" {
@@ -310,6 +335,23 @@ fn git_subcommand(args: &[String]) -> Option<&str> {
         return Some(token);
     }
     None
+}
+
+/// Whether a language runtime invocation carries an inline-eval/module flag
+/// (gh #347): the code is not in the workspace. `args` is the tokens after
+/// the program. A flag may follow other flags, so every token is scanned;
+/// `=`-attached forms (`--eval=code`) match on their base.
+fn interpreter_inline_eval(program: &str, args: &[String]) -> bool {
+    let Some((_, flags)) = INTERPRETER_EVAL_FLAGS
+        .iter()
+        .find(|(name, _)| *name == program)
+    else {
+        return false;
+    };
+    args.iter().any(|token| {
+        let base = token.split_once('=').map(|(base, _)| base).unwrap_or(token);
+        flags.iter().any(|flag| base.eq_ignore_ascii_case(flag))
+    })
 }
 
 /// A package tool doing a publish or a global install (network/global state).
@@ -590,6 +632,39 @@ mod tests {
             "git add src/x.rs",
             "git commit -m x",
             "git diff --stat",
+        ] {
+            assert!(ok(command), "should be scoped: {command}");
+        }
+    }
+
+    // Verifies: gh #347 - inline eval/module flags on language runtimes
+    // execute code that is NOT in the workspace, so the analyzer cannot
+    // reason about it. Script-file invocations stay scoped (the folder's
+    // own code is trusted); inline eval reviews.
+    #[test]
+    fn interpreter_inline_eval_always_reviews() {
+        for command in [
+            "python3 -c 'import os'",
+            "node -e 'console.log(1)'",
+            "perl -e 'print 1'",
+            "ruby -e 'puts 1'",
+            "php -r 'echo 1;'",
+            "lua -e 'print(1)'",
+            "pwsh -Command 'Get-Date'",
+            "python3 -m pytest",
+            "python3 ./venv/bin/python -c x",
+            "node --eval=1",
+        ] {
+            assert!(!ok(command), "should review: {command}");
+        }
+        // Script-file invocations (the code is in the workspace) stay
+        // scoped, per the analyzer's contract.
+        for command in [
+            "python3 scripts/run.py",
+            "node index.js",
+            "node ./build.js",
+            "python3 /work/proj/test.py",
+            "deno run build.ts",
         ] {
             assert!(ok(command), "should be scoped: {command}");
         }
