@@ -117,6 +117,56 @@ restart" limitation above is retired for reload-or-later flows; a
 trust granted mid-turn still applies to the next load, never the
 running turn.
 
+## Addendum (2026-10-16, gh #345/#346/#347)
+
+The analyzer's refuse-set grew; the "provably stays inside" bar moved.
+Three `p1-high` escapes shared one seam (`workspace_scoped` →
+`segment_ok` → `path_ok`) and landed together. This addendum records
+the shape change; the decision itself is unchanged.
+
+- **gh #345 — git subcommand classification.** Both git checks read
+  `toks[i + 1]`, so a global flag before the subcommand hid it:
+  `git -C . push` and `git --no-pager push` auto-approved egress, and
+  `git -c user.email=x config` auto-approved a config override.
+  `git_subcommand` now walks past global flags, consuming the
+  option-argument of `-C`/`-c`/`--git-dir`/`--work-tree`/`--namespace`/
+  `--config-env` (detached) and treating `=`-attached forms as
+  self-consuming. A config override, an `--exec-path`/`--super-prefix`
+  redirect, a dangling flag-argument, or no subcommand at all makes the
+  invocation unclassifiable, and unclassifiable refuses.
+- **gh #346 — symlink resolution.** `path_ok` normalized lexically
+  only, so a workspace symlink pointing outside made the linked path
+  read as inside. It now resolves through `canonicalize_deepest`, the
+  same helper `ScopeRoots::resolve` uses, so the model tool path and
+  the extension `fs` boundary agree on "inside". The helper also folds
+  a lexically-normalized non-existent tail, which closed a real
+  parent-traversal escape in `ScopeRoots::resolve` when a `..` sat past
+  a missing directory (FR-PERM-12). The direction is deliberate: a
+  fold may over-refuse a `..` that crosses a symlink, and a false
+  review costs one prompt.
+- **gh #347 — interpreter inline eval.** No language runtime was in
+  `DENY_PROGRAMS`, and an inline code string with no path-ish
+  substring tripped no path check, so `python3 -c "<code>"`
+  auto-approved arbitrary code. Inline eval is code *not in the
+  workspace*, which the analyzer cannot reason about; a per-runtime
+  `INTERPRETER_EVAL_FLAGS` table refuses it. Script-file invocations
+  (`python3 scripts/run.py`) stay scoped — trusting a folder trusts the
+  code in it, which is still the contract. Known trade: `python3 -m
+  pytest` now reviews, because module code lives outside the
+  workspace.
+
+None of the three is an ABI change. Guards live in the analyzer's own
+unit matrices plus turn-level regression files
+(`tests/regressions/345-*.rs`, `346-*.rs`, `347-*.rs`) that drive a
+whole turn through a recording permission prompt.
+
+### Follow-up recorded, not fixed here
+
+`is_package_mutation` has the same flag-argument weakness
+(`cargo -Z unstable-options install` reads `unstable-options` as the
+subcommand and misses `install`). It was out of scope for the gh #345
+batch and is noted for a follow-up rather than fixed speculatively.
+
 ## Revisit conditions
 
 - A real command the analyzer refuses that a user reasonably expects to be

@@ -302,3 +302,15 @@ mod sensitive_read_escalation;
 // (live proof: a stored deny watched the read run `ok` with no record).
 #[path = "259-rules-apply-to-in-workspace-reads.rs"]
 mod rules_apply_to_in_workspace_reads;
+// GitHub #345: git global flags hid the subcommand from the egress and
+// config checks, so a trusted folder auto-approved `git --no-pager push`.
+#[path = "345-git-flags-bypass-egress-classifier.rs"]
+mod git_flags_bypass_egress_classifier;
+// GitHub #346: a workspace symlink pointing outside auto-approved an
+// out-of-workspace read under folder trust.
+#[path = "346-symlink-escape-auto-approve.rs"]
+mod symlink_escape_auto_approve;
+// GitHub #347: `python3 -c`/`node -e`/... auto-approved arbitrary inline
+// code under folder trust.
+#[path = "347-interpreter-inline-eval-auto-approve.rs"]
+mod interpreter_inline_eval_auto_approve;

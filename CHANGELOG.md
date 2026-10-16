@@ -19,6 +19,36 @@ Dates are UTC.
   rule). No binary rides this release (it stays on the `unstable`
   line); no WIT or schema change.
 
+### Security
+- **Folder-trust shell analyzer escape hatches closed (gh #345,
+  #346, #347).** Three `p1-high` defects let a hostile repository
+  run network egress, arbitrary inline code, and out-of-workspace
+  reads with no prompt while the folder was trusted.
+  - **gh #345:** `segment_ok` read the git subcommand from
+    `toks[i + 1]`, so any global flag before it hid the subcommand
+    from the egress and config checks — `git -C . push`,
+    `git --no-pager push`, and `git -c user.email=x config` all
+    auto-approved. A new `git_subcommand` parser classifies past
+    global flags (consuming `-C`/`-c`/`--git-dir`/`--work-tree`/
+    `--namespace`/`--config-env` and their `=`-attached forms) and
+    refuses the invocation when it carries a config override, an
+    `--exec-path`/`--super-prefix` redirect, a dangling
+    flag-argument, or no subcommand at all.
+  - **gh #346:** `shell::path_ok` normalized lexically only, so a
+    workspace symlink pointing outside (`ln -s /etc ./etc_link`)
+    auto-approved `cat ./etc_link/passwd`. It now resolves through
+    the same `canonicalize_deepest` the `fs` scope uses. The shared
+    helper also folds a lexically-normalized tail, closing a
+    parent-traversal escape in `ScopeRoots::resolve` (FR-PERM-12)
+    when a `..` sat in a non-existent tail.
+  - **gh #347:** no language runtime was covered by `DENY_PROGRAMS`,
+    so `python3 -c "<code>"`, `node -e`, and the like
+    auto-approved — inline code is not in the workspace and cannot
+    be reasoned about. A new `INTERPRETER_EVAL_FLAGS` table refuses
+    inline eval/module flags per runtime; script-file invocations
+    (`python3 scripts/run.py`) stay scoped. Known trade:
+    `python3 -m pytest` now reviews.
+
 ### Fixed
 - **Antigravity model listing on real payloads (gh #236).** The
 claimed 10M-fuel exhaustion did not reproduce on the fresh

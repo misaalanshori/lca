@@ -432,6 +432,8 @@ FR-PERM-28. The agent SHALL accept `-a`/`--approve` (trust this project for the 
 
 FR-PERM-20. WHILE a project is trusted, persistently or for the session, and a shell command provably stays inside the workspace root, the agent SHALL run it without prompting. A command the agent cannot prove stays inside the workspace SHALL be reviewed (ADR-0039).
 
+Annotation, 2026-10-16 (gh #345/#346/#347): the analyzer's refuse-set grew, so the "provably stays inside" bar moved up at three points. Git subcommands are classified past global flags (`git -C . push` no longer hides the egress subcommand; a `-c`/`--config-env` override or an `--exec-path`/`--super-prefix` redirect refuses). Path tokens resolve symlinks through the same `canonicalize_deepest` the `fs` boundary uses (a workspace link pointing outside reviews), and the helper folds a non-existent tail so a trailing `..` cannot read as inside. Interpreter inline-eval/module flags (`python3 -c`, `node -e`, `python3 -m`, ...) refuse, because that code is not in the workspace; script-file invocations stay scoped. `python3 -m pytest` now reviews, the accepted trade.
+
 FR-PERM-21. The agent SHALL support allow and deny rules, matched as globs, at session, project, and global scope. A deny rule SHALL refuse a matching action without prompting, and SHALL take precedence over an allow rule.
 
 Annotation, 2026-10-14 (gh #259): rules apply to in-workspace reads too — every read/list/grep routes through `authorize()` for rule matching. No matching rule stays exactly as silent as before (trust fast path / R3 cut, no modal, no record); an allow rule allows and records (`Once`), a deny rule refuses and records (`Denied`). Sensitive paths keep #215 behavior.
