@@ -244,9 +244,15 @@ pub(crate) fn canonicalize_deepest(path: &Path) -> PathBuf {
             expansions += 1;
             continue;
         }
-        match (current.file_name(), current.parent()) {
-            (Some(name), Some(parent)) => {
-                tail.push(name.to_os_string());
+        // `Path::file_name` is `None` for a trailing `..`/`.` component, so
+        // take the last component from `components()` instead: the walk must
+        // keep popping past `..` to reach an ancestor it can canonicalize
+        // (gh #346 review: with `file_name` the walk stopped at `..` and
+        // returned a path still under the un-canonical, possibly symlinked
+        // root).
+        match (current.components().next_back(), current.parent()) {
+            (Some(component), Some(parent)) => {
+                tail.push(component.as_os_str().to_os_string());
                 current = parent.to_path_buf();
             }
             _ => {
@@ -284,5 +290,35 @@ impl From<ScopeViolation> for lca_protocol::CapabilityError {
             }
             _ => lca_protocol::CapabilityError::Permission(violation.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // The tail-`..` fold is exercised through `ScopeRoots::resolve` in
+    // `tests/scopes.rs`; this pins the helper's own contract on a
+    // symlinked root, which is exactly where the walk used to stop early
+    // (CI caught it on macOS, whose `/tmp` is a symlink).
+    use super::*;
+
+    #[test]
+    fn a_trailing_parent_dir_in_a_missing_tail_folds_to_the_canonical_base() {
+        let root = lca_testkit::scratch_path("lca-scope-helper");
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = root.join("ws");
+        std::fs::create_dir_all(&ws).expect("mkdir");
+        let canonical_ws = std::fs::canonicalize(&ws).expect("canonical ws");
+
+        // `.`/`..` round-trips to the canonical base: before the fix the
+        // walk stopped at the `..` (its `file_name()` is `None`) and never
+        // canonicalized the base itself.
+        let folded = canonicalize_deepest(&ws.join("src/../src/main.rs"));
+        assert_eq!(folded, canonical_ws.join("src/main.rs"));
+
+        // A `..` that escapes the base still lands outside it.
+        let escaped = canonicalize_deepest(&ws.join("newdir/../../evil"));
+        assert!(!escaped.starts_with(&canonical_ws), "got {escaped:?}");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

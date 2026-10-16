@@ -16,7 +16,9 @@ use std::time::Duration;
 
 use lca_core::{Agent, AgentConfig, TurnEvent, TurnSink};
 use lca_permissions::{Action, Decision, GrantStore, PermissionPrompt, ProposalDiff};
-use lca_protocol::{PermissionDecision, Record, ToolResultStatus};
+use lca_protocol::ToolResultStatus;
+#[cfg(unix)]
+use lca_protocol::{PermissionDecision, Record};
 use lca_session::SessionStore;
 use lca_testkit::{FakeProvider, fake_usage};
 use lca_tools::{CancelFlag, NativeOps, ToolExecutor};
@@ -125,6 +127,7 @@ async fn run_turn(fixture: &mut Fixture, input: &str) -> (Sink, RecordingPrompt)
     (sink, prompt)
 }
 
+#[cfg(unix)]
 fn permission_records(fixture: &Fixture) -> Vec<Record> {
     fixture
         .store
