@@ -205,6 +205,14 @@ Not stopped at first install. The first resolution of a tag to a digest trusts t
 
 An update resolves the ABI line tag to a new digest, which is a trust decision at that moment. An update that widens the capability set prompts before applying.
 
+### A `git+` source smuggles git options
+
+A crafted `git+` source is not merely bytes — it becomes the *argv* of a `git` subprocess the host runs. Before gh #349, `git clone --quiet <url> <dir>` and `git checkout --quiet <rev>` handed a user-supplied url/rev to git with no end-of-options separator and no `-` rejection, so `git+--upload-pack=<cmd>` reached git as an **option**. `--upload-pack` runs a command for local transports, so that is arbitrary execution during `lca ext install`.
+
+Stopped. `parse_git_source` (the gate in front of every git invocation) now refuses an empty or `-`-prefixed url or rev, and the clone passes its positionals after `--`. The checkout relies on the validation rather than `--`, because `git checkout -- <rev>` reads `<rev>` as a pathspec (the path-restore form) and would break every ordinary rev. The subprocess itself is bounded by a 60 s timeout with both pipes drained while it runs, so a stalled transport cannot wedge the install. Fuzz/attack-surface: the git source resolver is a tenth argv-shaped input.
+
+Receipt: `crates/lca-registry/tests/registry.rs` (`git_source_refuses_an_option_injected_url_before_spawning_git`, `git_source_refuses_an_option_injected_rev_before_spawning_git`), `crates/lca-registry/src/git.rs` unit tests, `tests/regressions/349-git-source-option-injection.rs`.
+
 ### A malicious session file
 
 A crafted session log or a manifest with pathological content triggers a parser bug.

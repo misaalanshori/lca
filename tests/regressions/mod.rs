@@ -329,3 +329,7 @@ mod debug_log_owner_only;
 // models on disk; it must be the exact inverse of the login writes.
 #[path = "293-logout-purges-profile-secrets.rs"]
 mod logout_purges_profile_secrets;
+// GitHub #349: an option-injected git url/rev reached `git clone`/
+// `git checkout` unvalidated, and `--upload-pack` runs a command.
+#[path = "349-git-source-option-injection.rs"]
+mod git_source_option_injection;

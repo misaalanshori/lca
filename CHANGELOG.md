@@ -20,6 +20,20 @@ Dates are UTC.
   line); no WIT or schema change.
 
 ### Security
+- **`git+` sources could smuggle git options (gh #349).** The registry's
+  git resolver built `git clone --quiet <url> <dir>` and
+  `git checkout --quiet <rev>` from user-supplied url/rev strings with no
+  `--` end-of-options separator, and `parse_git_source` never rejected a
+  value starting with `-`. A source like `git+--upload-pack=<cmd>` reached
+  git as an option, and `--upload-pack` runs a command for local
+  transports — arbitrary execution during `lca ext install`. The parser
+  now refuses an empty or `-`-prefixed url or rev, the clone passes its
+  positionals after `--`, and the checkout relies on that validation
+  (`git checkout -- <rev>` would read the rev as a pathspec). The git
+  subprocess also gained a 60 s timeout with both pipes drained while it
+  runs, so a stalled transport cannot wedge the install — the clone path
+  only ever used `Command::output()`, which already drained, so no pipe
+  deadlock existed to fix there.
 - **`logout` left preset profile secrets on disk (gh #293).**
   `openai-compatible`'s `run_logout` deleted only the bare
   `api_key`/`base_url`, while the login path also writes

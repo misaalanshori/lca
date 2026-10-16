@@ -1060,6 +1060,45 @@ async fn git_source_pins_an_explicit_rev() {
     assert_eq!(resolved.commit, first);
 }
 
+// Verifies: gh #349 - an option-injected git url is refused by
+// validation before any git process starts. The value reaches
+// `parse_git_source`, sits in front of every git invocation, so the
+// reject is `Error::Invalid`, never a `git clone` that merely fails.
+#[test]
+fn git_source_refuses_an_option_injected_url_before_spawning_git() {
+    let root = lca_testkit::scratch_path("lca-registry-git-inject");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let sentinel = root.join("spawned");
+    // The exact AC1 payload: `--upload-pack` runs a command for local
+    // transports. The `#rev`-free form puts it in the url position.
+    let source = format!("git+--upload-pack=touch {}", sentinel.display());
+    let err = lca_registry::resolve_git(&source).expect_err("the injected url is refused");
+    assert!(
+        matches!(err, lca_registry::Error::Invalid(_)),
+        "a validation error, not a fetch error: {err}"
+    );
+    assert!(!sentinel.exists(), "the injected command never ran");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Verifies: gh #349 - the same for a `#--force`-shaped rev: refused by
+// validation, without spawning git (today it starts a clone that only
+// fails on the transport).
+#[test]
+fn git_source_refuses_an_option_injected_rev_before_spawning_git() {
+    let root = lca_testkit::scratch_path("lca-registry-git-inject-rev");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let source = format!("git+{}#--force", root.join("repo").display());
+    let err = lca_registry::resolve_git(&source).expect_err("the injected rev is refused");
+    assert!(
+        matches!(err, lca_registry::Error::Invalid(_)),
+        "a validation error, not a fetch error: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // Verifies: gh #252 - bare names expand to the official repository
 // (default tag tracks the ABI line); explicit refs pass through.
 #[test]
