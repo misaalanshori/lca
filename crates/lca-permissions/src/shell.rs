@@ -182,11 +182,15 @@ fn segment_ok(segment: &str, cwd: &Path, workspace: &Path) -> bool {
     if DENY_PROGRAMS.contains(&name.as_str()) {
         return false;
     }
-    if name == "git"
-        && let Some(sub) = toks.get(i + 1)
-        && GIT_EGRESS.contains(&sub.as_str())
-    {
-        return false;
+    if name == "git" {
+        // GH #345: the subcommand can sit behind any number of global flags
+        // (`git -C . push`, `git --no-pager push`). Classify past them; an
+        // invocation we cannot classify is refused, never assumed benign.
+        match git_subcommand(&toks[i + 1..]) {
+            Some(sub) if GIT_EGRESS.contains(&sub) || sub == "config" => return false,
+            None => return false,
+            Some(_) => {}
+        }
     }
     if name == "find"
         && toks
@@ -210,9 +214,6 @@ fn segment_ok(segment: &str, cwd: &Path, workspace: &Path) -> bool {
         return false;
     }
     if name == "rm" && toks.iter().any(|t| t == "--no-preserve-root") {
-        return false;
-    }
-    if name == "git" && toks.get(i + 1).is_some_and(|s| s == "config") {
         return false;
     }
     if is_package_mutation(&name, &toks[i + 1..]) {
@@ -251,6 +252,64 @@ fn segment_ok(segment: &str, cwd: &Path, workspace: &Path) -> bool {
         j += 1;
     }
     true
+}
+
+/// `git` global flags whose value is the NEXT token when written detached
+/// (`-C <dir>`, `-c <kv>`). The `=`-attached form (`--git-dir=x`) consumes
+/// only itself and is handled separately.
+const GIT_FLAG_TAKES_ARG: &[&str] = &[
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--config-env",
+];
+
+/// `git` global flags that make the invocation unclassifiable, so the caller
+/// refuses: `-c`/`--config-env` reconfigure git (transport helpers, hooks,
+/// aliases - `git -c alias.p='!cmd' p` runs `cmd`), and `--exec-path`/
+/// `--super-prefix` redirect where git finds its subcommands (arbitrary
+/// execution).
+const GIT_FLAG_REFUSE: &[&str] = &["-c", "--config-env", "--exec-path", "--super-prefix"];
+
+/// The subcommand of a `git` invocation, skipping global flags and their
+/// option-arguments. `args` is the tokens after `git`.
+///
+/// `None` means "cannot classify" and the caller refuses: a config override,
+/// an exec-path redirect, a dangling flag-argument, or no subcommand at all.
+fn git_subcommand(args: &[String]) -> Option<&str> {
+    let mut i = 0;
+    while i < args.len() {
+        let token = args[i].as_str();
+        // An `=`-attached flag consumes only itself.
+        if let Some((base, _)) = token.split_once('=') {
+            if GIT_FLAG_REFUSE.contains(&base) {
+                return None;
+            }
+            i += 1;
+            continue;
+        }
+        if token.starts_with('-') {
+            if GIT_FLAG_REFUSE.contains(&token) {
+                return None;
+            }
+            if GIT_FLAG_TAKES_ARG.contains(&token) {
+                // The next token is this flag's argument; a dangling one is
+                // refused (the loop's bound check returns `None`).
+                i += 2;
+                continue;
+            }
+            // `--` ends option parsing; the next token is the subcommand.
+            if token == "--" {
+                return args.get(i + 1).map(String::as_str);
+            }
+            i += 1;
+            continue;
+        }
+        return Some(token);
+    }
+    None
 }
 
 /// A package tool doing a publish or a global install (network/global state).
@@ -496,6 +555,43 @@ mod tests {
             "go install x",
         ] {
             assert!(!ok(command), "should review: {command}");
+        }
+    }
+
+    // Verifies: gh #345 - a global git flag must not hide the subcommand
+    // from the egress/config checks. Both git checks used to read
+    // `toks[i + 1]`, so any leading flag shifted the subcommand past them.
+    #[test]
+    fn git_global_flags_do_not_hide_egress_or_config() {
+        // Refused: the subcommand is egress or config, or the invocation
+        // carries a config override / a dangling flag-argument.
+        for command in [
+            "git -C . push origin main",
+            "git --no-pager push",
+            "git -c user.signingkey=x commit",
+            "git -c alias.p='!evil' p",
+            "git --config-env=x.y=HOME commit",
+            "git --git-dir=.git push",
+            "git --work-tree=. push",
+            "git -C",
+            "git -c x=y config",
+            "git --no-pager -C . fetch origin",
+            "git -C . remote add origin https://x",
+        ] {
+            assert!(!ok(command), "should review: {command}");
+        }
+        // Allowed: benign flags still leave the subcommand classifiable and
+        // non-egress, so a trusted folder keeps auto-approving them.
+        for command in [
+            "git -C . status",
+            "git --no-pager log",
+            "git -C . diff",
+            "git status",
+            "git add src/x.rs",
+            "git commit -m x",
+            "git diff --stat",
+        ] {
+            assert!(ok(command), "should be scoped: {command}");
         }
     }
 
