@@ -97,3 +97,105 @@ fn credential_lookups_log_key_and_prefix() {
         "get_credential(\"missing\") -> None"
     );
 }
+
+// ---------------------------------------------------------------------------
+// gh #343: the exact-match list let standard OAuth keys through. One shared
+// normalized matcher (lowercase, `_`/`-` stripped) with exact + suffix rules.
+// ---------------------------------------------------------------------------
+
+// Verifies: gh #343 acceptance 1 - OAuth token-exchange payloads mask every
+// credential key (the live leak shape: `access_token`/`id_token` in
+// cleartext), in both snake_case and camelCase.
+#[test]
+fn oauth_token_exchange_payloads_mask_every_credential_key() {
+    let out = redact_json(
+        r#"{"access_token":"ya29.a0AfH6SM12345","id_token":"eyJhbGciOiJSUzI1NiJ9.abc","refresh_token":"1//0gabcdef123456","client_secret":"GOCSPX-abcdef123","expires_in":3600,"token_type":"Bearer"}"#,
+    );
+    for secret in [
+        "ya29.a0AfH6SM12345",
+        "eyJhbGciOiJSUzI1NiJ9.abc",
+        "1//0gabcdef123456",
+        "GOCSPX-abcdef123",
+    ] {
+        assert!(!out.contains(secret), "{secret} leaked in {out}");
+    }
+    assert!(out.contains("access_token"), "the key survives: {out}");
+    assert!(out.contains("expires_in"));
+    // `token_type` is not a credential: it stays visible (readability pin).
+    assert!(out.contains(r#""token_type":"Bearer"#));
+
+    // camelCase and hyphenated spellings mask the same way.
+    assert!(!redact_json(r#"{"accessToken":"FAKESECRET-CAMEL-1"}"#).contains("FAKESECRET-CAMEL-1"));
+    assert!(
+        !redact_json(r#"{"Access-Token":"FAKESECRET-HYPHEN-1"}"#).contains("FAKESECRET-HYPHEN-1")
+    );
+}
+
+// Verifies: gh #343 acceptance 2 - an OAuth loopback callback URL masks its
+// one-time `code` (and the other credential params).
+#[test]
+fn oauth_callback_urls_mask_the_code_and_tokens() {
+    let out = redact_url(
+        "http://127.0.0.1:8080/callback?code=4/0AfH6SM12345&state=xyz&token=fa29.a0AfH6SM12345",
+    );
+    assert!(!out.contains("4/0AfH6SM12345"), "code leaked in {out}");
+    assert!(!out.contains("fa29.a0AfH6SM12345"), "token leaked in {out}");
+    assert!(
+        out.contains("state=xyz"),
+        "state is not a credential: {out}"
+    );
+}
+
+// Verifies: gh #343 - camelCase cookie names mask (the snake-case list
+// missed `sessionId`), while the pinned `session_id` behavior is kept.
+#[test]
+fn camel_case_session_cookies_mask() {
+    assert_eq!(
+        redact_header("cookie", "sessionId=abc123456789xyz; theme=dark"),
+        "cookie: sessionId=abc1234...[REDACTED]; theme=dark"
+    );
+    // The pre-#343 pinned shape still holds.
+    assert_eq!(
+        redact_header("cookie", "session_id=abc123456789xyz; theme=dark"),
+        "cookie: session_id=abc1234...[REDACTED]; theme=dark"
+    );
+    assert_eq!(
+        redact_header("cookie", "sid=abc123456789xyz; sessid=def123456789xyz"),
+        "cookie: sid=abc1234...[REDACTED]; sessid=def1234...[REDACTED]"
+    );
+}
+
+// Verifies: gh #343 - usage counters and `token_type` stay visible (the
+// deliberate non-mask that keeps wire logs readable), while the documented
+// over-mask trade (`monkey`, `zip_code`) masks.
+#[test]
+fn usage_counters_stay_visible_and_the_over_mask_is_deliberate() {
+    let payload = r#"{"max_tokens":4096,"input_tokens":123,"prompt_tokens":100,"completion_tokens":23,"token_type":"Bearer","model":"m"}"#;
+    let out = redact_json(payload);
+    for visible in [
+        "\"max_tokens\":4096",
+        "\"input_tokens\":123",
+        "\"prompt_tokens\":100",
+        "\"completion_tokens\":23",
+        "\"token_type\":\"Bearer\"",
+        "\"model\":\"m\"",
+    ] {
+        assert!(
+            out.contains(visible),
+            "{visible} should stay visible in {out}"
+        );
+    }
+    assert!(!out.contains("REDACTED"), "no counter is a secret: {out}");
+    // The accepted over-mask: a false mask costs a debug line; a false pass
+    // leaks a credential. Pinned so the trade is visible and deliberate.
+    assert!(!redact_json(r#"{"monkey":"FAKESECRET-MONKEY-1"}"#).contains("FAKESECRET-MONKEY-1"));
+    assert!(!redact_json(r#"{"zip_code":"FAKESECRET-ZIP-1"}"#).contains("FAKESECRET-ZIP-1"));
+}
+
+// Verifies: gh #343 - a URL with no query and non-JSON text pass through
+// unchanged (the pre-existing passthrough contract).
+#[test]
+fn no_query_and_non_json_pass_through() {
+    assert_eq!(redact_url("https://x.test/plain"), "https://x.test/plain");
+    assert_eq!(redact_json("plain text"), "plain text");
+}

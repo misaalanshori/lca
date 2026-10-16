@@ -20,6 +20,26 @@ Dates are UTC.
   line); no WIT or schema change.
 
 ### Security
+- **Debug-log secret hygiene (gh #343, #342).** Two defects in
+  `lca-debug`'s `~/.lca/logs/` write path.
+  - **gh #343:** `redact_url`/`redact_json`/`redact_cookie` matched
+    keys by exact equality against a six-name list, so standard OAuth
+    keys — `access_token`, `id_token`, and the callback `code` — were
+    written in cleartext to `debug-wire.log`, along with
+    `sessionId`-style camelCase cookies. Matching is now one shared
+    `is_sensitive_key` over a normalized name (lowercase, `_`/`-`
+    stripped; exact + suffix), so `access_token`, `accessToken`,
+    `Access-Token`, `client_secret`, `device_code`, and `authorization`
+    all mask. Usage counters (`max_tokens`, `input_tokens`,
+    `prompt_tokens`) and `token_type` deliberately stay visible; the
+    accepted over-mask (`monkey`, `zip_code`) is documented — a false
+    mask costs a debug line, a false pass leaks a credential.
+  - **gh #342:** `RotatingWriter` opened the debug files with the
+    default mode (umask 022 → `0644`), world-readable to any local
+    user. New opens use `0600` and repair a pre-existing `0644` file
+    on the next open; rotation renames the already-repaired file, so
+    the `.1` spare is `0600` too. Windows relies on the inherited
+    `%USERPROFILE%` profile ACL (documented, not asserted).
 - **`{file:}` substitution bypassed the credential store through a
   symlink (gh #341).** `read_secret_file` refused protected stores on
   the lexical path only, then `std::fs::read_to_string` followed

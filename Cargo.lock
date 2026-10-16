@@ -1771,6 +1771,7 @@ dependencies = [
  "lca-cli",
  "lca-config",
  "lca-core",
+ "lca-debug",
  "lca-ext-abi",
  "lca-ext-host",
  "lca-ext-native",

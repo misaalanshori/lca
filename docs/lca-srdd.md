@@ -98,6 +98,8 @@ First-party extensions, including the default OpenAI-compatible provider and ski
 
 `lca-testkit` holds the fake provider, the test harness, and shared fixtures. It is a dev dependency everywhere.
 
+`lca-debug` holds internal lifecycle tracing, the redaction rules, and the rotating debug-log writers (gh #258, #342, #343); it is always a dependency but emits nothing unless the `debug-trace` feature is on.
+
 `lca-cli` is the binary. It wires everything, parses arguments, and owns `main`.
 
 `xtask` is the build automation crate. It runs cross-compilation, size checks, WIT validation, and release packaging.
@@ -758,6 +760,7 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── lca-ext-native/         in-binary extension registry, default-feature wiring
 │   ├── lca-registry/           OCI and HTTPS-archive resolvers, lockfile
 │   ├── lca-config/             configuration merge
+│   ├── lca-debug/              lifecycle tracing, redaction, rotating debug logs
 │   ├── lca-tui/                terminal engine and widget library
 │   ├── lca-ui/                 agent interface: transcript, chrome, selectors
 │   ├── lca-sdk/                embedding API

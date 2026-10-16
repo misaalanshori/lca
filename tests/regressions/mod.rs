@@ -318,3 +318,10 @@ mod interpreter_inline_eval_auto_approve;
 // link into `~/.lca/credentials/` read the secret at config-load time.
 #[path = "341-file-substitution-symlink-bypass.rs"]
 mod file_substitution_symlink_bypass;
+// GitHub #343: debug redaction matched keys exactly, so OAuth
+// `access_token`/`id_token`/`code` leaked to `debug-wire.log` in the clear.
+#[path = "343-debug-redaction-oauth-keys.rs"]
+mod debug_redaction_oauth_keys;
+// GitHub #342: debug logs were created world-readable (umask 022).
+#[path = "342-debug-log-owner-only.rs"]
+mod debug_log_owner_only;

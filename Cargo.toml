@@ -49,6 +49,9 @@ lca-testkit = { path = "crates/lca-testkit" }
 lca-tools = { path = "crates/lca-tools" }
 lca-tui = { path = "crates/lca-tui" }
 lca-ui = { path = "crates/lca-ui" }
+# gh #342/#343: the debug-log redaction and permission guards drive the
+# public `lca-debug` API (redact, RotatingWriter) directly.
+lca-debug = { path = "crates/lca-debug" }
 image.workspace = true
 antigravity = { path = "extensions/antigravity" }
 lca-subscription = { path = "crates/lca-subscription" }

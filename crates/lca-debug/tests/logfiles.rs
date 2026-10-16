@@ -71,3 +71,81 @@ fn rotation_never_creates_a_third_file() {
         "live plus one spare, nothing else: {files:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// gh #342: the logs were opened with the default mode (umask 022 → 0644),
+// world-readable. Owner-only 0600 on Unix; the Windows shape is the profile
+// ACL (documented, not testable here).
+// ---------------------------------------------------------------------------
+
+/// The Unix permission bits of a path.
+#[cfg(unix)]
+fn mode_of(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).expect("stat").permissions().mode() & 0o777
+}
+
+// Verifies: gh #342 acceptance 1 - a newly created log file is 0600.
+// Windows has no POSIX mode bits; the profile ACL is the documented shape
+// and its assertion would need ACL surgery the crate does not carry.
+#[cfg(unix)]
+#[test]
+fn a_new_log_file_is_owner_only() {
+    let root = lca_testkit::scratch_path("debug-mode-new");
+    let path = root.join("debug.log");
+    let mut writer = RotatingWriter::open(&path).expect("open");
+    writer.write_all(b"line\n").expect("write");
+    writer.flush().expect("flush");
+    assert_eq!(mode_of(&path), 0o600, "a fresh log file is owner-only");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_new_log_file_is_owner_only() {
+    // Windows: `%USERPROFILE%` subdirectories inherit the profile ACL
+    // (user + SYSTEM + Administrators), so other unprivileged users cannot
+    // read the logs. Asserting that needs ACL surgery, which is out of
+    // scope; the shape is documented in `logfiles.rs` and
+    // `docs/environment-variables.md`.
+    let root = lca_testkit::scratch_path("debug-mode-new");
+    let path = root.join("debug.log");
+    let mut writer = RotatingWriter::open(&path).expect("open");
+    writer.write_all(b"line\n").expect("write");
+    writer.flush().expect("flush");
+    assert!(path.exists(), "the file exists (ACL is the platform shape)");
+}
+
+// Verifies: gh #342 acceptance 2 - a pre-existing world-readable file is
+// repaired to 0600 on the next open (the end state matters, not just new
+// files); rotation keeps both the live file and its spare owner-only.
+#[cfg(unix)]
+#[test]
+fn a_preexisting_world_readable_file_is_repaired_and_rotation_keeps_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = lca_testkit::scratch_path("debug-mode-repair");
+    let path = root.join("debug.log");
+    // Plant a 0644 file as a previous version would have left it.
+    std::fs::write(&path, "old\n").expect("plant");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod 644");
+    assert_eq!(mode_of(&path), 0o644, "the fixture starts world-readable");
+
+    // A tiny cap so the first write rotates, exercising every open site.
+    let mut writer = RotatingWriter::with_cap(&path, 4).expect("open");
+    writer.write_all(b"new line\n").expect("write");
+    writer.flush().expect("flush");
+
+    assert_eq!(mode_of(&path), 0o600, "the live file is repaired");
+    let spare = root.join("debug.log.1");
+    if spare.exists() {
+        assert_eq!(mode_of(&spare), 0o600, "the rotated spare is owner-only");
+    }
+    // A direct repair (no rotation) also holds: reopen a 0644 file and
+    // write once.
+    let plain = root.join("debug-wire.log");
+    std::fs::write(&plain, "old\n").expect("plant");
+    std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).expect("chmod 644");
+    let mut writer = RotatingWriter::open(&plain).expect("open");
+    writer.write_all(b"more\n").expect("write");
+    writer.flush().expect("flush");
+    assert_eq!(mode_of(&plain), 0o600, "a reopened 0644 file is repaired");
+}

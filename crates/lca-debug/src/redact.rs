@@ -4,30 +4,60 @@
 //! schemes, and an identifying key prefix survive so developers can
 //! tell *which* credential is active without exposing it.
 
-/// Sensitive JSON keys and query parameters (the spec's set, verbatim).
-const SENSITIVE_KEYS: &[&str] = &[
-    "key",
-    "token",
-    "client_secret",
-    "refresh_token",
-    "api_key",
-    "password",
-];
-
-/// Cookie names whose values are sessions, not preferences.
-const SENSITIVE_COOKIES: &[&str] = &[
-    "session",
-    "session_id",
-    "token",
-    "auth",
-    "sid",
-    "sessid",
-    "credentials",
-    "secret",
-    "password",
-    "api_key",
-    "apikey",
-];
+/// Whether a key/parameter/cookie name carries a credential (gh #343).
+///
+/// Matched on a normalized name (lowercase, `_`/`-` stripped) so
+/// `access_token`, `accessToken`, and `Access-Token` all match. Exact
+/// names cover the short forms (`code`, `auth`, `session`); the suffix
+/// rule covers the `*_token`/`*_key`/`*_secret`/`*_code`/`*_auth`
+/// family.
+///
+/// Deliberately does NOT match plural usage counters (`max_tokens`,
+/// `input_tokens`, `prompt_tokens`, `completion_tokens`) or `token_type` —
+/// those are not credentials and keep wire logs readable.
+///
+/// Accepted over-mask (the direction is right: a false mask costs one
+/// debug line, a false pass leaks a credential): `monkey`, `hotkey`, and
+/// `zip_code`-style names mask too, because their normalized form ends in
+/// a sensitive suffix.
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized: String = key
+        .chars()
+        .filter(|c| *c != '_' && *c != '-')
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    const EXACT: &[&str] = &[
+        "key",
+        "token",
+        "code",
+        "secret",
+        "password",
+        "authorization",
+        "auth",
+        "credentials",
+        "session",
+        "cookie",
+        // The short session-cookie forms the suffix rule cannot reach.
+        "sid",
+        "sessid",
+        "sessionid",
+        "apikey",
+    ];
+    const SUFFIXES: &[&str] = &[
+        "token",
+        "key",
+        "secret",
+        "password",
+        "code",
+        "auth",
+        "session",
+        "credentials",
+    ];
+    EXACT.contains(&normalized.as_str()) || SUFFIXES.iter().any(|s| normalized.ends_with(s))
+}
 
 /// Mask a secret, keeping an identifying prefix: 8 chars for keys of
 /// 16+ chars, the first half below that, nothing for a 0-1 char value.
@@ -75,10 +105,7 @@ fn redact_cookie(value: &str) -> String {
             match pair.split_once('=') {
                 Some((key, val)) => {
                     let key = key.trim();
-                    if SENSITIVE_COOKIES
-                        .iter()
-                        .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
-                    {
+                    if is_sensitive_key(key) {
                         format!("{key}={}", redact_secret(val.trim()))
                     } else {
                         pair.to_string()
@@ -102,10 +129,7 @@ pub fn redact_url(url: &str) -> String {
         .split('&')
         .map(|pair| match pair.split_once('=') {
             Some((key, val)) => {
-                if SENSITIVE_KEYS
-                    .iter()
-                    .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
-                {
+                if is_sensitive_key(key) {
                     format!("{key}={}", redact_secret(val))
                 } else {
                     pair.to_string()
@@ -134,14 +158,22 @@ fn mask_json(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             for (key, val) in map.iter_mut() {
-                if SENSITIVE_KEYS
-                    .iter()
-                    .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
-                {
-                    if let Some(text) = val.as_str() {
-                        *val = serde_json::Value::String(redact_secret(text));
-                    } else {
-                        *val = serde_json::Value::String("[REDACTED]".to_string());
+                if is_sensitive_key(key) {
+                    match val {
+                        serde_json::Value::String(text) => {
+                            *val = serde_json::Value::String(redact_secret(text));
+                        }
+                        // A container under a sensitive name (e.g. `auth`)
+                        // keeps its schema: recurse rather than blank the
+                        // whole subtree, matching the module's "schema and
+                        // keys survive at every depth" contract. Any secret
+                        // nested inside is masked by the recursion.
+                        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                            mask_json(val);
+                        }
+                        _ => {
+                            *val = serde_json::Value::String("[REDACTED]".to_string());
+                        }
                     }
                 } else {
                     mask_json(val);

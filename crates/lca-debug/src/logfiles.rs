@@ -79,31 +79,34 @@ impl RotatingWriter {
         })
     }
 
-    /// Rotate when the live file reached the cap.
-    fn rotate_if_full(&mut self) -> std::io::Result<()> {
+    /// Rotate when the live file reached the cap. Returns whether it
+    /// rotated (the caller reopens).
+    fn rotate_if_full(&mut self) -> std::io::Result<bool> {
         let size = std::fs::metadata(&self.path)
             .map(|meta| meta.len())
             .unwrap_or(0);
         if size < self.cap {
-            return Ok(());
+            return Ok(false);
         }
+        // Drop the handle before the rename (Windows cannot rename an open
+        // file).
         self.file = None;
         let _ = std::fs::remove_file(&self.spare);
         std::fs::rename(&self.path, &self.spare)?;
-        Ok(())
+        Ok(true)
     }
 }
 
 impl Write for RotatingWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.rotate_if_full()?;
+        // Open (and repair) the live file BEFORE any rotation: the repair
+        // (gh #342) runs on a pre-existing 0644 file first, so the rename
+        // carries an already-owner-only file into the `.1` spare.
         if self.file.is_none() {
-            self.file = Some(
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&self.path)?,
-            );
+            self.file = Some(open_owner_only(&self.path)?);
+        }
+        if self.rotate_if_full()? {
+            self.file = Some(open_owner_only(&self.path)?);
         }
         match self.file.as_mut() {
             Some(file) => file.write(buf),
@@ -117,4 +120,41 @@ impl Write for RotatingWriter {
         }
         Ok(())
     }
+}
+
+/// Open (creating) the debug log owner-only (gh #342).
+///
+/// The logs record prompts, HTTP payloads, and file paths, so they are
+/// not world-readable. On Unix, `mode(0o600)` covers creation and a
+/// `set_permissions(0o600)` on the open handle **repairs a pre-existing
+/// 0644 file** left by an earlier version — the end state is what the
+/// acceptance criterion demands, and rotation renames the already-repaired
+/// live file, so the `.1` spare inherits 0600 too.
+///
+/// Windows: `%USERPROFILE%` subdirectories inherit the profile ACL (user +
+/// SYSTEM + Administrators), so another unprivileged user cannot read the
+/// logs. Asserting or tightening that needs ACL surgery the crate does not
+/// carry; the inherited ACL is the documented shape.
+/// ponytail: profile-ACL inheritance, not explicit owner-only ACLs; add a
+/// Windows ACL helper if a cross-user read is ever demonstrated.
+fn open_owner_only(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // The repair must never break logging (diagnostics degrade, never
+        // fail the agent); creation already used `mode(0o600)`, so a
+        // failure here leaves a file no worse than a fresh 0600 one. The
+        // error is intentionally swallowed (nothing logs before the
+        // subscriber exists, and the `tracing` dependency is optional).
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(file)
 }
