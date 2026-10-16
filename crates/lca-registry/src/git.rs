@@ -43,8 +43,10 @@ pub fn parse_git_source(source: &str) -> Option<(String, Option<String>)> {
 }
 
 /// Whether a url/rev is safe to hand to git as a positional argument: not
-/// empty, and not option-shaped. `-`-prefixed after trimming because git
-/// strips nothing before deciding "is this a flag".
+/// empty, and not option-shaped. The leading-whitespace trim is
+/// deliberately stricter than git (which reads a ` --x` token literally):
+/// no legitimate url or rev begins with whitespace, so refusing one costs
+/// nothing and closes the "looks like a flag" reading.
 fn is_usable_git_value(value: &str) -> bool {
     !value.is_empty() && !value.trim_start().starts_with('-')
 }
