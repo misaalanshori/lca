@@ -54,14 +54,6 @@ ignore = [
     # cargo-deny's yank-ignore for `zip` (same array, a package spec):
     # see the paragraph above. Scoped to this one crate.
     { crate = "zip" },
-    # The zip author is actively yanking/un-yanking 2.x releases (the
-    # crates.io index toggled several times on 2026-10-16/17), so any
-    # pinned 2.x can turn this gate red through no change of ours. A
-    # package spec in the same `ignore` array is cargo-deny's
-    # yank-ignore: the yank becomes a note, and a stale spec warns
-    # rather than fails. Scoped to `zip` only; every other crate's yank
-    # still fails the build.
-    { crate = "zip" },
 ]
 
 [licenses]
