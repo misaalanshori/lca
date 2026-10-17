@@ -126,6 +126,22 @@ Dates are UTC.
     eval flag matches its glued form; the first also closes the same
     bypass in `DENY_PROGRAMS`.
 
+### Changed
+- **The reasoning-signature extras bridge is recorded in-tree and pinned
+  (gh #289).** The 0.6 `content-block` variant has no `reasoning` case, so
+  a thinking run's replay signature crosses the ABI in the message's
+  reserved extras map under `thinking-signature`, and the guest rebuilds
+  the `Reasoning` block from it. That workaround is live-verified
+  (`gemini-3.8-flash` tool turns complete, follow-ups answer) and is now
+  the signature transport for the whole 0.6 line, documented in
+  `docs/abi-versioning.md` (the 0.6-compat window) and
+  `docs/providers/antigravity.md`. The host end — writing the key
+  alongside, forwarding `message.extras` verbatim, never overwriting a
+  caller's own key — is pinned by `lca-ext-host`'s `reasoning_bridge_tests`;
+  the guest end by the antigravity extension's rows. The typed `reasoning`
+  WIT case stays 0.7 work (#352, on the #123/#149/#354/#284/#302/#353
+  train) and no `wit/` file changed here.
+
 ### Fixed
 - **A cancellation test's hang guard fired after CI's own kill (CI
   `39044027340`).** `a_fresh_turn_starts_clean_after_cancellation` guards
