@@ -85,13 +85,13 @@ pub fn build_messages_body(
         match message.role {
             MessageRole::System => {}
             MessageRole::User => {
-                let mut blocks = content_blocks(&message.content);
+                let blocks = content_blocks(&message.content);
                 if blocks.is_empty() {
                     continue;
                 }
-                if cache_breakpoints && let Some(last) = blocks.last_mut() {
-                    last["cache_control"] = breakpoint();
-                }
+                // No breakpoint here: see the single post-loop anchor below.
+                // gh #334: planting one per user message grew the count
+                // linearly with history and broke Anthropic's 4-cap.
                 messages.push(serde_json::json!({"role": "user", "content": blocks}));
             }
             MessageRole::Assistant => {
@@ -159,6 +159,23 @@ pub fn build_messages_body(
             }
         }
     }
+    // gh #334: pi's THIRD cache anchor — the final block of the LAST
+    // serialized message — attached once, here, rather than inside the
+    // loop. This is deliberately outside the role match so a request whose
+    // last message is a tool result (serialized as `role: user` +
+    // `tool_result`, which the old code never reached) still gets it.
+    //
+    // Anthropic caps a request at FOUR `cache_control` breakpoints; this
+    // plus the system prompt and the last tool declaration is three, which
+    // leaves headroom. Do not attach another here.
+    if cache_breakpoints
+        && let Some(last_message) = messages.last_mut()
+        && let Some(last_block) = last_message["content"]
+            .as_array_mut()
+            .and_then(|blocks| blocks.last_mut())
+    {
+        last_block["cache_control"] = breakpoint();
+    }
     let mut tools: Vec<serde_json::Value> = request.tools.iter().map(tool_declaration).collect();
     if cache_breakpoints && let Some(last) = tools.last_mut() {
         last["cache_control"] = breakpoint();
@@ -195,8 +212,46 @@ pub fn build_messages_body(
 }
 
 /// One message's content blocks in the Messages shape.
+///
+/// gh #335: Anthropic requires `thinking`/`redacted_thinking` blocks to
+/// PRECEDE every other assistant content block — a replay that puts text
+/// first is rejected with "thinking blocks must precede all other content
+/// blocks". So reasoning is emitted first (relative order preserved,
+/// signatures verbatim), then the merged text, then images. The merged
+/// text shape is kept: only the *ordering* is the API's requirement.
 fn content_blocks(content: &[ContentBlock]) -> Vec<serde_json::Value> {
     let mut blocks = Vec::new();
+    for block in content {
+        if let ContentBlock::Reasoning {
+            reasoning,
+            signature,
+        } = block
+        {
+            // gh #41: replay resends the thinking verbatim with its
+            // signature; a signature over redacted (empty) text
+            // travels as `redacted_thinking`, pi's shape, so the
+            // vendor accepts the transcript.
+            match signature {
+                Some(signature) if reasoning.is_empty() => {
+                    blocks.push(serde_json::json!({
+                        "type": "redacted_thinking",
+                        "data": signature,
+                    }));
+                }
+                Some(signature) => {
+                    blocks.push(serde_json::json!({
+                        "type": "thinking",
+                        "thinking": reasoning,
+                        "signature": signature,
+                    }));
+                }
+                // Unsigned reasoning never goes back on the wire:
+                // resending thinking without its signature is what
+                // signature-requiring vendors reject.
+                None => {}
+            }
+        }
+    }
     let text: String = content
         .iter()
         .filter_map(|block| match block {
@@ -208,46 +263,15 @@ fn content_blocks(content: &[ContentBlock]) -> Vec<serde_json::Value> {
         blocks.push(serde_json::json!({"type": "text", "text": text}));
     }
     for block in content {
-        match block {
-            ContentBlock::Reasoning {
-                reasoning,
-                signature,
-            } => {
-                // gh #41: replay resends the thinking verbatim with its
-                // signature; a signature over redacted (empty) text
-                // travels as `redacted_thinking`, pi's shape, so the
-                // vendor accepts the transcript.
-                match signature {
-                    Some(signature) if reasoning.is_empty() => {
-                        blocks.push(serde_json::json!({
-                            "type": "redacted_thinking",
-                            "data": signature,
-                        }));
-                    }
-                    Some(signature) => {
-                        blocks.push(serde_json::json!({
-                            "type": "thinking",
-                            "thinking": reasoning,
-                            "signature": signature,
-                        }));
-                    }
-                    // Unsigned reasoning never goes back on the wire:
-                    // resending thinking without its signature is what
-                    // signature-requiring vendors reject.
-                    None => {}
-                }
-            }
-            ContentBlock::Image { media_type, bytes } => {
-                blocks.push(serde_json::json!({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": lca_protocol::base64_encode(bytes),
-                    },
-                }));
-            }
-            _ => {}
+        if let ContentBlock::Image { media_type, bytes } = block {
+            blocks.push(serde_json::json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": lca_protocol::base64_encode(bytes),
+                },
+            }));
         }
     }
     blocks

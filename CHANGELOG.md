@@ -127,6 +127,26 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **Anthropic cache breakpoints grew with history (gh #334).** The
+  Messages body planted a `cache_control` breakpoint on the last block of
+  **every user message**, so a session with three user turns emitted five
+  (system + tools + three messages). Anthropic caps a request at four and
+  rejects the rest with `invalid_request_error: At most 4 cache_control
+  breakpoints may be specified`. The same arm matched only the user role,
+  so a request ending in a tool result got **no** final breakpoint at all
+  — the cache tail was silently missing exactly on tool rounds. There are
+  now three fixed anchors and never more: the system prompt, the last tool
+  declaration, and one post-loop breakpoint on the final block of the last
+  serialized message (which covers a tool-result final, since that
+  serializes as `role: user`).
+- **Anthropic assistant `thinking` blocks serialized after text
+  (gh #335).** `content_blocks` merged the text segments and pushed them
+  at index 0, then appended the reasoning blocks. Anthropic requires
+  `thinking`/`redacted_thinking` to precede every other assistant content
+  block, so replaying a thinking turn failed with
+  `thinking blocks must precede all other content blocks` — turn 2 of any
+  thinking conversation. Reasoning now serializes first (relative order
+  preserved, signatures verbatim), then the merged text, then `tool_use`.
 - **`[limits] memory_mb` was parsed as bytes, and `[limits]` was ignored
   without `[capabilities]` (gh #287).** Two defects in the manifest's
   resource-hint table. `memory_bytes` was assigned the raw `memory_mb`

@@ -353,3 +353,11 @@ mod tools_capability_install_consent;
 // (a 64-byte limiter), and `[limits]` was ignored without `[capabilities]`.
 #[path = "287-manifest-limits-memory-unit.rs"]
 mod manifest_limits_memory_unit;
+// GitHub #334: a cache breakpoint on every user message broke Anthropic's
+// four-breakpoint cap, and tool-final requests got no tail anchor at all.
+#[path = "334-cache-breakpoint-cap.rs"]
+mod cache_breakpoint_cap;
+// GitHub #335: assistant `text` serialized before `thinking`, which
+// Anthropic rejects on replay.
+#[path = "335-thinking-blocks-precede-text.rs"]
+mod thinking_blocks_precede_text;
