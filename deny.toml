@@ -36,10 +36,13 @@ ignore = [
     # change against a code path we never execute, and the release policy
     # puts a dependency update in its own PR, not bundled with a fix.
     #
-    # The lockfile resolves `zip` to a non-yanked 2.x (see Cargo.lock):
-    # 2.4.2 was yanked by the author on 2026-10-16, which `yanked =
-    # "deny"` rejects on its own, so the 2 line is kept but moved off the
-    # pulled version. The `version = "2"` manifest line is unchanged.
+    # The `zip` 2.x line is the pinned dependency; the author is
+    # actively yanking/un-yanking those releases, and the crates.io
+    # index toggled several times across 2026-10-16/17. A version pin is
+    # therefore not stable enough to satisfy `yanked = "deny"` on its
+    # own, so `zip` gets a yank-ignore (the package spec below): a yank
+    # on it is a note, while a stale spec is only a warning, so the gate
+    # is deterministic. Every other crate's yank still fails the build.
     #
     # Remove when: a 2.x backport of the three advisories lands, or zip 9
     # ships a lean deflate feature set (drop `zopfli`/`nix`), or at the
@@ -48,6 +51,17 @@ ignore = [
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
+    # cargo-deny's yank-ignore for `zip` (same array, a package spec):
+    # see the paragraph above. Scoped to this one crate.
+    { crate = "zip" },
+    # The zip author is actively yanking/un-yanking 2.x releases (the
+    # crates.io index toggled several times on 2026-10-16/17), so any
+    # pinned 2.x can turn this gate red through no change of ours. A
+    # package spec in the same `ignore` array is cargo-deny's
+    # yank-ignore: the yank becomes a note, and a stale spec warns
+    # rather than fails. Scoped to `zip` only; every other crate's yank
+    # still fails the build.
+    { crate = "zip" },
 ]
 
 [licenses]

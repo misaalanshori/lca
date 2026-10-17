@@ -138,10 +138,11 @@ Dates are UTC.
   the writes use `ZipWriter`. Patch is `zip >= 9.0.0` with no 2.x
   backport; bumping to 9 warps in `nix`/`typed-path`/`zopfli` for an
   unreachable code path, so the three IDs join `deny.toml`'s ignore list
-  with the dead-code evidence and a remove-when note. `zip` 2.4.2 was
-  also yanked by its author on 2026-10-16, so the lockfile resolves the
-  2.x line to a non-yanked release; the `version = "2"` manifest line is
-  unchanged. No behavior change.
+  with the dead-code evidence. The `zip` 2.x line is also being
+  yanked/un-yanked upstream (the index toggled repeatedly on
+  2026-10-16/17), so `zip` carries a cargo-deny yank-ignore in the same
+  array, making the yank check deterministic without moving the pin. No
+  behavior change; the `version = "2"` manifest line is unchanged.
 - **Antigravity model listing on real payloads (gh #236).** The
 claimed 10M-fuel exhaustion did not reproduce on the fresh
 component (measured floor: ~1.5M for a 12 KiB / 32-model catalog,
