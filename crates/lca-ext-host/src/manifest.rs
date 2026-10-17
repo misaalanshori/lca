@@ -130,7 +130,6 @@ impl Manifest {
         let mut parsed_completion = false;
         let mut tools = false;
         let mut parsed_ui_regions: Vec<String> = Vec::new();
-        let mut parsed_limits: Option<ExtensionLimits> = None;
         if let Some(capabilities) = value.get("capabilities") {
             let table = capabilities.as_table().ok_or_else(|| {
                 LoadError::InvalidManifest("`capabilities` must be a table".into())
@@ -305,8 +304,15 @@ impl Manifest {
                 }
             }
             parsed_ui_regions = ui_regions;
-            parsed_limits = manifest_limits(&value)?;
         }
+
+        // gh #287: `[limits]` is a resource hint, not a capability. It used
+        // to be parsed inside the `[capabilities]` branch, so a limits-only
+        // extension (a pure tool, hook, or workflow) silently ran on the
+        // host's defaults. Parsed unconditionally now; `manifest_limits`
+        // returns `Ok(None)` when the table is absent, so a manifest with
+        // neither still gets no override.
+        let parsed_limits = manifest_limits(&value)?;
 
         // Gh #157: the optional `[login]` table declares the
         // environment override the host consults before stored
@@ -373,9 +379,20 @@ fn manifest_limits(value: &toml::Value) -> Result<Option<ExtensionLimits>, LoadE
         ));
     }
     Ok(Some(ExtensionLimits {
-        memory_bytes: (memory_mb as usize).min(MAX_MEMORY_BYTES),
+        // gh #287: `memory_mb` is **mebibytes** (the schema's unit, and the
+        // key name); `memory_bytes` and `MAX_MEMORY_BYTES` are bytes.
+        // Multiply FIRST, then clamp: clamping the un-multiplied value
+        // turned a 1000-MiB ask into a 1000-BYTE limiter. Saturating so a
+        // wild value cannot wrap before the clamp sees it.
+        memory_bytes: (memory_mb as usize)
+            .saturating_mul(1024 * 1024)
+            .min(MAX_MEMORY_BYTES),
         fuel_per_call: (fuel as u64).min(MAX_FUEL_PER_CALL),
-        log_limit_bytes: 0, // log stays the host's (config key)
+        // The manifest cannot set this: the log cap is a host configuration
+        // key (`extensions.log_limit_bytes`), and `ExtHost` always overrides
+        // this field with its own value (see the per-instance limits merge),
+        // so `0` here is never observed as "no log output".
+        log_limit_bytes: 0,
     }))
 }
 

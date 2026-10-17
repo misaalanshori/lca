@@ -133,7 +133,7 @@
           "minimum": 1,
           "maximum": 512,
           "default": 64,
-          "description": "Linear memory ceiling for one instance."
+          "description": "Linear memory ceiling for one instance, in mebibytes (MiB). The host multiplies by 1,048,576 and clamps to its own maximum."
         },
         "fuel_per_call": {
           "type": "integer",

@@ -293,6 +293,15 @@ returns it as an error result (a guest cannot distinguish a denied
 call from a failed one, by design); the refusal is recorded
 (FR-EXT-9) either way.
 
+## Resource hints
+
+A manifest may also carry a `[limits]` table, which is **not** a
+capability and grants nothing: it hints at resource ceilings the host may
+lower. `memory_mb` is mebibytes (1..512, default 64) and `fuel_per_call`
+is the execution budget for one call. The table applies whether or not the
+manifest declares `[capabilities]`. See the authoring guide's "Capabilities
+in practice" for the practical advice.
+
 ## Capabilities deliberately absent from 0.1
 
 These come up in design discussion and are not in the first release. Each needs evidence from Phase 3 before it is added, following the pattern that already justified adding `net-local`, `pty`, and `completion` during design: a real, motivated case, not a speculative one.

@@ -127,6 +127,24 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **`[limits] memory_mb` was parsed as bytes, and `[limits]` was ignored
+  without `[capabilities]` (gh #287).** Two defects in the manifest's
+  resource-hint table. `memory_bytes` was assigned the raw `memory_mb`
+  number, so a manifest asking for 64 MiB got a **64-byte** limiter —
+  Wasmtime then traps on the guest's first 64 KiB page with `memory
+  minimum size of 17 pages exceeds memory limits`, and the extension never
+  runs at all. The clamp order was wrong twice over as well:
+  `.min(MAX_MEMORY_BYTES)` ran on the un-multiplied value, so a 1000-MiB
+  ask clamped to 1000 *bytes*. `memory_bytes` is now
+  `memory_mb.saturating_mul(1 MiB).min(MAX_MEMORY_BYTES)` — multiply
+  first, clamp the bytes after. Separately, the parse call sat inside the
+  `[capabilities]` branch, so a `[limits]`-declaring extension with no
+  capabilities table silently ran on the host's defaults; it is parsed
+  unconditionally now (`Ok(None)` when the table is absent). The schema's
+  `memory_mb` description never stated the unit, which is how the drift
+  survived — it now says mebibytes. No shipped extension declares
+  `[limits]`, so no released manifest was affected; the trap was reachable
+  by any third-party manifest that did.
 - **A `tools` capability blocked every install (gh #307).** The
   install-time consent generator enumerated the capability vocabulary
   with a nine-arm match and a wildcard error arm. The `tools` capability

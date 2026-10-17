@@ -349,3 +349,7 @@ mod gc_keeps_live_tool_result_images;
 // declaring that capability failed install with "unknown capability".
 #[path = "307-tools-capability-install-consent.rs"]
 mod tools_capability_install_consent;
+// GitHub #287: `[limits] memory_mb` was assigned to the byte field raw
+// (a 64-byte limiter), and `[limits]` was ignored without `[capabilities]`.
+#[path = "287-manifest-limits-memory-unit.rs"]
+mod manifest_limits_memory_unit;
