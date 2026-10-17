@@ -127,6 +127,25 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **`session gc` deleted live tool-result images (gh #311).** The mark
+  set was built by a walker that matched `user` attachments and a
+  `tool-result`'s oversized-text `attachment`, but never
+  `ToolResult.images` — the field gh #113 added for images a tool
+  returned. A result carrying only images has `attachment: None`, so the
+  pattern did not match at all and `lca session gc` **permanently deleted
+  live images**, after which turn assembly and export failed on the
+  missing files. Silent, destructive, on a documented user command.
+  The root cause was drift: the export walker had learned about `images`
+  in #113 and the gc walker had not, so there are now **three** callers
+  of one shared walker,
+  `lca_session::attachments::referenced_attachments` — gc's mark set, the
+  export's attachment map, and the export's inlined-image set — with a
+  checklist naming each hash-bearing record field and each deliberately
+  excluded one. `ToolResult.full_output_path` is excluded because it is a
+  path derived from `attachment`, not an independent hash. Verified: a
+  tool-result image survives gc, a text spill survives, a user attachment
+  survives, a genuinely unreferenced file is still swept (gc is not
+  neutered), and export lists exactly the same hash set before and after.
 - **Truncated WebP headers panicked the image widget (gh #358).** The
   dimension sniffer proved 16 bytes of `RIFF….WEBP` magic and then read
   the canvas size with direct indexing: `VP8X` and `VP8 ` reached byte 29,

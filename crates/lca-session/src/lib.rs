@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod attachments;
 mod cache;
 pub(crate) mod debug;
 pub mod export_html;

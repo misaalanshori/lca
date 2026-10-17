@@ -240,35 +240,27 @@ impl SessionStore {
         records: &[lca_protocol::Record],
     ) -> serde_json::Map<String, serde_json::Value> {
         let mut map = serde_json::Map::new();
-        for record in records {
-            let hashes: Vec<&String> = match record {
-                lca_protocol::Record::User { attachments, .. } => attachments.iter().collect(),
-                lca_protocol::Record::ToolResult {
-                    attachment, images, ..
-                } => attachment.iter().chain(images.iter()).collect(),
-                _ => Vec::new(),
+        // gh #311: the SAME walker the GC uses, so "export resolves" and "gc
+        // keeps" cannot drift apart again. It used to be an inline closure
+        // here and a different one in `store::gc`, and they disagreed about
+        // tool-result images.
+        for hash in crate::attachments::reachable_set(records) {
+            let Some(path) = self.attachment_path(session, &hash) else {
+                continue;
             };
-            for hash in hashes {
-                if map.contains_key(hash) {
-                    continue;
-                }
-                let Some(path) = self.attachment_path(session, hash) else {
-                    continue;
-                };
-                let own = session.dir().join("attachments").join(hash);
-                let value = if path == own {
-                    format!("attachments/{hash}")
-                } else {
-                    let owner = path
-                        .parent()
-                        .and_then(Path::parent)
-                        .and_then(Path::file_name)
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    format!("../{owner}/attachments/{hash}")
-                };
-                map.insert(hash.clone(), serde_json::Value::String(value));
-            }
+            let own = session.dir().join("attachments").join(&hash);
+            let value = if path == own {
+                format!("attachments/{hash}")
+            } else {
+                let owner = path
+                    .parent()
+                    .and_then(Path::parent)
+                    .and_then(Path::file_name)
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                format!("../{owner}/attachments/{hash}")
+            };
+            map.insert(hash, serde_json::Value::String(value));
         }
         map
     }
@@ -336,15 +328,11 @@ impl SessionStore {
                 .collect()
         };
         let mut images = std::collections::BTreeMap::new();
-        for hash in records
-            .iter()
-            .flat_map(|record| match record {
-                lca_protocol::Record::User { attachments, .. } => attachments.clone(),
-                lca_protocol::Record::ToolResult { images, .. } => images.clone(),
-                _ => Vec::new(),
-            })
-            .collect::<std::collections::HashSet<_>>()
-        {
+        // gh #311: the same walker as gc and the JSON export map. A
+        // tool-result text spill also lands here now, which is harmless: the
+        // `sniff_image_media_type` gate below drops anything that is not an
+        // image, so the inlined set is unchanged.
+        for hash in crate::attachments::reachable_set(&records) {
             let Some(path) = self.attachment_path(session, &hash) else {
                 continue;
             };

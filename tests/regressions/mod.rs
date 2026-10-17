@@ -341,3 +341,7 @@ mod at_file_truncation_utf8_boundary;
 // magic proof, panicking the image widget in the render path.
 #[path = "358-truncated-webp-no-panic.rs"]
 mod truncated_webp_no_panic;
+// GitHub #311: `session gc` deleted live tool-result image attachments
+// because its reachability walker never collected `ToolResult.images`.
+#[path = "311-gc-keeps-live-tool-result-images.rs"]
+mod gc_keeps_live_tool_result_images;

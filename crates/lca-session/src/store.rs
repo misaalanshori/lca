@@ -552,7 +552,7 @@ impl SessionStore {
             // abandoned branch's attachments are still in the log and
             // must survive, while a compaction orphan is truly gone.
             let outcome = self.read_with(member, ViewMode::Audit)?;
-            collect_referenced(
+            crate::attachments::referenced_attachments(
                 &crate::view::reachable_records(outcome.records),
                 &mut reachable,
             );
@@ -1174,23 +1174,4 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     std::fs::rename(&temp, path)?;
     Ok(())
-}
-
-/// Every attachment hash a resolved record list references: the GC's mark
-/// set. A `user` message carries a list, a `tool-result` carries at most one.
-fn collect_referenced(records: &[lca_protocol::Record], out: &mut BTreeSet<String>) {
-    for record in records {
-        match record {
-            lca_protocol::Record::User { attachments, .. } => {
-                out.extend(attachments.iter().cloned());
-            }
-            lca_protocol::Record::ToolResult {
-                attachment: Some(hash),
-                ..
-            } => {
-                out.insert(hash.clone());
-            }
-            _ => {}
-        }
-    }
 }
