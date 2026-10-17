@@ -339,6 +339,17 @@ pub fn consent_lines(manifest: &str) -> Result<Vec<String>, Error> {
                 "{} This lets it ask the current model for a response.",
                 reason(value, "reason")
             )),
+            // ABI 0.6 (gh #77): nested tool calling through the host. The arm
+            // was missing while the WIT, the host manifest parser, and
+            // `docs/capabilities.md` all knew it, so installing any package
+            // that declared it failed at this match (gh #307). The
+            // schema-vocabulary guard test now fails at the growth point
+            // instead: a capability added to the schema without an arm here
+            // turns `every_schema_capability_has_a_consent_line` red.
+            "tools" => lines.push(format!(
+                "{} This lets it list, activate, and call other tools in the session.",
+                reason(value, "reason")
+            )),
             "ui" => lines.push(
                 "Show a segment in the status line and content in the side panel.".to_string(),
             ),

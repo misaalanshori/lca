@@ -285,8 +285,8 @@ active set (registered names apply, unknown names are ignored and
 reported); `get-active-tools` reads it back.
 
 The `reason` field is required. Consent text uses it directly: the
-reason string, followed by "This lets its tools call other tools
-through the agent."
+reason string, followed by "This lets it list, activate, and call other
+tools in the session."
 
 On denial: every function answers the refusal. `execute-tool`
 returns it as an error result (a guest cannot distinguish a denied

@@ -345,3 +345,7 @@ mod truncated_webp_no_panic;
 // because its reachability walker never collected `ToolResult.images`.
 #[path = "311-gc-keeps-live-tool-result-images.rs"]
 mod gc_keeps_live_tool_result_images;
+// GitHub #307: `consent_lines` had no `tools` arm, so any package
+// declaring that capability failed install with "unknown capability".
+#[path = "307-tools-capability-install-consent.rs"]
+mod tools_capability_install_consent;

@@ -107,6 +107,24 @@ for cap in $(grep -oE '^\[capabilities\.[a-z-]+\]' "$caps_doc" | sed 's/^\[capab
   fi
 done
 
+# The reverse direction (gh #307): every capability the SCHEMA declares
+# must have its own `### <name>` section in docs/capabilities.md, so a
+# capability added to the normative source is never shipped undocumented.
+# `crates/lca-registry` has the matching guard on the consent side
+# (`every_schema_capability_has_a_consent_line`), reading this same file,
+# which is how the missing `tools` consent arm will be caught next time.
+for cap in $(python3 - "$schema" <<'PYS'
+import json, sys
+props = json.load(open(sys.argv[1]))["properties"]["capabilities"]["properties"]
+print("\n".join(sorted(props)))
+PYS
+); do
+  if ! grep -qE "^### ${cap}$" "$caps_doc"; then
+    echo "docs-consistency: capability '$cap' is in $schema but has no '### $cap' section in $caps_doc"
+    fail=1
+  fi
+done
+
 # Provider decoupling (gh #157): the host crate embeds no provider
 # literals. `api.openai.com` in `crates/lca-cli/src` is the QA-018
 # smell verbatim - the manifest owns default hosts now. Test fixtures

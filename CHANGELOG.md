@@ -127,6 +127,24 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **A `tools` capability blocked every install (gh #307).** The
+  install-time consent generator enumerated the capability vocabulary
+  with a nine-arm match and a wildcard error arm. The `tools` capability
+  (ABI 0.6, gh #77) had landed in the WIT, the host's manifest parser,
+  and `docs/capabilities.md`, but never got its consent arm — so
+  installing ANY extension declaring `[capabilities.tools]` failed
+  immediately with `invalid artifact: unknown capability 'tools' in the
+  manifest`, before a consent screen could appear. The arm is added with
+  the documented sentence ("This lets it list, activate, and call other
+  tools in the session."), and the root-cause class — vocabulary drift
+  between mirrors — gets a guard: a test reads the capability names from
+  `schemas/extension-manifest.schema.json` (the normative manifest source)
+  and asserts `consent_lines` handles every one, so the next capability
+  added to the schema without an arm fails at the vocabulary's growth
+  point. The reverse direction is now gated too:
+  `scripts/docs-consistency.sh` fails when a schema capability has no
+  `### <name>` section in `docs/capabilities.md`, and the `tools`
+  section's quoted consent sentence was corrected to match the code.
 - **`session gc` deleted live tool-result images (gh #311).** The mark
   set was built by a walker that matched `user` attachments and a
   `tool-result`'s oversized-text `attachment`, but never
