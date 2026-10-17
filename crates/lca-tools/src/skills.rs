@@ -611,9 +611,18 @@ pub fn load_body(roots: &SkillsRoots, name: &str) -> Option<String> {
         .map(|skill| skill.body)
 }
 
-/// The injection: every matched skill becomes one appended system message,
-/// each naming its source. Appended, never edited in place, so the stable
-/// cache region is untouched by construction (Phase 4 exit clause 4).
+/// The injection: every matched skill becomes one appended message, each
+/// naming its source. Appended, never edited in place, so the stable cache
+/// region is untouched by construction (Phase 4 exit clause 4).
+///
+/// The role is `User` for the reason gh #299 records: every provider
+/// builder joins all `System` messages into the vendor's top-level
+/// `system` / `systemInstruction`, so a trailing `System` message is not
+/// appended at all - it is hoisted into the ROOT prompt, which grows on a
+/// match and shrinks on the next turn that matches nothing (a KV-cache
+/// bust in both directions; ADR-0017, FR-CACHE-5/6). The
+/// `[skill instructions]` wrapper is the shape the model reads as
+/// injected context.
 pub fn injection(matched: &[&Skill]) -> Option<ChatMessage> {
     if matched.is_empty() {
         return None;
@@ -629,8 +638,8 @@ pub fn injection(matched: &[&Skill]) -> Option<ChatMessage> {
         text.push_str("\n\n");
     }
     Some(ChatMessage::text(
-        MessageRole::System,
-        text.trim_end().to_string(),
+        MessageRole::User,
+        format!("[skill instructions]\n{}", text.trim_end()),
     ))
 }
 

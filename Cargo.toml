@@ -63,6 +63,9 @@ lca-wire-anthropic = { path = "crates/lca-wire-anthropic" }
 # child stdio server, and its foreign-id row pins the shared selector.
 mcp = { path = "extensions/mcp" }
 lca-wire-mcp = { path = "crates/lca-wire-mcp" }
+# gh #299: the skill-injection payload guard drives the real transform the
+# skills extension runs, and the three provider body builders it feeds.
+skills = { path = "extensions/skills" }
 openai-compatible = { path = "extensions/openai-compatible" }
 serde_json.workspace = true
 tokio.workspace = true

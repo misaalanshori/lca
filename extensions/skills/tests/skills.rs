@@ -65,11 +65,30 @@ fn a_match_appends_and_never_rewrites() {
         "prefix byte-identical: the stable region cannot have moved"
     );
     let injection = transformed.last().expect("the injection");
-    assert_eq!(injection.role, MessageRole::System);
+    // SANCTIONED CHANGE (gh #299): this assertion used to pin
+    // `MessageRole::System`, which was pinning the cache-bust defect. Every
+    // provider builder joins all `System` messages into the vendor's
+    // top-level `system` / `systemInstruction`, so a trailing System
+    // message is hoisted into the ROOT prompt: the root grows on the turn
+    // a skill matches and shrinks on the next turn that matches nothing,
+    // busting the KV cache in both directions (ADR-0017, FR-CACHE-5/6).
+    // The injection is now a user-role message carrying the
+    // `[skill instructions]` wrapper, which is what keeps it "appended".
+    // The append-only half of this test (above) is unchanged and still the
+    // FR-CACHE-5 half of the contract.
+    assert_eq!(
+        injection.role,
+        MessageRole::User,
+        "a trailing System message would be hoisted into the root prompt"
+    );
     let text = match &injection.content[..] {
         [ContentBlock::Text { text }] => text.clone(),
         other => panic!("one text block, got {other:?}"),
     };
+    assert!(
+        text.starts_with("[skill instructions]\n"),
+        "the issue's wrapper shape: {text}"
+    );
     assert!(text.contains("[skill commit style]"), "{text}");
     assert!(text.contains("imperative"), "{text}");
 

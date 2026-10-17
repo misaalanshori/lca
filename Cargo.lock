@@ -1792,6 +1792,7 @@ dependencies = [
  "mcp",
  "openai-compatible",
  "serde_json",
+ "skills",
  "tokio",
  "tracing",
 ]

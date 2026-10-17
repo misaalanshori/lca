@@ -127,6 +127,20 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **Skill injection and instruction deltas mutated the vendor's root
+  system prompt (gh #299, and the same class in gh #217's path).** Both
+  appended their text as a `MessageRole::System` message. Every provider
+  builder joins all `System` messages into the vendor's top-level
+  `system` / `systemInstruction`, so a *trailing* system message is not
+  trailing at all: it is hoisted into the ROOT prompt. The root grew on
+  every turn a skill matched and shrank again on the next turn that
+  matched nothing — two full KV-cache busts per match/unmatch cycle, and
+  the cache-boundary narrowing never fired because the leading messages
+  were untouched. Both now send a `User`-role message carrying a
+  `[skill instructions]` / `[instructions changed]` wrapper, which stays
+  in the conversational stream where it belongs; `messages[0]` and the
+  hoisted root string stay byte-identical across match and unmatch turns
+  (ADR-0017, FR-CACHE-5/6).
 - **A JSON-RPC notification desynchronized the stdio MCP transport
   (gh #291).** `round_trip` and `Session::resource_templates` each read
   exactly one line after sending a request, so a server notification

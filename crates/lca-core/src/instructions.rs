@@ -58,9 +58,8 @@ pub async fn check_instructions(
     }
     for path in guard.bodies.keys() {
         if !seen.contains_key(path) {
-            deltas.push(ChatMessage::text(
-                MessageRole::System,
-                format!("The instructions from {} no longer apply.", path.display()),
+            deltas.push(wrapped(
+                "The instructions from {} no longer apply.".to_string(),
             ));
         }
     }
@@ -70,14 +69,11 @@ pub async fn check_instructions(
 
 /// A new instruction file's full text (OpenCode's added shape).
 fn new_instructions(path: &Path, body: &str) -> ChatMessage {
-    ChatMessage::text(
-        MessageRole::System,
-        format!(
-            "New instructions apply from {}:\n{}",
-            path.display(),
-            capped(body)
-        ),
-    )
+    wrapped(format!(
+        "New instructions apply from {}:\n{}",
+        path.display(),
+        capped(body)
+    ))
 }
 
 /// An edit's unified diff (OpenCode's changed shape): the hunk when
@@ -101,7 +97,23 @@ fn changed_instructions(path: &Path, before: &str, after: &str) -> ChatMessage {
     } else {
         diff_wrapped(path, hunk)
     };
-    ChatMessage::text(MessageRole::System, text)
+    wrapped(text)
+}
+
+/// One instruction delta as an appended message.
+///
+/// The role is `User`, not `System` (gh #299's builder audit). This file's
+/// own comment used to call the position "the skills-merge position",
+/// meaning the trailing slot -- but a trailing `System` message is not
+/// trailing on the wire at all: every provider builder joins
+/// `role == System` messages into the vendor's root `system` /
+/// `systemInstruction`, so each instruction edit grew the ROOT prompt and
+/// busted the KV cache. That is precisely the class gh #299 fixed for
+/// skills, and this is the identical shape (role + wrapper), so it is fixed
+/// the same way. The `[instructions changed]` wrapper keeps the delta
+/// legible as injected context rather than user speech.
+fn wrapped(text: String) -> ChatMessage {
+    ChatMessage::text(MessageRole::User, format!("[instructions changed]\n{text}"))
 }
 
 /// The diff-shaped delta body.

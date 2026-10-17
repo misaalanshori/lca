@@ -76,6 +76,16 @@ pub fn skill_matches(skill: &Skill, latest_user: &str) -> bool {
 /// The injection: every matched skill becomes one appended message -
 /// appended, never edited in place, so the stable cache region is
 /// untouched by construction (Phase 4 exit clause4).
+///
+/// The role is `User`, not `System` (gh #299). Every provider builder
+/// joins all `System` messages into the vendor's top-level `system` /
+/// `systemInstruction`, so a trailing `System` here does not stay
+/// "appended" at all: it is hoisted into the ROOT prompt, growing it on
+/// the turn a skill matches and shrinking it again on the next turn that
+/// matches nothing - a full KV-cache bust in both directions (ADR-0017,
+/// FR-CACHE-5/6). A user-role message stays in the conversational stream
+/// where it belongs; the `[skill instructions]` wrapper keeps it legible
+/// to the model as injected context rather than user speech.
 pub fn injection_message(matched: &[&Skill]) -> Option<lca_protocol::ChatMessage> {
     if matched.is_empty() {
         return None;
@@ -89,8 +99,8 @@ pub fn injection_message(matched: &[&Skill]) -> Option<lca_protocol::ChatMessage
         text.push_str("\n\n");
     }
     Some(lca_protocol::ChatMessage::text(
-        lca_protocol::MessageRole::System,
-        text.trim_end().to_string(),
+        lca_protocol::MessageRole::User,
+        format!("[skill instructions]\n{}", text.trim_end()),
     ))
 }
 

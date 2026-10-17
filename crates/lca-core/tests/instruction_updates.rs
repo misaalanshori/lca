@@ -314,3 +314,91 @@ async fn rule_edits_append_diffs_without_touching_the_prefix() {
     );
     let _ = backend;
 }
+
+// ---- gh #299 audit finding: instruction deltas had the same cache-bust ----
+
+// The #217 turn-boundary check appends its deltas "as trailing system
+// messages (the skills-merge position)" — but that position is exactly the
+// one gh #299 proved is *not* trailing on the wire: every provider builder
+// joins `role == System` messages into the vendor's root `system` /
+// `systemInstruction`. So an instruction edit grew the root prompt, and a
+// second edit grew it again: the same KV-cache bust class, one turn later.
+//
+// Found by the #299 builder audit and fixed in-cycle because it is the
+// identical shape (role + wrapper), as the brief allows. These rows pin the
+// observable consequence: the hoisted root string never contains the delta
+// text, and the delta still reaches the model in the conversational stream.
+// Verifies: gh #299 (audit) + gh #217 + FR-CACHE-5/6.
+#[tokio::test]
+async fn an_instruction_delta_never_reaches_the_hoisted_root() {
+    use lca_protocol::{ContentBlock, MessageRole};
+
+    let root = lca_testkit::scratch_path("gh299-instructions");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let agents = root.join("AGENTS.md");
+    std::fs::write(&agents, "Be brief.\n").expect("write");
+    let baseline = Arc::new(Mutex::new(InstructionBaseline::default()));
+    let sources = vec![agents.clone()];
+
+    // Prime the baseline (startup adoption is silent).
+    let adopted = lca_core::instructions::check_instructions(&sources, &baseline).await;
+    assert!(adopted.is_empty(), "startup adoption is silent");
+
+    // The user edits the file mid-session.
+    std::fs::write(&agents, "Be brief.\nAlways run tests.\n").expect("rewrite");
+    let deltas = lca_core::instructions::check_instructions(&sources, &baseline).await;
+    assert_eq!(deltas.len(), 1, "one edit, one delta");
+
+    // The hoisting rule every provider builder applies.
+    let hoist = |messages: &[lca_protocol::ChatMessage]| -> String {
+        messages
+            .iter()
+            .filter(|message| message.role == MessageRole::System)
+            .flat_map(|message| {
+                message.content.iter().filter_map(|block| match block {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let mut conversation = vec![
+        lca_protocol::ChatMessage::text(MessageRole::System, "You are LCA."),
+        lca_protocol::ChatMessage::text(MessageRole::User, "earlier"),
+    ];
+    let root_before = hoist(&conversation);
+    conversation.extend(deltas.clone());
+
+    assert_eq!(
+        hoist(&conversation),
+        root_before,
+        "the delta must not join the root system prompt (the #299 class)"
+    );
+    assert!(
+        !hoist(&conversation).contains("Always run tests."),
+        "the edited instruction text must never appear in the root"
+    );
+
+    // It still reaches the model, as a user-role message in the stream.
+    let delta = conversation.last().expect("the delta");
+    assert_eq!(
+        delta.role,
+        MessageRole::User,
+        "a trailing System delta would be hoisted into the root"
+    );
+    let text: String = delta
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        text.starts_with("[instructions changed]\n"),
+        "the delta carries a legible wrapper: {text}"
+    );
+    assert!(text.contains("Always run tests."), "{text}");
+}

@@ -370,3 +370,8 @@ mod partial_usage_merge;
 // server notification desynchronized the stream permanently.
 #[path = "291-mcp-stdio-notification-desync.rs"]
 mod mcp_stdio_notification_desync;
+// GitHub #299: a mid-session skill match injected a System-role message,
+// which every provider builder hoists into the vendor's root system prompt
+// — a KV-cache bust in both directions.
+#[path = "299-skill-injection-preserves-root-system.rs"]
+mod skill_injection_preserves_root_system;
