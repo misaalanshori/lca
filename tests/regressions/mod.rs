@@ -333,3 +333,7 @@ mod logout_purges_profile_secrets;
 // `git checkout` unvalidated, and `--upload-pack` runs a command.
 #[path = "349-git-source-option-injection.rs"]
 mod git_source_option_injection;
+// GitHub #263: `@file` truncation cut at a fixed byte count, panicking
+// when the 1 MiB bound fell inside a multi-byte UTF-8 character.
+#[path = "263-at-file-truncation-utf8-boundary.rs"]
+mod at_file_truncation_utf8_boundary;

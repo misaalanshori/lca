@@ -201,3 +201,93 @@ fn skills_collect_extra_and_validate_paths() {
     assert!(check_resource_paths("--skill", &[root.join("my-skill")], "md").is_ok());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Write `@file` content whose first `prefix` bytes are `a` and whose
+/// tail follows, so the 1 MiB cut can be aimed at a known char state.
+fn write_padded(root: &std::path::Path, name: &str, prefix: usize, tail: &str) {
+    let mut content = "a".repeat(prefix);
+    content.push_str(tail);
+    std::fs::write(root.join(name), &content).expect("write fixture");
+}
+
+/// The inlined body of the single `<file>` block, marker included.
+fn inlined_body(text: &str) -> &str {
+    let open = text.find('>').expect("open tag") + 1;
+    let start = text[open..].find('\n').expect("tag newline") + open + 1;
+    let end = text.find("\n</file>").expect("close tag");
+    &text[start..end]
+}
+
+// Verifies: gh #263 - truncating an `@file` at the 1 MiB bound lands on a
+// character boundary whatever the alignment: the cut aimed one byte into a
+// 3-byte CJK char, two bytes into a 4-byte emoji, one byte into a 2-byte
+// accent, and exactly on a boundary. The old direct
+// `truncate(INPUT_MAX_BYTES)` panicked for the first three.
+#[test]
+fn at_file_truncation_never_splits_a_character() {
+    let root = lca_testkit::scratch_path("lca-at-truncate-utf8");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let limit = INPUT_MAX_BYTES as usize;
+    // A 3-byte CJK char occupying bytes limit-1..limit+2: byte `limit`
+    // falls inside it. Fill is ASCII, so everything before is a boundary.
+    write_padded(&root, "cjk.txt", limit - 1, "世界");
+    // A 4-byte emoji occupying limit-2..limit+2: byte `limit` is inside.
+    write_padded(&root, "emoji.txt", limit - 2, "🎉🎉");
+    // A 2-byte accent occupying limit-1..limit+1: byte `limit` is inside.
+    write_padded(&root, "accent.txt", limit - 1, "ééé");
+    // Boundary-exact: byte `limit` is the start of the tail.
+    write_padded(&root, "exact.txt", limit, "tail");
+
+    // The safe cut each case must land on (the nearest boundary at or
+    // below the limit).
+    for (name, expected_cut) in [
+        ("cjk.txt", limit - 1),
+        ("emoji.txt", limit - 2),
+        ("accent.txt", limit - 1),
+        ("exact.txt", limit),
+    ] {
+        let (text, _images) = expand_at_files(&[name.to_string()], &root)
+            .unwrap_or_else(|err| panic!("@file {name} must expand: {err}"));
+        assert!(
+            std::str::from_utf8(text.as_bytes()).is_ok(),
+            "{name}: the inlined text is valid UTF-8"
+        );
+        let body = inlined_body(&text);
+        let marker = "\n… (input truncated at 1 MiB)";
+        assert!(
+            body.ends_with(marker),
+            "{name}: the marker still appends: {:?}",
+            &body[body.len().saturating_sub(40)..]
+        );
+        let content = &body[..body.len() - marker.len()];
+        assert_eq!(
+            content.len(),
+            expected_cut,
+            "{name}: the cut lands on the nearest boundary at or below the bound"
+        );
+        assert!(
+            content.is_char_boundary(content.len()),
+            "{name}: the cut is a char boundary"
+        );
+        assert!(
+            content.chars().all(|c| c == 'a'),
+            "{name}: nothing after the cut survives (no partial char)"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Verifies: gh #263 - the no-truncation path is untouched: a file under
+// the bound inlines whole, marker-free.
+#[test]
+fn at_file_under_the_bound_is_untouched() {
+    let root = lca_testkit::scratch_path("lca-at-no-truncate");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("mkdir");
+    std::fs::write(root.join("small.txt"), "世 🎉 é fine\n").expect("write");
+    let (text, _images) = expand_at_files(&["small.txt".to_string()], &root).expect("expands");
+    assert!(text.contains("世 🎉 é fine"), "content inlines whole");
+    assert!(!text.contains("truncated"), "no marker on the happy path");
+    let _ = std::fs::remove_dir_all(&root);
+}

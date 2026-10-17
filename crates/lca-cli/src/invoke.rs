@@ -607,7 +607,13 @@ pub fn expand_at_files(file_args: &[String], cwd: &Path) -> Result<(String, Vec<
             content = stripped.to_string();
         }
         if (content.len() as u64) > INPUT_MAX_BYTES {
-            content.truncate(INPUT_MAX_BYTES as usize);
+            // gh #263: `String::truncate` panics when the index is not a
+            // char boundary, and a 1 MiB cut into CJK/emoji/accented text
+            // lands inside a multi-byte sequence. `floor_char_boundary`
+            // walks back to the nearest boundary (stable since 1.80; the
+            // pinned toolchain is 1.98.1) and clamps an out-of-range index
+            // to the length, so this is total.
+            content.truncate(content.floor_char_boundary(INPUT_MAX_BYTES as usize));
             content.push('\n');
             content.push_str(TRUNCATED_MARKER);
         }

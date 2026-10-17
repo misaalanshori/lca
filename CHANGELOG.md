@@ -127,6 +127,23 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **`@file` truncation panicked on multi-byte UTF-8 (gh #263).**
+  `expand_at_files` capped inlined files with a plain
+  `String::truncate(INPUT_MAX_BYTES)`, which panics when the 1 MiB index
+  lands inside a multi-byte character. A CJK-, emoji-, or
+  accent-heavy file of just over 1 MiB therefore crashed the CLI with
+  `byte index 1048576 is not a char boundary` before any model call
+  (exit 101 — a panic in a production path). The cut now lands on the
+  nearest character boundary at or below the bound via
+  `str::floor_char_boundary` (stable on the pinned 1.98.1, no new
+  dependency), so the straddling character is dropped whole and the
+  truncation marker still appends. Same-class sibling audit: the piped
+  stdin cap truncates a `Vec<u8>` (cannot panic),
+  `lca-ui/src/render.rs` truncates a `Vec<String>` (cannot panic),
+  `lca-tools`' `read_up_to` truncates a byte buffer, the TUI editor's
+  cuts come from `char_indices`, the markdown fence trim subtracts a
+  `trim_start` byte length, and antigravity's family trim subtracts an
+  ASCII suffix length — all provably on char boundaries, none changed.
 - **Dependency audit: three `zip` extraction advisories, manager-approved
   ignore (gh #349 follow-on).** A fresh advisory-database pull (2026-10-09/10)
   now flags `zip`'s extraction path: RUSTSEC-2026-0367 (SUID/SGID bits
