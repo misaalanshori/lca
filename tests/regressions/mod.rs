@@ -366,3 +366,7 @@ mod thinking_blocks_precede_text;
 // output half) wiped the prompt counters and auto-compaction never fired.
 #[path = "276-partial-usage-merge.rs"]
 mod partial_usage_merge;
+// GitHub #291: the stdio MCP reader took the next line as the reply, so a
+// server notification desynchronized the stream permanently.
+#[path = "291-mcp-stdio-notification-desync.rs"]
+mod mcp_stdio_notification_desync;

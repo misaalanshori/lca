@@ -44,22 +44,126 @@ pub fn select_response(
     id: u64,
 ) -> Result<serde_json::Value, String> {
     for message in messages {
-        let matches = message.get("id").and_then(|found| found.as_u64()) == Some(id);
-        if !matches {
-            continue;
+        match classify(message, id) {
+            Classified::Notification => continue,
+            Classified::Foreign(other) => {
+                // In a batch, a foreign id is just another conversation on
+                // the same envelope; the single-outstanding-request stdio
+                // path is where it means desync (see
+                // [`response_for`]).
+                let _ = other;
+                continue;
+            }
+            Classified::Answer(Reply::Result(result)) => return Ok(result),
+            Classified::Answer(Reply::Error(error)) => return Err(error),
         }
-        if let Some(error) = message.get("error") {
-            return Err(format!("MCP server errored: {error}"));
-        }
-        return message
-            .get("result")
-            .cloned()
-            .ok_or_else(|| format!("MCP server answered without a result: {message}"));
     }
     Err(format!(
         "MCP server answered without our response (id {id})"
     ))
 }
+
+/// Whether a JSON-RPC message is a server notification (an ordinary
+/// `method`-bearing message with no `id`), which every MCP server is
+/// free to interleave with replies.
+pub fn is_notification(message: &serde_json::Value) -> bool {
+    message.get("method").is_some() && message.get("id").is_none()
+}
+
+/// How one received message relates to the request we are waiting on.
+enum Classified {
+    /// `method`, no `id`: server chatter, discard and keep reading.
+    Notification,
+    /// An `id` that is not ours (or no usable `id` at all).
+    Foreign(Option<u64>),
+    /// Our reply.
+    Answer(Reply),
+}
+
+/// A reply for our id: either the result, or the JSON-RPC error the
+/// server answered with.
+///
+/// The two are distinct on purpose (gh #291). A JSON-RPC error for our
+/// id is a *legitimate answer* — `resources/templates/list` being
+/// unimplemented arrives this way and means "no templates", not a
+/// failure. A transport problem (bad JSON, EOF, a desynced id) is a
+/// `Err` and must never be read as an empty success. Collapsing them
+/// would let a desynchronized stream look like an empty listing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Reply {
+    /// The `result` member.
+    Result(serde_json::Value),
+    /// The `error` member, already formatted the way the host reports it.
+    Error(String),
+}
+
+fn classify(message: &serde_json::Value, id: u64) -> Classified {
+    if is_notification(message) {
+        return Classified::Notification;
+    }
+    let found = message.get("id").and_then(|found| found.as_u64());
+    if found != Some(id) {
+        return Classified::Foreign(found);
+    }
+    if let Some(error) = message.get("error") {
+        return Classified::Answer(Reply::Error(format!("MCP server errored: {error}")));
+    }
+    match message.get("result").cloned() {
+        Some(result) => Classified::Answer(Reply::Result(result)),
+        // Our id with neither member is not a legitimately empty answer.
+        None => Classified::Answer(Reply::Error(format!(
+            "MCP server answered without a result: {message}"
+        ))),
+    }
+}
+
+/// Read exactly one reply for `id` from a line-at-a-time source
+/// (gh #291).
+///
+/// A single-outstanding-request transport cannot legitimately receive a
+/// foreign id, so a mismatch is desync already in progress: it fails
+/// loud and names the id rather than silently consuming a reply that
+/// belongs to some other call. Notifications are ordinary MCP traffic
+/// and are discarded.
+///
+/// `next_line` yields the next decoded line, or `Ok(None)` at EOF; the
+/// transport (a pipe, a socket, a test script) owns the I/O and the
+/// error text, which is why this lives here as semantics over values and
+/// the extension keeps the reading loop's plumbing.
+pub fn response_for(
+    id: u64,
+    mut next_line: impl FnMut() -> Result<Option<String>, String>,
+) -> Result<Reply, String> {
+    loop {
+        let Some(line) = next_line()? else {
+            // EOF without our reply: the reader's existing behaviour for
+            // a closed stdout, named the same way every transport names it.
+            return Err(EOF_WITHOUT_REPLY.to_string());
+        };
+        let message: serde_json::Value = serde_json::from_str(&line)
+            .map_err(|err| format!("MCP server answered bad JSON: {err}"))?;
+        match classify(&message, id) {
+            Classified::Notification => continue,
+            Classified::Foreign(found) => {
+                return Err(match found {
+                    Some(other) => format!(
+                        "MCP server answered another call (wanted id {id}, got id {other}); \
+                         the stream is desynchronized"
+                    ),
+                    None => format!(
+                        "MCP server answered without an id (wanted id {id}); \
+                         the stream is desynchronized"
+                    ),
+                });
+            }
+            Classified::Answer(answer) => return Ok(answer),
+        }
+    }
+}
+
+/// The EOF message [`response_for`] returns when a server closes its
+/// stdout before answering. Shared so transports name it identically.
+pub const EOF_WITHOUT_REPLY: &str = "MCP server closed its stdout";
 
 /// Decode standard base64 (MCP `blob` content). Whitespace refused;
 /// padding required in the last quantum, like every strict decoder.

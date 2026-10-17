@@ -284,6 +284,8 @@ and the resource trio stay native until server URLs have a managed
 path to the guest (a `net` import on the `tool-catalog` world is a
 WIT change, deferred under the freeze).
 
+On the stdio transport, the reader takes the first message that carries the request's own `id`; JSON-RPC notifications (`method` with no `id` — `notifications/message`, `notifications/progress`, `notifications/tools/list_changed`) are ordinary MCP traffic and are discarded rather than mistaken for the reply. A response carrying a *different* `id` is a desync, not noise: it fails loudly and names the id, because a single-outstanding-request pipe cannot legitimately see one.
+
 ## Other worlds
 
 The `command` world adds a slash command. The spec function returns a name, an argument hint, and a completion mode. The invoke function takes the argument string and returns an effect: insert text into the input, submit a prompt, show a widget, or do nothing.

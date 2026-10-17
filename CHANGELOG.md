@@ -126,6 +126,24 @@ Dates are UTC.
     eval flag matches its glued form; the first also closes the same
     bypass in `DENY_PROGRAMS`.
 
+### Fixed
+- **A JSON-RPC notification desynchronized the stdio MCP transport
+  (gh #291).** `round_trip` and `Session::resource_templates` each read
+  exactly one line after sending a request, so a server notification
+  (`method` with no `id` — `notifications/message`,
+  `notifications/progress`, `notifications/tools/list_changed`, all
+  ordinary MCP traffic) was parsed as the reply: "answered without a
+  result" from one reader, "answered another call" from the other. The
+  real reply then stayed queued, so **every later call on that connection
+  read a stale line** — a permanent desync that broke every call after the
+  first notification. The selection rules now live once in
+  `lca_wire_mcp::response_for` (notifications discarded, our `id` answered,
+  a foreign `id` failing loudly and named, bad JSON still a hard error) and
+  both readers use it. `Reply` keeps a JSON-RPC error for our id distinct
+  from a transport failure, so an unimplemented `resources/templates/list`
+  still reads as "no templates" while a desynchronized stream can no
+  longer masquerade as an empty listing.
+
 ### Changed
 - **The reasoning-signature extras bridge is recorded in-tree and pinned
   (gh #289).** The 0.6 `content-block` variant has no `reasoning` case, so

@@ -589,16 +589,16 @@ pub fn round_trip(
         .map_err(|err| format!("cannot encode MCP request: {err}"))?;
     line.push('\n');
     io.write_all(line.as_bytes())?;
-    let answer = read_line(io, buf)?;
-    let message: serde_json::Value = serde_json::from_str(&answer)
-        .map_err(|err| format!("MCP server answered bad JSON: {err}"))?;
-    if let Some(error) = message.get("error") {
-        return Err(format!("MCP server errored: {error}"));
+    // gh #291: the reply is the first message carrying OUR id. Server
+    // notifications (`method`, no `id`) are ordinary MCP traffic and are
+    // discarded; a foreign id fails loud because a single-outstanding-
+    // request transport cannot see one legitimately. The selection rules
+    // live in `lca_wire_mcp` (ADR-0045: selectors in the wire kit,
+    // transports in the extension) so the stdio and HTTP paths agree.
+    match lca_wire_mcp::response_for(id, || Ok(Some(read_line(io, buf)?)))? {
+        lca_wire_mcp::Reply::Result(result) => Ok(result),
+        lca_wire_mcp::Reply::Error(error) => Err(error),
     }
-    message
-        .get("result")
-        .cloned()
-        .ok_or_else(|| format!("MCP server answered without a result: {answer}"))
 }
 
 /// The live side of one spawned server: `initialize`, the
@@ -681,18 +681,16 @@ impl<T: Stdio> Session<T> {
             .map_err(|err| format!("cannot encode MCP request: {err}"))?;
         line.push('\n');
         self.io.write_all(line.as_bytes())?;
-        let answer = read_line(&self.io, &mut self.buf)?;
-        let message: serde_json::Value = serde_json::from_str(&answer)
-            .map_err(|err| format!("MCP server answered bad JSON: {err}"))?;
-        if message.get("id").and_then(|found| found.as_u64()) != Some(id) {
-            return Err("MCP server answered another call".to_string());
+        // gh #291: same reader as `round_trip`, so notifications are
+        // tolerated here too. The distinction that matters: a JSON-RPC
+        // error for our id means the method is unimplemented, which reads
+        // as "no templates", while a transport failure (bad JSON, EOF, a
+        // desynchronized id) propagates - a corrupt stream must never
+        // masquerade as an empty listing.
+        match lca_wire_mcp::response_for(id, || Ok(Some(read_line(&self.io, &mut self.buf)?)))? {
+            lca_wire_mcp::Reply::Result(result) => Ok(templates_from_list(&result)),
+            lca_wire_mcp::Reply::Error(_) => Ok(Vec::new()),
         }
-        if message.get("error").is_some() {
-            return Ok(Vec::new());
-        }
-        Ok(templates_from_list(
-            message.get("result").unwrap_or(&serde_json::Value::Null),
-        ))
     }
 
     /// Read one resource by URI.
@@ -885,5 +883,206 @@ mod tests {
             err.contains("do.thing") && err.contains("do_thing"),
             "{err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod notification_tolerance_tests {
+    //! gh #291: JSON-RPC notifications must not desync the stdio stream.
+    //!
+    //! MCP servers emit server-to-client notifications as ordinary
+    //! traffic (`notifications/message`, `notifications/progress`,
+    //! `notifications/tools/list_changed`) between the request and its
+    //! reply. A reader that takes the next line as the answer parses a
+    //! notification as the reply — and because the *real* reply stays
+    //! queued in `buf`, every later call then reads a stale line and the
+    //! connection is permanently desynchronized.
+    //!
+    //! These rows drive the real `round_trip`/`Session` over a scripted
+    //! line source, which is the whole transport the fix touches.
+
+    use super::*;
+    use std::cell::RefCell;
+
+    /// A [`Stdio`] that hands out pre-scripted lines and records what
+    /// was written. Reads are line-granular so a row's script reads
+    /// exactly like the wire.
+    struct ScriptedIo {
+        incoming: RefCell<Vec<String>>,
+        written: RefCell<Vec<String>>,
+    }
+
+    impl ScriptedIo {
+        fn new(lines: &[&str]) -> ScriptedIo {
+            ScriptedIo {
+                incoming: RefCell::new(lines.iter().map(|line| (*line).to_string()).collect()),
+                written: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Stdio for ScriptedIo {
+        fn write_all(&self, bytes: &[u8]) -> Result<(), String> {
+            self.written
+                .borrow_mut()
+                .push(String::from_utf8_lossy(bytes).into_owned());
+            Ok(())
+        }
+
+        fn read_some(&self, _max: usize) -> Result<Option<Vec<u8>>, String> {
+            let next = {
+                let mut queue = self.incoming.borrow_mut();
+                if queue.is_empty() {
+                    None
+                } else {
+                    Some(queue.remove(0))
+                }
+            };
+            Ok(next.map(|line| {
+                let mut bytes = line.into_bytes();
+                bytes.push(b'\n');
+                bytes
+            }))
+        }
+    }
+
+    fn reply(id: u64, result: serde_json::Value) -> String {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
+    }
+
+    fn notification(method: &str) -> String {
+        // Notifications carry `method` and NO `id`: that is the shape
+        // the reader must discard.
+        serde_json::json!({"jsonrpc": "2.0", "method": method}).to_string()
+    }
+
+    // Verifies: gh #291 - a notification arriving BEFORE the reply is
+    // discarded and the reply still answers the call.
+    #[test]
+    fn a_notification_before_the_reply_is_skipped() {
+        let io = ScriptedIo::new(&[
+            &notification("notifications/message"),
+            &reply(1, serde_json::json!({"ok": true})),
+        ]);
+        let mut buf = Vec::new();
+        let answer = round_trip(&io, &mut buf, 1, "tools/call", serde_json::json!({}))
+            .expect("the reply is found past the notification");
+        assert_eq!(answer, serde_json::json!({"ok": true}));
+    }
+
+    // Verifies: gh #291 - several notifications of different kinds,
+    // interleaved with the reply, are all discarded.
+    #[test]
+    fn every_notification_kind_is_skipped() {
+        let io = ScriptedIo::new(&[
+            &notification("notifications/message"),
+            &notification("notifications/progress"),
+            &notification("notifications/tools/list_changed"),
+            &reply(4, serde_json::json!({"tools": []})),
+        ]);
+        let mut buf = Vec::new();
+        let answer = round_trip(&io, &mut buf, 4, "tools/list", serde_json::json!({}))
+            .expect("every notification is skipped");
+        assert_eq!(answer, serde_json::json!({"tools": []}));
+    }
+
+    // Verifies: gh #291 - THE DESYNC PIN. Two sequential calls on one
+    // session, each preceded by a notification: call 2 must get its own
+    // reply, never call 1's. On the pre-fix reader call 1 consumed the
+    // notification and failed, leaving call 1's real reply queued so
+    // call 2 answered with call 1's payload.
+    #[test]
+    fn two_sequential_calls_stay_in_sync_across_notifications() {
+        let io = ScriptedIo::new(&[
+            // call 1's notification, then call 1's reply
+            &notification("notifications/message"),
+            &reply(1, serde_json::json!({"call": "first"})),
+            // call 2's notification, then call 2's reply
+            &notification("notifications/progress"),
+            &reply(2, serde_json::json!({"call": "second"})),
+        ]);
+        let mut buf = Vec::new();
+        let first = round_trip(&io, &mut buf, 1, "tools/call", serde_json::json!({}))
+            .expect("first call answers");
+        assert_eq!(first, serde_json::json!({"call": "first"}));
+        let second = round_trip(&io, &mut buf, 2, "tools/call", serde_json::json!({}))
+            .expect("second call answers");
+        assert_eq!(
+            second,
+            serde_json::json!({"call": "second"}),
+            "the second call must not read the first call's reply"
+        );
+    }
+
+    // Verifies: gh #291 - a reply carrying SOMEONE ELSE'S id is a
+    // desync, not noise: a single-outstanding-request transport cannot
+    // legitimately receive a foreign id, so it fails loud and names it
+    // rather than silently consuming a reply that belongs elsewhere.
+    #[test]
+    fn a_foreign_id_fails_loud_and_names_it() {
+        let io = ScriptedIo::new(&[&reply(99, serde_json::json!({"wrong": true}))]);
+        let mut buf = Vec::new();
+        let err = round_trip(&io, &mut buf, 1, "tools/call", serde_json::json!({}))
+            .expect_err("a foreign id is a desync");
+        assert!(err.contains("99"), "the foreign id is named: {err}");
+    }
+
+    // Verifies: gh #291 - an error for OUR id is the server's answer
+    // and keeps today's error shape.
+    #[test]
+    fn an_error_for_our_id_returns_the_error_payload() {
+        let io = ScriptedIo::new(&[
+            &notification("notifications/message"),
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 7,
+                "error": {"code": -32601, "message": "unknown method"},
+            })
+            .to_string(),
+        ]);
+        let mut buf = Vec::new();
+        let err = round_trip(&io, &mut buf, 7, "tools/call", serde_json::json!({}))
+            .expect_err("the error is the answer");
+        assert!(err.contains("unknown method"), "{err}");
+    }
+
+    // Verifies: gh #291 - bad JSON stays a hard error: that is real
+    // corruption, not a notification.
+    #[test]
+    fn bad_json_is_still_a_hard_error() {
+        let io = ScriptedIo::new(&["this is not json"]);
+        let mut buf = Vec::new();
+        let err = round_trip(&io, &mut buf, 1, "tools/call", serde_json::json!({}))
+            .expect_err("bad JSON is corruption");
+        assert!(err.contains("bad JSON"), "{err}");
+    }
+
+    // Verifies: gh #291 - notification-only traffic never reports
+    // success: it keeps waiting and ends on EOF with a failure.
+    #[test]
+    fn notification_only_traffic_never_succeeds() {
+        let io = ScriptedIo::new(&[
+            &notification("notifications/message"),
+            &notification("notifications/progress"),
+        ]);
+        let mut buf = Vec::new();
+        let err = round_trip(&io, &mut buf, 1, "tools/call", serde_json::json!({}))
+            .expect_err("no reply means no success");
+        assert!(err.contains("closed its stdout"), "{err}");
+    }
+
+    // Verifies: gh #291 - `resource_templates` (the second reader)
+    // tolerates notifications the same way instead of reporting
+    // "answered another call".
+    #[test]
+    fn resource_templates_skip_notifications() {
+        let io = ScriptedIo::new(&[
+            &notification("notifications/tools/list_changed"),
+            &reply(1, serde_json::json!({"resourceTemplates": []})),
+        ]);
+        let mut session = Session::new(io);
+        let templates = session
+            .resource_templates()
+            .expect("a notification does not break the listing");
+        assert!(templates.is_empty());
     }
 }

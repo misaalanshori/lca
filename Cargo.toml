@@ -59,6 +59,10 @@ lca-wire-openai = { path = "crates/lca-wire-openai" }
 # The gh #334/#335 guards assert the Anthropic request JSON shape through
 # the shared wire kit's public body builder.
 lca-wire-anthropic = { path = "crates/lca-wire-anthropic" }
+# The gh #291 desync guard drives the real managed MCP bridge over a real
+# child stdio server, and its foreign-id row pins the shared selector.
+mcp = { path = "extensions/mcp" }
+lca-wire-mcp = { path = "crates/lca-wire-mcp" }
 openai-compatible = { path = "extensions/openai-compatible" }
 serde_json.workspace = true
 tokio.workspace = true
