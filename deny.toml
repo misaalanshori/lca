@@ -7,7 +7,48 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # RUSTSEC-2026-0367 (GHSA-vv5m-jxxh-4627, 2026-10-09), RUSTSEC-2026-0368
+    # (GHSA-4v9h-p7m9-rh26, 2026-10-09), and RUSTSEC-2026-0369
+    # (GHSA-4684-h2q9-2vcp, 2026-10-10): all three are in `zip`'s archive
+    # *extraction* path. 0367 preserves SUID/SGID bits during extraction,
+    # 0368 lets `ZipArchive::extract` create symlinks whose targets leave
+    # the destination, and 0369 applies Unix permissions through those
+    # symlinks without confining the target. Every one is patched only in
+    # `zip >= 9.0.0`; there is no 2.x backport.
+    #
+    # Dead code in this workspace. All three fire through
+    # `ZipStreamReader::extract()` / `ZipArchive::extract()`, which LCA
+    # never calls (grep: zero call sites in `crates/` and `extensions/`,
+    # production or test). `lca-registry::read_archive` reads entries one
+    # at a time (`by_index`/`by_name` + `read_to_end`) behind its own
+    # `valid_archive_path` guard, which rejects NUL, backslashes, absolute
+    # paths, `.`/`..`, and empty components before anything is written;
+    # `lca-registry::pack_archive` and `lca-cli/src/bug.rs` only *write*
+    # zips (`ZipWriter`). No `extract()` call is reachable, so none of the
+    # three can fire.
+    #
+    # Why not bump to zip 9: the fix has no 2.x backport (patched is
+    # `>= 9.0.0` only), and zip 9 measured +3 lockfile packages (`nix`,
+    # `cfg_aliases`, `typed-path`, plus a swap of `derive_arbitrary`) and
+    # pulls `zopfli`/`bumpalo` through its `deflate` feature for a reader
+    # we use only via `ZipArchive`. That is a major-version dependency
+    # change against a code path we never execute, and the release policy
+    # puts a dependency update in its own PR, not bundled with a fix.
+    #
+    # The lockfile resolves `zip` to a non-yanked 2.x (see Cargo.lock):
+    # 2.4.2 was yanked by the author on 2026-10-16, which `yanked =
+    # "deny"` rejects on its own, so the 2 line is kept but moved off the
+    # pulled version. The `version = "2"` manifest line is unchanged.
+    #
+    # Remove when: a 2.x backport of the three advisories lands, or zip 9
+    # ships a lean deflate feature set (drop `zopfli`/`nix`), or at the
+    # next dependency review - whichever comes first. Tracked in the
+    # gh #349 report's recommendations.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+]
 
 [licenses]
 version = 2
