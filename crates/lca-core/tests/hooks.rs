@@ -784,15 +784,44 @@ async fn cancelling_a_turn_interrupts_a_running_extension_call() {
 // Verifies: FR-CONC-1's boundary half (a fresh turn starts clean after a
 // cancellation: the cancel does not stick).
 //
+// The guards in this test are hang guards, not requirements - the
+// assertions are the requirements, and they are untouched. They sat at 30
+// seconds, which was comfortably above the observed cost until a hosted
+// runner put the whole test past 60 seconds (CI 39044027340, 2026-10-17):
+// the run reported SLOW [> 60s] before nextest's own 120-second
+// `terminate-after` killed it, and the printed breakdown still showed
+// turn two's own work at 30.000s with the tool call never finishing. Two
+// things follow from that shape.
+//
+// First, 30 seconds is a *load* threshold here, not a hang threshold: the
+// same test takes 16-20s solo (turn two's work: 24-132ms) and 72-83s when
+// three suites share four cores, with the breakdown above still green -
+// turn two's cost barely moves while the harness around it stretches, so
+// the clock these guards measure is not turn two's. Second, a guard that
+// fires *after* nextest's terminate point is worse than no guard: it
+// neither runs (so no breakdown is printed at the moment it matters) nor
+// leaves the job a named failure, and the panic additionally cannot end
+// the process, because the spinning guest's thread - spawned by
+// `ExtHost::blocking` - is never joined. The kill is what stored the
+// failure, not the guard.
+//
+// So both guards sit just under nextest's 120-second terminate
+// (`.config/nextest.toml`): they fire only when that bound is about to
+// take the job down anyway, which buys the breakdown line and a named
+// panic instead of a silent `TIMEOUT`. Raising a guard is not loosening an
+// assertion - nothing here asserts on elapsed time, and the 3-second
+// promptness bound inside turn one (the real NFR-29-shaped claim) is
+// unchanged.
+//
 // Quarantined on Windows under testing-plan section 13 (2026-10-02): this
-// turn tripped its 30-second hang guard twice on the hosted runner (CI
-// 36881146884, 36943299928) while turn one's assertions passed both times
-// and Linux/macOS stayed green in every run. The mechanism is not yet
-// named - the ledger entry in docs/platform-notes.md carries what is
-// known. The guard prints an elapsed breakdown when it fires (and a
-// one-line summary when it passes) so the next observation names the
-// phase - provider silence, tool-call stall, or record write - instead
-// of just the total. Remove the cfg_attr to un-quarantine.
+// turn tripped its hang guard twice on the hosted runner (CI 36881146884,
+// 36943299928) while turn one's assertions passed both times and
+// Linux/macOS stayed green in every run. The ledger entry in
+// docs/platform-notes.md carries what is known. The guard prints an
+// elapsed breakdown when it fires (and a one-line summary when it passes)
+// so the next observation names the phase - provider silence, tool-call
+// stall, or record write - instead of just the total. Remove the cfg_attr
+// to un-quarantine.
 #[tokio::test]
 #[cfg_attr(
     windows,
@@ -865,7 +894,9 @@ async fn a_fresh_turn_starts_clean_after_cancellation() {
         h.config.clone(),
     );
     let outcome = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
+        // Just under nextest's 120s terminate: fires only when the job is
+        // about to be killed anyway, so the failure is named.
+        std::time::Duration::from_secs(110),
         agent.run_turn("spin", &mut sink, &cancel),
     )
     .await
@@ -878,7 +909,8 @@ async fn a_fresh_turn_starts_clean_after_cancellation() {
     let turn_started = std::time::Instant::now();
     let mut sink2 = CollectingSink::default();
     let second = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
+        // Same ceiling as turn one's guard; see the note on this test.
+        std::time::Duration::from_secs(110),
         agent.run_turn("again", &mut sink2, &fresh),
     )
     .await;

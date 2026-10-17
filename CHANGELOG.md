@@ -127,6 +127,21 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **A cancellation test's hang guard fired after CI's own kill (CI
+  `39044027340`).** `a_fresh_turn_starts_clean_after_cancellation` guards
+  its two turns with `tokio::time::timeout` so a hang names itself instead
+  of taking the pipeline down. The guards sat at 30 s, but nextest
+  terminates a test after 120 s (`.config/nextest.toml`), and on a hosted
+  runner the whole test exceeded 60 s of *load* while its second turn's
+  own work stayed in the tens of milliseconds — so the guard fired after
+  the job was already dead, printing nothing and letting the anonymous
+  `TIMEOUT` store the failure (and the panic could not bring the process
+  down either: the spinning guest's thread is never joined). Both guards
+  now sit at 110 s, just under the terminate, which buys the elapsed
+  breakdown and a named failure. No assertion was touched; the test's real
+  elapsed-time claim (turn one stopping within 3 s of the cancel) is
+  unchanged. See `docs/platform-notes.md` for the load-scale evidence and
+  for why the #276 usage merge cannot be the cause.
 - **Partial usage reports overwrote instead of merging (gh #276).** A
   provider may report its counters across several stream events —
   Anthropic's `message_start` carries input/cache with output 0, its
