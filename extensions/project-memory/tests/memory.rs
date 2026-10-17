@@ -250,3 +250,153 @@ fn snapshot_block_respects_the_token_budget() {
     );
     assert!(block.contains("truncated"), "{block}");
 }
+
+// ---------------------------------------------------------------------------
+// gh #296: the pin must freeze an EMPTY memory too
+// ---------------------------------------------------------------------------
+//
+// `pin: Mutex<Option<String>>` conflated "not yet initialised" with
+// "initialised but empty": a session with no MEMORY.md stored `None`, so a
+// mid-session `learn` (which writes the file) made the NEXT call re-read
+// and inject the block into `messages[0]` on turn 2+. That is a root-system
+// mutation mid-session — the same cache-bust class as #299, which is why
+// the guard lives here as well as in the payload rows.
+
+// Verifies: gh #296 acceptance 1+2 — starting with NO memory, a
+// mid-session `learn` does not make the next transform inject anything.
+// `messages[0]` stays byte-identical (red-first: this is the defect).
+#[test]
+fn an_empty_start_stays_frozen_across_a_mid_session_learn() {
+    let fs = FakeFs::new();
+    let memory = ProjectMemory::new_trusted(&fs);
+    let conversation = || {
+        vec![
+            ChatMessage::text(MessageRole::System, "Be helpful.".to_string()),
+            ChatMessage::text(MessageRole::User, "hello".to_string()),
+        ]
+    };
+
+    // Turn 1: nothing on disk, so nothing injected — and that "nothing"
+    // must be FROZEN, not merely absent.
+    let first = memory.transform(conversation());
+    assert_eq!(first, conversation(), "no memory, no mutation");
+
+    // The model learns a fact mid-session.
+    memory
+        .learn("Learned mid-session.", MemoryScope::Project)
+        .expect("learn writes the file");
+
+    // Turn 2: the file now exists, but the session's head must not move.
+    let second = memory.transform(conversation());
+    assert_eq!(
+        second, first,
+        "a mid-session learn must not mutate messages[0]"
+    );
+    assert!(
+        !head(&second).contains("Learned mid-session."),
+        "the new fact belongs to the NEXT session:\n{}",
+        head(&second)
+    );
+
+    // The file does carry it, for that next session.
+    let text = read_memory(&fs, MemoryScope::Project).expect("read");
+    assert!(text.contains("Learned mid-session."), "{text}");
+}
+
+// Verifies: gh #296 acceptance 1 — the same guarantees hold when the
+// memory file exists but is blank (whitespace only): still a frozen empty
+// snapshot, not an uninitialised pin.
+#[test]
+fn a_blank_memory_file_also_freezes_empty() {
+    let fs = FakeFs::new();
+    project_memory::FsView::write(&fs, "workspace", project_memory::PROJECT_PATH, "   \n\n")
+        .expect("seed a blank file");
+    let memory = ProjectMemory::new_trusted(&fs);
+    let conversation = || {
+        vec![ChatMessage::text(
+            MessageRole::System,
+            "Be helpful.".to_string(),
+        )]
+    };
+
+    let first = memory.transform(conversation());
+    assert_eq!(first, conversation(), "blank is empty");
+    memory
+        .learn("Late fact.", MemoryScope::Project)
+        .expect("learn");
+    let second = memory.transform(conversation());
+    assert_eq!(second, first, "the blank start froze empty for good");
+}
+
+// Verifies: gh #296 acceptance 3 — global facts load into the snapshot
+// alongside project facts.
+#[test]
+fn global_facts_load_alongside_project_facts() {
+    let fs = FakeFs::new();
+    let memory = ProjectMemory::new_trusted(&fs);
+    memory
+        .learn("Project rule.", MemoryScope::Project)
+        .expect("learn project");
+    memory
+        .learn("Global preference.", MemoryScope::Global)
+        .expect("learn global");
+
+    let out = memory.transform(vec![ChatMessage::text(
+        MessageRole::System,
+        "Be helpful.".to_string(),
+    )]);
+    let text = head(&out);
+    assert!(
+        text.contains("Project rule."),
+        "project fact missing:\n{text}"
+    );
+    assert!(
+        text.contains("Global preference."),
+        "global fact missing:\n{text}"
+    );
+    assert!(
+        text.starts_with("# Project Memory"),
+        "one combined block under one heading:\n{text}"
+    );
+}
+
+// Verifies: gh #296 acceptance 3 — global-only memory still produces a
+// snapshot (the old code read Project alone and injected nothing).
+#[test]
+fn global_memory_alone_still_snapshots() {
+    let fs = FakeFs::new();
+    let memory = ProjectMemory::new_trusted(&fs);
+    memory
+        .learn("Only a global fact.", MemoryScope::Global)
+        .expect("learn global");
+
+    let out = memory.transform(vec![ChatMessage::text(
+        MessageRole::System,
+        "Be helpful.".to_string(),
+    )]);
+    assert!(
+        head(&out).contains("Only a global fact."),
+        "a global-only snapshot must inject:\n{}",
+        head(&out)
+    );
+}
+
+// Verifies: gh #296 acceptance 1+3 — a global fact learned mid-session is
+// likewise frozen out, so the combined read does not reopen the bust.
+#[test]
+fn a_mid_session_global_learn_does_not_move_the_head() {
+    let fs = FakeFs::new();
+    let memory = ProjectMemory::new_trusted(&fs);
+    let conversation = || {
+        vec![ChatMessage::text(
+            MessageRole::System,
+            "Be helpful.".to_string(),
+        )]
+    };
+    let first = memory.transform(conversation());
+    memory
+        .learn("Global late fact.", MemoryScope::Global)
+        .expect("learn global");
+    let second = memory.transform(conversation());
+    assert_eq!(second, first, "the global half of the read must freeze too");
+}

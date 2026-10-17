@@ -1791,6 +1791,7 @@ dependencies = [
  "lca-wire-openai",
  "mcp",
  "openai-compatible",
+ "project-memory",
  "serde_json",
  "skills",
  "tokio",

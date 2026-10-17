@@ -375,3 +375,7 @@ mod mcp_stdio_notification_desync;
 // — a KV-cache bust in both directions.
 #[path = "299-skill-injection-preserves-root-system.rs"]
 mod skill_injection_preserves_root_system;
+// GitHub #296: project memory's pin never froze an empty snapshot, so a
+// mid-session `learn` re-read the file and mutated `messages[0]`.
+#[path = "296-memory-pin-freezes-empty-snapshot.rs"]
+mod memory_pin_freezes_empty_snapshot;

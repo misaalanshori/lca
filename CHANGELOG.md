@@ -127,6 +127,20 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **Project memory never froze an *empty* snapshot, so a mid-session
+  `learn` mutated `messages[0]` (gh #296).** The pin was
+  `Mutex<Option<String>>`, which conflates "not yet initialised" with
+  "initialised but empty": a session starting with no `MEMORY.md` stored
+  `None`, so a `learn` mid-session (which writes the file) made the next
+  transform **re-read** and inject a block into the root system prompt on
+  turn 2+ — the same KV-cache bust class gh #299 had just fixed, from a
+  different producer. The pin is now tri-state
+  (`Mutex<Option<Option<String>>>`: outer = frozen, inner = the snapshot),
+  so empty freezes as an initialised `None` and no later `learn` can
+  reopen it. Second defect in the same function, also fixed: the read was
+  `MemoryScope::Project` only, so facts learned with `scope: "global"`
+  were never injected at all — global and project memory are now read
+  together into the one snapshot block (ADR-0017, FR-CACHE-5).
 - **Skill injection and instruction deltas mutated the vendor's root
   system prompt (gh #299, and the same class in gh #217's path).** Both
   appended their text as a `MessageRole::System` message. Every provider

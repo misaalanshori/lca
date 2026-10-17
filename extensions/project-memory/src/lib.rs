@@ -4,6 +4,23 @@
 //! embeddings, no daemons, no vector anything: plain Markdown the
 //! owner can read, edit, and commit.
 //!
+//! # The freeze rule (gh #296)
+//!
+//! The snapshot is read **once**, on the session's first transform, and is
+//! immutable for the rest of that session: a `learn` writes the files for
+//! *future* sessions and never moves the active session's head. That is an
+//! ADR-0017 requirement (FR-CACHE-5) — the injected block lives in
+//! `messages[0]`, so re-reading it mid-session would mutate the root system
+//! prompt and bust the provider's prompt cache.
+//!
+//! The freeze covers an **empty** start too. A session that begins with no
+//! memory freezes an initialised-but-empty snapshot (the tri-state
+//! [`SnapshotPin`]), so the first `learn` cannot reopen the read. Both
+//! scopes are read and combined for the one block: global facts come first,
+//! then project facts, because a project rule is the more specific
+//! instruction when the two disagree and the model reads later text as the
+//! nearer context.
+//!
 //! Paths: project memory lives at
 //! `.lca/extensions/project-memory/MEMORY.md` under the `workspace`
 //! scope; global memory lives at `MEMORY.md` under the `private`
@@ -176,21 +193,43 @@ pub fn snapshot_block(memory_text: &str) -> String {
     block
 }
 
-/// Read the project memory once and freeze it: the first call loads
-/// the file into the pin, every later call reuses the pin. A
-/// mid-session `learn` updates the file for future sessions but never
-/// moves the active session's head (ADR-0017).
-pub fn pinned_snapshot(fs: &dyn FsView, pin: &Mutex<Option<String>>) -> Option<String> {
+/// The pin's state: `None` means "not frozen yet", `Some(_)` means
+/// "frozen", where the inner `None` is a frozen **empty** snapshot.
+///
+/// The tri-state is the whole point (gh #296). A plain
+/// `Option<String>` conflates "not yet initialised" with "initialised
+/// but empty", so a session that started with no memory stored `None`,
+/// and a mid-session `learn` — which writes the file — made the next
+/// call re-read it and inject a block into `messages[0]` on turn 2+. That
+/// is a root-system mutation mid-session: the same cache-bust class as
+/// gh #299. Freezing the emptiness is what keeps the head byte-identical.
+pub type SnapshotPin = Mutex<Option<Option<String>>>;
+
+/// Read both memory scopes once and freeze the combined snapshot.
+///
+/// The first call loads global then project memory into the pin; every
+/// later call reuses the pin, including when what it froze was *empty*.
+/// A mid-session `learn` updates the files for future sessions but never
+/// moves the active session's head (ADR-0017, FR-CACHE-5).
+///
+/// Global and project are read through the same `snapshot_block`, so the
+/// session sees one block under one heading. Global comes first: a
+/// project rule is the more specific instruction when the two disagree,
+/// and the model reads later text as the nearer context.
+pub fn pinned_snapshot(fs: &dyn FsView, pin: &SnapshotPin) -> Option<String> {
     let mut guard = pin.lock().unwrap_or_else(|poison| poison.into_inner());
     if guard.is_none() {
-        let text = read_memory(fs, MemoryScope::Project).unwrap_or_default();
-        *guard = if text.trim().is_empty() {
+        let global = read_memory(fs, MemoryScope::Global).unwrap_or_default();
+        let project = read_memory(fs, MemoryScope::Project).unwrap_or_default();
+        let combined = format!("{global}\n{project}");
+        let combined = combined.trim();
+        *guard = Some(if combined.is_empty() {
             None
         } else {
-            Some(snapshot_block(&text))
-        };
+            Some(snapshot_block(combined))
+        });
     }
-    guard.clone()
+    guard.clone().flatten()
 }
 
 /// The whole transform: prepend the frozen block to the head of the
@@ -263,7 +302,7 @@ pub fn learn_tool_spec() -> lca_protocol::ToolSpec {
 pub struct ProjectMemory<'a> {
     fs: &'a dyn FsView,
     project_trusted: bool,
-    pin: Mutex<Option<String>>,
+    pin: SnapshotPin,
 }
 
 impl<'a> ProjectMemory<'a> {
@@ -342,7 +381,7 @@ mod native {
     pub struct ProjectMemoryNative {
         cap: Arc<lca_tools::Capabilities>,
         project_trusted: bool,
-        pin: Mutex<Option<String>>,
+        pin: SnapshotPin,
     }
 
     impl ProjectMemoryNative {
@@ -505,9 +544,11 @@ pub use native::ProjectMemoryNative;
 mod wasm_mode {
     use super::*;
 
-    /// The guest-side pin: one component instance serves one session,
-    /// so a process-wide freeze is the session-start snapshot.
-    static PIN: Mutex<Option<String>> = Mutex::new(None);
+    /// The guest-side pin: one component instance serves one session, so a
+    /// process-wide freeze is the session-start snapshot. Tri-state for the
+    /// same reason as the host pin (gh #296): an empty start must freeze as
+    /// an initialised `None`, not stay uninitialised.
+    static PIN: SnapshotPin = Mutex::new(None);
 
     /// The guest filesystem behind the shared [`FsView`], one copy
     /// per world module (each `generate!` owns its host bindings).
