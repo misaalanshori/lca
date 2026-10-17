@@ -109,19 +109,31 @@ fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     if bytes.get(..4)? != b"RIFF" || bytes.get(8..12)? != b"WEBP" {
         return None;
     }
+    // gh #358: the magic proves only 16 bytes. Each arm reads further, and
+    // used to index directly, so any 16..=29-byte file with the magic
+    // panicked in the render path. Every read goes through a checked
+    // slice now; a truncated header simply reports no dimensions and the
+    // caller draws the placeholder.
     match bytes.get(12..16)? {
         b"VP8X" => {
-            let w = 1 + u32::from_le_bytes([bytes[24], bytes[25], bytes[26], 0]);
-            let h = 1 + u32::from_le_bytes([bytes[27], bytes[28], bytes[29], 0]);
-            Some((w, h))
+            // Canvas width/height are 24-bit LE, stored minus one.
+            let w = bytes.get(24..27)?;
+            let h = bytes.get(27..30)?;
+            Some((
+                1 + u32::from_le_bytes([w[0], w[1], w[2], 0]),
+                1 + u32::from_le_bytes([h[0], h[1], h[2], 0]),
+            ))
         }
         b"VP8 " => {
-            let w = u16::from_le_bytes([bytes[26], bytes[27]]) as u32 & 0x3fff;
-            let h = u16::from_le_bytes([bytes[28], bytes[29]]) as u32 & 0x3fff;
-            Some((w, h))
+            let w = bytes.get(26..28)?;
+            let h = bytes.get(28..30)?;
+            Some((
+                u16::from_le_bytes([w[0], w[1]]) as u32 & 0x3fff,
+                u16::from_le_bytes([h[0], h[1]]) as u32 & 0x3fff,
+            ))
         }
         b"VP8L" => {
-            let bits = u32::from_le_bytes([bytes[21], bytes[22], bytes[23], bytes[24]]);
+            let bits = u32::from_le_bytes(bytes.get(21..25)?.try_into().ok()?);
             Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
         }
         _ => None,
@@ -355,6 +367,111 @@ mod tests {
         assert!(out[0].contains("image/tiff"));
         assert!(out[0].contains("unknown size"));
         assert!(out.len() > 1, "a second line explains the placeholder");
+    }
+
+    // Verifies: gh #358 - a truncated WebP header of ANY length never
+    // panics. The magic needs 16 bytes; the three chunk arms read up to
+    // byte 29 (VP8X/VP8) or 24 (VP8L), so every short input used to index
+    // out of bounds in the render path. The whole 0..=30 matrix, not
+    // three samples.
+    #[test]
+    fn truncated_webp_headers_never_panic() {
+        for kind in [b"VP8X", b"VP8 ", b"VP8L"] {
+            for len in 0..=30usize {
+                let mut bytes = vec![0u8; len];
+                if len >= 4 {
+                    bytes[..4].copy_from_slice(b"RIFF");
+                }
+                if len >= 12 {
+                    bytes[8..12].copy_from_slice(b"WEBP");
+                }
+                if len >= 16 {
+                    bytes[12..16].copy_from_slice(kind);
+                }
+                let got = image_dimensions("image/webp", &bytes);
+                // Short of the arm's requirement the header is unreadable;
+                // a complete one is not truncated, so it may parse.
+                let needs = if kind == b"VP8L" { 25 } else { 30 };
+                if len < needs {
+                    assert_eq!(
+                        got,
+                        None,
+                        "{} at {len} bytes is a truncated header",
+                        String::from_utf8_lossy(kind)
+                    );
+                }
+            }
+        }
+        assert_eq!(image_dimensions("image/webp", &[]), None, "empty input");
+    }
+
+    // Verifies: gh #358 AC2 - the three chunk kinds still parse their real
+    // dimensions (the safe reads did not change the arithmetic).
+    #[test]
+    fn webp_dimensions_parse_each_chunk_kind() {
+        // VP8X: 30 bytes, 24-bit LE canvas size minus one at 24..30.
+        let mut vp8x = webp_header(b"VP8X", 30);
+        vp8x[24..27].copy_from_slice(&[0x2f, 0x02, 0x00]); // 560 - 1
+        vp8x[27..30].copy_from_slice(&[0x8f, 0x01, 0x00]); // 400 - 1
+        assert_eq!(image_dimensions("image/webp", &vp8x), Some((560, 400)));
+
+        // VP8 (lossy): 30 bytes, 14-bit dimensions after the 3-byte frame
+        // tag + start code at 26..30.
+        let mut vp8 = webp_header(b"VP8 ", 30);
+        vp8[26..28].copy_from_slice(&320u16.to_le_bytes());
+        vp8[28..30].copy_from_slice(&240u16.to_le_bytes());
+        assert_eq!(image_dimensions("image/webp", &vp8), Some((320, 240)));
+
+        // VP8L (lossless): 25 bytes, 14-bit (w-1) then 14-bit (h-1).
+        let mut vp8l = webp_header(b"VP8L", 25);
+        let bits: u32 = (639 & 0x3fff) | ((479 & 0x3fff) << 14);
+        vp8l[21..25].copy_from_slice(&bits.to_le_bytes());
+        assert_eq!(image_dimensions("image/webp", &vp8l), Some((640, 480)));
+    }
+
+    // Verifies: gh #358 - the class, not the samples: no byte buffer at
+    // all panics the dimension sniffer for any supported media type. A
+    // panic here is fatal because `image_dimensions` runs on every
+    // transcript render and resize.
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 512, ..ProptestConfig::default() })]
+
+        #[test]
+        fn no_byte_buffer_panics_the_dimension_sniffer(
+            bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..2048),
+        ) {
+            for media_type in ["image/png", "image/gif", "image/jpeg", "image/webp"] {
+                let _ = image_dimensions(media_type, &bytes);
+            }
+        }
+
+        /// A buffer that starts with the WebP magic and *then* arbitrary
+        /// bytes is the exact shape that used to panic.
+        #[test]
+        fn no_magic_prefixed_webp_buffer_panics(
+            kind in 0usize..3,
+            tail in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..64),
+        ) {
+            let fourcc: &[u8; 4] = [b"VP8X", b"VP8 ", b"VP8L"][kind];
+            let mut bytes = vec![0u8; 16];
+            bytes[..4].copy_from_slice(b"RIFF");
+            bytes[8..12].copy_from_slice(b"WEBP");
+            bytes[12..16].copy_from_slice(fourcc);
+            bytes.extend_from_slice(&tail);
+            let _ = image_dimensions("image/webp", &bytes);
+        }
+    }
+
+    /// A WebP byte buffer of `len` zeros carrying the RIFF/WEBP magic and
+    /// the given chunk fourcc at 12..16.
+    fn webp_header(kind: &[u8; 4], len: usize) -> Vec<u8> {
+        let mut bytes = vec![0u8; len];
+        bytes[..4].copy_from_slice(b"RIFF");
+        bytes[8..12].copy_from_slice(b"WEBP");
+        bytes[12..16].copy_from_slice(kind);
+        bytes
     }
 
     // Verifies: R5 - the kitty encoder emits a complete chunk with its id.

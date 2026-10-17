@@ -337,3 +337,7 @@ mod git_source_option_injection;
 // when the 1 MiB bound fell inside a multi-byte UTF-8 character.
 #[path = "263-at-file-truncation-utf8-boundary.rs"]
 mod at_file_truncation_utf8_boundary;
+// GitHub #358: truncated WebP headers direct-indexed past the 16-byte
+// magic proof, panicking the image widget in the render path.
+#[path = "358-truncated-webp-no-panic.rs"]
+mod truncated_webp_no_panic;

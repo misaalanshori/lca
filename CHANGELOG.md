@@ -127,6 +127,24 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **Truncated WebP headers panicked the image widget (gh #358).** The
+  dimension sniffer proved 16 bytes of `RIFF….WEBP` magic and then read
+  the canvas size with direct indexing: `VP8X` and `VP8 ` reached byte 29,
+  `VP8L` byte 24. Any 16–29-byte file carrying the magic — a truncated
+  download, a corrupt attachment, a text file renamed `.webp` — aborted
+  the process with `index out of bounds` inside `image_dimensions`, which
+  runs on **every** transcript render and resize (a panic there is fatal
+  in the release profile, not recoverable). All three arms now read
+  through checked slices, so a short header reports no dimensions and the
+  renderer draws its placeholder. Sibling audit: the PNG and GIF arms were
+  already safe, and the JPEG segment walker is **provably** bounded — its
+  `while i + 9 < bytes.len()` guard means the largest index the body
+  touches (`i + 8`) satisfies `i + 8 <= len - 2`, so no input escapes
+  (verified over ~303k probes and 8.3M loop-body entries, margin ≥ 1);
+  it was left unchanged. Guards: the full 0..=30 truncation matrix per
+  chunk kind, positive dimension rows per chunk kind, two `proptest`
+  properties (no byte buffer panics, no magic-prefixed buffer panics), and
+  a real-terminal row attaching a truncated `.webp`.
 - **`@file` truncation panicked on multi-byte UTF-8 (gh #263).**
   `expand_at_files` capped inlined files with a plain
   `String::truncate(INPUT_MAX_BYTES)`, which panics when the 1 MiB index
