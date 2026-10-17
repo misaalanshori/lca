@@ -58,4 +58,46 @@ impl Usage {
     pub fn reported_cache(&self) -> bool {
         self.cache_read + self.cache_write + self.cache_write_1h > 0
     }
+
+    /// Absorb a later partial report (gh #276): a provider may report its
+    /// counters across several stream events (Anthropic: `message_start`
+    /// carries input/cache, `message_delta` carries output).
+    ///
+    /// Counters merge per field — a later **non-zero** value wins, because a
+    /// provider that refines its count in a second event is authoritative
+    /// while a zero there means "not reported in this event", not "was
+    /// zero". A single full report therefore absorbs to exactly itself, so
+    /// providers that report once gain nothing and lose nothing.
+    ///
+    /// Cost follows the same authority rule, taken **wholesale**: a later
+    /// non-zero total replaces the total *and* its breakdown (a provider
+    /// that prices only at the end is defining the cost, not adding to it),
+    /// while a zero total leaves the earlier cost alone. `extras` merges key
+    /// by key, a later value winning.
+    pub fn absorb(&mut self, later: &Usage) {
+        if later.input != 0 {
+            self.input = later.input;
+        }
+        if later.output != 0 {
+            self.output = later.output;
+        }
+        if later.cache_read != 0 {
+            self.cache_read = later.cache_read;
+        }
+        if later.cache_write != 0 {
+            self.cache_write = later.cache_write;
+        }
+        if later.cache_write_1h != 0 {
+            self.cache_write_1h = later.cache_write_1h;
+        }
+        if later.cost != 0.0 {
+            self.cost = later.cost;
+            self.cost_input = later.cost_input;
+            self.cost_cache_read = later.cost_cache_read;
+            self.cost_cache_write = later.cost_cache_write;
+        }
+        for (key, value) in &later.extras {
+            self.extras.insert(key.clone(), value.clone());
+        }
+    }
 }

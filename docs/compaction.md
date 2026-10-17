@@ -11,7 +11,11 @@ context_tokens > context_window − reserve
 ```
 
 strict on both sides: equality does not fire. `context_tokens` is the
-latest assistant call's prompt tokens (input + cache fields);
+latest assistant call's prompt tokens (input + cache fields) — the
+**merged** usage report, never just the last stream event's, because a
+provider may split its counters across events (gh #276, Anthropic's
+`message_start` + `message_delta`); a whole-struct overwrite there read
+zero and this trigger could never fire;
 `context_window` is the model's published window, or the 128k fallback
 when the endpoint publishes none. `reserve` is `compaction.reserve_tokens`
 when set, else the stopgap's fraction derivation `(1 − threshold) × window`

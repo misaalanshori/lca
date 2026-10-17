@@ -127,6 +127,20 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **Partial usage reports overwrote instead of merging (gh #276).** A
+  provider may report its counters across several stream events —
+  Anthropic's `message_start` carries input/cache with output 0, its
+  `message_delta` carries output with the prompt counters absent. Every
+  accumulator did a whole-struct assignment, so the delta's zeros wiped
+  the prompt metrics. The consequence was not cosmetic: prompt tokens read
+  0, so `maybe_compact`'s threshold could never fire and a long Anthropic
+  session grew until the provider rejected it (FR-SESS-4), while every
+  `Record::Assistant` persisted zeros and the footer/`/session`/`/usage`
+  under-reported. `Usage::absorb` now merges per field (a later non-zero
+  value wins, zero never erases) and the cost block transfers wholesale
+  when a later event prices it; the four accumulator sites use it. A
+  single-report provider (the OpenAI shape) absorbs to exactly itself, so
+  its records are unchanged.
 - **Anthropic cache breakpoints grew with history (gh #334).** The
   Messages body planted a `cache_control` breakpoint on the last block of
   **every user message**, so a session with three user turns emitted five

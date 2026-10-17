@@ -669,3 +669,138 @@ fn tool_result_duration_is_backward_compatible() {
     let json = serde_json::to_string(&result).expect("serialize");
     assert!(!json.contains("duration_ms"), "absent serializes absent");
 }
+
+// ---- gh #276: partial usage reports merge instead of overwriting ----
+
+// Verifies: gh #276 (a later non-zero counter wins per field; zero never
+// erases what an earlier event reported)
+#[test]
+fn a_partial_report_absorbs_per_field_without_erasing() {
+    // Anthropic's shape: `message_start` carries input/cache (output 0),
+    // `message_delta` carries output (input/cache 0).
+    let mut merged = Usage {
+        input: 1200,
+        cache_read: 4000,
+        cache_write: 300,
+        cache_write_1h: 64,
+        ..Default::default()
+    };
+    merged.absorb(&Usage {
+        output: 87,
+        ..Default::default()
+    });
+    assert_eq!(
+        (
+            merged.input,
+            merged.output,
+            merged.cache_read,
+            merged.cache_write,
+            merged.cache_write_1h
+        ),
+        (1200, 87, 4000, 300, 64),
+        "the delta's zeros must not erase the start's prompt counts"
+    );
+    assert_eq!(merged.prompt_tokens(), 300 + 1200 + 4000 + 64);
+}
+
+// Verifies: gh #276 (a later non-zero value is a refinement, and wins)
+#[test]
+fn a_refined_counter_replaces_the_earlier_estimate() {
+    let mut merged = Usage {
+        input: 10,
+        output: 3,
+        ..Default::default()
+    };
+    merged.absorb(&Usage {
+        input: 10,
+        output: 42,
+        ..Default::default()
+    });
+    assert_eq!((merged.input, merged.output), (10, 42));
+}
+
+// Verifies: gh #276 (a single full report absorbs to exactly itself -
+// the OpenAI shape stays byte-identical)
+#[test]
+fn absorbing_one_complete_report_is_the_old_assignment() {
+    let reported = Usage {
+        input: 500,
+        output: 60,
+        cache_read: 900,
+        cache_write: 100,
+        cache_write_1h: 5,
+        cost: 0.021,
+        cost_input: 0.01,
+        cost_cache_read: 0.008,
+        cost_cache_write: 0.003,
+        extras: Default::default(),
+    };
+    let mut merged = Usage::default();
+    merged.absorb(&reported);
+    assert_eq!(merged, reported, "one event is assignment, not a merge");
+}
+
+// Verifies: gh #276 (a non-zero cost report is authoritative whole -
+// total and breakdown - because a provider that prices at the end is
+// defining the cost, not adding a delta)
+#[test]
+fn a_later_cost_report_replaces_the_whole_cost_breakdown() {
+    let mut merged = Usage {
+        cost: 0.0,
+        cost_input: 0.0,
+        cost_cache_read: 0.0,
+        cost_cache_write: 0.0,
+        ..Default::default()
+    };
+    merged.absorb(&Usage {
+        cost: 0.0300,
+        cost_input: 0.012,
+        cost_cache_read: 0.015,
+        cost_cache_write: 0.003,
+        ..Default::default()
+    });
+    assert!((merged.cost - 0.03).abs() < 1e-12);
+    assert!((merged.cost_input - 0.012).abs() < 1e-12);
+    assert!((merged.cost_cache_read - 0.015).abs() < 1e-12);
+    assert!((merged.cost_cache_write - 0.003).abs() < 1e-12);
+}
+
+// Verifies: gh #276 (a zero cost in the later report keeps the earlier
+// cost - the same "zero means not reported here" rule as the counters)
+#[test]
+fn a_zero_cost_report_keeps_the_earlier_cost() {
+    let mut merged = Usage {
+        cost: 0.05,
+        cost_input: 0.02,
+        ..Default::default()
+    };
+    merged.absorb(&Usage {
+        output: 12,
+        ..Default::default()
+    });
+    assert!((merged.cost - 0.05).abs() < 1e-12);
+    assert!((merged.cost_input - 0.02).abs() < 1e-12);
+    assert_eq!(merged.output, 12);
+}
+
+// Verifies: gh #276 (extras merge additively in the non-structural map:
+// a later key wins, an earlier key not resent survives)
+#[test]
+fn extras_merge_key_by_key() {
+    let mut merged = Usage::default();
+    merged.extras.insert("kept".to_string(), "1".to_string());
+    merged
+        .extras
+        .insert("updated".to_string(), "old".to_string());
+    merged.absorb(&Usage {
+        extras: [("updated".to_string(), "new".to_string())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    });
+    assert_eq!(merged.extras.get("kept").map(String::as_str), Some("1"));
+    assert_eq!(
+        merged.extras.get("updated").map(String::as_str),
+        Some("new")
+    );
+}

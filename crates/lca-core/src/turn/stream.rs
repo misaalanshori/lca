@@ -201,7 +201,7 @@ impl Agent<'_> {
                     }
                     Some(StreamEvent::Usage { usage: reported }) => {
                         stream_log.push(StreamEvent::Usage { usage: reported.clone() });
-                        usage = reported;
+                        usage.absorb(&reported);
                     }
                     Some(StreamEvent::Error { message, retryable }) => {
                         stream_log.push(StreamEvent::Error { message: message.clone(), retryable });
@@ -239,7 +239,7 @@ impl Agent<'_> {
                             }
                             StreamEvent::Usage { usage: reported } => {
                                 stream_log.push(StreamEvent::Usage { usage: reported.clone() });
-                                usage = reported;
+                                usage.absorb(&reported);
                             }
                             StreamEvent::Error { message, retryable } => {
                                 stream_log.push(StreamEvent::Error { message: message.clone(), retryable });

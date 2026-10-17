@@ -316,7 +316,7 @@ impl lca_tools::CompletionBackend for ProviderBackend {
                 let absorb = |event: StreamEvent, collected: &mut (String, lca_protocol::Usage, Option<String>)| {
                     match event {
                         StreamEvent::TextDelta { delta } => collected.0.push_str(&delta),
-                        StreamEvent::Usage { usage: reported } => collected.1 = reported,
+                        StreamEvent::Usage { usage: reported } => collected.1.absorb(&reported),
                         StreamEvent::Error { message, .. } => collected.2 = Some(message),
                         _ => {}
                     }
@@ -340,7 +340,7 @@ impl lca_tools::CompletionBackend for ProviderBackend {
             while let Some(event) = rx.recv().await {
                 match event {
                     StreamEvent::TextDelta { delta } => collected.0.push_str(&delta),
-                    StreamEvent::Usage { usage: reported } => collected.1 = reported,
+                    StreamEvent::Usage { usage: reported } => collected.1.absorb(&reported),
                     StreamEvent::Error { message, .. } => collected.2 = Some(message),
                     _ => {}
                 }

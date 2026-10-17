@@ -242,8 +242,23 @@ impl TurnBuilder {
     }
 
     /// The mandatory usage record for this turn.
+    ///
+    /// A provider that reports usage in several events (gh #276: Anthropic's
+    /// `message_start` + `message_delta`) pairs this with [`Self::usage_event`]
+    /// calls for the earlier partial reports: this one is the last event the
+    /// provider emits, so it is what a whole-struct overwrite would have left
+    /// behind.
     pub fn usage(mut self, usage: Usage) -> Self {
         self.usage = Some(usage);
+        self
+    }
+
+    /// A partial usage report in stream position (gh #276), before the
+    /// mandatory trailing [`Self::usage`] record. Scripting one of these is
+    /// how a split-usage provider gets exercised: the counters merge per
+    /// field instead of the last event winning outright.
+    pub fn usage_event(mut self, usage: Usage) -> Self {
+        self.events.push(Step::Event(StreamEvent::Usage { usage }));
         self
     }
 

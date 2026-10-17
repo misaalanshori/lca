@@ -361,3 +361,8 @@ mod cache_breakpoint_cap;
 // Anthropic rejects on replay.
 #[path = "335-thinking-blocks-precede-text.rs"]
 mod thinking_blocks_precede_text;
+// GitHub #276: `Usage` was assigned whole at every stream accumulator, so
+// a split usage report (`message_start` prompt half + `message_delta`
+// output half) wiped the prompt counters and auto-compaction never fired.
+#[path = "276-partial-usage-merge.rs"]
+mod partial_usage_merge;

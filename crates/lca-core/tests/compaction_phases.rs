@@ -800,3 +800,66 @@ async fn a_compact_veto_cancels_the_compaction() {
         "the veto names its reason"
     );
 }
+
+// ---- gh #276: auto-compaction triggers off the MERGED prompt count ----
+
+// FR-SESS-4 end-to-end, and the defect's real consequence. A provider
+// that reports usage in two events (Anthropic's `message_start` for the
+// prompt counters, `message_delta` for output) used to leave the
+// persisted assistant record at `input: 0`, so `last_prompt` read 0 and
+// the threshold could never fire — a long session grew until the
+// provider rejected it. With the fields merged the same split stream
+// crosses the threshold and compacts exactly once.
+// Verifies: gh #276 + FR-SESS-4 (the merged prompt count drives the trigger)
+#[tokio::test]
+async fn split_usage_still_crosses_the_compaction_threshold() {
+    let provider = FakeProvider::builder()
+        // Turn 1: the prompt half arrives first, output second - the
+        // Anthropic two-event shape, 9000 prompt tokens over a
+        // 10_000-token window at a 0.5 threshold.
+        .turn(|t| {
+            t.text("ok")
+                .usage_event(lca_protocol::Usage {
+                    input: 7000,
+                    cache_read: 2000,
+                    ..Default::default()
+                })
+                .usage(lca_protocol::Usage {
+                    output: 10,
+                    ..Default::default()
+                })
+        })
+        .turn(|t| t.text("summarized").usage(fake_usage(50, 10, 0, 0)))
+        .build();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let double = SeeingDouble {
+        calls: calls.clone(),
+        saw_previous: Arc::new(Mutex::new(Vec::new())),
+    };
+    let registry = seeing_registry(double);
+    let config = budget_config(registry, 10_000, 0.5);
+    let mut h = harness("split-usage-compaction", provider, config);
+    let mut sink = CollectingSink::default();
+    let mut prompt = prompt();
+
+    turn(&mut h, "first", &mut sink, &mut prompt).await;
+    turn(&mut h, "second", &mut sink, &mut prompt).await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the merged 9000 prompt tokens crossed 0.5 x 10000; a wiped \
+         record would have read 0 and never fired"
+    );
+
+    // The durable marker: the compaction landed as a record.
+    let read = h
+        .store
+        .read_with(&h.session, ViewMode::Display)
+        .expect("records");
+    assert!(
+        read.records
+            .iter()
+            .any(|record| matches!(record, Record::Compaction { .. })),
+        "the threshold compaction wrote its record"
+    );
+}

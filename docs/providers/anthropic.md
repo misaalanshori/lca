@@ -35,6 +35,16 @@ Messages bodies over `POST {api_base}/v1/messages` with cache breakpoints on: `x
 
 Two request-shape rules the API enforces, both fixed in gh #334/#335. **Cache breakpoints are three fixed anchors and never more**: the system prompt, the last tool declaration, and the final content block of the last message — whatever role that message has, so a turn ending in a tool result is covered. Anthropic caps a request at four `cache_control` breakpoints and rejects the rest with `invalid_request_error`, so the count must not scale with history length. **Thinking blocks come first**: `thinking` and `redacted_thinking` must precede every other assistant content block, so a replayed thinking turn serializes reasoning (signatures verbatim), then the merged text, then `tool_use`; anything else fails with "thinking blocks must precede all other content blocks".
 
+## Usage reporting
+
+The SSE lifecycle reports usage **twice**: `message_start` carries
+`input_tokens` and the cache counters with `output_tokens` 0, and
+`message_delta` carries the final `output_tokens` with the prompt counters
+absent. The two are merged per field (`Usage::absorb`, gh #276): a later
+non-zero value wins, zero means "not reported in this event", so the
+prompt count that auto-compaction reads survives the delta. Taking the last
+event alone would read a zero prompt count on every Anthropic turn.
+
 ## login, logout, usage
 
 `login` offers three choices: the API key, the browser subscription, and the copy-code subscription. `logout` clears the namespace (no subscription-token revoke exists). `usage` is the credential-validity probe these gateways get — a live token is `Ok` with empty counts, which is what makes `auth check` answer `ready` for a live login.

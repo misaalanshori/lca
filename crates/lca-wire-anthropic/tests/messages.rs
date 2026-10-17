@@ -814,3 +814,81 @@ fn single_kind_shapes_are_unchanged() {
     assert_eq!(blocks.len(), 1, "{blocks:?}");
     assert_eq!(blocks[0]["type"], "thinking");
 }
+
+// Verifies: gh #276 (the real Messages SSE lifecycle - `message_start`'s
+// prompt half then `message_delta`'s output half - merges into one Usage
+// when consumed the way the turn consumes it; a whole-struct overwrite
+// would leave the prompt counters at zero)
+#[test]
+fn the_two_event_usage_lifecycle_merges_through_the_decoder() {
+    // The captured two-event JSON, verbatim from the API's documented
+    // lifecycle: start carries input + cache, delta carries output and
+    // omits the prompt counters entirely.
+    let frames = [
+        serde_json::json!({
+            "type": "message_start",
+            "message": {
+                "usage": {
+                    "input_tokens": 1200,
+                    "output_tokens": 0,
+                    "cache_read_input_tokens": 4000,
+                    "cache_creation_input_tokens": 300,
+                },
+            },
+        }),
+        serde_json::json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }),
+        serde_json::json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "done"},
+        }),
+        serde_json::json!({"type": "content_block_stop", "index": 0}),
+        serde_json::json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 87},
+        }),
+        serde_json::json!({"type": "message_stop"}),
+    ];
+    let mut stream = AnthropicStream::new();
+    let events: Vec<StreamEvent> = frames.iter().flat_map(|frame| stream.feed(frame)).collect();
+
+    // Exactly the turn's accumulation rule: absorb, never assign.
+    let mut merged = lca_protocol::Usage::default();
+    for event in &events {
+        if let StreamEvent::Usage { usage } = event {
+            merged.absorb(usage);
+        }
+    }
+    assert_eq!(
+        (
+            merged.input,
+            merged.output,
+            merged.cache_read,
+            merged.cache_write
+        ),
+        (1200, 87, 4000, 300),
+        "the lifecycle's two halves merge; events: {events:?}"
+    );
+    assert_eq!(
+        merged.prompt_tokens(),
+        1200 + 4000 + 300,
+        "the prompt count the compaction trigger reads"
+    );
+    // And the failure mode, spelled out: the last event alone is zeros.
+    let last = events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            StreamEvent::Usage { usage } => Some(usage.clone()),
+            _ => None,
+        })
+        .expect("the delta reports");
+    assert_eq!(
+        (last.input, last.cache_read),
+        (0, 0),
+        "the delta alone is the wipe: this is why assignment was wrong"
+    );
+}
