@@ -339,3 +339,58 @@ fn no_documented_key_falls_outside_the_vocabulary() {
         );
     }
 }
+
+/// The keys the `/settings` selector (`lca-cli`'s `tui/display.rs`) offers
+/// rows for. It is a fourth mirror of the vocabulary: a row whose key is not
+/// in `resolved()` renders the `<unset> [default]` fallback, so a typo'd key
+/// looks like an unset setting instead of an error.
+fn selector_row_keys() -> BTreeSet<String> {
+    let source = std::fs::read_to_string(repo().join("crates/lca-cli/src/tui/display.rs"))
+        .expect("read display.rs");
+    let mut keys = BTreeSet::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("row(") {
+            continue;
+        }
+        // `row("Section", "key", &[...])`, single- or multi-line: take the
+        // quoted string that is not the section label (sections have spaces
+        // and capitals, keys never do).
+        for (index, part) in trimmed.split('"').enumerate() {
+            if index % 2 == 1
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '.' || c == '_')
+                && part.contains('.')
+            {
+                keys.insert(part.to_string());
+            }
+        }
+    }
+    assert!(
+        keys.len() > 20,
+        "the selector row list parsed suspiciously few keys ({}): did `row(` change shape?",
+        keys.len()
+    );
+    keys
+}
+
+// Verifies: gh #272 - every row `/settings` offers has a key `resolved()`
+// reports, so the selector cannot display the `<unset>` fallback for a
+// setting that exists (or, worse, for a key that does not exist at all under
+// a name that looks plausible).
+#[test]
+fn every_settings_selector_row_has_a_resolved_key() {
+    let config = Config::defaults();
+    let reported: BTreeSet<&str> = config.resolved().map(|(key, _, _)| key).collect();
+    let mut orphans = Vec::new();
+    for key in selector_row_keys() {
+        if !reported.contains(key.as_str()) {
+            orphans.push(key);
+        }
+    }
+    assert!(
+        orphans.is_empty(),
+        "`/settings` rows whose key resolved() does not report (they would render `<unset> [default]`): {orphans:?}"
+    );
+}
