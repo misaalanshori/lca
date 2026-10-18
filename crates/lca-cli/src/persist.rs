@@ -37,6 +37,24 @@ fn persist_setting_at(
     persist_item_at(path, key, value.map(|value| typed_item(key, value)))
 }
 
+/// Drop the tables a leaf removal emptied (gh #273), deepest first: the
+/// recursive descent removes a table once its own subtree is gone, so
+/// clearing `models.enabled` takes `[models]` with it instead of leaving an
+/// empty section behind. An empty undocumented table would now be refused by
+/// the unknown-key walk, so this keeps the writer's output loadable.
+fn prune_emptied_tables(table: &mut toml_edit::Table, path: &[String]) -> bool {
+    let Some((head, rest)) = path.split_first() else {
+        return table.is_empty();
+    };
+    let Some(child) = table.get_mut(head).and_then(toml_edit::Item::as_table_mut) else {
+        return false;
+    };
+    if prune_emptied_tables(child, rest) {
+        table.remove(head);
+    }
+    table.is_empty()
+}
+
 /// Type one string value for a key (gh #82 fix): validated cycle
 /// values persist as their TOML type (bools and numbers unquoted),
 /// so the file reloads. Anything the validator refuses (free-text
@@ -70,6 +88,9 @@ fn persist_item_at(
     // value is replaced by a table - a dotted key claims structure.
     let mut segments = key.split('.');
     let leaf = segments.next_back().unwrap_or(key);
+    // The table path above the leaf, in order: what a removal has to prune
+    // if it empties them (gh #273).
+    let structured_path: Vec<String> = segments.clone().map(str::to_string).collect();
     let mut table = doc.as_table_mut();
     for segment in segments {
         let needs_table = !table.get(segment).is_some_and(|item| item.is_table_like());
@@ -89,6 +110,11 @@ fn persist_item_at(
         Some(value) => table[leaf] = value,
         None => {
             table.remove(leaf);
+            // Gh #273: a removal that empties its table leaves `[models]`
+            // behind with no children. Harmless before the unknown-key walk
+            // existed; now an empty table is refused as an unknown key, so a
+            // `/settings` clear would write a file lca then refuses to load.
+            prune_emptied_tables(doc.as_table_mut(), &structured_path);
         }
     }
     if let Some(parent) = path.parent() {
@@ -315,6 +341,15 @@ mod list_tests {
         })
         .expect("reload");
         assert!(cleared.models_enabled().is_empty(), "cleared means all");
+        // Gh #273: the clear must not leave an empty `[models]` table behind.
+        // An empty undocumented table is refused by the unknown-key walk, so
+        // the writer's own output has to stay loadable - which the reload
+        // above already proves, and this row pins the file shape directly.
+        let after = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            !after.contains("[models]"),
+            "clearing the last child must prune the table, got: {after:?}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

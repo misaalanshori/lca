@@ -852,11 +852,18 @@ fn display_inventory_loads_with_documented_defaults() {
 }
 
 // Verifies: gh #83 (the retry inventory) — `provider.retry_base_delay_ms`
-// merges and defaults to the historical 250ms; `net.proxy_url` is
-// not a key (the proxy is env-only by decision): the file loads and
-// the phantom key has no source, so nothing reads it.
+// merges and defaults to the historical 250ms.
+//
+// SANCTIONED CHANGE (gh #273): this row used to end by writing
+// `net.proxy_url = "http://proxy:8080"` and asserting the load
+// *succeeded* with no source for the key - "an unknown key never fails
+// the load". Gh #273 exists precisely to reverse that behavior: a
+// phantom key now fails loud and names itself. The proxy decision the
+// old tail was documenting (the proxy is environment-only) moved to
+// `an_unknown_key_is_refused_rather_than_ignored` below, which keeps
+// the same intent with the new contract.
 #[test]
-fn retry_base_delay_merges_and_proxy_url_is_refused() {
+fn retry_base_delay_merges_and_defaults_to_the_historical_250ms() {
     let dir = scratch("retry-inventory");
     let config = Config::load(&lca_config::LoadInput {
         user_file: None,
@@ -875,20 +882,29 @@ fn retry_base_delay_merges_and_proxy_url_is_refused() {
     })
     .expect("load");
     assert_eq!(config.provider_retry_base_delay_ms(), 100);
+}
 
+// Verifies: gh #273 (SANCTIONED CHANGE above) - the proxy decision the
+// previous row's tail documented: the proxy is environment-only by design,
+// so `net.proxy_url` is not a key. Under the new contract that is an error
+// naming the key, which tells the user where to go (`HTTP_PROXY`) instead
+// of accepting a setting nothing reads.
+#[test]
+fn an_unknown_key_is_refused_rather_than_ignored() {
+    let dir = scratch("proxy-key-refused");
     write(
         &dir.join("user.toml"),
         "net.proxy_url = \"http://proxy:8080\"\n",
     );
-    let config = Config::load(&lca_config::LoadInput {
+    let err = Config::load(&lca_config::LoadInput {
         user_file: Some(dir.join("user.toml")),
         ..Default::default()
     })
-    .expect("an unknown key never fails the load");
-    assert_eq!(
-        config.source_of("net.proxy_url"),
-        lca_config::MergeSource::Default,
-        "no such key: nothing reads it, env stays the interface"
+    .expect_err("`net.proxy_url` is not a key: the proxy is environment-only");
+    let text = err.to_string();
+    assert!(
+        text.contains("net.proxy_url"),
+        "the refusal names the key: {text}"
     );
 }
 

@@ -409,6 +409,15 @@ mod sse_utf8_chunk_boundary;
 // vocabulary - a dead environment override and seven unreported settings.
 #[path = "272-config-key-vocabulary.rs"]
 mod config_key_vocabulary;
+// GitHub #273: unknown `config.toml` keys were silently ignored and the
+// `[provider]` retry keys were applied twice.
+#[path = "273-unknown-config-key-loud.rs"]
+mod unknown_config_key_loud;
+// GitHub #272/#273 class fix: the config vocabulary mirrors
+// (`Config` fields, `resolved()`, `KNOWN_KEYS`, `TABLE_KEYS`, the doc
+// key table) must agree, so the next omission fails a test.
+#[path = "272-273-config-drift-guard.rs"]
+mod config_drift_guard;
 // GitHub #338: the Responses builder dropped user images and the usage
 // mapper hardcoded `cache_read: 0`.
 #[path = "338-responses-images-and-cache-read.rs"]

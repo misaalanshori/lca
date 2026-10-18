@@ -160,6 +160,44 @@ pub const KNOWN_KEYS: &[&str] = &[
     "skills.inject_matched",
 ];
 
+/// The documented keys whose value is a table rather than a scalar (gh
+/// #273). Their subtree is **user-shaped** - level names, model ids,
+/// catalog entries, proposal notes - so the unknown-key walk stops
+/// descending at them and the key's own parser validates the contents.
+///
+/// Three of these cannot appear in [`KNOWN_KEYS`] because they have no
+/// single-value form (no flag, no `LCA_*` variable); `extensions.catalogs`
+/// is listed there for a different reason and is repeated here because it
+/// is equally a table. Keeping one list of table-shaped keys is what makes
+/// the walk and the catalogue agree by construction.
+pub const TABLE_KEYS: &[&str] = &[
+    "thinking.budgets",
+    "models.thinking_levels",
+    "extensions.catalogs",
+    "permissions.proposals",
+];
+
+/// Whether `path` names a complete documented key (scalar or table).
+pub fn is_documented_key(path: &str) -> bool {
+    KNOWN_KEYS.contains(&path) || TABLE_KEYS.contains(&path)
+}
+
+/// Whether `path` is the head of a documented table (gh #273): `models`
+/// heads `models.enabled` and `models.thinking_levels`, `ui` heads the
+/// dozen `ui.*` keys.
+///
+/// Used only to decide whether an *empty* table is a typo or a harmless
+/// no-op: `[models]` with nothing under it is legal TOML and changes
+/// nothing, so refusing it would be hostile, while `[modles]` is a
+/// misspelling of a real section and must be reported.
+pub fn is_section_head(path: &str) -> bool {
+    let prefix = format!("{path}.");
+    KNOWN_KEYS
+        .iter()
+        .chain(TABLE_KEYS.iter())
+        .any(|key| key.starts_with(&prefix))
+}
+
 pub(crate) fn csv(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)

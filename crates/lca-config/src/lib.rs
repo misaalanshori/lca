@@ -20,8 +20,9 @@ mod values;
 pub use keys::{
     CACHE_WARMING_MODES, CATALOG_ID_RULE, CODEBLOCK_BORDERS, CustomCatalog, DOUBLE_ESCAPE_ACTIONS,
     FULLSCREEN_EXIT_OUTPUTS, FULLSCREEN_SCROLLBARS, KNOWN_KEYS, MERMAID_MODES, PERMISSION_MODES,
-    QUEUE_MODES, SHELL_TOOLS, THINKING_LEVELS, THINKING_VISIBILITIES, TREE_FILTER_MODES,
-    TRUST_DEFAULTS, TypedValue, is_valid_catalog_id, parse_typed,
+    QUEUE_MODES, SHELL_TOOLS, TABLE_KEYS, THINKING_LEVELS, THINKING_VISIBILITIES,
+    TREE_FILTER_MODES, TRUST_DEFAULTS, TypedValue, is_documented_key, is_section_head,
+    is_valid_catalog_id, parse_typed,
 };
 
 mod keybindings;
@@ -110,6 +111,21 @@ pub enum ConfigError {
         label: String,
         /// Why it failed (refused, missing, unreadable).
         reason: String,
+    },
+    /// A file names a key this build does not know (gh #273).
+    ///
+    /// Its own variant rather than an [`ConfigError::InvalidValue`]
+    /// because the fix is different: the value may be perfectly well
+    /// formed and the key may exist in a newer release. The copy names
+    /// the key and says which two things to check.
+    #[error(
+        "{key} in {label} is not a setting this build knows: check the spelling (\"lca config\" lists every key), or the key may need a newer lca"
+    )]
+    UnknownKey {
+        /// The dotted key as the file spelled it.
+        key: String,
+        /// Which layer it came from.
+        label: String,
     },
     /// A key held a value of the wrong type.
     #[error("{key} in {label} is invalid: {reason}")]

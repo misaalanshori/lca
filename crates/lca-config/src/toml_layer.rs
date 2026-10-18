@@ -12,6 +12,7 @@ use super::keys::{
 };
 use super::{ColorMode, Config, ConfigError, MergeSource, TypedValue};
 
+use super::is_documented_key;
 use super::{label_for, table_value, type_name};
 
 impl Config {
@@ -21,6 +22,12 @@ impl Config {
         source: MergeSource,
     ) -> Result<(), ConfigError> {
         let label = label_for(source);
+        // Gh #273: refuse a key this build does not know, before applying
+        // anything. The loop below looks up a fixed list, so a key outside
+        // it was never seen at all - the `other =>` arm was unreachable and
+        // a typo loaded clean. A user who writes a setting expects either
+        // the setting or an error, never silence.
+        refuse_unknown_keys(table, "", label)?;
         let apply = |this: &mut Self, key: &str, value: toml::Value| -> Result<(), ConfigError> {
             let invalid = |reason: String| ConfigError::InvalidValue {
                 key: key.to_string(),
@@ -607,14 +614,69 @@ impl Config {
                 apply(self, key, value.clone())?;
             }
         }
-        if let Some(table) = table_value(table, "provider").and_then(toml::Value::as_table) {
-            if let Some(limit) = table.get("retry_limit") {
-                apply(self, "provider.retry_limit", limit.clone())?;
-            }
-            if let Some(delay) = table.get("retry_base_delay_ms") {
-                apply(self, "provider.retry_base_delay_ms", delay.clone())?;
-            }
-        }
         Ok(())
     }
+}
+
+/// Refuse a leaf the configuration vocabulary does not contain (gh #273).
+///
+/// Walks the parsed table and builds each leaf's dotted path from the keys
+/// that lead to it, so a table written in section form (`[ui] colur = ...`)
+/// and one written dotted (`ui.colur = ...`) are judged identically. A path
+/// is acceptable when it is a documented key, or when it lies *inside* a
+/// documented table ([`TABLE_KEYS`]) - those subtrees are user-shaped
+/// (level names, model ids, catalog entries) and the key's own parser
+/// validates them.
+///
+/// Descending past an undocumented table name costs nothing and buys a
+/// better message: `[net] proxy_url = "..."` reports `net.proxy_url`, the
+/// path the user actually typed, instead of the bare `net`. A table whose
+/// children are all documented is a section by construction - `path.leaf`
+/// can only match a known key if `path` is a real prefix - so no separate
+/// section test is needed; only an *empty* undocumented table has to be
+/// reported on its own name.
+///
+/// `label` names the layer in the error, so a project-file refusal says
+/// "project file" and not "default".
+pub(super) fn refuse_unknown_keys(
+    table: &toml::Table,
+    prefix: &str,
+    label: &str,
+) -> Result<(), ConfigError> {
+    let unknown = |key: String| ConfigError::UnknownKey {
+        key,
+        label: label.to_string(),
+    };
+    for (name, value) in table {
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}.{name}")
+        };
+        match value {
+            // A documented table's contents are the key's own vocabulary:
+            // stop here and let its parser judge (`[thinking.budgets] low =
+            // 3000` is not "an unknown level" to this walk).
+            toml::Value::Table(_) if crate::keys::TABLE_KEYS.contains(&path.as_str()) => continue,
+            toml::Value::Table(children) => {
+                // An empty table is legal TOML and changes nothing, so it is
+                // accepted when its name heads documented keys (`[models]`
+                // with nothing under it). A name that heads nothing is a
+                // misspelling of a section, and that is worth reporting.
+                if children.is_empty() {
+                    if crate::keys::is_section_head(&path) {
+                        continue;
+                    }
+                    return Err(unknown(path));
+                }
+                refuse_unknown_keys(children, &path, label)?;
+            }
+            _ => {
+                if !is_documented_key(&path) {
+                    return Err(unknown(path));
+                }
+            }
+        }
+    }
+    Ok(())
 }

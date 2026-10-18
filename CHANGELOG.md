@@ -168,6 +168,40 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **The configuration vocabulary drifted from itself, and unknown keys were
+  silent (gh #272, #273).** Several hand-maintained lists describe one
+  vocabulary - the `Config` fields, `Config::resolved()` (what `lca config` and
+  `/settings` print, FR-CFG-2), `KNOWN_KEYS` (what a `LCA_*` variable can set),
+  and the TOML application loop - and nothing checked that they agreed.
+  - **gh #272:** `skills.inject_matched` was missing from `KNOWN_KEYS`, which is
+    the list the environment loop iterates, so `LCA_SKILLS_INJECT_MATCHED=true`
+    parsed (the parser knew the key) and then did nothing at all. Seven
+    settings - `compaction.strategy`, `provider.retry_base_delay_ms`,
+    `provider.retry_max_delay_ms`, `queue.steering_mode`, `queue.follow_up_mode`,
+    `thinking.budgets`, `extensions.catalogs` - were missing from `resolved()`,
+    so a user who set one and went looking for it found no row, which reads as
+    "this setting does not exist". Both lists are complete, and the new rows
+    carry their winning source like every other row.
+  - **gh #273 (silent keys):** the loader walks a fixed list of known keys and
+    looks each up, so a key outside the list was never examined - the branch
+    that reports an unknown key was unreachable. A typo such as
+    `compaction.theshold = 0.5` loaded clean and changed nothing. The walk now
+    runs over the parsed table and refuses anything outside the vocabulary by
+    name, whether spelled dotted or as a section, at any depth; table-valued
+    keys keep owning their subtrees. The refusal says what to check (the
+    spelling, or a newer `lca`), and an untrusted project file stays inert
+    including its junk keys, so a repository cannot brick startup (FR-PERM-9).
+  - **gh #273 (double parse):** `[provider]` retry keys were applied by two code
+    paths - the section-form lookup and a hand-written block after the loop -
+    which agreed on two of the three keys and handled neither the third
+    (`retry_max_delay_ms`) nor a future edit. One path now.
+  - **The class fix:** a drift guard pins the five mirrors against each other
+    (`Config` fields, `resolved()`, `KNOWN_KEYS`, `TABLE_KEYS`, and the
+    `docs/configuration.md` key table), so the next key added to one and
+    forgotten in another fails a test instead of shipping. It was measured
+    biting: dropping a `resolved()` row, dropping a `KNOWN_KEYS` entry, and
+    removing a doc row each turn a named row red.
+
 - **Three defects in the OpenAI-family wire kit (gh #337, #338, #359).**
   All in `crates/lca-wire-openai`, the SSE and request/usage seam shared by
   every OpenAI-shaped provider.

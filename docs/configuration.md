@@ -8,6 +8,13 @@ This is the key reference for the merged configuration the requirements document
 
 Highest first: command line flags, environment variables, the project file at `.lca/config.toml`, the user file in the platform config directory, built-in defaults (FR-CFG-1).
 
+A key this build does not know is an **error**, naming the key and the layer that set it (gh #273): a typo'd or invented setting is refused rather than accepted-and-ignored, because silence reads as "configured" to the user. The copy points at the two real causes - a spelling mistake, or a config written for a newer `lca`. Two consequences worth knowing:
+
+* **A config file newer than the binary fails loudly.** Writing a key a newer release added, then running an older `lca`, is an error rather than a silently dropped setting. That is the deliberate trade: the alternative is a file that means different things on different machines.
+* **The untrusted project file stays inert, junk keys included.** FR-PERM-9 means the file is not read at all until the project is trusted, so a repository cannot brick startup by shipping a bad key. The trust prompt is the boundary: files the user opted into are validated, the one they did not is ignored wholesale.
+
+Table-valued keys (`thinking.budgets`, `models.thinking_levels`, `extensions.catalogs`, `permissions.proposals`) own their subtrees: their children are that key's vocabulary (level names, model ids, catalog entries), validated by the key's own parser rather than by the key walk.
+
 The project file is read only after the user marks the project as trusted. An untrusted project file cannot enable extensions or change permission defaults (FR-PERM-9).
 
 The user file is **`~/.lca/config.toml`** on every platform (R7). Theme files live under `~/.lca/themes/`, the `/fullscreen` toggle writes `~/.lca/ui.json`, and `make`/provider preset overrides live at `~/.lca/provider-presets.toml`. The platform config directory (`$XDG_CONFIG_HOME` or `~/.config` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows) is *not* where the agent's own files live; it is what the `fs` capability's `home-config` scope resolves to, for reading another tool's configuration.
@@ -87,6 +94,8 @@ convention: `LCA_LOG`, then `RUST_LOG`, then `warn` by default
 | `queue.steering_mode` | `all` or `one-at-a-time` | `all` | How queued steering messages flush (gh #76, pi's `steeringMode`): `all` joins everything waiting at the next boundary (historical); `one-at-a-time` drains one per boundary, in order. Default differs from pi's by decision (changing it would change long-standing behavior). |
 | `queue.follow_up_mode` | `one-at-a-time` or `all` | `one-at-a-time` | How queued follow-ups flush at turn end (gh #76, pi's `followUpMode`): one per turn end, or all joined as one submission. |
 | `compaction.strategy` | string | unset (automatic) | The preferred compaction extension (gh #3): names the strategy `/ext` picks; unset or unknown falls back to the first enabled one. |
+
+One TOML shape rule bites these retry keys: `provider` is both a leaf (`provider = "name"`) and a section head, and TOML forbids using one path as both, so a file that names its provider cannot also carry `provider.retry_limit`/`provider.retry_*_delay_ms`. Use the environment form (`LCA_PROVIDER_RETRY_LIMIT`, `LCA_PROVIDER_RETRY_BASE_DELAY_MS`, `LCA_PROVIDER_RETRY_MAX_DELAY_MS`), which the precedence ladder puts above both files anyway. The same applies to `thinking` beside `[thinking.budgets]`. (Found while implementing gh #273; a pre-existing TOML constraint, not a bug in the loader.)
 
 Network and retry inventory (gh #83, pi's "Network and retries"): attempts, base delay, and the max-delay cap are the tunable layer; there is no transport selection (hyper-only, no WebSocket/SSE switch) and no per-request timeout key. The proxy is environment-only by decision — `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`, see Environment above — never a `net.proxy_url` key: a proxy URL carries credentials that must not land in config files, and per-machine routing is what process env is for.
 | `tool.timeout_seconds` | integer | explicit-only (see below) | Shell command timeout when set; the command's process tree is killed on expiry (FR-TOOL-5). Unset means no timeout where the user can cancel (interactive, pi's default) and the historical 120s backstop where nobody can (headless, documented divergence: an unbounded hang in CI is worse than a timeout error). A per-call `timeout` in the `shell` arguments overrides either default for that call. |
