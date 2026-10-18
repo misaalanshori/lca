@@ -405,6 +405,10 @@ mod mcp_resource_staging_private;
 // split across TCP chunks.
 #[path = "337-sse-utf8-chunk-boundary.rs"]
 mod sse_utf8_chunk_boundary;
+// GitHub #272: `KNOWN_KEYS` / `resolved()` drifted from the config
+// vocabulary - a dead environment override and seven unreported settings.
+#[path = "272-config-key-vocabulary.rs"]
+mod config_key_vocabulary;
 // GitHub #338: the Responses builder dropped user images and the usage
 // mapper hardcoded `cache_read: 0`.
 #[path = "338-responses-images-and-cache-read.rs"]

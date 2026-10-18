@@ -152,6 +152,12 @@ pub const KNOWN_KEYS: &[&str] = &[
     "trust.default_project",
     "ui.thinking",
     "markdown.codeblock_border",
+    // Gh #272: this key existed everywhere but here, so
+    // `LCA_SKILLS_INJECT_MATCHED` was silently inert - the environment
+    // loop below iterates this list, and `parse_typed` already knew the
+    // key. The regression rows for the drift live in
+    // `crates/lca-config/tests/keys.rs`.
+    "skills.inject_matched",
 ];
 
 pub(crate) fn csv(raw: &str) -> Vec<String> {

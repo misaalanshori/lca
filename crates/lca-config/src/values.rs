@@ -460,6 +460,17 @@ impl Config {
                 self.compaction_threshold.to_string(),
             ),
             ("compaction.enabled", self.compaction_enabled.to_string()),
+            // Gh #272: seven keys were absent from this mirror, so
+            // `lca config` under-reported them (FR-CFG-2). Optional
+            // strings use the same `<...>` convention as `model` /
+            // `ui.theme`; the two table keys report a count like
+            // `models.thinking_levels` does.
+            (
+                "compaction.strategy",
+                self.compaction_strategy
+                    .clone()
+                    .unwrap_or_else(|| "<automatic>".to_string()),
+            ),
             (
                 "compaction.reserve_tokens",
                 self.compaction_reserve_tokens.to_string(),
@@ -471,6 +482,14 @@ impl Config {
             (
                 "provider.retry_limit",
                 self.provider_retry_limit.to_string(),
+            ),
+            (
+                "provider.retry_base_delay_ms",
+                self.provider_retry_base_delay_ms.to_string(),
+            ),
+            (
+                "provider.retry_max_delay_ms",
+                self.provider_retry_max_delay_ms.to_string(),
             ),
             (
                 "tool.timeout_seconds",
@@ -628,6 +647,24 @@ impl Config {
                     "<empty>".to_string()
                 } else {
                     format!("{} proposal(s)", self.permissions_proposals.len())
+                },
+            ),
+            ("queue.steering_mode", self.queue_steering_mode.clone()),
+            ("queue.follow_up_mode", self.queue_follow_up_mode.clone()),
+            (
+                "thinking.budgets",
+                if self.thinking_budgets.is_empty() {
+                    "<unset>".to_string()
+                } else {
+                    format!("{} level(s)", self.thinking_budgets.len())
+                },
+            ),
+            (
+                "extensions.catalogs",
+                if self.extensions_catalogs.is_empty() {
+                    "<unset>".to_string()
+                } else {
+                    format!("{} catalog(s)", self.extensions_catalogs.len())
                 },
             ),
         ]
