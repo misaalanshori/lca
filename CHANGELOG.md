@@ -127,6 +127,29 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **An extension's own fetch to an ungranted host could not ask for
+  consent (gh #302, 0.6.x half).** Two defects stacked. `webfetch` ships
+  `[capabilities.net] hosts = []` on purpose — every host arrives by
+  consent or an ad hoc grant — but the capability layer required a
+  *non-empty* host list to consider `net` declared, so the first fetch died
+  with `no network capability declared` on the declaration gate, before the
+  pattern check a prompt could have helped. And the deny below it was
+  terminal: the ad hoc-grant modal and store lived in the tool/permission
+  layer and were never consulted for an extension's host-mediated fetch, so
+  every URL failed without `--allow-host` (which worked only because it
+  plants a grant before the check). Declaration is now the gate
+  (`net_declared`, so "declared, no hosts yet" stays distinct from "never
+  declared"), and a user-initiated fetch asks where the deny happens —
+  allow once, allow always (persisted per project, silent afterwards), or
+  deny — through the same modal, store, deny-rule precedence and yolo answer
+  every other approval uses. The ask belongs to the call: a provider's
+  background endpoint probe still never prompts. Headless is unchanged, and
+  a manifest with no `net` table still gets the flat refusal and is never
+  offered consent. The WIT `net` import for tool-world guests — without
+  which the WASM half cannot fetch at all — rides the 0.7 train
+  (#123/#149/#354/#284/#352/#353) and is not in this change; the WASM half
+  still reports the deferral plainly.
+
 - **Every turn's cost was counted twice in the footer (gh #327).** Two
   accumulation points existed for the same money: the stream's
   `TurnEvent::Usage` handler grew `chat.usage.*` (including `cost`) as

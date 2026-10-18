@@ -92,6 +92,8 @@ The extension reads its own tokens through `credentials` and tries to send them 
 
 Stopped by the `net` allow list. The host checks the target host against the patterns the user approved. A request to an unlisted host is refused and recorded. The extension cannot open a socket, so there is no path around the check.
 
+An unlisted host is not silently granted to make this convenient (gh #302). A user-initiated fetch asks for the ad hoc grant, so the host is added only when a human approves that exact host by name — and a denied or unprompted call still never leaves the machine. The ask cannot launder an undeclared capability: a manifest without `net` keeps the flat "not declared" refusal and is never offered consent. Background convenience requests, such as a provider probing an endpoint for its model list, never prompt at all.
+
 Not stopped: exfiltration to a host the user already approved. A provider extension for a real service can send anything to that service's own API, and no allow list can distinguish a completion request from a payload. This is a residual risk, noted below.
 
 ### DNS rebinding bypasses the net allow list
@@ -171,7 +173,7 @@ Hooks give a second layer. A policy extension can deny calls by pattern before t
 
 Injected text tells the model to read a secret and include it in a request to an attacker's host, perhaps through a web fetch tool or a command with a URL.
 
-Partly stopped. A built-in tool that makes network requests is subject to the permission layer, and a command with a URL shows the URL in the prompt. An extension-provided fetch tool is subject to the extension's own `net` allow list.
+Partly stopped. A built-in tool that makes network requests is subject to the permission layer, and a command with a URL shows the URL in the prompt. An extension-provided fetch tool is subject to the extension's own `net` allow list, and since gh #302 an ungranted host is offered to the user as an ad hoc grant naming that exact host rather than being fetched quietly — so the first contact with an attacker's host is a decision the user sees.
 
 Not stopped: an injected instruction to write a secret into a file the attacker can later read, in a repository the attacker has access to. Version control review is the defense.
 

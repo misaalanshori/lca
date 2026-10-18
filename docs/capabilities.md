@@ -51,6 +51,14 @@ The host resolves every hostname before connecting and checks the resolved addre
 
 On denial: the request function returns a permission error naming the host that was refused. The extension can handle it. The denial is recorded.
 
+An empty host list is a declaration, not an absence (gh #302). `hosts = []` is the shape an extension ships when every host it may reach arrives by consent — `webfetch` is the worked example — and the host distinguishes it from a manifest that never declared `net` at all. A manifest with no `net` table keeps the flat "not declared" refusal: the declaration gate never becomes a way to ask for a capability the sandbox does not carry.
+
+Where the deny happens, a **user-initiated** call may ask instead of failing (gh #302). The tool path the model or the user deliberately invoked — `webfetch`'s own fetch — offers the ad hoc grant of [FR-PERM-16](#net): the same modal, grant store, deny-rule precedence and yolo answer every other approval uses, with Allow once (this session), Allow always (persisted per project, so later turns and later processes skip the prompt), or Deny. The capability layer's own check still runs first and still refuses a call nobody approved: an approval is what lets a request out, never the absence of a prompt, so a grant-less call never goes out because no prompt was reachable.
+
+The ask belongs to the call, not to the capability. A convenience request — a provider probing an endpoint for its model list, a login flow's discovery — keeps the plain deny and falls back, because it runs on a background thread with no user action behind it and the flow it belongs to has its own consent already. Prompting there would ask one question twice and leave the interface waiting behind a modal nobody triggered.
+
+Headless runs are unchanged: with no prompt installed the ask answers denied, so the error copy names the host and the two fixes (`lca` interactively once, or `--allow-host <host>` for one run) exactly as before.
+
 A manifest cannot declare a wildcard covering every host; a bare `*` is rejected at install time, and correctly so, since a consent screen that reads "connect anywhere" tells a user nothing they can evaluate. The real case this rejects is a provider extension whose actual host isn't known until the user configures it, such as an extension speaking to whatever OpenAI-compatible endpoint a user points it at. That case is handled the same way an out-of-vocabulary `fs` path is: the manifest declares whatever fixed hosts it has a sensible default for, if any, and the user adds the specific host they actually want as an ad hoc grant, at the point they configure it, usually the same login or setup flow that asks for the base URL in the first place. The consent shown at that moment names the exact host being added, not a pattern standing in for "anywhere."
 
 ### net-local
