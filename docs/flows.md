@@ -321,6 +321,21 @@ sequenceDiagram
     Core->>Core: append assistant record to session log
 ```
 
+Two rules hold at the byte level, and both are the same class: a stream must never
+lose bytes and must never lie about what it received.
+
+- **Frames are split on bytes, never on decoded text** (gh #337). HTTP byte streams do
+  not align with UTF-8 character boundaries, so buffers stay `Vec<u8>` until a complete
+  `\n\n`-terminated frame exists; only the complete frame is decoded. A codepoint may
+  straddle two network chunks inside the buffer, which is harmless - decoding per chunk
+  instead corrupts it into replacement characters.
+- **End of stream flushes and reports** (gh #359). At EOF the trailing buffer is parsed:
+  a tail carrying a `data:` line is a frame that lost its terminator, and anything else
+  is surfaced as a transport error rather than dropped. A response whose body carried no
+  frame at all is an explicit transport failure, never an empty assistant message - those
+  two are indistinguishable downstream, and only one of them means "the model said
+  nothing".
+
 Notes.
 
 The host pulls. The extension does not push. This keeps back pressure on the side that knows whether the interface can keep up, and it maps onto a native async stream later without changing the event variant.

@@ -9,6 +9,7 @@
 pub mod chat_completions;
 pub mod error;
 pub mod responses;
+pub mod sse;
 
 pub use chat_completions::{SseDecoder, map_usage, parse_sse, to_wire, tools_wire};
 pub use error::{StreamFailure, classify_status, failure_for_status, json_error_message};

@@ -29,7 +29,7 @@ Only the two called hosts are declared: the proxy and the IdP. `grok.com` and `x
 
 ## Requests
 
-Responses-protocol bodies over `POST {api_base}/v1/responses` (`store: false` always): the bearer plus the proxy's header block (`X-XAI-Token-Auth: xai-grok-cli`, the client version and `lca` identifier, the `x-grok-model-override` model, the `x-grok-user-id` account). The reasoning effort rides when the caller names one.
+Responses-protocol bodies over `POST {api_base}/v1/responses` (`store: false` always): the bearer plus the proxy's header block (`X-XAI-Token-Auth: xai-grok-cli`, the client version and `lca` identifier, the `x-grok-model-override` model, the `x-grok-user-id` account). The reasoning effort rides when the caller names one. The request carries user text and images: an image block serializes into the same input message's content array as an `input_image` part with the bytes inlined as a data URL (gh #338), so an image-only message still reaches the model. The terminal `response.completed` object's `usage.input_tokens_details.cached_tokens` maps to `cache_read`, so a prompt-cache hit is reported as a hit rather than billed as fresh input (gh #338).
 
 ## login, logout, usage
 

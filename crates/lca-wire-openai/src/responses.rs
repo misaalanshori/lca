@@ -26,20 +26,41 @@ pub fn build_responses_body(
         match message.role {
             MessageRole::System => {}
             MessageRole::User => {
-                let text: String = message
-                    .content
-                    .iter()
-                    .filter_map(|block| match block {
-                        ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
+                // Gh #338: images ride the same content array as text, in the
+                // API's `input_image` shape (pi's `openai-responses-shared`):
+                // text parts first, then image parts, `detail: "auto"`, the
+                // bytes inlined as a data URL. The old serializer filtered
+                // `Text` only, so an image was dropped - and an image-only
+                // message joined to an empty string and vanished entirely.
+                let mut parts: Vec<serde_json::Value> = Vec::new();
+                let mut text = String::new();
+                for block in &message.content {
+                    match block {
+                        ContentBlock::Text { text: part } => text.push_str(part),
+                        ContentBlock::Image { .. } => {}
+                        ContentBlock::Reasoning { .. } | ContentBlock::ToolCall { .. } => {}
+                    }
+                }
                 if !text.is_empty() {
+                    parts.push(serde_json::json!({"type": "input_text", "text": text}));
+                }
+                for block in &message.content {
+                    if let ContentBlock::Image { media_type, bytes } = block {
+                        parts.push(serde_json::json!({
+                            "type": "input_image",
+                            "detail": "auto",
+                            "image_url": format!(
+                                "data:{media_type};base64,{}",
+                                lca_protocol::base64_encode(bytes)
+                            ),
+                        }));
+                    }
+                }
+                if !parts.is_empty() {
                     input.push(serde_json::json!({
                         "type": "message",
                         "role": "user",
-                        "content": [{"type": "input_text", "text": text}],
+                        "content": parts,
                     }));
                 }
             }
@@ -304,13 +325,26 @@ pub fn responses_usage(response: &serde_json::Value) -> Option<Usage> {
         .get("output_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    // Gh #338: the Responses API reports prompt-cache hits under
+    // `input_tokens_details.cached_tokens`, exactly as Chat Completions
+    // reports them under `prompt_tokens_details.cached_tokens`. This was
+    // hardcoded to 0, so every cache hit on codex/grok was billed as fresh
+    // input.
+    let cache_read = usage
+        .get("input_tokens_details")
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     if input == 0 && output == 0 {
         return None;
     }
     Some(Usage {
-        input,
+        // `input_tokens` counts the cached tokens too; the rest of this kit
+        // treats `input` as the uncached remainder (`map_usage` does the
+        // same subtraction for Chat Completions).
+        input: input.saturating_sub(cache_read),
         output,
-        cache_read: 0,
+        cache_read,
         cache_write: 0,
         cache_write_1h: 0,
         cost: 0.0,
@@ -328,10 +362,16 @@ pub fn responses_usage(response: &serde_json::Value) -> Option<Usage> {
 pub struct ResponseStreamDriver<'a> {
     cap: &'a dyn lca_protocol::ProviderCap,
     handle: u32,
-    buffer: String,
+    /// Raw bytes until a complete frame is available (gh #337): never a
+    /// `String`, or a codepoint straddling a chunk boundary would be
+    /// corrupted.
+    buffer: crate::sse::FrameBuffer,
     mapper: ResponsesStream,
     pending: std::collections::VecDeque<lca_protocol::StreamEvent>,
     finished: bool,
+    /// Whether any frame carried a `data:` payload: a 200 body with none is
+    /// not an empty answer (gh #359).
+    saw_frame: bool,
 }
 
 impl<'a> ResponseStreamDriver<'a> {
@@ -372,10 +412,11 @@ impl<'a> ResponseStreamDriver<'a> {
         Ok(ResponseStreamDriver {
             cap,
             handle,
-            buffer: String::new(),
+            buffer: crate::sse::FrameBuffer::new(),
             mapper: ResponsesStream::new(),
             pending: std::collections::VecDeque::new(),
             finished: false,
+            saw_frame: false,
         })
     }
 
@@ -394,10 +435,19 @@ impl<'a> ResponseStreamDriver<'a> {
                 .map_err(StreamFailure::from)
             {
                 Ok(Some(chunk)) => {
-                    self.buffer.push_str(&String::from_utf8_lossy(&chunk));
-                    self.drain_frames();
+                    // Gh #337: bytes until a complete frame exists, then
+                    // each *complete* frame decodes on its own.
+                    let mut frames: Vec<String> = Vec::new();
+                    self.buffer
+                        .feed(&chunk, &mut |frame| frames.push(frame.to_string()));
+                    for frame in frames {
+                        self.handle_frame(&frame);
+                    }
                 }
-                Ok(None) => self.finished = true,
+                Ok(None) => {
+                    self.finished = true;
+                    self.finish_stream();
+                }
                 Err(err) => {
                     self.finished = true;
                     return Some(Err(err));
@@ -406,30 +456,54 @@ impl<'a> ResponseStreamDriver<'a> {
         }
     }
 
-    /// Decode every complete `\n\n`-terminated frame currently buffered.
-    fn drain_frames(&mut self) {
-        loop {
-            let Some(end) = self.buffer.find("\n\n") else {
-                return;
-            };
-            let frame: String = self.buffer.drain(..end + 2).collect();
-            for line in frame.lines() {
-                let line = line.trim_end_matches('\r');
-                let Some(payload) = line.strip_prefix("data:").map(str::trim) else {
-                    continue;
-                };
-                if payload.is_empty() || payload == "[DONE]" {
-                    continue;
-                }
-                let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
-                    continue;
-                };
-                if let Some(event) = single_error(&value) {
-                    self.pending.push_back(event);
-                    continue;
-                }
-                self.pending.extend(self.mapper.feed(&value));
+    /// One complete frame's `data:` payloads into events.
+    fn handle_frame(&mut self, frame: &str) {
+        for payload in crate::sse::frame_payloads(frame) {
+            if payload.is_empty() || payload == "[DONE]" {
+                continue;
             }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+                continue;
+            };
+            self.saw_frame = true;
+            if let Some(event) = single_error(&value) {
+                self.pending.push_back(event);
+                continue;
+            }
+            self.pending.extend(self.mapper.feed(&value));
+        }
+    }
+
+    /// End of stream (gh #359).
+    ///
+    /// A truncated tail is the last thing a body can carry, so it is parsed
+    /// rather than dropped: a tail with a `data:` line is a frame that lost
+    /// its terminator, and one without surfaces as a transport error. Then,
+    /// if the body never carried a frame at all, that is reported as a
+    /// transport failure - an empty assistant message is indistinguishable
+    /// from a model that said nothing, and it must never mean that.
+    fn finish_stream(&mut self) {
+        if let Some(tail) = self.buffer.take_tail() {
+            let parseable = tail.lines().any(|line| {
+                line.trim_end_matches('\r')
+                    .trim_start()
+                    .starts_with("data:")
+            });
+            self.handle_frame(&tail);
+            // A tail with no `data:` line cannot have been part of a frame,
+            // so it is a truncated frame whether or not earlier frames
+            // arrived; report it either way (gh #359: no received byte
+            // disappears silently).
+            if !parseable && !tail.trim().is_empty() {
+                self.pending
+                    .push_back(crate::sse::truncated_tail_event(&tail));
+            }
+        }
+        if !self.saw_frame {
+            self.pending.push_back(lca_protocol::StreamEvent::Error {
+                message: crate::sse::no_frames_failure("").message,
+                retryable: false,
+            });
         }
     }
 }

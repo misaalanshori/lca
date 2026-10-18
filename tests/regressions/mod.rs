@@ -401,3 +401,15 @@ mod archive_read_ceiling;
 // world-writable `/tmp` directory with predictable names.
 #[path = "344-mcp-resource-staging-private.rs"]
 mod mcp_resource_staging_private;
+// GitHub #337: per-chunk lossy decoding corrupted multi-byte codepoints
+// split across TCP chunks.
+#[path = "337-sse-utf8-chunk-boundary.rs"]
+mod sse_utf8_chunk_boundary;
+// GitHub #338: the Responses builder dropped user images and the usage
+// mapper hardcoded `cache_read: 0`.
+#[path = "338-responses-images-and-cache-read.rs"]
+mod responses_images_and_cache_read;
+// GitHub #359: the Responses driver dropped its trailing buffer at EOF and
+// stayed silent on a zero-frame 200 body.
+#[path = "359-sse-eof-flush-and-zero-frame.rs"]
+mod sse_eof_flush_and_zero_frame;

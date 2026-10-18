@@ -29,7 +29,7 @@ Two notes against the September spec this replaces: `worlds` is `provider` only 
 
 ## Requests
 
-Responses-protocol bodies over `POST {api_base}/codex/responses` (`store: false` always): the bearer, the `chatgpt-account-id` header decoded from the JWT, `originator: lca`, and `OpenAI-Beta: responses=experimental`. The reasoning effort rides when the caller names one (`minimal` maps to the wire's `low`).
+Responses-protocol bodies over `POST {api_base}/codex/responses` (`store: false` always): the bearer, the `chatgpt-account-id` header decoded from the JWT, `originator: lca`, and `OpenAI-Beta: responses=experimental`. The reasoning effort rides when the caller names one (`minimal` maps to the wire's `low`). The request carries user text and images: an image block serializes into the same input message's content array as an `input_image` part with the bytes inlined as a data URL (gh #338), so an image-only message still reaches the model. The terminal `response.completed` object's `usage.input_tokens_details.cached_tokens` maps to `cache_read`, so a prompt-cache hit is reported as a hit rather than billed as fresh input (gh #338).
 
 ## login, logout, usage
 

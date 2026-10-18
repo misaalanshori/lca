@@ -11,7 +11,10 @@ use lca_protocol::{ChatMessage, ContentBlock, MessageRole, StreamEvent, ToolSpec
 /// Streaming response decoder: feed it bytes, it emits typed events.
 #[derive(Default)]
 pub struct SseDecoder {
-    buffer: String,
+    /// Raw bytes until a complete frame is available (gh #337). Never a
+    /// `String`: a codepoint may straddle a chunk boundary inside here, and
+    /// decoding per chunk would corrupt it.
+    buffer: crate::sse::FrameBuffer,
     open_calls: Vec<(usize, String, String)>, // (index, call_id, name)
     finished: bool,
     /// Whether any well-formed frame (or `[DONE]`) was seen: a body with
@@ -33,19 +36,39 @@ impl SseDecoder {
     }
 
     /// Feed a chunk of response bytes.
+    ///
+    /// Frames are split at the byte level and each *complete* frame is
+    /// decoded (gh #337): a multi-byte codepoint split across two network
+    /// chunks stays intact because nothing decodes the partial buffer.
     pub fn feed(&mut self, chunk: &[u8], emit: &mut dyn FnMut(StreamEvent)) {
-        self.buffer.push_str(&String::from_utf8_lossy(chunk));
-        while let Some(end) = self.buffer.find("\n\n") {
-            let event: String = self.buffer.drain(..end + 2).collect();
-            self.handle_event(&event, emit);
+        let mut frames: Vec<String> = Vec::new();
+        self.buffer
+            .feed(chunk, &mut |frame| frames.push(frame.to_string()));
+        for frame in frames {
+            self.handle_event(&frame, emit);
         }
     }
 
     /// Flush any trailing event that was not newline-terminated.
+    ///
+    /// Gh #359's rule applied to this twin: received bytes are never silently
+    /// discarded. The tail is parsed; if it yields no `data:` payload it is a
+    /// truncated frame and surfaces as a transport error.
     pub fn finish(&mut self, emit: &mut dyn FnMut(StreamEvent)) {
-        if !self.buffer.is_empty() {
-            let rest = std::mem::take(&mut self.buffer);
+        if let Some(rest) = self.buffer.take_tail() {
+            // A tail carrying a `data:` line is a frame that lost its
+            // terminator (the parseable case); one without is a frame that
+            // never finished arriving, so it is reported rather than
+            // dropped (gh #359).
+            let parseable = rest.lines().any(|line| {
+                line.trim_end_matches('\r')
+                    .trim_start()
+                    .starts_with("data:")
+            });
             self.handle_event(&rest, emit);
+            if !parseable && !rest.trim().is_empty() {
+                emit(crate::sse::truncated_tail_event(&rest));
+            }
         }
         if !self.finished {
             self.finished = true;

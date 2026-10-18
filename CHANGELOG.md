@@ -168,6 +168,39 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **Three defects in the OpenAI-family wire kit (gh #337, #338, #359).**
+  All in `crates/lca-wire-openai`, the SSE and request/usage seam shared by
+  every OpenAI-shaped provider.
+  - **gh #337:** both streaming decoders did
+    `buffer.push_str(&String::from_utf8_lossy(chunk))` **per network chunk**.
+    HTTP byte streams do not align with character boundaries, so a
+    multi-byte codepoint straddling two chunks became `U+FFFD U+FFFD`:
+    an emoji, an accented letter, or CJK text corrupted whenever a packet
+    boundary landed mid-character — a matter of timing, not input. Frames
+    now split at the byte level and only a *complete* frame is decoded, so a
+    split codepoint waits harmlessly in the buffer. Both decoders share one
+    framer, which is what stops the twins drifting again.
+  - **gh #338 (images):** `build_responses_body` filtered user content for
+    `Text` only, so an attached image was discarded — and an image-only
+    message joined to an empty string and vanished, meaning the model
+    received nothing at all. Images now serialize into the input message's
+    content array as `input_image` parts with the bytes inlined as data
+    URLs (pi's shape, `detail: "auto"`).
+  - **gh #338 (cache accounting):** `responses_usage` hardcoded
+    `cache_read: 0` instead of reading
+    `usage.input_tokens_details.cached_tokens`, so every prompt-cache hit on
+    codex and grok was counted as fresh input and the footer and `/usage`
+    overstated spend. It now maps the field and reports `input` as the
+    uncached remainder, matching the Chat Completions mapper.
+  - **gh #359:** the Responses driver dropped its trailing buffer at EOF
+    (a final frame that lost its `\n\n` terminator was discarded) and
+    stayed silent on a 200 body carrying no frames (an empty assistant
+    message, indistinguishable from a model that said nothing). EOF now
+    parses the tail — a `data:` line means a frame that lost its
+    terminator, anything else surfaces as a transport error — and a body
+    with no frames is an explicit non-retryable transport failure. The
+    Chat Completions twin had the same gaps; it gets the same rule.
+
 - **An extension's own fetch to an ungranted host could not ask for
   consent (gh #302, 0.6.x half).** Two defects stacked. `webfetch` ships
   `[capabilities.net] hosts = []` on purpose — every host arrives by
