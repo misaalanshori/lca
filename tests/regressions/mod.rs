@@ -379,3 +379,7 @@ mod skill_injection_preserves_root_system;
 // mid-session `learn` re-read the file and mutated `messages[0]`.
 #[path = "296-memory-pin-freezes-empty-snapshot.rs"]
 mod memory_pin_freezes_empty_snapshot;
+// GitHub #265: login option routing ignored the provider, so a key meant
+// for one provider was stored in another's credential namespace.
+#[path = "265-login-option-provider-scoping.rs"]
+mod login_option_provider_scoping;

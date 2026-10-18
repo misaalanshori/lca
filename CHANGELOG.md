@@ -126,6 +126,19 @@ Dates are UTC.
     eval flag matches its glued form; the first also closes the same
     bypass in `DENY_PROGRAMS`.
 
+### Security
+- **Login option routing ignored the provider, storing a key in another
+  provider's credential namespace (gh #265).** `LoginFlow::pick` matched
+  options by `id` alone across *all* providers and then overwrote the
+  requested provider with the matched row's owner. Several providers
+  declare `id: "api-key"` / `id: "oauth"`, so choosing "api-key" under
+  OpenRouter stored the key in Anthropic's namespace — and that provider
+  then gets *sent* the key. A cross-vendor credential leak, not a
+  mislabelled row. Matching is now scoped to the named provider, with the
+  id-only fallback kept only for the bare `/login` pick (whose rows carry
+  their own provider). A miss under a named provider is a named refusal
+  rather than a silent reroute.
+
 ### Fixed
 - **Project memory never froze an *empty* snapshot, so a mid-session
   `learn` mutated `messages[0]` (gh #296).** The pin was

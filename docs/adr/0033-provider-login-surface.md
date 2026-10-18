@@ -59,7 +59,15 @@ to whiplash.
 ## Consequences
 
 `/login` becomes a picker fed by installed provider extensions; disabling an
-extension removes its presets with it. The `provider-identity` `login` stays
+extension removes its presets with it. **Option resolution is provider-scoped
+(annotated 2026-10-18, gh #265):** several providers declare the same option
+ids (`api-key`, `oauth`), so a choice is matched *inside the provider that
+offers it* and the matched option's owner is the credential namespace. An
+id-only search is a cross-vendor credential leak — the key lands in whichever
+provider declared that id first, and that provider then gets sent it. The
+id-only fallback survives only for the bare `/login` pick, whose rows carry
+their own provider anyway; a miss under a named provider is a named refusal,
+never a silent reroute to someone else's option. The `provider-identity` `login` stays
 for providers whose flow is self-contained (antigravity's OAuth). Conformance
 gains options round-trip and submit cases in both delivery modes; the host
 gains one new dispatch method pair. Wire identity (ADR-0031's V1/V2) is

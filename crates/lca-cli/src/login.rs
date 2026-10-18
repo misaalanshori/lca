@@ -194,15 +194,38 @@ impl LoginFlow {
     /// The user chose `choice`. An option with no fields submits right
     /// away (a local `auth = "none"` endpoint has no key step).
     pub fn pick(&mut self, provider: &str, choice: &str) -> Step {
+        // gh #265: match inside the NAMED provider's scope first. An
+        // id-only search is a cross-vendor credential leak: several
+        // providers declare `id: "api-key"` / `id: "oauth"`, so it
+        // matched whichever provider came first in the list and stored
+        // the user's key in that provider's namespace — which then gets
+        // *sent* the key. When no provider is named (the bare `/login`
+        // picker, where a row carries no provider of its own) the old
+        // id-only behavior is what the picker means, and stays.
+        let scoped = |owner: &String, option: &LoginOption| {
+            (provider.is_empty() || owner == provider) && option.id == choice
+        };
         let Some((owner, option)) = self
             .options
             .iter()
-            .find(|(_, option)| option.id == choice)
+            .find(|(owner, option)| scoped(owner, option))
+            .or_else(|| {
+                if provider.is_empty() {
+                    self.options.iter().find(|(_, option)| option.id == choice)
+                } else {
+                    None
+                }
+            })
             .map(|(owner, option)| (owner.clone(), option.clone()))
         else {
-            return Step::Next(LoginNext::Message(format!(
-                "no login option named `{choice}`"
-            )));
+            // Name the provider as well as the option: the fix for a
+            // miss is to pick a provider that declares it, and the user
+            // cannot know which without being told what was searched.
+            return Step::Next(LoginNext::Message(if provider.is_empty() {
+                format!("no login option named `{choice}`")
+            } else {
+                format!("`{provider}` has no login option named `{choice}`")
+            }));
         };
         // A preset's fields win over the row's provider, so one option
         // always belongs to exactly one extension.
@@ -401,6 +424,182 @@ mod tests {
         };
         assert_eq!(choice, "ollama");
         assert!(values.is_empty(), "nothing was asked for");
+    }
+
+    // -----------------------------------------------------------------
+    // gh #265: the pick must match inside the named provider's scope
+    // -----------------------------------------------------------------
+
+    /// Two providers that both declare `api-key` and `oauth` — the
+    /// collision the leak needs. `anthropic` comes first, so an id-only
+    /// search always lands on it.
+    fn colliding_options() -> Vec<(String, LoginOption)> {
+        vec![
+            ("anthropic".into(), option("api-key", &["api-key"])),
+            ("anthropic".into(), option("oauth", &[])),
+            ("openrouter".into(), option("api-key", &["api-key"])),
+            ("openrouter".into(), option("oauth", &[])),
+        ]
+    }
+
+    // Verifies: gh #265 acceptance 1+3 — a choice made under a provider
+    // routes to THAT provider, not to the first one declaring the id.
+    // Red before the fix: the old id-only search matched `anthropic`.
+    #[test]
+    fn a_colliding_option_id_routes_to_the_named_provider() {
+        let mut flow = LoginFlow::new();
+        let _ = flow.offer(colliding_options());
+        let Step::Submit { provider, .. } = flow.pick("openrouter", "oauth") else {
+            panic!("the field-less oauth option submits on selection");
+        };
+        assert_eq!(
+            provider, "openrouter",
+            "api-key under OpenRouter must not be stored in Anthropic's namespace"
+        );
+    }
+
+    // Verifies: gh #265 acceptance 2 — identical ids across providers
+    // resolve unambiguously, each to its own owner.
+    #[test]
+    fn identical_ids_resolve_to_each_owner() {
+        for (chosen, expected) in [("anthropic", "anthropic"), ("openrouter", "openrouter")] {
+            let mut flow = LoginFlow::new();
+            let _ = flow.offer(colliding_options());
+            let Step::Submit { provider, .. } = flow.pick(chosen, "oauth") else {
+                panic!("{chosen}/oauth submits");
+            };
+            assert_eq!(provider, expected, "pick({chosen}, oauth)");
+        }
+    }
+
+    // Verifies: gh #265 acceptance 2 — the SAME for a key-bearing option,
+    // where the wrong provider would receive the credential value.
+    #[test]
+    fn a_key_option_routes_to_the_named_provider() {
+        for (chosen, expected) in [("anthropic", "anthropic"), ("openrouter", "openrouter")] {
+            let mut flow = LoginFlow::new();
+            let _ = flow.offer(colliding_options());
+            let Step::Next(LoginNext::Secret { .. }) = flow.pick(chosen, "api-key") else {
+                panic!("{chosen}/api-key asks for the key");
+            };
+            let Step::Submit {
+                provider, values, ..
+            } = flow.push(chosen, "FAKESECRET-265")
+            else {
+                panic!("one field submits");
+            };
+            assert_eq!(provider, expected, "the key is routed to {expected}");
+            assert_eq!(
+                values.get("api-key").map(String::as_str),
+                Some("FAKESECRET-265")
+            );
+        }
+    }
+
+    // Verifies: gh #265 — a miss under a NAMED provider is the named
+    // error step, never a silent fallback to another provider's option
+    // of that id (a fallback here would be the leak again).
+    #[test]
+    fn a_miss_under_a_named_provider_is_refused_not_rerouted() {
+        let mut flow = LoginFlow::new();
+        let _ = flow.offer(colliding_options());
+        let Step::Next(LoginNext::Message(text)) = flow.pick("grok", "api-key") else {
+            panic!("grok declares no api-key: this must be the error step");
+        };
+        assert!(text.contains("api-key"), "names the option: {text}");
+        assert!(
+            text.contains("grok"),
+            "and the provider, so the user knows what to do: {text}"
+        );
+    }
+
+    // Verifies: gh #265 — the bare `/login` pick (no provider context)
+    // keeps today's id-only behavior, which is intended: the picker row
+    // the user clicked carries no provider of its own there.
+    #[test]
+    fn an_empty_provider_still_resolves_by_id_alone() {
+        let mut flow = LoginFlow::new();
+        let _ = flow.offer(colliding_options());
+        let Step::Next(LoginNext::Secret { .. }) = flow.pick("", "api-key") else {
+            panic!("the id alone still asks for the key");
+        };
+        let Step::Submit { provider, .. } = flow.push("", "FAKESECRET-265") else {
+            panic!("one field submits");
+        };
+        assert_eq!(
+            provider, "anthropic",
+            "the first declarer, the documented fallback"
+        );
+    }
+
+    // Verifies: gh #265 — a preset option's owner still wins over the
+    // request, once matching is scoped (the owner-overwrite is correct
+    // in its place: the matched option's owner IS the credential
+    // namespace, so a preset declared by extension X always routes to X).
+    #[test]
+    fn the_matched_owner_still_wins_over_the_request() {
+        let mut flow = LoginFlow::new();
+        let _ = flow.offer(vec![(
+            "openai-compatible".into(),
+            option("openrouter", &[]),
+        )]);
+        // The caller names a different provider; the option belongs to
+        // openai-compatible, so that is where the credential goes.
+        let Step::Submit { provider, .. } = flow.pick("openai-compatible", "openrouter") else {
+            panic!("submits");
+        };
+        assert_eq!(provider, "openai-compatible");
+    }
+
+    // Verifies: gh #265 — THE LEAK GUARD. The whole flow end to end:
+    // pick an option under OpenRouter, type a key, and write it through
+    // the real credential store. The chosen provider's namespace must
+    // hold the value and the OTHER provider's namespace must stay
+    // absent/empty. On the old code the key landed in `anthropic.json`,
+    // which is the leak (that provider would then be *sent* the key).
+    #[test]
+    fn the_credential_lands_in_the_chosen_namespace_only() {
+        let root = lca_testkit::scratch_path("gh265-leak");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        let grants =
+            std::sync::Arc::new(std::sync::Mutex::new(lca_permissions::GrantStore::empty()));
+
+        // Two providers both declaring `api-key`; anthropic is first.
+        let mut flow = LoginFlow::new();
+        let _ = flow.offer(colliding_options());
+
+        // The user picks OpenRouter's api-key row.
+        let Step::Next(LoginNext::Secret { .. }) = flow.pick("openrouter", "api-key") else {
+            panic!("the key step");
+        };
+        let Step::Submit {
+            provider, values, ..
+        } = flow.push("openrouter", "FAKESECRET-265-LEAK")
+        else {
+            panic!("one field submits");
+        };
+        assert_eq!(provider, "openrouter", "routed to the chosen provider");
+
+        // Write through the real store, exactly as the login flow does.
+        let key = values.get("api-key").expect("the collected key");
+        crate::store_provider_secret(&root, &root, &provider, "api_key", key, &grants)
+            .expect("the secret stores");
+
+        // The chosen namespace holds it...
+        let chosen = root.join("credentials").join("openrouter.json");
+        let text = std::fs::read_to_string(&chosen).expect("read the chosen namespace");
+        assert!(
+            text.contains("FAKESECRET-265-LEAK"),
+            "the key is in the chosen provider's namespace: {text}"
+        );
+        // ...and the other namespace holds NOTHING (the leak).
+        let other = root.join("credentials").join("anthropic.json");
+        assert!(
+            !other.exists(),
+            "the wrong provider's namespace must not exist at all: {}",
+            other.display()
+        );
     }
 
     #[test]
