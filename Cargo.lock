@@ -1796,7 +1796,6 @@ dependencies = [
  "skills",
  "tokio",
  "tracing",
- "webfetch",
 ]
 
 [[package]]
@@ -3897,6 +3896,7 @@ dependencies = [
  "lca-ext-abi",
  "lca-permissions",
  "lca-protocol",
+ "lca-testkit",
  "lca-tools",
  "serde_json",
  "tokio",

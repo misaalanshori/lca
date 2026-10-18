@@ -27,6 +27,11 @@ wit-bindgen = "0.41"
 
 [dev-dependencies]
 serde_json.workspace = true
+# gh #302: the consent rows drive the real permission seam (a recording
+# prompt plus a real grant store) against this tool's own `NetView` impl.
+lca-permissions = { path = "../../crates/lca-permissions" }
+lca-tools = { path = "../../crates/lca-tools" }
+lca-testkit = { path = "../../crates/lca-testkit" }
 
 [lints]
 workspace = true
