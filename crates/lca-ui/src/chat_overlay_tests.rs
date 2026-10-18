@@ -1110,6 +1110,7 @@ fn settings_dividers_are_chrome() {
         ],
         selected: 0,
         editing: None,
+        query: String::new(),
     });
     let (w, h) = (80u16, 24u16);
     let (rect, _) = chat.picker_layout(w, h).expect("the box maps");

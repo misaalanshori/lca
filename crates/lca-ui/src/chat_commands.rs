@@ -170,6 +170,7 @@ impl Chat {
                     rows,
                     selected: 0,
                     editing: None,
+                    query: String::new(),
                 });
                 return Action::Continue;
             }

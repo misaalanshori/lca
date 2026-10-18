@@ -678,8 +678,15 @@ impl SettingsPicker {
     /// click-each-row guards fail if they drift apart.
     pub fn mouse_rows(&self) -> Vec<Option<usize>> {
         let mut rows = vec![None, None];
+        if !self.query.is_empty() {
+            // The search line and its blank (gh #272 parity pass): the
+            // painter shows them only while a query is set.
+            rows.push(None);
+            rows.push(None);
+        }
         let mut section = "";
-        for (index, row) in self.rows.iter().enumerate() {
+        for index in self.visible() {
+            let row = &self.rows[index];
             if !row.section.is_empty() && row.section != section {
                 section = row.section.as_str();
                 // Divider plus its padding blank (gh #235): both
@@ -701,6 +708,46 @@ pub struct SettingsPicker {
     /// The inline-edit buffer while a free-text row edits (gh #174):
     /// `Some` means keystrokes land here, not in navigation.
     pub editing: Option<String>,
+    /// Type-to-search over the rows (pi's `ConfigSelector` filter, gh
+    /// #272 parity pass). Empty means every row shows. Matched against
+    /// the key, the label, and the description, case-insensitively; the
+    /// selection indexes `visible`, never `rows`, so filtering can never
+    /// select a row that is not on screen.
+    pub query: String,
+}
+
+impl SettingsPicker {
+    /// The row indices the query admits, in display order. An empty query
+    /// admits everything, so the unfiltered list is the same code path.
+    pub fn visible(&self) -> Vec<usize> {
+        if self.query.is_empty() {
+            return (0..self.rows.len()).collect();
+        }
+        let needle = self.query.to_lowercase();
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                row.key.to_lowercase().contains(&needle)
+                    || row.label.to_lowercase().contains(&needle)
+                    || row.description.to_lowercase().contains(&needle)
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// The row the cursor is on, if any.
+    pub fn selected_row(&self) -> Option<&crate::state::SettingRow> {
+        self.visible()
+            .get(self.selected)
+            .and_then(|index| self.rows.get(*index))
+    }
+
+    /// Keep the cursor inside the filtered list after the query changed.
+    pub fn clamp_selection(&mut self) {
+        let len = self.visible().len();
+        self.selected = self.selected.min(len.saturating_sub(1));
+    }
 }
 
 /// The thinking levels and their descriptions, from pi's

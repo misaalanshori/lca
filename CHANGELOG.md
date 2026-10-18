@@ -195,6 +195,12 @@ Dates are UTC.
     paths - the section-form lookup and a hand-written block after the loop -
     which agreed on two of the three keys and handled neither the third
     (`retry_max_delay_ms`) nor a future edit. One path now.
+  - **`/settings` filters as you type.** pi's `ConfigSelector` filters its
+    list; LCA's did not, which made a 40-row sectioned list a scroll hunt. The
+    query matches the key, the label, and the description, case-insensitively;
+    `Esc` clears it before closing; an empty result says `No matching settings`;
+    and the cursor indexes the filtered set, so a filter can never leave `Enter`
+    pointed at a row that is not on screen.
   - **The class fix:** a drift guard pins the five mirrors against each other
     (`Config` fields, `resolved()`, `KNOWN_KEYS`, `TABLE_KEYS`, and the
     `docs/configuration.md` key table), so the next key added to one and

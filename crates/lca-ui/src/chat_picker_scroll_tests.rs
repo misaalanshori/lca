@@ -122,6 +122,7 @@ fn settings_paging_keys_jump_and_step_selection() {
             .collect(),
         selected: 0,
         editing: None,
+        query: String::new(),
     });
     let _ = chat.handle_picker_key("", Some("end"));
     assert_eq!(chat.settings_picker.as_ref().unwrap().selected, 29);
@@ -189,6 +190,7 @@ fn settings_rows_paint_labels_and_a_description() {
         ],
         selected: 1,
         editing: None,
+        query: String::new(),
     });
     let text = strip(&chat.viewport(100, 30, 0)).join("\n");
     assert!(text.contains("Editor padding"), "labels paint:\n{text}");
@@ -270,6 +272,7 @@ fn settings_painter_shows_scrollback_not_false() {
         }],
         selected: 0,
         editing: None,
+        query: String::new(),
     });
     let viewport = strip(&chat.viewport(80, 24, 0)).join("\n");
     assert!(

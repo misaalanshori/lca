@@ -15,8 +15,9 @@ const HINT_FILTER: &str = "↑↓ move · enter apply · esc close · type to fi
 const HINT_TREE: &str = "↑↓ move · ←/→ fold · f filter · e label · enter show · esc close";
 const HINT_GRANTS: &str = "↑↓ move · enter revoke · esc close";
 const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
-const HINT_SETTINGS: &str = "↑↓ move · enter/←→ change · q/esc close";
 const HINT_SETTINGS_EDIT: &str = "type the value · enter apply · esc cancel";
+/// Pi's `/settings` hint verbatim: the list filters as you type.
+const HINT_SETTINGS_SEARCH: &str = "↑↓ move · enter/←→ change · q/esc close · type to search";
 const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
 
 /// The sensitive filename in a permission modal's action text, if the
@@ -405,23 +406,43 @@ impl Chat {
         // (selection is row-indexed, so headers skip themselves).
         if let Some(picker) = &self.settings_picker {
             let mut body = vec!["key = value [source]; /grants for permissions".to_string()];
-            body.push(String::new());
+            // Gh #272 parity pass: pi's `ConfigSelector` carries a live
+            // type-to-search line; ours becomes one row and only shows
+            // while a query is set, so the unfiltered list looks as it
+            // did. The visible set drives the cursor, so a filtered-out
+            // row can never be selected.
+            let visible = picker.visible();
+            let mut selected_body;
+            if picker.query.is_empty() {
+                body.push(String::new());
+                selected_body = 2 + picker.selected;
+            } else {
+                body.push(format!("  search: {}", picker.query));
+                body.push(String::new());
+                selected_body = 3 + picker.selected;
+            }
+            if visible.is_empty() {
+                // Pi's empty state (`ConfigSelector`): the list says so
+                // rather than showing nothing, which would read as a
+                // rendering failure (gh #272 parity pass).
+                body.push("  No matching settings".to_string());
+            }
             let mut section: &str = "";
-            let mut selected_body = 2 + picker.selected;
-            for (index, row) in picker.rows.iter().enumerate() {
+            for (position, index) in visible.iter().copied().enumerate() {
+                let row = &picker.rows[index];
                 if !row.section.is_empty() && row.section != section {
                     section = row.section.as_str();
                     body.push(format!(" ── {section} ──"));
                     // gh #235: air under the divider.
                     body.push(String::new());
-                    if index <= picker.selected {
+                    if position <= picker.selected {
                         selected_body += 2;
                     }
                 }
                 let cur = if index == picker.selected { '>' } else { ' ' };
                 // Gh #174: a row being edited shows its buffer, not its
                 // stored value.
-                if index == picker.selected
+                if position == picker.selected
                     && let Some(buffer) = picker.editing.as_ref()
                 {
                     body.push(format!(" {cur} {} = {}█", row.label, buffer));
@@ -438,19 +459,19 @@ impl Chat {
             // pinned hint (outside the items, so the row map holds).
             let hint = if picker.editing.is_some() {
                 HINT_SETTINGS_EDIT.to_string()
-            } else if let Some(row) = picker.rows.get(picker.selected) {
+            } else if let Some(row) = picker.selected_row() {
                 let cap = (width as usize)
-                    .saturating_sub(HINT_SETTINGS.len() + 12)
+                    .saturating_sub(HINT_SETTINGS_SEARCH.len() + 12)
                     .max(20);
                 let desc =
                     lca_tui::engine::text::truncate_to_width(&row.description, cap, "…", false);
                 if desc.is_empty() {
-                    HINT_SETTINGS.to_string()
+                    HINT_SETTINGS_SEARCH.to_string()
                 } else {
-                    format!("{} · {desc}", HINT_SETTINGS)
+                    format!("{} · {desc}", HINT_SETTINGS_SEARCH)
                 }
             } else {
-                HINT_SETTINGS.to_string()
+                HINT_SETTINGS_SEARCH.to_string()
             };
             self.picker_overlay(
                 viewport,

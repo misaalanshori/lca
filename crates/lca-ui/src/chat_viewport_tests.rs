@@ -767,6 +767,7 @@ fn clicking_the_editor_dismisses_settings() {
         rows: vec![],
         selected: 0,
         editing: None,
+        query: String::new(),
     });
     assert!(chat.picker_open(), "settings owns the keyboard");
     let (w, h) = (80u16, 24u16);

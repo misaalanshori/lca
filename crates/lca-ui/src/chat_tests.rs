@@ -1113,16 +1113,17 @@ mod tooltip_tests;
 mod overlay_tests;
 
 #[cfg(test)]
-#[path = "chat_toast_tests.rs"]
-mod toast_tests;
-
+#[path = "chat_mcp_tests.rs"]
+mod mcp_tests;
 #[cfg(test)]
 #[path = "chat_picker_scroll_tests.rs"]
 mod picker_scroll_tests;
-
 #[cfg(test)]
-#[path = "chat_mcp_tests.rs"]
-mod mcp_tests;
+#[path = "chat_settings_filter_tests.rs"]
+mod settings_filter_tests;
+#[cfg(test)]
+#[path = "chat_toast_tests.rs"]
+mod toast_tests;
 
 #[cfg(test)]
 #[path = "chat_hub_tests.rs"]
@@ -1186,15 +1187,7 @@ fn a_model_without_a_set_offers_every_level() {
 
 // Verifies: gh #225 - the first C-c clears composer text (the hint's
 // promise); empty-armed C-c exits on the second tap.
-#[test]
-fn ctrl_c_clears_text_first_and_exits_when_empty() {
-    let mut chat = chat();
-    for c in "scratch-text".chars() {
-        chat.handle_key(&c.to_string());
-    }
-    assert_eq!(chat.editor.text(), "scratch-text");
-    assert_eq!(chat.handle_key("\x03"), Action::Continue);
-    assert_eq!(chat.editor.text(), "", "the first tap clears");
-    assert_eq!(chat.handle_key("\x03"), Action::Continue);
-    assert_eq!(chat.handle_key("\x03"), Action::Exit);
-}
+
+#[cfg(test)]
+#[path = "chat_ctrl_c_tests.rs"]
+mod ctrl_c_tests;

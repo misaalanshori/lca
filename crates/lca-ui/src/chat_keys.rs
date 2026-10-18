@@ -435,7 +435,7 @@ impl Chat {
                     }
                     Some("enter") => {
                         let buffer = picker.editing.take().unwrap_or_default();
-                        let row = picker.rows.get(picker.selected).cloned();
+                        let row = picker.selected_row().cloned();
                         if let Some(row) = row {
                             // An untouched buffer writes nothing: the file
                             // keeps its comments and mtime.
@@ -449,7 +449,7 @@ impl Chat {
                         // Re-read like the cycle path, so value and
                         // source show what actually won.
                         picker.rows = self.settings_rows();
-                        picker.selected = picker.selected.min(picker.rows.len().saturating_sub(1));
+                        picker.clamp_selection();
                         self.settings_picker = Some(picker);
                     }
                     Some("backspace") => {
@@ -469,34 +469,46 @@ impl Chat {
                 }
                 return Some(Action::Continue);
             }
+            // Gh #272 parity pass: the list filters as you type (pi's
+            // `ConfigSelector`). Every navigation step is bounded by the
+            // *visible* count, and each selection change maps back to a
+            // row index, so a filter that shrinks the list can never leave
+            // the cursor on a row that is not on screen.
+            let visible_len = picker.visible().len();
             match key {
+                Some("escape") if !picker.query.is_empty() => {
+                    // Pi's Esc clears the query before it closes the list.
+                    picker.query.clear();
+                    picker.clamp_selection();
+                    self.settings_picker = Some(picker);
+                }
                 Some("escape") | Some("q") => {}
                 Some("up") => {
                     picker.selected = picker.selected.saturating_sub(1);
                     self.settings_picker = Some(picker);
                 }
                 Some("down") => {
-                    picker.selected =
-                        (picker.selected + 1).min(picker.rows.len().saturating_sub(1));
+                    picker.selected = (picker.selected + 1).min(visible_len.saturating_sub(1));
                     self.settings_picker = Some(picker);
                 }
                 Some("pageup" | "pageUp" | "pagedown" | "pageDown" | "home" | "end") => {
                     if let Some(next) = key.and_then(|key| {
-                        Self::page_selected(
-                            picker.selected,
-                            picker.rows.len().saturating_sub(1),
-                            key,
-                        )
+                        Self::page_selected(picker.selected, visible_len.saturating_sub(1), key)
                     }) {
                         picker.selected = next;
                     }
+                    self.settings_picker = Some(picker);
+                }
+                Some("backspace") if !picker.query.is_empty() => {
+                    picker.query.pop();
+                    picker.clamp_selection();
                     self.settings_picker = Some(picker);
                 }
                 Some("enter") | Some("right") | Some("left") => {
                     let forward = key != Some("left");
                     // The key is cloned out before the match so the row
                     // borrow ends: one arm re-borrows the picker mutably.
-                    let row = picker.rows.get(picker.selected).cloned();
+                    let row = picker.selected_row().cloned();
                     match row.as_ref().map(|row| row.key.as_str()) {
                         // A sub-picker row steps aside: the sub-picker's
                         // own key arm sits above this one, so the selector
@@ -527,6 +539,14 @@ impl Chat {
                     }
                 }
                 _ => {
+                    // A printable keystroke is a search term, not a dead
+                    // key (gh #272 parity pass). Rows still need Enter to
+                    // change, so typing to filter can never edit a value.
+                    if let Some(text) = printable(data).or_else(|| paste_text(data)) {
+                        picker.query.push_str(&text);
+                        picker.selected = 0;
+                        picker.clamp_selection();
+                    }
                     self.settings_picker = Some(picker);
                 }
             }
