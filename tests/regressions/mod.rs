@@ -397,3 +397,7 @@ mod catalog_id_traversal;
 // ceiling, so a tiny archive could expand to gigabytes in RAM.
 #[path = "350-archive-read-ceiling.rs"]
 mod archive_read_ceiling;
+// GitHub #344: binary MCP resource payloads staged in a shared
+// world-writable `/tmp` directory with predictable names.
+#[path = "344-mcp-resource-staging-private.rs"]
+mod mcp_resource_staging_private;

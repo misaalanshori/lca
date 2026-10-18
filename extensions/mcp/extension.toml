@@ -7,8 +7,12 @@ license = "Apache-2.0"
 
 # The bridge spawns each configured server in the workspace scope; the
 # spawn passes the same permission prompt as a model-requested command.
+# `temp` (read-write) is where a server's binary resource payloads are
+# staged for the model (gh #344): a per-session, owner-only scratch
+# directory under the data home, never a shared one.
 [capabilities.fs]
 workspace = "read"
+temp = "read-write"
 
 [capabilities.process]
 reason = "Runs configured MCP servers over stdio."

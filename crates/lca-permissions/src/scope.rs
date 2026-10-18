@@ -126,7 +126,11 @@ pub struct ScopeRoots {
 }
 
 impl ScopeRoots {
-    fn root_for(&self, scope: &str) -> Option<&Path> {
+    /// The configured directory a scope resolves against, when the name is
+    /// in the vocabulary. Public because a caller that stages a file and
+    /// hands the path onward (gh #344) must name the real location; the
+    /// root is always the host's own configuration, never guest input.
+    pub fn root_for(&self, scope: &str) -> Option<&Path> {
         match scope {
             "workspace" => Some(&self.workspace),
             "private" => Some(&self.private),

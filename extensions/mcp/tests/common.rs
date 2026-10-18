@@ -342,11 +342,25 @@ fn mcp_payload(body: &str, sse: bool, plain: bool) -> String {
                 .pointer("/params/uri")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "hello, remote"}]},
-            })
+            // `mock://bytes` serves a binary blob so the staging path
+            // (gh #344) is exercised over HTTP too.
+            if uri.ends_with("bytes") {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {"contents": [{
+                        "uri": uri,
+                        "mimeType": "application/octet-stream",
+                        "blob": base64("binary-bytes"),
+                    }]},
+                })
+            } else {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "hello, remote"}]},
+                })
+            }
         }
         _ if request.get("id").is_some() => serde_json::json!({
             "jsonrpc": "2.0",
@@ -430,14 +444,25 @@ pub fn sandbox(
 ) -> Arc<lca_tools::Capabilities> {
     let root = lca_testkit::scratch_path(&format!("lca-mcp-{name}"));
     let _ = std::fs::remove_dir_all(&root);
-    for dir in ["project", "private", "config", "data", "tmp"] {
+    // The PRODUCTION layout (gh #344): the session temp directory lives
+    // under the data home (`<data>/tmp/<session>`, FR-SESS-8), not beside
+    // it. The old sibling roots hid the state-directory exclusion - the
+    // same fixture drift an earlier audit found for `private` - so `temp`
+    // looked usable here while being refused on a real installation.
+    for dir in [
+        "project",
+        "private",
+        "config",
+        "data/tmp/session",
+        "data/sessions",
+    ] {
         std::fs::create_dir_all(root.join(dir)).expect("mkdir");
     }
     let roots = ScopeRoots {
         workspace: root.join("project"),
         private: root.join("private"),
         home_config: root.join("config"),
-        temp: root.join("tmp"),
+        temp: root.join("data/tmp/session"),
         state_dir: root.join("data"),
     };
     grants
@@ -459,6 +484,35 @@ pub fn sandbox(
         root.join("project"),
         None,
     ))
+}
+
+/// Minimal base64 (the mock's `blob` field; no dependency for one
+/// fixture payload).
+fn base64(text: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = text.as_bytes();
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 /// One remote server pointed at the mock.

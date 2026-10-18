@@ -64,6 +64,7 @@ The host import table is the enumerable surface. Every function in it is an entr
 | `lca:host/state` write | Every extension (always granted) | Filling the disk; planting data a later call trusts |
 | A package's `resources/` bag at install | Whoever published the package | Shipping hostile content that the host or the model will read |
 | An archive's members at install | Whoever published the package | A decompression bomb (a kilobyte archive expanding to gigabytes in RAM) exhausting memory, or a member past the manifest/component/resource ceilings |
+| Binary MCP resource payloads at read | The configured MCP server (and so whoever controls it) | Staging a blob in a shared world-writable directory with a guessable name, so a local user pre-plants a symlink and the user's own process writes through it |
 | A catalog `id` in configuration | A trusted project's `.lca/config.toml`, or the user file | Path traversal into the catalog cache path, writing attacker-chosen bytes outside `~/.lca/catalogs/` |
 
 ### The three new surfaces (ADR-0030/0031/0032)
@@ -194,6 +195,26 @@ Stopped by the split permission store. A project file holds proposals with no fo
 Also stopped earlier by project trust. An untrusted project has its configuration ignored entirely.
 
 See ADR-0006 for why both layers exist.
+
+### A binary MCP resource is staged where a local user can reach it
+
+A configured MCP server answers `resources/read` with a binary blob. The
+bridge writes it to disk and hands the model the path.
+
+Stopped by staging through the `temp` capability scope (gh #344). The old
+code wrote `<system tmp>/lca-mcp-resources/{server}-{counter}-{safe}` with a
+raw `std::fs::write`: a shared world-writable directory, a counter that
+restarts at 0 every process, and a write that follows symlinks — so a local
+user could pre-plant a link at a predictable name and have the user's own
+process overwrite any file they could write. It also bypassed the capability
+scopes and never cleaned up. Staging now writes into `<data>/tmp/<session>`
+through `fs_write_new`: `create_new` (a planted entry is an error, not a
+target), owner-only `0600` on the file and `0700` on the directory, the scope
+check running first and recording any refusal, and the session-temp guard
+removing the directory at exit.
+
+Not stopped: the *content* of a blob the user then reads. That is the
+same content risk as any file the model reads.
 
 ### A hostile archive exhausts memory at install
 

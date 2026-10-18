@@ -20,6 +20,24 @@ Dates are UTC.
   line); no WIT or schema change.
 
 ### Security
+- **Binary MCP resources staged in shared world-writable `/tmp` (gh
+  #344).** `read_result` wrote a server's binary resource payload to
+  `<system tmp>/lca-mcp-resources/{server}-{counter}-{safe}` with a raw
+  `std::fs::write`. That directory is shared and world-writable, the
+  counter restarts at 0 on every process, and the write follows symlinks —
+  so a local user could pre-plant a link at a predictable name and have the
+  user's own process overwrite any file they can write. The same call also
+  bypassed the capability scopes entirely and never cleaned up. Staging now
+  goes through a new `Capabilities::fs_write_new` on the `temp` scope:
+  `create_new` (a planted entry is an error, never a target), owner-only
+  `0600` on the file and `0700` on its directory, the scope check running
+  first and recording refusals, and the session-temp guard removing the
+  directory at exit. **Found on the way:** the `temp` scope was itself
+  unusable on a real installation — its root is `<data>/tmp/<session>`, so
+  the state-directory exclusion refused every resolution, and the sibling
+  test fixtures hid it. `temp` now gets the same sanctioned exemption
+  `private` already had, still confined to its own root.
+
 - **Two hostile-artifact surfaces in `lca-registry` (gh #348, #350).**
   - **gh #348:** a catalog `id` from `[[extensions.catalogs]]` was joined
     straight onto `<data>/catalogs/{id}.toml`. A *trusted* project's

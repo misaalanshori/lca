@@ -17,6 +17,10 @@ pub fn manifest_grants() -> lca_tools::CapabilityGrants {
         fs: vec![
             lca_permissions::ScopeGrant::parse("workspace", lca_permissions::FsMode::Read)
                 .expect("workspace read grant parses"),
+            // gh #344: binary resource payloads stage in the per-session
+            // temp scope (owner-only, scope-checked), never shared /tmp.
+            lca_permissions::ScopeGrant::parse("temp", lca_permissions::FsMode::ReadWrite)
+                .expect("temp read-write grant parses"),
         ],
         fs_declared: true,
         ..Default::default()
@@ -188,10 +192,23 @@ fn resource_row(server: &str, resource: &crate::McpResource) -> serde_json::Valu
     row
 }
 
-/// Map read contents to one result: text stays text, images ride
-/// the image lane, other bytes land in a file whose path the model
-/// receives (pi's rule).
+/// Map read contents to one result: text stays text, images ride the image
+/// lane, other bytes stage into the session's temp scope and the model
+/// receives that path (pi's rule).
+///
+/// Gh #344: staging used to write `<system tmp>/lca-mcp-resources/
+/// {server}-{counter}-{safe}` with a raw `std::fs::write`. That directory is
+/// shared and world-writable, the counter restarts at 0 every process, and
+/// `fs::write` follows symlinks - so a local attacker could pre-plant a link
+/// at a predictable name and have the user's own process write through it.
+/// It also bypassed the capability scopes entirely and never cleaned up.
+///
+/// Staging now goes through [`Capabilities::fs_write_new`] on the `temp`
+/// scope: one private directory per session (`<data>/tmp/<session>`, removed
+/// at exit by the session-temp guard), created with `create_new` so a
+/// planted entry is an error rather than a target, owner-only `0600`.
 fn read_result(
+    caps: &lca_tools::Capabilities,
     call_id: &str,
     server: &str,
     contents: Vec<crate::ResourceContent>,
@@ -217,31 +234,73 @@ fn read_result(
                     });
                     continue;
                 }
-                let dir = std::env::temp_dir().join("lca-mcp-resources");
-                std::fs::create_dir_all(&dir)
+                let staged = stage_blob(caps, server, &uri, &bytes, &COUNTER)
                     .map_err(|err| format!("cannot stage the resource: {err}"))?;
-                let leaf = uri.rsplit('/').next().unwrap_or("resource");
-                let safe: String = leaf
-                    .chars()
-                    .map(|c| {
-                        if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
-                            c
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect();
-                let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let path = dir.join(format!("{server}-{id}-{safe}"));
-                std::fs::write(&path, &bytes)
-                    .map_err(|err| format!("cannot stage the resource: {err}"))?;
-                text.push_str(&path.to_string_lossy());
+                text.push_str(&staged.to_string_lossy());
             }
         }
     }
     let mut result = lca_protocol::ToolResult::ok(call_id.to_string(), text);
     result.images = images;
     Ok(result)
+}
+
+/// Write one binary resource into the session temp scope and return its
+/// absolute path, for the model to read.
+///
+/// The scope resolves the relative name against `<data>/tmp/<session>`, so
+/// the directory is per-session and private; the name only has to be unique
+/// *within* it, which the counter plus the server name gives. The write is
+/// `create_new`, and a collision retries with the next counter value rather
+/// than clobbering whatever is there.
+fn stage_blob(
+    caps: &lca_tools::Capabilities,
+    server: &str,
+    uri: &str,
+    bytes: &[u8],
+    counter: &std::sync::atomic::AtomicU64,
+) -> Result<std::path::PathBuf, String> {
+    let leaf = uri.rsplit('/').next().unwrap_or("resource");
+    let safe: String = leaf
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let server_part: String = server
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    // The scope check runs inside `fs_write_new`; a refusal is reported as
+    // the staging failure (the denial is recorded by the capability layer).
+    let mut last = String::new();
+    for _ in 0..8 {
+        let id = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("{server_part}-{id}-{safe}");
+        match caps.fs_write_new("temp", &name, bytes) {
+            Ok(()) => {
+                // The path the model must read: the slot the scope resolved,
+                // not the system temp dir.
+                let base = caps.scope_root("temp").ok_or_else(|| {
+                    "the temp scope is not available to this extension".to_string()
+                })?;
+                return Ok(base.join(&name));
+            }
+            Err(err) => {
+                last = err.to_string();
+                // A name collision (another server used this slot) retries;
+                // any other refusal is final.
+                if !last.contains("exists") {
+                    break;
+                }
+            }
+        }
+    }
+    Err(last)
 }
 
 /// What one managed server is doing (the `/mcp` rows read these).
@@ -313,6 +372,11 @@ impl ManagedServer {
 /// re-registration.
 pub struct McpBridge {
     servers: Mutex<Vec<ManagedServer>>,
+    /// The bridge's own capability engine (gh #344). Binary resources are
+    /// staged through its `temp` scope, so the write is scope-checked and
+    /// owner-only instead of a raw write into a shared world-writable
+    /// directory.
+    caps: Arc<lca_tools::Capabilities>,
 }
 
 /// Connect one stdio entry: spawn (the permission layer asks),
@@ -487,6 +551,7 @@ impl McpBridge {
         }
         McpBridge {
             servers: Mutex::new(servers),
+            caps,
         }
     }
 
@@ -711,7 +776,7 @@ impl McpBridge {
                 let contents = live
                     .resource_read(&uri)
                     .map_err(lca_protocol::DispatchError::Failed)?;
-                read_result(&call.call_id, &server, contents).map_err(failed)
+                read_result(&self.caps, &call.call_id, &server, contents).map_err(failed)
             }
             _ => Err(failed(format!("unknown MCP tool {:?}", call.name))),
         }

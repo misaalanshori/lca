@@ -28,6 +28,7 @@ use lca_protocol::CapabilityError;
 use tower_service::Service;
 
 mod errors;
+mod fs;
 mod net;
 #[cfg(test)]
 mod pinned_tests;
@@ -663,66 +664,6 @@ impl Capabilities {
                 self.record("fs", &format!("{scope}:{path}"), &violation.to_string());
                 err
             })
-    }
-
-    // ------------------------------------------------------------------
-    // fs
-    // ------------------------------------------------------------------
-
-    /// Read a file inside a granted scope.
-    pub fn fs_read(&self, scope: &str, path: &str) -> Result<Vec<u8>, CapabilityError> {
-        if !self.grants.fs_declared {
-            return Err(self.undeclared("fs"));
-        }
-        let resolved = self.resolve(scope, path, false)?;
-        Ok(std::fs::read(resolved)?)
-    }
-
-    /// Write a file inside a granted scope, creating its parent.
-    pub fn fs_write(&self, scope: &str, path: &str, bytes: &[u8]) -> Result<(), CapabilityError> {
-        if !self.grants.fs_declared {
-            return Err(self.undeclared("fs"));
-        }
-        let resolved = self.resolve(scope, path, true)?;
-        if let Some(parent) = resolved.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(resolved, bytes)?;
-        Ok(())
-    }
-
-    /// List a directory inside a granted scope; sorted for determinism.
-    pub fn fs_list(&self, scope: &str, path: &str) -> Result<Vec<String>, CapabilityError> {
-        if !self.grants.fs_declared {
-            return Err(self.undeclared("fs"));
-        }
-        let resolved = self.resolve(scope, path, false)?;
-        let mut names: Vec<String> = std::fs::read_dir(resolved)?
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        Ok(names)
-    }
-
-    /// Stat a path inside a granted scope.
-    pub fn fs_stat(&self, scope: &str, path: &str) -> Result<(bool, u64), CapabilityError> {
-        if !self.grants.fs_declared {
-            return Err(self.undeclared("fs"));
-        }
-        let resolved = self.resolve(scope, path, false)?;
-        let meta = std::fs::metadata(resolved)?;
-        Ok((meta.is_dir(), meta.len()))
-    }
-
-    /// Resolve a granted scope's own directory: the working directory for
-    /// spawned programs must be a scope the extension can already see
-    /// (capability catalog).
-    fn scope_dir(&self, scope: &str) -> Result<PathBuf, CapabilityError> {
-        if !self.grants.fs_declared {
-            return Err(self.undeclared("fs"));
-        }
-        self.resolve(scope, ".", false)
     }
 
     // ------------------------------------------------------------------
