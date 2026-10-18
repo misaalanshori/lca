@@ -1086,7 +1086,7 @@ impl TurnState {
         // A turn that ends without its `TurnEnded` event still rests the
         // separator.
         chat.separator.idle();
-        chat.usage.cost += outcome.usage.cost;
+        chat.fold_turn_usage(&outcome.usage); // gh #327: once, from core's turn sum
         // Gh #213: the resting badge follows the outcome (read before
         // the aborted branch below overwrites it for cancels).
         self.last_ok = Some(outcome.error.is_none());

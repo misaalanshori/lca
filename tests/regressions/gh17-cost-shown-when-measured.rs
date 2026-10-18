@@ -81,14 +81,22 @@ fn the_footer_hides_the_cost_before_any_usage() {
 }
 
 // A measured zero cost (a free model) is informative, so it shows.
+//
+// SANCTIONED CHANGE (gh #327): this row used to reach the footer totals
+// through `on_turn_event(TurnEvent::Usage(..))`. Since gh #327 the stream
+// handler feeds only the live display, and the session totals (which the
+// footer renders) fold once per turn from core's authoritative outcome. So
+// the row now folds through `fold_turn_usage`, which is the path a real
+// turn takes — the policy it pins (a measured zero is shown, not hidden) is
+// unchanged.
 #[test]
 fn a_measured_zero_cost_is_shown() {
     let mut chat = chat();
-    chat.on_turn_event(lca_protocol::TurnEvent::Usage(lca_protocol::Usage {
+    chat.fold_turn_usage(&lca_protocol::Usage {
         input: 100,
         output: 10,
         ..Default::default()
-    }));
+    });
     let text = frame(&chat);
     assert!(
         text.contains("$0.0000"),
@@ -97,15 +105,19 @@ fn a_measured_zero_cost_is_shown() {
 }
 
 // A real cost is unchanged by the policy.
+//
+// SANCTIONED CHANGE (gh #327): same reason as the row above — the footer
+// totals are fed by the per-turn fold now, not by the stream handler. The
+// assertion (a priced turn renders `$0.0123`) is untouched.
 #[test]
 fn a_real_cost_is_shown_as_before() {
     let mut chat = chat();
-    chat.on_turn_event(lca_protocol::TurnEvent::Usage(lca_protocol::Usage {
+    chat.fold_turn_usage(&lca_protocol::Usage {
         input: 100,
         output: 10,
         cost: 0.0123,
         ..Default::default()
-    }));
+    });
     let text = frame(&chat);
     assert!(
         text.contains("$0.0123"),

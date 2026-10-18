@@ -88,8 +88,16 @@ pub struct Chat {
     pub keybindings: Arc<KeybindingsManager>,
     /// The theme.
     pub theme: Theme,
-    /// Accumulated session usage.
+    /// Accumulated session usage: the true, single-counted sum of every
+    /// completed turn's totals (gh #327). Folded once per turn by
+    /// [`Chat::fold_turn_usage`] — never grown by the stream.
     pub usage: Usage,
+    /// This turn's usage so far, rebuilt from the stream (gh #327): a
+    /// provider may report in several events, so this `absorb`s each one
+    /// exactly as core does. It feeds mid-turn display only; the session
+    /// total takes it (or core's authoritative `TurnOutcome`) once, at
+    /// the turn boundary.
+    pub turn_usage: Usage,
     /// The turn's generation-time meter (the footer's tok/s reading).
     meter: crate::turn_metrics::StreamMeter,
     /// Whether a turn is running.
@@ -320,6 +328,7 @@ impl Chat {
             footer,
             theme,
             usage: Usage::default(),
+            turn_usage: Usage::default(),
             turn_running: false,
             compacting: false,
             turn_status: None,
@@ -415,8 +424,67 @@ impl Chat {
                 usage: Some(usage), ..
             } = record
             {
-                self.on_turn_event(TurnEvent::Usage(usage.clone()));
+                // gh #327: a replayed record's usage is a COMPLETED turn's
+                // total, so it folds through the same single-counted path
+                // `reap` uses rather than through the stream handler (which
+                // now only feeds display). Historical spend still shows on a
+                // resumed session — it just cannot be double-counted by
+                // construction, because there is one fold.
+                self.fold_turn_usage(usage);
             }
+        }
+    }
+
+    /// Start a turn's usage view (gh #327): called at the turn boundary so
+    /// a later turn's stream never inherits a previous one's numbers.
+    pub fn begin_turn_usage(&mut self) {
+        self.turn_usage = Usage::default();
+    }
+
+    /// Note one *tool step's* complete usage report inside a turn (gh
+    /// #327): distinct calls sum, which is what core's per-turn
+    /// `accumulate_usage` does, so the live turn view matches the total
+    /// `reap` later folds.
+    ///
+    /// This is deliberately distinct from [`Usage::absorb`], which the
+    /// stream handler uses: an `absorb` is a *refinement* within one call
+    /// (gh #276 — a later non-zero value wins), while a step is a new call
+    /// whose numbers add. Conflating them would either double-count a
+    /// refinement or lose a step's spend.
+    pub fn note_turn_step(&mut self, usage: &Usage) {
+        self.turn_usage.input = self.turn_usage.input.saturating_add(usage.input);
+        self.turn_usage.output = self.turn_usage.output.saturating_add(usage.output);
+        self.turn_usage.cache_read = self.turn_usage.cache_read.saturating_add(usage.cache_read);
+        self.turn_usage.cache_write = self
+            .turn_usage
+            .cache_write
+            .saturating_add(usage.cache_write);
+        self.turn_usage.cache_write_1h = self
+            .turn_usage
+            .cache_write_1h
+            .saturating_add(usage.cache_write_1h);
+        self.turn_usage.cost += usage.cost;
+    }
+
+    /// Fold one completed turn's total into the session totals (gh #327).
+    ///
+    /// This is the ONE implementation of "turn total into session total":
+    /// `TurnState::reap` calls it with core's authoritative
+    /// [`lca_protocol::TurnOutcome::usage`], and the record-replay path
+    /// calls it per historical record. Both add exactly once, so the
+    /// footer, `/session` and `/usage` report the true sum.
+    pub fn fold_turn_usage(&mut self, usage: &Usage) {
+        self.usage.input = self.usage.input.saturating_add(usage.input);
+        self.usage.output = self.usage.output.saturating_add(usage.output);
+        self.usage.cache_read = self.usage.cache_read.saturating_add(usage.cache_read);
+        self.usage.cache_write = self.usage.cache_write.saturating_add(usage.cache_write);
+        self.usage.cache_write_1h = self
+            .usage
+            .cache_write_1h
+            .saturating_add(usage.cache_write_1h);
+        self.usage.cost += usage.cost;
+        for (key, value) in &usage.extras {
+            self.usage.extras.insert(key.clone(), value.clone());
         }
     }
 
@@ -472,11 +540,13 @@ impl Chat {
                 self.footer.context_used = usage.input + usage.cache_read + usage.cache_write;
                 // The turn's own output side, for the tok/s reading at its end.
                 self.meter.note_usage(usage.output);
-                self.usage.input = self.usage.input.saturating_add(usage.input);
-                self.usage.output = self.usage.output.saturating_add(usage.output);
-                self.usage.cache_read = self.usage.cache_read.saturating_add(usage.cache_read);
-                self.usage.cache_write = self.usage.cache_write.saturating_add(usage.cache_write);
-                self.usage.cost += usage.cost;
+                // gh #327: this is display state only. The session total is
+                // folded once at the turn boundary; growing it here would
+                // count the turn twice (the stream, then `reap`) and would
+                // also double-count a provider that refines its totals
+                // across events (gh #276). The turn-local view absorbs each
+                // report instead, which is the correct merge.
+                self.turn_usage.absorb(&usage);
             }
             TurnEvent::RetryScheduled {
                 attempt,
@@ -1105,3 +1175,6 @@ pub(super) fn highlight_matches(line: &str, query: &str) -> String {
 #[cfg(test)]
 #[path = "chat_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "usage_tests.rs"]
+mod usage_tests;

@@ -126,6 +126,21 @@ Dates are UTC.
     eval flag matches its glued form; the first also closes the same
     bypass in `DENY_PROGRAMS`.
 
+### Fixed
+- **Every turn's cost was counted twice in the footer (gh #327).** Two
+  accumulation points existed for the same money: the stream's
+  `TurnEvent::Usage` handler grew `chat.usage.*` (including `cost`) as
+  events arrived, and `TurnState::reap` added `outcome.usage.cost` again at
+  completion — so the footer, `/session` and `/usage` reported double the
+  real spend. The stream-side `+=` had a second defect under gh #276's
+  partial-usage model: a provider refining its totals across two events
+  double-counted even with `reap` removed. Stream events now drive only
+  display (the footer's prompt size, the tok/s meter, a turn-local view
+  that `absorb`s a refinement and sums a new tool step); the session totals
+  fold core's authoritative per-turn usage **once** through one
+  `Chat::fold_turn_usage`, which the record-replay path shares so a resumed
+  session still reports its history.
+
 ### Security
 - **Login option routing ignored the provider, storing a key in another
   provider's credential namespace (gh #265).** `LoginFlow::pick` matched
