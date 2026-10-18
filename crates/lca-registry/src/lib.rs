@@ -25,8 +25,8 @@ mod http;
 
 pub use catalog::{
     CATALOG_FORMAT, CATALOG_TTL, CatalogEntry, CatalogSource, MergedEntry, abi_supported,
-    cache_fresh, cache_path, fetch_catalog, merge_catalogs, official_source, parse_catalog,
-    read_cache, write_cache,
+    cache_fresh, cache_path, fetch_catalog, is_valid_catalog_id, merge_catalogs, official_source,
+    parse_catalog, read_cache, write_cache,
 };
 pub use git::{parse_git_source, resolve_git};
 pub use http::plain_get;

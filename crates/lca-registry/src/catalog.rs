@@ -218,10 +218,46 @@ pub async fn fetch_catalog(
     }
 }
 
+/// Whether a catalog id is usable as a cache-file name (gh #348).
+///
+/// The id comes from `[[extensions.catalogs]]`, which a *trusted* project
+/// file can set (FR-PERM-9 gates the file, not this field), and it is
+/// joined straight onto the cache directory. A charset rule is the right
+/// shape rather than a blocklist of `..`/`/`/`\`: those characters simply
+/// are not in the vocabulary, so no encoding trick reaches the path
+/// builder. Non-empty, ASCII alphanumerics plus `-` and `_` - the same
+/// shape extension and session ids already use.
+///
+/// `lca-config` enforces the identical rule at parse time (it cannot
+/// depend on this crate), and a regression row pins the two together.
+pub fn is_valid_catalog_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// What a rejected catalog id should say: the id, the rule, and what to
+/// change. One copy so the config-time and cache-time refusals agree.
+pub(crate) fn catalog_id_rule() -> &'static str {
+    "a catalog id may use only ASCII letters, digits, `-`, and `_`"
+}
+
 /// The cache file for one catalog under a data directory
 /// (`~/.lca/catalogs/<id>.toml`).
-pub fn cache_path(data_dir: &Path, id: &str) -> PathBuf {
-    data_dir.join("catalogs").join(format!("{id}.toml"))
+///
+/// Fails on an id outside [`is_valid_catalog_id`]'s vocabulary rather than
+/// joining it (gh #348): the id is untrusted input from a configuration
+/// file, and an unvalidated join let `id = "../../cron.d/x"` write
+/// attacker-chosen bytes outside the cache directory on refresh.
+pub fn cache_path(data_dir: &Path, id: &str) -> Result<PathBuf, Error> {
+    if !is_valid_catalog_id(id) {
+        return Err(Error::Invalid(format!(
+            "invalid catalog id `{id}`: {}",
+            catalog_id_rule()
+        )));
+    }
+    Ok(data_dir.join("catalogs").join(format!("{id}.toml")))
 }
 
 fn required_str(entry: &toml::Value, key: &str) -> Result<String, Error> {
@@ -246,6 +282,95 @@ mod tests {
             oci_ref: format!("ghcr.io/example/{name}:abi-0.6"),
             capabilities: Vec::new(),
         }
+    }
+
+    /// The traversal shapes a hostile `id` can take (gh #348).
+    const HOSTILE_IDS: &[&str] = &[
+        "..",
+        "../..",
+        "../../cron.d/malicious",
+        "../escape",
+        "a/../../b",
+        "sub/dir",
+        "/absolute",
+        "\\windows\\path",
+        "a\\b",
+        "with space",
+        "nul\0byte",
+        "dots.in.name",
+        "tilde~",
+        "colon:443",
+        "*",
+        "%2e%2e",
+        "ünicode",
+    ];
+
+    // Verifies: gh #348 - the charset rule rejects every traversal and
+    // separators shape. Each of these, joined, used to land outside
+    // `catalogs/`.
+    #[test]
+    fn hostile_catalog_ids_are_refused() {
+        for id in HOSTILE_IDS {
+            assert!(!is_valid_catalog_id(id), "`{id}` must be refused");
+        }
+    }
+
+    // Verifies: gh #348 - legitimate ids keep working (no existing
+    // catalog bricks): single words, hyphens, underscores, digits, and
+    // the official id itself all pass.
+    #[test]
+    fn legitimate_catalog_ids_are_accepted() {
+        for id in [
+            "official",
+            "acme",
+            "acme-corp",
+            "acme_corp",
+            "acme2",
+            "A-Z_09",
+            "0",
+        ] {
+            assert!(is_valid_catalog_id(id), "`{id}` must be accepted");
+            let path = cache_path(Path::new("/data"), id).expect("valid id builds a path");
+            assert_eq!(
+                path,
+                Path::new("/data")
+                    .join("catalogs")
+                    .join(format!("{id}.toml"))
+            );
+            // The resolved path is a direct child of the cache directory.
+            assert_eq!(
+                path.parent(),
+                Some(Path::new("/data").join("catalogs").as_path()),
+                "`{id}` nests no deeper than the cache directory"
+            );
+        }
+    }
+
+    // Verifies: gh #348 - the refusal is loud and actionable: it names
+    // the offending id and states the rule, so a user with a
+    // hand-written config knows what to change.
+    #[test]
+    fn the_cache_path_refusal_names_the_id_and_the_rule() {
+        let err = cache_path(Path::new("/data"), "../../cron.d/malicious")
+            .expect_err("traversal refuses");
+        let text = err.to_string();
+        assert!(
+            text.contains("../../cron.d/malicious"),
+            "names the id: {text}"
+        );
+        assert!(
+            text.contains("ASCII letters, digits"),
+            "states the rule: {text}"
+        );
+    }
+
+    // Verifies: gh #348 - an empty id refuses too. It would not traverse,
+    // but `catalogs/.toml` is a shared file every empty-id catalog would
+    // fight over, so it is out of the vocabulary like any other.
+    #[test]
+    fn an_empty_catalog_id_is_refused() {
+        assert!(!is_valid_catalog_id(""));
+        assert!(cache_path(Path::new("/data"), "").is_err());
     }
 
     // Verifies: gh #256 - the official source carries a fetch URL at

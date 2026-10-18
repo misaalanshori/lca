@@ -388,3 +388,8 @@ mod login_option_provider_scoping;
 // declaration gate, and the deny below it never offered the ad hoc grant.
 #[path = "302-webfetch-interactive-consent.rs"]
 mod webfetch_interactive_consent;
+// GitHub #348: a catalog id from configuration was joined onto the cache
+// path unvalidated, so a trusted project's `.lca/config.toml` could write
+// attacker-chosen bytes outside `catalogs/`.
+#[path = "348-catalog-id-traversal.rs"]
+mod catalog_id_traversal;

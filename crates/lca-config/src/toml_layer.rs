@@ -91,8 +91,25 @@ impl Config {
                                 .map(str::to_string)
                                 .ok_or_else(|| invalid(format!("each catalog needs `{name}`")))
                         };
+                        let id = field("id")?;
+                        // Gh #348: the id names a cache file, and a
+                        // *trusted* project file can set it (FR-PERM-9
+                        // gates the file, not this field), so it is
+                        // untrusted input joined onto a path. Refusing
+                        // here means a hostile configuration never gets
+                        // as far as a refresh that would write outside
+                        // the cache directory. The same rule lives in
+                        // `lca_registry::is_valid_catalog_id` (this crate
+                        // has no dependency on the registry); a
+                        // regression row pins the two together.
+                        if !crate::keys::is_valid_catalog_id(&id) {
+                            return Err(invalid(format!(
+                                "catalog id `{id}`: {}",
+                                crate::keys::CATALOG_ID_RULE
+                            )));
+                        }
                         catalogs.push(crate::keys::CustomCatalog {
-                            id: field("id")?,
+                            id,
                             name: field("name")?,
                             url: field("url")?,
                         });

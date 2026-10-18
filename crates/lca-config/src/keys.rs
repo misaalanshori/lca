@@ -22,6 +22,24 @@ pub const PERMISSION_MODES: &[&str] = &["ask", "yolo"];
 /// `followUpMode` names verbatim).
 pub const QUEUE_MODES: &[&str] = &["all", "one-at-a-time"];
 
+/// What a rejected catalog id should say: the rule, in one place.
+pub const CATALOG_ID_RULE: &str = "a catalog id may use only ASCII letters, digits, `-`, and `_`";
+
+/// Whether a catalog id may name a cache file (gh #348): non-empty, ASCII
+/// alphanumerics plus `-`/`_`. A charset rule, not a traversal blocklist -
+/// `.`, `/`, and `\` are simply not in the vocabulary, so no encoding
+/// trick reaches the path builder.
+///
+/// The same rule is enforced where the path is built
+/// (`lca_registry::is_valid_catalog_id`), because this crate must not
+/// depend on the registry. Both copies are pinned by a regression row.
+pub fn is_valid_catalog_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// One user-configured custom extension catalog (#227): an id, a
 /// display name, and the catalog document URL. Parsed from the
 /// `extensions.catalogs` array; the hub merges these behind the

@@ -233,7 +233,16 @@ pub fn fetch_all(
     let mut merged = Vec::new();
     let mut failed = Vec::new();
     for source in &sources {
-        let cache = lca_registry::cache_path(data_dir, &source.id);
+        // Gh #348: an invalid catalog id refuses before any path is
+        // built; the hub lists it as a failed source rather than
+        // silently dropping the user's configuration.
+        let cache = match lca_registry::cache_path(data_dir, &source.id) {
+            Ok(cache) => cache,
+            Err(_) => {
+                failed.push(source.name.clone());
+                continue;
+            }
+        };
         let entries = match lca_core::drive_blocking({
             let source = source.clone();
             let cache = cache.clone();

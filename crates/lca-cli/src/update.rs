@@ -328,7 +328,16 @@ async fn run_models() -> i32 {
     }));
     let mut code = crate::exit::OK;
     for source in &sources {
-        let cache = lca_registry::cache_path(&data, &source.id);
+        // Gh #348: the id is untrusted configuration; an invalid one is
+        // reported and skipped, never joined onto a path.
+        let cache = match lca_registry::cache_path(&data, &source.id) {
+            Ok(cache) => cache,
+            Err(err) => {
+                eprintln!("error: {}: {err}", source.name);
+                code = crate::exit::INTERNAL;
+                continue;
+            }
+        };
         match lca_registry::fetch_catalog(source, &cache, true).await {
             Ok(entries) => println!("{}: {} entries", source.name, entries.len()),
             Err(err) => {
