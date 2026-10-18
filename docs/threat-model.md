@@ -63,6 +63,8 @@ The host import table is the enumerable surface. Every function in it is an entr
 | `lca:host/resources` read | Every extension (always granted) | Reading its own package data; the risk is not the read but what the bytes *are* - see the skill-text and preset scenarios below |
 | `lca:host/state` write | Every extension (always granted) | Filling the disk; planting data a later call trusts |
 | A package's `resources/` bag at install | Whoever published the package | Shipping hostile content that the host or the model will read |
+| An archive's members at install | Whoever published the package | A decompression bomb (a kilobyte archive expanding to gigabytes in RAM) exhausting memory, or a member past the manifest/component/resource ceilings |
+| A catalog `id` in configuration | A trusted project's `.lca/config.toml`, or the user file | Path traversal into the catalog cache path, writing attacker-chosen bytes outside `~/.lca/catalogs/` |
 
 ### The three new surfaces (ADR-0030/0031/0032)
 
@@ -192,6 +194,44 @@ Stopped by the split permission store. A project file holds proposals with no fo
 Also stopped earlier by project trust. An untrusted project has its configuration ignored entirely.
 
 See ADR-0006 for why both layers exist.
+
+### A hostile archive exhausts memory at install
+
+An attacker publishes an extension package whose archive is a few kilobytes
+but declares members that expand to gigabytes, or one member past every
+ceiling.
+
+Stopped by a read ceiling on every member. Each entry is read through
+`Read::take(limit + 1)` — the component at `MAX_COMPONENT_BYTES` (64 MiB),
+`resources/*` at `RESOURCE_FILE_MAX_BYTES`, and the manifest at
+`MAX_MANIFEST_BYTES` (1 MiB) — so the expansion is refused while reading
+rather than after it landed. The member count is capped before any entry is
+opened, and the download itself is capped. Every refusal names the member
+and the limit, and says to repackage it smaller. Before this, the component
+member had no ceiling at all and the resource check ran after
+`read_to_end` had already allocated.
+
+Not stopped: an archive inside every ceiling whose *content* is hostile.
+Those are content risks (what the bytes are), handled by the surfaces below,
+not by size.
+
+### A catalog id traverses out of the cache directory
+
+A trusted project's `.lca/config.toml` names a custom catalog with
+`id = "../../cron.d/malicious"`. The id becomes a cache filename, so the next
+refresh writes attacker-controlled bytes wherever the user can write.
+
+Stopped by a charset rule on the id: ASCII letters, digits, `-`, and `_`
+only, enforced when the configuration is parsed (so a hostile file never
+produces a catalog at all) and again where the cache path is built (so a
+source arriving any other way still cannot write). `.`, `/`, and `\` are
+outside the vocabulary, so no encoding trick reaches the path builder. The
+refusal names the id and the rule.
+
+Not a hole: an *untrusted* project file contributes no catalog at all —
+FR-PERM-9 keeps it out of the merge entirely, so the attack requires the
+user to have trusted the repository, which is the normal state for one they
+cloned and chose to work in.
 
 ### The update check's answer is hostile
 

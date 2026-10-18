@@ -393,3 +393,7 @@ mod webfetch_interactive_consent;
 // attacker-chosen bytes outside `catalogs/`.
 #[path = "348-catalog-id-traversal.rs"]
 mod catalog_id_traversal;
+// GitHub #350: `read_archive` decompressed zip members with no read
+// ceiling, so a tiny archive could expand to gigabytes in RAM.
+#[path = "350-archive-read-ceiling.rs"]
+mod archive_read_ceiling;

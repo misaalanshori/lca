@@ -271,11 +271,22 @@ pub(super) async fn fetch_bytes(
         if !status.is_success() {
             return Err(Error::Fetch(format!("{url}: HTTP {status}")));
         }
+        // Gh #350: bound what one download may retain. `collect` had no
+        // ceiling, so a server streaming an endless body (or a declared
+        // multi-gigabyte archive) was retained whole. The member ceilings in
+        // `read_archive` bound the *expanded* size; this bounds the bytes
+        // that arrive before any of that runs.
         let body = http_body_util::BodyExt::collect(response.into_body())
             .await
             .map_err(|err| Error::Fetch(format!("{url}: {err}")))?
-            .to_bytes()
-            .to_vec();
-        return Ok((body, headers));
+            .to_bytes();
+        if body.len() as u64 > crate::MAX_ARCHIVE_BYTES {
+            return Err(Error::Fetch(format!(
+                "{url}: the archive is {} bytes, over the {} byte download limit - ask the packager for a smaller package",
+                body.len(),
+                crate::MAX_ARCHIVE_BYTES
+            )));
+        }
+        return Ok((body.to_vec(), headers));
     }
 }

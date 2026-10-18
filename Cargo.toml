@@ -47,6 +47,11 @@ lca-sdk = { path = "crates/lca-sdk" }
 lca-session = { path = "crates/lca-session" }
 lca-testkit = { path = "crates/lca-testkit" }
 lca-tools = { path = "crates/lca-tools" }
+# gh #350: the archive-ceiling guard builds hostile archives (a member whose
+# uncompressed size is gigabytes of zeros) to prove the read stays bounded.
+# `zip` is already in the shipped graph via lca-registry, so this adds no
+# package; it is BYO for the test's own packing.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 lca-tui = { path = "crates/lca-tui" }
 lca-ui = { path = "crates/lca-ui" }
 # gh #342/#343: the debug-log redaction and permission guards drive the

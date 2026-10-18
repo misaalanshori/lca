@@ -14,15 +14,17 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+mod archive;
 mod catalog;
 mod git;
 mod http;
 
+pub(crate) use archive::manifest_declares_resources;
+pub use archive::{pack_archive, pack_archive_with_resources, read_archive};
 pub use catalog::{
     CATALOG_FORMAT, CATALOG_TTL, CatalogEntry, CatalogSource, MergedEntry, abi_supported,
     cache_fresh, cache_path, fetch_catalog, is_valid_catalog_id, merge_catalogs, official_source,
@@ -151,6 +153,35 @@ pub const RESOURCE_FILE_MAX_BYTES: u64 = 1024 * 1024;
 /// Per-package size cap for the whole `resources/` bag (ADR-0030's
 /// suggested 32 MB). A DoS guard, shown as a manifest-declared budget.
 pub const RESOURCE_PACKAGE_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Ceiling on one archive member's **uncompressed** size (gh #350).
+///
+/// A component is code, not memory: the host caps a guest's linear memory
+/// separately (manifest `memory_mb`, clamped at 512 MiB), so this number
+/// bounds bytes on disk, not bytes the guest may allocate at run time. The
+/// largest first-party component in the tree is ~1.8 MB, so 64 MiB is
+/// generous by more than an order of magnitude while still turning a
+/// decompression bomb into a named refusal instead of an OOM.
+pub const MAX_COMPONENT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Ceiling on an `extension.toml` from an archive (gh #350). A manifest is
+/// a page of keys; 1 MiB is generous. Without a bound, the manifest read
+/// was the one member with no ceiling anywhere.
+pub const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+
+/// Ceiling on an archive's **compressed** size, i.e. what one download may
+/// retain (gh #350). Zip's compression ratio caps how far a bomb can
+/// expand, so an archive smaller than this cannot exceed the member
+/// ceilings by much; the per-member `take` bounds still do the real work.
+/// 64 MiB is the same order as one component's ceiling.
+pub const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Refuse an archive carrying more members than this (gh #350). A package
+/// is `extension.toml`, one component, and a `resources/` bag; a few
+/// hundred files is already an outlier. This bounds the name-vector
+/// allocation before any entry is opened, which is the part a bomb made of
+/// many tiny entries would otherwise multiply.
+pub const MAX_ARCHIVE_ENTRIES: usize = 1024;
 
 impl Resolved {
     /// Content-digest a component (FR-DIST-3's value).
@@ -583,181 +614,6 @@ impl InstallTree {
 }
 
 // ---------------------------------------------------------------------------
-// Archives (ADR-0010's zip: extension.toml + the component, nothing else)
-// ---------------------------------------------------------------------------
-
-/// Pack the files ADR-0010 names into a zip (authors and tests).
-pub fn pack_archive(manifest: &str, component: &[u8]) -> Result<Vec<u8>, Error> {
-    pack_archive_with_resources(manifest, component, &[])
-}
-
-/// Pack a manifest, a component, and an optional `resources/` bag
-/// (ADR-0030) into the archive `read_archive` accepts.
-pub fn pack_archive_with_resources(
-    manifest: &str,
-    component: &[u8],
-    resources: &[(String, Vec<u8>)],
-) -> Result<Vec<u8>, Error> {
-    let mut cursor = std::io::Cursor::new(Vec::new());
-    {
-        let mut writer = zip::ZipWriter::new(&mut cursor);
-        let stored = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
-        let deflated = zip::write::SimpleFileOptions::default();
-        writer
-            .start_file("extension.toml", deflated)
-            .map_err(|err| Error::Invalid(err.to_string()))?;
-        std::io::Write::write_all(&mut writer, manifest.as_bytes())?;
-        writer
-            .start_file("component.wasm", stored)
-            .map_err(|err| Error::Invalid(err.to_string()))?;
-        std::io::Write::write_all(&mut writer, component)?;
-        for (rel, bytes) in resources {
-            if !valid_archive_path(rel) {
-                return Err(Error::Invalid(format!(
-                    "resource path `{rel}` is not a safe relative path"
-                )));
-            }
-            writer
-                .start_file(format!("resources/{rel}"), deflated)
-                .map_err(|err| Error::Invalid(err.to_string()))?;
-            std::io::Write::write_all(&mut writer, bytes)?;
-        }
-        writer
-            .finish()
-            .map_err(|err| Error::Invalid(err.to_string()))?;
-    }
-    Ok(cursor.into_inner())
-}
-
-/// Unpack an archive to the pair everything downstream expects
-/// (ADR-0010: exactly these two files, verified digest downstream).
-pub fn read_archive(bytes: &[u8]) -> Result<Archive, Error> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .map_err(|err| Error::Invalid(format!("not a zip archive: {err}")))?;
-    // Names first (owned), so the per-file borrow of the archive ends
-    // before the next iteration starts.
-    let names: Vec<String> = (0..archive.len())
-        .filter_map(|index| {
-            archive
-                .by_index(index)
-                .ok()
-                .map(|file| file.name().to_string())
-        })
-        .collect();
-    let mut manifest = None;
-    let mut component = None;
-    let mut resources: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut bag_bytes = 0u64;
-    for name in names {
-        let mut file = archive
-            .by_name(&name)
-            .map_err(|err| Error::Invalid(err.to_string()))?;
-        if name == "extension.toml" {
-            if manifest.is_some() {
-                return Err(Error::Invalid(
-                    "the archive carries more than one extension.toml".to_string(),
-                ));
-            }
-            let mut text = String::new();
-            file.read_to_string(&mut text)?;
-            manifest = Some(text);
-        } else if name.ends_with(".wasm") && !name.contains('/') {
-            if component.is_some() {
-                return Err(Error::Invalid(
-                    "the archive carries more than one component".to_string(),
-                ));
-            }
-            let mut buffer = Vec::new();
-            file.read_to_end(&mut buffer)?;
-            component = Some(buffer);
-        } else if let Some(rel) = name.strip_prefix("resources/") {
-            // ADR-0030: the bag is the extension's own data, but a
-            // hostile archive is a hostile archive. Reject traversal,
-            // absolute paths, backslashes, and duplicates here, before
-            // anything is written.
-            if !valid_archive_path(rel) {
-                return Err(Error::Invalid(format!(
-                    "resource path `{name}` leaves the package"
-                )));
-            }
-            if file.is_dir() {
-                continue;
-            }
-            let mut buffer = Vec::new();
-            file.read_to_end(&mut buffer)?;
-            if buffer.len() as u64 > RESOURCE_FILE_MAX_BYTES {
-                return Err(Error::Invalid(format!(
-                    "resource `{name}` is {} bytes, over the {} byte per-file cap",
-                    buffer.len(),
-                    RESOURCE_FILE_MAX_BYTES
-                )));
-            }
-            bag_bytes += buffer.len() as u64;
-            if bag_bytes > RESOURCE_PACKAGE_MAX_BYTES {
-                return Err(Error::Invalid(format!(
-                    "the resource bag exceeds the {RESOURCE_PACKAGE_MAX_BYTES} byte package cap"
-                )));
-            }
-            if resources.iter().any(|(path, _)| path == rel) {
-                return Err(Error::Invalid(format!("duplicate resource `{name}`")));
-            }
-            resources.push((rel.to_string(), buffer));
-        } else {
-            // ADR-0010 + ADR-0030: extension.toml, the component, and
-            // `resources/**`, nothing else.
-            return Err(Error::Invalid(format!(
-                "unexpected archive entry `{name}` (the archive allows extension.toml, the component, and resources/**)"
-            )));
-        }
-    }
-    match (manifest, component) {
-        (Some(manifest), Some(component)) => Ok(Archive {
-            manifest,
-            component,
-            resources,
-        }),
-        // A data-only package (ADR-0030) declares `resources` and carries
-        // no component; the archive is valid with the bag alone.
-        (Some(manifest), None) if manifest_declares_resources(&manifest) => Ok(Archive {
-            manifest,
-            component: Vec::new(),
-            resources,
-        }),
-        _ => Err(Error::Invalid(
-            "the archive must carry extension.toml and the component".to_string(),
-        )),
-    }
-}
-
-/// Whether a manifest declares a non-empty `resources` bag (the data-only
-/// extension marker, ADR-0030).
-pub(crate) fn manifest_declares_resources(manifest: &str) -> bool {
-    manifest
-        .parse::<toml::Value>()
-        .ok()
-        .and_then(|value| {
-            value
-                .get("resources")
-                .and_then(|resources| resources.as_array())
-                .map(|kinds| !kinds.is_empty())
-        })
-        .unwrap_or(false)
-}
-
-/// Whether an archive entry's path is a safe relative resource path:
-/// no absolute root, no `..`, no backslash, no NUL, not empty.
-fn valid_archive_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.contains('\0')
-        && !path.contains('\\')
-        && !path.starts_with('/')
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
-}
-
-// ---------------------------------------------------------------------------
 // Resolvers (FR-DIST-1/5/9): OCI, HTTPS archive, local path
 // ---------------------------------------------------------------------------
 
@@ -882,6 +738,20 @@ pub fn resolve_local(component: &Path, manifest_path: Option<&Path>) -> Result<R
         component: component_bytes,
         resources,
     })
+}
+
+/// Whether an archive entry's path is a safe relative resource path:
+/// no absolute root, no `..`, no backslash, no NUL, not empty. Shared by
+/// the archive reader (gh #350's member ceiling runs on top of this) and the
+/// resource-directory reader that installs a local package.
+pub(crate) fn valid_archive_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains('\0')
+        && !path.contains('\\')
+        && !path.starts_with('/')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 /// Read a package's `resources/` directory into `(relative path, bytes)`.

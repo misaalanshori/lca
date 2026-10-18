@@ -20,6 +20,29 @@ Dates are UTC.
   line); no WIT or schema change.
 
 ### Security
+- **Two hostile-artifact surfaces in `lca-registry` (gh #348, #350).**
+  - **gh #348:** a catalog `id` from `[[extensions.catalogs]]` was joined
+    straight onto `<data>/catalogs/{id}.toml`. A *trusted* project's
+    `.lca/config.toml` carrying `id = "../../cron.d/malicious"` made the
+    next refresh write attacker-chosen bytes wherever the user can write
+    (an untrusted project file contributes no catalog at all — FR-PERM-9 —
+    so the attack needs a repo the user chose to trust). The id is now a
+    charset — ASCII letters, digits, `-`, `_` — enforced when the
+    configuration is parsed *and* again where the cache path is built, so
+    `.`/`/`/`\` are outside the vocabulary rather than blocked. Both
+    refusals name the id and the rule.
+  - **gh #350:** `read_archive` decompressed members with no read ceiling.
+    Components had no size check at all, `resources/*` was measured only
+    *after* `read_to_end` had already allocated, and `extension.toml` had
+    no bound anywhere — so a few-kilobyte archive could expand to gigabytes
+    in RAM during `lca ext install`. Every member now reads through
+    `Read::take(limit + 1)` and is refused past its limit
+    (`MAX_COMPONENT_BYTES` 64 MiB, the existing
+    `RESOURCE_FILE_MAX_BYTES` 1 MiB, `MAX_MANIFEST_BYTES` 1 MiB), the
+    member count is capped before any entry is opened, and the download
+    itself is capped. Every refusal names the member and the limit and says
+    to repackage it smaller.
+
 - **`git+` sources could smuggle git options (gh #349).** The registry's
   git resolver built `git clone --quiet <url> <dir>` and
   `git checkout --quiet <rev>` from user-supplied url/rev strings with no
