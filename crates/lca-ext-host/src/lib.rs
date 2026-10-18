@@ -249,6 +249,8 @@ impl ExtHost {
                 fs_declared: !manifest.fs.is_empty(),
                 process: manifest.process,
                 pty: manifest.pty,
+                // Gh #302: `hosts = []` is a declaration, not an absence.
+                net_declared: manifest.net_declared,
                 net: manifest.net.clone(),
                 net_local: manifest.net_local.clone(),
                 adhoc_net: Vec::new(), // Phase5's install flow attaches

@@ -38,6 +38,11 @@ pub const MANIFEST: &str = include_str!("../extension.toml");
 #[cfg(not(target_arch = "wasm32"))]
 pub fn manifest_grants() -> lca_tools::CapabilityGrants {
     lca_tools::CapabilityGrants {
+        // Gh #302: the manifest DECLARES `net` with an empty host list -
+        // every host arrives by consent or an ad hoc grant - and the
+        // engine has to know that, or the first request dies on the
+        // "never declared" gate instead of asking.
+        net_declared: true,
         net: Vec::new(),
         ..Default::default()
     }
@@ -499,7 +504,12 @@ mod native {
             headers: &[(&str, &str)],
         ) -> Result<u32, String> {
             let owned: Vec<(&str, &str)> = headers.to_vec();
-            self.net_request(method, url, &owned, None)
+            // Gh #302: a webfetch call is user/model intent - the model
+            // chose this URL, or the user asked for it - so an ungranted
+            // host asks for the ad hoc grant rather than dead-ending.
+            // Every other caller keeps the plain deny: a provider's model
+            // discovery or login probe must never pop a modal.
+            self.net_request_asking(method, url, &owned, None)
                 .map_err(|err| err.to_string())
         }
 

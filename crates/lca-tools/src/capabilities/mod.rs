@@ -80,6 +80,14 @@ pub struct CapabilityGrants {
     pub process: bool,
     /// The `pty` capability was declared.
     pub pty: bool,
+    /// The `net` (or `net-local`) capability was declared at all (gh
+    /// #302). An empty declared host list is the *normal* shape for an
+    /// extension whose hosts arrive by consent - webfetch ships
+    /// `[capabilities.net] hosts = []` on purpose - so without this flag
+    /// "declared, no hosts yet" is indistinguishable from "never
+    /// declared", and the first real request died on the wrong gate with
+    /// "no network capability declared".
+    pub net_declared: bool,
     /// `net` patterns: internet hosts, HTTPS only (ADR-0011).
     pub net: Vec<lca_permissions::NetPattern>,
     /// `net-local` patterns: local ranges, HTTP allowed (ADR-0011).

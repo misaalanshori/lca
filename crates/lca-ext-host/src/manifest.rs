@@ -23,6 +23,11 @@ pub struct Manifest {
     pub process: bool,
     /// The `pty` capability was declared (FR-PERM-1).
     pub pty: bool,
+    /// The `net` (or `net-local`) capability was declared at all (gh
+    /// #302). `hosts = []` is the shape an extension ships when its
+    /// hosts arrive by consent, so "declared with no hosts" must stay
+    /// distinguishable from "never declared".
+    pub net_declared: bool,
     /// `net` host patterns (internet, HTTPS only).
     pub net: Vec<lca_permissions::NetPattern>,
     /// `net-local` address patterns (local ranges, HTTP allowed).
@@ -125,6 +130,7 @@ impl Manifest {
         let mut pty = false;
         let mut parsed_net: Vec<lca_permissions::NetPattern> = Vec::new();
         let mut parsed_net_local: Vec<lca_permissions::LocalPattern> = Vec::new();
+        let mut net_declared = false;
         let mut parsed_oauth: Option<OAuthSettings> = None;
         let mut parsed_credentials = false;
         let mut parsed_completion = false;
@@ -181,6 +187,8 @@ impl Manifest {
                 reason_of(cap, "capabilities.tools")?;
                 tools = true;
             }
+            // Gh #302: an empty `hosts` list is still a declaration.
+            net_declared = table.contains_key("net") || table.contains_key("net-local");
             let mut net = Vec::new();
             if let Some(cap) = table.get("net") {
                 let hosts = cap.get("hosts").and_then(|v| v.as_array()).ok_or_else(|| {
@@ -333,6 +341,7 @@ impl Manifest {
             fs,
             process,
             pty,
+            net_declared,
             net: parsed_net,
             net_local: parsed_net_local,
             oauth: parsed_oauth,

@@ -120,6 +120,37 @@ fn call_json(json: &str) -> ToolCall {
     }
 }
 
+// Verifies: gh #302 - `hosts = []` is a declaration. A manifest that
+// declares `net` with nothing pre-granted (webfetch's shipped shape: every
+// host arrives by consent) must stay distinguishable from one that never
+// declared `net` at all, or the engine's first request dies on the
+// "never declared" gate instead of offering consent.
+#[test]
+fn an_empty_net_host_list_still_counts_as_declared() {
+    let declared =
+        Manifest::parse(&manifest_with("\n[capabilities.net]\nhosts = []\n")).expect("parses");
+    assert!(
+        declared.net_declared,
+        "an empty hosts list is still a declaration"
+    );
+    assert!(declared.net.is_empty(), "and grants no host by itself");
+
+    let net_local_only = Manifest::parse(&manifest_with(
+        "\n[capabilities.net-local]\naddresses = [\"localhost\"]\n",
+    ))
+    .expect("parses");
+    assert!(
+        net_local_only.net_declared,
+        "net-local is the same capability family"
+    );
+
+    let undeclared = Manifest::parse(&manifest_with("")).expect("parses");
+    assert!(
+        !undeclared.net_declared,
+        "no net table means never declared"
+    );
+}
+
 // Verifies: FR-PERM-1 (the manifest declares every capability the
 // extension needs; the host parses that declaration into grants).
 #[test]

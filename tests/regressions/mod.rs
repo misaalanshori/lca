@@ -383,3 +383,8 @@ mod memory_pin_freezes_empty_snapshot;
 // for one provider was stored in another's credential namespace.
 #[path = "265-login-option-provider-scoping.rs"]
 mod login_option_provider_scoping;
+// GitHub #302 (0.6.x half): an extension's own `net` request had no
+// interactive consent path - webfetch's `hosts = []` died on the
+// declaration gate, and the deny below it never offered the ad hoc grant.
+#[path = "302-webfetch-interactive-consent.rs"]
+mod webfetch_interactive_consent;

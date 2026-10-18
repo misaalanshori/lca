@@ -47,6 +47,9 @@ lca-sdk = { path = "crates/lca-sdk" }
 lca-session = { path = "crates/lca-session" }
 lca-testkit = { path = "crates/lca-testkit" }
 lca-tools = { path = "crates/lca-tools" }
+# gh #302: the webfetch tool's own grants/fetch path, so the regression row
+# drives the tool the model calls rather than a bare net_request.
+webfetch = { path = "extensions/webfetch" }
 lca-tui = { path = "crates/lca-tui" }
 lca-ui = { path = "crates/lca-ui" }
 # gh #342/#343: the debug-log redaction and permission guards drive the

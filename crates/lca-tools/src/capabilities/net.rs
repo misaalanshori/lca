@@ -20,10 +20,59 @@ impl Capabilities {
         headers: &[(&str, &str)],
         body: Option<&[u8]>,
     ) -> Result<u32, CapabilityError> {
-        let has_any = !self.grants.net.is_empty()
-            || !self.grants.net_local.is_empty()
-            || !self.live_adhoc_net().is_empty();
-        if !has_any {
+        self.net_request_once(method, url, headers, body, false)
+    }
+
+    /// [`Self::net_request`] for a **user-initiated** call: where a prompt
+    /// is reachable, an ungranted host is offered as an ad hoc `net` grant
+    /// (gh #302, FR-PERM-16) instead of failing outright, and an approval
+    /// re-runs the dispatch once.
+    ///
+    /// This is deliberately *not* what `net_request` does. Most network
+    /// calls inside this host are not the user's intent - `discover_models`
+    /// probes an endpoint and falls back to a curated list on any error,
+    /// and a provider's login flow has its own consent already. Turning
+    /// every one of those into a modal would ask the same question twice
+    /// (the second time from a background thread, with no user action
+    /// behind it) and would leave a spinner behind a modal nobody expected.
+    /// So the ask is a property of the *call*, not of the capability: the
+    /// tool path that the model or the user deliberately invoked opts in
+    /// here, and everything else keeps the plain deny. The deny remains the
+    /// enforcement backstop either way - an approval is what lets the
+    /// request out, never the absence of a prompt.
+    pub fn net_request_asking(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Option<&[u8]>,
+    ) -> Result<u32, CapabilityError> {
+        // One consent round per request: an approval re-runs the whole
+        // dispatch, so a refusal consent cannot fix (a port pin, a
+        // rebinding address) still ends in the honest denial instead of
+        // looping.
+        self.net_request_once(method, url, headers, body, true)
+    }
+
+    /// [`Self::net_request`] with the consent budget made explicit: the
+    /// retry after an approval passes `false` and can only ever deny.
+    fn net_request_once(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Option<&[u8]>,
+        may_ask: bool,
+    ) -> Result<u32, CapabilityError> {
+        // Gh #302: "declared with no hosts" is the consent-first shape
+        // (webfetch ships exactly that), so declaration is the gate here,
+        // not a non-empty host list. A sandbox that never declared `net`
+        // or `net-local` still gets the flat NotGranted refusal.
+        if !self.grants.net_declared
+            && self.grants.net.is_empty()
+            && self.grants.net_local.is_empty()
+            && self.live_adhoc_net().is_empty()
+        {
             return Err(self.refused(
                 "net",
                 url,
@@ -148,6 +197,12 @@ impl Capabilities {
             {
                 return self.http_exchange(method, url, headers, body);
             }
+            // Gh #302: consent covers an ungranted local target too -
+            // it is the same "nothing covers this" case as tier 1's tail,
+            // reached by a different route.
+            if may_ask && self.consent_to_host(&host, port) {
+                return self.net_request_once(method, url, headers, body, false);
+            }
             return Err(self.refused(
                 capability,
                 url,
@@ -183,11 +238,75 @@ impl Capabilities {
                 )),
             ));
         }
+        // Gh #302: nothing covers this host. Where a prompt is reachable
+        // this is where the user gets to attach it (FR-PERM-16) instead of
+        // reading a dead end; headless and deny-rule paths answer "no" and
+        // fall through to exactly the refusal above.
+        if may_ask && self.consent_to_host(&host, port) {
+            return self.net_request_once(method, url, headers, body, false);
+        }
         Err(self.refused(
             capability,
             url,
             CapabilityError::Permission(format!("{host}:{port} matches no granted pattern")),
         ))
+    }
+
+    /// Ask for one host's consent through the permission layer's own
+    /// `net` action (gh #302): the same modal, grant store, deny-rule
+    /// precedence, yolo answer and session-pattern semantics every other
+    /// approval uses, so this builds no second prompt path.
+    ///
+    /// Returns whether the host is now granted. `false` covers a decline,
+    /// an unreachable prompt (headless answers denied), a deny rule, and
+    /// a store failure - each of which leaves the caller on the refusal
+    /// path with its own honest message.
+    fn consent_to_host(&self, host: &str, port: u16) -> bool {
+        let action = Action::Net {
+            host: self.consent_pattern(host, port),
+        };
+        let decision = {
+            let mut store = lock(&self.store);
+            let mut prompt = lock(&self.prompt);
+            authorize(
+                &mut store,
+                &self.project,
+                &action,
+                self.proposals.as_ref(),
+                &mut *prompt,
+                None,
+            )
+        };
+        match decision {
+            Ok(outcome) => outcome.allowed,
+            Err(err) => {
+                // A store that cannot persist must not silently become a
+                // grant: refuse and let the caller report the denial.
+                // No tracing dependency in this crate: the refusal the
+                // caller reports carries the store failure's own text.
+                let _ = &err;
+                false
+            }
+        }
+    }
+
+    /// The ad hoc pattern that will actually cover this request
+    /// (ADR-0022's vocabulary): the bare host only when the default
+    /// 443 path applies, otherwise `host:port`. A local name needs no
+    /// port because the ad hoc local branch in the tier-1 rule matches
+    /// on the host alone (FR-PERM-16's literal-address shape).
+    fn consent_pattern(&self, host: &str, port: u16) -> String {
+        let local_named = host
+            .parse::<IpAddr>()
+            .map(is_local_address)
+            .unwrap_or(false)
+            || host == "localhost"
+            || host.ends_with(".local");
+        if local_named || port == 443 {
+            host.to_string()
+        } else {
+            format!("{host}:{port}")
+        }
     }
 
     /// Execute the HTTP exchange and park the buffered response in the

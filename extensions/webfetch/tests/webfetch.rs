@@ -174,6 +174,13 @@ fn manifest_grants_match_the_manifest() {
     let grants = webfetch::manifest_grants();
     assert!(grants.net.is_empty(), "no pre-granted hosts");
     assert!(manifest.contains("hosts = []"), "{manifest}");
+    // Gh #302: `hosts = []` is a declaration, not an absence. Without
+    // this the engine cannot tell "declared, all hosts by consent" from
+    // "never declared", and the first fetch dies on the wrong gate.
+    assert!(
+        grants.net_declared,
+        "an empty hosts list still declares net"
+    );
 }
 
 // Verifies: conversion edge cases — entities decode, nested blocks
