@@ -342,11 +342,19 @@ fn mcp_payload(body: &str, sse: bool, plain: bool) -> String {
                 .pointer("/params/uri")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "hello, remote"}]},
-            })
+            if uri == "mock://bytes" {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {"contents": [{"uri": uri, "mimeType": "application/octet-stream", "blob": "YmluYXJ5LWJ5dGVz"}]},
+                })
+            } else {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "hello, remote"}]},
+                })
+            }
         }
         _ if request.get("id").is_some() => serde_json::json!({
             "jsonrpc": "2.0",
@@ -424,20 +432,26 @@ impl lca_permissions::PermissionPrompt for Always {
 /// A real capability engine pointed at the mock: workspace `fs` for
 /// the scope, the ad hoc loopback grant for `net`, the loopback OAuth
 /// flow, and the credentials namespace.
-pub fn sandbox(
+pub fn sandbox(name: &str, grants: lca_tools::CapabilityGrants) -> Arc<lca_tools::Capabilities> {
+    sandbox_with_temp(name, grants).0
+}
+
+/// A real capability engine and its session temp root, pointed at the mock.
+pub fn sandbox_with_temp(
     name: &str,
     mut grants: lca_tools::CapabilityGrants,
-) -> Arc<lca_tools::Capabilities> {
+) -> (Arc<lca_tools::Capabilities>, std::path::PathBuf) {
     let root = lca_testkit::scratch_path(&format!("lca-mcp-{name}"));
     let _ = std::fs::remove_dir_all(&root);
-    for dir in ["project", "private", "config", "data", "tmp"] {
+    for dir in ["project", "private", "config", "data/tmp/session"] {
         std::fs::create_dir_all(root.join(dir)).expect("mkdir");
     }
+    let temp = root.join("data/tmp/session");
     let roots = ScopeRoots {
         workspace: root.join("project"),
         private: root.join("private"),
         home_config: root.join("config"),
-        temp: root.join("tmp"),
+        temp: temp.clone(),
         state_dir: root.join("data"),
     };
     grants
@@ -448,17 +462,20 @@ pub fn sandbox(
         timeout_seconds: 30,
     });
     grants.credentials = true;
-    Arc::new(lca_tools::Capabilities::new(
-        "mcp",
-        grants,
-        roots,
-        Arc::new(Mutex::new(Always)),
-        Arc::new(Mutex::new(
-            GrantStore::open(&root.join("grants.json")).expect("store"),
+    (
+        Arc::new(lca_tools::Capabilities::new(
+            "mcp",
+            grants,
+            roots,
+            Arc::new(Mutex::new(Always)),
+            Arc::new(Mutex::new(
+                GrantStore::open(&root.join("grants.json")).expect("store"),
+            )),
+            root.join("project"),
+            None,
         )),
-        root.join("project"),
-        None,
-    ))
+        temp,
+    )
 }
 
 /// One remote server pointed at the mock.

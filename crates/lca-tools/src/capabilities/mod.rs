@@ -28,6 +28,7 @@ use lca_protocol::CapabilityError;
 use tower_service::Service;
 
 mod errors;
+mod fs;
 mod net;
 #[cfg(test)]
 mod pinned_tests;

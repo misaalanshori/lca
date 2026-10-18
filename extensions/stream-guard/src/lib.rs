@@ -12,7 +12,7 @@
 //! scope (active only when the project is trusted), and `rules.toml`
 //! under the `private` scope (`<data>/private/stream-guard/`). The
 //! issue's literal `~/.lca/...` global path sits inside the agent
-//! state directory, which every non-`private` scope refuses —
+//! state directory, which scopes cannot reach outside their own roots —
 //! `private` is the vocabulary-legal equivalent, as in project-memory.
 //!
 //! Matching uses the `regex` crate, which guarantees linear-time

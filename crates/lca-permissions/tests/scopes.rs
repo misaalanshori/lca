@@ -1,6 +1,6 @@
 //! Filesystem scope resolution (ADR-0005, `docs/capabilities.md` `fs`):
 //! named vocabulary, mode enforcement, traversal and symlink refusal, and
-//! the state-directory exclusion that keeps credential isolation true.
+//! the state-directory exclusion with its confined scope exceptions.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use lca_permissions::{FsMode, ScopeGrant, ScopeRoots, ScopeViolationKind};
@@ -209,6 +209,54 @@ fn private_resolves_under_the_state_dir_and_home_config_still_cannot_reach_it() 
             .resolve(&home_grant, "home-config", "other-tool.toml", false)
             .is_ok(),
         "another tool's config still resolves"
+    );
+}
+
+// The production temp root lives under `<data>/tmp/<session>` and is
+// intentionally usable without exposing sibling state directories.
+#[test]
+fn temp_resolves_under_the_state_dir_but_stays_inside_its_session_root() {
+    let root = lca_testkit::scratch_path("lca-scope-temp-prod");
+    let _ = std::fs::remove_dir_all(&root);
+    let data = root.join(".lca");
+    let temp = data.join("tmp/session-a");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&temp).expect("mkdir temp");
+    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+    std::fs::create_dir_all(data.join("credentials")).expect("mkdir credentials");
+    let roots = ScopeRoots {
+        workspace,
+        private: data.join("private/mcp"),
+        home_config: root.join("config"),
+        temp: temp.clone(),
+        state_dir: data.clone(),
+    };
+    let temp_grant = vec![ScopeGrant::parse("temp", FsMode::ReadWrite).expect("grant")];
+
+    let resolved = roots
+        .resolve(&temp_grant, "temp", "resource.bin", true)
+        .expect("the session temp root is allowed inside state");
+    assert!(resolved.starts_with(std::fs::canonicalize(&temp).expect("canonical temp")));
+
+    let escaped = roots
+        .resolve(&temp_grant, "temp", "../../credentials/token", false)
+        .expect_err("the temp scope cannot reach sibling state");
+    assert!(
+        matches!(escaped.kind, ScopeViolationKind::Escape),
+        "{escaped:?}"
+    );
+
+    let workspace_grant = vec![ScopeGrant::parse("workspace", FsMode::Read).expect("grant")];
+    let inside_state = ScopeRoots {
+        workspace: data.clone(),
+        ..roots
+    };
+    let refused = inside_state
+        .resolve(&workspace_grant, "workspace", "credentials/token", false)
+        .expect_err("ordinary scopes still cannot access state");
+    assert!(
+        matches!(refused.kind, ScopeViolationKind::StateDirectory),
+        "{refused:?}"
     );
 }
 

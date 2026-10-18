@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{mock_server, sandbox};
+use common::{mock_server, sandbox, sandbox_with_temp};
 use mcp::config::{EntryKind, McpExposure, ServerEntry, ServerSource};
 
 fn fixture() -> String {
@@ -67,7 +67,7 @@ fn stdio_resources_list_and_read() {
         eprintln!("skip: python3 is not installed");
         return;
     }
-    let caps = sandbox("resources-stdio", mcp::manifest_grants());
+    let (caps, temp_root) = sandbox_with_temp("resources-stdio", mcp::manifest_grants());
     let bridge = mcp::McpBridge::connect_managed(caps, vec![stdio_entry(McpExposure::Direct)]);
     let names: Vec<String> = bridge
         .tool_specs()
@@ -97,15 +97,33 @@ fn stdio_resources_list_and_read() {
     )
     .expect("read");
     assert_eq!(read.content, "hello, resource");
-    // Binary content stages to a file whose path the model receives.
+    // Binary content stages into the session temp scope at a path the model receives.
     let staged = call(
         &bridge,
         mcp::READ_RESOURCE_TOOL,
         r#"{"server":"echo","uri":"echo://bytes"}"#,
     )
     .expect("read bytes");
-    let bytes = std::fs::read(staged.content.trim()).expect("staged file reads");
+    let staged_path = std::path::PathBuf::from(staged.content.trim());
+    let temp = std::fs::canonicalize(temp_root).expect("canonical session temp");
+    assert!(
+        staged_path.starts_with(&temp),
+        "{staged_path:?} not in {temp:?}"
+    );
+    let bytes = std::fs::read(&staged_path).expect("staged file reads");
     assert_eq!(bytes, b"binary-bytes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(staged_path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o077,
+            0
+        );
+    }
 }
 
 // Verifies: gh #53 - the same trio over HTTP, plus the widest rule:
@@ -113,7 +131,7 @@ fn stdio_resources_list_and_read() {
 #[test]
 fn http_resources_list_and_read_deferred() {
     let mock = mock_server();
-    let caps = sandbox("resources-http", mcp::manifest_grants());
+    let (caps, temp_root) = sandbox_with_temp("resources-http", mcp::manifest_grants());
     let entry = ServerEntry {
         name: "remote".to_string(),
         kind: EntryKind::Http {
@@ -144,6 +162,20 @@ fn http_resources_list_and_read_deferred() {
     )
     .expect("read");
     assert_eq!(read.content, "hello, remote");
+
+    let staged = call(
+        &bridge,
+        mcp::READ_RESOURCE_TOOL,
+        r#"{"server":"remote","uri":"mock://bytes"}"#,
+    )
+    .expect("read binary resource");
+    let staged_path = std::path::PathBuf::from(staged.content.trim());
+    let temp = std::fs::canonicalize(temp_root).expect("canonical session temp");
+    assert!(staged_path.starts_with(temp), "{staged_path:?}");
+    assert_eq!(
+        std::fs::read(staged_path).expect("staged file reads"),
+        b"binary-bytes"
+    );
 }
 
 // Verifies: gh #53 - a hidden server serves nothing: neither its

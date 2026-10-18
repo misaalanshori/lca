@@ -237,6 +237,12 @@ Stopped by resolution through preopened directory handles. The host never joins 
 
 Symbolic links created after the grant need explicit tests. That is where this class of bug lives.
 
+### A local user plants a link at an MCP resource staging path
+
+The MCP bridge stages non-image binary resource bytes in a shared temporary directory using predictable names.
+
+Stopped by writing through the `temp` filesystem scope in the active session. The scope is confined to its own root even though that root sits under the agent's state directory. Session temp directories are owner-only on Unix, resource filenames include a cryptographically random nonce, and files are created exclusively with owner-only permissions. An existing symlink or file is never replaced, and the session cleanup removes staged resources at exit. Receipt: `tests/regressions/344-mcp-binary-resources-use-private-session-temp.rs`, `lca-tools/tests/scoped_write.rs`, and `mcp/tests/resources.rs`.
+
 ## Residual risks
 
 These are accepted, not solved. Each needs a decision if it becomes real.
@@ -339,8 +345,8 @@ are the review's to make, not something this list can pre-answer.
   `tests/scopes.rs` - `parent_traversal_out_of_a_scope_is_refused`,
   `a_symlink_created_after_the_grant_is_refused` (unix: Windows
   symlink creation needs elevation, recorded in the phase log),
-  `absolute_paths_are_refused`, and the state directory refused under
-  every scope.
+  `absolute_paths_are_refused`, and
+  `temp_resolves_under_the_state_dir_but_stays_inside_its_session_root`.
 - **Credential namespace isolation has no bypass, including through
   fs with every scope granted.** Receipt: `lca-tools`
   `tests/network.rs` `credentials_are_namespace_isolated_with_owner_

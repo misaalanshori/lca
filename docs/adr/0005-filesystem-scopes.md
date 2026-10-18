@@ -51,3 +51,7 @@ The ad hoc grant, mentioned above as the pressure valve beyond the fixed vocabul
 ## Revisit conditions
 
 Three or more real extensions needing a scope the vocabulary does not have, which would argue for a new name rather than a new model. Evidence that users routinely add ad hoc path grants, which would mean the vocabulary is wrong.
+
+## Annotation 2026-10-18 (gh #344)
+
+The session temp directory is stored under `<data>/tmp/<session>`, inside the state tree. The state-directory exclusion therefore permits the `temp` scope to resolve only within its own root, alongside the existing `private` exception. Other state paths remain refused, including sibling sessions, extension files, and credentials. This makes the declared per-session temp scope usable without granting access to the surrounding state tree.

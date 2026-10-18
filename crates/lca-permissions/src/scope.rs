@@ -121,7 +121,8 @@ pub struct ScopeRoots {
     /// A per-session temporary directory.
     pub temp: PathBuf,
     /// The agent's own state directory: sessions, extension tree,
-    /// credential store. Refused under every scope.
+    /// credential store. Only the declared private and temp roots resolve
+    /// inside it; all other paths are refused.
     pub state_dir: PathBuf,
 }
 
@@ -141,8 +142,8 @@ impl ScopeRoots {
     /// `write` requests a write; a `read` grant refuses it. The resolution
     /// is canonical as far as the deepest existing ancestor, so parent
     /// traversal and symlinks (including one created after the grant) are
-    /// caught before anything opens (FR-PERM-12), and the state directory
-    /// is refused under every scope.
+    /// caught before anything opens (FR-PERM-12). The agent state tree is
+    /// refused except for each granted `private` or `temp` scope's own root.
     pub fn resolve(
         &self,
         grants: &[ScopeGrant],
@@ -176,14 +177,11 @@ impl ScopeRoots {
         let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         let canonical_state =
             std::fs::canonicalize(&self.state_dir).unwrap_or_else(|_| self.state_dir.clone());
-        // The state-directory exclusion protects the sessions, the extension
-        // tree, and the credential store from every scope and every ad hoc
-        // grant. The `private` scope is the one sanctioned exception: its own
-        // root lives under the state directory (`<data>/private/<name>`) and
-        // is confined by the `starts_with(root)` check below, so it cannot
-        // reach those subtrees. Excluding all of the state directory made
-        // `private` unusable (ADR-0005 / capability catalog's `fs` table).
-        if scope != "private" && resolved.starts_with(&canonical_state) {
+        // The state-directory exclusion protects sessions, the extension
+        // tree, and credentials. `private` and `temp` are sanctioned
+        // exceptions because their roots live under state; the root check
+        // below confines each to its own subtree.
+        if scope != "private" && scope != "temp" && resolved.starts_with(&canonical_state) {
             return Err(violation(ScopeViolationKind::StateDirectory));
         }
         if !resolved.starts_with(&canonical_root) {

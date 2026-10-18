@@ -337,6 +337,28 @@ fn two_sessions_resolve_distinct_existing_dirs() {
     assert_ne!(first, second);
     assert!(first.is_dir() && second.is_dir());
     assert!(first.starts_with(base.join("tmp")));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&first)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "session temp is private to its owner"
+        );
+        assert_eq!(
+            std::fs::metadata(base.join("tmp"))
+                .expect("temp root metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "session names are private to their owner"
+        );
+    }
     let _ = std::fs::remove_dir_all(&base);
 }
 

@@ -370,6 +370,10 @@ mod partial_usage_merge;
 // server notification desynchronized the stream permanently.
 #[path = "291-mcp-stdio-notification-desync.rs"]
 mod mcp_stdio_notification_desync;
+// GitHub #344: binary resources used predictable shared /tmp paths instead
+// of the active session's scoped temp directory.
+#[path = "344-mcp-binary-resources-use-private-session-temp.rs"]
+mod mcp_binary_resources_use_private_session_temp;
 // GitHub #299: a mid-session skill match injected a System-role message,
 // which every provider builder hoists into the vendor's root system prompt
 // — a KV-cache bust in both directions.

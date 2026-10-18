@@ -34,8 +34,24 @@ pub fn load_user_keybindings(
 /// no session (extension install, pre-session login) pass the system
 /// temp dir explicitly instead.
 pub fn ensure_session_temp(data_dir: &Path, session_id: &str) -> std::io::Result<PathBuf> {
-    let path = data_dir.join("tmp").join(session_id);
-    std::fs::create_dir_all(&path)?;
+    let root = data_dir.join("tmp");
+    let path = root.join(session_id);
+    for dir in [&root, &path] {
+        std::fs::create_dir_all(dir)?;
+        if !std::fs::symlink_metadata(dir)?.file_type().is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "session temp path is not a directory",
+            ));
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for dir in [&root, &path] {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
     Ok(path)
 }
 
@@ -94,6 +110,20 @@ pub fn config_file() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_temp_guard_removes_staged_files_on_drop() {
+        let data =
+            std::env::temp_dir().join(format!("lca-session-temp-cleanup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let temp = ensure_session_temp(&data, "session-a").expect("session temp");
+        std::fs::write(temp.join("mcp-resource.bin"), b"resource").expect("staged file");
+
+        drop(SessionTempGuard(temp.clone()));
+
+        assert!(!temp.exists(), "session cleanup removes staged resources");
+        let _ = std::fs::remove_dir_all(data);
+    }
 
     // Verifies: gh #66 - a missing key file is silent defaults; a broken
     // one is a loud string for the startup notice.

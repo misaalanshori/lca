@@ -94,9 +94,11 @@ Import interface: `lca:host/fs`. Open, read, write, list, and stat functions tak
 
 Modes are `read` or `read-write`. A scope absent from the manifest is absent from the grant. Each scope resolves to the per-platform path listed in `docs/platform-notes.md`.
 
-Resolution goes through preopened directory handles. The host never joins a guest string onto a base path. A path that leaves its scope through a parent traversal or a symbolic link is refused, including when the link is created after the grant. A path that enters the agent's own state directory, where sessions, the extension tree, and the credential store live, is refused the same way, under every scope and every ad hoc grant.
+Resolution refuses paths that leave their scope through a parent traversal or a symbolic link, including when the link is created after the grant. The state-directory exclusion protects sessions, the extension tree, and credentials. Its only exceptions are the extension's own `private` root and the active session's `temp` root; each remains confined to its own scope, and no other path in the agent's state is reachable through these scopes or an ad hoc grant.
 
-Consent text names the scope in plain words: "Read files in this project. Read and write its own private data directory. Read your configuration directory."
+Consent text names the scope in plain words: "Read files in this project. Read and write its own private data directory. Read your configuration directory. Read and write temporary files for this session."
+
+The MCP bridge declares `temp = "read-write"` so it can stage non-image binary resources for the model. It creates each file exclusively in the active session's temp directory; on Unix, the directory is owner-only (`0700`) and staged files have no group or other permissions (at most `0600`). The CLI removes the directory when the session ends.
 
 Scope grants are unchanged by the sensitive-read escalation (gh #215):
 that escalation lives in the model tool-call permission path, where
@@ -121,7 +123,7 @@ Import interface: `lca:host/credentials`. Get, set, and delete functions taking 
 
 The store prefers the platform keychain where one exists and falls back to a file with owner-only permissions. The extension cannot tell which backend is in use and cannot choose.
 
-Values never enter the session log, never appear in a session export, and are not readable through any other capability. The `fs` capability cannot reach the credential file even with `home-config` granted, because the store lives in the agent's own state directory, which the host excludes from every `fs` resolution.
+Values never enter the session log, never appear in a session export, and are not readable through any other capability. The `fs` capability cannot reach the credential file even with `home-config`, `private`, or `temp` granted, because it is outside those scopes' own roots and the host excludes the rest of the agent's state directory.
 
 Manifest validation rejects a namespace that does not match the extension name. There is no cross-namespace read at any privilege level.
 

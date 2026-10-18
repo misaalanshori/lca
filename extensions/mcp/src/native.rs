@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use crate::{ServerConfig, qualify_tools};
 
 /// The grants the manifest declares: `process` to spawn the servers,
-/// `fs` (workspace, read) for the scope they run in. A test keeps them
-/// in step with `extension.toml`.
+/// workspace read for server working directories, and session-temp write
+/// for binary resource staging. A test keeps them in step with `extension.toml`.
 #[allow(clippy::expect_used)] // the extension's own literal manifest patterns are valid by construction.
 pub fn manifest_grants() -> lca_tools::CapabilityGrants {
     lca_tools::CapabilityGrants {
@@ -17,6 +17,8 @@ pub fn manifest_grants() -> lca_tools::CapabilityGrants {
         fs: vec![
             lca_permissions::ScopeGrant::parse("workspace", lca_permissions::FsMode::Read)
                 .expect("workspace read grant parses"),
+            lca_permissions::ScopeGrant::parse("temp", lca_permissions::FsMode::ReadWrite)
+                .expect("session temp write grant parses"),
         ],
         fs_declared: true,
         ..Default::default()
@@ -189,23 +191,21 @@ fn resource_row(server: &str, resource: &crate::McpResource) -> serde_json::Valu
 }
 
 /// Map read contents to one result: text stays text, images ride
-/// the image lane, other bytes land in a file whose path the model
-/// receives (pi's rule).
+/// the image lane, and other bytes are exclusively created in the
+/// session's scoped temp directory.
 fn read_result(
     call_id: &str,
-    server: &str,
+    caps: &lca_tools::Capabilities,
     contents: Vec<crate::ResourceContent>,
 ) -> Result<lca_protocol::ToolResult, String> {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut text = String::new();
     let mut images = Vec::new();
     for content in contents {
         match content {
             crate::ResourceContent::Text { text: part, .. } => text.push_str(&part),
             crate::ResourceContent::Blob {
-                uri,
-                mime_type,
-                bytes,
+                mime_type, bytes, ..
             } => {
                 let image = mime_type
                     .as_deref()
@@ -217,24 +217,17 @@ fn read_result(
                     });
                     continue;
                 }
-                let dir = std::env::temp_dir().join("lca-mcp-resources");
-                std::fs::create_dir_all(&dir)
-                    .map_err(|err| format!("cannot stage the resource: {err}"))?;
-                let leaf = uri.rsplit('/').next().unwrap_or("resource");
-                let safe: String = leaf
-                    .chars()
-                    .map(|c| {
-                        if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
-                            c
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect();
-                let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let path = dir.join(format!("{server}-{id}-{safe}"));
-                std::fs::write(&path, &bytes)
-                    .map_err(|err| format!("cannot stage the resource: {err}"))?;
+                let mut nonce = [0u8; 16];
+                getrandom::fill(&mut nonce)
+                    .map_err(|err| format!("cannot generate a private resource name: {err}"))?;
+                let mut suffix = String::with_capacity(nonce.len() * 2);
+                for byte in nonce {
+                    suffix.push(HEX[(byte >> 4) as usize] as char);
+                    suffix.push(HEX[(byte & 0x0f) as usize] as char);
+                }
+                let path = caps
+                    .fs_write_new("temp", &format!("mcp-resource-{suffix}.bin"), &bytes)
+                    .map_err(|err| format!("cannot stage the resource in session temp: {err}"))?;
                 text.push_str(&path.to_string_lossy());
             }
         }
@@ -312,6 +305,7 @@ impl ManagedServer {
 /// keeps one handle and later turns see the new table with no
 /// re-registration.
 pub struct McpBridge {
+    caps: Arc<lca_tools::Capabilities>,
     servers: Mutex<Vec<ManagedServer>>,
 }
 
@@ -486,6 +480,7 @@ impl McpBridge {
             }
         }
         McpBridge {
+            caps,
             servers: Mutex::new(servers),
         }
     }
@@ -711,7 +706,7 @@ impl McpBridge {
                 let contents = live
                     .resource_read(&uri)
                     .map_err(lca_protocol::DispatchError::Failed)?;
-                read_result(&call.call_id, &server, contents).map_err(failed)
+                read_result(&call.call_id, &self.caps, contents).map_err(failed)
             }
             _ => Err(failed(format!("unknown MCP tool {:?}", call.name))),
         }
