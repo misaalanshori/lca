@@ -178,12 +178,23 @@ impl ScopeRoots {
             std::fs::canonicalize(&self.state_dir).unwrap_or_else(|_| self.state_dir.clone());
         // The state-directory exclusion protects the sessions, the extension
         // tree, and the credential store from every scope and every ad hoc
-        // grant. The `private` scope is the one sanctioned exception: its own
-        // root lives under the state directory (`<data>/private/<name>`) and
-        // is confined by the `starts_with(root)` check below, so it cannot
-        // reach those subtrees. Excluding all of the state directory made
-        // `private` unusable (ADR-0005 / capability catalog's `fs` table).
-        if scope != "private" && resolved.starts_with(&canonical_state) {
+        // grant. Two scopes are sanctioned exceptions because their own roots
+        // live under the state directory and are confined by the
+        // `starts_with(root)` check below, so they cannot reach those
+        // subtrees:
+        //
+        // - `private` is `<data>/private/<name>` (ADR-0005). Excluding all of
+        //   the state directory made it unusable.
+        // - `temp` is `<data>/tmp/<session>` (FR-SESS-8 puts temp under the
+        //   data home, and the capability catalog documents it as "a
+        //   per-session temporary directory, removed at exit"). Excluding the
+        //   state directory made it unusable in the same way - and because the
+        //   scope tests used sibling `tmp`/`data` roots, nothing caught it
+        //   until gh #344 tried to stage through it.
+        //
+        // Everything else still cannot reach the agent's own tree through a
+        // mis-set root: the root check below is what contains these two.
+        if scope != "private" && scope != "temp" && resolved.starts_with(&canonical_state) {
             return Err(violation(ScopeViolationKind::StateDirectory));
         }
         if !resolved.starts_with(&canonical_root) {

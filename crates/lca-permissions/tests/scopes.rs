@@ -151,6 +151,67 @@ fn the_state_directory_is_refused_under_every_scope() {
     );
 }
 
+// The production layout for `temp`: `<data>/tmp/<session>` is UNDER the state
+// directory (FR-SESS-8 puts temp under the data home), so the state-directory
+// exclusion refused every `temp` resolution - the documented "per-session
+// temporary directory, removed at exit" was unusable, and gh #344 could not
+// stage a byte through it.
+//
+// This is the same fixture drift the audit found for `private` (the comment
+// above): the shared fixtures used sibling `tmp`/`data` roots, so `temp`
+// never met the exclusion. This row uses the production shape and fails on
+// the old code with `StateDirectory`.
+#[test]
+fn temp_resolves_under_the_state_dir_on_the_production_layout() {
+    let root = lca_testkit::scratch_path("lca-scope-temp-prod");
+    let _ = std::fs::remove_dir_all(&root);
+    let data = root.join("data");
+    let temp = data.join("tmp").join("session-1");
+    let workspace = root.join("ws");
+    for dir in [
+        &temp,
+        &workspace,
+        &data.join("sessions"),
+        &data.join("private"),
+    ] {
+        std::fs::create_dir_all(dir).expect("mkdir");
+    }
+    let roots = ScopeRoots {
+        workspace,
+        private: data.join("private"),
+        home_config: root.join("config"),
+        temp: temp.clone(),
+        state_dir: data.clone(),
+    };
+    let grant = vec![ScopeGrant::parse("temp", FsMode::ReadWrite).expect("grant")];
+
+    // A plain write inside the session's own temp directory resolves.
+    let resolved = roots
+        .resolve(&grant, "temp", "resource.bin", true)
+        .expect("temp must resolve on the production layout");
+    let canonical_temp = std::fs::canonicalize(&temp).expect("canonical temp");
+    assert!(resolved.starts_with(&canonical_temp), "{resolved:?}");
+
+    // The exception is not a hole: traversal out of the temp root still
+    // escapes, and the state directory's own subtrees stay unreachable
+    // through the scope because the root check confines it.
+    let escape = roots
+        .resolve(&grant, "temp", "../../sessions/x", true)
+        .expect_err("traversal out of temp is still refused");
+    assert!(
+        matches!(escape.kind, ScopeViolationKind::Escape),
+        "{escape:?}"
+    );
+    let lateral = roots
+        .resolve(&grant, "temp", "../../credentials/x.json", true)
+        .expect_err("the credential store is still unreachable");
+    assert!(
+        matches!(lateral.kind, ScopeViolationKind::Escape),
+        "{lateral:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // The production layout: `private` lives under the state directory and must
 // resolve (the one sanctioned exception), while the macOS/Windows overlap
 // where home-config contains the state directory still refuses the agent's
