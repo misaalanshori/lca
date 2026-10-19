@@ -273,6 +273,25 @@ pub fn purge_tokens(cap: &dyn ProviderCap) {
     }
 }
 
+/// Whether a refresh rejection means the grant itself is dead
+/// (gh #315): RFC 6749 §5.2's `invalid_grant`.
+///
+/// Read from the parsed `error` FIELD, never from the body text: the
+/// description of an unrelated failure can contain the same words, and
+/// signing a user out over a server-side error is worse than the error.
+/// An unparseable body is not a verdict either - the conservative
+/// direction is one more failed call, not a forced re-login.
+fn refresh_grant_is_dead(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|json| {
+            json.get("error")
+                .and_then(|error| error.as_str())
+                .map(str::to_string)
+        })
+        .is_some_and(|error| error == "invalid_grant")
+}
+
 /// The access token, refreshed first when it is within a minute of
 /// expiry and a refresh token exists (FR-PROV-5). A rejected refresh
 /// purges, so the next call re-authenticates instead of looping.
@@ -306,8 +325,26 @@ pub fn access_token(cap: &dyn ProviderCap, spec: &OAuthSpec) -> Result<String, I
         ],
     )?;
     if !(200..300).contains(&status) {
-        if status == 401 {
+        // Gh #315: an expired or revoked refresh token is RFC 6749
+        // §5.2's **400 `invalid_grant`**, not a 401 - the transport
+        // authenticated fine and the request was well formed; the grant
+        // itself is dead. Purging only on 401 left the dead token in
+        // place, so every later turn retried it, got the same 400, and
+        // the user was trapped in a refresh loop whose only exit was
+        // knowing that `/logout` exists.
+        //
+        // The verdict reads the parsed `error` field, never a substring
+        // of the body: a server-side error that merely mentions the
+        // words must not sign the user out. Every other 4xx keeps the
+        // credentials, because a wrong client id or a malformed request
+        // says nothing about whether the token is still good, and a
+        // spurious purge costs the user a full re-login.
+        if status == 401 || (status == 400 && refresh_grant_is_dead(&text)) {
             purge_tokens(cap);
+            return Err(IdentityFailure(format!(
+                "the {} session has expired or was revoked; run /login {} to sign in again",
+                spec.name, spec.name
+            )));
         }
         return Err(IdentityFailure(format!(
             "token refresh failed: {}",

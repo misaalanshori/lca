@@ -405,6 +405,9 @@ mod mcp_resource_staging_private;
 // split across TCP chunks.
 #[path = "337-sse-utf8-chunk-boundary.rs"]
 mod sse_utf8_chunk_boundary;
+// GitHub #315: a 400 `invalid_grant` refresh left dead tokens in place.
+#[path = "315-refresh-invalid-grant-purges.rs"]
+mod refresh_invalid_grant_purges;
 // GitHub #272: `KNOWN_KEYS` / `resolved()` drifted from the config
 // vocabulary - a dead environment override and seven unreported settings.
 #[path = "272-config-key-vocabulary.rs"]
