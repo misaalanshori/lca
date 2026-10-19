@@ -37,6 +37,13 @@ capabilities cannot serve (streaming transports beyond stdio pipes …)" and "on
 such case scopes a new capability". Two fired. The answer turned out not to be a
 new capability but a different home.
 
+pi's own layout is the corroboration. `packages/mcp/` declares no dependency on
+the agent package at all — its only runtime dependency is `cross-spawn` — and
+splits into `protocol/`, `transports/`, `oauth/`, and `auth-provider.ts` beneath
+a `client.ts`. The protocol adapter sits below the agent on both sides; LCA's
+error was putting it in the extension tree, which is a *sibling* layer, and then
+letting the host import it directly.
+
 ## Decision
 
 MCP becomes `crates/lca-mcp`, a first-class internal subsystem: a build-time
