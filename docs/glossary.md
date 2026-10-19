@@ -98,7 +98,7 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **Session.** One durable, append-only conversation record on disk, with its own log, its own metadata, and its own identity, forkable and resumable. See `docs/session-log-format.md`.
 
-**Stable prefix.** The leading portion of a resolved message list, up to and including the most recent compaction, that a provider's prompt cache can reuse across turns unchanged. The host computes this boundary and passes it to the active provider extension on every completion call. See ADR-0017.
+**Stable prefix.** The leading portion of a resolved message list that a provider's prompt cache can reuse across turns unchanged. It is anchored at the most recent compaction and then grows between compaction records (gh #275): everything durably sent through this turn's user message, further bounded by the divergence check when content inside it changed. The host computes this boundary and passes it to the active provider extension on every completion call. See ADR-0017.
 
 **State (bag).** An extension's own mutable, non-secret data, served by `lca:host/state` from `<state_dir>/state/<name>/`: caches, last-used values, counters. Keyed by the extension's own identity so a cross-namespace read has no address; size-capped; wiped on uninstall. Not secret-grade - secrets go in `credentials`. Not session state and not the `stable prefix`/`dynamic suffix` sense of "state" used elsewhere. See ADR-0030.
 

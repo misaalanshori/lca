@@ -340,6 +340,8 @@ FR-CACHE-4. WHERE a provider has never reported cache activity within a scan, th
 
 FR-CACHE-5. The agent SHALL pass the current stable-prefix boundary, computed from the most recent compaction record, to the active provider extension on every completion call.
 
+Annotation, 2026-10-19 (gh #275): the boundary **grows between** compaction records. The compaction record anchors the durable view; the claimable prefix then advances turn by turn to everything previously sent through this turn's user message, bounded by FR-CACHE-6's divergence check against what the previous request actually carried. Before this, the computation froze `stable_prefix` at the compaction summary forever after any compaction, so the whole live conversation was permanently un-cacheable; "computed from the most recent compaction record" names the anchor, not a clamp at it.
+
 FR-CACHE-6. IF the post-transform content within the stable-prefix boundary differs from what was sent to the provider on the previous turn, THEN the agent SHALL narrow the boundary reported for that turn to end before the earliest differing message and SHALL record the divergence as an extension event rather than rejecting the turn.
 
 Annotation, 2026-10-14 (gh #217): mid-session instruction edits append unified diffs as trailing system messages (past the boundary, OpenCode's `renderUpdate` shape), so `messages[0]` stays byte-identical and the boundary advances instead of collapsing. Deltas cap at 16 KiB; the full text replaces the diff when shorter.

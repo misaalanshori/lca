@@ -46,6 +46,20 @@ Every provider profile under `docs/providers/` that talks to a real hosted vendo
 
 **Annotation (2026-10-17, gh #299): "appended" is not the same as "trailing on the wire".** This record's guarantee is about the leading prefix, and it assumed that a transform or a turn-boundary append could not disturb it because appending is not editing. That assumption is only true if the appended message survives as a message. Every provider builder in this tree joins `role == System` messages into the vendor's top-level `system` / `systemInstruction` — the message does not exist on the wire at all, so a *trailing* system message is in fact a mutation of the ROOT prompt. Two producers did exactly that: skills injection (`extensions/skills`, the host-side merge in `lca-tools`) and gh #217's instruction deltas (`lca-core/src/instructions.rs`). Each match appended a system message, so the root grew on the turn a skill matched and shrank again on the next turn that matched nothing: two full cache busts, and the narrow-and-record behavior above never fired because the leading messages were untouched. Both now send a `User`-role message carrying a `[skill instructions]` / `[instructions changed]` wrapper, which stays in the conversational stream. The general rule this record should be read with: a transform may only append *conversational* messages; anything appended with `System` role is a root mutation in effect. `tests/pi-parity/cache.rs` and `tests/regressions/299-skill-injection-preserves-root-system.rs` pin it.
 
+**Annotation (2026-10-19, gh #275): the boundary grows between compaction
+records.** The decision above says the host "already knows exactly where the
+stable region ends, since that is the same boundary compaction's own durable
+record marks" — true as an anchor, wrong as a clamp. The implementation froze
+the reported boundary at the compaction summary for every turn after any
+compaction, so the live conversation was permanently un-cacheable. The
+derivation is now what this record's own measurement half assumes: the claim
+advances turn by turn to everything durably sent through the current turn's
+user message (per-turn injections appended after it are ephemeral under
+FR-CTX-4 and are never claimed or recorded as sent), and FR-CACHE-6's
+cross-turn divergence check bounds it against what the previous request
+carried. The narrow-and-record behavior, the hint's advisory nature, and
+everything else in this record are unchanged.
+
 ## Revisit conditions
 
 A provider whose caching model doesn't fit the leading-prefix shape this design assumes, which would need its own boundary representation rather than a single leaf-count. Evidence that the narrow-and-record behavior for a transform touching the stable region is too permissive in practice, which would argue for tightening it, though not for returning to outright rejection without first trying a stronger warning.
