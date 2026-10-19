@@ -149,6 +149,60 @@ pub fn without_verbatim(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// [`spawn_direct`] with extra environment variables.
+///
+/// The variables are **overlaid** on the inherited environment, never
+/// substituted for it: a child that lost `PATH` could not run anything, so
+/// "set these" has to mean "in addition to what I already have" (pi's rule,
+/// `stdio.ts`: `{ ...process.env, ...this.options.env }`). gh #418 Phase
+/// C#C1 needs this for an MCP server's `env` block.
+pub fn spawn_direct_with_env(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &std::collections::BTreeMap<String, String>,
+) -> std::io::Result<TreeChild> {
+    if !cwd.is_dir() {
+        return Err(std::io::Error::other(format!(
+            "working directory does not exist: {}",
+            cwd.display()
+        )));
+    }
+    let cwd = without_verbatim(cwd);
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args)
+        .envs(env)
+        .current_dir(&cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Own process group so a kill reaches the whole tree.
+        cmd.process_group(0);
+    }
+
+    let child = cmd.spawn()?;
+    #[cfg(unix)]
+    let tree = Tree::Group { pgid: child.id() };
+    #[cfg(windows)]
+    let tree = match crate::ops::windows_job::Job::attach(child.id()) {
+        Some(job) => Tree::Job(job),
+        None => {
+            // No job: killing the tree falls back to the child only; the
+            // platform notes name this as the Windows orphan risk, so fail
+            // loud instead of shipping a tree that cannot be killed.
+            let _ = child.kill();
+            return Err(std::io::Error::other(
+                "cannot assign the child to a Job Object",
+            ));
+        }
+    };
+    Ok(TreeChild { child, tree })
+}
+
 /// Spawn `program` with an explicit argv in `cwd`, no shell, pipes for
 /// stdio, and a tree identity that dies together (FR-TOOL-5's process
 /// semantics without the shell layer).

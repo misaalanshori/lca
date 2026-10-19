@@ -700,6 +700,102 @@ fn writes_outside_the_workspace_still_prompt_in_ask_mode() {
     assert_eq!(prompt.asked.len(), 1);
 }
 
+// Verifies: gh #418 Phase C#C5 (gh #303) - the *slot* forwards hints to
+// whatever prompt is installed. `SharedPrompt` is the object every engine
+// actually holds, and its `ask_annotated` used to be the default trait body
+// (which drops the hints and calls `ask`), so a hinted action reached the
+// real prompt as a bare one. The decision is unchanged either way: hints
+// are hints, never a bypass.
+#[test]
+fn the_shared_prompt_slot_forwards_hints_to_the_installed_prompt() {
+    use lca_protocol::ToolAnnotations;
+    /// Records the annotated surface it was shown; always allows, so the
+    /// decision row below can prove hints change nothing.
+    struct Recording {
+        surfaces: Vec<String>,
+    }
+    impl PermissionPrompt for Recording {
+        fn ask(&mut self, action: &Action) -> Decision {
+            self.surfaces.push(format!("plain:{}", action.display()));
+            Decision::Always
+        }
+        fn ask_annotated(
+            &mut self,
+            action: &Action,
+            annotations: Option<&ToolAnnotations>,
+        ) -> Decision {
+            self.surfaces.push(format!(
+                "annotated:{}",
+                action.display_annotated(annotations)
+            ));
+            Decision::Always
+        }
+        fn review_proposals(&mut self, _diff: &ProposalDiff) -> bool {
+            true
+        }
+    }
+    let hints = ToolAnnotations {
+        read_only_hint: Some(true),
+        destructive_hint: Some(false),
+        ..Default::default()
+    };
+    // A write outside the workspace, so the prompt is genuinely asked
+    // instead of the action being allowed by a workspace rule.
+    let action = Action::WritePath {
+        path: PathBuf::from("/etc/lca-c5-hosts"),
+    };
+    // One run with a fresh store, so a stored "always" from the first run
+    // cannot skip the second run's prompt.
+    let run = |tag: &str, with_hints: bool| -> (Vec<String>, bool) {
+        let root = scratch(&format!("shared-prompt-hints-{tag}"));
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let mut store = GrantStore::open(&root.join("grants.json")).expect("open");
+        let slot = lca_permissions::SharedPrompt::default();
+        let recorder = std::sync::Arc::new(std::sync::Mutex::new(Recording {
+            surfaces: Vec::new(),
+        }));
+        slot.set(recorder.clone());
+        let mut via_slot = slot.clone();
+        let outcome = lca_permissions::authorize(
+            &mut store,
+            &project,
+            &action,
+            None,
+            &mut via_slot,
+            with_hints.then_some(&hints),
+        )
+        .expect("authorize");
+        let surfaces = recorder.lock().expect("lock").surfaces.clone();
+        (surfaces, outcome.allowed())
+    };
+
+    let (hinted, hinted_allowed) = run("hinted", true);
+    assert!(
+        hinted
+            .iter()
+            .any(|surface| surface.starts_with("annotated:") && surface.contains("read-only")),
+        "the slot forwards hints instead of dropping them: {hinted:?}"
+    );
+    assert!(
+        !hinted.iter().any(|surface| surface.starts_with("plain:")),
+        "the slot must not fall back to the bare ask: {hinted:?}"
+    );
+
+    // A hint is not a bypass (ADR-0045): the same action decides the same
+    // way without them.
+    let (bare, bare_allowed) = run("bare", false);
+    assert_eq!(
+        bare,
+        vec![format!("annotated:{}", action.display())],
+        "without hints the surface is the action's plain display"
+    );
+    assert_eq!(
+        bare_allowed, hinted_allowed,
+        "hints never change the decision"
+    );
+}
+
 // Verifies: #78 (PG-026) - tool hints render on the prompt surface and
 // reach it through `authorize`, while decisions ignore them entirely:
 // the same action decides identically with or without hints (a hint is

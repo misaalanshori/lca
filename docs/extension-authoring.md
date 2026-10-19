@@ -248,6 +248,8 @@ and skipped, never blocking the rest.
     "echo": {
       "command": "python3",
       "args": ["echo-server.py"],
+      "env": { "API_TOKEN": "${ECHO_TOKEN}" },
+      "cwd": "./servers",
       "exposure": "direct",
       "description": "Echo."
     },
@@ -261,11 +263,23 @@ and skipped, never blocking the rest.
 ```
 
 `${NAME}` expands from the process environment in commands, args,
-headers, and secrets. `!command` values are refused (executing
-config content is a trust hole), `env` waits for the 0.7
-process-env seam (entries carrying it skip loudly), the legacy SSE
-transport is rejected, and `cwd` names an `fs` scope (default
-`workspace`).
+`env` values, headers, and secrets. `!command` values are refused
+(executing config content is a trust hole) and the legacy SSE
+transport is rejected.
+
+A stdio server's `env` **overlays** the inherited environment: the
+child keeps `PATH`, `HOME`, and everything else, and the listed
+variables are added on top (pi's rule). A server whose `env`
+replaced the environment could not run anything, so "set these"
+always means "in addition to".
+
+`cwd` is a **directory path**, not a scope name: a leading `~`
+expands to your home, and a relative path resolves against the
+session working directory. It is resolved through the `workspace`
+scope, so `..` and absolute paths cannot aim a server outside it;
+no `cwd` means the session working directory. A server that dies
+during the handshake reports the last 2 KB of its own stderr, so
+`/mcp` can say why it exited.
 
 ### Managing servers
 

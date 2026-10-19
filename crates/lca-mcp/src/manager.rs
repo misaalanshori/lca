@@ -269,7 +269,10 @@ impl McpManager {
             Exposure::Deferred => "deferred",
             Exposure::Hidden => "hidden",
         };
-        format!("`{target}` exposure: {level}")
+        // gh #418 Phase C#C4 (gh #267): name the server, not the raw
+        // argument - `exposure echo direct` used to reply with the whole
+        // `echo direct` string in backticks.
+        format!("`{name}` exposure: {level}")
     }
 
     /// Persist one entry's knobs: the defining file, or a fresh

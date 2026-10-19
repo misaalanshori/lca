@@ -99,7 +99,8 @@ fn noisy_entry(name: &str) -> ServerEntry {
         kind: EntryKind::Stdio {
             command: "python3".to_string(),
             args: vec![fixture("noisy-mcp-server.py")],
-            cwd_scope: "workspace".to_string(),
+            cwd: None,
+            env: std::collections::BTreeMap::new(),
         },
         enabled: true,
         exposure: McpExposure::Direct,

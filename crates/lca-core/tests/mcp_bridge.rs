@@ -89,7 +89,8 @@ async fn an_echo_turn_round_trips_through_the_bridge() {
             name: "echo".to_string(),
             command: "python3".to_string(),
             args: vec![fixture.to_string_lossy().into_owned()],
-            cwd_scope: "workspace".to_string(),
+            cwd: None,
+            env: std::collections::BTreeMap::new(),
         }],
     )
     .expect("the fixture server connects");
@@ -195,7 +196,8 @@ fn deferred_mcp_tools_surface_through_tool_search() {
         kind: lca_mcp::config::EntryKind::Stdio {
             command: "python3".to_string(),
             args: vec![fixture.to_string_lossy().into_owned()],
-            cwd_scope: "workspace".to_string(),
+            cwd: None,
+            env: std::collections::BTreeMap::new(),
         },
         enabled: true,
         exposure: lca_mcp::config::McpExposure::Deferred,

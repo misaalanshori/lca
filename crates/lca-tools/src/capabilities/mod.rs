@@ -680,10 +680,40 @@ impl Capabilities {
         args: &[String],
         cwd_scope: &str,
     ) -> Result<u32, CapabilityError> {
+        self.process_spawn_in(
+            program,
+            args,
+            cwd_scope,
+            None,
+            &std::collections::BTreeMap::new(),
+        )
+    }
+
+    /// [`Capabilities::process_spawn`] with a directory *path* inside a
+    /// scope and extra environment variables.
+    ///
+    /// `cwd` is resolved through the named scope, so `..`, an absolute path,
+    /// and a symlink are refused exactly as any other guest path is - a
+    /// config file naming `"cwd": "../../etc"` cannot aim the child outside
+    /// the workspace (gh #418 Phase C#C1). `None` means the scope's own root.
+    /// `env` is overlaid on the inherited environment, never substituted for
+    /// it.
+    pub fn process_spawn_in(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd_scope: &str,
+        cwd: Option<&str>,
+        env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<u32, CapabilityError> {
         if !self.grants.process {
             return Err(self.undeclared("process"));
         }
-        let dir = self.scope_dir(cwd_scope).inspect_err(|err| {
+        let dir = match cwd.filter(|cwd| !cwd.is_empty()) {
+            Some(cwd) => self.resolve(cwd_scope, cwd, false),
+            None => self.scope_dir(cwd_scope),
+        }
+        .inspect_err(|err| {
             self.record(
                 "process",
                 &format!("{program} (in {cwd_scope})"),
@@ -724,11 +754,12 @@ impl Capabilities {
                 ));
             }
         }
-        let child = crate::process::spawn_direct(program, args, &dir).map_err(|err| {
-            let err = CapabilityError::from(err);
-            self.record("process", &display, &err.to_string());
-            err
-        })?;
+        let child =
+            crate::process::spawn_direct_with_env(program, args, &dir, env).map_err(|err| {
+                let err = CapabilityError::from(err);
+                self.record("process", &display, &err.to_string());
+                err
+            })?;
         let mut table = lock(&self.handles);
         let id = table.next;
         table.next += 1;

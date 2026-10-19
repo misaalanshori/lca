@@ -42,7 +42,8 @@ fn stdio_entry(exposure: McpExposure) -> ServerEntry {
         kind: EntryKind::Stdio {
             command: "python3".to_string(),
             args: vec![fixture()],
-            cwd_scope: "workspace".to_string(),
+            cwd: None,
+            env: std::collections::BTreeMap::new(),
         },
         enabled: true,
         exposure,

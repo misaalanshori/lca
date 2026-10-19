@@ -58,6 +58,19 @@ pub fn select_response(
             Classified::Answer(Reply::Error(error)) => return Err(error),
         }
     }
+    // gh #336: a JSON-RPC error carrying `"id": null` is the server's
+    // answer to *the* request it could not associate with an id -
+    // exactly this one, since the envelope holds only our round. Without
+    // this scan the server's own explanation ("Parse error", "Internal
+    // error", overloaded) was dropped and the call read as a vanished
+    // response, which is the least actionable thing to report.
+    if let Some(error) = messages
+        .iter()
+        .find(|message| message.get("id").is_some_and(serde_json::Value::is_null))
+        .and_then(|message| message.get("error"))
+    {
+        return Err(format!("MCP server errored: {error}"));
+    }
     Err(format!(
         "MCP server answered without our response (id {id})"
     ))
@@ -227,6 +240,42 @@ mod tests {
         assert!(select_response(&messages, 8).is_err());
         let errors = parse_sse_messages("data: {\"id\":9,\"error\":{\"code\":1}}\n\n");
         assert!(select_response(&errors, 9).is_err());
+    }
+
+    // Verifies: gh #418 Phase C#C3 (gh #336) - a server that answers a
+    // JSON-RPC error with `"id": null` (the shape a transport-level
+    // failure takes: parse errors, overloaded, internal) surfaces that
+    // error, instead of reading as "no response at all". The null-id
+    // error is round-scoped, so it may only answer the request the
+    // envelope was collected for - a later request must not inherit it.
+    #[test]
+    fn a_null_id_error_answers_instead_of_missing_the_response() {
+        let envelope = parse_sse_messages(
+            "data: {\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Parse error\"}}\n\n",
+        );
+        let err = select_response(&envelope, 4).expect_err("the error is the answer");
+        assert!(err.contains("MCP server errored"), "{err}");
+        assert!(err.contains("Parse error"), "{err}");
+        assert!(err.contains("-32700"), "{err}");
+
+        // Our own id still wins over a null-id error in the same envelope.
+        let mixed = parse_sse_messages(
+            "data: {\"id\":null,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}\n\ndata: {\"id\":5,\"result\":{\"ok\":true}}\n\n",
+        );
+        assert_eq!(
+            select_response(&mixed, 5).expect("our result"),
+            serde_json::json!({"ok": true})
+        );
+
+        // A null-id *notification-shaped* message is not an answer.
+        let notification = parse_sse_messages(
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\"}\n\n",
+        );
+        assert!(select_response(&notification, 6).is_err());
+
+        // A foreign numeric id is still a desync, not a null-id answer.
+        let foreign = parse_sse_messages("data: {\"id\":99,\"result\":{}}\n\n");
+        assert!(select_response(&foreign, 6).is_err());
     }
 
     // Verifies: gh #53 - the blob decoder round-trips (padding

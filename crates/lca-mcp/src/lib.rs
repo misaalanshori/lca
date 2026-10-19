@@ -33,10 +33,16 @@ pub mod config;
 pub mod manager;
 pub mod native;
 pub mod remote;
+pub mod resources;
 pub mod wire;
 pub use manager::McpManager;
 pub use native::{McpBridge, ServerStateKind, ServerStatus, manifest_grants};
 pub use remote::{TokenStore, refresh, sign_in};
+pub use resources::{
+    LIST_RESOURCES_TOOL, LIST_TEMPLATES_TOOL, McpResource, McpResourceTemplate, READ_RESOURCE_TOOL,
+    ResourceContent, contents_from_read, resource_tool_specs, resources_from_list,
+    templates_from_list, widest_resource_exposure,
+};
 
 use std::collections::BTreeMap;
 
@@ -50,8 +56,14 @@ pub struct ServerConfig {
     /// Its arguments.
     #[serde(default)]
     pub args: Vec<String>,
-    /// The `fs` scope the server runs in (pi's `cwd`).
-    pub cwd_scope: String,
+    /// The directory the child runs in, relative to the session cwd
+    /// (pi's `cwd`); `None` means the session cwd itself.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Environment variables overlaid on the inherited environment
+    /// (pi's `env`).
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 /// One remote server to bridge (pi's `mcpServers` entry, HTTP subset).
@@ -255,9 +267,44 @@ pub fn sanitize(text: &str) -> String {
         .collect()
 }
 
+/// pi's namespace for one server: `mcp__<server>` with `-` folded to
+/// `_`. Two server names that normalize to the same namespace would share
+/// one tool prefix, so `config` refuses the second at load.
+pub fn mcp_namespace(server: &str) -> String {
+    format!("mcp__{}", sanitize(server))
+}
+
+/// pi's `MAX_TOOL_NAME_LENGTH`.
+pub const MAX_TOOL_NAME_LENGTH: usize = 64;
+
 /// pi's tool name: `mcp__<server>__<tool>`.
 pub fn tool_name(server: &str, tool: &str) -> String {
     format!("mcp__{}__{}", sanitize(server), sanitize(tool))
+}
+
+/// pi's `createMcpToolName`: `mcp__<server>__<tool>`, and when that runs
+/// past [`MAX_TOOL_NAME_LENGTH`] or the caller says the name is already
+/// claimed, cut it to fit and append `_<sha256(server \0 tool)[..8]>`.
+///
+/// The suffix is a hash of the *unmodified* pair, so it is
+/// order-independent: which of two colliding tools keeps a plain name
+/// never depends on the order the server listed them (pi's comment: "like
+/// Codex, all tools whose names sanitize to the same name get the hash
+/// suffix"). `is_taken` is how the caller reports an earlier claim;
+/// `qualify_tools` passes a set membership test.
+pub fn create_tool_name(server: &str, tool: &str, is_taken: impl Fn(&str) -> bool) -> String {
+    let plain = tool_name(server, tool);
+    if plain.len() <= MAX_TOOL_NAME_LENGTH && !is_taken(&plain) {
+        return plain;
+    }
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(format!("{server}\0{tool}").as_bytes());
+    let hash: String = digest
+        .iter()
+        .take(4)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let keep = MAX_TOOL_NAME_LENGTH - hash.len() - 1;
+    format!("{}_{hash}", &plain[..plain.len().min(keep)])
 }
 
 /// One tool the server listed, before namespacing.
@@ -277,262 +324,78 @@ pub struct ServerTool {
 
 /// Qualify one server's tools: pi names, per-tool exposure from the
 /// server default plus its `toolExposure` rules, one namespace per
-/// server. `hidden` tools are excluded (registered but unreachable).
-/// A sanitized collision refuses the server (pi's hash suffix is a
-/// later-phase nicety, ADR-0045).
+/// server. `hidden` tools are excluded (registered but unreachable). A
+/// sanitized collision or an overlong name takes pi's `_<hash8>` suffix
+/// (gh #418 Phase C#C2), so both tools stay callable.
 pub fn qualify_tools(
     server: &str,
     tools: Vec<ServerTool>,
     default: config::McpExposure,
     rules: &[(String, config::McpExposure)],
 ) -> Result<Vec<lca_protocol::ToolSpec>, String> {
-    let mut seen = BTreeMap::new();
-    let mut specs = Vec::with_capacity(tools.len());
-    for tool in tools {
-        if let Some(first) = seen.insert(tool.qualified.clone(), tool.name.clone()) {
-            return Err(format!(
-                "MCP server {server:?} lists tools {first:?} and {:?} under one name {:?}",
-                tool.name, tool.qualified
-            ));
-        }
+    Ok(qualified_pairs(server, tools, default, rules)?
+        .into_iter()
+        .map(|(_, spec)| spec)
+        .collect())
+}
+
+/// [`qualify_tools`], keeping each spec paired with the **server's own**
+/// spelling of the tool.
+///
+/// The pair is what a caller building call routing needs: the model calls
+/// the assigned name (possibly `_<hash8>`-suffixed), and `tools/call` must
+/// send the server the name it listed (gh #418 Phase C#C2).
+pub fn qualified_pairs(
+    server: &str,
+    tools: Vec<ServerTool>,
+    default: config::McpExposure,
+    rules: &[(String, config::McpExposure)],
+) -> Result<Vec<(String, lca_protocol::ToolSpec)>, String> {
+    // gh #418 Phase C#C2: two passes, because whether a name needs the
+    // hash suffix depends on the whole set. Pass one counts the plain
+    // names so a duplicated one makes *every* claimant suffixed (pi's
+    // order-independent rule); pass two assigns.
+    let mut plain_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for tool in &tools {
+        *plain_counts
+            .entry(tool_name(server, &tool.name))
+            .or_default() += 1;
+    }
+    let mut taken: BTreeMap<String, String> = BTreeMap::new();
+    let mut names: Vec<String> = Vec::with_capacity(tools.len());
+    for tool in &tools {
+        let duplicated = plain_counts
+            .get(&tool_name(server, &tool.name))
+            .is_some_and(|count| *count > 1);
+        let name = create_tool_name(server, &tool.name, |candidate| {
+            duplicated || taken.contains_key(candidate)
+        });
+        taken.insert(name.clone(), tool.name.clone());
+        names.push(name);
+    }
+    let mut specs: Vec<(String, lca_protocol::ToolSpec)> = Vec::with_capacity(tools.len());
+    for (tool, name) in tools.into_iter().zip(names) {
         let exposure = config::exposure_for(default, rules, &tool.name);
         if exposure == config::McpExposure::Hidden {
             continue;
         }
-        specs.push(lca_protocol::ToolSpec {
-            name: tool.qualified.clone(),
+        let spec = lca_protocol::ToolSpec {
+            name: name.clone(),
             description: tool.description,
             parameters: tool.parameters,
             exposure: exposure.as_tool_exposure(),
             namespace: Some(lca_protocol::ToolNamespace {
-                name: format!("mcp__{}", sanitize(server)),
+                name: mcp_namespace(server),
                 description: format!("Tools from MCP server `{server}`."),
                 instructions: None,
             }),
             annotations: Some(tool.annotations),
             extras: BTreeMap::new(),
-        });
-    }
-    specs.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(specs)
-}
-
-/// One listed resource (pi's `list_mcp_resources` row).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpResource {
-    /// The address `read_mcp_resource` reads.
-    pub uri: String,
-    /// The display name.
-    pub name: String,
-    /// The longer title, when listed.
-    pub title: Option<String>,
-    /// One line about it, when listed.
-    pub description: Option<String>,
-    /// The content type, when listed.
-    pub mime_type: Option<String>,
-}
-
-/// One listed URI template.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpResourceTemplate {
-    /// The template (`echo://{name}`).
-    pub uri_template: String,
-    /// The display name.
-    pub name: String,
-    /// The longer title, when listed.
-    pub title: Option<String>,
-    /// One line about it, when listed.
-    pub description: Option<String>,
-    /// The content type, when listed.
-    pub mime_type: Option<String>,
-}
-
-/// One read resource content.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResourceContent {
-    /// Text (or text-like) content.
-    Text {
-        /// Where it was read from.
-        uri: String,
-        /// The listed type, when sent.
-        mime_type: Option<String>,
-        /// The text itself.
-        text: String,
-    },
-    /// Binary content (base64 on the wire, bytes here).
-    Blob {
-        /// Where it was read from.
-        uri: String,
-        /// The listed type, when sent.
-        mime_type: Option<String>,
-        /// The decoded bytes.
-        bytes: Vec<u8>,
-    },
-}
-
-/// Map one `resources/list` result to resources plus the next cursor.
-pub fn resources_from_list(result: &serde_json::Value) -> (Vec<McpResource>, Option<String>) {
-    let empty = Vec::new();
-    let listed = result
-        .get("resources")
-        .and_then(|resources| resources.as_array())
-        .unwrap_or(&empty);
-    let text = |entry: &serde_json::Value, key: &str| {
-        entry
-            .get(key)
-            .and_then(|value| value.as_str())
-            .map(str::to_string)
-    };
-    let resources = listed
-        .iter()
-        .filter_map(|entry| {
-            Some(McpResource {
-                uri: text(entry, "uri")?,
-                name: text(entry, "name").unwrap_or_default(),
-                title: text(entry, "title"),
-                description: text(entry, "description"),
-                mime_type: text(entry, "mimeType"),
-            })
-        })
-        .collect();
-    let cursor = result
-        .get("nextCursor")
-        .and_then(|cursor| cursor.as_str())
-        .map(str::to_string);
-    (resources, cursor)
-}
-
-/// Map one `resources/templates/list` result to templates (a server
-/// without the method answers method-not-found; the sessions turn
-/// that into an empty list, pi's `withoutTemplates`).
-pub fn templates_from_list(result: &serde_json::Value) -> Vec<McpResourceTemplate> {
-    let empty = Vec::new();
-    let listed = result
-        .get("resourceTemplates")
-        .and_then(|templates| templates.as_array())
-        .unwrap_or(&empty);
-    let text = |entry: &serde_json::Value, key: &str| {
-        entry
-            .get(key)
-            .and_then(|value| value.as_str())
-            .map(str::to_string)
-    };
-    listed
-        .iter()
-        .filter_map(|entry| {
-            Some(McpResourceTemplate {
-                uri_template: text(entry, "uriTemplate")?,
-                name: text(entry, "name").unwrap_or_default(),
-                title: text(entry, "title"),
-                description: text(entry, "description"),
-                mime_type: text(entry, "mimeType"),
-            })
-        })
-        .collect()
-}
-
-/// Map one `resources/read` result to contents.
-pub fn contents_from_read(result: &serde_json::Value) -> Result<Vec<ResourceContent>, String> {
-    let empty = Vec::new();
-    let listed = result
-        .get("contents")
-        .and_then(|contents| contents.as_array())
-        .unwrap_or(&empty);
-    let mut out = Vec::with_capacity(listed.len());
-    for entry in listed {
-        let uri = entry
-            .get("uri")
-            .and_then(|uri| uri.as_str())
-            .unwrap_or("")
-            .to_string();
-        let mime_type = entry
-            .get("mimeType")
-            .and_then(|mime| mime.as_str())
-            .map(str::to_string);
-        if let Some(text) = entry.get("text").and_then(|text| text.as_str()) {
-            out.push(ResourceContent::Text {
-                uri,
-                mime_type,
-                text: text.to_string(),
-            });
-        } else if let Some(blob) = entry.get("blob").and_then(|blob| blob.as_str()) {
-            out.push(ResourceContent::Blob {
-                uri,
-                mime_type,
-                bytes: crate::wire::base64_decode(blob)?,
-            });
-        } else {
-            return Err("the server sent unreadable resource content".to_string());
-        }
-    }
-    Ok(out)
-}
-
-/// The bridge's resource tools (pi's names): they reach every
-/// connected, non-hidden server that offers resources.
-pub const LIST_RESOURCES_TOOL: &str = "list_mcp_resources";
-/// The bridge's template lister.
-pub const LIST_TEMPLATES_TOOL: &str = "list_mcp_resource_templates";
-/// The bridge's resource reader.
-pub const READ_RESOURCE_TOOL: &str = "read_mcp_resource";
-
-/// The three resource tools at one exposure.
-pub fn resource_tool_specs(exposure: lca_protocol::ToolExposure) -> Vec<lca_protocol::ToolSpec> {
-    let spec =
-        |name: &str, description: &str, parameters: serde_json::Value| lca_protocol::ToolSpec {
-            name: name.to_string(),
-            description: description.to_string(),
-            parameters,
-            exposure,
-            namespace: None,
-            annotations: None,
-            extras: BTreeMap::new(),
         };
-    vec![
-        spec(
-            LIST_RESOURCES_TOOL,
-            "List MCP resources as JSON. With `server`, one page (`cursor` continues); without, the first page of every server.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "server": {"type": "string"},
-                    "cursor": {"type": "string"},
-                },
-            }),
-        ),
-        spec(
-            LIST_TEMPLATES_TOOL,
-            "List MCP resource URI templates. With `server`, one server's; without, every server's.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {"server": {"type": "string"}},
-            }),
-        ),
-        spec(
-            READ_RESOURCE_TOOL,
-            "Read one MCP resource by `server` and `uri`. Text arrives as text, images as images, other bytes as a file path.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "server": {"type": "string"},
-                    "uri": {"type": "string"},
-                },
-                "required": ["server", "uri"],
-            }),
-        ),
-    ]
-}
-
-/// The widest exposure among resource-serving servers (pi's rule:
-/// `direct`, then `codemode` or `deferred`). `None` registers no
-/// resource tools.
-pub fn widest_resource_exposure(
-    exposures: &[lca_protocol::ToolExposure],
-) -> Option<lca_protocol::ToolExposure> {
-    use lca_protocol::ToolExposure as Exposure;
-    [Exposure::Direct, Exposure::Codemode, Exposure::Deferred]
-        .into_iter()
-        .find(|level| exposures.contains(level))
+        specs.push((tool.name, spec));
+    }
+    specs.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+    Ok(specs)
 }
 
 /// What a `tools/call` returned.
@@ -815,10 +678,7 @@ mod tests {
         assert!(is_valid_server_name("my-server_2"));
         assert!(!is_valid_server_name("has space"));
         assert!(!is_valid_server_name(""));
-        assert!(
-            parse_servers(r#"[{"name":"bad name","command":"x","cwd_scope":"workspace"}]"#)
-                .is_err()
-        );
+        assert!(parse_servers(r#"[{"name":"bad name","command":"x"}]"#).is_err());
     }
 
     // Verifies: gh #53 - the phase-2 envelope shapes hold at the unit
@@ -850,41 +710,145 @@ mod tests {
         assert_eq!(server.timeout(), std::time::Duration::from_secs(60));
     }
 
-    // Verifies: gh #53 - a sanitized collision refuses the server with
-    // both tool names in the error.
+    // Verifies: gh #418 Phase C#C2 - pi's `createMcpToolName` shape: a
+    // name that sanitizes to the same string as another, or that runs past
+    // 64 characters, gets the deterministic 8-char `_<sha256(server\0tool)>`
+    // suffix, and **both** colliding tools stay callable under distinct
+    // registered names. The suffix is order-independent (pi's comment: which
+    // one keeps the plain name must not depend on the listing order).
     #[test]
-    fn collisions_name_both_tools() {
-        let tools = vec![
-            ServerTool {
-                name: "do.thing".to_string(),
-                qualified: tool_name("s", "do.thing"),
-                description: String::new(),
-                parameters: serde_json::json!({}),
-                annotations: lca_protocol::ToolAnnotations {
-                    read_only_hint: None,
-                    destructive_hint: None,
-                    idempotent_hint: None,
-                    open_world_hint: None,
-                },
-            },
-            ServerTool {
-                name: "do_thing".to_string(),
-                qualified: tool_name("s", "do_thing"),
-                description: String::new(),
-                parameters: serde_json::json!({}),
-                annotations: lca_protocol::ToolAnnotations {
-                    read_only_hint: None,
-                    destructive_hint: None,
-                    idempotent_hint: None,
-                    open_world_hint: None,
-                },
-            },
-        ];
-        let err = qualify_tools("s", tools, crate::config::McpExposure::Direct, &[])
-            .expect_err("collision refuses");
+    fn colliding_and_overlong_tool_names_get_a_deterministic_suffix() {
+        let tool = |name: &str| ServerTool {
+            name: name.to_string(),
+            qualified: tool_name("s", name),
+            description: String::new(),
+            parameters: serde_json::json!({}),
+            annotations: lca_protocol::ToolAnnotations::default(),
+        };
+        let collision = |order: [&str; 2]| {
+            let listed: Vec<ServerTool> = order.into_iter().map(tool).collect();
+            let specs = qualify_tools("s", listed, crate::config::McpExposure::Direct, &[])
+                .expect("both stay callable");
+            let mut names: Vec<String> = specs.into_iter().map(|spec| spec.name).collect();
+            names.sort();
+            names
+        };
+        // `do.thing` and `do_thing` both sanitize to `mcp__s__do_thing`.
+        let forwards = collision(["do.thing", "do_thing"]);
+        let backwards = collision(["do_thing", "do.thing"]);
+        assert_eq!(forwards.len(), 2, "both tools stay callable: {forwards:?}");
+        assert_eq!(forwards, backwards, "the suffix is order-independent");
+        assert_ne!(forwards[0], forwards[1]);
+        for name in &forwards {
+            assert!(name.starts_with("mcp__s__do_thing"), "{name}");
+            let suffix = name.strip_prefix("mcp__s__do_thing_").expect("suffixed");
+            assert_eq!(suffix.len(), 8, "8-char hash suffix: {name}");
+            assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()), "{name}");
+        }
+
+        // Over 64 characters gets the same treatment, cut to fit the cap.
+        let specs = qualify_tools(
+            "s",
+            vec![
+                tool(&"x".repeat(100)),
+                tool(&format!("{}y", "x".repeat(100))),
+            ],
+            crate::config::McpExposure::Direct,
+            &[],
+        )
+        .expect("overlong names stay callable");
+        let names: Vec<&str> = specs.iter().map(|spec| spec.name.as_str()).collect();
+        assert_eq!(names.len(), 2);
+        for name in &names {
+            assert!(
+                name.len() <= 64,
+                "tool names cap at 64: {name} ({} bytes)",
+                name.len()
+            );
+            assert!(name.starts_with("mcp__s__x"), "{name}");
+        }
+        assert_ne!(names[0], names[1], "two overlong names stay distinct");
+
+        // A name that needs neither is untouched.
+        let plain = qualify_tools(
+            "s",
+            vec![tool("echo")],
+            crate::config::McpExposure::Direct,
+            &[],
+        )
+        .expect("plain");
+        assert_eq!(plain[0].name, "mcp__s__echo");
+    }
+
+    // Verifies: gh #418 Phase C#C2 - the routing map keys by the *assigned*
+    // name and carries the server's own spelling, so a suffixed tool still
+    // calls the right server tool. This is the "both stay callable" half of
+    // pi's rule (the naming half is the row above).
+    #[test]
+    fn a_suffixed_tool_still_routes_to_the_server_spelling() {
+        let tool = |name: &str| ServerTool {
+            name: name.to_string(),
+            qualified: tool_name("s", name),
+            description: String::new(),
+            parameters: serde_json::json!({}),
+            annotations: lca_protocol::ToolAnnotations::default(),
+        };
+        let pairs = qualified_pairs(
+            "s",
+            vec![tool("do.thing"), tool("do_thing"), tool("echo")],
+            crate::config::McpExposure::Direct,
+            &[],
+        )
+        .expect("both callable");
+        let routing: BTreeMap<String, String> = pairs
+            .iter()
+            .map(|(original, spec)| (spec.name.clone(), original.clone()))
+            .collect();
+        assert_eq!(routing.len(), 3);
+        assert_eq!(routing.get("mcp__s__echo"), Some(&"echo".to_string()));
+        let originals: Vec<&String> = routing.values().collect();
         assert!(
-            err.contains("do.thing") && err.contains("do_thing"),
-            "{err}"
+            originals.contains(&&"do.thing".to_string())
+                && originals.contains(&&"do_thing".to_string()),
+            "each suffixed name routes to a distinct server spelling: {routing:?}"
+        );
+        for name in routing
+            .keys()
+            .filter(|name| name.starts_with("mcp__s__do_thing"))
+        {
+            assert_ne!(name, "mcp__s__do_thing", "the plain form was claimed twice");
+        }
+    }
+
+    // Verifies: gh #418 Phase C#C2 - two server names that collide under the
+    // `-` -> `_` namespace normalization are refused at config load with a
+    // message naming both, because they would share one `mcp__` namespace.
+    #[test]
+    fn colliding_server_names_are_refused_naming_both() {
+        let parsed = crate::config::parse_mcp_json(
+            r#"{"mcpServers": {
+                "my-server": {"command": "true"},
+                "my_server": {"command": "true"},
+                "my_server_2": {"command": "true"}
+            }}"#,
+            crate::config::ServerSource::User,
+        );
+        let refused: Vec<&String> = parsed
+            .warnings
+            .iter()
+            .filter(|warning| warning.contains("conflicts with"))
+            .collect();
+        assert_eq!(refused.len(), 1, "{:?}", parsed.warnings);
+        let warning = refused[0];
+        assert!(
+            warning.contains("my-server") && warning.contains("my_server"),
+            "the warning names both entries: {warning}"
+        );
+        // The distinct one still loads: a collision skips only the loser.
+        assert!(
+            parsed.servers.iter().any(|s| s.name == "my_server_2"),
+            "{:?}",
+            parsed.servers.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
     }
 }

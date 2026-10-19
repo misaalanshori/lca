@@ -81,18 +81,35 @@ pub struct ServerEntry {
 
 /// Convert one entry to its stdio transport config, if it has one.
 impl ServerEntry {
+    /// The `cwd` a stdio entry names, expanded but unresolved.
+    ///
+    /// `~` / `~/...` expands to the user's home; everything else is
+    /// returned as written, for the spawn seam to resolve against the
+    /// session cwd inside the `workspace` scope (gh #418 Phase C#C1).
+    pub fn cwd_path(&self) -> Option<String> {
+        let EntryKind::Stdio { cwd, .. } = &self.kind else {
+            return None;
+        };
+        let cwd = cwd.as_deref()?.trim();
+        if cwd.is_empty() {
+            return None;
+        }
+        Some(expand_home(cwd))
+    }
+
     /// The stdio transport config, if this entry is a stdio server.
     pub fn stdio_config(&self) -> Option<crate::ServerConfig> {
         match &self.kind {
             EntryKind::Stdio {
-                command,
-                args,
-                cwd_scope,
+                command, args, env, ..
             } => Some(crate::ServerConfig {
                 name: self.name.clone(),
                 command: command.clone(),
                 args: args.clone(),
-                cwd_scope: cwd_scope.clone(),
+                // Resolved against the session cwd at spawn time (gh #418
+                // Phase C#C1); the transport config carries the raw form.
+                cwd: self.cwd_path(),
+                env: env.clone(),
             }),
             EntryKind::Http { .. } => None,
         }
@@ -127,9 +144,16 @@ pub enum EntryKind {
         command: String,
         /// Its arguments.
         args: Vec<String>,
-        /// The `fs` scope it runs in (pi's `cwd`; a scope name, so an
-        /// entry cannot aim outside what the manifest grants).
-        cwd_scope: String,
+        /// The directory the child runs in, when the entry names one
+        /// (gh #418 Phase C#C1: pi's `cwd`, a path resolved against the
+        /// session cwd with a leading `~` expanded). `None` means the
+        /// session cwd. The path is resolved through the `workspace`
+        /// scope at spawn time, so it cannot aim outside it.
+        cwd: Option<String>,
+        /// Environment variables added on top of the inherited
+        /// environment (pi's rule: `env` *overlays* `process.env`; a
+        /// child that lost `PATH` could not run anything).
+        env: BTreeMap<String, String>,
     },
     /// A streamable-HTTP server (pi's `url`/`headers`/`oauth`).
     Http {
@@ -152,6 +176,31 @@ pub struct ParsedConfig {
     pub servers: Vec<ServerEntry>,
     /// One line per skipped entry, naming the server and the cause.
     pub warnings: Vec<String>,
+}
+
+/// Expand a leading `~` to the user's home directory (pi's `expandHome`).
+///
+/// Only a leading `~` or `~/` expands: `~user` names another account, which
+/// a config file has no business addressing, so it is left alone and will
+/// fail scope resolution rather than silently mean something else.
+pub fn expand_home(path: &str) -> String {
+    let Some(rest) = path.strip_prefix('~') else {
+        return path.to_string();
+    };
+    if !(rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\')) {
+        return path.to_string();
+    }
+    let Some(home) = home_dir() else {
+        return path.to_string();
+    };
+    format!("{}{}", home.to_string_lossy(), rest)
+}
+
+/// The user's home directory, with the workspace's existing platform rule.
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
 }
 
 /// Expand `${NAME}` from the process environment. A value that IS a
@@ -235,9 +284,24 @@ pub fn parse_mcp_json(text: &str, source: ServerSource) -> ParsedConfig {
         .get("mcpServers")
         .and_then(|servers| servers.as_object())
         .unwrap_or(&empty);
+    // gh #418 Phase C#C2: `my-server` and `my_server` normalize into one
+    // `mcp__my_server` namespace, so the second would shadow the first's
+    // tools. Refuse it and name both (pi's rule: "server \"a\" conflicts
+    // with \"b\""), and skip only the loser so the rest still load.
+    let mut namespaces: BTreeMap<String, String> = BTreeMap::new();
     for (name, entry) in servers {
         match parse_entry(name, entry, source) {
-            Ok(entry) => parsed.servers.push(entry),
+            Ok(entry) => {
+                let namespace = crate::mcp_namespace(name);
+                if let Some(first) = namespaces.get(&namespace) {
+                    parsed.warnings.push(format!(
+                        "server {name:?} skipped: its name conflicts with {first:?} (both normalize to `{namespace}`)"
+                    ));
+                    continue;
+                }
+                namespaces.insert(namespace, name.clone());
+                parsed.servers.push(entry);
+            }
             Err(err) => parsed
                 .warnings
                 .push(format!("server {name:?} skipped: {err}")),
@@ -283,10 +347,9 @@ fn parse_entry(
                         .and_then(expand_value)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            // `env` parses and expands (shared validation), but a
-            // non-empty map skips the entry: per-server environment
-            // needs a process-env seam the frozen capability has no
-            // slot for (0.7 cut line, named in the warning).
+            // gh #418 Phase C#C1: `env` is supported. Values expand
+            // `${VAR}` exactly like `args` do, and the map is passed to
+            // the child *alongside* the inherited environment.
             let env = entry
                 .get("env")
                 .and_then(|env| env.as_object())
@@ -302,15 +365,12 @@ fn parse_entry(
                         .collect::<Result<BTreeMap<_, _>, _>>()
                 })
                 .transpose()?;
-            if env.as_ref().is_some_and(|env| !env.is_empty()) {
-                return Err(
-                    "env needs the 0.7 process-env seam; the entry waits for it".to_string()
-                );
-            }
             EntryKind::Stdio {
                 command: expand_value(command)?.to_string(),
                 args,
-                cwd_scope: get_str("cwd").unwrap_or("workspace").to_string(),
+                // A path, not a scope name (gh #418 Phase C#C1).
+                cwd: get_str("cwd").map(str::to_string),
+                env: env.unwrap_or_default(),
             }
         }
         (None, Some(url)) => {
@@ -554,14 +614,77 @@ fn read_json_file(path: &Path) -> Result<serde_json::Value, String> {
     }
 }
 
-/// Write one JSON file, creating parent directories.
+/// The indentation a file already uses, or two spaces for a new one.
+///
+/// pi's rule (`config.ts`: `/^([ \t]+)\S/m`): keep the shape the user
+/// wrote, so an edit never reformats a whole config file. gh #418 Phase
+/// C#C4.
+fn indentation_of(text: &str) -> &str {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed == line {
+            continue;
+        }
+        let indent_len = line.len() - trimmed.len();
+        let indent = &line[..indent_len];
+        // A tab is one level; spaces are whatever the file uses.
+        return if indent.contains('\t') { "\t" } else { indent };
+    }
+    "  "
+}
+
+/// Serialize `value` with `indent` at every level.
+fn to_string_with_indent(value: &serde_json::Value, indent: &str) -> Result<String, String> {
+    let mut buffer = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(indent.as_bytes());
+    let mut serializer = serde_json::Serializer::with_formatter(&mut buffer, formatter);
+    serde::Serialize::serialize(value, &mut serializer)
+        .map_err(|err| format!("cannot encode: {err}"))?;
+    String::from_utf8(buffer).map_err(|err| format!("cannot encode: {err}"))
+}
+
+/// Write one JSON file atomically, owner-only, keeping its indentation.
+///
+/// The house pattern (`lca-tools` `state_write`, `write_credentials`): write
+/// a sibling temporary file, restrict it to the owner, then `rename` over
+/// the target. A crash between the write and the rename leaves the previous
+/// file intact - a half-written `mcp.json` is a config the user loses.
+///
+/// `mcp.json` carries credentials in `env` and `headers` by design, so the
+/// process umask must not decide who can read it: `0600` on Unix, an
+/// owner-only DACL on Windows. gh #418 Phase C#C4 (gh #267).
 fn write_json_file(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| format!("{err}"))?;
     }
-    let text =
-        serde_json::to_string_pretty(value).map_err(|err| format!("cannot encode: {err}"))?;
-    std::fs::write(path, text).map_err(|err| format!("{err}"))
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut text = to_string_with_indent(value, indentation_of(&existing))?;
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    let temp = sibling_temp_path(path);
+    std::fs::write(&temp, text).map_err(|err| format!("{err}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))
+            .map_err(|err| format!("cannot restrict {temp:?}: {err}"))?;
+    }
+    std::fs::rename(&temp, path).map_err(|err| {
+        let _ = std::fs::remove_file(&temp);
+        format!("{err}")
+    })
+}
+
+/// A dot-prefixed sibling of `path`, so a leftover from a crash is not
+/// mistaken for a real config file (the naming rule gh #320 established for
+/// state writes).
+fn sibling_temp_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "mcp.json".to_string());
+    path.with_file_name(format!(".{name}.tmp"))
 }
 
 /// Serialize one entry back to its file shape.
@@ -579,11 +702,23 @@ fn entry_json(entry: &ServerEntry) -> serde_json::Value {
         EntryKind::Stdio {
             command,
             args,
-            cwd_scope,
+            cwd,
+            env,
         } => {
             value["command"] = command.clone().into();
             value["args"] = args.clone().into();
-            value["cwd"] = cwd_scope.clone().into();
+            // gh #418 Phase C#C1: `cwd` and `env` must survive an edit
+            // round-trip, or the next `/mcp` verb would delete them.
+            if let Some(cwd) = cwd {
+                value["cwd"] = cwd.clone().into();
+            }
+            if !env.is_empty() {
+                value["env"] = env
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone().into()))
+                    .collect::<serde_json::Map<String, serde_json::Value>>()
+                    .into();
+            }
         }
         EntryKind::Http {
             url,

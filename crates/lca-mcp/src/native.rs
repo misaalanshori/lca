@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::{ServerConfig, qualify_tools};
+use crate::{ServerConfig, qualified_pairs};
 
 /// The capability grants this subsystem needs: `process` to spawn the
 /// servers, `fs` (workspace read) for the scope they run in, and `temp`
@@ -385,6 +385,27 @@ pub struct McpBridge {
     caps: Arc<lca_tools::Capabilities>,
 }
 
+/// Qualify one server's listed tools and build its call routing.
+///
+/// One helper for both transports, because the routing map must be keyed
+/// by the name `qualify_tools` *assigned* - for a sanitized collision or an
+/// overlong name that is the `_<hash8>` form, not the server's spelling.
+/// Deriving it from the specs instead of the listing is what keeps two
+/// colliding tools separately callable (gh #418 Phase C#C2).
+fn qualify_listed(
+    name: &str,
+    listed: Vec<crate::ServerTool>,
+    entry: &crate::config::ServerEntry,
+) -> Result<(Vec<lca_protocol::ToolSpec>, BTreeMap<String, String>), String> {
+    let pairs = qualified_pairs(name, listed, entry.exposure, &entry.tool_exposure)?;
+    let calls = pairs
+        .iter()
+        .map(|(original, spec)| (spec.name.clone(), original.clone()))
+        .collect();
+    let specs = pairs.into_iter().map(|(_, spec)| spec).collect();
+    Ok((specs, calls))
+}
+
 /// Connect one stdio entry: spawn (the permission layer asks),
 /// handshake, list, qualify with the entry's exposure.
 fn connect_one_stdio(
@@ -393,7 +414,13 @@ fn connect_one_stdio(
     config: &ServerConfig,
 ) -> Result<LiveServer, String> {
     let handle = caps
-        .process_spawn(&config.command, &config.args, &config.cwd_scope)
+        .process_spawn_in(
+            &config.command,
+            &config.args,
+            "workspace",
+            config.cwd.as_deref(),
+            &config.env,
+        )
         .map_err(|err| format!("MCP server {:?} did not start: {err}", entry.name))?;
     let outcome = (|| -> Result<LiveServer, String> {
         let mut session = crate::Session::new(ChildPipe {
@@ -402,11 +429,7 @@ fn connect_one_stdio(
         });
         let offers = session.initialize()?;
         let listed = session.tools(&entry.name)?;
-        let calls = listed
-            .iter()
-            .map(|tool| (tool.qualified.clone(), tool.name.clone()))
-            .collect();
-        let specs = qualify_tools(&entry.name, listed, entry.exposure, &entry.tool_exposure)?;
+        let (specs, calls) = qualify_listed(&entry.name, listed, entry)?;
         Ok(LiveServer::Stdio {
             caps: caps.clone(),
             handle,
@@ -419,11 +442,68 @@ fn connect_one_stdio(
     })();
     match outcome {
         Ok(live) => Ok(live),
-        Err(err) => {
-            let _ = caps.process_kill(handle);
-            Err(format!("MCP server {:?} failed: {err}", entry.name))
+        Err(err) => Err(format!(
+            "MCP server {:?} failed: {err}{}",
+            entry.name,
+            stderr_tail(caps, handle)
+        )),
+    }
+}
+
+/// The last ≤2,000 bytes the child wrote to stderr, as a ` stderr: ...`
+/// suffix, or an empty string when it wrote nothing.
+///
+/// gh #418 Phase C#C1: a server that dies during the handshake usually
+/// explained itself on stderr ("config is wrong", a Python traceback, a
+/// missing token). Reporting only "the handshake failed" throws that away,
+/// so `/mcp` cannot say why. Only read on the failure path, and only
+/// non-blocking (see [`read_stderr_tail`]), because a live child's pipe may
+/// never close.
+fn stderr_tail(caps: &Arc<lca_tools::Capabilities>, handle: u32) -> String {
+    let tail = read_stderr_tail(caps, handle);
+    if tail.is_empty() {
+        return String::new();
+    }
+    format!(" stderr: {tail}")
+}
+
+/// How much of the child's stderr is kept (pi keeps 64 KiB; the tail that
+/// explains a crash is at the end, and 2 KiB is what `/mcp` can show).
+const STDERR_TAIL_BYTES: usize = 2000;
+
+/// Read what the child has already written to stderr, bounded.
+///
+/// `read_up_to` asks for at most one buffer and returns `None` at EOF, so a
+/// child that closed its pipe (the usual failure shape) is read to the end
+/// and a still-running child gives us its partial output. Never called on
+/// success, so it cannot steal a live server's stderr.
+fn read_stderr_tail(caps: &Arc<lca_tools::Capabilities>, handle: u32) -> String {
+    let mut collected = Vec::new();
+    loop {
+        match caps.process_read_stderr(handle, STDERR_TAIL_BYTES) {
+            Ok(Some(chunk)) if !chunk.is_empty() => {
+                collected.extend_from_slice(&chunk);
+                // Keep only the tail, so a chatty server cannot grow this.
+                if collected.len() > STDERR_TAIL_BYTES {
+                    let keep_from = collected.len() - STDERR_TAIL_BYTES;
+                    let keep_from = String::from_utf8_lossy(&collected[keep_from..])
+                        .char_indices()
+                        .next()
+                        .map(|(index, _)| index + keep_from)
+                        .unwrap_or(keep_from);
+                    collected.drain(..keep_from);
+                }
+            }
+            _ => break,
         }
     }
+    let text = String::from_utf8_lossy(&collected).trim().to_string();
+    if text.is_empty() {
+        return String::new();
+    }
+    // One line, so the notice stays one line; a traceback keeps its shape
+    // in the log but not in the status row.
+    text.replace(['\r', '\n'], " | ")
 }
 
 /// Connect one remote entry, sorting the outcome into live, silent
@@ -447,12 +527,8 @@ fn connect_one_http(
     let listed = session
         .tools(&entry.name)
         .map_err(ServerStateKind::Failed)?;
-    let calls = listed
-        .iter()
-        .map(|tool| (tool.qualified.clone(), tool.name.clone()))
-        .collect();
-    let specs = qualify_tools(&entry.name, listed, entry.exposure, &entry.tool_exposure)
-        .map_err(ServerStateKind::Failed)?;
+    let (specs, calls) =
+        qualify_listed(&entry.name, listed, entry).map_err(ServerStateKind::Failed)?;
     Ok(LiveServer::Http {
         session: Mutex::new(session),
         specs,
@@ -470,7 +546,8 @@ fn inline_stdio(config: ServerConfig) -> crate::config::ServerEntry {
         kind: crate::config::EntryKind::Stdio {
             command: config.command.clone(),
             args: config.args.clone(),
-            cwd_scope: config.cwd_scope.clone(),
+            cwd: config.cwd.clone(),
+            env: config.env.clone(),
         },
         enabled: true,
         exposure: crate::config::McpExposure::Direct,

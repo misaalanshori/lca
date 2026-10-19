@@ -183,6 +183,28 @@ impl PermissionPrompt for SharedPrompt {
         }
     }
 
+    /// gh #418 Phase C#C5 (gh #303): forward the tool hints.
+    ///
+    /// The trait default drops them and calls `ask`, which is right for a
+    /// prompt with no annotated surface but wrong for this slot: it is the
+    /// object every engine holds, so the default silently flattened every
+    /// hinted action on its way to the real prompt. Forwarding keeps the
+    /// hints a *display* concern - the decision still comes from the
+    /// installed prompt's own rules (a hint is not a bypass, ADR-0045).
+    fn ask_annotated(
+        &mut self,
+        action: &Action,
+        annotations: Option<&lca_protocol::ToolAnnotations>,
+    ) -> Decision {
+        match self.current() {
+            Some(prompt) => prompt
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .ask_annotated(action, annotations),
+            None => Decision::Denied,
+        }
+    }
+
     fn review_proposals(&mut self, diff: &ProposalDiff) -> bool {
         match self.current() {
             Some(prompt) => prompt

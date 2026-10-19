@@ -155,6 +155,33 @@ async fn tool_search_declares_deferred_hits_mid_turn() {
     );
 }
 
+// A prompt behind the `SharedPrompt` slot: the engines hold the slot, so a
+// turn-level row has to prove the hints survive that extra hop too.
+struct SlotSpy {
+    surfaces: Vec<String>,
+}
+
+impl lca_permissions::PermissionPrompt for SlotSpy {
+    fn ask(&mut self, action: &lca_permissions::Action) -> Decision {
+        self.surfaces.push(format!("plain:{}", action.display()));
+        Decision::Always
+    }
+    fn ask_annotated(
+        &mut self,
+        action: &lca_permissions::Action,
+        annotations: Option<&lca_protocol::ToolAnnotations>,
+    ) -> Decision {
+        self.surfaces.push(format!(
+            "annotated:{}",
+            action.display_annotated(annotations)
+        ));
+        Decision::Always
+    }
+    fn review_proposals(&mut self, _diff: &lca_permissions::ProposalDiff) -> bool {
+        false
+    }
+}
+
 // A prompt that records the annotated surface it was shown (#78):
 // scripted decision, observed surface.
 struct HintSpy {
@@ -217,6 +244,60 @@ async fn shell_prompt_shows_builtin_hints() {
             .any(|surface| surface.contains("echo hi") && surface.contains("destructive")),
         "the approval surface names the builtin hints: {:?}",
         prompt.surfaces
+    );
+}
+
+// Verifies: gh #418 Phase C#C5 (gh #303) - the turn-level path with the
+// `SharedPrompt` slot in the middle, which is the object every capability
+// engine actually holds. The slot's `ask_annotated` used to be the trait
+// default (drop the hints, call `ask`), so hints reached the real prompt
+// stripped. This row is the one the defect needed: authorize-level rows
+// miss the slot entirely.
+//
+// An in-workspace `write` is silently allowed (gh #259's fast path), so the
+// row drives a shell call, whose approval surface is where hints render.
+#[tokio::test]
+async fn the_shared_prompt_slot_carries_hints_to_the_turn_prompt() {
+    let provider = FakeProvider::builder()
+        .turn(|t| {
+            t.tool_call("shell", r#"{"command":"echo slot-hints"}"#)
+                .usage(fake_usage(10, 5, 0, 5))
+        })
+        .turn(|t| t.text("done").usage(fake_usage(20, 5, 10, 0)))
+        .build();
+    let mut h = harness("slot-hints", provider, default_config());
+    let mut sink = CollectingSink::default();
+    let spy = Arc::new(Mutex::new(SlotSpy {
+        surfaces: Vec::new(),
+    }));
+    let mut prompt = lca_permissions::SharedPrompt::default();
+    prompt.set(spy.clone());
+    let mut agent = Agent::new(
+        &h.store,
+        &h.session,
+        h.provider.as_ref(),
+        &mut h.tools,
+        h.grants.clone(),
+        &mut prompt,
+        None,
+        h.config.clone(),
+    );
+    let outcome = agent
+        .run_turn("say hi loudly", &mut sink, &lca_tools::CancelFlag::new())
+        .await;
+    assert_eq!(outcome.status, lca_core::TurnStatus::Ok);
+    let surfaces = spy.lock().expect("lock").surfaces.clone();
+    assert!(
+        surfaces
+            .iter()
+            .any(|surface| surface.starts_with("annotated:")
+                && surface.contains("slot-hints")
+                && surface.contains("destructive")),
+        "hints survive the slot on the way to the turn prompt: {surfaces:?}"
+    );
+    assert!(
+        !surfaces.iter().any(|surface| surface.starts_with("plain:")),
+        "the slot must not collapse to the bare ask: {surfaces:?}"
     );
 }
 

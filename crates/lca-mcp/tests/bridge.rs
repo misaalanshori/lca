@@ -88,7 +88,8 @@ fn echo_server() -> lca_mcp::ServerConfig {
         name: "echo".to_string(),
         command: "python3".to_string(),
         args: vec![fixture().to_string_lossy().into_owned()],
-        cwd_scope: "workspace".to_string(),
+        cwd: None,
+        env: std::collections::BTreeMap::new(),
     }
 }
 

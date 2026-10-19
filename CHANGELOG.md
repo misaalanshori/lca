@@ -6,6 +6,40 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Fixed
+- **`mcp.json` is written atomically and owner-only** (gh #418 Phase C, gh
+  #267). Editing a server through `/mcp` used to rewrite the file in place
+  with the process umask and the host's own JSON formatting, so an
+  interrupted write could leave a truncated config and a config carrying
+  `env`/`headers` secrets could land world-readable. Writes now go to a
+  dot-prefixed sibling, are restricted to the owner (`0600`, an owner-only
+  DACL on Windows), and are renamed over the target; the file's existing
+  indentation is preserved. The `exposure` confirmation also names the
+  server instead of echoing the raw argument back.
+- **A stdio MCP server's `env` and `cwd` work as documented** (gh #418 Phase
+  C). `env` was refused outright with "needs the 0.7 process-env seam", and
+  `cwd` was read as a capability scope name rather than a path. `env` now
+  overlays the inherited environment (values expand `${NAME}`; the child
+  keeps `PATH`), and `cwd` is a directory path resolved against the session
+  working directory with `~` expansion, still confined to the workspace
+  scope. A server that dies during the handshake now reports the last 2 KB of
+  its stderr, so `/mcp` says why, not just that it did.
+- **Two MCP servers or tools whose names differ only in `-` vs `_` no longer
+  collide silently** (gh #418 Phase C). Server names that normalize into one
+  `mcp__` namespace are refused at load with both names in the message;
+  colliding or over-64-character tool names take pi's deterministic
+  `_<hash8>` suffix, so both tools stay separately callable.
+- **A JSON-RPC error with `"id": null` is reported instead of dropped** (gh
+  #418 Phase C, gh #336). Servers that answer a parse or internal error that
+  way read as "answered without our response", which hid the server's own
+  explanation.
+- **Tool-annotation hints reach the approval prompt** (gh #418 Phase C, gh
+  #303). `SharedPrompt` — the object every capability engine holds — used the
+  trait's default `ask_annotated`, which drops the hints and calls `ask`, so
+  `readOnlyHint`/`destructiveHint` were stripped before the real prompt saw
+  them. Hints stay display-only: a `readOnlyHint: true` call is approved or
+  denied by exactly the same rules as before.
+
 ### Changed
 - **MCP is now part of the binary's core tooling rather than a separately
   published extension** (gh #418, ADR-0047, superseding ADR-0045). Nothing

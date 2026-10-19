@@ -30,7 +30,8 @@ fn stdio_entry(name: &str, exposure: McpExposure, enabled: bool) -> ServerEntry 
         kind: EntryKind::Stdio {
             command: "python3".to_string(),
             args: vec![fixture()],
-            cwd_scope: "workspace".to_string(),
+            cwd: None,
+            env: std::collections::BTreeMap::new(),
         },
         enabled,
         exposure,
@@ -53,7 +54,8 @@ fn one_failure_never_blocks_the_rest() {
     failing.kind = EntryKind::Stdio {
         command: "mcp-p53-definitely-missing-binary".to_string(),
         args: Vec::new(),
-        cwd_scope: "workspace".to_string(),
+        cwd: None,
+        env: std::collections::BTreeMap::new(),
     };
     let bridge = lca_mcp::McpBridge::connect_managed(
         caps,
