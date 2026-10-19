@@ -218,7 +218,7 @@ Dates are UTC.
     (`ops`, `process`, `pty`) route through the one checked `Job::attach`,
     failing loud rather than running a tree they cannot kill.
 
-- **Three places where the WASM path silently did less than the native path- **The embedding SDK lost state and capabilities that only show up in a long
+- **The embedding SDK lost state and capabilities that only show up in a long
   session, and three durability defects beside it (gh #309, #310, #313, #312,
   #317).**
   - **gh #309:** `Session::create` accepted a `data_dir`, used it to open the
