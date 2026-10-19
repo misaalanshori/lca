@@ -135,7 +135,7 @@ Describe when to use the tool and when not to. Models pick tools by description,
 
 Constrain the parameters. An enum with three values produces better calls than a string with three values named in prose.
 
-The host validates arguments against this schema before it calls `execute`. An argument that fails validation never reaches the extension.
+The host validates arguments against this schema before it calls `execute`. An argument that fails validation never reaches the extension. The vocabulary it enforces is `type` (a name or a union of names, so `["string", "null"]` makes a field nullable and both arms are accepted), `enum` (checked whether or not `type` is present, which is what makes `{"enum": ["project", "global"]}` meaningful on its own), `required`, `properties`, and `items`. Validation recurses on the *value*: an object admitted through a union still has its `required` and `properties` checked, and a schema with no `type` at all still validates the `properties` it declares. A type keyword the host does not model is not a rejection.
 
 A tool may declare an output schema and return structured data
 (#49): put the JSON Schema text under the `output-schema` key of

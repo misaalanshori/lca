@@ -61,3 +61,17 @@ fn unknown_keywords_do_not_reject() {
     // A schema with no `type` at all constrains nothing.
     assert!(validate_against_schema(&json!({}), r#"{"anything":true}"#).is_ok());
 }
+
+// Verifies: gh #306 - a union `type` array validates every member, and an
+// `enum` is a constraint in its own right.
+#[test]
+fn union_types_and_enums_are_both_enforced() {
+    let nullable = json!({"type": ["string", "null"]});
+    assert!(validate_against_schema(&nullable, r#""s""#).is_ok());
+    assert!(validate_against_schema(&nullable, "null").is_ok());
+    assert!(validate_against_schema(&nullable, "1").is_err());
+
+    let enumerated = json!({"enum": ["project", "global"]});
+    assert!(validate_against_schema(&enumerated, r#""global""#).is_ok());
+    assert!(validate_against_schema(&enumerated, r#""other""#).is_err());
+}

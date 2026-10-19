@@ -170,6 +170,12 @@ struct OpenCall {
     call_id: String,
     name: String,
     arguments: String,
+    /// A second `ToolCallStart` arrived for this id (gh #305). The call stays
+    /// in `open` so later fragments and the end are attributed to it rather
+    /// than reported as orphans, but it is never moved into `closed`: its
+    /// arguments would be fragments stitched across a reset boundary, and
+    /// running them invokes a tool the model never asked for.
+    poisoned: bool,
 }
 
 /// Accumulates streamed tool-call fragments keyed by call identifier
@@ -190,13 +196,18 @@ impl ToolCallAccumulator {
                     self.errors.push(ProtocolError::DuplicateStart {
                         call_id: call_id.clone(),
                     });
-                    existing.name = name;
-                    existing.arguments.clear();
+                    // Poison rather than rebrand (gh #305). Overwriting the
+                    // name and clearing the fragments is what made the
+                    // truncated call look runnable: `ToolCallEnd` then moved
+                    // it into `closed` with arguments assembled from the
+                    // wrong start.
+                    existing.poisoned = true;
                 } else {
                     self.open.push(OpenCall {
                         call_id,
                         name,
                         arguments: String::new(),
+                        poisoned: false,
                     });
                 }
             }
@@ -212,12 +223,14 @@ impl ToolCallAccumulator {
                 match self.open.iter().position(|c| c.call_id == call_id) {
                     Some(index) => {
                         let call = self.open.remove(index);
-                        self.closed.push(ToolCall {
-                            call_id: call.call_id,
-                            name: call.name,
-                            arguments: call.arguments,
-                            parent_call_id: None,
-                        });
+                        if !call.poisoned {
+                            self.closed.push(ToolCall {
+                                call_id: call.call_id,
+                                name: call.name,
+                                arguments: call.arguments,
+                                parent_call_id: None,
+                            });
+                        }
                     }
                     None => self.errors.push(ProtocolError::EndWithoutStart { call_id }),
                 }
@@ -233,9 +246,14 @@ impl ToolCallAccumulator {
         let mut errors = self.errors;
         if stream_ended {
             for call in self.open {
-                errors.push(ProtocolError::StreamEndedWithOpenCall {
-                    call_id: call.call_id,
-                });
+                // A poisoned call already produced `DuplicateStart`, which is
+                // the more specific report; adding `StreamEndedWithOpenCall`
+                // would count one defect twice.
+                if !call.poisoned {
+                    errors.push(ProtocolError::StreamEndedWithOpenCall {
+                        call_id: call.call_id,
+                    });
+                }
             }
         }
         (self.closed, errors)
@@ -281,8 +299,15 @@ pub enum SchemaError {
 /// Validate a tool call's arguments against its JSON-schema `parameters`
 /// before the host calls `execute` (extension authoring guide). Covers the
 /// subset the project's tools declare - `object`/`array`/`string`/`integer`/
-/// `number`/`boolean` types, `required`, and `items` - and names the offending
-/// field. Unknown type keywords are ignored rather than rejected.
+/// `number`/`boolean`/`null` types, union type arrays, `enum`, `required`, and
+/// `items` - and names the offending field. Unknown type keywords are ignored
+/// rather than rejected.
+///
+/// Two omissions were live before gh #306: a `type` given as an *array*
+/// (`["string", "null"]`, the standard spelling for nullable) made the
+/// `let-else` fall through, so the whole subtree went unvalidated; and `enum`
+/// was never inspected, so `extensions/project-memory`'s
+/// `"scope": {"enum": ["project", "global"]}` accepted anything.
 pub fn validate_against_schema(
     schema: &serde_json::Value,
     arguments: &str,
@@ -292,15 +317,11 @@ pub fn validate_against_schema(
     validate_value(schema, &value, "$")
 }
 
-fn validate_value(
-    schema: &serde_json::Value,
-    value: &serde_json::Value,
-    path: &str,
-) -> Result<(), SchemaError> {
-    let Some(expected) = schema.get("type").and_then(serde_json::Value::as_str) else {
-        return Ok(());
-    };
-    let matches = match expected {
+/// Whether `value` satisfies one JSON Schema type name. An unrecognized name
+/// matches everything: the validator models the vocabulary the project ships
+/// and leaves newer keywords alone rather than rejecting them.
+fn matches_type_name(expected: &str, value: &serde_json::Value) -> bool {
+    match expected {
         "object" => value.is_object(),
         "array" => value.is_array(),
         "string" => value.is_string(),
@@ -309,15 +330,76 @@ fn validate_value(
         "boolean" => value.is_boolean(),
         "null" => value.is_null(),
         _ => true,
-    };
-    if !matches {
-        return Err(SchemaError::Type {
-            path: path.to_string(),
-            expected: expected.to_string(),
-        });
     }
-    match (expected, value) {
-        ("object", serde_json::Value::Object(map)) => {
+}
+
+/// Check a schema's `type` (a name or a union of names) against `value`.
+fn check_type(
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+    path: &str,
+) -> Result<(), SchemaError> {
+    match schema.get("type") {
+        Some(serde_json::Value::String(expected)) => {
+            if matches_type_name(expected, value) {
+                Ok(())
+            } else {
+                Err(SchemaError::Type {
+                    path: path.to_string(),
+                    expected: expected.clone(),
+                })
+            }
+        }
+        Some(serde_json::Value::Array(types)) => {
+            let names: Vec<&str> = types.iter().filter_map(serde_json::Value::as_str).collect();
+            // An array with no usable names constrains nothing, same rule as
+            // an unknown keyword.
+            if names.is_empty() || names.iter().any(|name| matches_type_name(name, value)) {
+                Ok(())
+            } else {
+                Err(SchemaError::Type {
+                    path: path.to_string(),
+                    expected: names.join(" | "),
+                })
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Check a schema's `enum`, when present. Any JSON value may be a member.
+fn check_enum(
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+    path: &str,
+) -> Result<(), SchemaError> {
+    let Some(allowed) = schema.get("enum").and_then(serde_json::Value::as_array) else {
+        return Ok(());
+    };
+    if allowed.is_empty() || allowed.iter().any(|candidate| candidate == value) {
+        return Ok(());
+    }
+    Err(SchemaError::Type {
+        path: path.to_string(),
+        expected: format!("one of {allowed:?}"),
+    })
+}
+
+fn validate_value(
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+    path: &str,
+) -> Result<(), SchemaError> {
+    // Both constraints run regardless of how `type` is spelled, and both run
+    // even when `type` is absent: an `enum` is a constraint on its own, and a
+    // `type`-less schema may still carry `properties` (gh #306).
+    check_type(schema, value, path)?;
+    check_enum(schema, value, path)?;
+    // Structural recursion keys off the *value*, not the declared type, so an
+    // object admitted by `["object", "null"]` - or by a schema with no `type`
+    // at all - still has its children validated.
+    match value {
+        serde_json::Value::Object(map) => {
             if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
                 for key in required.iter().filter_map(serde_json::Value::as_str) {
                     if !map.contains_key(key) {
@@ -336,7 +418,7 @@ fn validate_value(
                 }
             }
         }
-        ("array", serde_json::Value::Array(items)) => {
+        serde_json::Value::Array(items) => {
             if let Some(item_schema) = schema.get("items") {
                 for (index, item) in items.iter().enumerate() {
                     validate_value(item_schema, item, &format!("{path}[{index}]"))?;

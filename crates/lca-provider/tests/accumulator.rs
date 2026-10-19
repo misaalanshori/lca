@@ -69,8 +69,15 @@ fn two_starts_for_one_id_record_an_error() {
     let (calls, errors) = acc.finish(false);
     assert_eq!(errors.len(), 1);
     assert!(matches!(&errors[0], ProtocolError::DuplicateStart { call_id } if call_id == "c1"));
-    assert_eq!(calls.len(), 1, "one call survives, with the last name");
-    assert_eq!(calls[0].name, "grep");
+    // SANCTIONED CHANGE (gh #305): this row used to assert one call survived
+    // "with the last name" - which was the defect itself. Renaming the open
+    // call and clearing its fragments made `ToolCallEnd` publish a call
+    // stitched from fragments that belonged to the earlier start, and the
+    // host ran it. A duplicated start now poisons the call.
+    assert!(
+        calls.is_empty(),
+        "a duplicated start poisons the call so truncated fragments never run"
+    );
 }
 
 // The flows document: a stream that ends with a tool call still open is a

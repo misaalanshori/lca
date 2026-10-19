@@ -476,3 +476,12 @@ mod truncate_head_tail_long_lines;
 // the process-tree-kill guarantee could be silently absent.
 #[path = "322-windows-job-object-checked.rs"]
 mod windows_job_object_checked;
+// GitHub #305: a duplicated `ToolCallStart` renamed and cleared the open
+// call, so `ToolCallEnd` emitted a call stitched from fragments across the
+// reset boundary and the host ran it.
+#[path = "305-duplicate-tool-call-start-discarded.rs"]
+mod duplicate_tool_call_start_discarded;
+// GitHub #306: `validate_against_schema` skipped union `type` arrays and
+// never inspected `enum`.
+#[path = "306-schema-union-types-and-enums.rs"]
+mod schema_union_types_and_enums;
