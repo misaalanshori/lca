@@ -96,10 +96,15 @@ impl ExtensionDispatch for GitHubCopilot {
             .await;
             match result {
                 Ok(()) => Ok(()),
-                Err(lca_tools::BridgeError::Work(failure)) => Err(DispatchError::Failed(format!(
-                    "github-copilot: {}",
-                    failure.message
-                ))),
+                Err(lca_tools::BridgeError::Work(failure)) => Err(
+                    // Gh #356: keep the wire kit's class and retryability.
+                    DispatchError::provider_failed(
+                        "github-copilot",
+                        failure.message,
+                        failure.class,
+                        failure.retryable,
+                    ),
+                ),
                 Err(lca_tools::BridgeError::Panicked) => Err(DispatchError::Failed(
                     "github-copilot: the provider call panicked".to_string(),
                 )),

@@ -96,10 +96,15 @@ impl ExtensionDispatch for OpenRouter {
             .await;
             match result {
                 Ok(()) => Ok(()),
-                Err(lca_tools::BridgeError::Work(failure)) => Err(DispatchError::Failed(format!(
-                    "openrouter: {}",
-                    failure.message
-                ))),
+                Err(lca_tools::BridgeError::Work(failure)) => Err(
+                    // Gh #356: keep the wire kit's class and retryability.
+                    DispatchError::provider_failed(
+                        "openrouter",
+                        failure.message,
+                        failure.class,
+                        failure.retryable,
+                    ),
+                ),
                 Err(lca_tools::BridgeError::Panicked) => Err(DispatchError::Failed(
                     "openrouter: the provider call panicked".to_string(),
                 )),

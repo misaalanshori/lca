@@ -152,4 +152,44 @@ pub enum DispatchError {
     /// The call failed; the host decides whether that disables.
     #[error("extension call failed: {0}")]
     Failed(String),
+    /// A provider stream failed with the class and retryability its wire kit
+    /// already determined (gh #356).
+    ///
+    /// Without this, a bridge could only say `Failed(String)`, and the turn
+    /// loop had to re-derive `(class, retryable)` by looking for
+    /// `"provider returned HTTP NNN"` in the text. A vendor error phrased any
+    /// other way - an `invalid_api_key` body, an expired session, a 400 the
+    /// provider worded itself - fell through to `("transport", true)` and was
+    /// retried three times before failing on the wrong code.
+    #[error("extension call failed: {extension}: {message}")]
+    ProviderFailed {
+        /// The provider extension's name.
+        extension: String,
+        /// The provider's own error message.
+        message: String,
+        /// Error class the wire kit assigned (`"auth"`, `"invalid"`,
+        /// `"transport"`, or a kit-specific label).
+        class: &'static str,
+        /// Whether the core turn loop should retry this failure.
+        retryable: bool,
+    },
+}
+
+impl DispatchError {
+    /// A provider stream failure which already knows its class and
+    /// retryability (gh #356).
+    #[must_use]
+    pub fn provider_failed(
+        extension: impl Into<String>,
+        message: impl Into<String>,
+        class: &'static str,
+        retryable: bool,
+    ) -> DispatchError {
+        DispatchError::ProviderFailed {
+            extension: extension.into(),
+            message: message.into(),
+            class,
+            retryable,
+        }
+    }
 }

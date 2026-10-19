@@ -635,9 +635,16 @@ async fn stable_region_divergence_narrows_the_boundary_once_and_settles() {
     let outcome = turn(&mut h, "fourth", &mut sink, &mut prompt).await;
     eprintln!("T4 {:?}", (outcome.status, outcome.error));
     let fourth = h.provider.last_request().expect("request four");
+    // SANCTIONED CHANGE (gh #275): this was `3`, frozen at the compaction
+    // summary. `stable_cap` no longer clamps to `assembled.stable_prefix`
+    // forever after a compaction, so the boundary advances across the
+    // post-compaction conversation: on turn 4 the previous request had sent
+    // 5 messages through turn 3's user message, and all 5 still match, so 5
+    // is the claimable prefix. `3` was the defect - everything after the
+    // summary was permanently un-cacheable.
     assert_eq!(
-        fourth.stable_prefix, 3,
-        "settled: content matches what was sent, narrowing goes no further"
+        fourth.stable_prefix, 5,
+        "post-compaction the boundary advances across what was already sent"
     );
     assert_eq!(
         count_extension_events(&h, "cache-boundary-narrowed"),

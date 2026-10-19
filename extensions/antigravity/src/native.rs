@@ -106,10 +106,15 @@ impl ExtensionDispatch for Antigravity {
             .await;
             match result {
                 Ok(()) => Ok(()),
-                Err(lca_tools::BridgeError::Work(failure)) => Err(DispatchError::Failed(format!(
-                    "antigravity: {}",
-                    failure.message
-                ))),
+                Err(lca_tools::BridgeError::Work(failure)) => Err(
+                    // Gh #356: keep the wire kit's class and retryability.
+                    DispatchError::provider_failed(
+                        "antigravity",
+                        failure.message,
+                        failure.class,
+                        failure.retryable,
+                    ),
+                ),
                 Err(lca_tools::BridgeError::Panicked) => Err(DispatchError::Failed(
                     "antigravity: the provider call panicked".to_string(),
                 )),

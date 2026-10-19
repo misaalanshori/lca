@@ -269,10 +269,15 @@ impl ExtensionDispatch for OpenAiCompat {
             .await;
             match result {
                 Ok(()) => Ok(()),
-                Err(lca_tools::BridgeError::Work(failure)) => Err(DispatchError::Failed(format!(
-                    "openai-compatible: {}",
-                    failure.message
-                ))),
+                Err(lca_tools::BridgeError::Work(failure)) => Err(
+                    // Gh #356: keep the wire kit's class and retryability.
+                    DispatchError::provider_failed(
+                        "openai-compatible",
+                        failure.message,
+                        failure.class,
+                        failure.retryable,
+                    ),
+                ),
                 Err(lca_tools::BridgeError::Panicked) => Err(DispatchError::Failed(
                     "openai-compatible: the provider call panicked".to_string(),
                 )),

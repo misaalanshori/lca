@@ -96,10 +96,15 @@ impl ExtensionDispatch for Anthropic {
             .await;
             match result {
                 Ok(()) => Ok(()),
-                Err(lca_tools::BridgeError::Work(failure)) => Err(DispatchError::Failed(format!(
-                    "anthropic: {}",
-                    failure.message
-                ))),
+                Err(lca_tools::BridgeError::Work(failure)) => Err(
+                    // Gh #356: keep the wire kit's class and retryability.
+                    DispatchError::provider_failed(
+                        "anthropic",
+                        failure.message,
+                        failure.class,
+                        failure.retryable,
+                    ),
+                ),
                 Err(lca_tools::BridgeError::Panicked) => Err(DispatchError::Failed(
                     "anthropic: the provider call panicked".to_string(),
                 )),

@@ -91,14 +91,25 @@ latest checkpoint appends a `custom` record of type
 A provider failure matching the overflow patterns (`token cap`,
 `prompt is too long`, `exceeds token limit`, `max_tokens …
 exceed`, `context window` / `length`) compacts and retries the turn
-once, instead of ending it dead. The aborted attempt stays visible
-to `TurnEnded` (error), the `overflow` compaction runs, and the
-retry starts fresh on the compacted log; a still-capped retry
+once, instead of ending it dead. The `overflow` compaction runs and
+the retry starts fresh on the compacted log; a still-capped retry
 surfaces, and a failed recovery compacts nothing and retries
-nothing. Divergence, documented: the aborted attempt's partial text
-is not persisted (LCA never persists failed attempts) — the error
-marks the boundary. Recovery respects `compaction.enabled`: opted
-out means no strategy to compact with, so the error surfaces.
+nothing.
+
+`TurnEnded` fires **once**, when the turn actually finishes (gh
+#277). It used to fire before the recovery was attempted, so a
+recovered turn carried on streaming after its own `TurnEnded` and an
+unrecovered one emitted the event twice. The recovery is marked
+instead by `CompactionStarted` / `CompactionEnded { reason:
+"overflow" }`, which is what a consumer should read as "the turn hit
+its cap and recovered"; `TurnEnded` remains the single end-of-turn
+signal. A turn that recovered carries no `Error` event at all, since
+nothing failed from the caller's point of view.
+
+Divergence, documented: the aborted attempt's partial text is not
+persisted (LCA never persists failed attempts) — the compaction
+record marks the boundary. Recovery respects `compaction.enabled`:
+opted out means no strategy to compact with, so the error surfaces.
 
 ## Retain-none (phase 3)
 

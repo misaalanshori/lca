@@ -15,7 +15,9 @@ use lca_provider::{CompletionRequest, ProtocolError};
 use lca_session::ViewMode;
 use lca_tools::{CancelFlag, ToolExecutor};
 
-use super::assemble::{assemble_with, message_text, stable_fingerprint, usage_prompt_tokens};
+use super::assemble::{
+    COMPACTION_SUMMARY_PREFIX, assemble_with, message_text, stable_fingerprint, usage_prompt_tokens,
+};
 use super::compact::compact_candidate;
 use super::{Agent, TurnSink};
 
@@ -155,24 +157,21 @@ impl Agent<'_> {
                     retryable,
                 }) => {
                     // Gh #36 phase 3: the error is the signal - a capped
-                    // generation compacts and retries (pi's recovery
-                    // ordering: the aborted attempt stays visible to
-                    // TurnEnded, recovery compacts, the retry runs fresh).
-                    // The partial attempt text is not persisted (LCA never
-                    // persists failed attempts); the error marks the
-                    // boundary. A failed recovery compacts nothing and
-                    // retries nothing: the error surfaces as-is.
+                    // generation compacts and retries. The partial attempt
+                    // text is not persisted (LCA never persists failed
+                    // attempts). A failed recovery compacts nothing and
+                    // retries nothing: the error surfaces below, once.
+                    //
+                    // Gh #277: nothing is emitted here. This branch used to
+                    // send `Error` and `TurnEnded` before attempting the
+                    // recovery, so a *recovered* turn carried on streaming
+                    // after `TurnEnded` and an unrecovered one emitted both
+                    // events twice. The recovery is marked by
+                    // `CompactionStarted`/`CompactionEnded { reason:
+                    // "overflow" }`, which `compact_before_turn` emits; the
+                    // turn's end is marked below, when the turn really ends.
                     if !overflow_recovered && super::compact::is_overflow_error(&message) {
                         overflow_recovered = true;
-                        sink.on_event(TurnEvent::Error {
-                            message: message.clone(),
-                            class: class.clone(),
-                            retryable,
-                        });
-                        sink.on_event(TurnEvent::TurnEnded {
-                            status: TurnStatus::Error,
-                            stop_reason: StopReason::Error,
-                        });
                         let records = match self.store.read_with(self.session, ViewMode::Display) {
                             Ok(outcome) => outcome.records,
                             Err(_) => {
@@ -213,10 +212,17 @@ impl Agent<'_> {
             // table's math for listed models; a reported cost is never
             // overwritten, and unlisted models stay tokens-only.
             if response.usage.cost == 0.0
-                && let Some(priced) =
-                    super::pricing::table_cost(&self.config.model, &response.usage)
+                && let Some(price) = super::pricing::price_for(&self.config.model)
             {
-                response.usage.cost = priced;
+                // Gh #274: the four buckets are persisted alongside the
+                // total, because `lca_session::cache` attributes a cache
+                // miss to a dollar figure per bucket (ADR-0017). With only
+                // `cost` set, that attribution was always `$0.00`.
+                let priced = super::pricing::PricedUsage::new(price, &response.usage);
+                response.usage.cost = priced.total;
+                response.usage.cost_input = priced.cost_input;
+                response.usage.cost_cache_read = priced.cost_cache_read;
+                response.usage.cost_cache_write = priced.cost_cache_write;
             }
             accumulate_usage(&mut turn_usage, &response.usage);
             if let Err(outcome) = self.reject_incomplete(&response, sink, &turn_usage) {
@@ -462,7 +468,6 @@ impl Agent<'_> {
                 table.get(hash).cloned()
             })
         };
-        let stable_cap = self.stable_cap(&assembled, input);
         // FR-CTX-2: every enabled transform, in installation order, before
         // every provider call; a rejection ends the turn here, with no call
         // (FR-CTX-3) and nothing persisted (FR-CTX-4).
@@ -503,7 +508,20 @@ impl Agent<'_> {
         };
         let mut messages = messages;
         messages.extend(self.instruction_deltas(first_round).await);
-        let stable_prefix = self.narrow_stable_prefix(&messages, stable_cap, sink);
+        // Gh #275: the cap is computed on the POST-transform list. A
+        // transform that inserts a message before the current turn's user
+        // message shifts every index after it, so a cap computed on the
+        // pre-transform list pointed at the wrong message (or past the end).
+        let stable_cap = self.stable_cap(&messages, input);
+        // Gh #275: `sent_stable` records only the durable prefix - through
+        // the current turn's user message, plus a compaction summary when
+        // one sits after it. A trailing per-turn injection (a matched skill,
+        // an instruction delta) is ephemeral under FR-CTX-4: it is never
+        // written to the log, so on the next turn a different message sits at
+        // that index. Storing it made the next turn read as a divergence and
+        // narrow the boundary for no reason.
+        let durable_end = self.durable_end(&messages, stable_cap);
+        let stable_prefix = self.narrow_stable_prefix(&messages[..durable_end], stable_cap, sink);
         Ok(self.build_request(messages, stable_prefix))
     }
 
@@ -523,23 +541,47 @@ impl Agent<'_> {
         .await
     }
 
-    /// The stable-prefix boundary base (FR-CACHE-5): everything through the
-    /// most recent compaction record, never reaching this turn's own user
-    /// message - content sent for the first time this call cannot be
-    /// claimed as cached.
-    fn stable_cap(&self, assembled: &super::assemble::Assembled, input: &str) -> usize {
-        let mut stable_cap = if assembled.compaction_seen {
-            assembled.stable_prefix
-        } else {
-            usize::MAX
-        };
-        stable_cap = stable_cap.min(assembled.messages.len());
-        if let Some(index) = assembled.messages.iter().rposition(|message| {
-            message.role == MessageRole::User && message_text(message) == input
-        }) {
-            stable_cap = stable_cap.min(index);
-        }
-        stable_cap
+    /// The stable-prefix boundary base (FR-CACHE-5): the index of this
+    /// turn's own user message, so content sent for the first time this call
+    /// is never claimed as cached.
+    ///
+    /// Gh #275 removed two things from this. It used to run on the
+    /// pre-transform list, so an inserted message shifted the answer; and it
+    /// used to clamp to `assembled.stable_prefix` whenever a compaction had
+    /// ever been seen, which froze the boundary at the summary on every
+    /// subsequent turn and left the whole post-compaction conversation
+    /// permanently un-cacheable. The current turn's user message is already
+    /// the correct upper bound: `narrow_stable_prefix` bounds it further
+    /// against what the previous request actually sent, which is the only
+    /// claim the provider could have cached.
+    fn stable_cap(&self, messages: &[ChatMessage], input: &str) -> usize {
+        messages
+            .iter()
+            .rposition(|message| {
+                message.role == MessageRole::User && message_text(message) == input
+            })
+            .unwrap_or(messages.len())
+    }
+
+    /// Where the durable part of the outgoing request ends (gh #275).
+    ///
+    /// Everything through the current turn's user message is in the session
+    /// log. On the turn which just compacted, the summary record lands *after*
+    /// that user message, so the summary is durable too. Anything past those
+    /// two is a per-turn injection that FR-CTX-4 keeps out of the log.
+    fn durable_end(&self, messages: &[ChatMessage], stable_cap: usize) -> usize {
+        let through_input = stable_cap.saturating_add(1).min(messages.len());
+        // A summary can only appear after the end of the compaction range,
+        // so scanning forward from the user message is enough and cannot
+        // mistake an earlier summary for this turn's.
+        let summary_end = messages[through_input..]
+            .iter()
+            .position(|message| {
+                message.role == MessageRole::User
+                    && message_text(message).starts_with(COMPACTION_SUMMARY_PREFIX)
+            })
+            .map(|offset| through_input + offset + 1);
+        summary_end.map_or(through_input, |end| end.max(through_input))
     }
 
     /// FR-CACHE-6: content inside the boundary which differs from what

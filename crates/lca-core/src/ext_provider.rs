@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::lock;
 use lca_ext_abi::ExtensionDispatch;
-use lca_protocol::{CompletionRequest, EventSink, ModelInfo, StreamEvent};
+use lca_protocol::{CompletionRequest, DispatchError, EventSink, ModelInfo, StreamEvent};
 use lca_provider::{BoxFuture, EventSender, Provider, ProviderError};
 
 /// Wraps one provider-world handle as the core's `Provider`.
@@ -66,7 +66,18 @@ impl EventSink for Mid {
 /// ponytail: message-shape heuristics; a pre-freeze ABI addition could
 /// carry the class explicitly (the `docs/abi-versioning.md` punch list
 /// is where that belongs).
-fn classify_message(message: &str) -> (&'static str, bool) {
+/// Classify an *unstructured* failure message (gh #356): the fallback for
+/// errors that carry no class of their own, which is every error a WASM
+/// provider guest can express (WIT 0.6's `stream-completion` returns
+/// `result<_, string>`).
+///
+/// The HTTP-status sniff is the original heuristic. The auth list is the
+/// gh #356 addition: an expired session or an `invalid_api_key` body used to
+/// land in the `transport, retryable` default, so the turn loop retried a
+/// permanent failure three times with backoff and then exited on the wrong
+/// code. These read as *authoritative* refusals - nothing the loop can fix.
+#[must_use]
+pub fn classify_message(message: &str) -> (&'static str, bool) {
     if let Some(status) = message
         .split("provider returned HTTP ")
         .nth(1)
@@ -80,6 +91,27 @@ fn classify_message(message: &str) -> (&'static str, bool) {
         };
         let retryable = status == 429 || status == 408 || (500..=599).contains(&status);
         return (class, retryable);
+    }
+    // Auth first: "no anthropic login yet" holds neither "permission denied"
+    // nor "not found", and an expired session is the one class where a retry
+    // is guaranteed to fail again.
+    let auth = [
+        "invalid_api_key",
+        "invalid api key",
+        "incorrect api key",
+        "authentication failed",
+        "unauthorized",
+        "unauthenticated",
+        "session has expired",
+        "was revoked",
+        "no such login",
+        "run /login",
+        "no login yet",
+    ]
+    .iter()
+    .any(|needle| message.to_ascii_lowercase().contains(needle));
+    if auth {
+        return ("auth", false);
     }
     let refusal = [
         "permission denied",
@@ -164,13 +196,26 @@ impl Provider for ExtensionProvider {
                     break;
                 }
             }
-            answered.map_err(|err| {
-                let message = err.to_string();
-                let (class, retryable) = classify_message(&message);
-                ProviderError {
+            answered.map_err(|err| match err {
+                // Gh #356: the wire kit already decided; do not re-guess.
+                DispatchError::ProviderFailed {
+                    extension,
                     message,
                     class,
                     retryable,
+                } => ProviderError {
+                    message: format!("extension call failed: {extension}: {message}"),
+                    class,
+                    retryable,
+                },
+                other => {
+                    let message = other.to_string();
+                    let (class, retryable) = classify_message(&message);
+                    ProviderError {
+                        message,
+                        class,
+                        retryable,
+                    }
                 }
             })
         })

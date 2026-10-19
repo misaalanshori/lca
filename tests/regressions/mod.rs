@@ -485,3 +485,24 @@ mod duplicate_tool_call_start_discarded;
 // never inspected `enum`.
 #[path = "306-schema-union-types-and-enums.rs"]
 mod schema_union_types_and_enums;
+// Shared doubles for the #275 / #277 rows (declared once: `ExtensionDispatch`
+// has no defaults, and clippy refuses a module loaded twice).
+#[path = "doubles_275.rs"]
+mod doubles_275;
+// GitHub #274: the curated price table billed cache reads at the input rate
+// and the turn loop left the per-bucket cost fields at zero, so a cache
+// saving always measured as `$0.00`.
+#[path = "274-pricing-cache-read-discount-and-breakdown.rs"]
+mod pricing_cache_read_discount_and_breakdown;
+// GitHub #275: `stable_cap` was computed before the context transform and
+// frozen at the compaction summary afterwards.
+#[path = "275-stable-cap-post-transform-and-compaction.rs"]
+mod stable_cap_post_transform_and_compaction;
+// GitHub #277: overflow recovery emitted `Error` and `TurnEnded` before it
+// tried to recover, so a recovered turn continued after `TurnEnded`.
+#[path = "277-overflow-recovery-single-turn-ended.rs"]
+mod overflow_recovery_single_turn_ended;
+// GitHub #356: the provider bridge flattened structured `StreamFailure`
+// values to text and re-derived the class by substring heuristics.
+#[path = "356-provider-bridge-preserves-error-class.rs"]
+mod provider_bridge_preserves_error_class;

@@ -185,7 +185,7 @@ pub fn assemble(records: &[Record], system_prompt: &str) -> Assembled {
 /// (`packages/coding-agent/src/core/messages.ts`). The wire role stays
 /// `user` (no ABI change); the framing is what tells the model this is its
 /// own compacted memory rather than a note from the user.
-const COMPACTION_SUMMARY_PREFIX: &str = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
+pub(crate) const COMPACTION_SUMMARY_PREFIX: &str = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
 const COMPACTION_SUMMARY_SUFFIX: &str = "\n</summary>";
 
 /// Build the outbound message list from a session's resolved (display-view)

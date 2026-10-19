@@ -168,7 +168,59 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
-- **Five `lca-tools` durability and hygiene defects, each of which failed
+- **A provider/core batch where each defect was cheap to paper over and
+  expensive to leave (gh #305, #306, #274, #275, #277, #356).**
+  - **gh #305:** a second `ToolCallStart` for an already-open call id recorded
+    `ProtocolError::DuplicateStart` and then renamed the open call and cleared
+    its fragments. The follow-up `ToolCallEnd` therefore published a call whose
+    arguments were stitched from fragments belonging to the earlier start, and
+    the host ran it. A duplicated start now *poisons* the call: it stays
+    tracked (so later fragments and the end are not misreported as orphans) but
+    never becomes runnable, and the EOF report does not double-count a problem
+    `DuplicateStart` already named.
+  - **gh #306:** `validate_against_schema` bailed out whenever `type` was not a
+    string, so `["string", "null"]` - the standard spelling for nullable - made
+    the whole subtree unvalidated, and a type-less schema did the same. `enum`
+    was never inspected, so `extensions/project-memory`'s
+    `"scope": {"enum": ["project", "global"]}` accepted anything. Union types,
+    `enum` (with or without `type`), and value-driven structural recursion are
+    all enforced now.
+  - **gh #274:** the curated price table billed `cache_read` at the full input
+    rate, and the turn loop copied only `usage.cost` onto the persisted record,
+    leaving `cost_input`, `cost_cache_read`, and `cost_cache_write` at `0.0`.
+    Those three fields are exactly what the cache-waste measurement reads
+    (ADR-0017), so on any table-priced model the cache saving was reported as
+    precisely `$0.00`. Cache reads and writes now carry their own published
+    rates and the breakdown is persisted. Measured: a gpt-4o turn of 2M input +
+    1M cache-read + 1M output costs **$16.25** rather than $17.50, with
+    `cost_input = 5.0` and `cost_cache_read = 1.25`.
+  - **gh #275:** the stable-prefix boundary was computed before the context
+    transforms ran, so an inserted message shifted every index after it; and it
+    clamped to the compaction summary whenever a compaction had ever been seen,
+    which froze the boundary there for the rest of the session - everything
+    after the summary was permanently un-cacheable. It is now computed on the
+    post-transform list and advances normally after a compaction. Separately,
+    `sent_stable` now records only the durable prefix, not the per-turn
+    injections appended after the user message; those are never logged
+    (FR-CTX-4), so recording them made the *next* turn read as a divergence and
+    narrow the boundary for no reason.
+  - **gh #277:** the overflow-recovery branch emitted `Error` and `TurnEnded`
+    before attempting to recover. A recovered turn then carried on streaming
+    after its own `TurnEnded`, and an unrecovered one emitted both events
+    twice. Nothing is emitted before the attempt now: recovery is marked by
+    `CompactionStarted`/`CompactionEnded { reason: "overflow" }`, and
+    `TurnEnded` fires once when the turn really ends.
+  - **gh #356:** every native provider bridge flattened its wire kit's
+    `StreamFailure { message, class, retryable }` into
+    `DispatchError::Failed(String)`, forcing the turn loop to re-derive the
+    classification by looking for `"provider returned HTTP NNN"` in the text.
+    An `invalid_api_key` body, an expired session, or a vendor-worded 400 fell
+    through to `("transport", true)` and was retried three times with backoff
+    before failing on the wrong code. `DispatchError::ProviderFailed` carries
+    the class and retryability across the boundary, and the text fallback (the
+    only route a WASM guest has) now recognizes auth refusals.
+
+- **Three places where the WASM path silently did less than the native path- **Five `lca-tools` durability and hygiene defects, each of which failed
   silently rather than loudly (gh #318, #319, #320, #321, #322).**
   - **gh #318:** `process_wait` and `pty_wait` waited on the child while
     holding the handle table's mutex and then left the entry in place, so

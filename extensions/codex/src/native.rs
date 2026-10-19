@@ -97,7 +97,15 @@ impl ExtensionDispatch for Codex {
             match result {
                 Ok(()) => Ok(()),
                 Err(lca_tools::BridgeError::Work(failure)) => {
-                    Err(DispatchError::Failed(format!("codex: {}", failure.message)))
+                    // Gh #356: keep the wire kit's class and retryability;
+                    // flattening to a string made the turn loop re-guess them
+                    // from the message text.
+                    Err(DispatchError::provider_failed(
+                        "codex",
+                        failure.message,
+                        failure.class,
+                        failure.retryable,
+                    ))
                 }
                 Err(lca_tools::BridgeError::Panicked) => Err(DispatchError::Failed(
                     "codex: the provider call panicked".to_string(),

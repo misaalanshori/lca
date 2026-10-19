@@ -97,7 +97,15 @@ impl ExtensionDispatch for Grok {
             match result {
                 Ok(()) => Ok(()),
                 Err(lca_tools::BridgeError::Work(failure)) => {
-                    Err(DispatchError::Failed(format!("grok: {}", failure.message)))
+                    // Gh #356: keep the wire kit's class and retryability;
+                    // flattening to a string made the turn loop re-guess them
+                    // from the message text.
+                    Err(DispatchError::provider_failed(
+                        "grok",
+                        failure.message,
+                        failure.class,
+                        failure.retryable,
+                    ))
                 }
                 Err(lca_tools::BridgeError::Panicked) => Err(DispatchError::Failed(
                     "grok: the provider call panicked".to_string(),
