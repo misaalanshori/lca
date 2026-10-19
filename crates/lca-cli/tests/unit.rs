@@ -351,6 +351,79 @@ fn a_creation_failure_errors() {
     let _ = std::fs::remove_file(&base);
 }
 
+// Verifies: gh #344 follow-up - the session temp dir and its `<data>/tmp`
+// parent are owner-only at creation. The scope engine confines resolution to
+// the session root, but the parent is created with the ambient umask and would
+// otherwise be world-listable, disclosing which sessions exist.
+#[cfg(unix)]
+#[test]
+fn the_session_temp_dirs_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = std::env::temp_dir().join(format!("lca-temp-mode-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let session = lca_cli::ensure_session_temp(&base, "session-mode").expect("create");
+    for dir in [base.join("tmp"), session.clone()] {
+        let mode = std::fs::metadata(&dir).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{} is owner-only, got {mode:o}", dir.display());
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// Verifies: gh #344 follow-up - a symlink planted at the session temp path is
+// refused at creation, not followed. Scope resolution already fail-closes at
+// use time; this closes the window before the first stage, when nothing has
+// resolved the path yet.
+#[cfg(unix)]
+#[test]
+fn a_planted_symlink_at_the_session_temp_path_is_refused() {
+    let base = std::env::temp_dir().join(format!("lca-temp-link-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("tmp")).expect("mkdir tmp");
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("mkdir elsewhere");
+    let planted = base.join("tmp").join("session-link");
+    std::os::unix::fs::symlink(&elsewhere, &planted).expect("plant symlink");
+
+    let err = lca_cli::ensure_session_temp(&base, "session-link")
+        .expect_err("a symlink at the session path must fail loudly");
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
+    // And the target is untouched: the link was neither followed nor replaced.
+    assert!(planted.is_symlink(), "the planted link is still a link");
+    assert!(
+        std::fs::read_dir(&elsewhere)
+            .expect("read")
+            .next()
+            .is_none(),
+        "nothing was created through the link"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// Verifies: gh #344 follow-up - the same guard one level up. A symlink where
+// `<data>/tmp` should be would otherwise become every session's temp root.
+#[cfg(unix)]
+#[test]
+fn a_planted_symlink_at_the_temp_root_is_refused() {
+    let base = std::env::temp_dir().join(format!("lca-temp-rootlink-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).expect("mkdir base");
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("mkdir elsewhere");
+    std::os::unix::fs::symlink(&elsewhere, base.join("tmp")).expect("plant symlink");
+
+    let err = lca_cli::ensure_session_temp(&base, "session-a")
+        .expect_err("a symlink at the temp root must fail loudly");
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
+    assert!(
+        std::fs::read_dir(&elsewhere)
+            .expect("read")
+            .next()
+            .is_none(),
+        "nothing was created through the link"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 // Verifies: gh #133 receipt - the configured prefix rides the resolved
 // shell the backend runs, so every command carries it.
 #[test]

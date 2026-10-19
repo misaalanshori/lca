@@ -33,9 +33,51 @@ pub fn load_user_keybindings(
 /// propagate to the caller (`?`, never a silent `let _`); contexts with
 /// no session (extension install, pre-session login) pass the system
 /// temp dir explicitly instead.
+///
+/// Hardened at creation (gh #344 follow-up):
+///
+/// - A path that already exists and is not a directory is refused, using
+///   symlink-aware metadata so a planted symlink fails *here* rather than at
+///   the first staging call. Scope resolution already fail-closes at use time
+///   (`canonicalize_deepest` + `starts_with(root)`); this closes the window
+///   before the first stage, when nothing has resolved the path yet and a
+///   link would silently become the session's temp root.
+/// - Both `<data>/tmp` and the session directory are set to `0700` on Unix at
+///   creation. The scope engine confines resolution to the session root, but
+///   the *parent* `<data>/tmp` was created with the ambient umask, so it was
+///   world-listable and disclosed the set of live session ids.
 pub fn ensure_session_temp(data_dir: &Path, session_id: &str) -> std::io::Result<PathBuf> {
-    let path = data_dir.join("tmp").join(session_id);
+    let root = data_dir.join("tmp");
+    let path = root.join(session_id);
+    // Refuse a non-directory at either level before creating anything under
+    // it. `symlink_metadata` deliberately does not follow: a link is "not a
+    // directory here", which is exactly the case that must fail loudly.
+    for candidate in [&root, &path] {
+        match std::fs::symlink_metadata(candidate) {
+            Ok(meta) if !meta.is_dir() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "the session temp path {} exists and is not a directory",
+                        candidate.display()
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
     std::fs::create_dir_all(&path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Owner-only on both levels: the session dir holds staged payloads,
+        // and the parent discloses which sessions exist.
+        for dir in [&root, &path] {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
     Ok(path)
 }
 
