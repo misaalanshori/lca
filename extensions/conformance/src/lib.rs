@@ -117,6 +117,61 @@ pub trait IdentityCap {
     fn oauth_await(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError>;
     /// Abandon a flow.
     fn oauth_end(&self, handle: u32) -> Result<(), CapabilityError>;
+    /// Read one of the extension's own resources (gh #314): the provider
+    /// world imports `lca:host/resources`, and a guest that does not
+    /// delegate to it silently reports `not-found` for its own bag.
+    fn resource_read(&self, path: &str) -> Result<Vec<u8>, CapabilityError>;
+    /// The response's headers (gh #314): the provider world imports
+    /// `lca:host/net`, and a guest that does not delegate loses
+    /// `retry-after` - and with it any server-directed backoff.
+    fn net_response_headers(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError>;
+}
+
+/// The resource the provider probe reads, proving the delegation crossed
+/// both delivery modes (gh #314). Baked into the extension's own bag.
+pub const PROBE_RESOURCE: &str = "probe/provider.txt";
+
+/// What [`PROBE_RESOURCE`] contains, so the outcome is comparable.
+pub const PROBE_RESOURCE_BODY: &str = "provider-resource-ok";
+
+/// The URL the provider probe requests to prove the `net` delegation
+/// crosses (gh #314). The fixture manifest grants exactly this host; no
+/// test asserts the response's content, only that the *call reaches the
+/// capability layer* in both modes - a guest that never delegates gets a
+/// `not-granted`/`not-found` shape the report names.
+pub const PROBE_HEADER_URL: &str = "https://conformance.example.com/probe-headers";
+
+/// How the provider probe reports the two crossings (gh #314).
+///
+/// `resource=` is the bytes the guest read from its own bag - the exact
+/// assertion that `resources::read` is delegated. `headers=` reports what
+/// the `net::response_headers` *import* did: the delegation itself is what
+/// gh #314 fixed, and an unknown handle answering `not-found` (rather than
+/// an empty list) is the observable proof the call crossed into the host.
+/// Both modes must produce the same string.
+pub fn probe_capability_report(cap: &dyn IdentityCap) -> String {
+    let resource = match cap.resource_read(PROBE_RESOURCE) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(err) => format!("<resource failed: {err}>"),
+    };
+    // Handle 0 was never issued by anyone, so the host must answer with a
+    // *failure*: only a delegated call can do that. The trait default this
+    // replaced answered `Ok(vec![])`, which is how the omission stayed
+    // invisible (a caller reads an empty list as "no headers").
+    //
+    // Both modes classify the failure the same way here on purpose. The
+    // WIT `net::error` variant has no not-found case, so the host folds it
+    // into `invalid`; reporting the fold is what makes the two modes'
+    // strings identical, and the report's `failed` prefix is what proves the
+    // call crossed at all. (The un-folded vocabulary gap is noted in this
+    // cycle's report; widening the variant is an ABI change, not a bug fix.)
+    let headers = match cap.net_response_headers(0) {
+        Ok(headers) => format!("<answered {headers:?}>"),
+        Err(CapabilityError::NotFound(reason)) => format!("failed({reason})"),
+        Err(CapabilityError::Invalid(reason)) => format!("failed({reason})"),
+        Err(other) => format!("<{other}>"),
+    };
+    format!("resource={resource};headers={headers}")
 }
 
 /// The redirect path the identity probe's oauth flow uses (the manifest
@@ -755,7 +810,8 @@ mod scripts;
 pub use scripts::{
     compact_excerpts, compact_script, provider_models, provider_models_default, scripted_events,
     scripted_login, scripted_login_options, scripted_login_submit, scripted_logout, scripted_usage,
-    scripted_usage_report, transform_script, ui_event_script, ui_script,
+    scripted_usage_report, scripted_usage_report_with, transform_script, ui_event_script,
+    ui_script,
 };
 
 // ---------------------------------------------------------------------------

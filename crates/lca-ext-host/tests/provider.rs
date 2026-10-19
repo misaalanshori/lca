@@ -76,6 +76,16 @@ impl Fixture {
             temp: root.join("tmp"),
             state_dir: root.join("data"),
         };
+        // Gh #314: the provider probe reads its own resource bag in both
+        // modes, so the fixture seeds the directory the host serves
+        // (`<state>/extensions/<name>/resources`, ADR-0030).
+        let resources = root.join("data/extensions/conformance/resources/probe");
+        std::fs::create_dir_all(&resources).expect("mkdir probe resources");
+        std::fs::write(
+            resources.join("provider.txt"),
+            conformance::PROBE_RESOURCE_BODY.as_bytes(),
+        )
+        .expect("seed the probe resource");
         Fixture {
             store: Arc::new(Mutex::new(
                 GrantStore::open(&root.join("grants.json")).expect("store"),
@@ -98,7 +108,7 @@ impl Fixture {
     }
 
     fn capabilities(&self) -> Arc<lca_tools::Capabilities> {
-        Arc::new(lca_tools::Capabilities::new(
+        let mut cap = lca_tools::Capabilities::new(
             "conformance",
             lca_tools::CapabilityGrants {
                 fs: vec![
@@ -124,7 +134,13 @@ impl Fixture {
             self.store.clone(),
             self.root.join("project"),
             None,
-        ))
+        );
+        // Gh #314: the native twin reads the SAME bag the WASM host serves,
+        // so the two modes' capability probe compares like with like.
+        cap.set_resources(lca_tools::ResourceSource::Dir(
+            self.root.join("data/extensions/conformance/resources"),
+        ));
+        Arc::new(cap)
     }
 
     fn wasm_mode(&self) -> lca_ext_host::WasmExtension {
@@ -210,6 +226,125 @@ async fn model_listing_is_identical_across_modes() {
     assert_eq!(wasm_models.len(), 2);
     assert_eq!(wasm_models[0].id, "conformance-a");
     assert_eq!(wasm_models[1].context_window, 8192);
+}
+
+// Verifies: gh #316 - WASM `list_models` preserves `extras`, so the WASM
+// path advertises the same vision/thinking/cache metadata the native path
+// does. The pre-existing row above compares the two modes, but the fixture's
+// models carried *empty* extras on both sides, so it agreed vacuously and
+// could not see the guest's hardcoded `Vec::new()`.
+#[tokio::test]
+async fn model_extras_survive_the_wasm_round_trip() {
+    let fixture = Fixture::new("model-extras");
+    let (wasm, native) = fixture.both_modes();
+
+    let wasm_models = wasm.provider_models(&[]).expect("wasm models");
+    let native_models = native.provider_models(&[]).expect("native models");
+
+    // The fixture must be exercising the field, or this row would repeat
+    // the blind spot it exists to close.
+    assert!(
+        native_models.iter().any(|model| !model.extras.is_empty()),
+        "the conformance fixture must publish models carrying extras"
+    );
+    assert_eq!(
+        wasm_models, native_models,
+        "NFR-25: the two modes must produce the same model metadata"
+    );
+
+    // And the specific metadata gh #316 reports as lost, named.
+    let first = &wasm_models[0];
+    assert_eq!(
+        first.extras.get("vision").map(String::as_str),
+        Some("true"),
+        "the WASM path sees the vision flag"
+    );
+    assert_eq!(
+        first.extras.get("thinking").map(String::as_str),
+        Some("true"),
+        "the WASM path sees the thinking flag"
+    );
+    assert_eq!(
+        first.extras.get("prompt_cache").map(String::as_str),
+        Some("short=300,long=3600"),
+        "the WASM path sees the prompt-cache lifetimes"
+    );
+    // A model whose metadata differs keeps its own answer (no cross-talk).
+    assert_eq!(
+        wasm_models[1].extras.get("vision").map(String::as_str),
+        Some("false")
+    );
+}
+
+// Verifies: gh #314 - the two capability delegations `GuestCap` omitted.
+// `resource_read` failed to the trait's `NotFound` default, so a WASM
+// provider could not read its own `resources/` bag (presets, curated model
+// lists); `net_response_headers` returned an empty list, so `retry-after`
+// was invisible and a server-directed backoff never happened. Both ride the
+// fixture's `usage` extras (`capability_probe`) so the two delivery modes
+// are compared on one string.
+#[tokio::test]
+async fn the_provider_capability_delegations_cross_in_both_modes() {
+    let fixture = Fixture::new("cap-delegations");
+    let (wasm, native) = fixture.both_modes();
+
+    let report = |usage: lca_protocol::Usage| {
+        usage
+            .extras
+            .get("capability_probe")
+            .cloned()
+            .expect("the fixture's usage carries the probe report")
+    };
+    let wasm_report = report(
+        wasm.identity_usage()
+            .await
+            .expect("wasm usage")
+            .expect("wasm outcome"),
+    );
+    let native_report = report(
+        native
+            .identity_usage()
+            .await
+            .expect("native usage")
+            .expect("native outcome"),
+    );
+
+    // The resource half is byte-identical across modes - that is the
+    // gh #314 fix for `resource_read`. The header half differs only in how
+    // an unissued handle is *named* (see below), so compare the halves.
+    let resource_half = |report: &str| report.split(';').next().unwrap_or_default().to_string();
+    assert_eq!(
+        resource_half(&wasm_report),
+        resource_half(&native_report),
+        "NFR-25: the two modes read their resource bag identically"
+    );
+    assert!(
+        wasm_report.contains(conformance::PROBE_RESOURCE_BODY),
+        "the WASM guest read its own resource bag: {wasm_report}"
+    );
+    assert!(
+        !wasm_report.contains("<resource failed"),
+        "no resource failure in either mode: {wasm_report}"
+    );
+    // The delegation, not a default: an unissued handle must reach the host
+    // and come back as a *failure*, because the trait default this fix
+    // replaced answered `Ok(vec![])` - an empty header list, which is exactly
+    // how the omission stayed invisible (a caller reads it as "this response
+    // has no headers").
+    //
+    // The two modes spell the failure differently and that is not fixable
+    // here: native says `not-found`, the WIT `net::error` variant has no
+    // not-found case, so the host folds it into `invalid`. Recorded as an
+    // ABI observation in this cycle's report rather than papered over - the
+    // property that matters is that neither mode answers `Ok([])`.
+    assert!(
+        wasm_report.contains("headers=failed(unknown handle 0)"),
+        "the header call reached the host with a real failure: {wasm_report}"
+    );
+    assert!(
+        !wasm_report.contains("answered []"),
+        "an empty header list would be the pre-fix default: {wasm_report}"
+    );
 }
 
 // Verifies: ADR-0004's typed stream, NFR-25's exact-equality promise for

@@ -405,9 +405,16 @@ mod mcp_resource_staging_private;
 // split across TCP chunks.
 #[path = "337-sse-utf8-chunk-boundary.rs"]
 mod sse_utf8_chunk_boundary;
+// GitHub #314: the WASM provider guest omitted two capability
+// delegations, so WASM silently did less than native.
+#[path = "314-subscription-wasm-cap-delegations.rs"]
+mod subscription_wasm_cap_delegations;
 // GitHub #315: a 400 `invalid_grant` refresh left dead tokens in place.
 #[path = "315-refresh-invalid-grant-purges.rs"]
 mod refresh_invalid_grant_purges;
+// GitHub #316: the WASM model listing dropped per-model extras.
+#[path = "316-wasm-model-extras-survive.rs"]
+mod wasm_model_extras_survive;
 // GitHub #272: `KNOWN_KEYS` / `resolved()` drifted from the config
 // vocabulary - a dead environment override and seven unreported settings.
 #[path = "272-config-key-vocabulary.rs"]

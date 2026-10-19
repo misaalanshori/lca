@@ -27,7 +27,7 @@ use exports::lca::ext::provider_login::{
 };
 use exports::lca::ext::provider_models::{Guest as ModelsGuest, ModelInfo as WasmModel};
 use lca::ext::types::{ExtraPair, Usage as WasmUsage};
-use lca::host::{credentials, oauth};
+use lca::host::{credentials, net, oauth, resources};
 
 fn map_credentials(err: credentials::Error) -> crate::CapabilityError {
     use crate::CapabilityError as E;
@@ -47,6 +47,27 @@ fn map_oauth(err: oauth::Error) -> crate::CapabilityError {
         oauth::Error::Timeout(d) => E::Timeout(d),
         oauth::Error::Io(d) => E::Io(d),
         oauth::Error::Invalid(d) => E::Invalid(d),
+    }
+}
+
+fn map_resources(err: resources::Error) -> crate::CapabilityError {
+    use crate::CapabilityError as E;
+    match err {
+        resources::Error::Permission(d) => E::Permission(d),
+        resources::Error::NotFound(d) => E::NotFound(d),
+        resources::Error::Invalid(d) => E::Invalid(d),
+    }
+}
+
+fn map_net(err: net::Error) -> crate::CapabilityError {
+    use crate::CapabilityError as E;
+    match err {
+        net::Error::Permission(d) => E::Permission(d),
+        net::Error::NotGranted(d) => E::NotGranted(d),
+        net::Error::Dns(d) => E::Io(d),
+        net::Error::Tls(d) => E::Io(d),
+        net::Error::Io(d) => E::Io(d),
+        net::Error::Invalid(d) => E::Invalid(d),
     }
 }
 
@@ -76,6 +97,15 @@ impl crate::IdentityCap for GuestIdentityCap {
     }
     fn oauth_end(&self, handle: u32) -> Result<(), crate::CapabilityError> {
         oauth::end_flow(handle).map_err(map_oauth)
+    }
+    fn resource_read(&self, path: &str) -> Result<Vec<u8>, crate::CapabilityError> {
+        resources::read(path).map_err(map_resources)
+    }
+    fn net_response_headers(
+        &self,
+        handle: u32,
+    ) -> Result<Vec<(String, String)>, crate::CapabilityError> {
+        net::response_headers(handle).map_err(map_net)
     }
 }
 
@@ -142,7 +172,15 @@ impl ModelsGuest for ProviderComponent {
                 name: model.name,
                 context_window: model.context_window,
                 max_tokens: model.max_tokens,
-                extras: Vec::new(),
+                // Gh #316: carried, not zeroed. This twin had the same
+                // hardcode as the shared macro, which is why the existing
+                // cross-mode row could not see the loss: both sides threw
+                // the field away, so they "agreed".
+                extras: model
+                    .extras
+                    .into_iter()
+                    .map(|(key, value)| ExtraPair { key, value })
+                    .collect(),
             })
             .collect()
     }
@@ -190,7 +228,12 @@ impl IdentityGuest for ProviderComponent {
     }
 
     fn usage() -> Result<TokenUsage, WasmOutcome> {
-        let usage = to_wit_usage(&crate::scripted_usage_report());
+        // Gh #314: the same probe the native twin runs, through this
+        // guest's capability view - so a missing delegation shows up as a
+        // `<... failed>` in the report rather than as silent agreement.
+        let usage = to_wit_usage(&crate::scripted_usage_report_with(
+            crate::probe_capability_report(&GuestIdentityCap),
+        ));
         Ok(TokenUsage {
             input: usage.input,
             output: usage.output,

@@ -41,14 +41,29 @@ pub fn provider_models_default() -> Vec<lca_protocol::ModelInfo> {
             name: "Conformance A".to_string(),
             context_window: 4096,
             max_tokens: 512,
-            extras: Default::default(),
+            // Gh #316: the fixture must exercise the field. With empty
+            // extras on both sides, "native and WASM agree" was true and
+            // vacuous - which is how the guest's hardcoded `Vec::new()`
+            // survived.
+            extras: [
+                ("vision".to_string(), "true".to_string()),
+                ("thinking".to_string(), "true".to_string()),
+                (
+                    "prompt_cache".to_string(),
+                    "short=300,long=3600".to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
         },
         lca_protocol::ModelInfo {
             id: "conformance-b".to_string(),
             name: "Conformance B".to_string(),
             context_window: 8192,
             max_tokens: 1024,
-            extras: Default::default(),
+            extras: [("vision".to_string(), "false".to_string())]
+                .into_iter()
+                .collect(),
         },
     ]
 }
@@ -377,7 +392,17 @@ pub fn scripted_logout() -> lca_protocol::IdentityOutcome {
 
 /// The standard usage shape the generic `/usage` prints.
 pub fn scripted_usage_report() -> lca_protocol::Usage {
-    lca_protocol::Usage {
+    scripted_usage_report_with(String::new())
+}
+
+/// The usage record carrying the gh #314 capability probe's verdict.
+///
+/// `extras` is the ABI's reserved extension point and both modes already
+/// map it field-for-field, so the probe rides an existing channel rather
+/// than adding an export: one string both delivery modes must produce
+/// identically, or the row that compares them fails.
+pub fn scripted_usage_report_with(probe: String) -> lca_protocol::Usage {
+    let mut usage = lca_protocol::Usage {
         input: 700,
         output: 70,
         cache_read: 7000,
@@ -388,7 +413,11 @@ pub fn scripted_usage_report() -> lca_protocol::Usage {
         cost_cache_read: 0.0,
         cost_cache_write: 0.0,
         extras: Default::default(),
+    };
+    if !probe.is_empty() {
+        usage.extras.insert("capability_probe".to_string(), probe);
     }
+    usage
 }
 
 /// The login options the conformance probe reports (ADR-0033): a fixed

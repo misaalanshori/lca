@@ -69,7 +69,7 @@ macro_rules! subscription_wasm_dispatcher {
         };
         use exports::lca::ext::provider_models::{Guest as ModelsGuest, ModelInfo as WasmModel};
         use lca::ext::types::{ExtraPair, Usage as WasmUsage};
-        use lca::host::{credentials, net, oauth};
+        use lca::host::{credentials, net, oauth, resources};
         use lca_protocol::{OauthCap, ProviderCap};
 
         fn map_net(err: net::Error) -> lca_protocol::CapabilityError {
@@ -81,6 +81,20 @@ macro_rules! subscription_wasm_dispatcher {
                 net::Error::Tls(d) => E::Io(d),
                 net::Error::Io(d) => E::Io(d),
                 net::Error::Invalid(d) => E::Invalid(d),
+            }
+        }
+
+        /// The resource import's error, mapped the same way its
+        /// siblings map theirs (gh #314): `permission` and `not-found`
+        /// keep their meaning because callers act differently on them -
+        /// a refused path is a bug, a missing one may be an optional
+        /// resource.
+        fn map_resources(err: resources::Error) -> lca_protocol::CapabilityError {
+            use lca_protocol::CapabilityError as E;
+            match err {
+                resources::Error::Permission(d) => E::Permission(d),
+                resources::Error::NotFound(d) => E::NotFound(d),
+                resources::Error::Invalid(d) => E::Invalid(d),
             }
         }
 
@@ -138,6 +152,18 @@ macro_rules! subscription_wasm_dispatcher {
                 net::read_body(handle, max as u64).map_err(map_net)
             }
 
+            // Gh #314: the trait's default returns an empty list, which
+            // compiled fine and silently cost the WASM path every header
+            // the native path sees - `retry-after` above all, so a rate
+            // limit was invisible and the kit could not back off on the
+            // server's own clock the way native does.
+            fn net_response_headers(
+                &self,
+                handle: u32,
+            ) -> Result<Vec<(String, String)>, lca_protocol::CapabilityError> {
+                net::response_headers(handle).map_err(map_net)
+            }
+
             fn net_close_response(
                 &self,
                 handle: u32,
@@ -176,6 +202,18 @@ macro_rules! subscription_wasm_dispatcher {
                     credentials::Error::Io(d) => lca_protocol::CapabilityError::Io(d),
                     credentials::Error::Invalid(d) => lca_protocol::CapabilityError::Invalid(d),
                 })
+            }
+
+            // Gh #314: the trait's default reports `NotFound` for every
+            // path, so a WASM provider could not read its own `resources/`
+            // bag - presets, curated model lists, any data-only package
+            // content. The import was already bound in this world; only
+            // the delegation was missing.
+            fn resource_read(
+                &self,
+                path: &str,
+            ) -> Result<Vec<u8>, lca_protocol::CapabilityError> {
+                resources::read(path).map_err(map_resources)
             }
         }
 
@@ -335,7 +373,20 @@ macro_rules! subscription_wasm_dispatcher {
                         name: model.name,
                         context_window: model.context_window,
                         max_tokens: model.max_tokens,
-                        extras: Vec::new(),
+                        // Gh #316: the ABI record has carried `extras`
+                        // since its first draft (`wit/world-provider.wit`)
+                        // and the host copies it through untouched, so
+                        // hardcoding an empty list here made the WASM
+                        // path advertise every model as having no
+                        // metadata - no vision, no thinking levels, no
+                        // prompt-cache lifetimes - while native kept it.
+                        // An omission, not an ABI-shape problem: no WIT
+                        // change, no new field.
+                        extras: model
+                            .extras
+                            .into_iter()
+                            .map(|(key, value)| ExtraPair { key, value })
+                            .collect(),
                     })
                     .collect()
             }

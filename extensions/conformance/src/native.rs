@@ -195,6 +195,12 @@ impl crate::IdentityCap for NativeCap {
     fn oauth_end(&self, handle: u32) -> Result<(), CapabilityError> {
         self.cap.oauth_end(handle)
     }
+    fn resource_read(&self, path: &str) -> Result<Vec<u8>, CapabilityError> {
+        self.cap.resource_read(path)
+    }
+    fn net_response_headers(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError> {
+        self.cap.net_response_headers(handle)
+    }
 }
 
 /// The native-linked conformance extension: same schema, same shared
@@ -414,7 +420,18 @@ impl lca_ext_abi::ExtensionDispatch for NativeConformance {
             lca_protocol::DispatchError,
         >,
     > {
-        Box::pin(std::future::ready(Ok(Ok(crate::scripted_usage_report()))))
+        // Gh #314: the same probe the guest runs, through the native
+        // capability engine, so the two reports can be compared.
+        // The engine-backed identity view, so the probe runs the native
+        // path's own capability calls.
+        let probe = crate::probe_capability_report(&NativeCap {
+            cap: self.cap.clone(),
+            dialogs: self.dialogs.clone(),
+            tools_view: self.tools_view.lock().ok().and_then(|slot| slot.clone()),
+        });
+        Box::pin(std::future::ready(Ok(Ok(
+            crate::scripted_usage_report_with(probe),
+        ))))
     }
 
     fn login_options(
