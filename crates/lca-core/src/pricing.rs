@@ -18,6 +18,13 @@ pub struct Price {
     /// Input tokens written to the prompt cache. Some vendors charge a
     /// premium over fresh input (the Claude line bills 1.25x).
     pub cache_write_per_mtok: f64,
+    /// Input tokens written to the extended (one-hour) cache tier. This tier
+    /// is not the ordinary write tier: Anthropic bills it at **2x input**,
+    /// not at the 1.25x five-minute rate, and `cache-write-hour` is recorded
+    /// separately for exactly that reason (FR-CORE-8). Falls back to
+    /// `2 * input_per_mtok`, which is the published rule, when a table
+    /// omits it.
+    pub cache_write_1h_per_mtok: f64,
     /// Output side.
     pub output_per_mtok: f64,
 }
@@ -45,12 +52,20 @@ fn table() -> &'static HashMap<String, Price> {
                     .get("cache_write")
                     .and_then(|v| v.as_float())
                     .unwrap_or(input);
+                // The one-hour tier bills at 2x input on Anthropic, which is
+                // the only vendor publishing that tier; defaulting to the
+                // 5-minute write rate would under-bill it by ~60%.
+                let cache_write_1h = rates
+                    .get("cache_write_1h")
+                    .and_then(|v| v.as_float())
+                    .unwrap_or(input * 2.0);
                 map.insert(
                     model.to_ascii_lowercase(),
                     Price {
                         input_per_mtok: input,
                         cache_read_per_mtok: cache_read,
                         cache_write_per_mtok: cache_write,
+                        cache_write_1h_per_mtok: cache_write_1h,
                         output_per_mtok: output,
                     },
                 );
@@ -81,7 +96,8 @@ pub struct PricedUsage {
     pub cost_input: f64,
     /// Cache-read tokens at the cache-read rate.
     pub cost_cache_read: f64,
-    /// Cache-write tokens (both tiers) at the cache-write rate.
+    /// Cache-write tokens at the cache-write rate, plus the one-hour tier at
+    /// its own (higher) rate.
     pub cost_cache_write: f64,
     /// Output tokens at the output rate.
     pub cost_output: f64,
@@ -96,12 +112,13 @@ impl PricedUsage {
         let per_mtok = |tokens: u64, rate: f64| tokens as f64 / 1_000_000.0 * rate;
         let cost_input = per_mtok(usage.input, price.input_per_mtok);
         let cost_cache_read = per_mtok(usage.cache_read, price.cache_read_per_mtok);
-        // The one-hour tier is still a cache write; it bills at the
-        // cache-write rate rather than at a rate of its own.
-        let cost_cache_write = per_mtok(
-            usage.cache_write + usage.cache_write_1h,
-            price.cache_write_per_mtok,
-        );
+        // The one-hour tier is a cache write for accounting purposes but not
+        // for billing: Anthropic charges 2x input for it against 1.25x for
+        // the five-minute tier, so folding them together under-bills a
+        // long-lived cache by a wide margin. `cost_cache_write` carries both,
+        // since the persisted record has one cache-write cost field.
+        let cost_cache_write = per_mtok(usage.cache_write, price.cache_write_per_mtok)
+            + per_mtok(usage.cache_write_1h, price.cache_write_1h_per_mtok);
         let cost_output = per_mtok(usage.output, price.output_per_mtok);
         PricedUsage {
             cost_input,
@@ -140,6 +157,7 @@ mod tests {
                 input_per_mtok: 2.50,
                 cache_read_per_mtok: 1.25,
                 cache_write_per_mtok: 2.50,
+                cache_write_1h_per_mtok: 5.00,
                 output_per_mtok: 10.00,
             }
         );
@@ -197,7 +215,8 @@ mod tests {
                 price.input_per_mtok > 0.0
                     && price.output_per_mtok > 0.0
                     && price.cache_read_per_mtok > 0.0
-                    && price.cache_write_per_mtok > 0.0,
+                    && price.cache_write_per_mtok > 0.0
+                    && price.cache_write_1h_per_mtok > 0.0,
                 "{model} carries positive rates for every bucket"
             );
         }

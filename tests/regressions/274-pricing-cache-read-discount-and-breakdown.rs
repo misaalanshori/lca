@@ -88,9 +88,11 @@ fn a_cache_heavy_turn_is_cheaper_than_the_input_rate() {
     assert!((cost - 15.30).abs() < 1e-9, "got {cost}");
 }
 
-/// The 1-hour cache tier bills with ordinary cache writes.
+/// The one-hour cache tier has its own rate: Anthropic bills it at 2x input,
+/// against 1.25x for the five-minute tier. Folding the two together (the
+/// first draft of gh #274 did) under-bills a long-lived cache badly.
 #[test]
-fn the_one_hour_cache_write_rides_the_cache_write_rate() {
+fn the_one_hour_cache_tier_bills_at_twice_input() {
     let usage = Usage {
         input: 0,
         output: 0,
@@ -99,10 +101,35 @@ fn the_one_hour_cache_write_rides_the_cache_write_rate() {
         cache_write_1h: 1_000_000,
         ..Default::default()
     };
-    let cost = table_cost("gpt-4o", &usage).expect("listed");
+    let cost = table_cost("claude-sonnet-4-5", &usage).expect("listed");
     assert!(
-        (cost - 2.50).abs() < 1e-9,
-        "1M one-hour cache writes at the gpt-4o cache-write rate: {cost}"
+        (cost - 6.00).abs() < 1e-9,
+        "1M one-hour writes on claude-sonnet-4-5 bill at 2x input (6.00),          not the 3.75 five-minute rate: {cost}"
+    );
+    // And the five-minute tier is unchanged. Built fresh: `..usage` would
+    // carry the one-hour count along and this assertion would silently be
+    // measuring both tiers (which is how the first draft of this row failed).
+    let short = Usage {
+        cache_write: 1_000_000,
+        cache_write_1h: 0,
+        ..Default::default()
+    };
+    let short_cost = table_cost("claude-sonnet-4-5", &short).expect("listed");
+    assert!((short_cost - 3.75).abs() < 1e-9, "5m tier: {short_cost}");
+}
+
+/// The two write tiers are distinct on the same record.
+#[test]
+fn the_two_write_tiers_are_priced_separately() {
+    let both = Usage {
+        cache_write: 1_000_000,
+        cache_write_1h: 1_000_000,
+        ..Default::default()
+    };
+    let cost = table_cost("claude-sonnet-4-5", &both).expect("listed");
+    assert!(
+        (cost - (3.75 + 6.00)).abs() < 1e-9,
+        "1M five-minute (3.75) + 1M one-hour (6.00) = 9.75: {cost}"
     );
 }
 
@@ -146,6 +173,14 @@ fn every_entry_carries_positive_cache_rates() {
         assert!(
             price.cache_read_per_mtok <= price.input_per_mtok,
             "{model}: a cache read is never dearer than fresh input"
+        );
+        assert!(
+            price.cache_write_1h_per_mtok > 0.0,
+            "{model} carries a positive one-hour cache-write rate"
+        );
+        assert!(
+            price.cache_write_1h_per_mtok >= price.cache_write_per_mtok,
+            "{model}: the one-hour tier is never cheaper than the five-minute one"
         );
     }
 }
@@ -204,6 +239,7 @@ fn a_price_literal_names_both_cache_rates() {
         input_per_mtok: 1.0,
         cache_read_per_mtok: 0.5,
         cache_write_per_mtok: 1.25,
+        cache_write_1h_per_mtok: 2.0,
         output_per_mtok: 2.0,
     };
     assert_eq!(price.cache_read_per_mtok, 0.5);
