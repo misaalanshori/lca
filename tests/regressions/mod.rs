@@ -405,6 +405,18 @@ mod mcp_resource_staging_private;
 // split across TCP chunks.
 #[path = "337-sse-utf8-chunk-boundary.rs"]
 mod sse_utf8_chunk_boundary;
+// GitHub #313: session migration rewrote the log non-atomically and named
+// backups at second resolution.
+#[path = "313-session-migrate-atomic-and-backup.rs"]
+mod session_migrate_atomic_and_backup;
+// GitHub #317: `ScratchDir::new` shared one path per name+pid, so parallel
+// tests deleted each other's directories.
+#[path = "317-scratch-dir-parallel-uniqueness.rs"]
+mod scratch_dir_parallel_uniqueness;
+// GitHub #312: the HTML export emitted `messagemessage-*` classes and an
+// unescaped image media type.
+#[path = "312-html-export-classes-and-media-escape.rs"]
+mod html_export_classes_and_media_escape;
 // GitHub #314: the WASM provider guest omitted two capability
 // delegations, so WASM silently did less than native.
 #[path = "314-subscription-wasm-cap-delegations.rs"]

@@ -180,7 +180,7 @@ The format version is recorded in `meta.json` and in the `session-start` record.
 
 `lca migrate <id>` (gh #98) is the one rewrite this format ships: linkage backfill. Pre-linkage records (no `parent`, written before gh #37) chain to their log predecessor - exactly what `append` would have stamped - so the entry tree and the ancestry walk see old logs. The rules:
 
-- One log per run. The original survives in `<session>/backups/migrate-<unix-seconds>/log.jsonl` until the user removes it.
+- One log per run. The original survives in `<session>/backups/migrate-<unix-millis>/log.jsonl` until the user removes it. Millisecond resolution (gh #313) replaced seconds, which collided for any two migrations inside one second and silently overwrote the earlier backup; a `-<n>` suffix claims a distinct directory on the remaining same-millisecond case. The rewrite of the log itself goes through the same atomic temp-file-and-rename path as every other write, so an interrupted migration cannot leave a truncated `log.jsonl`.
 - Only stamped lines change, by value surgery (unknown fields survive); everything else - unknown-future lines, junction records, linked records - rides through byte-identical.
 - Verified, not trusted: the Display and Audit id-sequences and the contents modulo `parent` must read identical before and after, or the rewrite is refused and the backup named.
 - Refused with a message, never rewritten blind: a meta/header version mismatch (pick the true version by hand first) and a truncated log (repair it first). Unknown-future records migrate along verbatim with a warning, the same warn-and-skip the reader applies.

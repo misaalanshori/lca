@@ -166,7 +166,13 @@ impl SessionStore {
         let backup = self.backup_log(session)?;
         let text = std::fs::read_to_string(session.log_path())?;
         let (out, stamped) = stamp_log(&text);
-        std::fs::write(session.log_path(), out)?;
+        // Gh #313: the log IS the session, and this is the one place it is
+        // rewritten in place. `std::fs::write` truncates then writes, so a
+        // crash or a full disk between those steps leaves a truncated log -
+        // the failure the backup exists to survive, caused by the code that
+        // takes the backup. Every other write in this crate publishes through
+        // `write_atomic` (temp file + rename); this one now does too.
+        super::store::write_atomic(&session.log_path(), out.as_bytes())?;
 
         // Lossless verification: the same transcript, the same
         // contents modulo the stamped links.
@@ -240,16 +246,44 @@ impl SessionStore {
     /// original survives until the user removes it).
     #[inline(never)]
     fn backup_log(&self, session: &Session) -> super::Result<std::path::PathBuf> {
+        // Gh #313: millisecond resolution, plus a collision loop. Seconds
+        // collided for any two migrations inside one second (a script, a
+        // test, or a user re-running immediately), and the second copy
+        // silently overwrote the first - the backup the format promises to
+        // keep "until the user removes it". Milliseconds make that unlikely;
+        // the loop makes it impossible, including on a coarse clock and
+        // across two migrations in the same millisecond.
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_secs())
+            .map(|elapsed| elapsed.as_millis())
             .unwrap_or(0);
-        let dir = session
-            .dir()
-            .join("backups")
-            .join(format!("migrate-{stamp}"));
-        std::fs::create_dir_all(&dir)?;
-        let backup = dir.join("log.jsonl");
+        let backups = session.dir().join("backups");
+        let mut attempt = 0u32;
+        let backup = loop {
+            let name = if attempt == 0 {
+                format!("migrate-{stamp}")
+            } else {
+                format!("migrate-{stamp}-{attempt}")
+            };
+            let dir = backups.join(name);
+            // `create_dir` (not `create_dir_all`) is the claim: it fails
+            // when the directory already exists, so two callers can never
+            // both win the same name.
+            match std::fs::create_dir(&dir) {
+                Ok(()) => break (dir.join("log.jsonl")),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    attempt = attempt.saturating_add(1);
+                    if attempt > 1000 {
+                        return Err(err.into());
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    // The `backups` parent does not exist yet.
+                    std::fs::create_dir_all(&backups)?;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        };
         std::fs::copy(session.log_path(), &backup)?;
         Ok(backup)
     }

@@ -78,10 +78,32 @@ pub fn fake_usage(input: u64, output: u64, cache_read: u64, cache_write: u64) ->
 /// ```
 pub struct ScratchDir(std::path::PathBuf);
 
+/// The next sequence number for [`ScratchDir::new`] (gh #317).
+///
+/// Keying the path on the name and the process alone made every call in one
+/// binary collide: two tests (or two threads of one test) that happened to use
+/// the same name computed the same path, and the second call's `remove_dir_all`
+/// deleted the first one's live directory. A process-wide monotonic counter
+/// makes each call unique, which is what turns "usually fine under nextest's
+/// one-process-per-test" into "correct under `cargo test` and plain threads
+/// too".
+static SCRATCH_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl ScratchDir {
-    /// Create (clearing any stale copy) `<temp>/lca-test-<name>-<pid>`.
+    /// Create a fresh, uniquely named `<temp>/lca-test-<name>-<pid>-<seq>`.
+    ///
+    /// `seq` comes from a process-wide counter (gh #317), so no two calls
+    /// share a path even with one name and one process. Nothing is removed
+    /// before creation beyond this call's own directory, so an in-use
+    /// directory from a sibling test is never cleared.
     pub fn new(name: &str) -> ScratchDir {
-        let dir = std::env::temp_dir().join(format!("lca-test-{name}-{}", std::process::id()));
+        use std::sync::atomic::Ordering;
+        let seq = SCRATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("lca-test-{name}-{}-{seq}", std::process::id()));
+        // Idempotent re-run safety: a counter that restarted (a fresh process
+        // with the same pid is implausible, but a leftover directory from a
+        // killed run is not) must not inherit stale content.
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir");
         ScratchDir(dir)

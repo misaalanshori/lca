@@ -45,9 +45,13 @@ fn preview(text: &str) -> String {
 }
 
 fn image_tag(image: &HtmlImage) -> String {
+    // Gh #312: `media_type` is attachment data, not a literal, so it is
+    // escaped like every other interpolated value. Unescaped it can close
+    // the `src` attribute and inject a handler - the same injection the
+    // text escaping already prevents for content.
     format!(
         "<img alt=\"attached image\" src=\"data:{};base64,{}\"/>",
-        image.media_type,
+        escape(&image.media_type),
         lca_protocol::base64_encode(&image.bytes)
     )
 }
@@ -174,20 +178,28 @@ pub fn render_html(
     }
     let mut sidebar = String::new();
     for row in &rows {
+        // Gh #312: the id is exporter input, so it is escaped here exactly
+        // as it is in the article below; the two must name the same anchor.
         sidebar.push_str(&format!(
             "<a href=\"#{}\" class=\"{}\">{}</a>",
-            row.id,
+            escape(&row.id),
             row.class,
             escape(&row.label)
         ));
     }
     let mut main = String::new();
     for row in &rows {
+        // Gh #312: `row.class` is already `message-user` / `message-assistant`
+        // / ... so `"message{}"` concatenated two class names into one
+        // unknown token (`messagemessage-user`), matching none of the
+        // stylesheet's `.message-*` selectors. The base `message` marker, the
+        // row's own class, and the hidden marker are three separate tokens.
+        let hidden_class = if row.hidden { " message-hidden" } else { "" };
         main.push_str(&format!(
-            "<article id=\"{}\" class=\"message{} {}\">{}</article>",
-            row.id,
+            "<article id=\"{}\" class=\"message {}{}\">{}</article>",
+            escape(&row.id),
             row.class,
-            if row.hidden { "message-hidden" } else { "" },
+            hidden_class,
             row.body
         ));
     }

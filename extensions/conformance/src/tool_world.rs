@@ -17,7 +17,7 @@ wit_bindgen::generate!({
 use lca::ext::types::ToolCall;
 use lca::host::{fs, process, pty, resources, state};
 
-use crate::{Cap, ModeOutcome, mode_and_args, run_shared, schema_json};
+use crate::{Cap, mode_and_args, schema_json};
 use exports::lca::ext::execute::Guest as ExecuteTrait;
 use exports::lca::ext::execute::ToolResult as WasmResult;
 use exports::lca::ext::tool_schema::{Guest as SchemaGuest, Schema};

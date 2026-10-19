@@ -159,3 +159,59 @@ fn exposes_models_like_a_provider_should() {
     assert!(!models.is_empty());
     assert_eq!(provider.name(), "fake");
 }
+
+// Verifies: gh #317 - `ScratchDir::new` must give every call its own
+// directory. Before the fix the path was `<tmp>/lca-test-<name>-<pid>`, so
+// two tests in one binary that happened to share a name computed the same
+// path: the second call's `remove_dir_all` deleted the first one's live
+// directory out from under it, and whichever test lost the race failed for
+// a reason that had nothing to do with what it was testing.
+#[test]
+fn consecutive_scratch_dirs_with_one_name_are_distinct() {
+    let first = lca_testkit::ScratchDir::new("gh317-same-name");
+    let second = lca_testkit::ScratchDir::new("gh317-same-name");
+    assert_ne!(
+        first.path(),
+        second.path(),
+        "two calls with the same name must not share a path"
+    );
+    // Both must exist at the same time: the second call must not have
+    // cleared the first.
+    assert!(first.path().is_dir(), "the first directory still exists");
+    assert!(second.path().is_dir(), "the second directory exists");
+}
+
+// Verifies: gh #317 - and the multi-threaded case the issue describes:
+// threads in one test binary racing on the same name each get a live,
+// distinct directory. This is the shape that actually broke under
+// `cargo test`.
+#[test]
+fn parallel_threads_never_share_a_scratch_path() {
+    let paths: std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let dirs: std::sync::Arc<std::sync::Mutex<Vec<lca_testkit::ScratchDir>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let paths = paths.clone();
+            let dirs = dirs.clone();
+            scope.spawn(move || {
+                let dir = lca_testkit::ScratchDir::new("gh317-race");
+                assert!(dir.path().is_dir(), "each thread's own directory exists");
+                paths.lock().expect("paths").push(dir.path().to_path_buf());
+                // Held alive until the scope ends, so a clobbering
+                // implementation is caught rather than tidied away.
+                dirs.lock().expect("dirs").push(dir);
+            });
+        }
+    });
+    let paths = paths.lock().expect("paths");
+    let mut unique = paths.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        paths.len(),
+        unique.len(),
+        "every thread got its own directory: {paths:?}"
+    );
+}
