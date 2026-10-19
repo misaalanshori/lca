@@ -79,3 +79,32 @@ fn the_path_helper_is_unique_too() {
     assert_ne!(first, second, "the path helper is unique per call too");
     assert!(first.is_dir() && second.is_dir(), "both exist");
 }
+
+// Verifies: gh #317 - the DOWNSTREAM consequence the uniqueness change exposed:
+// a helper that scratches a directory and a test that scratched the same name
+// to find it used to share one path by collision. `extensions/mcp`'s
+// `engine(name)` did exactly that, so `scratch("mcp-deny")` after
+// `engine("mcp-deny", ..)` only "found" the engine's data directory because
+// both calls collided. With unique paths the helper must hand its root back -
+// which is the correct shape anyway: a test asserting on a directory should
+// receive that directory, not recompute it.
+//
+// The general form is what this row pins: two calls with one name never alias,
+// so no test can accidentally depend on recomputing another call's path.
+#[test]
+fn a_second_call_never_aliases_the_first() {
+    let first = lca_testkit::scratch_path("317-alias");
+    std::fs::create_dir_all(first.join("data")).expect("mkdir");
+    let second = lca_testkit::scratch_path("317-alias");
+    assert_ne!(first, second, "the two paths are distinct");
+    assert!(
+        !second.join("data").exists(),
+        "the second path does not see the first's contents: {}",
+        second.display()
+    );
+    assert!(
+        first.join("data").is_dir(),
+        "and the first is untouched: {}",
+        first.display()
+    );
+}

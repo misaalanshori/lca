@@ -168,6 +168,46 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **The embedding SDK lost state and capabilities that only show up in a long
+  session, and three durability defects beside it (gh #309, #310, #313, #312,
+  #317).**
+  - **gh #309:** `Session::create` accepted a `data_dir`, used it to open the
+    store, then dropped it — and `AgentConfig::default()` leaves `data_dir`
+    empty, so every shell child of an embedded turn saw `LCA_DATA_DIR=""`, the
+    one variable `docs/configuration.md` documents for finding the agent's data
+    home. The SDK also had no `resume` (though `id()` documents itself as the
+    handle a resume takes), no way to attach an `ExtensionRegistry`, and no way
+    to cancel a running turn — the `CancelFlag` was a local of `send`, so a host
+    could watch a turn start and not stop it. All four exist now:
+    `Session::resume`, `with_extensions`, `with_agent_config`, `cancel`, and
+    `send_with_cancel`.
+  - **gh #310:** `send` rebuilt `ToolExecutor`, `AgentConfig`, and the cancel
+    flag on every turn. That reset the executor's `ReadTracker` (so
+    `edit_requires_read: true` refused an edit on turn 2 of a file read on turn
+    1), its subfolder-instruction dedup, and the config's `sent_stable` cell —
+    which is exactly what FR-CACHE-6's prompt-cache divergence check reads, so
+    the check could only ever compare a turn with itself. All three are now
+    session-scoped and shared across turns.
+  - **gh #313:** `migrate` rewrote `log.jsonl` with `std::fs::write`, which
+    truncates before it writes — a crash or full disk mid-write left a truncated
+    session, and the backup meant to survive that was written by the same code
+    path. It now uses the crate's atomic temp-file-and-rename helper. Backups
+    were named `migrate-<unix-seconds>`, so two migrations inside one second
+    collided and the second silently overwrote the first; milliseconds plus a
+    collision-suffixed `create_dir` claim make each backup its own directory.
+  - **gh #312:** the HTML export emitted `class="messagemessage-user"` — two
+    class names concatenated into one token that matches none of the
+    stylesheet's `.message-*` selectors, so every exported transcript rendered
+    unstyled — and interpolated an image's `media_type` unescaped into the
+    `data:` URI, where a quote closes the `src` attribute. Both fixed, and the
+    sidebar's `href` now escapes the anchor id the same way the article does.
+  - **gh #317:** `ScratchDir::new` keyed its path on name and pid only, so two
+    tests in one binary sharing a name computed the same path and the second
+    call's `remove_dir_all` deleted the first one's live directory. A
+    process-wide counter makes every call unique. This exposed one test that had
+    been relying on the collision (`extensions/mcp`'s `engine(name)` plus a
+    second `scratch(name)`), which now hands its root back instead.
+
 - **Three places where the WASM path silently did less than the native path
   (gh #314, #315, #316).** One crate (`lca-subscription`), one failure mode: an
   omission that compiles, succeeds quietly, and costs a feature.

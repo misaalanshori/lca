@@ -47,7 +47,18 @@ impl PermissionPrompt for Answer {
 /// The engine plus its prompt spy: the permission-path assertions
 /// read `asked` back to prove the spawn went through the prompt.
 fn engine(name: &str, answer: Decision) -> (Arc<lca_tools::Capabilities>, Arc<Mutex<Answer>>) {
-    let root = scratch(name);
+    engine_at(scratch(name), answer)
+}
+
+/// [`engine`] against an explicit root. Since gh #317 every `scratch` call gets
+/// its own directory, so a caller that wants to assert on the engine's state
+/// directory must hand the root in rather than scratch the same name twice
+/// (two calls used to collide onto one path, which is what made a second
+/// `scratch(name)` "work").
+fn engine_at(
+    root: PathBuf,
+    answer: Decision,
+) -> (Arc<lca_tools::Capabilities>, Arc<Mutex<Answer>>) {
     let spy = Arc::new(Mutex::new(Answer {
         asked: Mutex::new(Vec::new()),
         answer,
@@ -161,8 +172,10 @@ fn a_denied_spawn_is_recorded() {
         eprintln!("skip: python3 is not installed");
         return;
     }
+    // Gh #317: the root is created once and handed to the engine, so the
+    // journal assertion below reads the same directory the engine wrote.
     let root = scratch("mcp-deny");
-    let (caps, spy) = engine("mcp-deny", Decision::Denied);
+    let (caps, spy) = engine_at(root.clone(), Decision::Denied);
     let err = match mcp::McpBridge::connect(caps.clone(), vec![echo_server()]) {
         Ok(_) => panic!("a denied spawn refuses the bridge"),
         Err(err) => err,

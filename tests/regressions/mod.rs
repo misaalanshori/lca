@@ -405,6 +405,14 @@ mod mcp_resource_staging_private;
 // split across TCP chunks.
 #[path = "337-sse-utf8-chunk-boundary.rs"]
 mod sse_utf8_chunk_boundary;
+// GitHub #309: the embedding Session dropped data_dir and lacked resume,
+// extension attachment, and cancellation.
+#[path = "309-sdk-resume-extensions-cancel-datadir.rs"]
+mod sdk_resume_extensions_cancel_datadir;
+// GitHub #310: `send` rebuilt the tool executor and agent config every turn,
+// wiping read tracking and the cache-divergence cell.
+#[path = "310-sdk-persists-tools-and-cache-state.rs"]
+mod sdk_persists_tools_and_cache_state;
 // GitHub #313: session migration rewrote the log non-atomically and named
 // backups at second resolution.
 #[path = "313-session-migrate-atomic-and-backup.rs"]

@@ -48,16 +48,12 @@ pub type PermissionCallback = Arc<dyn Fn(String) -> Decision + Send + Sync>;
 /// need a human's approval is declined and recorded (deny-by-default,
 /// NFR-13) - the headless rule, `docs/headless.md`.
 pub struct Session {
-    /// The project the session belongs to (the tools' workspace).
-    cwd: PathBuf,
     /// Where the append-only log and the grant store live.
     store: Arc<SessionStore>,
     /// The session handle (its id is the host's resume key).
     session: lca_session::Session,
     /// The provider this session talks through.
     provider: Arc<dyn lca_provider::Provider>,
-    /// The session's model (empty resolves to the provider's first).
-    model: String,
     /// Standing grants, shared with every capability engine; the store is
     /// locked per authorize call, never for a whole turn.
     grants: Arc<std::sync::Mutex<GrantStore>>,
@@ -66,8 +62,34 @@ pub struct Session {
     approval: Option<PermissionCallback>,
     /// Serializes turns: one session, one conversation, in order.
     turn: tokio::sync::Mutex<()>,
+    /// The tool executor, built once (gh #310): its `ReadTracker` and
+    /// loaded-instruction dedup are per session, not per turn, so
+    /// `edit_requires_read` and "inject a subfolder AGENTS.md once" mean what
+    /// they say across a conversation. A per-turn executor wiped both.
+    tools: tokio::sync::Mutex<ToolExecutor>,
+    /// The agent configuration, owned by the session (gh #310). Its `Arc`
+    /// fields - `sent_stable`, `instruction_baseline`, `skills_cache`,
+    /// `steer`, `extensions` - are the cross-turn state FR-CACHE-6's
+    /// divergence check depends on; rebuilding it per turn reset them all.
+    config: std::sync::Mutex<AgentConfig>,
+    /// The active turn's cancel flag (gh #309): re-armed at each `send`, so
+    /// [`Session::cancel`] from another task cancels the turn that is
+    /// actually running.
+    cancel: std::sync::Mutex<CancelFlag>,
     /// The event stream's fan-out point.
     events: tokio::sync::broadcast::Sender<TurnEvent>,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The provider, the tool executor, and the config are trait objects or
+        // holders with no `Debug` of their own; identity and a live-turn flag
+        // are what a log line needs.
+        f.debug_struct("Session")
+            .field("id", &self.session.id())
+            .field("provider", &self.provider.name())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Why a session could not start.
@@ -150,18 +172,99 @@ impl Session {
         } else {
             requested
         };
-        let (events, _first_subscriber) = tokio::sync::broadcast::channel(EVENT_CAPACITY);
-        Ok(Session {
+        Ok(Session::assemble(
             cwd,
+            data,
             store,
             session,
             provider,
             model,
-            grants: Arc::new(std::sync::Mutex::new(grants)),
+            Arc::new(std::sync::Mutex::new(grants)),
+        ))
+    }
+
+    /// The shared tail of [`Session::create`] and [`Session::resume`]: build
+    /// the session-scoped state that must outlive every turn (gh #309,
+    /// #310).
+    fn assemble(
+        cwd: PathBuf,
+        data_dir: PathBuf,
+        store: Arc<SessionStore>,
+        session: lca_session::Session,
+        provider: Arc<dyn lca_provider::Provider>,
+        model: String,
+        grants: Arc<std::sync::Mutex<GrantStore>>,
+    ) -> Session {
+        let tools = ToolExecutor::new(
+            Arc::new(NativeOps::default()),
+            cwd.clone(),
+            cwd.clone(),
+            TOOL_RESULT_LIMIT,
+            Some(Duration::from_secs(TOOL_TIMEOUT_SECS)),
+        );
+        let config = AgentConfig {
+            provider: provider.name().to_string(),
+            model: model.clone(),
+            // Gh #309: the documented `LCA_*` row - a shell child reads the
+            // agent's data home from here. `AgentConfig::default()` leaves it
+            // empty, which is what every embedder's shell children saw.
+            data_dir: data_dir.clone(),
+            ..AgentConfig::default()
+        };
+        let (events, _first_subscriber) = tokio::sync::broadcast::channel(EVENT_CAPACITY);
+        Session {
+            store,
+            session,
+            provider,
+            grants,
             approval: None,
             turn: tokio::sync::Mutex::new(()),
+            tools: tokio::sync::Mutex::new(tools),
+            config: std::sync::Mutex::new(config),
+            cancel: std::sync::Mutex::new(CancelFlag::new()),
             events,
-        })
+        }
+    }
+
+    /// Reopen an existing session by id (gh #309) and append to its log.
+    ///
+    /// `Session::create` always starts a new session; the embeddings that keep
+    /// their own handle (`id()` is documented as "resume tools take it") had
+    /// no way back in, even though `SessionStore::session` existed.
+    pub fn resume(
+        cwd: impl Into<PathBuf>,
+        data_dir: impl Into<PathBuf>,
+        session_id: &str,
+        provider: Arc<dyn lca_provider::Provider>,
+        model: impl Into<String>,
+    ) -> Result<Session, Error> {
+        let cwd = cwd.into();
+        let data = data_dir.into();
+        let store = Arc::new(SessionStore::new(data.clone()));
+        let session = store
+            .session(&cwd, session_id)
+            .map_err(|err| Error::Start(err.to_string()))?;
+        let grants = GrantStore::open(&data.join("grants.json"))
+            .map_err(|err| Error::Start(err.to_string()))?;
+        let requested = model.into();
+        let model = if requested.is_empty() {
+            provider
+                .list_models()
+                .first()
+                .map(|model| model.id.clone())
+                .unwrap_or_else(|| provider.name().to_string())
+        } else {
+            requested
+        };
+        Ok(Session::assemble(
+            cwd,
+            data,
+            store,
+            session,
+            provider,
+            model,
+            Arc::new(std::sync::Mutex::new(grants)),
+        ))
     }
 
     /// Register the host's approval callback (gh #14): wherever the
@@ -199,18 +302,104 @@ impl Session {
         self.events.subscribe()
     }
 
+    /// Attach an extension registry (gh #309): the dispatch table the turn's
+    /// tool calls, hooks, and context transforms run through. Registering
+    /// here replaces whatever was set before, so it is meant for setup.
+    pub fn with_extensions(self, extensions: Arc<lca_core::ExtensionRegistry>) -> Self {
+        let mut config = self.config_guard();
+        config.extensions = extensions;
+        drop(config);
+        self
+    }
+
+    /// Tune the agent configuration (gh #309): `edit_requires_read`,
+    /// `system_prompt`, `max_iterations`, retry knobs, and the rest.
+    ///
+    /// The closure receives the live config, so `provider`, `model`, and
+    /// `data_dir` stay coherent with the session unless the caller
+    /// deliberately changes them.
+    pub fn with_agent_config(self, f: impl FnOnce(&mut AgentConfig)) -> Self {
+        let mut config = self.config_guard();
+        f(&mut config);
+        drop(config);
+        self
+    }
+
+    /// The shared stable-prefix cell (gh #310): the observable seam for
+    /// FR-CACHE-6, so an embedder can see what the last turn sent.
+    pub fn sent_stable_handle(&self) -> Arc<std::sync::Mutex<Option<Vec<String>>>> {
+        self.config_guard().sent_stable.clone()
+    }
+
+    /// Whether the session's config holds `registry` (gh #309): the
+    /// observable seam for [`Session::with_extensions`], so an embedder can
+    /// assert what it attached.
+    pub fn shares_extensions(&self, registry: &Arc<lca_core::ExtensionRegistry>) -> bool {
+        let config = self.config_guard();
+        Arc::ptr_eq(&config.extensions, registry)
+    }
+
+    /// The lock over the session's config (poison-tolerant: one poisoned
+    /// guard must not take the session down).
+    fn config_guard(&self) -> std::sync::MutexGuard<'_, AgentConfig> {
+        self.config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The lock over the active turn's cancel flag.
+    fn cancel_guard(&self) -> std::sync::MutexGuard<'_, CancelFlag> {
+        self.cancel
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Cancel the turn that is running now (gh #309).
+    ///
+    /// Before this, the `CancelFlag` was a local of `send`: an embedder could
+    /// see a turn start and had no way to stop it. The flag is re-armed at
+    /// each `send`, so calling this with no turn in flight is a no-op on a
+    /// fresh flag rather than a stale one.
+    pub fn cancel(&self) {
+        self.cancel_guard().cancel();
+    }
+
+    /// Send one input, letting the caller own the cancel flag (gh #309): the
+    /// alternative to [`Session::cancel`] for hosts that would rather hold the
+    /// handle themselves.
+    pub async fn send_with_cancel(&self, input: &str, cancel: &CancelFlag) -> TurnOutcome {
+        self.run(input, Some(cancel)).await
+    }
+
     /// Send one input through the agent loop: events reach every
     /// subscriber while the turn runs, records land in the log before
     /// this returns, and the outcome answers like headless mode's.
     pub async fn send(&self, input: &str) -> TurnOutcome {
+        // Re-arm the session's flag for this turn, so `cancel()` cancels the
+        // turn that is actually running (gh #309).
+        {
+            let mut flag = self.cancel_guard();
+            *flag = CancelFlag::new();
+        }
+        self.run(input, None).await
+    }
+
+    /// The shared body of `send` and `send_with_cancel`: `external` is the
+    /// caller's flag when one was handed in, else the session's.
+    async fn run(&self, input: &str, external: Option<&CancelFlag>) -> TurnOutcome {
         let _turn = self.turn.lock().await;
-        let mut tools = ToolExecutor::new(
-            Arc::new(NativeOps::default()),
-            self.cwd.clone(),
-            self.cwd.clone(),
-            TOOL_RESULT_LIMIT,
-            Some(Duration::from_secs(TOOL_TIMEOUT_SECS)),
-        );
+        // Clone the flag rather than borrow it across the await: `CancelFlag`
+        // is an `Arc` pair inside, so the clone shares the cancel state.
+        let session_flag = {
+            let flag = self.cancel_guard();
+            flag.clone()
+        };
+        let cancel: CancelFlag = external.cloned().unwrap_or(session_flag);
+        let mut tools = self.tools.lock().await;
+        // Gh #310: the config is cloned per turn, and its `Arc` fields are
+        // shared - so `sent_stable`, `instruction_baseline`, `skills_cache`,
+        // and `extensions` carry across turns instead of resetting.
+        let config = self.config_guard().clone();
         let mut deny_all = DenyAll;
         let mut callback = self
             .approval
@@ -221,12 +410,6 @@ impl Session {
             None => &mut deny_all,
         };
         let mut sink = Fanout(self.events.clone());
-        let cancel = CancelFlag::new();
-        let config = AgentConfig {
-            provider: self.provider.name().to_string(),
-            model: self.model.clone(),
-            ..AgentConfig::default()
-        };
         let mut agent = Agent::new(
             &self.store,
             &self.session,

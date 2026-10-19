@@ -270,7 +270,7 @@ impl SessionStore {
             // when the directory already exists, so two callers can never
             // both win the same name.
             match std::fs::create_dir(&dir) {
-                Ok(()) => break (dir.join("log.jsonl")),
+                Ok(()) => break dir.join("log.jsonl"),
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     attempt = attempt.saturating_add(1);
                     if attempt > 1000 {
