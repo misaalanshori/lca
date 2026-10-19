@@ -250,7 +250,7 @@ pub(crate) struct Ui {
     login_cancelled: Arc<Mutex<bool>>,
     /// The MCP session manager (gh #53): files, bridge, and actions.
     /// The cell swaps on `/reload`; the bridge rebuilds in place.
-    mcp: Arc<Mutex<Arc<crate::mcp::McpManager>>>,
+    mcp: Arc<Mutex<Arc<lca_mcp::manager::McpManager>>>,
 }
 
 /// Enter the interactive interface for `cwd`, optionally resuming `resume`.
@@ -1089,7 +1089,11 @@ fn load_registry(
     session_cell: &Arc<Mutex<Session>>,
     temp: &Path,
     flags: &crate::CliFlags,
-) -> (ExtensionRegistry, Arc<crate::mcp::McpManager>, Vec<String>) {
+) -> (
+    ExtensionRegistry,
+    Arc<lca_mcp::manager::McpManager>,
+    Vec<String>,
+) {
     // The one assembly, shared with headless mode and `--list-models`
     // (gh #8): only the stats source differs, and a session's own reads
     // the session this interface is showing.

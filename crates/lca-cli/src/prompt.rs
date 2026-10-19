@@ -221,8 +221,8 @@ pub fn agent_system_prompt(
         .unwrap_or(0);
     let cwd_text = cwd.to_string_lossy();
     let date_text = civil_date(now);
-    let mcp = crate::mcp::load_entries(&data, cwd, trusted);
-    let mcp_servers = crate::mcp::servers_section(&mcp.entries);
+    let mcp = lca_mcp::config::load_entries(&data, cwd, trusted);
+    let mcp_servers = lca_mcp::manager::servers_section(&mcp.entries);
     Ok(compose_system_prompt(&PromptInputs {
         preamble,
         tool_names: lca_core::BUILTIN_TOOLS,

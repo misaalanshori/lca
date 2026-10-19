@@ -1,8 +1,12 @@
 //! `mcp.json` (gh #53 phase 3): user and project configuration with
-//! pi's merge rules. Pure parsing - no files, no host - so the bridge,
-//! the host loader, and the tests share every refusal.
+//! pi's merge rules, plus the file loading and persistence built on them
+//! (gh #418 Phase B moved both out of `crates/lca-cli/src/mcp.rs`, so the
+//! subsystem owns its own domain). Parsing stays pure and shared; the file
+//! helpers at the end of this module are the only part that touches the
+//! filesystem.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 /// Where one entry came from (the manager persists edits to the
 /// defining file; project overrides apply to the session per pi).
@@ -481,4 +485,213 @@ pub fn apply_project_json(user: &mut ParsedConfig, text: &str) {
         known.source = ServerSource::Project;
     }
     user.servers.sort_by(|a, b| a.name.cmp(&b.name));
+}
+
+// ------------------------------------------------------------------
+// File locations, loading, and persistence (gh #418 Phase B: these moved
+// here from `crates/lca-cli/src/mcp.rs`, so the subsystem owns its own
+// domain rather than the host owning it).
+// ------------------------------------------------------------------
+
+/// The user's file: `<data>/mcp.json` (pi's `~/.pi/agent/mcp.json`
+/// shape, LCA's data dir).
+pub fn user_config_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("mcp.json")
+}
+
+/// The project's file: `<cwd>/.lca/mcp.json`, read only when trusted
+/// (the config file's own rule, FR-PERM-9).
+pub fn project_config_path(cwd: &Path) -> PathBuf {
+    cwd.join(".lca").join("mcp.json")
+}
+
+/// What one load found.
+pub struct LoadedMcp {
+    /// The merged entries, sorted by name.
+    pub entries: Vec<ServerEntry>,
+    /// One line per skipped entry or unreadable file.
+    pub warnings: Vec<String>,
+}
+
+/// Load user entries plus the trusted project's (an untrusted
+/// project's file is ignored silently, like the config file's).
+pub fn load_entries(data_dir: &Path, cwd: &Path, trusted: bool) -> LoadedMcp {
+    let mut warnings = Vec::new();
+    let user_path = user_config_path(data_dir);
+    let mut parsed = match std::fs::read_to_string(&user_path) {
+        Ok(text) => parse_mcp_json(&text, ServerSource::User),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Default::default(),
+        Err(err) => {
+            warnings.push(format!("mcp.json unreadable: {err}"));
+            Default::default()
+        }
+    };
+    warnings.extend(std::mem::take(&mut parsed.warnings));
+    let project_path = project_config_path(cwd);
+    if trusted && project_path.is_file() {
+        match std::fs::read_to_string(&project_path) {
+            Ok(text) => {
+                apply_project_json(&mut parsed, &text);
+                warnings.extend(std::mem::take(&mut parsed.warnings));
+            }
+            Err(err) => warnings.push(format!("project mcp.json unreadable: {err}")),
+        }
+    }
+    LoadedMcp {
+        entries: parsed.servers,
+        warnings,
+    }
+}
+
+/// Read one JSON file (missing reads as empty).
+fn read_json_file(path: &Path) -> Result<serde_json::Value, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).map_err(|err| format!("{err}")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Ok(serde_json::json!({"mcpServers": {}}))
+        }
+        Err(err) => Err(format!("{err}")),
+    }
+}
+
+/// Write one JSON file, creating parent directories.
+fn write_json_file(path: &Path, value: &serde_json::Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| format!("{err}"))?;
+    }
+    let text =
+        serde_json::to_string_pretty(value).map_err(|err| format!("cannot encode: {err}"))?;
+    std::fs::write(path, text).map_err(|err| format!("{err}"))
+}
+
+/// Serialize one entry back to its file shape.
+fn entry_json(entry: &ServerEntry) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "enabled": entry.enabled,
+        "exposure": match entry.exposure {
+            McpExposure::Direct => "direct",
+            McpExposure::Codemode => "codemode",
+            McpExposure::Deferred => "deferred",
+            McpExposure::Hidden => "hidden",
+        },
+    });
+    match &entry.kind {
+        EntryKind::Stdio {
+            command,
+            args,
+            cwd_scope,
+        } => {
+            value["command"] = command.clone().into();
+            value["args"] = args.clone().into();
+            value["cwd"] = cwd_scope.clone().into();
+        }
+        EntryKind::Http {
+            url,
+            headers,
+            timeout_secs,
+            oauth,
+        } => {
+            value["url"] = url.clone().into();
+            value["headers"] = headers
+                .iter()
+                .map(|(key, header)| (key.clone(), header.clone().into()))
+                .collect::<serde_json::Map<String, serde_json::Value>>()
+                .into();
+            if *timeout_secs > 0 {
+                value["timeout"] = (*timeout_secs).into();
+            }
+            if let Some(oauth) = oauth {
+                let mut object = serde_json::json!({});
+                if let Some(name) = &oauth.client_name {
+                    object["clientName"] = name.clone().into();
+                }
+                if let Some(scope) = &oauth.scope {
+                    object["scope"] = scope.clone().into();
+                }
+                if let Some(url) = &oauth.auth_server_metadata_url {
+                    object["authServerMetadataUrl"] = url.clone().into();
+                }
+                if let Some(id) = &oauth.client_id {
+                    object["clientId"] = id.clone().into();
+                }
+                value["oauth"] = object;
+            }
+        }
+    }
+    if !entry.tool_exposure.is_empty() {
+        let mut rules = serde_json::Map::new();
+        for (tool, exposure) in &entry.tool_exposure {
+            rules.insert(
+                tool.clone(),
+                match exposure {
+                    McpExposure::Direct => "direct",
+                    McpExposure::Codemode => "codemode",
+                    McpExposure::Deferred => "deferred",
+                    McpExposure::Hidden => "hidden",
+                }
+                .into(),
+            );
+        }
+        value["toolExposure"] = rules.into();
+    }
+    if !entry.description.is_empty() {
+        value["description"] = entry.description.clone().into();
+    }
+    value
+}
+
+/// Write one full entry into its file, keeping every other server
+/// and every unknown key.
+pub(crate) fn write_full_entry(path: &Path, entry: &ServerEntry) -> Result<(), String> {
+    let mut file = read_json_file(path)?;
+    if !file.is_object() {
+        file = serde_json::json!({"mcpServers": {}});
+    }
+    if file.get("mcpServers").is_none() {
+        file["mcpServers"] = serde_json::json!({});
+    }
+    file["mcpServers"][&entry.name] = entry_json(entry);
+    write_json_file(path, &file)
+}
+
+/// Write a knob-only project override (a user-level server edited
+/// under a trusted project), merging with whatever the file holds.
+pub(crate) fn write_project_override(
+    path: &Path,
+    name: &str,
+    enabled: bool,
+    exposure: Option<&str>,
+) -> Result<(), String> {
+    let mut file = read_json_file(path)?;
+    if !file.is_object() {
+        file = serde_json::json!({"mcpServers": {}});
+    }
+    if file.get("mcpServers").is_none() {
+        file["mcpServers"] = serde_json::json!({});
+    }
+    let mut patch = serde_json::json!({"enabled": enabled});
+    if let Some(level) = exposure {
+        patch["exposure"] = level.into();
+    }
+    // Merge with an existing override instead of clobbering it.
+    let patch_object: Vec<(String, serde_json::Value)> =
+        patch.as_object().map_or_else(Vec::new, |object| {
+            object
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        });
+    if let Some(existing) = file["mcpServers"]
+        .get(name)
+        .and_then(|entry| entry.as_object())
+    {
+        let mut merged = existing.clone();
+        for (key, value) in patch_object {
+            merged.insert(key, value);
+        }
+        file["mcpServers"][name] = merged.into();
+    } else {
+        file["mcpServers"][name] = patch;
+    }
+    write_json_file(path, &file)
 }

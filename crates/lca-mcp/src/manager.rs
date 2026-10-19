@@ -1,61 +1,19 @@
-//! MCP management (gh #53 phase 3): `mcp.json` loading with the
-//! house trust rules, the session manager, and the system-prompt
-//! section. The bridge lives in `crates/lca-mcp` (ADR-0047: a first-class
-//! subsystem, not an extension); this module is the host side (files, grants,
-//! notices), and folding it into the subsystem is gh #418 Phase B.
+//! The MCP session manager (gh #53 phase 3, folded here by gh #418 Phase B):
+//! lifecycle state, capability-grant assembly, the `/mcp` action dispatch, and
+//! the `## MCP servers` system-prompt section.
+//!
+//! This module is UI-free by design. It answers with a notice string and never
+//! touches a widget, a terminal, or the agent loop - the host renders whatever
+//! comes back. File locations and `mcp.json` persistence live in
+//! [`crate::config`], because that module already owns the parser.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// The user's file: `<data>/mcp.json` (pi's `~/.pi/agent/mcp.json`
-/// shape, LCA's data dir).
-pub fn user_config_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("mcp.json")
-}
-
-/// The project's file: `<cwd>/.lca/mcp.json`, read only when trusted
-/// (the config file's own rule, FR-PERM-9).
-pub fn project_config_path(cwd: &Path) -> PathBuf {
-    cwd.join(".lca").join("mcp.json")
-}
-
-/// What one load found.
-pub struct LoadedMcp {
-    /// The merged entries, sorted by name.
-    pub entries: Vec<lca_mcp::config::ServerEntry>,
-    /// One line per skipped entry or unreadable file.
-    pub warnings: Vec<String>,
-}
-
-/// Load user entries plus the trusted project's (an untrusted
-/// project's file is ignored silently, like the config file's).
-pub fn load_entries(data_dir: &Path, cwd: &Path, trusted: bool) -> LoadedMcp {
-    let mut warnings = Vec::new();
-    let user_path = user_config_path(data_dir);
-    let mut parsed = match std::fs::read_to_string(&user_path) {
-        Ok(text) => lca_mcp::config::parse_mcp_json(&text, lca_mcp::config::ServerSource::User),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Default::default(),
-        Err(err) => {
-            warnings.push(format!("mcp.json unreadable: {err}"));
-            Default::default()
-        }
-    };
-    warnings.extend(std::mem::take(&mut parsed.warnings));
-    let project_path = project_config_path(cwd);
-    if trusted && project_path.is_file() {
-        match std::fs::read_to_string(&project_path) {
-            Ok(text) => {
-                lca_mcp::config::apply_project_json(&mut parsed, &text);
-                warnings.extend(std::mem::take(&mut parsed.warnings));
-            }
-            Err(err) => warnings.push(format!("project mcp.json unreadable: {err}")),
-        }
-    }
-    LoadedMcp {
-        entries: parsed.servers,
-        warnings,
-    }
-}
+use crate::config::{
+    EntryKind, McpExposure, ServerEntry, ServerSource, load_entries, project_config_path,
+    user_config_path, write_full_entry, write_project_override,
+};
 
 /// The host half of one URL: `scheme://host[:port]` becomes the ad
 /// hoc pattern (configuration is the consent, FR-PERM-16's
@@ -72,13 +30,11 @@ fn url_host(url: &str) -> Option<String> {
 /// `oauth` for the sign-in loop, and `credentials` for the token
 /// store. Unparsable hosts warn and connect-deny later, never
 /// silently.
-pub fn manager_grants(
-    entries: &[lca_mcp::config::ServerEntry],
-) -> (lca_tools::CapabilityGrants, Vec<String>) {
+pub fn manager_grants(entries: &[ServerEntry]) -> (lca_tools::CapabilityGrants, Vec<String>) {
     let mut warnings = Vec::new();
-    let mut grants = lca_mcp::manifest_grants();
+    let mut grants = crate::manifest_grants();
     for entry in entries {
-        let lca_mcp::config::EntryKind::Http { url, .. } = &entry.kind else {
+        let EntryKind::Http { url, .. } = &entry.kind else {
             continue;
         };
         let Some(host) = url_host(url) else {
@@ -120,8 +76,8 @@ pub struct McpManager {
     caps: Arc<lca_tools::Capabilities>,
     user_path: PathBuf,
     project_path: Option<PathBuf>,
-    entries: Mutex<Vec<lca_mcp::config::ServerEntry>>,
-    bridge: Arc<lca_mcp::McpBridge>,
+    entries: Mutex<Vec<ServerEntry>>,
+    bridge: Arc<crate::McpBridge>,
     login: Mutex<Option<LoginTask>>,
 }
 
@@ -131,9 +87,9 @@ impl McpManager {
         caps: Arc<lca_tools::Capabilities>,
         user_path: PathBuf,
         project_path: Option<PathBuf>,
-        entries: Vec<lca_mcp::config::ServerEntry>,
+        entries: Vec<ServerEntry>,
     ) -> McpManager {
-        let bridge = Arc::new(lca_mcp::McpBridge::connect_managed(
+        let bridge = Arc::new(crate::McpBridge::connect_managed(
             caps.clone(),
             entries.clone(),
         ));
@@ -148,12 +104,12 @@ impl McpManager {
     }
 
     /// The bridge handle the registry serves.
-    pub fn bridge(&self) -> Arc<lca_mcp::McpBridge> {
+    pub fn bridge(&self) -> Arc<crate::McpBridge> {
         self.bridge.clone()
     }
 
     /// The entries (for the prompt section).
-    pub fn entries(&self) -> Vec<lca_mcp::config::ServerEntry> {
+    pub fn entries(&self) -> Vec<ServerEntry> {
         self.entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -177,23 +133,23 @@ impl McpManager {
         let mut lines = Vec::with_capacity(statuses.len() + 1);
         for status in &statuses {
             let state = match &status.state {
-                lca_mcp::ServerStateKind::Connected => {
+                crate::ServerStateKind::Connected => {
                     format!("connected ({} tools)", status.tools)
                 }
-                lca_mcp::ServerStateKind::Disabled => "disabled".to_string(),
-                lca_mcp::ServerStateKind::Failed(err) => format!("failed: {err}"),
-                lca_mcp::ServerStateKind::NeedsSignIn(detail) => format!("needs sign-in: {detail}"),
+                crate::ServerStateKind::Disabled => "disabled".to_string(),
+                crate::ServerStateKind::Failed(err) => format!("failed: {err}"),
+                crate::ServerStateKind::NeedsSignIn(detail) => format!("needs sign-in: {detail}"),
             };
             let source = match status.source {
-                lca_mcp::config::ServerSource::User => "user",
-                lca_mcp::config::ServerSource::Project => "project",
-                lca_mcp::config::ServerSource::Inline => "inline",
+                ServerSource::User => "user",
+                ServerSource::Project => "project",
+                ServerSource::Inline => "inline",
             };
             let exposure = match status.exposure {
-                lca_mcp::config::McpExposure::Codemode => "codemode",
-                lca_mcp::config::McpExposure::Deferred => "deferred",
-                lca_mcp::config::McpExposure::Direct => "direct",
-                lca_mcp::config::McpExposure::Hidden => "hidden",
+                McpExposure::Codemode => "codemode",
+                McpExposure::Deferred => "deferred",
+                McpExposure::Direct => "direct",
+                McpExposure::Hidden => "hidden",
             };
             lines.push(format!(
                 "- {} [{exposure}] ({source}): {state}",
@@ -225,7 +181,7 @@ impl McpManager {
     }
 
     /// Pick one managed entry by name.
-    fn find(&self, target: &str) -> Result<lca_mcp::config::ServerEntry, String> {
+    fn find(&self, target: &str) -> Result<ServerEntry, String> {
         self.entries()
             .into_iter()
             .find(|entry| entry.name == target)
@@ -248,10 +204,10 @@ impl McpManager {
             .into_iter()
             .find(|status| status.name == target);
         match state.map(|status| status.state) {
-            Some(lca_mcp::ServerStateKind::Connected) => format!("`{target}` reconnected"),
-            Some(lca_mcp::ServerStateKind::Disabled) => format!("`{target}` is disabled"),
-            Some(lca_mcp::ServerStateKind::Failed(err)) => format!("`{target}` failed: {err}"),
-            Some(lca_mcp::ServerStateKind::NeedsSignIn(detail)) => {
+            Some(crate::ServerStateKind::Connected) => format!("`{target}` reconnected"),
+            Some(crate::ServerStateKind::Disabled) => format!("`{target}` is disabled"),
+            Some(crate::ServerStateKind::Failed(err)) => format!("`{target}` failed: {err}"),
+            Some(crate::ServerStateKind::NeedsSignIn(detail)) => {
                 format!("`{target}` needs sign-in: {detail}")
             }
             None => format!("no MCP server {target:?}"),
@@ -279,7 +235,7 @@ impl McpManager {
     /// cycle it direct → codemode → deferred → hidden → direct,
     /// persisting like `set_enabled`.
     fn set_exposure(&self, target: &str) -> String {
-        use lca_mcp::config::McpExposure as Exposure;
+        use McpExposure as Exposure;
         let level = |word: &str| match word {
             "direct" => Some(Exposure::Direct),
             "codemode" => Some(Exposure::Codemode),
@@ -321,24 +277,24 @@ impl McpManager {
     /// project (later edits stay in the override).
     fn persist_knobs(
         &self,
-        entry: &mut lca_mcp::config::ServerEntry,
+        entry: &mut ServerEntry,
         enabled: bool,
-        exposure: Option<lca_mcp::config::McpExposure>,
+        exposure: Option<McpExposure>,
     ) -> Result<(), String> {
         let exposure_str = exposure.map(|level| match level {
-            lca_mcp::config::McpExposure::Direct => "direct",
-            lca_mcp::config::McpExposure::Codemode => "codemode",
-            lca_mcp::config::McpExposure::Deferred => "deferred",
-            lca_mcp::config::McpExposure::Hidden => "hidden",
+            McpExposure::Direct => "direct",
+            McpExposure::Codemode => "codemode",
+            McpExposure::Deferred => "deferred",
+            McpExposure::Hidden => "hidden",
         });
-        if entry.source == lca_mcp::config::ServerSource::User
+        if entry.source == ServerSource::User
             && let Some(project) = &self.project_path
         {
             write_project_override(project, &entry.name, enabled, exposure_str)?;
-            entry.source = lca_mcp::config::ServerSource::Project;
+            entry.source = ServerSource::Project;
         } else {
             let path = match entry.source {
-                lca_mcp::config::ServerSource::Project => self.project_path.as_ref(),
+                ServerSource::Project => self.project_path.as_ref(),
                 _ => Some(&self.user_path),
             }
             .ok_or_else(|| "no project file to persist to".to_string())?;
@@ -367,7 +323,7 @@ impl McpManager {
         cwd: &std::path::Path,
         trusted: bool,
     ) -> (
-        Vec<lca_mcp::config::ServerEntry>,
+        Vec<ServerEntry>,
         lca_tools::CapabilityGrants,
         Vec<String>,
         PathBuf,
@@ -406,7 +362,7 @@ impl McpManager {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let server = target.to_string();
         std::thread::spawn(move || {
-            let outcome = lca_mcp::sign_in(caps, &config);
+            let outcome = crate::sign_in(caps, &config);
             let _ = done_tx.send((server, outcome));
         });
         *self
@@ -430,7 +386,7 @@ impl McpManager {
         let Some(config) = entry.http_config() else {
             return format!("`{target}` is a stdio server: nothing to sign out of");
         };
-        let store = lca_mcp::TokenStore::new(self.caps.clone(), &config);
+        let store = crate::TokenStore::new(self.caps.clone(), &config);
         match store.clear() {
             Ok(()) => {
                 self.rebuild();
@@ -468,175 +424,20 @@ impl McpManager {
     }
 }
 
-/// Read one JSON file (missing reads as empty).
-fn read_json_file(path: &Path) -> Result<serde_json::Value, String> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|err| format!("{err}")),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            Ok(serde_json::json!({"mcpServers": {}}))
-        }
-        Err(err) => Err(format!("{err}")),
-    }
-}
-
-/// Write one JSON file, creating parent directories.
-fn write_json_file(path: &Path, value: &serde_json::Value) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| format!("{err}"))?;
-    }
-    let text =
-        serde_json::to_string_pretty(value).map_err(|err| format!("cannot encode: {err}"))?;
-    std::fs::write(path, text).map_err(|err| format!("{err}"))
-}
-
-/// Serialize one entry back to its file shape.
-fn entry_json(entry: &lca_mcp::config::ServerEntry) -> serde_json::Value {
-    let mut value = serde_json::json!({
-        "enabled": entry.enabled,
-        "exposure": match entry.exposure {
-            lca_mcp::config::McpExposure::Direct => "direct",
-            lca_mcp::config::McpExposure::Codemode => "codemode",
-            lca_mcp::config::McpExposure::Deferred => "deferred",
-            lca_mcp::config::McpExposure::Hidden => "hidden",
-        },
-    });
-    match &entry.kind {
-        lca_mcp::config::EntryKind::Stdio {
-            command,
-            args,
-            cwd_scope,
-        } => {
-            value["command"] = command.clone().into();
-            value["args"] = args.clone().into();
-            value["cwd"] = cwd_scope.clone().into();
-        }
-        lca_mcp::config::EntryKind::Http {
-            url,
-            headers,
-            timeout_secs,
-            oauth,
-        } => {
-            value["url"] = url.clone().into();
-            value["headers"] = headers
-                .iter()
-                .map(|(key, header)| (key.clone(), header.clone().into()))
-                .collect::<serde_json::Map<String, serde_json::Value>>()
-                .into();
-            if *timeout_secs > 0 {
-                value["timeout"] = (*timeout_secs).into();
-            }
-            if let Some(oauth) = oauth {
-                let mut object = serde_json::json!({});
-                if let Some(name) = &oauth.client_name {
-                    object["clientName"] = name.clone().into();
-                }
-                if let Some(scope) = &oauth.scope {
-                    object["scope"] = scope.clone().into();
-                }
-                if let Some(url) = &oauth.auth_server_metadata_url {
-                    object["authServerMetadataUrl"] = url.clone().into();
-                }
-                if let Some(id) = &oauth.client_id {
-                    object["clientId"] = id.clone().into();
-                }
-                value["oauth"] = object;
-            }
-        }
-    }
-    if !entry.tool_exposure.is_empty() {
-        let mut rules = serde_json::Map::new();
-        for (tool, exposure) in &entry.tool_exposure {
-            rules.insert(
-                tool.clone(),
-                match exposure {
-                    lca_mcp::config::McpExposure::Direct => "direct",
-                    lca_mcp::config::McpExposure::Codemode => "codemode",
-                    lca_mcp::config::McpExposure::Deferred => "deferred",
-                    lca_mcp::config::McpExposure::Hidden => "hidden",
-                }
-                .into(),
-            );
-        }
-        value["toolExposure"] = rules.into();
-    }
-    if !entry.description.is_empty() {
-        value["description"] = entry.description.clone().into();
-    }
-    value
-}
-
-/// Write one full entry into its file, keeping every other server
-/// and every unknown key.
-fn write_full_entry(path: &Path, entry: &lca_mcp::config::ServerEntry) -> Result<(), String> {
-    let mut file = read_json_file(path)?;
-    if !file.is_object() {
-        file = serde_json::json!({"mcpServers": {}});
-    }
-    if file.get("mcpServers").is_none() {
-        file["mcpServers"] = serde_json::json!({});
-    }
-    file["mcpServers"][&entry.name] = entry_json(entry);
-    write_json_file(path, &file)
-}
-
-/// Write a knob-only project override (a user-level server edited
-/// under a trusted project), merging with whatever the file holds.
-fn write_project_override(
-    path: &Path,
-    name: &str,
-    enabled: bool,
-    exposure: Option<&str>,
-) -> Result<(), String> {
-    let mut file = read_json_file(path)?;
-    if !file.is_object() {
-        file = serde_json::json!({"mcpServers": {}});
-    }
-    if file.get("mcpServers").is_none() {
-        file["mcpServers"] = serde_json::json!({});
-    }
-    let mut patch = serde_json::json!({"enabled": enabled});
-    if let Some(level) = exposure {
-        patch["exposure"] = level.into();
-    }
-    // Merge with an existing override instead of clobbering it.
-    let patch_object: Vec<(String, serde_json::Value)> =
-        patch.as_object().map_or_else(Vec::new, |object| {
-            object
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect()
-        });
-    if let Some(existing) = file["mcpServers"]
-        .get(name)
-        .and_then(|entry| entry.as_object())
-    {
-        let mut merged = existing.clone();
-        for (key, value) in patch_object {
-            merged.insert(key, value);
-        }
-        file["mcpServers"][name] = merged.into();
-    } else {
-        file["mcpServers"][name] = patch;
-    }
-    write_json_file(path, &file)
-}
-
 /// The `## MCP servers` section: configured, non-direct servers with
 /// one line each on how their tools are reached (pi lists exactly
 /// these; direct tools are declared anyway, hidden and disabled stay
 /// silent).
-pub fn servers_section(entries: &[lca_mcp::config::ServerEntry]) -> Option<String> {
+pub fn servers_section(entries: &[ServerEntry]) -> Option<String> {
     let mut lines = Vec::new();
     for entry in entries {
         if !entry.enabled {
             continue;
         }
         let reach = match entry.exposure {
-            lca_mcp::config::McpExposure::Direct | lca_mcp::config::McpExposure::Hidden => continue,
-            lca_mcp::config::McpExposure::Codemode => {
-                "callable from scripts; find them by server name"
-            }
-            lca_mcp::config::McpExposure::Deferred => "load with tool_search, then call directly",
+            McpExposure::Direct | McpExposure::Hidden => continue,
+            McpExposure::Codemode => "callable from scripts; find them by server name",
+            McpExposure::Deferred => "load with tool_search, then call directly",
         };
         let what = if entry.description.is_empty() {
             entry.name.clone()

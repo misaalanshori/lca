@@ -131,3 +131,35 @@ long-lived supervisor above this crate, which would be its own record. If a
 future phase needs the subsystem to read agent state (a `/mcp` modal that shows
 turn context), that is the moment to reconsider whether `lca-mcp` can stay below
 `lca-core` or whether the modal belongs in `lca-ui` instead.
+
+## Annotation, 2026-10-20 (gh #418 Phase B): the fold is complete
+
+The Decision section describes the end state; it is now the actual state.
+`crates/lca-cli/src/mcp.rs` is deleted, and its contents live in the two
+modules this record names:
+
+- **`crates/lca-mcp/src/config.rs`** — the `mcp.json` path rules
+  (`user_config_path`, `project_config_path`), `LoadedMcp` and `load_entries`
+  (user file plus the trusted project's overrides), and the persistence helpers
+  (`write_json_file`, `entry_json`, `write_full_entry`,
+  `write_project_override`). That module already owned the parser, so file
+  handling belongs next to it.
+- **`crates/lca-mcp/src/manager.rs`** — `McpManager` (lifecycle state, the
+  bridge handle, the background sign-in task and `poll`), `manager_grants`
+  (capability assembly: `process`, workspace `fs`, one ad hoc `net` pattern per
+  configured remote host, `oauth`, `credentials`), the `/mcp` action dispatch
+  (`act`/`reconnect`/`set_enabled`/`set_exposure`/`begin_login`/`logout`), and
+  `servers_section` (the `## MCP servers` system-prompt block).
+
+`lca-cli` keeps only glue: `registry.rs` calls `McpManager::plan` and
+`McpManager::load`, `prompt.rs` calls `load_entries` and `servers_section`, and
+the TUI keeps the `/mcp` slash surface that reaches `manager` verbs where it
+used to reach `mcp.rs`. The manager answers with a notice *string* and never
+touches a widget — the architecture test now pins that, forbidding `lca-ui` and
+`lca-tui` in `lca-mcp`'s dependency tables alongside `lca-core` and `lca-cli`.
+
+No behaviour changed: the moved suite
+(`crates/lca-cli/tests/mcp_manager.rs` → `crates/lca-mcp/tests/manager.rs`) is
+the bracket, with every assertion unchanged apart from import paths. The `/mcp`
+modal is Phase G, and the stdio/HTTP/OAuth behaviour fixes are Phases C–E; this
+annotation records placement only.

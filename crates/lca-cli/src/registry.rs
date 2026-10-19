@@ -29,7 +29,11 @@ pub(crate) fn assemble(
     stats: StatsSource,
     temp: &Path,
     flags: &crate::CliFlags,
-) -> (ExtensionRegistry, Arc<crate::mcp::McpManager>, Vec<String>) {
+) -> (
+    ExtensionRegistry,
+    Arc<lca_mcp::manager::McpManager>,
+    Vec<String>,
+) {
     let mut registry = ExtensionRegistry::new();
     // gh #70: `--no-extensions` skips installed and built-in
     // extensions (providers still resolve, or the run cannot start).
@@ -75,7 +79,7 @@ pub(crate) fn assemble(
     let data = crate::data_dir();
     let trusted = crate::lock(grants).is_trusted(cwd);
     let (entries, mgrants, warnings, user_path, project_path) =
-        crate::mcp::McpManager::plan(&data, cwd, trusted);
+        lca_mcp::manager::McpManager::plan(&data, cwd, trusted);
     let mcp_caps = crate::extension_capabilities(
         cwd,
         "mcp",
@@ -127,7 +131,7 @@ pub(crate) fn assemble(
     crate::apply_enablement(&mut registry, |name| {
         crate::lock(grants).extension_enabled(cwd, name) == Some(false)
     });
-    let manager = Arc::new(crate::mcp::McpManager::load(
+    let manager = Arc::new(lca_mcp::manager::McpManager::load(
         mcp_caps,
         user_path,
         project_path,

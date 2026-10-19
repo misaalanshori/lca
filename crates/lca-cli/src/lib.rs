@@ -64,9 +64,6 @@ pub use rpc::rpc;
 /// state machine, with no I/O of its own.
 pub mod login;
 
-/// MCP management (gh #53): `mcp.json`, the manager, prompts.
-pub mod mcp;
-
 /// The request-path consent for an endpoint host the manifest does not
 /// cover, and this run's `--allow-host` grant (gh #29, QA-004).
 pub mod net_consent;

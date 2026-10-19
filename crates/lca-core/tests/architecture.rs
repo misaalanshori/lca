@@ -95,11 +95,15 @@ fn the_mcp_subsystem_does_not_depend_on_the_core_or_the_binary() {
     for table in ["dependencies", "dev-dependencies", "build-dependencies"] {
         let deps = doc.get(table).and_then(toml::Value::as_table);
         let Some(deps) = deps else { continue };
-        for forbidden in ["lca-core", "lca-cli"] {
+        // `lca-ui` and `lca-tui` join the list at gh #418 Phase B: the manager
+        // moved into this crate, and it must stay renderable-free - it answers
+        // with a notice string and the host decides how to show it. A UI edge
+        // would also make `lca-ui -> ... -> lca-mcp` a cycle in waiting.
+        for forbidden in ["lca-core", "lca-cli", "lca-ui", "lca-tui"] {
             assert!(
                 !deps.contains_key(forbidden),
                 "lca-mcp carries `{forbidden}` in [{table}]; the MCP subsystem must sit below \
-                 the agent loop (gh #418 Phase A)"
+                 the agent loop and stay UI-free (gh #418 Phases A/B)"
             );
         }
     }

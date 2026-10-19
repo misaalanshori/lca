@@ -114,8 +114,8 @@ impl Ui {
     /// The host hooks wired for this composition (S1).
     pub(super) fn hooks(self: &Arc<Self>) -> UiHooks {
         fn current_manager(
-            cell: &Arc<Mutex<Arc<crate::mcp::McpManager>>>,
-        ) -> Arc<crate::mcp::McpManager> {
+            cell: &Arc<Mutex<Arc<lca_mcp::manager::McpManager>>>,
+        ) -> Arc<lca_mcp::manager::McpManager> {
             crate::lock(cell).clone()
         }
         // E2: keep the live theme cell in step with the persisted pick so

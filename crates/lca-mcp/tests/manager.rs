@@ -6,7 +6,10 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use lca_cli::mcp::{McpManager, load_entries, servers_section};
+// gh #418 Phase B: this file moved from `crates/lca-cli/tests/mcp_manager.rs`
+// with the logic it drives; only the import paths changed.
+use lca_mcp::config::load_entries;
+use lca_mcp::manager::{McpManager, servers_section};
 
 fn root(name: &str) -> PathBuf {
     let dir = lca_testkit::scratch_path(&format!("lca-mcp-{name}"));
@@ -219,10 +222,10 @@ fn plan_points_at_a_missing_project_file() {
     );
     let project = dir.join("project");
     let (_entries, _grants, _warnings, _user, project_path) =
-        lca_cli::mcp::McpManager::plan(&dir.join("data"), &project, true);
+        McpManager::plan(&dir.join("data"), &project, true);
     assert_eq!(project_path, Some(project.join(".lca/mcp.json")));
     let (_entries, _grants, _warnings, _user, untrusted) =
-        lca_cli::mcp::McpManager::plan(&dir.join("data"), &project, false);
+        McpManager::plan(&dir.join("data"), &project, false);
     assert_eq!(untrusted, None);
 }
 

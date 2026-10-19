@@ -22,15 +22,19 @@
 //!   the turn's `tool_call`/`tool_result` hooks like any other tool.
 //! - The **`!command` refusal**, which keeps shell syntax out of a tool name.
 //!
-//! Layout: this module is the protocol core and the domain types; `config`
-//! is the `mcp.json` shape; `native` is the `ExtensionDispatch` implementation
-//! the host drives; `remote` is the streamable-HTTP and OAuth path; `wire` is
-//! the pure wire-protocol kit (SSE envelope, JSON-RPC selector, base64).
+//! Layout: this module is the protocol core and the domain types; `config` is
+//! the `mcp.json` shape plus its file loading and persistence; `manager` is the
+//! session lifecycle, grant assembly, `/mcp` action dispatch, and the
+//! system-prompt section; `native` is the `ExtensionDispatch` implementation the
+//! host drives; `remote` is the streamable-HTTP and OAuth path; `wire` is the
+//! pure wire-protocol kit (SSE envelope, JSON-RPC selector, base64).
 
 pub mod config;
+pub mod manager;
 pub mod native;
 pub mod remote;
 pub mod wire;
+pub use manager::McpManager;
 pub use native::{McpBridge, ServerStateKind, ServerStatus, manifest_grants};
 pub use remote::{TokenStore, refresh, sign_in};
 
