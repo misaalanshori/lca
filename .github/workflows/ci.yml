@@ -135,7 +135,7 @@ jobs:
             packages: '-p lca-protocol -p lca-permissions -p lca-session -p lca-config -p lca-provider -p lca-testkit -p lca-ext-abi'
             args: "-E 'not (package(lca-ext-host) and test(/nfr|instantiation|hook|epoch/))'"
           - group: engines
-            packages: '-p lca-tools -p lca-core -p lca-ext-host -p lca-ext-native -p lca-debug -p lca-subscription -p lca-wire-anthropic -p lca-wire-mcp -p lca-wire-openai'
+            packages: '-p lca-tools -p lca-core -p lca-mcp -p lca-ext-host -p lca-ext-native -p lca-debug -p lca-subscription -p lca-wire-anthropic -p lca-wire-openai'
             args: "-E 'not (package(lca-ext-host) and test(/nfr|instantiation|hook|epoch/))'"
           - group: shell
             packages: '-p lca-cli -p lca-tui -p lca-registry -p lca-sdk -p lca-regressions -p lca-ui'
@@ -146,7 +146,7 @@ jobs:
           # no test targets today (tool-legacy) are listed anyway so
           # their first test lands in a job with no CI edit.
           - group: extensions
-            packages: '-p anthropic -p antigravity -p codex -p compaction-default -p conformance -p formatter -p github-copilot -p grok -p handoff -p hash-edit -p hooks-example -p kimi-coding -p llama -p mcp -p meta -p openai-compatible -p openrouter -p project-memory -p question -p rules-compat -p skills -p stream-guard -p tool-legacy -p ui-example -p ultrathink -p webfetch'
+            packages: '-p anthropic -p antigravity -p codex -p compaction-default -p conformance -p formatter -p github-copilot -p grok -p handoff -p hash-edit -p hooks-example -p kimi-coding -p llama -p meta -p openai-compatible -p openrouter -p project-memory -p question -p rules-compat -p skills -p stream-guard -p tool-legacy -p ui-example -p ultrathink -p webfetch'
             args: "-E 'not (package(lca-ext-host) and test(/nfr|instantiation|hook|epoch/))'"
     steps:
       - uses: actions/checkout@v4
