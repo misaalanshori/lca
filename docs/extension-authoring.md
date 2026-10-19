@@ -329,7 +329,7 @@ The `provider` world exports model listing, a completion call that returns a str
 
 ## Resources and state
 
-An extension package may carry a `resources/` folder: its own read-only data (presets, `SKILL.md` docs, templates, any bytes). The extension reads it through `lca:host/resources` - `list-resources(prefix)` and `read(path)` - and sees only its own tree, never the filesystem. Declare the kinds in the manifest:
+An extension package may carry a `resources/` folder: its own read-only data (presets, `SKILL.md` docs, templates, any bytes). The extension reads it through `lca:host/resources` - `list-resources(prefix)` and `read(path)` - and sees only its own tree, never the filesystem. This works identically in both delivery modes (gh #314: the WASM provider guest had omitted the delegation to that import, so a WASM provider could not read its own bag while the native twin could). Declare the kinds in the manifest:
 
 ```toml
 resources = ["provider-presets", "skills"]

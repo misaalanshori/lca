@@ -168,6 +168,36 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
+- **Three places where the WASM path silently did less than the native path
+  (gh #314, #315, #316).** One crate (`lca-subscription`), one failure mode: an
+  omission that compiles, succeeds quietly, and costs a feature.
+  - **gh #314:** the WASM provider guest implemented the net
+    request/status/body/close calls and the three credential calls, and stopped.
+    The two it left out have trait defaults that look fine and are not:
+    `net_response_headers` answered `Ok(vec![])`, so a WASM codex/grok turn
+    never saw `retry-after` and could not honour a server-directed backoff the
+    way native does; `resource_read` answered `NotFound` for every path, so a
+    WASM provider could not read its own `resources/` bag — presets, curated
+    model lists, any data-only package content — even though the
+    `lca:host/resources` import was already bound in the provider world. Both
+    now delegate, with the same error mapping as their siblings.
+  - **gh #315:** a token refresh purged credentials only on HTTP 401. An
+    expired or revoked *refresh token* is RFC 6749 §5.2's **400
+    `invalid_grant`** — the request was well formed, the grant is dead — so the
+    dead token stayed in place, every later turn retried it, got the same 400,
+    and the user was trapped in a refresh loop whose only exit was knowing
+    `/logout` exists. A 400 whose parsed `error` field is `invalid_grant` now
+    purges and says to run `/login`; every other status keeps the credentials,
+    including a 400 with a different error code, because a wrong client id or a
+    server outage says nothing about whether the token is still good.
+  - **gh #316:** the WASM model listing hardcoded `extras: Vec::new()`, so a
+    WASM provider advertised every model as having no metadata — no vision, no
+    thinking levels, no prompt-cache lifetimes — while native kept it. The ABI
+    record already carried the field, so no WIT change was needed; the
+    conformance fixture's models also carried *empty* extras on both sides,
+    which is why the cross-mode equality test agreed and could not see it. The
+    fixture now publishes real metadata, so that test is no longer vacuous.
+
 - **The configuration vocabulary drifted from itself, and unknown keys were
   silent (gh #272, #273).** Several hand-maintained lists describe one
   vocabulary - the `Config` fields, `Config::resolved()` (what `lca config` and

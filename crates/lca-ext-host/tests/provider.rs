@@ -341,6 +341,12 @@ async fn the_provider_capability_delegations_cross_in_both_modes() {
         wasm_report.contains("headers=failed(unknown handle 0)"),
         "the header call reached the host with a real failure: {wasm_report}"
     );
+    // The receipt, printed so a live run shows the values rather than only a
+    // green tick (zero-spend: the conformance matrix IS the evidence - a real
+    // subscription drive needs operator keys).
+    println!("capability probe (wasm)   = {wasm_report}");
+    println!("capability probe (native) = {native_report}");
+
     assert!(
         !wasm_report.contains("answered []"),
         "an empty header list would be the pre-fix default: {wasm_report}"
