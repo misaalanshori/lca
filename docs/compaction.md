@@ -106,6 +106,16 @@ its cap and recovered"; `TurnEnded` remains the single end-of-turn
 signal. A turn that recovered carries no `Error` event at all, since
 nothing failed from the caller's point of view.
 
+Divergence from pi, recorded: pi emits its `agent_end` and then tells
+subscribers whether a retry will follow (`willRetry` on the event), so
+a listener sees one end with a flag rather than a suppressed event.
+LCA has no such flag on `TurnEnded`, so the equivalent contract is
+enforced by the ordering instead - the recovery's compaction events
+precede the single `TurnEnded`. Nothing is lost as long as consumers
+read `CompactionStarted`/`CompactionEnded` for recovery and
+`TurnEnded` for the end; a consumer that needs pi's single-event form
+would need the flag added.
+
 Divergence, documented: the aborted attempt's partial text is not
 persisted (LCA never persists failed attempts) — the compaction
 record marks the boundary. Recovery respects `compaction.enabled`:
