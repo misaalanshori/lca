@@ -48,6 +48,32 @@ One requirement follows. IF a guest path resolution leaves its granted scope, TH
 
 The ad hoc grant, mentioned above as the pressure valve beyond the fixed vocabulary, later turned out to generalize beyond `fs`. The OpenAI-compatible provider under `docs/providers/openai-compatible.md` needed the same shape of escape hatch for `net`, since its whole reason for existing is a host the manifest cannot know in advance; the alternative, a manifest-declared wildcard, was already rejected on the same "a consent screen has to name something evaluable" grounds this record used for `fs`. The mechanism is the same in both places: something outside the fixed vocabulary, granted at the point of use rather than at install, with consent text naming the specific thing being added rather than a pattern standing in for it. See the capability catalog's `fs` and `net` sections for both.
 
+## Annotation, 2026-10-19 (gh #344): `temp` joins `private` as a sanctioned state-directory exception
+
+The Consequences section above says the host refuses any resolution entering the
+agent's own state directory "under every scope including an ad hoc grant". That
+made the two scopes whose roots *live under* the state directory unusable, which
+the vocabulary had already promised: `private` is `<data>/private/<name>` and
+`temp` is `<data>/tmp/<session>`, both resolved by the host, never by guest
+input.
+
+`private` was given an exemption when it was first exercised. `temp` was not, and
+nothing caught it because the scope tests used sibling `tmp`/`data` roots; on a
+real installation the check fired and `temp` resolved to nothing. gh #344 found
+this when the MCP resource staging path tried to stage a file through it and got
+the state-directory refusal instead of a directory.
+
+Both are now sanctioned exceptions, and the exemption is only ever a *narrowing*:
+`resolve` still requires the canonicalized target to start with the scope's own
+canonical root, so a `private` or `temp` resolution cannot reach `sessions/`,
+`credentials/`, or the extension tree. Everything else - `workspace`,
+`home-config`, and every ad hoc path grant - is still refused on entry to the
+state directory exactly as this record describes. The credential-isolation
+guarantee the record exists to protect is unchanged.
+
+The preopened-handle rule, the fixed vocabulary, and the "adding a scope is a
+host change, not an ABI change" consequence are all untouched.
+
 ## Revisit conditions
 
 Three or more real extensions needing a scope the vocabulary does not have, which would argue for a new name rather than a new model. Evidence that users routinely add ad hoc path grants, which would mean the vocabulary is wrong.

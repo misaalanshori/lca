@@ -12,8 +12,12 @@
 //! scope (active only when the project is trusted), and `rules.toml`
 //! under the `private` scope (`<data>/private/stream-guard/`). The
 //! issue's literal `~/.lca/...` global path sits inside the agent
-//! state directory, which every non-`private` scope refuses —
-//! `private` is the vocabulary-legal equivalent, as in project-memory.
+//! state directory, which no scope reaches: a scope resolves only
+//! inside its own root, and the two roots that *do* live under the
+//! state directory are `private` (`<data>/private/<name>`) and the
+//! active session's `temp` (`<data>/tmp/<session>`), each confined to
+//! itself. `private` is the vocabulary-legal equivalent, as in
+//! project-memory.
 //!
 //! Matching uses the `regex` crate, which guarantees linear-time
 //! matching: a hostile or sloppy pattern from a rule file cannot

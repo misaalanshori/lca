@@ -106,7 +106,7 @@ Modes are `read` or `read-write`. A scope absent from the manifest is absent fro
 
 A file staged for the model to read — an extension's large binary payload — goes through the `temp` scope rather than a shared location: `fs_write_new` creates it `create_new` (so an entry planted at the path is an error, never followed) with owner-only permissions on both the file and its directory, and the session's temp directory is removed at exit.
 
-Resolution goes through preopened directory handles. The host never joins a guest string onto a base path. A path that leaves its scope through a parent traversal or a symbolic link is refused, including when the link is created after the grant. A path that enters the agent's own state directory, where sessions, the extension tree, and the credential store live, is refused the same way, under every scope and every ad hoc grant.
+Resolution goes through preopened directory handles. The host never joins a guest string onto a base path. A path that leaves its scope through a parent traversal or a symbolic link is refused, including when the link is created after the grant. A path that enters the agent's own state directory, where sessions, the extension tree, and the credential store live, is refused the same way, under every scope and every ad hoc grant - except `private` and `temp`, whose own roots sit inside it and whose confinement to those roots is what keeps the refusal meaningful everywhere else.
 
 Consent text names the scope in plain words: "Read files in this project. Read and write its own private data directory. Read your configuration directory."
 
