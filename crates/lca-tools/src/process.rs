@@ -193,10 +193,12 @@ pub fn spawn_direct_with_env(
         None => {
             // No job: killing the tree falls back to the child only; the
             // platform notes name this as the Windows orphan risk, so fail
-            // loud instead of shipping a tree that cannot be killed.
+            // the spawn instead of shipping a spawn that can orphan.
+            let mut child = child;
             let _ = child.kill();
+            let _ = child.wait();
             return Err(std::io::Error::other(
-                "cannot assign the child to a Job Object",
+                "cannot assign the spawned process to a Job Object",
             ));
         }
     };
