@@ -466,6 +466,31 @@ are the review's to make, not something this list can pre-answer.
   have had succeed (every FR-PERM-3 test asserts the count after the
   refusal).
 
+- **OAuth discovery may reach a second host, and that reach is bounded
+  three ways** (gh #418 Phase D, gh #290). A sign-in follows the 401's
+  `resource_metadata` or the RFC 8414 issuer to an authorization server that
+  is often not the MCP server's own host, which is the only way a real IdP
+  (Auth0, Okta, an internal issuer) can work. The mitigation as built: the
+  extra host is admitted **for that flow only** — attached when the flow
+  starts, dropped when it ends, never persisted to the grant store, and
+  invisible to ordinary traffic, because the flow-scoped set is consulted
+  only by the sign-in path's own requests. Discovery is seeded with the
+  hosts the user *configured* (`authServerMetadataUrl`), so a configured
+  endpoint does not depend on the flow grant at all. Every discovered
+  endpoint is validated before a request leaves: `https://`, or `http://` on
+  loopback only (RFC 8252). The user sees the outside host in the sign-in
+  copy (`via <server>: authorization host <host>`). Receipts:
+  `crates/lca-mcp/tests/oauth_multihost.rs`
+  `a_sign_in_reaches_an_authorization_server_on_another_host` (the green
+  two-host journey),
+  `an_oauth_flow_host_does_not_survive_into_tool_traffic` (the set is
+  non-empty mid-flow, empty after, and a later request to the IdP host is
+  denied), and `a_discovered_endpoint_on_a_plain_http_host_is_refused` (no
+  token request is attempted). Residual: a *configured* metadata host joins
+  the static grant set, so it is reachable for ordinary traffic — that is
+  the same consent rule the server URL follows (FR-PERM-16), and it is the
+  user's own `mcp.json` line that granted it.
+
 Open findings for the external review: none known above low. The two
 residual risks the scenarios already name - exfiltration to an
 approved host, and a net-local range wider than the one device meant -

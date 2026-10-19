@@ -7,6 +7,21 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **An MCP server whose authorization server is on another host can sign in**
+  (gh #418 Phase D, gh #290). Two defects made that impossible: `sign_in`
+  passed an empty challenge map to discovery, so the RFC 9728
+  `resource_metadata` pointer a 401 supplies was discarded and the
+  discovery branch was dead; and grant assembly covered only the server's
+  own base-URL host, so the metadata fetch and token exchange were denied by
+  the capability layer before any prompt. The whole `WWW-Authenticate`
+  challenge now survives the round-trip, and a discovered host is admitted
+  **for the sign-in flow only** — dropped when the flow ends, never
+  persisted, and invisible to ordinary tool traffic. A host the user
+  configured (`oauth.authServerMetadataUrl`) joins the static grants the way
+  the server URL already does. Discovered endpoints must be `https://`, or
+  `http://` on loopback (RFC 8252), checked before any request leaves, and
+  the sign-in copy names an outside host (`via <server>: authorization host
+  <host>`) so the user sees where the credential goes.
 - **`mcp.json` is written atomically and owner-only** (gh #418 Phase C, gh
   #267). Editing a server through `/mcp` used to rewrite the file in place
   with the process umask and the host's own JSON formatting, so an

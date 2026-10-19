@@ -23,6 +23,70 @@ impl Capabilities {
         self.net_request_once(method, url, headers, body, false)
     }
 
+    /// Reach one host **for the current OAuth flow only** (gh #418 Phase D).
+    ///
+    /// An MCP server's authorization server can live on a host the static
+    /// grant list never names: the 401's `resource_metadata` or the RFC 8414
+    /// issuer points somewhere else (Auth0, Okta, Sentry). Granting every
+    /// such host permanently would widen what ordinary tool traffic can
+    /// reach, which is not what the user consented to. So the caller attaches
+    /// the discovered host with [`Self::oauth_flow_attach`], runs the flow's
+    /// own requests through this method, and the host disappears when the
+    /// flow ends.
+    ///
+    /// The host set is **only** consulted here: [`Self::net_request`] sees
+    /// the static grants alone, so a flow host can never carry ordinary
+    /// traffic. Loopback `http://` is allowed (RFC 8252, and how a local IdP
+    /// is reached); everything else must be `https://`, checked before any
+    /// request leaves.
+    pub fn oauth_flow_net_request(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Option<&[u8]>,
+    ) -> Result<u32, CapabilityError> {
+        self.net_request_with(method, url, headers, body, false, true)
+    }
+
+    /// The host patterns reachable for the current flow (empty outside one).
+    pub fn oauth_flow_hosts(&self) -> Vec<lca_permissions::NetPattern> {
+        lock(&self.oauth_flow_hosts).clone()
+    }
+
+    /// Attach the hosts a sign-in will need. Replaces the set: one flow at a
+    /// time, and the caller starts from the hosts it discovered.
+    pub fn oauth_flow_attach(
+        &self,
+        hosts: impl IntoIterator<Item = String>,
+    ) -> Result<(), CapabilityError> {
+        let mut patterns = Vec::new();
+        for host in hosts {
+            let pattern = lca_permissions::parse_net_pattern(&host).map_err(|err| {
+                CapabilityError::Invalid(format!("OAuth host {host:?} is not usable: {err}"))
+            })?;
+            if !patterns.contains(&pattern) {
+                patterns.push(pattern);
+            }
+        }
+        // Extend, not replace: the caller may attach in two waves (the
+        // discovery URLs it can see, then the endpoints discovery named).
+        // Deduplicated, because the same host across both waves is normal.
+        let mut hosts = lock(&self.oauth_flow_hosts);
+        for pattern in patterns {
+            if !hosts.contains(&pattern) {
+                hosts.push(pattern);
+            }
+        }
+        Ok(())
+    }
+
+    /// Drop every flow-scoped host. Called when the flow ends, whatever the
+    /// outcome.
+    pub fn oauth_flow_clear(&self) {
+        lock(&self.oauth_flow_hosts).clear();
+    }
+
     /// [`Self::net_request`] for a **user-initiated** call: where a prompt
     /// is reachable, an ungranted host is offered as an ad hoc `net` grant
     /// (gh #302, FR-PERM-16) instead of failing outright, and an approval
@@ -63,6 +127,21 @@ impl Capabilities {
         headers: &[(&str, &str)],
         body: Option<&[u8]>,
         may_ask: bool,
+    ) -> Result<u32, CapabilityError> {
+        self.net_request_with(method, url, headers, body, may_ask, false)
+    }
+
+    /// The real dispatch. `flow` admits the OAuth flow's own host set (gh
+    /// #418 Phase D); every other caller passes `false`, which is what keeps
+    /// a discovered host out of ordinary traffic.
+    fn net_request_with(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Option<&[u8]>,
+        may_ask: bool,
+        flow: bool,
     ) -> Result<u32, CapabilityError> {
         // Gh #302: "declared with no hosts" is the consent-first shape
         // (webfetch ships exactly that), so declaration is the gate here,
@@ -110,9 +189,17 @@ impl Capabilities {
             }
         };
 
-        // Tier1: named hosts (`net` grants plus ad hoc attachments).
+        // Tier1: named hosts (`net` grants plus ad hoc attachments, plus the
+        // OAuth flow's own discovered hosts when this *is* the flow).
         let declared_hit = self.grants.net.iter().find(|p| p.matches_host(&host));
-        let adhoc = self.live_adhoc_net();
+        let mut adhoc = self.live_adhoc_net();
+        if flow {
+            for pattern in self.oauth_flow_hosts() {
+                if !adhoc.contains(&pattern) {
+                    adhoc.push(pattern);
+                }
+            }
+        }
         let adhoc_hit = adhoc.iter().find(|p| p.matches_host(&host));
         if let Some(pattern) = declared_hit.or(adhoc_hit) {
             let is_adhoc = adhoc_hit.is_some();
@@ -201,7 +288,9 @@ impl Capabilities {
             // it is the same "nothing covers this" case as tier 1's tail,
             // reached by a different route.
             if may_ask && self.consent_to_host(&host, port) {
-                return self.net_request_once(method, url, headers, body, false);
+                // The retry keeps the same admission set: an approval must not
+                // silently narrow an OAuth flow's reach (gh #418 Phase D).
+                return self.net_request_with(method, url, headers, body, false, flow);
             }
             return Err(self.refused(
                 capability,
@@ -690,9 +779,34 @@ impl Capabilities {
     /// Open a URL in the user's browser (best effort; the extension falls
     /// back to displaying the URL when this fails).
     pub fn oauth_open(&self, url: &str) -> Result<(), CapabilityError> {
-        if !url.starts_with("http://127.0.0.1:") && !url.starts_with("https://") {
+        // A loopback address, not the literal `127.0.0.1` string: an
+        // authorization server can be `127.0.0.2`, `localhost`, or `::1`, and
+        // refusing those made a legitimate local IdP unopenable (gh #418
+        // Phase D).
+        let loopback_http = url
+            .strip_prefix("http://")
+            .and_then(|rest| rest.split('/').next())
+            .map(|authority| {
+                let host_port = authority.rsplit('@').next().unwrap_or(authority);
+                let host = if host_port.starts_with('[') {
+                    host_port
+                        .split_once(']')
+                        .map(|(inside, _)| format!("{inside}]"))
+                        .unwrap_or_else(|| host_port.to_string())
+                } else {
+                    host_port.split(':').next().unwrap_or(host_port).to_string()
+                };
+                let bare = host.trim_start_matches('[').trim_end_matches(']');
+                bare.eq_ignore_ascii_case("localhost")
+                    || bare.ends_with(".localhost")
+                    || bare
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            })
+            .unwrap_or(false);
+        if !loopback_http && !url.starts_with("https://") {
             return Err(CapabilityError::Invalid(format!(
-                "refusing to open {url}: only the loopback flow or https"
+                "refusing to open {url}: only a loopback flow or https"
             )));
         }
         lock(&self.oauth_opened).push(url.to_string());

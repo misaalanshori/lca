@@ -43,6 +43,24 @@ pub struct NetPattern {
     wildcard: bool,
 }
 
+impl std::fmt::Display for NetPattern {
+    /// The pattern as the user would write it: `host`, `host:port`, or
+    /// `*.example.com[:port]`. Not the inverse of `parse_net_pattern` for
+    /// every accepted spelling (case and a trailing dot normalize away), but
+    /// exactly what a refusal or a grant list should print.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let host = if self.wildcard {
+            format!("*{}", self.host)
+        } else {
+            self.host.clone()
+        };
+        match self.port {
+            Some(port) => write!(formatter, "{host}:{port}"),
+            None => write!(formatter, "{host}"),
+        }
+    }
+}
+
 impl NetPattern {
     /// Does this pattern cover the hostname, before port rules? A match
     /// here puts the request under `net`'s rules even when the port then

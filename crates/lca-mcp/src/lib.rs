@@ -32,12 +32,14 @@
 pub mod config;
 pub mod manager;
 pub mod native;
+pub mod oauth;
 pub mod remote;
 pub mod resources;
 pub mod wire;
 pub use manager::McpManager;
 pub use native::{McpBridge, ServerStateKind, ServerStatus, manifest_grants};
-pub use remote::{TokenStore, refresh, sign_in};
+pub use oauth::{refresh, sign_in, via_copy};
+pub use remote::TokenStore;
 pub use resources::{
     LIST_RESOURCES_TOOL, LIST_TEMPLATES_TOOL, McpResource, McpResourceTemplate, READ_RESOURCE_TOOL,
     ResourceContent, contents_from_read, resource_tool_specs, resources_from_list,
@@ -89,7 +91,7 @@ pub struct HttpServerConfig {
 
 /// OAuth settings for one remote server (pi's `oauth` object, the
 /// phase-2 subset: dynamic registration plus scope).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OAuthConfig {
     /// `client_name` for dynamic registration (default `lca`).
     #[serde(default)]

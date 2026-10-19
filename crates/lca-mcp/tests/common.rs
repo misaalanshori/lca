@@ -473,7 +473,7 @@ pub fn sandbox(
         timeout_seconds: 30,
     });
     grants.credentials = true;
-    Arc::new(lca_tools::Capabilities::new(
+    let caps = Arc::new(lca_tools::Capabilities::new(
         "mcp",
         grants,
         roots,
@@ -483,7 +483,13 @@ pub fn sandbox(
         )),
         root.join("project"),
         None,
-    ))
+    ));
+    // The browser launcher is a recorder: a headless run has no browser, and
+    // since gh #418 Phase D a failure to publish the authorization URL is
+    // reported instead of silently ignored - so the harness must publish it
+    // the way a desktop does.
+    caps.set_browser_opener(Some(Arc::new(|_url: &str| Ok(()))));
+    caps
 }
 
 /// Minimal base64 (the mock's `blob` field; no dependency for one

@@ -82,13 +82,13 @@ const READ_ATTEMPTS: usize = 3;
 /// (pi's refresh skew).
 const REFRESH_SKEW_MS: u64 = 30_000;
 /// Fallback lifetime when the server sends no `expires_in`.
-const DEFAULT_TOKEN_LIFETIME_SECS: u64 = 3600;
+pub(crate) const DEFAULT_TOKEN_LIFETIME_SECS: u64 = 3600;
 
 /// Run `work` on a thread and wait at most `timeout`: the `net`
 /// engine bounds body reads but not the head wait, so the bridge
 /// bounds the whole exchange itself. An expiry abandons the exchange
 /// (the engine owns the in-flight handle); the error names the wait.
-fn with_timeout<T: Send + 'static>(
+pub(crate) fn with_timeout<T: Send + 'static>(
     timeout: Duration,
     what: &str,
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
@@ -159,31 +159,106 @@ impl TokenStore {
         Ok(())
     }
 
+    /// Forget the remembered challenge (a best-effort delete; a finished
+    /// sign-in's step-up scopes are now in the grant itself).
+    pub fn clear_pending(&self) -> Result<(), String> {
+        self.caps
+            .credentials_delete(&self.pending_key())
+            .map_err(|err| format!("cannot clear the pending challenge: {err}"))
+    }
+
     fn pending_key(&self) -> String {
         // Rebuilt from the token key so the two can never drift apart.
         self.key.replacen("mcp-oauth:", "mcp-oauth-pending:", 1)
     }
 
-    /// The scopes a 401 advertised, waiting for the next sign-in.
-    pub fn pending_scope(&self) -> Result<Option<String>, String> {
-        self.caps
+    /// The `WWW-Authenticate` challenge a 401 advertised, waiting for the
+    /// next sign-in.
+    ///
+    /// gh #418 Phase D: the whole challenge is kept, not just `scope`. The
+    /// `resource_metadata` member is the RFC 9728 pointer to the server's
+    /// protected-resource metadata - the only way to find an authorization
+    /// server that lives on a different host. Discarding it made that
+    /// discovery branch dead, which is half of gh #290.
+    pub fn pending_challenge(&self) -> Result<Option<BTreeMap<String, String>>, String> {
+        let Some(stored) = self
+            .caps
             .credentials_get(&self.pending_key())
-            .map_err(|err| format!("cannot read the pending scopes: {err}"))
+            .map_err(|err| format!("cannot read the pending challenge: {err}"))?
+        else {
+            return Ok(None);
+        };
+        // Stored as JSON; a value from an older build was a bare scope list,
+        // so a parse failure is reported as its scope rather than dropped.
+        match serde_json::from_str::<serde_json::Value>(&stored) {
+            Ok(serde_json::Value::Object(object)) => Ok(Some(
+                object
+                    .into_iter()
+                    .filter_map(|(key, value)| value.as_str().map(|text| (key, text.to_string())))
+                    .collect(),
+            )),
+            _ => Ok(merge_scopes(&[Some(stored.as_str())]).map(|scope| {
+                let mut challenge = BTreeMap::new();
+                challenge.insert("scope".to_string(), scope);
+                challenge
+            })),
+        }
     }
 
-    /// Remember advertised scopes for the next sign-in (the union
-    /// with what is already pending).
-    pub fn set_pending(&self, scope: &str) -> Result<(), String> {
-        let merged =
-            merge_scopes(&[self.pending_scope()?.as_deref(), Some(scope)]).unwrap_or_default();
+    /// Remember where the sign-in's authorization server lives, for the
+    /// sign-in screen's copy (gh #418 Phase D's consent property: a
+    /// discovered host is named before the credential goes there). Empty
+    /// clears it.
+    pub fn set_discovery_note(&self, note: &str) -> Result<(), String> {
+        if note.is_empty() {
+            let _ = self.caps.credentials_delete(&self.note_key());
+            return Ok(());
+        }
         self.caps
-            .credentials_set(&self.pending_key(), &merged)
-            .map_err(|err| format!("cannot store the pending scopes: {err}"))
+            .credentials_set(&self.note_key(), note)
+            .map_err(|err| format!("cannot store the discovery note: {err}"))
+    }
+
+    /// The stored discovery note, when a sign-in discovered an outside host.
+    pub fn discovery_note(&self) -> Result<Option<String>, String> {
+        self.caps
+            .credentials_get(&self.note_key())
+            .map_err(|err| format!("cannot read the discovery note: {err}"))
+    }
+
+    fn note_key(&self) -> String {
+        self.key.replacen("mcp-oauth:", "mcp-oauth-note:", 1)
+    }
+
+    /// Remember an advertised challenge for the next sign-in: the new values
+    /// win, `scope` merges (step-up adds scopes, never drops them).
+    pub fn set_pending_challenge(
+        &self,
+        challenge: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let mut remembered = self.pending_challenge()?.unwrap_or_default();
+        for (key, value) in challenge {
+            if key == "scope" {
+                if let Some(merged) = merge_scopes(&[
+                    remembered.get(key).map(String::as_str),
+                    Some(value.as_str()),
+                ]) {
+                    remembered.insert(key.clone(), merged);
+                }
+            } else {
+                remembered.insert(key.clone(), value.clone());
+            }
+        }
+        let encoded = serde_json::to_string(&remembered)
+            .map_err(|err| format!("cannot encode the pending challenge: {err}"))?;
+        self.caps
+            .credentials_set(&self.pending_key(), &encoded)
+            .map_err(|err| format!("cannot store the pending challenge: {err}"))
     }
 }
 
 /// Milliseconds since the Unix epoch.
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_millis() as u64)
@@ -191,14 +266,14 @@ fn now_ms() -> u64 {
 }
 
 /// One buffered HTTP exchange.
-struct Attempt {
-    status: u16,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
+pub(crate) struct Attempt {
+    pub(crate) status: u16,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Vec<u8>,
 }
 
 /// What one attempt can report, split so denials never retry.
-enum AttemptOutcome {
+pub(crate) enum AttemptOutcome {
     Exchanged(Attempt),
     /// A transport failure worth another attempt.
     Retryable(String),
@@ -207,7 +282,7 @@ enum AttemptOutcome {
 }
 
 /// POST one envelope and buffer the answer.
-fn post_attempt(
+pub(crate) fn post_attempt(
     caps: &lca_tools::Capabilities,
     url: &str,
     headers: &[(String, String)],
@@ -217,7 +292,7 @@ fn post_attempt(
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
-    let handle = match caps.net_request("POST", url, &refs, Some(body)) {
+    let handle = match caps.oauth_flow_net_request("POST", url, &refs, Some(body)) {
         Ok(handle) => handle,
         Err(err) => {
             let detail = err.to_string();
@@ -256,16 +331,19 @@ fn post_attempt(
 }
 
 /// GET one document (discovery and metadata live here).
-fn get_document(
+pub(crate) fn get_document(
     caps: Arc<lca_tools::Capabilities>,
     timeout: Duration,
     url: &str,
 ) -> Result<serde_json::Value, String> {
+    // Validated before any request: a metadata URL on a public `http://` host
+    // would otherwise leak the request (and, on the token side, the grant).
+    crate::oauth::checked_endpoint(url, "a metadata URL")?;
     let url = url.to_string();
     with_timeout(timeout, "the metadata fetch", move || {
         let refs: Vec<(&str, &str)> = Vec::new();
         let handle = caps
-            .net_request("GET", &url, &refs, None)
+            .oauth_flow_net_request("GET", &url, &refs, None)
             .map_err(|err| format!("fetch failed: {err}"))?;
         let status = caps.net_response_status(handle).unwrap_or(0);
         let mut body = Vec::new();
@@ -295,381 +373,42 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .map(|(_, value)| value.as_str())
 }
 
-/// The authorization server behind one MCP server (RFC 8414's
-/// document, however it was found).
-struct IdpMeta {
-    authorization_endpoint: String,
-    token_endpoint: String,
-    registration_endpoint: Option<String>,
-}
-
-impl IdpMeta {
-    fn from_document(document: &serde_json::Value) -> Result<IdpMeta, String> {
-        let string = |key: &str| {
-            document
-                .get(key)
-                .and_then(|value| value.as_str())
-                .map(str::to_string)
-        };
-        Ok(IdpMeta {
-            authorization_endpoint: string("authorization_endpoint")
-                .ok_or_else(|| "the metadata names no authorization endpoint".to_string())?,
-            token_endpoint: string("token_endpoint")
-                .ok_or_else(|| "the metadata names no token endpoint".to_string())?,
-            registration_endpoint: string("registration_endpoint"),
-        })
-    }
-}
-
-/// The origin (`scheme://host[:port]`) of a URL.
-fn origin_of(url: &str) -> Result<String, String> {
-    let mut parts = url.splitn(4, '/');
-    let scheme = parts.next().unwrap_or("");
-    let empty = parts.next().unwrap_or("");
-    let host = parts.next().unwrap_or("");
-    if scheme.is_empty() || empty.is_empty() || host.is_empty() {
-        return Err(format!("cannot take the origin of {url:?}"));
-    }
-    Ok(format!("{scheme}//{host}"))
-}
-
-/// Find the authorization server: the configured metadata document
-/// wins (pi's `authServerMetadataUrl`), else the challenge's
-/// `resource_metadata` (RFC 9728), else the MCP origin as its own
-/// issuer.
-fn discover(
-    caps: Arc<lca_tools::Capabilities>,
+/// Probe one MCP endpoint and remember the challenge a 401 carries.
+///
+/// The capture half of gh #418 Phase D, split out so a caller (the manager's
+/// sign-in entry point, or a test) can do exactly what a failed call does:
+/// one unauthenticated request, and on a 401 the `WWW-Authenticate` members
+/// are stored for the next sign-in. A 200 means nothing to capture.
+pub fn remember_unauthorized(
+    caps: &Arc<lca_tools::Capabilities>,
     server: &HttpServerConfig,
-    challenge: &BTreeMap<String, String>,
-) -> Result<IdpMeta, String> {
-    if let Some(url) = server
-        .oauth
-        .as_ref()
-        .and_then(|oauth| oauth.auth_server_metadata_url.clone())
-    {
-        return IdpMeta::from_document(&get_document(caps, server.timeout(), &url)?);
+    url: &str,
+) -> Result<Option<BTreeMap<String, String>>, String> {
+    let refs: Vec<(&str, &str)> = Vec::new();
+    let handle = caps
+        .oauth_flow_net_request("POST", url, &refs, Some(b"{}"))
+        .map_err(|err| format!("the probe request failed: {err}"))?;
+    let status = caps
+        .net_response_status(handle)
+        .map_err(|err| format!("no status: {err}"))?;
+    let headers = caps
+        .net_response_headers(handle)
+        .map_err(|err| format!("cannot read the response headers: {err}"))?;
+    let _ = caps.net_close_response(handle);
+    if status != 401 {
+        return Ok(None);
     }
-    if let Some(metadata_url) = challenge.get("resource_metadata") {
-        let document = get_document(caps.clone(), server.timeout(), metadata_url)?;
-        let issuer = document
-            .get("authorization_servers")
-            .and_then(|servers| servers.as_array())
-            .and_then(|servers| servers.first())
-            .and_then(|first| first.as_str())
-            .ok_or_else(|| "the resource metadata names no authorization server".to_string())?;
-        let url = format!(
-            "{}/.well-known/oauth-authorization-server",
-            issuer.trim_end_matches('/')
-        );
-        return IdpMeta::from_document(&get_document(caps, server.timeout(), &url)?);
-    }
-    let url = format!(
-        "{}/.well-known/oauth-authorization-server",
-        origin_of(&server.url)?
-    );
-    IdpMeta::from_document(&get_document(caps, server.timeout(), &url)?)
-}
-
-/// Register this client (RFC 7591): the name the server sees, the
-/// loopback redirect, and the requested scopes.
-fn register_client(
-    caps: Arc<lca_tools::Capabilities>,
-    server: &HttpServerConfig,
-    meta: &IdpMeta,
-    redirect_uri: &str,
-    scope: Option<&str>,
-) -> Result<(String, Option<String>), String> {
-    let endpoint = meta.registration_endpoint.clone().ok_or_else(|| {
-        "the server supports no dynamic registration; configure a client id (phase 3)".to_string()
-    })?;
-    let client_name = server
-        .oauth
-        .as_ref()
-        .and_then(|oauth| oauth.client_name.clone())
-        .unwrap_or_else(|| "lca".to_string());
-    let mut registration = serde_json::json!({
-        "client_name": client_name,
-        "redirect_uris": [redirect_uri],
-        "grant_types": ["authorization_code", "refresh_token"],
-        "response_types": ["code"],
-    });
-    if let Some(scope) = scope {
-        registration["scope"] = scope.into();
-    }
-    let body = serde_json::to_vec(&registration)
-        .map_err(|err| format!("cannot encode the registration: {err}"))?;
-    let caps_moved = caps.clone();
-    let endpoint_moved = endpoint.clone();
-    let attempt = with_timeout(server.timeout(), "the client registration", move || {
-        let headers = vec![("Content-Type".to_string(), "application/json".to_string())];
-        match post_attempt(&caps_moved, &endpoint_moved, &headers, &body) {
-            AttemptOutcome::Exchanged(attempt) => Ok(attempt),
-            AttemptOutcome::Retryable(detail) | AttemptOutcome::Denied(detail) => Err(detail),
-        }
-    })?;
-    if attempt.status != 200 && attempt.status != 201 {
-        return Err(format!(
-            "registration answered {}: {}",
-            attempt.status,
-            String::from_utf8_lossy(&attempt.body)
-        ));
-    }
-    let answer: serde_json::Value = serde_json::from_slice(&attempt.body)
-        .map_err(|err| format!("bad registration JSON: {err}"))?;
-    let client_id = answer
-        .get("client_id")
-        .and_then(|id| id.as_str())
-        .ok_or_else(|| "registration answered no client id".to_string())?
-        .to_string();
-    let client_secret = answer
-        .get("client_secret")
-        .and_then(|secret| secret.as_str())
-        .map(str::to_string);
-    Ok((client_id, client_secret))
-}
-
-/// The interactive sign-in (the anthropic browser flow's shape):
-/// register (or reuse the configured client), open the authorize URL,
-/// wait for the pasted or looped-back code, exchange, store. The
-/// requested scopes are the configured ones plus any stored grant
-/// (step-up merges, never replaces).
-pub fn sign_in(
-    caps: Arc<lca_tools::Capabilities>,
-    server: &HttpServerConfig,
-) -> Result<(), String> {
-    let store = TokenStore::new(caps.clone(), server);
-    let stored = store.load()?;
-    let pending = store.pending_scope()?;
-    let scope = merge_scopes(&[
-        server
-            .oauth
-            .as_ref()
-            .and_then(|oauth| oauth.scope.as_deref()),
-        stored.as_ref().and_then(|token| token.scope.as_deref()),
-        pending.as_deref(),
-    ]);
-    // A server that answered 401 names what it needs; without a
-    // challenge the configured (plus stored) scopes are the request.
-    let (redirect_uri, flow) = caps
-        .oauth_begin("/callback")
-        .map_err(|err| format!("cannot start the loopback flow: {err}"))?;
-    let meta = discover(caps.clone(), server, &BTreeMap::new())?;
-    let (verifier, challenge) = pkce_pair().map_err(|err| format!("PKCE failed: {err}"))?;
-    // pi sends the verifier as the state; the equality check then
-    // covers both values at once.
-    let state = verifier.clone();
-    let (client_id, client_secret) = match server
-        .oauth
-        .as_ref()
-        .and_then(|oauth| oauth.client_id.clone())
-    {
-        Some(configured) => (
-            configured,
-            server
-                .oauth
-                .as_ref()
-                .and_then(|oauth| oauth.client_secret.clone()),
-        ),
-        None => register_client(caps.clone(), server, &meta, &redirect_uri, scope.as_deref())?,
-    };
-    let encode = percent_encode;
-    let mut url = format!(
-        "{}?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state={}",
-        meta.authorization_endpoint,
-        encode(&client_id),
-        encode(&redirect_uri),
-        encode(&challenge),
-        encode(&state),
-    );
-    if let Some(scope) = &scope {
-        url.push_str(&format!("&scope={}", encode(scope)));
-    }
-    let _ = caps.oauth_open(&url);
-    let callback = caps.oauth_await(flow);
-    let _ = caps.oauth_end(flow);
-    let callback = callback.map_err(|err| err.to_string())?;
-    let get = |key: &str| {
-        callback
-            .iter()
-            .find(|(name, _)| name == key)
-            .map(|(_, value)| value.clone())
-            .unwrap_or_default()
-    };
-    if get("state") != state {
-        return Err("OAuth state mismatch; the callback did not come from this flow".to_string());
-    }
-    let code = get("code");
-    if code.is_empty() {
-        return Err("the authorization server returned no code".to_string());
-    }
-    exchange(
-        caps.clone(),
-        server,
-        &meta,
-        &store,
-        &client_id,
-        client_secret.as_deref(),
-        &code,
-        &redirect_uri,
-        &verifier,
-        scope.as_deref(),
-    )
-}
-
-/// Exchange a code (or a refresh token) at the token endpoint; the
-/// `grant` closure shapes the form body per grant type.
-fn token_post(
-    caps: Arc<lca_tools::Capabilities>,
-    server: &HttpServerConfig,
-    token_url: &str,
-    pairs: &[(&str, &str)],
-) -> Result<serde_json::Value, String> {
-    let encoded = pairs
+    let challenge = headers
         .iter()
-        .map(|(key, value)| format!("{}={}", percent_encode(key), percent_encode(value)))
-        .collect::<Vec<_>>()
-        .join("&");
-    let token_url = token_url.to_string();
-    let attempt = with_timeout(server.timeout(), "the token exchange", move || {
-        let headers = vec![(
-            "Content-Type".to_string(),
-            "application/x-www-form-urlencoded".to_string(),
-        )];
-        match post_attempt(&caps, &token_url, &headers, encoded.as_bytes()) {
-            AttemptOutcome::Exchanged(attempt) => Ok(attempt),
-            AttemptOutcome::Retryable(detail) | AttemptOutcome::Denied(detail) => Err(detail),
-        }
-    })?;
-    if attempt.status != 200 {
-        return Err(format!(
-            "token endpoint answered {}: {}",
-            attempt.status,
-            String::from_utf8_lossy(&attempt.body)
-        ));
+        .find(|(name, _)| name.eq_ignore_ascii_case("www-authenticate"))
+        .map(|(_, value)| parse_www_authenticate(value))
+        .unwrap_or_default();
+    if challenge.is_empty() {
+        return Ok(None);
     }
-    serde_json::from_slice(&attempt.body).map_err(|err| format!("bad token JSON: {err}"))
-}
-
-/// Store an issuance (code or refresh grant) against its client.
-fn store_issuance(
-    store: &TokenStore,
-    answer: &serde_json::Value,
-    client_id: &str,
-    client_secret: Option<&str>,
-    token_url: &str,
-    fallback_scope: Option<&str>,
-) -> Result<(), String> {
-    let access_token = answer
-        .get("access_token")
-        .and_then(|token| token.as_str())
-        .ok_or_else(|| "the token endpoint issued no access token".to_string())?
-        .to_string();
-    let lifetime = answer
-        .get("expires_in")
-        .and_then(|secs| secs.as_u64())
-        .unwrap_or(DEFAULT_TOKEN_LIFETIME_SECS);
-    store.save(&StoredToken {
-        access_token,
-        refresh_token: answer
-            .get("refresh_token")
-            .and_then(|token| token.as_str())
-            .map(str::to_string),
-        expires_at_ms: Some(now_ms() + lifetime * 1000),
-        client_id: client_id.to_string(),
-        client_secret: client_secret.map(str::to_string),
-        scope: answer
-            .get("scope")
-            .and_then(|scope| scope.as_str())
-            .map(str::to_string)
-            .or_else(|| fallback_scope.map(str::to_string)),
-        token_url: token_url.to_string(),
-    })
-}
-
-/// The code exchange at the end of [`sign_in`].
-#[allow(clippy::too_many_arguments)]
-fn exchange(
-    caps: Arc<lca_tools::Capabilities>,
-    server: &HttpServerConfig,
-    meta: &IdpMeta,
-    store: &TokenStore,
-    client_id: &str,
-    client_secret: Option<&str>,
-    code: &str,
-    redirect_uri: &str,
-    verifier: &str,
-    scope: Option<&str>,
-) -> Result<(), String> {
-    let mut pairs = vec![
-        ("grant_type", "authorization_code"),
-        ("code", code),
-        ("redirect_uri", redirect_uri),
-        ("client_id", client_id),
-        ("code_verifier", verifier),
-    ];
-    let secret;
-    if let Some(secret_value) = client_secret {
-        secret = secret_value.to_string();
-        pairs.push(("client_secret", secret.as_str()));
-    }
-    let answer = token_post(caps, server, &meta.token_endpoint, &pairs)?;
-    store_issuance(
-        store,
-        &answer,
-        client_id,
-        client_secret,
-        &meta.token_endpoint,
-        scope,
-    )?;
-    // The grant now covers the stepped-up scopes: forget the pending
-    // memory (a best-effort delete; absence is the common case).
-    let _ = store.caps.credentials_delete(&store.pending_key());
-    Ok(())
-}
-
-/// Use the refresh token to mint a new access token. `Ok(true)` means
-/// the store holds fresh tokens; `Ok(false)` means there is nothing
-/// to refresh with. An `invalid_grant` purges the dead tokens (the
-/// grant died server-side; keeping it would loop).
-pub fn refresh(
-    caps: Arc<lca_tools::Capabilities>,
-    server: &HttpServerConfig,
-) -> Result<bool, String> {
     let store = TokenStore::new(caps.clone(), server);
-    let Some(stored) = store.load()? else {
-        return Ok(false);
-    };
-    let Some(refresh_token) = stored.refresh_token.clone() else {
-        return Ok(false);
-    };
-    let mut pairs = vec![
-        ("grant_type", "refresh_token"),
-        ("refresh_token", refresh_token.as_str()),
-        ("client_id", stored.client_id.as_str()),
-    ];
-    let secret;
-    if let Some(secret_value) = stored.client_secret.clone() {
-        secret = secret_value;
-        pairs.push(("client_secret", secret.as_str()));
-    }
-    match token_post(caps, server, &stored.token_url, &pairs) {
-        Ok(answer) => {
-            store_issuance(
-                &store,
-                &answer,
-                &stored.client_id,
-                stored.client_secret.as_deref(),
-                &stored.token_url,
-                stored.scope.as_deref(),
-            )?;
-            Ok(true)
-        }
-        Err(detail) if detail.contains("invalid_grant") => {
-            let _ = store.clear();
-            Ok(false)
-        }
-        Err(detail) => Err(detail),
-    }
+    store.set_pending_challenge(&challenge)?;
+    Ok(Some(challenge))
 }
 
 /// One live remote server behind the bridge.
@@ -709,7 +448,7 @@ impl HttpSession {
         if stale && stored.refresh_token.is_some() {
             // A dead grant purges inside `refresh`; anything else
             // keeps the stale token for one best-effort attempt.
-            let _ = refresh(self.caps.clone(), &self.server)?;
+            let _ = crate::oauth::refresh(self.caps.clone(), &self.server)?;
             return Ok(store.load()?.map(|fresh| fresh.access_token));
         }
         Ok(Some(stored.access_token))
@@ -721,16 +460,21 @@ impl HttpSession {
     /// stored access token is already gone by now (purged on the
     /// failed refresh, or never stored).
     fn remember_step_up(&self, headers: &[(String, String)]) -> String {
-        let scope = headers
+        // gh #418 Phase D: keep the *whole* challenge. `resource_metadata` is
+        // the RFC 9728 pointer to the protected-resource metadata, and it is
+        // the only way to find an authorization server on another host; the
+        // old code kept `scope` alone and threw that away.
+        let challenge = headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("www-authenticate"))
             .map(|(_, value)| parse_www_authenticate(value))
-            .and_then(|challenge| challenge.get("scope").cloned());
-        if let Some(scope) = &scope {
+            .unwrap_or_default();
+        let scope = challenge.get("scope").cloned();
+        if !challenge.is_empty() {
             let store = TokenStore::new(self.caps.clone(), &self.server);
             // A best-effort memory: the report must survive even when
             // the store write cannot.
-            let _ = store.set_pending(scope);
+            let _ = store.set_pending_challenge(&challenge);
         }
         match scope {
             Some(scope) => format!(
@@ -791,7 +535,7 @@ impl HttpSession {
                 Ok(AttemptOutcome::Retryable(detail)) => return Err(detail),
                 Ok(AttemptOutcome::Exchanged(exchange)) => {
                     if exchange.status == 401 && !refreshed {
-                        if refresh(self.caps.clone(), &self.server)? {
+                        if crate::oauth::refresh(self.caps.clone(), &self.server)? {
                             refreshed = true;
                             continue;
                         }

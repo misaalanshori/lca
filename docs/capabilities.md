@@ -59,6 +59,18 @@ The ask belongs to the call, not to the capability. A convenience request — a 
 
 Headless runs are unchanged: with no prompt installed the ask answers denied, so the error copy names the host and the two fixes (`lca` interactively once, or `--allow-host <host>` for one run) exactly as before.
 
+### OAuth sign-in reaches a second host — for the flow only (gh #418 Phase D)
+
+An MCP server's authorization server is routinely not on the server's own host: the 401's `WWW-Authenticate: resource_metadata` (RFC 9728) or the RFC 8414 issuer names Auth0, Okta, Sentry, or an internal IdP. Those fetches and the token exchange go through the same `net` check as everything else, so what a sign-in may reach is stated here rather than assumed.
+
+Three sources, and only these: the MCP server's own base-URL host; any host the user **configured** in `mcp.json` (`oauth.authServerMetadataUrl`) — configuration is the consent, the same rule the server URL already follows; and hosts **discovered** from the metadata, which are admitted as **session-scoped, OAuth-flow-only** grants. A discovered host is attachable while the flow runs and dropped when it ends, never written to the grant store, and never visible to ordinary tool traffic: the flow-scoped set is consulted only by the sign-in path's own requests, so a `tools/call`-time request to an IdP host is denied exactly as before.
+
+Discovered endpoints are validated before any request leaves: `https://` anywhere, or plain `http://` on loopback only (RFC 8252, and how a local IdP is reached on a developer machine). A discovered `http://` endpoint on any other host is refused with the URL and the rule in the message, and nothing is sent.
+
+The sign-in screen names an outside host: `via <server>: authorization host <host>`. The user sees where the credential is about to go before it goes there. A server whose authorization server is its own host says nothing extra.
+
+Scope: a 401's `scope` member still merges into the next sign-in's request (step-up adds scopes, never drops them), and `resource_metadata` is remembered alongside it so discovery has the hint the server just gave.
+
 A manifest cannot declare a wildcard covering every host; a bare `*` is rejected at install time, and correctly so, since a consent screen that reads "connect anywhere" tells a user nothing they can evaluate. The real case this rejects is a provider extension whose actual host isn't known until the user configures it, such as an extension speaking to whatever OpenAI-compatible endpoint a user points it at. That case is handled the same way an out-of-vocabulary `fs` path is: the manifest declares whatever fixed hosts it has a sensible default for, if any, and the user adds the specific host they actually want as an ad hoc grant, at the point they configure it, usually the same login or setup flow that asks for the base URL in the first place. The consent shown at that moment names the exact host being added, not a pattern standing in for "anywhere."
 
 ### net-local

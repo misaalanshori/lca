@@ -53,6 +53,39 @@ pub fn manager_grants(entries: &[ServerEntry]) -> (lca_tools::CapabilityGrants, 
             )),
         }
     }
+    // gh #418 Phase D: a metadata document the user *configured* names a host
+    // the sign-in will legitimately need (`authServerMetadataUrl`, pi's
+    // `authServerMetadataUrl`). Configuration is the consent, exactly as it is
+    // for the server's own URL above, so it joins the static set. A host that
+    // is only *discovered* stays flow-scoped instead, because the user never
+    // named it.
+    for entry in entries {
+        let configured_urls = entry
+            .http_config()
+            .and_then(|config| config.oauth)
+            .and_then(|oauth| oauth.auth_server_metadata_url);
+        let Some(url) = configured_urls else {
+            continue;
+        };
+        let Some(host) = url_host(&url) else {
+            warnings.push(format!(
+                "server {:?} configures an OAuth metadata URL with no usable host",
+                entry.name
+            ));
+            continue;
+        };
+        match lca_permissions::parse_net_pattern(&host) {
+            Ok(pattern) => {
+                if !grants.adhoc_net.contains(&pattern) {
+                    grants.adhoc_net.push(pattern);
+                }
+            }
+            Err(err) => warnings.push(format!(
+                "server {:?} grants nothing for its OAuth metadata host ({}); sign-in will deny",
+                entry.name, err
+            )),
+        }
+    }
     grants.oauth = Some(lca_permissions::OAuthSettings {
         redirect_path: "/callback".to_string(),
         timeout_seconds: 300,
@@ -82,6 +115,24 @@ pub struct McpManager {
 }
 
 impl McpManager {
+    /// The sign-in screen's copy (gh #418 Phase D's consent property): when a
+    /// sign-in discovered an authorization host outside the MCP server's own,
+    /// it is named here, so the user sees where the credential went.
+    ///
+    /// Empty when nothing has been discovered outside, which is the common
+    /// case and means there is nothing to say.
+    pub fn discovery_note(&self, server: &str) -> Option<String> {
+        let entry = self
+            .entries()
+            .into_iter()
+            .find(|entry| entry.name == server)?;
+        let config = entry.http_config()?;
+        crate::TokenStore::new(self.caps.clone(), &config)
+            .discovery_note()
+            .ok()
+            .flatten()
+    }
+
     /// Load, grant, and connect (all through `assemble`).
     pub fn load(
         caps: Arc<lca_tools::Capabilities>,
@@ -410,7 +461,12 @@ impl McpManager {
         match task.done.try_recv() {
             Ok((server, Ok(()))) => {
                 self.rebuild();
-                Some(format!("signed in to `{server}`"))
+                // Name a discovered outside host, so the report says where the
+                // credential went rather than only that it went (gh #418).
+                match self.discovery_note(&server) {
+                    Some(note) => Some(format!("signed in to `{server}` ({note})")),
+                    None => Some(format!("signed in to `{server}`")),
+                }
             }
             Ok((server, Err(err))) => Some(format!("sign-in to `{server}` failed: {err}")),
             Err(std::sync::mpsc::TryRecvError::Empty) => {

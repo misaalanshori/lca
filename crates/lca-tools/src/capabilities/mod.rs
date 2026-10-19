@@ -301,6 +301,13 @@ pub struct Capabilities {
     /// host imports poll it (the OAuth callback today) so a cancelled turn
     /// does not wait out their window: an epoch bump cannot interrupt host
     /// code that is already blocked (FR-CONC-1, NFR-21).
+    /// Hosts this engine may reach **for the current OAuth flow only** (gh
+    /// #418 Phase D): discovered authorization/token endpoints that sit
+    /// outside the static grant list. Attached when the flow starts, cleared
+    /// when it ends, never persisted, and consulted only from
+    /// [`Capabilities::oauth_flow_net_request`] - so ordinary traffic sees
+    /// exactly the static grants.
+    oauth_flow_hosts: Arc<Mutex<Vec<lca_permissions::NetPattern>>>,
     cancelled: Arc<std::sync::atomic::AtomicBool>,
     /// Wakes a blocked `net` wait the moment [`Capabilities::cancel`] fires.
     /// A `Notify`, not a sleep timer: the wait runs on a caller-owned
@@ -366,6 +373,7 @@ impl Capabilities {
             oauth_opened: Arc::new(Mutex::new(Vec::new())),
             oauth_begun: Arc::new(Mutex::new(Vec::new())),
             browser_opener: Arc::new(Mutex::new(None)),
+            oauth_flow_hosts: Arc::new(Mutex::new(Vec::new())),
             cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cancelled_notify: Arc::new(tokio::sync::Notify::new()),
             handles: Arc::new(Mutex::new(HandleTable::default())),

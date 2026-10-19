@@ -251,3 +251,66 @@ fn prompt_section_lists_reachable_servers() {
     assert!(!section.contains("loud"), "direct tools declare themselves");
     assert!(!section.contains("off"), "disabled stays silent");
 }
+
+// Verifies: gh #418 Phase D (gh #290) - the grant assembly covers the hosts a
+// sign-in legitimately needs: the server's own host *and* the OAuth metadata
+// host the user configured in `mcp.json`. Configuration is the consent, the
+// same rule the server URL already follows (FR-PERM-16); a host that is only
+// *discovered* stays flow-scoped instead, because the user never named it.
+#[test]
+fn the_manager_grants_the_configured_oauth_metadata_host() {
+    let dir = root("oauth-grants");
+    write(
+        &dir.join("data/mcp.json"),
+        r#"{"mcpServers": {
+            "remote": {
+                "url": "https://mcp.example.com/mcp",
+                "oauth": { "authServerMetadataUrl": "https://idp.example.net/.well-known/oauth-authorization-server" }
+            },
+            "plain": { "url": "https://plain.example.com/mcp" }
+        }}"#,
+    );
+    let loaded = load_entries(&dir.join("data"), &dir.join("project"), false);
+    assert_eq!(loaded.warnings, Vec::<String>::new());
+    let (grants, warnings) = lca_mcp::manager::manager_grants(&loaded.entries);
+    assert_eq!(warnings, Vec::<String>::new(), "no warnings");
+    let hosts: Vec<String> = grants.adhoc_net.iter().map(|p| p.to_string()).collect();
+    assert_eq!(
+        hosts.len(),
+        3,
+        "one per server plus the configured metadata host: {hosts:?}"
+    );
+    let joined = hosts.join(" ");
+    for expected in ["mcp.example.com", "idp.example.net", "plain.example.com"] {
+        assert!(
+            joined.contains(expected),
+            "{expected} is granted: {hosts:?}"
+        );
+    }
+    // The flow-scoped rule is unchanged: nothing else is reachable.
+    assert!(
+        !joined.contains("evil"),
+        "only named hosts are granted: {hosts:?}"
+    );
+}
+
+// Verifies: gh #418 Phase D (gh #290) - the sign-in screen's copy names a
+// discovered authorization host, so the user sees where the credential goes.
+// An authorization server on the MCP server's own host says nothing extra.
+#[test]
+fn the_sign_in_copy_names_a_discovered_outside_host() {
+    let server = lca_mcp::HttpServerConfig {
+        name: "remote".to_string(),
+        url: "https://mcp.example.com/mcp".to_string(),
+        headers: Default::default(),
+        timeout_secs: 0,
+        oauth: None,
+    };
+    let outside = lca_mcp::oauth::via_copy(&server, &["idp.example.net:443".to_string()]);
+    assert_eq!(
+        outside, "via remote: authorization host idp.example.net:443",
+        "the outside host is named"
+    );
+    let same = lca_mcp::oauth::via_copy(&server, &["mcp.example.com:443".to_string()]);
+    assert_eq!(same, "", "the server's own host says nothing");
+}
