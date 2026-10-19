@@ -1,10 +1,10 @@
 //! Split from `capabilities.rs` (cycle 7, P3).
 
-use super::parse_query;
+use super::parse_callback_query;
 
 #[test]
 fn query_parsing_decodes_and_keeps_empty_values() {
-    let params = parse_query("code=abc%20def&state=x+y&flag");
+    let params = parse_callback_query("code=abc%20def&state=x+y&flag");
     assert_eq!(
         params,
         vec![

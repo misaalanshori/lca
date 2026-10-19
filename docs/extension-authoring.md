@@ -346,7 +346,7 @@ lca ext config word-count +skills -skills/private
 
 For mutable, non-secret data, use `lca:host/state` - `read`/`write`/`delete`/`list-keys`, keyed by your own identity, size-capped, wiped on uninstall. Secrets go in `credentials`, never `state`.
 
-A state key is 1-200 characters of ASCII letters, digits, `.`, `_`, or `-`, because the host stores one file per key under your own namespace and a path separator would be a path surface. A key outside that set is refused with an `invalid` error naming the rule, not silently sanitized. The value is opaque bytes: up to 4 MB per key, 16 MB per namespace.
+A state key is 1-200 characters of ASCII letters, digits, `.`, `_`, or `-`, and does not begin with `.`, because the host stores one file per key under your own namespace and a path separator would be a path surface. The leading-dot refusal is what keeps the namespace able to hold the `.<key>.tmp` sibling a write renames from: a crash mid-write leaves that file behind, and it must never be reachable as a key. A key outside the set is refused with an `invalid` error naming the rule, not silently sanitized. A write is published atomically - the value is written to the temporary sibling and renamed into place - so a crash leaves the previous value intact rather than a truncated one, and a leftover temporary file is invisible to `state_list` and does not count toward the namespace cap. The value is opaque bytes: up to 4 MB per key, 16 MB per namespace.
 
 ```rust
 let bytes = lca::host::resources::read("provider-presets.toml")?;

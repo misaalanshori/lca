@@ -656,13 +656,8 @@ impl Capabilities {
                         else {
                             continue;
                         };
-                        let params = parse_query(&target);
-                        let page = "HTTP/1.1 200 OK
-content-type: text/html
-                                    content-length:63
-connection: close
-
-                                    <html><body>You can close this tab and return to LCA.</body></html>";
+                        let params = super::parse_callback_query(&target);
+                        let page = super::loopback_oauth_page();
                         let _ = stream.write_all(page.as_bytes());
                         let _ = tx.send(params);
                         return;

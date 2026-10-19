@@ -536,7 +536,7 @@ pub(crate) mod windows_job {
             let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
             info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             // SAFETY: `handle` is a valid job handle and `info` outlives the call.
-            unsafe {
+            let ok = unsafe {
                 SetInformationJobObject(
                     handle,
                     JobObjectExtendedLimitInformation,
@@ -544,6 +544,16 @@ pub(crate) mod windows_job {
                     std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
                 )
             };
+            // gh #322: a job without KILL_ON_JOB_CLOSE silently degrades the
+            // tree-kill guarantee to "kill the child". Refuse it instead of
+            // handing back a Job that cannot do its job - and close the
+            // handle we already opened, or it leaks.
+            if ok == 0 {
+                // SAFETY: `handle` came from CreateJobObjectW and is not
+                // used after this point.
+                unsafe { CloseHandle(handle) };
+                return None;
+            }
             Some(Job { handle })
         }
 
@@ -674,10 +684,26 @@ async fn platform_exec(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     let mut child = cmd.spawn()?;
-    let job = windows_job::Job::new();
-    if let (Some(job), Some(pid)) = (job.as_ref(), child.id()) {
-        job.assign(pid);
-    }
+    // gh #322: this used to build an unchecked job and ignore both the
+    // `Job::new()` and the `assign` result, so a shell spawn could proceed
+    // with no job at all - the Windows orphan protection
+    // docs/platform-notes.md promises, silently absent. Route through the
+    // same checked `attach` the direct-spawn and PTY paths use, and fail
+    // loud rather than run a tree we could not kill.
+    let job = match child.id() {
+        Some(pid) => windows_job::Job::attach(pid),
+        None => None,
+    };
+    let Some(job) = job else {
+        // A job is not optional on Windows: without it the timeout and
+        // cancellation paths can only kill the direct child, and a spawned
+        // grandchild outlives the turn (docs/platform-notes.md).
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+        return Err(std::io::Error::other(
+            "cannot assign the spawned process to a Job Object",
+        ));
+    };
     let Some(mut stdout) = child.stdout.take() else {
         return Err(std::io::Error::other(format!(
             "{}'s stdout was not piped",
@@ -712,13 +738,15 @@ async fn platform_exec(
                 else { on_output(&err_buf[..n]); push_capped(&mut collected, &err_buf[..n]); }
             }
             _ = async { match deadline { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending().await } } => {
-                if let Some(job) = job.as_ref() { job.kill(); } else { let _ = child.start_kill(); }
+                // `job` is unconditional now (gh #322), so the tree kill is
+                // the only path - no child-only fallback to silently take.
+                job.kill();
                 let _ = child.wait().await;
                 outcome = Some(ExecOutcome::Timeout);
                 break;
             }
             _ = cancel.wait_cancelled() => {
-                if let Some(job) = job.as_ref() { job.kill(); } else { let _ = child.start_kill(); }
+                job.kill();
                 let _ = child.wait().await;
                 outcome = Some(ExecOutcome::Cancelled);
                 break;

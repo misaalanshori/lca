@@ -31,7 +31,7 @@ pub use capabilities::{BrowserError, CompletionError};
 pub use capabilities::{
     BrowserOpener, Capabilities, CapabilityGrants, Denial, RESOURCE_FILE_MAX_BYTES,
     RESOURCE_PACKAGE_MAX_BYTES, RESOURCE_READ_MAX_BYTES, ResourceSource, STATE_TOTAL_MAX_BYTES,
-    STATE_VALUE_MAX_BYTES,
+    STATE_VALUE_MAX_BYTES, decode_query_component, loopback_oauth_page, parse_callback_query,
 };
 pub use open::{UrlLauncher, open_url, url_launchers, windows_url_launcher};
 pub use ops::{Entry, ExecOutcome, NativeOps, SessionEnv, Stat, ToolOps};

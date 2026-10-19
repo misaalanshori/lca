@@ -168,7 +168,57 @@ Dates are UTC.
     bypass in `DENY_PROGRAMS`.
 
 ### Fixed
-- **The embedding SDK lost state and capabilities that only show up in a long
+- **Five `lca-tools` durability and hygiene defects, each of which failed
+  silently rather than loudly (gh #318, #319, #320, #321, #322).**
+  - **gh #318:** `process_wait` and `pty_wait` waited on the child while
+    holding the handle table's mutex and then left the entry in place, so
+    every normally-exiting child and PTY leaked a `HandleEntry` (and a PTY's
+    master fd) for the rest of the session. The entry is now removed before
+    the blocking wait, which also stops a slow child from stalling every
+    other handle operation; a wrong-type handle is still refused without
+    being removed, so asking the process API about a PTY cannot destroy it.
+  - **gh #319:** the loopback OAuth redirect server answered browsers with a
+    malformed HTTP/1.1 response - 36 leading spaces on two lines, bare `\n`
+    endings, `content-length:63` for a 104-byte body - so a browser either
+    hung waiting for the bytes it was promised or read the indentation as
+    obsolete header folding. The callback query decoder also widened each
+    percent-decoded byte as Latin-1 (`char::from(byte)`), turning `%C3%A9`
+    into `Ã©`, corrupting any literal non-ASCII byte the same way, and
+    mapping a bad hex digit to `0` so `%zz` became a NUL byte. The reply is
+    now a correctly framed response with a length that matches its body, and
+    the decoder accumulates bytes and decodes UTF-8 once, preserving a
+    malformed `%` sequence verbatim.
+  - **gh #320:** `state_write` wrote in place with `std::fs::write`, which
+    truncates before it writes - a crash or full disk mid-write left a
+    shorter value that still parsed, so an extension's state was lost with no
+    error anywhere. It now writes a `.<key>.tmp` sibling and renames it into
+    place, `state_list` ignores a leftover temp file, and the per-namespace
+    byte cap does not count one (otherwise a single crash could make a
+    namespace permanently unrefillable). The temp name is dot-prefixed rather
+    than `Path::with_extension("tmp")`: key `foo.bar` would map to `foo.tmp`
+    under `with_extension`, colliding with the real key `foo.tmp`. A leading
+    dot is now refused as a key so that space belongs to the temp files.
+  - **gh #321:** `truncate_head_tail` admitted the first line and the last
+    line unconditionally (`&& index > 0`, `&& back > 0`), so a two-line file
+    of 100 KiB lines was emitted whole - 204801 bytes against a 64 KiB cap,
+    measured live through the `shell` tool. Whole lines are now only accepted
+    when they fit their budget; when a single line is longer than its budget
+    the head and tail are byte windows cut on UTF-8 character boundaries, and
+    the omission marker cites bytes instead of an impossible line range
+    (`showing lines 1..0 and 3..2` was the first draft's output). Measured
+    after: 65535 bytes of content under the 65536 cap.
+  - **gh #322:** the Win32 Job Object calls were unchecked.
+    `Job::new` ignored `SetInformationJobObject`'s return, so a job that
+    failed to acquire `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` was still handed
+    back as usable - the tree-kill guarantee degraded to "kill the child"
+    with nothing said. `platform_exec` went further and ignored both
+    `Job::new()` and `assign(pid)`, so a shell spawn could proceed with no
+    job at all. The setup result is now checked (closing the handle and
+    returning `None` on failure), and all three Windows spawn sites
+    (`ops`, `process`, `pty`) route through the one checked `Job::attach`,
+    failing loud rather than running a tree they cannot kill.
+
+- **Three places where the WASM path silently did less than the native path- **The embedding SDK lost state and capabilities that only show up in a long
   session, and three durability defects beside it (gh #309, #310, #313, #312,
   #317).**
   - **gh #309:** `Session::create` accepted a `data_dir`, used it to open the

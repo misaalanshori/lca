@@ -456,3 +456,23 @@ mod responses_images_and_cache_read;
 // stayed silent on a zero-frame 200 body.
 #[path = "359-sse-eof-flush-and-zero-frame.rs"]
 mod sse_eof_flush_and_zero_frame;
+// GitHub #318: `process_wait`/`pty_wait` left the handle in the table, so
+// every normal exit leaked a child/PTY entry.
+#[path = "318-process-and-pty-wait-remove-handles.rs"]
+mod process_and_pty_wait_remove_handles;
+// GitHub #319: the loopback OAuth reply was malformed HTTP/1.1 and the
+// query decoder widened bytes as Latin-1 instead of UTF-8.
+#[path = "319-oauth-loopback-http-and-utf8-query.rs"]
+mod oauth_loopback_http_and_utf8_query;
+// GitHub #320: `state_write` truncated in place, so a crash mid-write lost
+// the extension's state.
+#[path = "320-state-write-atomic.rs"]
+mod state_write_atomic;
+// GitHub #321: `truncate_head_tail` always kept the first and last line,
+// so a single oversized line blew past `max_bytes`.
+#[path = "321-truncate-head-tail-long-lines.rs"]
+mod truncate_head_tail_long_lines;
+// GitHub #322: the Win32 Job Object calls ignored their failure returns, so
+// the process-tree-kill guarantee could be silently absent.
+#[path = "322-windows-job-object-checked.rs"]
+mod windows_job_object_checked;

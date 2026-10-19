@@ -227,7 +227,11 @@ impl Capabilities {
         if let Some(dir) = path.parent().filter(|dir| dir.is_dir()) {
             for entry in std::fs::read_dir(dir)? {
                 let entry = entry?;
-                if entry.file_name().to_string_lossy() != key {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                // A temp file left by a crashed write is not a key and must
+                // not consume the namespace budget, or one crash could make
+                // the namespace permanently unrefillable (gh #320).
+                if name != key && !is_state_temp(&name) {
                     total += entry.metadata()?.len();
                 }
             }
@@ -240,7 +244,18 @@ impl Capabilities {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&path, value)?;
+        // Publish atomically (gh #320). `std::fs::write` truncates the
+        // destination before it writes, so a crash or a full disk between
+        // those two steps left the reader a shorter value that still parsed
+        // - silent, permanent loss. `write_credentials` in this same file
+        // already did temp-then-rename; state did not.
+        //
+        // The temp name is `.{key}.tmp`, not `path.with_extension("tmp")`:
+        // key `foo.bar` would map to `foo.tmp` under `with_extension`, which
+        // collides with key `foo.tmp` itself.
+        let temp = path.with_file_name(format!(".{key}.tmp"));
+        std::fs::write(&temp, value)?;
+        std::fs::rename(&temp, &path)?;
         Ok(())
     }
 
@@ -264,8 +279,11 @@ impl Capabilities {
         for entry in std::fs::read_dir(&dir)? {
             let entry = entry?;
             let meta = entry.metadata()?;
-            if meta.is_file() {
-                entries.push((entry.file_name().to_string_lossy().into_owned(), meta.len()));
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // A crash between the temp write and the rename leaves a
+            // `.{key}.tmp` sibling; it is not a key (gh #320).
+            if meta.is_file() && !is_state_temp(&name) {
+                entries.push((name, meta.len()));
             }
         }
         entries.sort();
@@ -276,14 +294,20 @@ impl Capabilities {
     /// Keys are a safe filename charset: a guest key can never carry a path
     /// (ADR-0030: identity namespace, never guest input).
     fn state_path(&self, key: &str) -> Result<PathBuf, CapabilityError> {
+        // A leading dot is refused so the namespace can hold the
+        // `.{key}.tmp` siblings `state_write` renames from (gh #320)
+        // without any key ever colliding with one. It costs nothing: no
+        // caller stores dotfiles, and the crash-recovery property is worth
+        // more than the charset.
         let safe = !key.is_empty()
             && key.len() <= 200
+            && !key.starts_with('.')
             && key
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
         if !safe {
             let err = CapabilityError::Invalid(format!(
-                "state key `{key}` must be 1-200 chars of letters, digits, `-`, `_`, or `.`"
+                "state key `{key}` must be 1-200 chars of letters, digits, `-`, `_`, or `.`, and must not begin with `.`"
             ));
             self.record("state", key, &err.to_string());
             return Err(err);
@@ -312,4 +336,11 @@ impl Capabilities {
         }
         Ok(canonical)
     }
+}
+
+/// A leftover temporary file from an interrupted [`Capabilities::state_write`]
+/// (gh #320): a dot-prefixed sibling ending in `.tmp`. No real key can match
+/// this shape, because [`Capabilities::state_path`] refuses a leading dot.
+fn is_state_temp(name: &str) -> bool {
+    name.starts_with('.') && name.ends_with(".tmp")
 }

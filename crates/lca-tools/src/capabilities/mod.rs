@@ -30,6 +30,7 @@ use tower_service::Service;
 mod errors;
 mod fs;
 mod net;
+mod oauth_page;
 #[cfg(test)]
 mod pinned_tests;
 mod proxy;
@@ -39,6 +40,7 @@ mod store;
 mod tls;
 mod traits;
 
+pub use oauth_page::{decode_query_component, loopback_oauth_page, parse_callback_query};
 use tls::proxied_stack;
 #[cfg(windows)]
 #[allow(unsafe_code)]
@@ -828,19 +830,61 @@ impl Capabilities {
         Ok(crate::process::write_all(writer, bytes)?)
     }
 
-    /// Wait for the child; returns its exit code.
+    /// Wait for the child; returns its exit code and releases the handle.
+    ///
+    /// The entry is removed *before* the blocking wait, which does two
+    /// things (gh #318): a normally-exiting child no longer leaks a
+    /// `HandleEntry` for the rest of the session, and the `handles` mutex is
+    /// not held across `wait()`, so waiting on a slow child cannot stall
+    /// every other handle operation.
+    ///
+    /// A wrong-type handle is refused *without* being removed - asking the
+    /// process API about a PTY must not destroy the PTY.
     pub fn process_wait(&self, handle: u32) -> Result<i32, CapabilityError> {
-        let mut table = lock(&self.handles);
-        let entry = table
-            .entries
-            .get_mut(&handle)
-            .ok_or_else(|| CapabilityError::NotFound(format!("unknown handle {handle}")))?;
-        let HandleEntry::Process { child, .. } = entry else {
-            return Err(CapabilityError::Invalid(format!(
-                "handle {handle} is not a process"
-            )));
-        };
+        let mut child = self.take_process(handle)?;
         Ok(child.wait()?)
+    }
+
+    /// Remove a process entry from the handle table, refusing without
+    /// removing when the handle is unknown or another type (gh #318).
+    fn take_process(&self, handle: u32) -> Result<crate::process::TreeChild, CapabilityError> {
+        let mut table = lock(&self.handles);
+        match table.entries.get(&handle) {
+            None => Err(CapabilityError::NotFound(format!(
+                "unknown handle {handle}"
+            ))),
+            Some(HandleEntry::Process { .. }) => match table.entries.remove(&handle) {
+                Some(HandleEntry::Process { child, .. }) => Ok(child),
+                // Unreachable: the check above ran under the same lock.
+                _ => Err(CapabilityError::NotFound(format!(
+                    "unknown handle {handle}"
+                ))),
+            },
+            Some(_) => Err(CapabilityError::Invalid(format!(
+                "handle {handle} is not a process"
+            ))),
+        }
+    }
+
+    /// Remove a PTY entry from the handle table, same rule as
+    /// [`Capabilities::take_process`] (gh #318).
+    fn take_pty(&self, handle: u32) -> Result<crate::pty::PtyChild, CapabilityError> {
+        let mut table = lock(&self.handles);
+        match table.entries.get(&handle) {
+            None => Err(CapabilityError::NotFound(format!(
+                "unknown handle {handle}"
+            ))),
+            Some(HandleEntry::Pty(_)) => match table.entries.remove(&handle) {
+                Some(HandleEntry::Pty(pty)) => Ok(pty),
+                // Unreachable: the check above ran under the same lock.
+                _ => Err(CapabilityError::NotFound(format!(
+                    "unknown handle {handle}"
+                ))),
+            },
+            Some(_) => Err(CapabilityError::Invalid(format!(
+                "handle {handle} is not a pty"
+            ))),
+        }
     }
 
     /// Kill the child's whole tree and release the handle.
@@ -976,18 +1020,14 @@ impl Capabilities {
         Ok(pty.resize(rows, cols)?)
     }
 
-    /// Wait for the program; returns its exit code.
+    /// Wait for the program; returns its exit code and releases the handle.
+    ///
+    /// Same rule as [`Capabilities::process_wait`] (gh #318): the entry is
+    /// removed before the blocking wait, so a normally-exiting PTY does not
+    /// leak the entry or its master fd, and a wrong-type handle is refused
+    /// without being consumed.
     pub fn pty_wait(&self, handle: u32) -> Result<i32, CapabilityError> {
-        let mut table = lock(&self.handles);
-        let entry = table
-            .entries
-            .get_mut(&handle)
-            .ok_or_else(|| CapabilityError::NotFound(format!("unknown handle {handle}")))?;
-        let HandleEntry::Pty(pty) = entry else {
-            return Err(CapabilityError::Invalid(format!(
-                "handle {handle} is not a pty"
-            )));
-        };
+        let mut pty = self.take_pty(handle)?;
         Ok(pty.wait()?)
     }
 
@@ -1087,42 +1127,4 @@ fn resolve_addrs(host: &str, port: u16) -> Result<Vec<IpAddr>, CapabilityError> 
         .to_socket_addrs()
         .map(|iter| iter.map(|addr: SocketAddr| addr.ip()).collect())
         .map_err(|err| CapabilityError::Io(format!("cannot resolve {host}: {err}")))
-}
-
-/// Parse a callback query string into pairs (the extension verifies
-/// `state` itself; the host only parses, per `docs/flows.md`).
-fn parse_query(query: &str) -> Vec<(String, String)> {
-    query
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| match pair.split_once('=') {
-            Some((key, value)) => (decode(key), decode(value)),
-            None => (decode(pair), String::new()),
-        })
-        .collect()
-}
-
-fn decode(value: &str) -> String {
-    let mut out = String::new();
-    let mut chars = value.bytes();
-    while let Some(byte) = chars.next() {
-        match byte {
-            b'+' => out.push(' '),
-            b'%' => {
-                let hi = chars.next();
-                let lo = chars.next();
-                if let (Some(hi), Some(lo)) = (hi, lo) {
-                    let nibble = |b: u8| match b {
-                        b'0'..=b'9' => b - b'0',
-                        b'a'..=b'f' => b - b'a' + 10,
-                        b'A'..=b'F' => b - b'A' + 10,
-                        _ => 0,
-                    };
-                    out.push(char::from((nibble(hi) << 4) | nibble(lo)));
-                }
-            }
-            other => out.push(other as char),
-        }
-    }
-    out
 }
