@@ -1,8 +1,19 @@
 # ADR-0045: MCP arrives as an extension bridge, not a host service
 
-Status: accepted.
+Status: **Superseded by [ADR-0047](0047-mcp-first-class-subsystem.md).**
 
 Date: 2026-10-09.
+
+> **Superseded by ADR-0047, 2026-10-19 (gh #418).** MCP is now
+> `crates/lca-mcp`, a first-class internal subsystem, and the WASM guest is
+> gone. This record's own revisit conditions fired: the extension boundary was
+> fiction in three ways — `lca-cli` (and, test-only, `lca-core`) carried a hard
+> dependency on it, the host owned its files and its permission prompting, and
+> the `tool-catalog` guest could not serve the HTTP/OAuth/resources features it
+> shipped (that world exports no `net`, `oauth`, or `credentials`). What this
+> record got right — the star topology, per-spawn prompts, the permission layer
+> on every call, the `!command` refusal — is preserved verbatim and named in
+> ADR-0047. The text below is the historical record and is not edited.
 
 ## Context
 

@@ -1,0 +1,35 @@
+[package]
+name = "lca-mcp"
+description = "MCP subsystem: external MCP servers over stdio and streamable HTTP as one tool suite (gh #53, ADR-0047)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "lca_mcp"
+# One native build. The WASM guest is gone: the `tool-catalog` world has no
+# `net`/`oauth`/`credentials`, so the component could never serve the feature
+# set this crate owns (ADR-0047).
+crate-type = ["rlib"]
+
+[dependencies]
+lca-protocol = { path = "../lca-protocol" }
+lca-ext-abi = { path = "../lca-ext-abi" }
+lca-tools = { path = "../lca-tools" }
+lca-permissions = { path = "../lca-permissions" }
+lca-config = { path = "../lca-config" }
+serde.workspace = true
+serde_json.workspace = true
+# PKCE S256 (RFC 7636) and the verifier's randomness.
+sha2.workspace = true
+getrandom = "0.3"
+tokio.workspace = true
+
+[dev-dependencies]
+lca-testkit = { path = "../lca-testkit" }
+
+[lints]
+workspace = true

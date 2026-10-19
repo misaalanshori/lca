@@ -6,6 +6,21 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Changed
+- **MCP is now part of the binary's core tooling rather than a separately
+  published extension** (gh #418, ADR-0047, superseding ADR-0045). Nothing
+  behaves differently: the same servers, the same `mcp.json`, the same
+  `mcp__<server>__<tool>` names, the same per-spawn permission prompt. What
+  changed is where it lives and what gets published. The crate moved from
+  `extensions/mcp` to `crates/lca-mcp` as a first-class subsystem, its
+  single-consumer wire kit (`lca-wire-mcp`) folded into it as `src/wire.rs`,
+  and its WASM guest was deleted along with the `mcp.wasm` artifacts — the
+  `tool-catalog` world exports no `net`, `oauth`, or `credentials`, so the
+  component could never serve the HTTP/OAuth/resources features it advertised.
+  If you installed MCP from the registry, it now ships with the binary:
+  remove the `mcp` entry from your `extensions`/`catalog` state and nothing
+  else changes. `lca-core` no longer carries any MCP dependency at run time.
+
 ### Added
 - **Extensions-only publish (`extensions-abi-0.6-20261011`).**
   Thirteen shippable first-party extensions ride the `abi-0.6` line;

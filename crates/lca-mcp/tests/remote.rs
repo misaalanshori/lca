@@ -13,9 +13,9 @@ use common::{mock_server, remote_server, sandbox};
 #[test]
 fn a_remote_server_lists_and_calls_echo() {
     let mock = mock_server();
-    let caps = sandbox("remote-echo", mcp::manifest_grants());
-    let bridge =
-        mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp")]).expect("connect");
+    let caps = sandbox("remote-echo", lca_mcp::manifest_grants());
+    let bridge = lca_mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp")])
+        .expect("connect");
     let specs = bridge.tool_specs().expect("specs");
     assert_eq!(specs.len(), 4, "echo plus the resource trio");
     assert!(specs.iter().any(|spec| spec.name == "mcp__remote__echo"));
@@ -44,9 +44,9 @@ fn transient_failures_retry_then_succeed() {
     let mock = mock_server();
     mock.fail_once("/mcp", 503, None, Vec::new());
     mock.fail_once("/mcp", 503, None, Vec::new());
-    let caps = sandbox("remote-retry", mcp::manifest_grants());
-    let bridge =
-        mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp")]).expect("connect");
+    let caps = sandbox("remote-retry", lca_mcp::manifest_grants());
+    let bridge = lca_mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp")])
+        .expect("connect");
     let result = runtime().block_on(bridge.execute_tool(&lca_protocol::ToolCall {
         call_id: "call-1".to_string(),
         name: "mcp__remote__echo".to_string(),
@@ -65,11 +65,11 @@ fn transient_failures_retry_then_succeed() {
 #[test]
 fn a_hung_server_times_out() {
     let mock = mock_server();
-    let caps = sandbox("remote-timeout", mcp::manifest_grants());
+    let caps = sandbox("remote-timeout", lca_mcp::manifest_grants());
     let mut server = remote_server(&mock, "/slow");
     server.timeout_secs = 1;
     let started = std::time::Instant::now();
-    let err = match mcp::McpBridge::connect_http(caps, vec![server]) {
+    let err = match lca_mcp::McpBridge::connect_http(caps, vec![server]) {
         Ok(_) => panic!("slow connect fails"),
         Err(err) => err,
     };
@@ -87,8 +87,8 @@ fn a_hung_server_times_out() {
 #[test]
 fn sse_responses_read() {
     let mock = mock_server();
-    let caps = sandbox("remote-sse", mcp::manifest_grants());
-    let bridge = mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp-sse")])
+    let caps = sandbox("remote-sse", lca_mcp::manifest_grants());
+    let bridge = lca_mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp-sse")])
         .expect("connect");
     let specs = bridge.tool_specs().expect("specs");
     assert_eq!(specs.len(), 4, "echo plus the resource trio");
@@ -99,9 +99,9 @@ fn sse_responses_read() {
 #[test]
 fn session_id_round_trips() {
     let mock = mock_server();
-    let caps = sandbox("remote-session", mcp::manifest_grants());
-    let bridge =
-        mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp")]).expect("connect");
+    let caps = sandbox("remote-session", lca_mcp::manifest_grants());
+    let bridge = lca_mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp")])
+        .expect("connect");
     let posts = mock.requests_of("POST /mcp");
     assert!(posts.len() >= 2, "initialize + list posted: {posts:?}");
     assert!(
@@ -122,9 +122,9 @@ fn session_id_round_trips() {
 #[test]
 fn a_call_reports_transient_failure_without_retry() {
     let mock = mock_server();
-    let caps = sandbox("remote-no-retry", mcp::manifest_grants());
-    let bridge =
-        mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp")]).expect("connect");
+    let caps = sandbox("remote-no-retry", lca_mcp::manifest_grants());
+    let bridge = lca_mcp::McpBridge::connect_http(caps, vec![remote_server(&mock, "/mcp")])
+        .expect("connect");
     mock.fail_once("tools/call", 503, None, Vec::new());
     let result = runtime().block_on(bridge.execute_tool(&lca_protocol::ToolCall {
         call_id: "call-1".to_string(),

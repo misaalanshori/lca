@@ -69,3 +69,14 @@ original decision is the record of what was decided on this date.
 (Anthropic, MCP, OpenAI). Same rule as the sixteen annotation - the
 boundaries are unchanged, only the count moves, and the workspace also
 holds the `extensions/` provider tree alongside `crates/`.
+
+*Annotation (2026-10-19, gh #418):* the count stays **twenty-one** crates under
+`crates/`, but the set changes: `lca-wire-mcp` leaves (absorbed into
+`lca-mcp/src/wire.rs` — it had exactly one consumer) and `lca-mcp` joins,
+moved out of `extensions/` because it was never really an extension
+(ADR-0047). The `lca-wire-*` grouping keeps its meaning: the two remaining kits
+are model-provider wire protocols, and the one-SSE-parser drift guard in
+`scripts/docs-consistency.sh` now recognizes `crates/lca-mcp` alongside them
+because MCP's streamable-HTTP envelope is a different protocol, not a fork of a
+provider engine. Boundaries are unchanged: `lca-mcp` sits below `lca-core`, and
+the architecture test pins that it depends on neither `lca-core` nor `lca-cli`.

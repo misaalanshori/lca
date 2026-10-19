@@ -139,7 +139,11 @@ fi
 # place each. A second `SseDecoder`, `ResponsesStream`,
 # `AnthropicStream`, request-body builder, or `StreamFailure` outside
 # `crates/lca-wire-*` is a forked engine, not a use of the kit.
-leak=$(grep -rn --include='*.rs' -E 'struct SseDecoder|struct ResponsesStream|struct AnthropicStream|fn build_responses_body|fn build_messages_body|fn parse_sse|struct StreamFailure' crates/ extensions/ | grep -v '^crates/lca-wire-' || true)
+# `crates/lca-mcp` is the second sanctioned home (gh #418): its SSE envelope
+# is the MCP streamable-HTTP transport, which is a different wire protocol
+# from the model-provider kits above, so the guard still means "no forked
+# provider engine" rather than "one SSE parser in the tree".
+leak=$(grep -rn --include='*.rs' -E 'struct SseDecoder|struct ResponsesStream|struct AnthropicStream|fn build_responses_body|fn build_messages_body|fn parse_sse|struct StreamFailure' crates/ extensions/ | grep -v -e '^crates/lca-wire-' -e '^crates/lca-mcp/' || true)
 if [ -n "$leak" ]; then
   echo "docs-consistency: residual wire engine outside the kits:"
   echo "$leak"

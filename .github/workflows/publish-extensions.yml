@@ -76,7 +76,7 @@ jobs:
         run: |
           cargo build --release --target wasm32-wasip2 \
             -p antigravity -p anthropic -p openrouter -p github-copilot \
-            -p meta -p kimi-coding -p llama -p mcp
+            -p meta -p kimi-coding -p llama
       - name: Publish the OCI artifacts (abi line tag + version tag)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -102,7 +102,6 @@ jobs:
           publish meta target/wasm32-wasip2/release/meta.wasm extensions/meta/extension.toml
           publish kimi-coding target/wasm32-wasip2/release/kimi_coding.wasm extensions/kimi-coding/extension.toml
           publish llama target/wasm32-wasip2/release/llama.wasm extensions/llama/extension.toml
-          publish mcp target/wasm32-wasip2/release/mcp.wasm extensions/mcp/extension.toml
       # Best effort: repo-scoped packages follow the public repo's
       # visibility, this just makes it explicit when the API allows.
       - name: Ensure the packages are public
@@ -110,6 +109,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for image in antigravity anthropic openrouter github-copilot meta kimi-coding llama mcp; do
+          for image in antigravity anthropic openrouter github-copilot meta kimi-coding llama; do
             gh api --method PATCH "/user/packages/container/lca%2F${image}" -f visibility=public || true
           done

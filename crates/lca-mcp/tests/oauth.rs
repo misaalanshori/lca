@@ -15,14 +15,14 @@ use common::{mock_server, remote_server, sandbox};
 /// shape).
 fn drive_sign_in(
     caps: &Arc<lca_tools::Capabilities>,
-    server: &mcp::HttpServerConfig,
+    server: &lca_mcp::HttpServerConfig,
 ) -> Result<(), String> {
     let for_thread = caps.clone();
     let server = server.clone();
     let result: Arc<Mutex<Option<Result<(), String>>>> = Arc::new(Mutex::new(None));
     let slot = result.clone();
     std::thread::spawn(move || {
-        let outcome = mcp::sign_in(for_thread, &server);
+        let outcome = lca_mcp::sign_in(for_thread, &server);
         *slot.lock().expect("slot") = Some(outcome);
     });
 
@@ -64,9 +64,9 @@ fn drive_sign_in(
     }
 }
 
-fn authed_server(mock: &common::Mock) -> mcp::HttpServerConfig {
+fn authed_server(mock: &common::Mock) -> lca_mcp::HttpServerConfig {
     let mut server = remote_server(mock, "/mcp");
-    server.oauth = Some(mcp::OAuthConfig {
+    server.oauth = Some(lca_mcp::OAuthConfig {
         client_name: Some("lca-test".to_string()),
         scope: Some("base".to_string()),
         auth_server_metadata_url: Some(format!(
@@ -84,11 +84,11 @@ fn authed_server(mock: &common::Mock) -> mcp::HttpServerConfig {
 #[test]
 fn browser_sign_in_registers_stores_and_connects() {
     let mock = mock_server();
-    let caps = sandbox("oauth-full", mcp::manifest_grants());
+    let caps = sandbox("oauth-full", lca_mcp::manifest_grants());
     let server = authed_server(&mock);
     drive_sign_in(&caps, &server).expect("sign-in runs");
 
-    let stored = mcp::TokenStore::new(caps.clone(), &server);
+    let stored = lca_mcp::TokenStore::new(caps.clone(), &server);
     let token = stored
         .load()
         .expect("store reads")
@@ -118,7 +118,7 @@ fn browser_sign_in_registers_stores_and_connects() {
 
     // The stored token authenticates the bridge with no new flow.
     mock.guard(Some("mock-access"), None);
-    let bridge = mcp::McpBridge::connect_http(caps.clone(), vec![server]).expect("connect");
+    let bridge = lca_mcp::McpBridge::connect_http(caps.clone(), vec![server]).expect("connect");
     assert_eq!(
         bridge.tool_specs().expect("specs").len(),
         4,
@@ -132,11 +132,11 @@ fn browser_sign_in_registers_stores_and_connects() {
 #[test]
 fn an_expired_token_refreshes_before_use() {
     let mock = mock_server();
-    let caps = sandbox("oauth-refresh", mcp::manifest_grants());
+    let caps = sandbox("oauth-refresh", lca_mcp::manifest_grants());
     let server = authed_server(&mock);
-    let store = mcp::TokenStore::new(caps.clone(), &server);
+    let store = lca_mcp::TokenStore::new(caps.clone(), &server);
     store
-        .save(&mcp::StoredToken {
+        .save(&lca_mcp::StoredToken {
             access_token: "stale-access".to_string(),
             refresh_token: Some("mock-refresh".to_string()),
             expires_at_ms: Some(1),
@@ -149,7 +149,7 @@ fn an_expired_token_refreshes_before_use() {
     mock.set_token(r#"{"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":1800,"scope":"base"}"#);
     mock.guard(Some("fresh-access"), None);
 
-    let bridge = mcp::McpBridge::connect_http(caps.clone(), vec![server]).expect("connect");
+    let bridge = lca_mcp::McpBridge::connect_http(caps.clone(), vec![server]).expect("connect");
     assert_eq!(
         bridge.tool_specs().expect("specs").len(),
         4,
@@ -166,11 +166,11 @@ fn an_expired_token_refreshes_before_use() {
 #[test]
 fn a_bad_refresh_purges_and_needs_sign_in() {
     let mock = mock_server();
-    let caps = sandbox("oauth-purge", mcp::manifest_grants());
+    let caps = sandbox("oauth-purge", lca_mcp::manifest_grants());
     let server = authed_server(&mock);
-    let store = mcp::TokenStore::new(caps.clone(), &server);
+    let store = lca_mcp::TokenStore::new(caps.clone(), &server);
     store
-        .save(&mcp::StoredToken {
+        .save(&lca_mcp::StoredToken {
             access_token: "stale-access".to_string(),
             refresh_token: Some("dead-refresh".to_string()),
             expires_at_ms: Some(1),
@@ -185,7 +185,7 @@ fn a_bad_refresh_purges_and_needs_sign_in() {
     // reports sign-in.
     mock.guard(Some("mock-access"), None);
 
-    let err = match mcp::McpBridge::connect_http(caps.clone(), vec![server]) {
+    let err = match lca_mcp::McpBridge::connect_http(caps.clone(), vec![server]) {
         Ok(_) => panic!("no token works"),
         Err(err) => err,
     };
@@ -201,11 +201,11 @@ fn a_bad_refresh_purges_and_needs_sign_in() {
 #[test]
 fn step_up_scopes_merge_on_re_sign_in() {
     let mock = mock_server();
-    let caps = sandbox("oauth-stepup", mcp::manifest_grants());
+    let caps = sandbox("oauth-stepup", lca_mcp::manifest_grants());
     let server = authed_server(&mock);
-    let store = mcp::TokenStore::new(caps.clone(), &server);
+    let store = lca_mcp::TokenStore::new(caps.clone(), &server);
     store
-        .save(&mcp::StoredToken {
+        .save(&lca_mcp::StoredToken {
             access_token: "base-only".to_string(),
             refresh_token: None,
             expires_at_ms: Some(9_999_999_999_999),
@@ -221,7 +221,7 @@ fn step_up_scopes_merge_on_re_sign_in() {
         Some(r#"Bearer resource_metadata="http://unused.invalid/x", scope="extra""#),
     );
 
-    let err = match mcp::McpBridge::connect_http(caps.clone(), vec![server.clone()]) {
+    let err = match lca_mcp::McpBridge::connect_http(caps.clone(), vec![server.clone()]) {
         Ok(_) => panic!("scope falls short"),
         Err(err) => err,
     };
@@ -241,7 +241,8 @@ fn step_up_scopes_merge_on_re_sign_in() {
     assert_eq!(token.access_token, "wide-access");
     // ...and the widened token opens the server.
     mock.guard(Some("wide-access"), None);
-    let bridge = mcp::McpBridge::connect_http(caps.clone(), vec![server]).expect("connect widens");
+    let bridge =
+        lca_mcp::McpBridge::connect_http(caps.clone(), vec![server]).expect("connect widens");
     assert_eq!(
         bridge.tool_specs().expect("specs").len(),
         4,

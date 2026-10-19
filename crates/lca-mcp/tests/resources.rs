@@ -6,7 +6,7 @@
 mod common;
 
 use common::{mock_server, sandbox};
-use mcp::config::{EntryKind, McpExposure, ServerEntry, ServerSource};
+use lca_mcp::config::{EntryKind, McpExposure, ServerEntry, ServerSource};
 
 fn fixture() -> String {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -40,7 +40,7 @@ fn stdio_entry(exposure: McpExposure) -> ServerEntry {
 }
 
 fn call(
-    bridge: &mcp::McpBridge,
+    bridge: &lca_mcp::McpBridge,
     tool: &str,
     arguments: &str,
 ) -> Result<lca_protocol::ToolResult, lca_protocol::DispatchError> {
@@ -67,8 +67,8 @@ fn stdio_resources_list_and_read() {
         eprintln!("skip: python3 is not installed");
         return;
     }
-    let caps = sandbox("resources-stdio", mcp::manifest_grants());
-    let bridge = mcp::McpBridge::connect_managed(caps, vec![stdio_entry(McpExposure::Direct)]);
+    let caps = sandbox("resources-stdio", lca_mcp::manifest_grants());
+    let bridge = lca_mcp::McpBridge::connect_managed(caps, vec![stdio_entry(McpExposure::Direct)]);
     let names: Vec<String> = bridge
         .tool_specs()
         .expect("specs")
@@ -76,15 +76,15 @@ fn stdio_resources_list_and_read() {
         .map(|spec| spec.name)
         .collect();
     for tool in [
-        mcp::LIST_RESOURCES_TOOL,
-        mcp::LIST_TEMPLATES_TOOL,
-        mcp::READ_RESOURCE_TOOL,
+        lca_mcp::LIST_RESOURCES_TOOL,
+        lca_mcp::LIST_TEMPLATES_TOOL,
+        lca_mcp::READ_RESOURCE_TOOL,
     ] {
         assert!(names.contains(&tool.to_string()), "{names:?}");
     }
-    let list = call(&bridge, mcp::LIST_RESOURCES_TOOL, "{}").expect("list");
+    let list = call(&bridge, lca_mcp::LIST_RESOURCES_TOOL, "{}").expect("list");
     assert!(list.content.contains("echo://greeting"), "{}", list.content);
-    let templates = call(&bridge, mcp::LIST_TEMPLATES_TOOL, "{}").expect("templates");
+    let templates = call(&bridge, lca_mcp::LIST_TEMPLATES_TOOL, "{}").expect("templates");
     assert!(
         templates.content.contains("echo://{name}"),
         "{}",
@@ -92,7 +92,7 @@ fn stdio_resources_list_and_read() {
     );
     let read = call(
         &bridge,
-        mcp::READ_RESOURCE_TOOL,
+        lca_mcp::READ_RESOURCE_TOOL,
         r#"{"server":"echo","uri":"echo://greeting"}"#,
     )
     .expect("read");
@@ -100,7 +100,7 @@ fn stdio_resources_list_and_read() {
     // Binary content stages to a file whose path the model receives.
     let staged = call(
         &bridge,
-        mcp::READ_RESOURCE_TOOL,
+        lca_mcp::READ_RESOURCE_TOOL,
         r#"{"server":"echo","uri":"echo://bytes"}"#,
     )
     .expect("read bytes");
@@ -113,7 +113,7 @@ fn stdio_resources_list_and_read() {
 #[test]
 fn http_resources_list_and_read_deferred() {
     let mock = mock_server();
-    let caps = sandbox("resources-http", mcp::manifest_grants());
+    let caps = sandbox("resources-http", lca_mcp::manifest_grants());
     let entry = ServerEntry {
         name: "remote".to_string(),
         kind: EntryKind::Http {
@@ -128,18 +128,18 @@ fn http_resources_list_and_read_deferred() {
         description: String::new(),
         source: ServerSource::User,
     };
-    let bridge = mcp::McpBridge::connect_managed(caps, vec![entry]);
+    let bridge = lca_mcp::McpBridge::connect_managed(caps, vec![entry]);
     let specs = bridge.tool_specs().expect("specs");
     let resource = specs
         .iter()
-        .find(|spec| spec.name == mcp::READ_RESOURCE_TOOL)
+        .find(|spec| spec.name == lca_mcp::READ_RESOURCE_TOOL)
         .expect("resource tools register");
     assert_eq!(resource.exposure, lca_protocol::ToolExposure::Deferred);
-    let list = call(&bridge, mcp::LIST_RESOURCES_TOOL, "{}").expect("list");
+    let list = call(&bridge, lca_mcp::LIST_RESOURCES_TOOL, "{}").expect("list");
     assert!(list.content.contains("mock://greeting"), "{}", list.content);
     let read = call(
         &bridge,
-        mcp::READ_RESOURCE_TOOL,
+        lca_mcp::READ_RESOURCE_TOOL,
         r#"{"server":"remote","uri":"mock://greeting"}"#,
     )
     .expect("read");
@@ -154,10 +154,10 @@ fn hidden_servers_serve_nothing() {
         eprintln!("skip: python3 is not installed");
         return;
     }
-    let caps = sandbox("resources-hidden", mcp::manifest_grants());
+    let caps = sandbox("resources-hidden", lca_mcp::manifest_grants());
     let mut entry = stdio_entry(McpExposure::Hidden);
     entry.tool_exposure = Vec::new();
-    let bridge = mcp::McpBridge::connect_managed(caps, vec![entry]);
+    let bridge = lca_mcp::McpBridge::connect_managed(caps, vec![entry]);
     let names: Vec<String> = bridge
         .tool_specs()
         .expect("specs")
@@ -172,10 +172,10 @@ fn hidden_servers_serve_nothing() {
 #[test]
 fn servers_without_resources_register_none() {
     let mock = mock_server();
-    let caps = sandbox("resources-absent", mcp::manifest_grants());
-    let bridge = mcp::McpBridge::connect_http(
+    let caps = sandbox("resources-absent", lca_mcp::manifest_grants());
+    let bridge = lca_mcp::McpBridge::connect_http(
         caps,
-        vec![mcp::HttpServerConfig {
+        vec![lca_mcp::HttpServerConfig {
             name: "remote".to_string(),
             url: format!("{}/mcp-plain", mock.base),
             headers: Default::default(),
@@ -192,7 +192,7 @@ fn servers_without_resources_register_none() {
         .collect();
     assert!(names.contains(&"mcp__remote__echo".to_string()));
     assert!(
-        !names.contains(&mcp::READ_RESOURCE_TOOL.to_string()),
+        !names.contains(&lca_mcp::READ_RESOURCE_TOOL.to_string()),
         "{names:?}"
     );
 }

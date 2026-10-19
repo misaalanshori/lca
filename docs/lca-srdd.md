@@ -92,7 +92,9 @@ First-party extensions, including the default OpenAI-compatible provider and ski
 
 `lca-tui` is the terminal engine and the widget library: terminal I/O and protocol negotiation, input parsing and keybindings, the two screen renderers with the selection subsystem, and the editor, markdown, autocomplete, and image widgets. It knows nothing about the agent. `lca-ui` is the agent interface built on it: the transcript, the chrome, the selectors, the theme, and the modal surfaces, and it is the only place that knows both the engine and the agent's domain types. The boundary is enforced mechanically, and the rendering and input model is described in ADR-0037.
 
-`lca-core` holds the agent loop, the dispatch table, and the compaction and context-transform dispatch. It sits above the domain and platform crates, and only `lca-sdk` and `lca-cli` depend on it.
+`lca-core` holds the agent loop, the dispatch table, and the compaction and context-transform dispatch. It sits above the domain and platform crates, and only `lca-sdk`, `lca-ui` and `lca-cli` depend on it.
+
+`lca-mcp` is the MCP subsystem: external tool servers over stdio and streamable HTTP, their tools served as one suite. It is a build-time backend in the ADR-0013 sense rather than an extension (ADR-0047), so it sits below `lca-core` and depends on neither `lca-core` nor `lca-cli`; the direction is pinned by the architecture test.
 
 `lca-sdk` is the embedding API for host applications, native and WASM.
 
@@ -757,6 +759,7 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── lca-protocol/           shared types
 │   ├── lca-session/            storage, fork, resume, compaction records; compaction and transform dispatch live in lca-core
 │   ├── lca-tools/              built-in tools, behind a swappable backend trait; see ADR-0013
+│   ├── lca-mcp/                MCP subsystem: tool servers over stdio and streamable HTTP; see ADR-0047
 │   ├── lca-permissions/        grants, prompts, approval store
 │   ├── lca-provider/           provider trait and stream types
 │   ├── lca-ext-abi/            WIT plus generated bindings
@@ -770,7 +773,6 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── lca-sdk/                embedding API
 │   ├── lca-subscription/       shared kit for subscription-gateway providers (OAuth PKCE, token refresh, Responses SSE)
 │   ├── lca-wire-anthropic/     shared Anthropic-family wire kit (Messages builder, SSE decoder, cache breakpoints)
-│   ├── lca-wire-mcp/           shared MCP wire kit (streamable-HTTP envelope, JSON-RPC selector; transports stay in extensions)
 │   ├── lca-wire-openai/        shared OpenAI-family wire kit (Chat Completions SSE, Responses builder/mapper)
 │   └── lca-testkit/            fake provider and harness
 ├── extensions/
@@ -784,7 +786,6 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── grok/                   xAI Grok via SuperGrok/X subscription; WASM by default
 │   ├── kimi-coding/            Moonshot Kimi via subscription; WASM by default
 │   ├── llama/                  local llama-server router models; WASM by default
-│   ├── mcp/                    external MCP servers over stdio as a tool-catalog extension
 │   ├── meta/                   Meta Llama and Muse via subscription; WASM by default
 │   ├── openrouter/             multi-model provider with browser OAuth; WASM by default
 │   ├── tool-legacy/            pre-catalog single-tool shape (gh #77 compat probe)

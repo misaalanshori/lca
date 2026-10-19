@@ -3,12 +3,11 @@
 //! through the real `tool_search` table.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
-use std::sync::Arc;
 
 mod common;
 
 use common::{mock_server, sandbox};
-use mcp::config::{EntryKind, McpExposure, ServerEntry, ServerSource};
+use lca_mcp::config::{EntryKind, McpExposure, ServerEntry, ServerSource};
 
 fn fixture() -> String {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -49,14 +48,14 @@ fn one_failure_never_blocks_the_rest() {
         eprintln!("skip: python3 is not installed");
         return;
     }
-    let caps = sandbox("managed-mixed", mcp::manifest_grants());
+    let caps = sandbox("managed-mixed", lca_mcp::manifest_grants());
     let mut failing = stdio_entry("failing", McpExposure::Direct, true);
     failing.kind = EntryKind::Stdio {
         command: "mcp-p53-definitely-missing-binary".to_string(),
         args: Vec::new(),
         cwd_scope: "workspace".to_string(),
     };
-    let bridge = mcp::McpBridge::connect_managed(
+    let bridge = lca_mcp::McpBridge::connect_managed(
         caps,
         vec![
             stdio_entry("echo", McpExposure::Deferred, true),
@@ -74,9 +73,12 @@ fn one_failure_never_blocks_the_rest() {
             .state
             .clone()
     };
-    assert!(matches!(state("echo"), mcp::ServerStateKind::Connected));
-    assert!(matches!(state("off"), mcp::ServerStateKind::Disabled));
-    assert!(matches!(state("failing"), mcp::ServerStateKind::Failed(_)));
+    assert!(matches!(state("echo"), lca_mcp::ServerStateKind::Connected));
+    assert!(matches!(state("off"), lca_mcp::ServerStateKind::Disabled));
+    assert!(matches!(
+        state("failing"),
+        lca_mcp::ServerStateKind::Failed(_)
+    ));
     // Only the connected server serves, under its own exposure:
     // the echo tool plus the resource trio (the fixture offers
     // resources), all deferred.
@@ -89,7 +91,7 @@ fn one_failure_never_blocks_the_rest() {
     assert!(
         specs
             .iter()
-            .any(|spec| spec.name == mcp::READ_RESOURCE_TOOL)
+            .any(|spec| spec.name == lca_mcp::READ_RESOURCE_TOOL)
     );
 }
 
@@ -99,10 +101,10 @@ fn one_failure_never_blocks_the_rest() {
 fn guarded_remote_lands_needs_sign_in() {
     let mock = mock_server();
     mock.guard(Some("mock-access"), Some(r#"Bearer scope="extra""#));
-    let caps = sandbox("managed-auth", mcp::manifest_grants());
-    let entry = mcp::config::ServerEntry {
+    let caps = sandbox("managed-auth", lca_mcp::manifest_grants());
+    let entry = lca_mcp::config::ServerEntry {
         name: "remote".to_string(),
-        kind: mcp::config::EntryKind::Http {
+        kind: lca_mcp::config::EntryKind::Http {
             url: format!("{}/mcp", mock.base),
             headers: Default::default(),
             timeout_secs: 10,
@@ -114,45 +116,14 @@ fn guarded_remote_lands_needs_sign_in() {
         description: String::new(),
         source: ServerSource::User,
     };
-    let bridge = mcp::McpBridge::connect_managed(caps, vec![entry]);
+    let bridge = lca_mcp::McpBridge::connect_managed(caps, vec![entry]);
     let statuses = bridge.statuses();
     assert_eq!(statuses.len(), 1);
     match &statuses[0].state {
-        mcp::ServerStateKind::NeedsSignIn(detail) => {
+        lca_mcp::ServerStateKind::NeedsSignIn(detail) => {
             assert!(detail.contains("extra"), "{detail}")
         }
         other => panic!("needs sign-in, not {other:?}"),
     }
     assert!(bridge.tool_specs().expect("specs").is_empty());
-}
-
-// Verifies: gh #53 - deferred MCP tools surface through the real
-// discovery table (`tool_search` finds them; activation declares
-// them), the #77 interplay shape.
-#[test]
-fn deferred_tools_surface_through_tool_search() {
-    if !python3_available() {
-        eprintln!("skip: python3 is not installed");
-        return;
-    }
-    let caps = sandbox("managed-search", mcp::manifest_grants());
-    let bridge = mcp::McpBridge::connect_managed(
-        caps,
-        vec![stdio_entry("echo", McpExposure::Deferred, true)],
-    );
-    let mut registry = lca_core::ExtensionRegistry::new();
-    registry.register(Arc::new(bridge));
-    let hits = registry.tool_search("echo");
-    assert!(
-        hits.iter().any(|spec| spec.name == "mcp__echo__echo"),
-        "deferred tools are discoverable: {:?}",
-        hits.iter().map(|spec| &spec.name).collect::<Vec<_>>()
-    );
-    assert!(
-        registry
-            .declared_tool_specs()
-            .iter()
-            .all(|spec| spec.name != "mcp__echo__echo"),
-        "but never declared until activated"
-    );
 }

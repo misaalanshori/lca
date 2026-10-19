@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
-use mcp::config::{
+use lca_mcp::config::{
     McpExposure, apply_project_json, expand_value, exposure_for, parse_mcp_json, pattern_matches,
 };
 
@@ -19,7 +19,7 @@ fn user_files_parse_both_transports() {
             "echo": {"command": "python3", "args": ["e.py"], "exposure": "direct", "description": "Echo."},
             "docs": {"url": "https://example.com/mcp", "headers": {"Authorization": "Bearer ${MCP_P3_TEST_DOCS_TOKEN}"}, "timeout": 30}
         }}"#,
-        mcp::config::ServerSource::User,
+        lca_mcp::config::ServerSource::User,
     );
     assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
     assert_eq!(parsed.servers.len(), 2);
@@ -28,7 +28,10 @@ fn user_files_parse_both_transports() {
         .iter()
         .find(|s| s.name == "echo")
         .expect("echo");
-    assert!(matches!(echo.kind, mcp::config::EntryKind::Stdio { .. }));
+    assert!(matches!(
+        echo.kind,
+        lca_mcp::config::EntryKind::Stdio { .. }
+    ));
     assert_eq!(echo.exposure, McpExposure::Direct);
     assert_eq!(echo.description, "Echo.");
     let docs = parsed
@@ -36,7 +39,7 @@ fn user_files_parse_both_transports() {
         .iter()
         .find(|s| s.name == "docs")
         .expect("docs");
-    assert!(matches!(docs.kind, mcp::config::EntryKind::Http { .. }));
+    assert!(matches!(docs.kind, lca_mcp::config::EntryKind::Http { .. }));
 }
 
 // Verifies: gh #53 - invalid entries are reported and skipped without
@@ -56,7 +59,7 @@ fn invalid_entries_report_and_skip() {
             "wtf": {"command": "true", "exposure": "sometimes"},
             "bang": {"command": "true", "env": {"K": "!run me"}}
         }}"#,
-        mcp::config::ServerSource::User,
+        lca_mcp::config::ServerSource::User,
     );
     assert_eq!(parsed.servers.len(), 1);
     assert_eq!(parsed.servers[0].name, "ok");
@@ -72,7 +75,7 @@ fn project_files_replace_or_patch() {
             "echo": {"command": "python3", "exposure": "direct"},
             "keep": {"command": "true"}
         }}"#,
-        mcp::config::ServerSource::User,
+        lca_mcp::config::ServerSource::User,
     );
     apply_project_json(
         &mut user,
@@ -90,14 +93,17 @@ fn project_files_replace_or_patch() {
         .expect("echo");
     assert!(!echo.enabled);
     assert_eq!(echo.exposure, McpExposure::Deferred);
-    assert!(matches!(echo.kind, mcp::config::EntryKind::Stdio { .. }));
-    assert_eq!(echo.source, mcp::config::ServerSource::Project);
+    assert!(matches!(
+        echo.kind,
+        lca_mcp::config::EntryKind::Stdio { .. }
+    ));
+    assert_eq!(echo.source, lca_mcp::config::ServerSource::Project);
     let keep = user
         .servers
         .iter()
         .find(|s| s.name == "keep")
         .expect("keep");
-    assert!(matches!(keep.kind, mcp::config::EntryKind::Http { .. }));
+    assert!(matches!(keep.kind, lca_mcp::config::EntryKind::Http { .. }));
 }
 
 // Verifies: gh #53 - exposure resolution: exact names win, then the

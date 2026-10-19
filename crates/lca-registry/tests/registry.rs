@@ -901,7 +901,13 @@ fn catalog_abi_filtering_follows_the_host_window() {
 fn shipped_catalog_parses_with_every_row_loadable() {
     let text = include_str!("../../../extensions/catalog.toml");
     let entries = lca_registry::parse_catalog(text).expect("shipped catalog parses");
-    assert!(entries.len() >= 13, "all shippable extensions listed");
+    // SANCTIONED CHANGE (gh #418 Phase A): the floor was 13. `mcp` left the
+    // catalog because it is now a first-class internal subsystem
+    // (`crates/lca-mcp`, ADR-0047), not an installable extension - there is no
+    // `mcp.wasm` to publish any more. The floor still guards the regression it
+    // was written for (a row silently vanishing), so it moves with the shipped
+    // set rather than being deleted.
+    assert!(entries.len() >= 12, "all shippable extensions listed");
     for entry in &entries {
         assert!(
             lca_registry::abi_supported(entry),
@@ -934,11 +940,18 @@ fn shipped_catalog_parses_with_every_row_loadable() {
         "meta",
         "openrouter",
         "compaction-default",
-        "mcp",
         "skills",
     ] {
         assert!(names.contains(&expected), "{expected} is catalogued");
     }
+    // SANCTIONED CHANGE (gh #418 Phase A): `mcp` was on that list. It is a
+    // first-class internal subsystem now (`crates/lca-mcp`, ADR-0047) with no
+    // WASM guest and nothing to publish, so it is deliberately absent - and the
+    // absence is asserted, not merely tolerated, so a stray re-add fails here.
+    assert!(
+        !names.contains(&"mcp"),
+        "mcp is an internal subsystem, not a catalogued extension (gh #418)"
+    );
 }
 
 // Verifies: #227 - the TTL cache: a fresh copy reads without network,

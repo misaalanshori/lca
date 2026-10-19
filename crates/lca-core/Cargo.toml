@@ -35,7 +35,10 @@ tracing-subscriber.workspace = true
 lca-ext-host = { path = "../lca-ext-host" }
 lca-ext-native = { path = "../lca-ext-native" }
 conformance = { path = "../../extensions/conformance" }
-mcp = { path = "../../extensions/mcp" }
+# gh #418 Phase A: `lca-mcp` is a first-class crate now. This edge is
+# test-only (`tests/mcp_bridge.rs` drives the real bridge); `lca-core` carries
+# no MCP dependency at run time, which is the decoupling the phase pins.
+lca-mcp = { path = "../lca-mcp" }
 serde_json.workspace = true
 
 [lints]

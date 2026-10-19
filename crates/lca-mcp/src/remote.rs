@@ -841,11 +841,11 @@ impl HttpSession {
             .filter(|(key, _)| key.eq_ignore_ascii_case("content-type"))
             .any(|(_, value)| value.contains("text/event-stream"));
         if streamed {
-            return lca_wire_mcp::select_response(&lca_wire_mcp::parse_sse_messages(text), id);
+            return crate::wire::select_response(&crate::wire::parse_sse_messages(text), id);
         }
         let message: serde_json::Value = serde_json::from_str(text)
             .map_err(|err| format!("MCP server answered bad JSON: {err}"))?;
-        lca_wire_mcp::select_response(std::slice::from_ref(&message), id)
+        crate::wire::select_response(std::slice::from_ref(&message), id)
     }
 
     /// The request headers: declared headers, the bearer token when

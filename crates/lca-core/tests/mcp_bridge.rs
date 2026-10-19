@@ -61,12 +61,14 @@ async fn an_echo_turn_round_trips_through_the_bridge() {
     }
     let root = scratch("mcp-turn");
     let project = root.join("project");
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../extensions/mcp/fixtures/echo-mcp-server.py");
+    // gh #418 Phase A: path-constant update only - the crate moved from
+    // `extensions/mcp` to `crates/lca-mcp`; the assertion below is unchanged.
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../lca-mcp/fixtures/echo-mcp-server.py");
 
     let caps = Arc::new(lca_tools::Capabilities::new(
         "mcp",
-        mcp::manifest_grants(),
+        lca_mcp::manifest_grants(),
         ScopeRoots {
             workspace: root.join("workspace"),
             private: root.join("private"),
@@ -81,9 +83,9 @@ async fn an_echo_turn_round_trips_through_the_bridge() {
         root.join("workspace"),
         None,
     ));
-    let bridge = mcp::McpBridge::connect(
+    let bridge = lca_mcp::McpBridge::connect(
         caps,
-        vec![mcp::ServerConfig {
+        vec![lca_mcp::ServerConfig {
             name: "echo".to_string(),
             command: "python3".to_string(),
             args: vec![fixture.to_string_lossy().into_owned()],
@@ -150,4 +152,71 @@ async fn an_echo_turn_round_trips_through_the_bridge() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].status, ToolResultStatus::Ok);
     assert_eq!(results[0].content, "echo: hello");
+}
+
+// Verifies: gh #53 - deferred MCP tools surface through the real discovery
+// table (`tool_search` finds them; activation declares them), the #77
+// interplay shape.
+//
+// gh #418 Phase A moved this row here from `crates/lca-mcp/tests/managed.rs`.
+// It drives `lca_core::ExtensionRegistry`, so it belongs on the core's side of
+// the boundary: `lca-core` may dev-depend on `lca-mcp`, never the reverse, and
+// the architecture guard pins that. Assertions are unchanged - only the crate
+// path and the sandbox helper differ.
+#[test]
+fn deferred_mcp_tools_surface_through_tool_search() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let root = scratch("mcp-deferred-search");
+    let project = root.join("project");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../lca-mcp/fixtures/echo-mcp-server.py");
+    let caps = Arc::new(lca_tools::Capabilities::new(
+        "mcp",
+        lca_mcp::manifest_grants(),
+        ScopeRoots {
+            workspace: project.clone(),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        },
+        Arc::new(Mutex::new(Allow)),
+        Arc::new(Mutex::new(
+            GrantStore::open(&root.join("grants.json")).expect("grants"),
+        )),
+        project,
+        None,
+    ));
+    let entry = lca_mcp::config::ServerEntry {
+        name: "echo".to_string(),
+        kind: lca_mcp::config::EntryKind::Stdio {
+            command: "python3".to_string(),
+            args: vec![fixture.to_string_lossy().into_owned()],
+            cwd_scope: "workspace".to_string(),
+        },
+        enabled: true,
+        exposure: lca_mcp::config::McpExposure::Deferred,
+        tool_exposure: Vec::new(),
+        description: "echo server.".to_string(),
+        source: lca_mcp::config::ServerSource::User,
+    };
+    let bridge = lca_mcp::McpBridge::connect_managed(caps, vec![entry]);
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(bridge));
+    let hits = registry.tool_search("echo");
+    assert!(
+        hits.iter().any(|spec| spec.name == "mcp__echo__echo"),
+        "deferred tools are discoverable: {:?}",
+        hits.iter().map(|spec| &spec.name).collect::<Vec<_>>()
+    );
+    assert!(
+        registry
+            .declared_tool_specs()
+            .iter()
+            .all(|spec| spec.name != "mcp__echo__echo"),
+        "but never declared until activated"
+    );
 }

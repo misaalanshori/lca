@@ -9,7 +9,7 @@
 //! connection read a stale line: a permanent desync that broke every
 //! call after the first one to a notification-emitting server.
 //!
-//! The fix is one selector in the wire kit (`lca_wire_mcp::response_for`,
+//! The fix is one selector in the wire kit (`lca_mcp::wire::response_for`,
 //! per ADR-0045's "selectors in the wire kit, transports in the
 //! extension"): loop until the reply carrying OUR id, discard
 //! notifications, fail loud and name a foreign id (a single-outstanding
@@ -22,7 +22,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
-use mcp::config::{EntryKind, McpExposure, ServerEntry, ServerSource};
+use lca_mcp::config::{EntryKind, McpExposure, ServerEntry, ServerSource};
 use std::sync::{Arc, Mutex};
 
 /// A grant engine whose roots live in a scratch dir (the MCP tests'
@@ -84,9 +84,10 @@ fn python3_available() -> bool {
 
 fn fixture(name: &str) -> String {
     // The regressions crate's manifest dir is the repo root, so the
-    // extension's fixture is reached by path from there.
+    // subsystem's fixture is reached by path from there (gh #418 Phase A:
+    // the crate moved from `extensions/mcp` to `crates/lca-mcp`).
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("extensions/mcp/fixtures")
+        .join("crates/lca-mcp/fixtures")
         .join(name)
         .to_string_lossy()
         .into_owned()
@@ -137,12 +138,12 @@ async fn sequential_calls_to_a_chatty_server_stay_in_sync() {
         eprintln!("skip: python3 is not installed");
         return;
     }
-    let caps = sandbox("gh291-seq", mcp::manifest_grants());
-    let bridge = mcp::McpBridge::connect_managed(caps, vec![noisy_entry("noisy")]);
+    let caps = sandbox("gh291-seq", lca_mcp::manifest_grants());
+    let bridge = lca_mcp::McpBridge::connect_managed(caps, vec![noisy_entry("noisy")]);
     let statuses = bridge.statuses();
     assert_eq!(statuses.len(), 1);
     assert!(
-        matches!(statuses[0].state, mcp::ServerStateKind::Connected),
+        matches!(statuses[0].state, lca_mcp::ServerStateKind::Connected),
         "the handshake survived three notifications: {:?}",
         statuses[0].state
     );
@@ -182,18 +183,18 @@ async fn resource_listing_tolerates_notifications() {
         eprintln!("skip: python3 is not installed");
         return;
     }
-    let caps = sandbox("gh291-templates", mcp::manifest_grants());
-    let bridge = mcp::McpBridge::connect_managed(caps, vec![noisy_entry("noisy")]);
+    let caps = sandbox("gh291-templates", lca_mcp::manifest_grants());
+    let bridge = lca_mcp::McpBridge::connect_managed(caps, vec![noisy_entry("noisy")]);
     let specs = bridge.tool_specs().expect("specs");
     assert!(
         specs
             .iter()
-            .any(|spec| spec.name == mcp::LIST_TEMPLATES_TOOL),
+            .any(|spec| spec.name == lca_mcp::LIST_TEMPLATES_TOOL),
         "the template tool exists for a server offering resources"
     );
 
     let result = bridge
-        .execute_tool(&call(mcp::LIST_TEMPLATES_TOOL, serde_json::json!({})))
+        .execute_tool(&call(lca_mcp::LIST_TEMPLATES_TOOL, serde_json::json!({})))
         .await
         .expect("the listing answers past the notifications");
     let text = text_of(result);
@@ -213,7 +214,7 @@ fn a_foreign_id_is_refused_by_the_shared_selector() {
         serde_json::json!({"jsonrpc": "2.0", "id": 4242, "result": {"stale": true}}).to_string(),
     ]
     .into_iter();
-    let err = lca_wire_mcp::response_for(7, || Ok(lines.next()))
+    let err = lca_mcp::wire::response_for(7, || Ok(lines.next()))
         .expect_err("a foreign id is a desync, not noise");
     assert!(err.contains("4242"), "the foreign id is named: {err}");
     assert!(err.contains("desynchronized"), "{err}");
@@ -231,6 +232,6 @@ fn notification_only_traffic_never_reports_success() {
     ]
     .into_iter();
     let err =
-        lca_wire_mcp::response_for(1, || Ok(lines.next())).expect_err("no reply means no success");
+        lca_mcp::wire::response_for(1, || Ok(lines.next())).expect_err("no reply means no success");
     assert!(err.contains("closed its stdout"), "{err}");
 }

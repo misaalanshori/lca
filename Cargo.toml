@@ -65,9 +65,9 @@ lca-wire-openai = { path = "crates/lca-wire-openai" }
 # the shared wire kit's public body builder.
 lca-wire-anthropic = { path = "crates/lca-wire-anthropic" }
 # The gh #291 desync guard drives the real managed MCP bridge over a real
-# child stdio server, and its foreign-id row pins the shared selector.
-mcp = { path = "extensions/mcp" }
-lca-wire-mcp = { path = "crates/lca-wire-mcp" }
+# child stdio server, and its foreign-id row pins the shared selector
+# (gh #418: the crate is `lca-mcp`, and its wire kit is `lca_mcp::wire`).
+lca-mcp = { path = "crates/lca-mcp" }
 # gh #299: the skill-injection payload guard drives the real transform the
 # skills extension runs, and the three provider body builders it feeds.
 skills = { path = "extensions/skills" }
@@ -248,9 +248,7 @@ panic = "abort"
 # the binary crate itself balloons the binary under fat LTO - libs
 # only. Hot paths - rendering, token streaming, tool execution -
 # stay at opt-level 3.)
-[profile.release.package.mcp]
-opt-level = "z"
-[profile.release.package.lca-wire-mcp]
+[profile.release.package.lca-mcp]
 opt-level = "z"
 [profile.release.package.lca-session]
 opt-level = "z"

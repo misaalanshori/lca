@@ -7,9 +7,15 @@ use std::sync::{Arc, Mutex};
 
 use crate::{ServerConfig, qualify_tools};
 
-/// The grants the manifest declares: `process` to spawn the servers,
-/// `fs` (workspace, read) for the scope they run in. A test keeps them
-/// in step with `extension.toml`.
+/// The capability grants this subsystem needs: `process` to spawn the
+/// servers, `fs` (workspace read) for the scope they run in, and `temp`
+/// (read-write) for staging binary resource payloads (gh #344).
+///
+/// This is the **only** declaration now. It used to be paired with
+/// `extension.toml`, with a parity test keeping the two in step; the WASM
+/// guest and its manifest died with ADR-0047, so the concern the parity test
+/// guarded — one capability set with one source of truth — is satisfied by
+/// there being exactly one table left to read.
 #[allow(clippy::expect_used)] // the extension's own literal manifest patterns are valid by construction.
 pub fn manifest_grants() -> lca_tools::CapabilityGrants {
     lca_tools::CapabilityGrants {

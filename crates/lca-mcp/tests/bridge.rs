@@ -65,7 +65,7 @@ fn engine_at(
     }));
     let caps = Arc::new(lca_tools::Capabilities::new(
         "mcp",
-        mcp::manifest_grants(),
+        lca_mcp::manifest_grants(),
         ScopeRoots {
             workspace: root.join("workspace"),
             private: root.join("private"),
@@ -83,8 +83,8 @@ fn engine_at(
     (caps, spy)
 }
 
-fn echo_server() -> mcp::ServerConfig {
-    mcp::ServerConfig {
+fn echo_server() -> lca_mcp::ServerConfig {
+    lca_mcp::ServerConfig {
         name: "echo".to_string(),
         command: "python3".to_string(),
         args: vec![fixture().to_string_lossy().into_owned()],
@@ -102,7 +102,7 @@ fn an_echo_server_lists_one_direct_tool() {
         return;
     }
     let (caps, spy) = engine("mcp-list", Decision::Always);
-    let bridge = mcp::McpBridge::connect(caps, vec![echo_server()]).expect("connect");
+    let bridge = lca_mcp::McpBridge::connect(caps, vec![echo_server()]).expect("connect");
     assert!(
         spy.lock()
             .expect("spy")
@@ -139,7 +139,7 @@ async fn a_call_returns_the_servers_answer() {
         return;
     }
     let (caps, _spy) = engine("mcp-call", Decision::Always);
-    let bridge = mcp::McpBridge::connect(caps, vec![echo_server()]).expect("connect");
+    let bridge = lca_mcp::McpBridge::connect(caps, vec![echo_server()]).expect("connect");
     let result = bridge
         .execute_tool(&lca_protocol::ToolCall {
             call_id: "call-1".to_string(),
@@ -157,9 +157,9 @@ async fn a_call_returns_the_servers_answer() {
 // rule: every character outside letters, digits, and `_` becomes `_`.
 #[test]
 fn tool_names_sanitize_pi_style() {
-    assert_eq!(mcp::tool_name("echo", "echo"), "mcp__echo__echo");
+    assert_eq!(lca_mcp::tool_name("echo", "echo"), "mcp__echo__echo");
     assert_eq!(
-        mcp::tool_name("my-server", "do.thing"),
+        lca_mcp::tool_name("my-server", "do.thing"),
         "mcp__my_server__do_thing"
     );
 }
@@ -176,7 +176,7 @@ fn a_denied_spawn_is_recorded() {
     // journal assertion below reads the same directory the engine wrote.
     let root = scratch("mcp-deny");
     let (caps, spy) = engine_at(root.clone(), Decision::Denied);
-    let err = match mcp::McpBridge::connect(caps.clone(), vec![echo_server()]) {
+    let err = match lca_mcp::McpBridge::connect(caps.clone(), vec![echo_server()]) {
         Ok(_) => panic!("a denied spawn refuses the bridge"),
         Err(err) => err,
     };

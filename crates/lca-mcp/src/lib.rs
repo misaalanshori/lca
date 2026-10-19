@@ -1,41 +1,40 @@
-//! MCP bridge (gh #53 phase 1): external MCP servers over stdio as one
-//! tool-catalog suite.
+//! The MCP subsystem (gh #53, gh #418): external MCP servers over stdio
+//! and streamable HTTP, exposed as one tool suite.
 //!
-//! The shape is ADR-0045's extension bridge, not a host service: the
-//! extension spawns each configured server through the `process`
-//! capability (one long-lived child per server, newline-delimited
-//! JSON-RPC over its stdio), names its tools pi's
-//! `mcp__<server>__<tool>`, and serves them `direct`. Spawning passes
-//! the same permission prompt as a model-requested command, so a
-//! declined server never starts and the denial is recorded; per-call
-//! arguments flow to an already-approved server, and every call runs
-//! through the turn's `tool_call`/`tool_result` hooks like any other
-//! extension tool.
+//! **This is a first-class internal subsystem, not an extension**
+//! (ADR-0047, superseding ADR-0045). It lives in `crates/` with the rest of
+//! the agent rather than in `extensions/`, because the extension boundary was
+//! fiction in three ways: `lca-cli` carried it as a hard dependency, the host
+//! owned its files and its permission prompting, and its WASM twin could not
+//! serve the feature set it shipped (the `tool-catalog` world exports no
+//! `net`, `oauth`, or `credentials`).
 //!
-//! Layout: this module is the shared protocol core (both targets).
-//! `native` is the in-process handle the scripted turn drives;
-//! `guest` is the sandboxed component twin behind the `tool-catalog`
-//! world. Later phases (OAuth/remote/resources/management) extend this
-//! core; they do not replace it.
+//! What is preserved from the extension-bridge era, deliberately:
+//!
+//! - The **star topology**: one long-lived child per configured server,
+//!   newline-delimited JSON-RPC over its stdio, and a single hop through
+//!   streamable HTTP for remote ones.
+//! - **Per-spawn permission prompts**. Spawning a server asks exactly as a
+//!   model-requested command does, so a declined server never starts and the
+//!   denial is recorded. Per-call arguments to an already-approved server do
+//!   not re-ask.
+//! - The **permission layer on every call**: every invocation runs through
+//!   the turn's `tool_call`/`tool_result` hooks like any other tool.
+//! - The **`!command` refusal**, which keeps shell syntax out of a tool name.
+//!
+//! Layout: this module is the protocol core and the domain types; `config`
+//! is the `mcp.json` shape; `native` is the `ExtensionDispatch` implementation
+//! the host drives; `remote` is the streamable-HTTP and OAuth path; `wire` is
+//! the pure wire-protocol kit (SSE envelope, JSON-RPC selector, base64).
 
 pub mod config;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod native;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod remote;
-#[cfg(not(target_arch = "wasm32"))]
+pub mod wire;
 pub use native::{McpBridge, ServerStateKind, ServerStatus, manifest_grants};
-#[cfg(not(target_arch = "wasm32"))]
 pub use remote::{TokenStore, refresh, sign_in};
-#[cfg(target_arch = "wasm32")]
-mod guest;
 
 use std::collections::BTreeMap;
-
-/// The `state` key the sandboxed guest reads its server list from (a
-/// JSON array of [`ServerConfig`]). Seeding it from the manifest is the
-/// phase-2 management cut line; phase 1 seeds it by hand.
-pub const SERVERS_STATE_KEY: &str = "mcp-servers";
 
 /// One stdio server to bridge (pi's `mcpServers` entry, stdio subset).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -456,7 +455,7 @@ pub fn contents_from_read(result: &serde_json::Value) -> Result<Vec<ResourceCont
             out.push(ResourceContent::Blob {
                 uri,
                 mime_type,
-                bytes: lca_wire_mcp::base64_decode(blob)?,
+                bytes: crate::wire::base64_decode(blob)?,
             });
         } else {
             return Err("the server sent unreadable resource content".to_string());
@@ -593,11 +592,11 @@ pub fn round_trip(
     // notifications (`method`, no `id`) are ordinary MCP traffic and are
     // discarded; a foreign id fails loud because a single-outstanding-
     // request transport cannot see one legitimately. The selection rules
-    // live in `lca_wire_mcp` (ADR-0045: selectors in the wire kit,
-    // transports in the extension) so the stdio and HTTP paths agree.
-    match lca_wire_mcp::response_for(id, || Ok(Some(read_line(io, buf)?)))? {
-        lca_wire_mcp::Reply::Result(result) => Ok(result),
-        lca_wire_mcp::Reply::Error(error) => Err(error),
+    // live in `crate::wire` (ADR-0047: selectors in the wire kit, transports
+    // in this crate) so the stdio and HTTP paths agree.
+    match crate::wire::response_for(id, || Ok(Some(read_line(io, buf)?)))? {
+        crate::wire::Reply::Result(result) => Ok(result),
+        crate::wire::Reply::Error(error) => Err(error),
     }
 }
 
@@ -687,9 +686,9 @@ impl<T: Stdio> Session<T> {
         // as "no templates", while a transport failure (bad JSON, EOF, a
         // desynchronized id) propagates - a corrupt stream must never
         // masquerade as an empty listing.
-        match lca_wire_mcp::response_for(id, || Ok(Some(read_line(&self.io, &mut self.buf)?)))? {
-            lca_wire_mcp::Reply::Result(result) => Ok(templates_from_list(&result)),
-            lca_wire_mcp::Reply::Error(_) => Ok(Vec::new()),
+        match crate::wire::response_for(id, || Ok(Some(read_line(&self.io, &mut self.buf)?)))? {
+            crate::wire::Reply::Result(result) => Ok(templates_from_list(&result)),
+            crate::wire::Reply::Error(_) => Ok(Vec::new()),
         }
     }
 

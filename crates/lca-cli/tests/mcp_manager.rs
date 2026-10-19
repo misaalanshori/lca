@@ -20,8 +20,10 @@ fn root(name: &str) -> PathBuf {
 fn fixture() -> String {
     // Forward slashes on every platform: a Windows path's
     // backslashes would read as JSON escapes in mcp.json.
+    // gh #418 Phase A: path-constant update only (the crate moved to
+    // `crates/lca-mcp`); no assertion changed.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../extensions/mcp/fixtures/echo-mcp-server.py")
+        .join("../lca-mcp/fixtures/echo-mcp-server.py")
         .to_string_lossy()
         .into_owned()
         .replace('\\', "/")
@@ -51,7 +53,7 @@ fn engine(name: &str) -> Arc<lca_tools::Capabilities> {
     for part in ["project", "private", "config", "data", "tmp"] {
         std::fs::create_dir_all(dir.join(part)).expect("mkdir");
     }
-    let mut grants = mcp::manifest_grants();
+    let mut grants = lca_mcp::manifest_grants();
     grants.oauth = Some(lca_permissions::OAuthSettings {
         redirect_path: "/callback".to_string(),
         timeout_seconds: 30,
@@ -108,7 +110,7 @@ fn project_files_load_only_when_trusted() {
     assert!(!trusted.entries[0].enabled, "trusted project patches");
     assert_eq!(
         trusted.entries[0].source,
-        mcp::config::ServerSource::Project
+        lca_mcp::config::ServerSource::Project
     );
 }
 

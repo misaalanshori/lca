@@ -516,8 +516,8 @@ fn base64(text: &str) -> String {
 }
 
 /// One remote server pointed at the mock.
-pub fn remote_server(mock: &Mock, path: &str) -> mcp::HttpServerConfig {
-    mcp::HttpServerConfig {
+pub fn remote_server(mock: &Mock, path: &str) -> lca_mcp::HttpServerConfig {
+    lca_mcp::HttpServerConfig {
         name: "remote".to_string(),
         url: format!("{}{path}", mock.base),
         headers: Default::default(),

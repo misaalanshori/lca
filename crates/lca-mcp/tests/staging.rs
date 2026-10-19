@@ -19,7 +19,7 @@
 mod common;
 
 use common::{mock_server, sandbox};
-use mcp::config::{EntryKind, McpExposure, ServerEntry, ServerSource};
+use lca_mcp::config::{EntryKind, McpExposure, ServerEntry, ServerSource};
 
 fn fixture() -> String {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -60,7 +60,7 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 fn call(
-    bridge: &mcp::McpBridge,
+    bridge: &lca_mcp::McpBridge,
     tool: &str,
     arguments: &str,
 ) -> Result<lca_protocol::ToolResult, lca_protocol::DispatchError> {
@@ -74,10 +74,10 @@ fn call(
 
 /// Read the echo fixture's binary resource and return the staged path.
 fn stage_one(caps: std::sync::Arc<lca_tools::Capabilities>) -> std::path::PathBuf {
-    let bridge = mcp::McpBridge::connect_managed(caps, vec![stdio_entry(McpExposure::Direct)]);
+    let bridge = lca_mcp::McpBridge::connect_managed(caps, vec![stdio_entry(McpExposure::Direct)]);
     let staged = call(
         &bridge,
-        mcp::READ_RESOURCE_TOOL,
+        lca_mcp::READ_RESOURCE_TOOL,
         r#"{"server":"echo","uri":"echo://bytes"}"#,
     )
     .expect("read bytes");
@@ -93,7 +93,7 @@ fn a_binary_resource_stages_inside_the_session_temp_scope() {
         eprintln!("skip: python3 is not installed");
         return;
     }
-    let caps = sandbox("staging-location", mcp::manifest_grants());
+    let caps = sandbox("staging-location", lca_mcp::manifest_grants());
     let temp_root = caps.scope_root("temp").expect("temp is granted");
     let path = stage_one(caps);
 
@@ -165,7 +165,7 @@ fn the_staged_file_is_owner_only_regardless_of_umask() {
         eprintln!("skip: python3 is not installed");
         return;
     }
-    let caps = sandbox("staging-mode", mcp::manifest_grants());
+    let caps = sandbox("staging-mode", lca_mcp::manifest_grants());
     let path = stage_one(caps);
     use std::os::unix::fs::PermissionsExt;
     let mode = std::fs::metadata(&path)
@@ -205,7 +205,7 @@ fn a_preplanted_symlink_at_the_old_shared_path_is_never_followed() {
     let _ = std::fs::remove_file(&planted);
     std::os::unix::fs::symlink(&victim, &planted).expect("plant symlink");
 
-    let caps = sandbox("staging-symlink", mcp::manifest_grants());
+    let caps = sandbox("staging-symlink", lca_mcp::manifest_grants());
     let path = stage_one(caps);
 
     // The staged file is the real one in the private scope, not the link.
@@ -240,17 +240,17 @@ fn staging_without_the_temp_grant_is_refused_by_the_scope() {
         return;
     }
     // The pre-#344 grant set: workspace read + process, no temp.
-    let mut grants = mcp::manifest_grants();
+    let mut grants = lca_mcp::manifest_grants();
     grants.fs.retain(|grant| grant.scope != "temp");
     let caps = sandbox("staging-notemp", grants);
     assert!(
         caps.scope_root("temp").is_none(),
         "the fixture really has no temp grant"
     );
-    let bridge = mcp::McpBridge::connect_managed(caps, vec![stdio_entry(McpExposure::Direct)]);
+    let bridge = lca_mcp::McpBridge::connect_managed(caps, vec![stdio_entry(McpExposure::Direct)]);
     let outcome = call(
         &bridge,
-        mcp::READ_RESOURCE_TOOL,
+        lca_mcp::READ_RESOURCE_TOOL,
         r#"{"server":"echo","uri":"echo://bytes"}"#,
     );
     let err = match outcome {
@@ -275,7 +275,7 @@ fn a_staged_resource_does_not_outlive_its_session_temp() {
         eprintln!("skip: python3 is not installed");
         return;
     }
-    let caps = sandbox("staging-cleanup", mcp::manifest_grants());
+    let caps = sandbox("staging-cleanup", lca_mcp::manifest_grants());
     let temp_root = caps.scope_root("temp").expect("temp is granted");
     let path = stage_one(caps);
     assert!(path.is_file(), "staged before cleanup");
@@ -308,7 +308,7 @@ fn the_staged_path_is_consumable_without_an_extra_prompt() {
         eprintln!("skip: python3 is not installed");
         return;
     }
-    let caps = sandbox("staging-consume", mcp::manifest_grants());
+    let caps = sandbox("staging-consume", lca_mcp::manifest_grants());
     let path = stage_one(caps);
 
     // The read tool would be asked to read this path from the workspace.
@@ -375,7 +375,7 @@ impl lca_permissions::PermissionPrompt for DenyAll {
 #[test]
 fn an_http_resource_stages_into_the_same_private_scope() {
     let mock = mock_server();
-    let caps = sandbox("staging-http", mcp::manifest_grants());
+    let caps = sandbox("staging-http", lca_mcp::manifest_grants());
     let temp_root = caps.scope_root("temp").expect("temp is granted");
     let entry = ServerEntry {
         name: "remote".to_string(),
@@ -391,10 +391,10 @@ fn an_http_resource_stages_into_the_same_private_scope() {
         description: String::new(),
         source: ServerSource::User,
     };
-    let bridge = mcp::McpBridge::connect_managed(caps, vec![entry]);
+    let bridge = lca_mcp::McpBridge::connect_managed(caps, vec![entry]);
     let staged = call(
         &bridge,
-        mcp::READ_RESOURCE_TOOL,
+        lca_mcp::READ_RESOURCE_TOOL,
         r#"{"server":"remote","uri":"mock://bytes"}"#,
     )
     .expect("read bytes over http");

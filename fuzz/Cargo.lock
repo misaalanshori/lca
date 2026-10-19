@@ -1340,6 +1340,7 @@ dependencies = [
  "lca-ext-abi",
  "lca-ext-host",
  "lca-ext-native",
+ "lca-mcp",
  "lca-permissions",
  "lca-protocol",
  "lca-provider",
@@ -1349,7 +1350,6 @@ dependencies = [
  "lca-tui",
  "lca-ui",
  "libc",
- "mcp",
  "openai-compatible",
  "serde",
  "serde_json",
@@ -1450,6 +1450,22 @@ dependencies = [
  "libfuzzer-sys",
  "serde_json",
  "wasmtime",
+]
+
+[[package]]
+name = "lca-mcp"
+version = "0.6.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "lca-config",
+ "lca-ext-abi",
+ "lca-permissions",
+ "lca-protocol",
+ "lca-tools",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]
@@ -1569,13 +1585,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lca-wire-mcp"
-version = "0.6.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
 name = "lca-wire-openai"
 version = "0.6.0"
 dependencies = [
@@ -1658,23 +1667,6 @@ name = "maybe-owned"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
-
-[[package]]
-name = "mcp"
-version = "0.6.0"
-dependencies = [
- "getrandom 0.3.4",
- "lca-ext-abi",
- "lca-permissions",
- "lca-protocol",
- "lca-tools",
- "lca-wire-mcp",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "wit-bindgen 0.41.0",
-]
 
 [[package]]
 name = "memchr"

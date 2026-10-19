@@ -75,6 +75,36 @@ fn nothing_depends_on_the_binary() {
     }
 }
 
+// Verifies: gh #418 Phase A - `lca-mcp` is a first-class subsystem that sits
+// *below* the agent loop, not beside the binary. Its whole reason for leaving
+// `extensions/` is that the extension boundary was fiction: it was imported as
+// a hard dependency and the host owned its files and prompts. Re-growing an
+// `lca-core` or `lca-cli` edge would put it back above the loop, so the
+// decoupling is pinned here rather than left to review.
+#[test]
+fn the_mcp_subsystem_does_not_depend_on_the_core_or_the_binary() {
+    let (_, manifest) = workspace_crates()
+        .into_iter()
+        .find(|(name, _)| name == "lca-mcp")
+        .expect("lca-mcp exists");
+    let doc: toml::Table =
+        toml::from_str(&std::fs::read_to_string(&manifest).expect("read")).expect("parse");
+    // Runtime AND dev edges: a test-only `lca-core` edge would mean the
+    // subsystem's tests reach into the agent loop, which is the same
+    // inversion one layer down.
+    for table in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        let deps = doc.get(table).and_then(toml::Value::as_table);
+        let Some(deps) = deps else { continue };
+        for forbidden in ["lca-core", "lca-cli"] {
+            assert!(
+                !deps.contains_key(forbidden),
+                "lca-mcp carries `{forbidden}` in [{table}]; the MCP subsystem must sit below \
+                 the agent loop (gh #418 Phase A)"
+            );
+        }
+    }
+}
+
 #[test]
 fn the_bottom_layer_has_no_workspace_dependencies() {
     for bottom in ["lca-protocol", "lca-config"] {

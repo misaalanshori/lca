@@ -106,14 +106,8 @@ description = "The default compaction strategy: summarize the old range through 
 oci_ref = "ghcr.io/misaalanshori/lca/compaction-default:abi-0.6"
 capabilities = ["completion"]
 
-[[extension]]
-name = "mcp"
-version = "0.1.0"
-abi = "0.6"
-category = "bridge"
-description = "MCP bridge (gh #53 phase 1): external MCP servers over stdio, one tool suite."
-oci_ref = "ghcr.io/misaalanshori/lca/mcp:abi-0.6"
-capabilities = ["fs", "process"]
+# `mcp` is deliberately absent: it is a first-class internal subsystem
+# (`crates/lca-mcp`), not an installable extension (gh #418, ADR-0047).
 
 [[extension]]
 name = "skills"

@@ -195,8 +195,16 @@ failures all arrive as error results.
 
 ## Bridging an MCP server
 
-An external MCP server joins as a `tool-catalog` extension
-(ADR-0045, `extensions/mcp`): spawn it through `process`, speak
+> **MCP is not an extension any more** (gh #418, ADR-0047). It lives in
+> `crates/lca-mcp` as a first-class internal subsystem, its WASM guest is gone,
+> and it is no longer published as `mcp.wasm`. This section stays because the
+> *shape* is still the best worked example of what a tool-catalog guest can
+> express - but read it as a design precedent, not as a recipe for wrapping a
+> third-party service. The `tool-catalog` world exports no `net`, `oauth`, or
+> `credentials`, which is why every transport past stdio had to be native and
+> why the extension boundary eventually had to go.
+
+The shape, as it was built: spawn the server through `process`, speak
 newline-delimited JSON-RPC over its pipes (`initialize`, the
 `notifications/initialized` handshake, `tools/list`, `tools/call`),
 and serve each tool under pi's `mcp__<server>__<tool>` name with
@@ -205,8 +213,12 @@ server; killing the bridge kills the tree. The spawn passes the
 same permission prompt as a model-requested command, so a declined
 server never starts and the denial is recorded - per-call arguments
 flow to an already-approved server, and every call runs through the
-turn's hooks like any other extension tool. The sandboxed twin reads
-its server list from the `state` key `mcp-servers`.
+turn's hooks like any other tool.
+
+If you are writing your own extension against an MCP-like backend, the parts
+that generalize are the naming scheme, the exposure vocabulary, and the
+per-spawn prompt; the transport and credential layers cannot live in a guest
+and belong in the host.
 
 A remote server rides streamable HTTP over `net`: JSON or SSE
 envelopes, the `Mcp-Session-Id` round-trip, pi's transient retry on
