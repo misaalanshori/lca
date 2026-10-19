@@ -12,8 +12,16 @@
 //! Windows orphan protection; an unchecked call turns a guarantee into a
 //! hope.
 //!
-//! Verifies: gh #322 - the job setup is checked at both call sites, and
-//! `platform_exec` fails loud rather than running without a job.
+//! Verifies: gh #322 - the job setup is checked at every construction site,
+//! `platform_exec` fails loud rather than running without a job, and the one
+//! helper that can produce a `Job` propagates a refusal as `None`.
+//!
+//! Every row here is a source guard rather than a behavioural one. The
+//! `windows_job` module is private and `cfg(windows)`, so behaviour cannot be
+//! driven from the Linux and macOS CI legs - and a Windows-only test would
+//! silently not exist on two of the three. Text checks are the weaker
+//! instrument, but they run everywhere, and the alternative was going back to
+//! a comment-only fix that nothing could fail on.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
@@ -121,42 +129,35 @@ fn job_assign_is_not_reachable_from_spawn_sites() {
     );
 }
 
-/// The real behavior row, Windows only: a job that cannot be set up makes
-/// `attach` return `None` rather than a job without the kill-on-close limit.
-/// On other platforms this row is a documented skip (the symbol does not
-/// exist), so it never reports a false pass.
-#[cfg(windows)]
+/// `attach` must be the only place that calls `assign`, and it must return
+/// `None` when `new()` does - so a caller can never receive a job the OS
+/// refused to configure. Both halves are source rows because `windows_job`
+/// is a private module behind `cfg(windows)`: a Windows-only behavioural row
+/// cannot run on the Linux and macOS legs, and the last time I relied on
+/// `--target x86_64-pc-windows-gnu` clippy alone it did not catch a test-target
+/// visibility error. Checking the text on every platform is what keeps this
+/// honest where the behaviour cannot run.
 #[test]
-fn attach_returns_a_job_or_none_never_an_unconfigured_one() {
-    // A live child is required for a real assign; the checked helper either
-    // hands back a configured job or refuses.
-    let mut child = std::process::Command::new("cmd")
-        .args(["/C", "exit 0"])
-        .spawn()
-        .expect("spawn cmd");
-    let pid = child.id();
-    let job = lca_tools::ops::windows_job::Job::attach(pid);
-    match job {
-        Some(_job) => {
-            child.wait().expect("wait");
-        }
-        None => {
-            let _ = child.wait();
-            // Reaching here means the platform refused a job; the point of
-            // the row is that this is a `None`, not a silently-unchecked
-            // `Some`.
-        }
-    }
-}
-
-#[cfg(not(windows))]
-#[test]
-fn attach_returns_a_job_or_none_never_an_unconfigured_one() {
-    // The checked helper is Windows-only, so there is nothing to call here.
-    // The row exists so the Windows-named test above has a counterpart on
-    // every leg (nextest reports a missing test name as a hard error), and
-    // the behaviour it stands for - a refusal is a `None`, never an
-    // unchecked `Some` - is pinned by the two source rows above, which run
-    // on every platform.
-    let _ = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+fn attach_is_the_one_checked_construction_site() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/lca-tools/src/ops.rs"),
+    )
+    .expect("read ops.rs");
+    let attach = source
+        .split("pub(crate) fn attach(pid: u32) -> Option<Job>")
+        .nth(1)
+        .expect("attach is present");
+    let attach = &attach[..attach.find("\n    }\n").expect("attach ends")];
+    assert!(
+        attach.contains("Job::new()?"),
+        "attach propagates a refused job as None, never an unchecked Some:\n{attach}"
+    );
+    assert!(
+        attach.contains("if job.assign(pid)"),
+        "attach checks the assignment:\n{attach}"
+    );
+    assert!(
+        attach.contains("None"),
+        "and a refused assignment is a None:\n{attach}"
+    );
 }
