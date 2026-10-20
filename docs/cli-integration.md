@@ -77,6 +77,7 @@ lca -p "read-only audit" --no-tools                   # model answers from conte
 lca -p "lint" -t 'shell,read'                         # allowlist; `+`/`-` deltas and `*` globs
 lca -p "try it" -e ./my-ext.wasm                     # one-run extension, same consent as installed
 lca -p "quiet" --no-extensions --no-skills            # providers still resolve
+lca -p "no mcp" --no-mcp                              # no server spawns, no endpoint contacted
 lca -a -p "trusted run"                               # project files load for this run, nothing persists
 ```
 

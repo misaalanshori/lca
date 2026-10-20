@@ -112,7 +112,21 @@ pub struct McpManager {
     entries: Mutex<Vec<ServerEntry>>,
     bridge: Arc<crate::McpBridge>,
     login: Mutex<Option<LoginTask>>,
+    /// Rows finished by background workers, waiting to land (gh #418 Phase E).
+    /// Behind a mutex because `McpManager` is shared across threads
+    /// (`Receiver` is `Send` but not `Sync`), and only the draining methods
+    /// touch it.
+    landed: Mutex<std::sync::mpsc::Receiver<crate::native::ManagedServer>>,
+    /// A sender for the same channel, so a rebuild can start a new round.
+    landed_tx: std::sync::mpsc::Sender<crate::native::ManagedServer>,
+    /// Whether a turn has already waited for the startup connections since the
+    /// session started (pi's `waitedForStartup`). Reset by every rebuild.
+    waited_for_startup: std::sync::atomic::AtomicBool,
 }
+
+/// pi's `DEFAULT_STARTUP_WAIT_MS`: how long the first turn waits for servers
+/// whose tools are declared to the model.
+pub const DEFAULT_STARTUP_WAIT_MS: std::time::Duration = std::time::Duration::from_millis(10_000);
 
 impl McpManager {
     /// The sign-in screen's copy (gh #418 Phase D's consent property): when a
@@ -140,9 +154,16 @@ impl McpManager {
         project_path: Option<PathBuf>,
         entries: Vec<ServerEntry>,
     ) -> McpManager {
-        let bridge = Arc::new(crate::McpBridge::connect_managed(
+        // gh #418 Phase E: connect in the background. `registry::assemble`
+        // must return inside NFR-3's budget whether a server is slow, hung,
+        // or unreachable; a synchronous connect made cold start the sum of
+        // every server's timeout.
+        let (done, landed) = std::sync::mpsc::channel();
+        let landed_tx_for_manager = done.clone();
+        let bridge = Arc::new(crate::McpBridge::spawn_connections(
             caps.clone(),
             entries.clone(),
+            done,
         ));
         McpManager {
             caps,
@@ -151,7 +172,125 @@ impl McpManager {
             entries: Mutex::new(entries),
             bridge,
             login: Mutex::new(None),
+            landed: Mutex::new(landed),
+            landed_tx: landed_tx_for_manager,
+            waited_for_startup: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Land every row a background worker has finished, without blocking.
+    ///
+    /// Called from the places that read state (`status_text`, `poll`,
+    /// `wait_for_startup`) so a finished connection becomes visible the next
+    /// time anyone looks, and from the turn boundary so the first request
+    /// sees the tools a fast server already produced.
+    pub fn drain_landed(&self) {
+        // Hold the receiver lock only while draining, never across `land`
+        // (which takes the bridge's own lock).
+        let mut rows = Vec::new();
+        {
+            let receiver = self
+                .landed
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            while let Ok(row) = receiver.try_recv() {
+                rows.push(row);
+            }
+        }
+        for row in rows {
+            self.bridge.land(row);
+        }
+    }
+
+    /// Wait until every background connection has finished (or the budget
+    /// runs out), landing results as they arrive.
+    ///
+    /// The tests' seam, and the honest one for any caller that wants the table
+    /// settled before reading it: `/mcp` and the turn boundary use
+    /// [`Self::wait_for_startup`] instead, which waits only for what a turn
+    /// actually needs.
+    pub fn wait_until_settled(&self, budget: std::time::Duration) -> Vec<String> {
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            self.drain_landed();
+            let pending = self.bridge.connecting_names();
+            if pending.is_empty() {
+                return Vec::new();
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return pending;
+            }
+            std::thread::sleep((deadline - now).min(std::time::Duration::from_millis(10)));
+        }
+    }
+
+    /// Wait (bounded) for the connections a turn needs, then land them.
+    ///
+    /// pi's rule (`index.ts`, `waitForDirectServers`): the **first** turn
+    /// waits up to [`DEFAULT_STARTUP_WAIT_MS`] for enabled servers whose tools
+    /// are declared straight to the model, so they appear in the first
+    /// request; servers behind `tool_search`, codemode, or the resource tools
+    /// are waited for on demand instead, and a hung server never holds a turn
+    /// past the budget.
+    ///
+    /// Returns the names still connecting when the budget ran out, so the host
+    /// can say so instead of silently omitting them.
+    pub fn wait_for_startup(&self) -> Vec<String> {
+        self.wait_for_startup_with(DEFAULT_STARTUP_WAIT_MS)
+    }
+
+    /// [`Self::wait_for_startup`] with an explicit budget (the tests use a
+    /// short one so a hung server costs a second rather than ten).
+    pub fn wait_for_startup_with(&self, budget: std::time::Duration) -> Vec<String> {
+        use std::sync::atomic::Ordering;
+        if self.waited_for_startup.swap(true, Ordering::SeqCst) {
+            // A later turn does not wait again: either the servers landed or
+            // they are still coming, and the model's view settles next turn.
+            self.drain_landed();
+            return self.bridge.connecting_names();
+        }
+        self.drain_landed();
+        // Only the servers whose tools are declared to the model justify
+        // holding a turn: everything else is reachable through discovery,
+        // which waits on demand.
+        let declaring = self
+            .entries()
+            .into_iter()
+            .filter(|entry| entry.enabled && entry.exposure == McpExposure::Direct)
+            .map(|entry| entry.name)
+            .collect::<Vec<_>>();
+        if declaring.is_empty() {
+            return Vec::new();
+        }
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            self.drain_landed();
+            let pending: Vec<String> = self
+                .bridge
+                .connecting_names()
+                .into_iter()
+                .filter(|name| declaring.contains(name))
+                .collect();
+            if pending.is_empty() {
+                return Vec::new();
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return pending;
+            }
+            // A short poll keeps the wait responsive to a worker that lands
+            // mid-sleep, without a channel select on one receiver per server.
+            std::thread::sleep((deadline - now).min(std::time::Duration::from_millis(10)));
+        }
+    }
+
+    /// Forget the startup wait, so a fresh connection round waits again (the
+    /// edit paths call this: a reconnected direct server should be declared to
+    /// the next request, not silently missing).
+    fn reset_startup_wait(&self) {
+        self.waited_for_startup
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// The bridge handle the registry serves.
@@ -170,12 +309,30 @@ impl McpManager {
     /// Rebuild the bridge around the current entries.
     fn rebuild(&self) {
         let entries = self.entries();
-        self.bridge.rebuild(self.caps.clone(), entries);
+        // Land anything a previous round finished before the table is
+        // replaced; a row from the old table must never resurrect.
+        self.drain_landed();
+        self.bridge
+            .rebuild_connecting(self.caps.clone(), entries, self.landed_tx());
+        // A fresh round can be waited for again: a reconnected `direct`
+        // server should be declared to the next request.
+        self.reset_startup_wait();
+    }
+
+    /// A sender that feeds this manager's landing channel.
+    ///
+    /// The channel is owned by the manager (one receiver), so a rebuild needs
+    /// a second sender rather than a new channel - a new channel would orphan
+    /// the workers the previous one still has.
+    fn landed_tx(&self) -> std::sync::mpsc::Sender<crate::native::ManagedServer> {
+        self.landed_tx.clone()
     }
 
     /// One status block: every server with state, tools, and source,
     /// then warnings. `/mcp` with no verb prints this.
     pub fn status_text(&self) -> String {
+        // A server that landed since the last look shows as connected now.
+        self.drain_landed();
         let statuses = self.bridge.statuses();
         if statuses.is_empty() {
             return "No MCP servers configured. Add one to mcp.json (see the authoring guide)."
@@ -188,6 +345,9 @@ impl McpManager {
                     format!("connected ({} tools)", status.tools)
                 }
                 crate::ServerStateKind::Disabled => "disabled".to_string(),
+                // gh #418 Phase E: honest, not silent. A server still
+                // connecting when `/mcp` is opened says so.
+                crate::ServerStateKind::Connecting => "connecting".to_string(),
                 crate::ServerStateKind::Failed(err) => format!("failed: {err}"),
                 crate::ServerStateKind::NeedsSignIn(detail) => format!("needs sign-in: {detail}"),
             };
@@ -257,6 +417,13 @@ impl McpManager {
         match state.map(|status| status.state) {
             Some(crate::ServerStateKind::Connected) => format!("`{target}` reconnected"),
             Some(crate::ServerStateKind::Disabled) => format!("`{target}` is disabled"),
+            // gh #418 Phase E: a reconnect starts a background round, so the
+            // honest verb is "reconnecting" - the server it just restarted has
+            // not landed yet. Reporting "reconnected" here would claim a
+            // connection the user does not have.
+            Some(crate::ServerStateKind::Connecting) => {
+                format!("`{target}` reconnecting (its tools appear once it lands)")
+            }
             Some(crate::ServerStateKind::Failed(err)) => format!("`{target}` failed: {err}"),
             Some(crate::ServerStateKind::NeedsSignIn(detail)) => {
                 format!("`{target}` needs sign-in: {detail}")
@@ -453,6 +620,7 @@ impl McpManager {
     /// Collect a finished background sign-in (the TUI loop calls
     /// this every tick): rebuild around the fresh tokens and report.
     pub fn poll(&self) -> Option<String> {
+        self.drain_landed();
         let task = self
             .login
             .lock()

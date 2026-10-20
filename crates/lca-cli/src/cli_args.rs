@@ -217,6 +217,10 @@ pub struct Cli {
     /// Skip discovered and configured themes for this run.
     #[arg(long = "no-themes")]
     pub no_themes: bool,
+    // gh #418 Phase E (gh #266, pi's `--no-mcp`): MCP off for one run.
+    /// Skip MCP servers for this run (no process starts, no server connects).
+    #[arg(long = "no-mcp")]
+    pub no_mcp: bool,
     // Deliberate divergence from pi (gh #8's DNA box): pi also has
     // `--api-key <key>`, and LCA will not add one. argv is world-readable
     // in the process list (`ps`), and the standing rule is that secrets
@@ -500,6 +504,10 @@ pub struct CliFlags {
     pub theme: Vec<std::path::PathBuf>,
     /// `--no-themes` (gh #70): skip discovered themes. Run-scoped.
     pub no_themes: bool,
+    /// `--no-mcp` (gh #418 Phase E, pi's flag of the same name): MCP off
+    /// for this run. Run-scoped like `--no-tools`; it never writes the
+    /// enablement record, which is `/mcp disable`'s job.
+    pub no_mcp: bool,
 }
 
 impl CliFlags {
@@ -527,6 +535,7 @@ impl CliFlags {
             no_skills: cli.no_skills,
             theme: cli.theme.clone(),
             no_themes: cli.no_themes,
+            no_mcp: cli.no_mcp,
         }
     }
 

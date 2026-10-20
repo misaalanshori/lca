@@ -6,7 +6,32 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+- **`--no-mcp` skips MCP for one run** (gh #418 Phase E, pi's flag of the
+  same name). No server process starts and no remote endpoint is contacted.
+  It is a per-run flag like `--no-tools`: it never writes the enablement
+  record, which stays `/mcp disable`'s job.
+
 ### Fixed
+- **A disabled MCP no longer spawns its servers or connects to its remotes**
+  (gh #418 Phase E, gh #266). `registry::assemble` built the bridge *after*
+  `apply_enablement` had already swept the registry, so `mcp` was never
+  consulted by the disablement rules and `McpManager::load` started every
+  configured server regardless — `lca ext disable mcp`, `/mcp disable`, and
+  the Extension Hub all had no effect on startup. Enablement (the persisted
+  record **and** `--no-mcp`) is now asked before anything connects, and the
+  bridge is registered before the sweep so it is covered like every other
+  handle.
+- **MCP no longer blocks startup** (gh #418 Phase E, NFR-3). `McpManager::load`
+  connected every server synchronously, so cold start was the sum of every
+  server's handshake or timeout — a hung server could hold the interface shut
+  for a minute. Servers now connect on background workers and assembly
+  returns at once; a server's row reads `connecting` until it lands. The first
+  turn waits up to 10 seconds (pi's `startupWaitMs`) only for servers whose
+  tools are declared directly to the model, so they appear in the first
+  request; `tool_search`, codemode, and resource tools wait on demand
+  instead, and a server still connecting is reported rather than silently
+  missing.
 - **An MCP server whose authorization server is on another host can sign in**
   (gh #418 Phase D, gh #290). Two defects made that impossible: `sign_in`
   passed an empty challenge map to discovery, so the RFC 9728

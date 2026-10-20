@@ -143,6 +143,25 @@ fn turn_worker(
                 error: Some(crate::net_consent::denied_message(&host)),
             };
         }
+        // gh #418 Phase E: the first turn waits (bounded) for servers whose
+        // tools are declared to the model, so they appear in the first
+        // request. A server still connecting costs the budget at most and is
+        // then named, never silently missing.
+        let still_connecting = ui.mcp_manager().wait_for_startup();
+        if !still_connecting.is_empty() {
+            // Honest, not silent (gh #418 Phase E; pi's
+            // "still connecting" notify): the extension-event channel is the
+            // established "an extension has something to say" path, and the
+            // interface renders it as a toast rather than as conversation.
+            sink.on_event(lca_protocol::TurnEvent::ExtensionEvent {
+                extension: "mcp".to_string(),
+                event: "connecting".to_string(),
+                detail: format!(
+                    "{} still connecting; their tools appear once they land",
+                    still_connecting.join(", ")
+                ),
+            });
+        }
         let live = ui.live_provider();
         // #49: the turn's nested-completion backend (live provider,
         // turn model and session). Tool-driven completions attribute

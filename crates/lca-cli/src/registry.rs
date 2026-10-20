@@ -78,8 +78,27 @@ pub(crate) fn assemble(
     // before the provider takes the prompt handle below.
     let data = crate::data_dir();
     let trusted = crate::lock(grants).is_trusted(cwd);
-    let (entries, mgrants, warnings, user_path, project_path) =
+    // gh #418 Phase E (gh #266): enablement is a question asked **before**
+    // anything connects, not after. Both answers are per-run facts: the
+    // persisted record (`/mcp disable`, `lca ext disable mcp`) and the
+    // `--no-mcp` flag, which is per-invocation and never written.
+    //
+    // The ordering bug was structural: `McpManager::load` spawned every
+    // configured server *before* `apply_enablement` had marked the bridge
+    // disabled, so a disabled MCP still started its children and connected to
+    // its remotes. Asking here means a disabled MCP spawns nothing at all -
+    // the guard the turn-level test asserts with a spawn marker.
+    let mcp_enabled =
+        !flags.no_mcp && crate::lock(grants).extension_enabled(cwd, "mcp") != Some(false);
+    let (mut entries, mgrants, warnings, user_path, project_path) =
         lca_mcp::manager::McpManager::plan(&data, cwd, trusted);
+    if !mcp_enabled {
+        // Keep the entries so `/mcp` still lists the servers (as disabled),
+        // but no worker starts for one.
+        for entry in &mut entries {
+            entry.enabled = false;
+        }
+    }
     let mcp_caps = crate::extension_capabilities(
         cwd,
         "mcp",
@@ -128,9 +147,9 @@ pub(crate) fn assemble(
     }
     #[cfg(not(feature = "bundled-openai-compat"))]
     let _ = shared_prompt;
-    crate::apply_enablement(&mut registry, |name| {
-        crate::lock(grants).extension_enabled(cwd, name) == Some(false)
-    });
+    // The bridge is registered **before** `apply_enablement` runs, so the
+    // enablement sweep covers it like every other handle (gh #266's second
+    // half: registering afterwards meant `mcp` was never consulted).
     let manager = Arc::new(lca_mcp::manager::McpManager::load(
         mcp_caps,
         user_path,
@@ -138,6 +157,14 @@ pub(crate) fn assemble(
         entries,
     ));
     registry.register(manager.bridge());
+    crate::apply_enablement(&mut registry, |name| {
+        if name == "mcp" {
+            // `--no-mcp` counts here too, so the flag reports the extension as
+            // disabled to everything downstream (`/ext`, the crash file).
+            return !mcp_enabled;
+        }
+        crate::lock(grants).extension_enabled(cwd, name) == Some(false)
+    });
     // gh #81: the crash file names what actually loaded.
     lca_tui::set_crash_extensions(
         registry

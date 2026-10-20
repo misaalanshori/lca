@@ -574,6 +574,12 @@ impl Ui {
         crate::lock(&self.registry).clone()
     }
 
+    /// The MCP session manager (gh #418 Phase E: the turn waits on its
+    /// startup connections, bounded, before the first request).
+    fn mcp_manager(&self) -> Arc<lca_mcp::manager::McpManager> {
+        crate::lock(&self.mcp).clone()
+    }
+
     /// The resolved provider this generation runs on.
     fn live_provider(&self) -> Arc<dyn Provider> {
         crate::lock(&self.live).provider.clone()

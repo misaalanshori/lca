@@ -307,6 +307,9 @@ pub(crate) struct Setup {
     pub(crate) agent_config: AgentConfig,
     pub(crate) proposals: Option<lca_permissions::Proposals>,
     pub(crate) prompt_impl: HeadlessPrompt,
+    /// The MCP session manager (gh #418 Phase E): the turn waits on its
+    /// startup connections, bounded, before the first request.
+    pub(crate) mcp_manager: std::sync::Arc<lca_mcp::manager::McpManager>,
     // Held for the run: dropping it removes the session temp dir.
     pub(crate) _temp_guard: crate::SessionTempGuard,
     // Held for a volatile run: dropping it removes the temp store.
@@ -546,7 +549,7 @@ pub(crate) async fn setup(
     // lookup.
     let stats_store = store.clone();
     let stats_session = session.clone();
-    let (registry, _mcp, mcp_warnings) = crate::registry::assemble(
+    let (registry, mcp_manager, mcp_warnings) = crate::registry::assemble(
         cwd,
         &config,
         shared_prompt.clone(),
@@ -612,6 +615,7 @@ pub(crate) async fn setup(
         agent_config,
         proposals,
         prompt_impl,
+        mcp_manager,
         _temp_guard: temp_guard,
         _volatile: volatile,
     })
@@ -657,6 +661,7 @@ pub async fn headless(
         agent_config,
         proposals,
         mut prompt_impl,
+        mcp_manager,
         _temp_guard: _,
         _volatile: _,
     } = setup;
@@ -685,6 +690,17 @@ pub async fn headless(
         } else {
             (message.clone(), Vec::new())
         };
+        // gh #418 Phase E: the first turn waits (bounded) for servers whose
+        // tools are declared to the model, so they appear in the first
+        // request; a hung server costs the 10-second budget at most and is
+        // then reported rather than silently missing.
+        let still_connecting = mcp_manager.wait_for_startup();
+        if !still_connecting.is_empty() {
+            eprintln!(
+                "MCP servers are still connecting: {} (their tools become available once connected)",
+                still_connecting.join(", ")
+            );
+        }
         let turn = {
             // #49: per-turn nested-completion backend (same shape as
             // the interactive runner).

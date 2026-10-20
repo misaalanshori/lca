@@ -17,7 +17,7 @@
 
 use super::headless::{HeadlessSink, Setup, setup};
 use super::*;
-use lca_core::{Agent, AgentConfig, TurnOutcome};
+use lca_core::{Agent, AgentConfig, TurnOutcome, TurnSink};
 use lca_session::SessionStore;
 use lca_tools::{CancelFlag, ToolExecutor};
 use std::io::Write;
@@ -93,6 +93,7 @@ pub async fn rpc(
         agent_config,
         proposals,
         prompt_impl,
+        mcp_manager,
         _temp_guard: _,
         _volatile: _,
     } = setup;
@@ -179,6 +180,24 @@ pub async fn rpc(
                 // the originals afterwards.
                 let (store_ref, session_ref) = (store.clone(), session.clone());
                 let mut turn_sink = event_sink();
+                // gh #418 Phase E: the first turn waits (bounded) for servers
+                // whose tools are declared to the model, so they appear in the
+                // first request; a server still connecting costs the budget at
+                // most and is then reported, never silently missing. RPC's
+                // events are the machine-readable path, so the note rides the
+                // `extension-event` envelope the interface and headless both
+                // already understand.
+                let still_connecting = mcp_manager.wait_for_startup();
+                if !still_connecting.is_empty() {
+                    turn_sink.on_event(lca_protocol::TurnEvent::ExtensionEvent {
+                        extension: "mcp".to_string(),
+                        event: "connecting".to_string(),
+                        detail: format!(
+                            "{} still connecting; their tools appear once they land",
+                            still_connecting.join(", ")
+                        ),
+                    });
+                }
                 run = Some(Box::pin(async move {
                     let mut agent = Agent::new(
                         &store_ref,

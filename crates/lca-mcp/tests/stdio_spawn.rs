@@ -94,6 +94,10 @@ async fn probe(root: &std::path::Path, entry: ServerEntry) -> Result<serde_json:
         None,
         vec![entry],
     );
+    // gh #418 Phase E: connections are background now, so the row is
+    // `connecting` until the worker lands. Settle first, then assert.
+    let pending = manager.wait_until_settled(std::time::Duration::from_secs(30));
+    assert!(pending.is_empty(), "the probe server settles: {pending:?}");
     let bridge = manager.bridge();
     let statuses = bridge.statuses();
     let status = statuses

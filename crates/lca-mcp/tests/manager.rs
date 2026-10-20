@@ -140,6 +140,9 @@ fn verbs_act_and_persist() {
         None,
         loaded.entries,
     );
+    // gh #418 Phase E: the bridge connects in the background, so settle
+    // before reading the state row.
+    manager.wait_until_settled(std::time::Duration::from_secs(30));
     let status = manager.act("", "");
     assert!(status.contains("echo"), "{status}");
     assert!(status.contains("connected"), "{status}");
@@ -158,8 +161,22 @@ fn verbs_act_and_persist() {
             .act("exposure", "echo deferred")
             .contains("deferred")
     );
+    // SANCTIONED CHANGE (gh #418 Phase E): this row asserted
+    // `contains("reconnected")`, which was true only while `reconnect` blocked
+    // on the handshake. A reconnect is now a background round, so the honest
+    // report is "reconnecting" until the server lands; asserting the old word
+    // would require either blocking again (the defect) or a false claim.
     let reconnected = manager.act("reconnect", "echo");
-    assert!(reconnected.contains("reconnected"), "{reconnected}");
+    assert!(
+        reconnected.contains("reconnecting"),
+        "a started round is reported as reconnecting: {reconnected}"
+    );
+    manager.wait_until_settled(std::time::Duration::from_secs(30));
+    let landed = manager.act("", "");
+    assert!(
+        landed.contains("connected"),
+        "and the reconnect does land: {landed}"
+    );
     assert!(
         manager.act("frobnicate", "echo").contains("unknown"),
         "unknown verbs name themselves"

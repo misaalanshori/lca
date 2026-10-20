@@ -334,6 +334,10 @@ pub enum ServerStateKind {
     Connected,
     /// Kept without connecting.
     Disabled,
+    /// A background worker is connecting it (gh #418 Phase E: a slow or
+    /// hanging server must not hold up the interface, so startup returns
+    /// immediately and the row says so instead of lying about "Failed").
+    Connecting,
     /// The handshake failed; the string names the cause.
     Failed(String),
     /// The server wants OAuth; the string says which scopes.
@@ -342,7 +346,11 @@ pub enum ServerStateKind {
 
 /// One managed server: its entry, its live session when connected,
 /// and its state for the manager.
-struct ManagedServer {
+///
+/// Crate-visible because a background worker hands its finished row back to
+/// the manager through a channel (gh #418 Phase E); the type never leaves the
+/// crate, and [`McpBridge::statuses`] is the public view.
+pub(crate) struct ManagedServer {
     entry: crate::config::ServerEntry,
     live: Option<LiveServer>,
     state: ServerStateKind,
@@ -585,8 +593,102 @@ impl McpBridge {
         caps: Arc<lca_tools::Capabilities>,
         entries: Vec<crate::config::ServerEntry>,
     ) -> McpBridge {
+        Self::connect_managed_blocking(caps, entries)
+    }
+
+    /// Connect every enabled entry **synchronously** (the all-in-one shape
+    /// the standalone constructors and the tests use).
+    fn connect_managed_blocking(
+        caps: Arc<lca_tools::Capabilities>,
+        entries: Vec<crate::config::ServerEntry>,
+    ) -> McpBridge {
         let mut servers = Vec::with_capacity(entries.len());
         for entry in entries {
+            servers.push(Self::connect_entry(&caps, entry));
+        }
+        McpBridge {
+            servers: Mutex::new(servers),
+            caps,
+        }
+    }
+
+    /// Build the row for one entry, connecting now.
+    fn connect_entry(
+        caps: &Arc<lca_tools::Capabilities>,
+        entry: crate::config::ServerEntry,
+    ) -> ManagedServer {
+        if !entry.enabled {
+            return ManagedServer {
+                entry,
+                live: None,
+                state: ServerStateKind::Disabled,
+            };
+        }
+        match &entry.kind {
+            crate::config::EntryKind::Stdio { .. } => {
+                let Some(config) = entry.stdio_config() else {
+                    return ManagedServer {
+                        entry,
+                        live: None,
+                        state: ServerStateKind::Failed("no stdio config".to_string()),
+                    };
+                };
+                match connect_one_stdio(caps, &entry, &config) {
+                    Ok(live) => ManagedServer {
+                        entry,
+                        live: Some(live),
+                        state: ServerStateKind::Connected,
+                    },
+                    Err(err) => ManagedServer {
+                        entry,
+                        live: None,
+                        state: ServerStateKind::Failed(err),
+                    },
+                }
+            }
+            crate::config::EntryKind::Http { .. } => {
+                let Some(config) = entry.http_config() else {
+                    return ManagedServer {
+                        entry,
+                        live: None,
+                        state: ServerStateKind::Failed("no http config".to_string()),
+                    };
+                };
+                match connect_one_http(caps, &entry, &config) {
+                    Ok(live) => ManagedServer {
+                        entry,
+                        live: Some(live),
+                        state: ServerStateKind::Connected,
+                    },
+                    Err(state) => ManagedServer {
+                        entry,
+                        live: None,
+                        state,
+                    },
+                }
+            }
+        }
+    }
+
+    /// Start every enabled entry connecting on a background worker and
+    /// return at once (gh #418 Phase E, NFR-3's cold start).
+    ///
+    /// Each worker hands its finished row back through `done`, so the
+    /// manager can land it without the worker touching the table (the
+    /// table is rebuilt on every edit, and a worker writing into a table
+    /// that has since been replaced would resurrect a dead server's row).
+    /// Until a row lands its state is [`ServerStateKind::Connecting`], which
+    /// `/mcp` reports honestly rather than silently omitting the server.
+    ///
+    /// A disabled entry is never spawned: it lands its `Disabled` row
+    /// immediately and no worker starts.
+    pub(crate) fn spawn_connections(
+        caps: Arc<lca_tools::Capabilities>,
+        entries: Vec<crate::config::ServerEntry>,
+        done: std::sync::mpsc::Sender<ManagedServer>,
+    ) -> McpBridge {
+        let mut servers = Vec::with_capacity(entries.len());
+        for (index, entry) in entries.into_iter().enumerate() {
             if !entry.enabled {
                 servers.push(ManagedServer {
                     entry,
@@ -595,41 +697,29 @@ impl McpBridge {
                 });
                 continue;
             }
-            match &entry.kind {
-                crate::config::EntryKind::Stdio { .. } => {
-                    let Some(config) = entry.stdio_config() else {
-                        continue;
-                    };
-                    match connect_one_stdio(&caps, &entry, &config) {
-                        Ok(live) => servers.push(ManagedServer {
-                            entry,
-                            live: Some(live),
-                            state: ServerStateKind::Connected,
-                        }),
-                        Err(err) => servers.push(ManagedServer {
-                            entry,
-                            live: None,
-                            state: ServerStateKind::Failed(err),
-                        }),
-                    }
-                }
-                crate::config::EntryKind::Http { .. } => {
-                    let Some(config) = entry.http_config() else {
-                        continue;
-                    };
-                    match connect_one_http(&caps, &entry, &config) {
-                        Ok(live) => servers.push(ManagedServer {
-                            entry,
-                            live: Some(live),
-                            state: ServerStateKind::Connected,
-                        }),
-                        Err(state) => servers.push(ManagedServer {
-                            entry,
-                            live: None,
-                            state,
-                        }),
-                    }
-                }
+            let placeholder = ManagedServer {
+                entry: entry.clone(),
+                live: None,
+                state: ServerStateKind::Connecting,
+            };
+            servers.push(placeholder);
+            let caps_for_worker = caps.clone();
+            let done_for_worker = done.clone();
+            // A named thread per server: a hung handshake must not consume a
+            // shared pool worker for the whole 10-second window (and the
+            // process capability's spawn is a blocking call by design).
+            let spawned = std::thread::Builder::new()
+                .name(format!("mcp-connect-{index}"))
+                .spawn(move || {
+                    let row = McpBridge::connect_entry(&caps_for_worker, entry);
+                    let _ = done_for_worker.send(row);
+                });
+            if let Err(err) = spawned
+                && let Some(last) = servers.last_mut()
+            {
+                // The thread could not start: say so rather than leave the row
+                // "connecting" forever, which would look like a slow server.
+                last.state = ServerStateKind::Failed(format!("cannot start a worker: {err}"));
             }
         }
         McpBridge {
@@ -638,9 +728,52 @@ impl McpBridge {
         }
     }
 
+    /// Land one finished row: replace the matching entry's state.
+    ///
+    /// Matched by name, because the table may have been rebuilt while the
+    /// worker ran; a row for a server that is no longer configured (or that
+    /// has since been reconnected) is dropped instead of resurrected.
+    pub(crate) fn land(&self, row: ManagedServer) -> bool {
+        let mut servers = self.locked();
+        let Some(slot) = servers.iter_mut().find(|server| {
+            server.entry.name == row.entry.name
+                && matches!(server.state, ServerStateKind::Connecting)
+        }) else {
+            // Dropped: the table moved on. Kill whatever the worker opened so
+            // it does not outlive its row.
+            let mut row = row;
+            row.shutdown();
+            return false;
+        };
+        let previous = std::mem::replace(slot, row);
+        // The placeholder held no session; dropping it is enough.
+        drop(previous);
+        true
+    }
+
+    /// Whether any row is still connecting (the startup wait's question).
+    pub fn has_connecting(&self) -> bool {
+        self.locked()
+            .iter()
+            .any(|server| matches!(server.state, ServerStateKind::Connecting))
+    }
+
+    /// The names of servers still connecting, in entry order.
+    pub fn connecting_names(&self) -> Vec<String> {
+        self.locked()
+            .iter()
+            .filter(|server| matches!(server.state, ServerStateKind::Connecting))
+            .map(|server| server.entry.name.clone())
+            .collect()
+    }
+
     /// Reconnect every managed entry in place (the manager calls
     /// this after any edit): old sessions shut down, states refresh,
     /// and the same handle serves the new table.
+    ///
+    /// Synchronous; the manager's own path is
+    /// [`McpBridge::rebuild_connecting`], which keeps the edit instant for the
+    /// same reason startup is (gh #418 Phase E).
     pub fn rebuild(
         &self,
         caps: Arc<lca_tools::Capabilities>,
@@ -654,6 +787,37 @@ impl McpBridge {
             server.shutdown();
         }
         *servers = McpBridge::connect_managed(caps, entries).take_servers();
+    }
+
+    /// [`McpBridge::rebuild`] without blocking: shut the old sessions down,
+    /// swap in `Connecting` rows, and let the workers report back.
+    pub(crate) fn rebuild_connecting(
+        &self,
+        caps: Arc<lca_tools::Capabilities>,
+        entries: Vec<crate::config::ServerEntry>,
+        done: std::sync::mpsc::Sender<ManagedServer>,
+    ) {
+        let mut servers = self
+            .servers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for server in servers.iter_mut() {
+            server.shutdown();
+        }
+        // The lock is held across the swap only; the workers start outside it
+        // (they would otherwise deadlock on `land` for a fast server).
+        drop(servers);
+        let fresh = McpBridge::spawn_connections(caps, entries, done);
+        let mut fresh_servers = fresh.take_servers();
+        let mut servers = self
+            .servers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for server in servers.iter_mut() {
+            server.shutdown();
+        }
+        servers.clear();
+        servers.append(&mut fresh_servers);
     }
 
     /// Take the rows out (rebuild plumbing only).
@@ -698,7 +862,12 @@ impl McpBridge {
                 ServerStateKind::Failed(err) | ServerStateKind::NeedsSignIn(err) => {
                     return Err(err.clone());
                 }
-                ServerStateKind::Connected | ServerStateKind::Disabled => {}
+                // The standalone constructors are synchronous, so a
+                // `Connecting` row cannot occur here; listing it keeps the
+                // match exhaustive as the state set grows.
+                ServerStateKind::Connected
+                | ServerStateKind::Disabled
+                | ServerStateKind::Connecting => {}
             }
         }
         Ok(bridge)
