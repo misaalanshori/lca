@@ -213,7 +213,8 @@ pub(crate) fn run(cmd: &McpCmd, cwd: &Path, trusted: bool) -> i32 {
             }
         }
         McpCmd::Logout { server } => {
-            let cli = open(&data, cwd, trusted);
+            // Needs the engine (credentials live on it) but nothing connected.
+            let cli = open_credentials_only(&data, cwd, trusted);
             match cli.logout(server) {
                 Ok(outcome) => {
                     if outcome.had {
@@ -230,6 +231,14 @@ pub(crate) fn run(cmd: &McpCmd, cwd: &Path, trusted: bool) -> i32 {
             }
         }
     }
+}
+
+/// Build the engine without a manager: the credential verbs (`logout`) need
+/// the store but never a connection, so they spawn nothing.
+fn open_credentials_only(data: &Path, cwd: &Path, trusted: bool) -> CliMcp {
+    let prompt = std::sync::Arc::new(std::sync::Mutex::new(CommandPrompt));
+    let caps = engine(data, cwd, trusted, prompt);
+    CliMcp::open_engine_only(caps, data, cwd, trusted)
 }
 
 /// Build the engine and manager one command-scoped invocation uses.
@@ -278,6 +287,20 @@ fn open_with(
     trusted: bool,
     prompt: std::sync::Arc<std::sync::Mutex<dyn lca_permissions::PermissionPrompt>>,
 ) -> CliMcp {
+    CliMcp::open(engine(data, cwd, trusted, prompt), data, cwd, trusted)
+}
+
+/// Build the capability engine a management verb runs on.
+///
+/// The grants are the manager's own (`process`, workspace `fs`, one ad hoc
+/// `net` pattern per configured host, `oauth`, `credentials`), so a `list` or
+/// `login` can reach exactly what a session would and nothing more.
+fn engine(
+    data: &Path,
+    cwd: &Path,
+    trusted: bool,
+    prompt: std::sync::Arc<std::sync::Mutex<dyn lca_permissions::PermissionPrompt>>,
+) -> std::sync::Arc<lca_tools::Capabilities> {
     let loaded = lca_mcp::config::load_entries(data, cwd, trusted);
     let (grants, _warnings) = lca_mcp::manager::manager_grants(&loaded.entries);
     let store = std::sync::Arc::new(std::sync::Mutex::new(
@@ -286,7 +309,7 @@ fn open_with(
     ));
     let shared = lca_permissions::SharedPrompt::default();
     shared.set(prompt);
-    let caps = crate::extension_capabilities(
+    crate::extension_capabilities(
         cwd,
         "mcp",
         grants,
@@ -294,8 +317,7 @@ fn open_with(
         store,
         lca_tools::ResourceSource::None,
         &data.join("tmp"),
-    );
-    CliMcp::open(caps, data, cwd, trusted)
+    )
 }
 
 /// `user` / `project`, as the copy spells them.

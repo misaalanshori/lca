@@ -308,6 +308,9 @@ pub struct Capabilities {
     /// [`Capabilities::oauth_flow_net_request`] - so ordinary traffic sees
     /// exactly the static grants.
     oauth_flow_hosts: Arc<Mutex<Vec<lca_permissions::NetPattern>>>,
+    /// A caller-supplied override for the loopback flow's callback window
+    /// (gh #418 Phase F). `None` keeps the grant's value.
+    oauth_timeout: Arc<Mutex<Option<u64>>>,
     cancelled: Arc<std::sync::atomic::AtomicBool>,
     /// Wakes a blocked `net` wait the moment [`Capabilities::cancel`] fires.
     /// A `Notify`, not a sleep timer: the wait runs on a caller-owned
@@ -374,6 +377,7 @@ impl Capabilities {
             oauth_begun: Arc::new(Mutex::new(Vec::new())),
             browser_opener: Arc::new(Mutex::new(None)),
             oauth_flow_hosts: Arc::new(Mutex::new(Vec::new())),
+            oauth_timeout: Arc::new(Mutex::new(None)),
             cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cancelled_notify: Arc::new(tokio::sync::Notify::new()),
             handles: Arc::new(Mutex::new(HandleTable::default())),
@@ -550,6 +554,16 @@ impl Capabilities {
     /// Redirect URLs `oauth_begin` bound, oldest first.
     pub fn oauth_begun(&self) -> Vec<String> {
         lock(&self.oauth_begun).clone()
+    }
+
+    /// Set how long a loopback flow waits for its callback.
+    ///
+    /// The grant's own value is the default (the manifest's 300 seconds);
+    /// a caller with an explicit budget - `lca mcp login --timeout` - says so
+    /// here rather than the flow silently ignoring the flag it accepted
+    /// (gh #418 Phase F).
+    pub fn oauth_set_timeout(&self, seconds: u64) {
+        lock(&self.oauth_timeout).replace(seconds);
     }
 
     /// Replace the browser launcher `oauth_open` uses (tests record the

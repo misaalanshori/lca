@@ -430,16 +430,19 @@ fn login_signs_in_against_an_identity_provider_on_another_host() {
     // loopback, so the test has to be the browser.
     let browser = sandbox.root.join("bin");
     std::fs::create_dir_all(&browser).expect("mkdir");
-    let script = browser.join("xdg-open");
-    std::fs::write(
-        &script,
-        "#!/bin/bash\npython3 - \"$1\" <<'PY'\nimport sys, urllib.parse, urllib.request\nurl = sys.argv[1]\nq = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)\nredirect = q[\"redirect_uri\"][0]\nstate = q[\"state\"][0]\nurllib.request.urlopen(redirect + \"?\" + urllib.parse.urlencode({\"code\": \"cli-code\", \"state\": state}), timeout=20).read()\nPY\n",
-    )
-    .expect("write browser shim");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    // The launcher name is platform-specific: `xdg-open` on Linux, `open` on
+    // macOS (`lca_tools::url_launchers`). Both are written, so this row is a
+    // real browser on either.
+    let shim = "#!/bin/bash\npython3 - \"$1\" <<'PY'\nimport sys, urllib.parse, urllib.request\nurl = sys.argv[1]\nq = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)\nredirect = q[\"redirect_uri\"][0]\nstate = q[\"state\"][0]\nurllib.request.urlopen(redirect + \"?\" + urllib.parse.urlencode({\"code\": \"cli-code\", \"state\": state}), timeout=20).read()\nPY\n";
+    for name in ["xdg-open", "open"] {
+        let script = browser.join(name);
+        std::fs::write(&script, shim).expect("write browser shim");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+        }
     }
 
     let path_env = format!(
@@ -481,8 +484,8 @@ fn login_signs_in_against_an_identity_provider_on_another_host() {
     );
 }
 
-// Verifies: gh #418 Phase F - a file-only verb never spawns the server it is
-// editing. The first version of `remove` opened a manager (which connects),
+// Verifies: gh #418 Phase F - a file-only or credential-only verb never
+// spawns the server it is editing. The first version of `remove` opened a manager (which connects),
 // so deleting a server *started* it: the spawn-probe marker appeared, and on a
 // piped stdout the orphaned child could take the process down with SIGPIPE.
 #[test]
@@ -526,6 +529,34 @@ fn removing_a_server_never_spawns_it() {
         std::fs::read_to_string(&marker).unwrap_or_default(),
         "",
         "`remove` never spawns the server it is deleting"
+    );
+
+    // `logout` is the same class: it clears a credential, so it needs the
+    // store and nothing else (gh #418 Phase F).
+    let added = sandbox.run_env(
+        None,
+        &["mcp", "add", "echo", "--", "python3", &fixture()],
+        &[("LCA_SPAWN_MARKER", marker_env.as_str())],
+    );
+    assert_eq!(added.status.code(), Some(0), "{}", common::stderr(&added));
+    let logged_out = sandbox.run_env(
+        None,
+        &["mcp", "logout", "echo"],
+        &[("LCA_SPAWN_MARKER", marker_env.as_str())],
+    );
+    // A stdio server has no credentials, so the verb refuses (exit 1) — but
+    // it must refuse *without* spawning it.
+    assert_eq!(
+        logged_out.status.code(),
+        Some(1),
+        "{}",
+        common::stdout(&logged_out)
+    );
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap_or_default(),
+        "",
+        "`logout` never spawns the server whose credentials it clears"
     );
 }
 

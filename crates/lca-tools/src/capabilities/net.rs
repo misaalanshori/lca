@@ -830,12 +830,13 @@ impl Capabilities {
     /// a timeout (the catalog's300-second default comes from the manifest;
     /// the per-thread deadline above is the hard ceiling), or a cancellation.
     pub fn oauth_await(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError> {
-        let timeout = self
-            .grants
-            .oauth
-            .as_ref()
-            .map(|settings| settings.timeout_seconds)
-            .unwrap_or(300);
+        let timeout = lock(&self.oauth_timeout).unwrap_or_else(|| {
+            self.grants
+                .oauth
+                .as_ref()
+                .map(|settings| settings.timeout_seconds)
+                .unwrap_or(300)
+        });
         let receiver = {
             let mut flows = lock(&self.flows);
             flows

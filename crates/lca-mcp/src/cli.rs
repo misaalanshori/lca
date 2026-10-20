@@ -150,7 +150,16 @@ pub struct RemoveOutcome {
 /// server to delete its config line would spawn a process for no reason, and
 /// the drop would then have to kill it.
 pub struct CliMcp {
+    /// The engine. Present whenever the caller supplied one; the credential
+    /// verbs need it (the store lives on an engine) even though they connect
+    /// nothing.
+    caps: Option<std::sync::Arc<lca_tools::Capabilities>>,
     manager: Option<McpManager>,
+    /// The entries as loaded from disk. Kept even for the file-only verbs, so
+    /// `logout` can resolve a name and clear its credentials without
+    /// connecting anything (gh #418 Phase F: connecting to delete a token is
+    /// the same mistake as connecting to delete a config line).
+    entries: Vec<ServerEntry>,
     user_path: PathBuf,
     project_path: PathBuf,
     cwd: PathBuf,
@@ -170,16 +179,45 @@ impl CliMcp {
         cwd: &Path,
         trusted: bool,
     ) -> CliMcp {
-        Self::open_inner(Some(caps), data_dir, cwd, trusted)
+        let user_path = user_config_path(data_dir);
+        let project_path = project_config_path(cwd);
+        let loaded = load_entries(data_dir, cwd, trusted);
+        let manager = McpManager::load(
+            caps.clone(),
+            user_path.clone(),
+            trusted.then(|| project_path.clone()),
+            loaded.entries.clone(),
+        );
+        CliMcp {
+            caps: Some(caps),
+            manager: Some(manager),
+            entries: loaded.entries,
+            user_path,
+            project_path,
+            cwd: cwd.to_path_buf(),
+            trusted,
+        }
     }
 
-    /// Open without a manager: the file-only verbs (`add`, `remove`) never
-    /// touch a server, so they neither spawn one nor build an engine.
+    /// Open for a verb that needs **no** engine and **no** connections:
+    /// `add` and `remove` only edit files.
     pub fn open_files_only(data_dir: &Path, cwd: &Path, trusted: bool) -> CliMcp {
-        Self::open_inner(None, data_dir, cwd, trusted)
+        Self::open_bare(None, data_dir, cwd, trusted)
     }
 
-    fn open_inner(
+    /// Open for a verb that needs the **engine but no connections**: the
+    /// credential verbs (`logout`), whose store lives on an engine while
+    /// nothing about them starts a server.
+    pub fn open_engine_only(
+        caps: std::sync::Arc<lca_tools::Capabilities>,
+        data_dir: &Path,
+        cwd: &Path,
+        trusted: bool,
+    ) -> CliMcp {
+        Self::open_bare(Some(caps), data_dir, cwd, trusted)
+    }
+
+    fn open_bare(
         caps: Option<std::sync::Arc<lca_tools::Capabilities>>,
         data_dir: &Path,
         cwd: &Path,
@@ -187,17 +225,11 @@ impl CliMcp {
     ) -> CliMcp {
         let user_path = user_config_path(data_dir);
         let project_path = project_config_path(cwd);
-        let manager = caps.map(|caps| {
-            let loaded = load_entries(data_dir, cwd, trusted);
-            McpManager::load(
-                caps,
-                user_path.clone(),
-                trusted.then(|| project_path.clone()),
-                loaded.entries,
-            )
-        });
+        let loaded = load_entries(data_dir, cwd, trusted);
         CliMcp {
-            manager,
+            caps,
+            manager: None,
+            entries: loaded.entries,
             user_path,
             project_path,
             cwd: cwd.to_path_buf(),
@@ -434,24 +466,26 @@ impl CliMcp {
         // Capture the challenge first, so RFC 9728 discovery has the hint a
         // 401 supplies (gh #418 Phase D's threading).
         let _ = crate::remote::remember_unauthorized(&self.caps()?, &config, &config.url);
-        let deadline = std::time::Instant::now() + budget;
-        crate::sign_in(self.caps()?, &config)?;
+        // `--timeout` is the caller's budget for the whole flow; without
+        // this the flag was accepted and ignored, and the wait used the
+        // grant's 300-second default (gh #418 Phase F).
+        let caps = self.caps()?;
+        caps.oauth_set_timeout(budget.as_secs().max(1));
+        crate::sign_in(caps, &config)?;
         let auth_url = self.caps()?.oauth_opened().last().cloned();
         if auth_url.is_none() {
             return Err("the sign-in published no authorization URL".to_string());
         }
         manager.drain_landed();
-        let _ = deadline;
         let tools = self.tool_count(name);
         Ok(LoginOutcome { auth_url, tools })
     }
 
     /// Delete one server's stored OAuth credentials.
     pub fn logout(&self, name: &str) -> Result<LogoutOutcome, String> {
-        let manager = self.manager()?;
-        let entry = manager
-            .entries()
-            .into_iter()
+        let entry = self
+            .entries
+            .iter()
             .find(|entry| entry.name == name)
             .ok_or_else(|| format!("no MCP server named {name:?}"))?;
         let Some(config) = entry.http_config() else {
@@ -469,7 +503,9 @@ impl CliMcp {
     /// the same engine the session uses, so a flow host grant lands where the
     /// session would have put it).
     fn caps(&self) -> Result<std::sync::Arc<lca_tools::Capabilities>, String> {
-        self.manager().map(McpManager::caps)
+        self.caps
+            .clone()
+            .ok_or_else(|| "this command needs no capability engine".to_string())
     }
 
     /// How many tools one server currently lists.
