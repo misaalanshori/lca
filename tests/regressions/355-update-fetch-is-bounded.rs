@@ -151,6 +151,11 @@ async fn a_declared_oversized_length_is_refused_from_the_header() {
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
         while let Ok((mut stream, _)) = listener.accept().await {
+            // Drain the request first: Windows closes a socket as soon as the
+            // writer task returns, which would surface as `SendRequest` on the
+            // client instead of the header refusal under test.
+            let mut sink = [0u8; 4096];
+            let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut sink).await;
             // Declare 2 GiB, then send nothing at all: a client that trusts the
             // body would wait; one that checks the header refuses immediately.
             let _ = stream
@@ -189,6 +194,14 @@ async fn an_ordinary_feed_still_arrives() {
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
         while let Ok((mut stream, _)) = listener.accept().await {
+            // Drain the request before answering, and keep the task alive
+            // after the write. Windows tears a socket down as soon as its
+            // writer task returns, so an unread request buffer or an
+            // immediate return surfaces as `client error (SendRequest)` on
+            // the client - the same shape the existing registry row avoids by
+            // serving in a loop (CI run 39506492565 caught this).
+            let mut sink = [0u8; 4096];
+            let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut sink).await;
             let payload = br#"{"tag_name":"phase6-0.2.0"}"#;
             let head = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
@@ -196,6 +209,10 @@ async fn an_ordinary_feed_still_arrives() {
             );
             let _ = stream.write_all(head.as_bytes()).await;
             let _ = stream.write_all(payload).await;
+            let _ = stream.flush().await;
+            // Hold the connection briefly so the client's read completes
+            // before the OS closes it.
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     });
     let body = lca_registry::plain_get(&format!("http://{addr}/releases/latest"))
