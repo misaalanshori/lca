@@ -89,7 +89,11 @@ fn host(
 ) -> Host {
     let listener = std::net::TcpListener::bind((ip, 0)).expect("bind");
     let addr = listener.local_addr().expect("addr");
-    let base = format!("http://{addr}");
+    // The requested host NAME, not the resolved address: a grant is keyed by
+    // the host string a URL carries, and on macOS `localhost` resolves to
+    // `::1` — building the base from `addr` would collapse the IdP onto the
+    // MCP server's host and make every cross-host row in this file vacuous.
+    let base = format!("http://{ip}:{}", addr.port());
     let base_for_answers = base.clone();
     let requests: Arc<Mutex<Vec<Recorded>>> = Arc::new(Mutex::new(Vec::new()));
     let recorded = requests.clone();
@@ -361,6 +365,12 @@ fn a_sign_in_reaches_an_authorization_server_on_another_host() {
     assert_eq!(token.access_token, "d-access");
 
     let seen = idp.paths();
+    assert!(
+        !seen.is_empty(),
+        "the IdP host was actually reached (base {} vs MCP {})",
+        idp.base,
+        mcp.base
+    );
     for (needle, what) in [
         ("oauth-protected-resource", "the challenge's metadata fetch"),
         ("oauth-authorization-server", "RFC 8414 discovery"),
