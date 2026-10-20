@@ -1,13 +1,22 @@
-//! Regression rows for gh #274: the curated price table must bill cache
-//! reads at their own rate and must populate the per-bucket cost breakdown.
+//! Regression rows for gh #274: catalog pricing must bill cache reads at
+//! their own rate and must populate the per-bucket cost breakdown.
 //!
 //! Two defects in one path:
 //!
-//! 1. `resources/pricing.toml` carried only `input` and `output`, so
-//!    `table_cost` billed `cache_read` and `cache_write` tokens at 100% of the
-//!    input rate. Every real vendor discounts cache *reads* heavily - 50% for
-//!    GPT-4o, 90% for the Claude line - so a cache-heavy turn was overpriced
-//!    by up to 10x, and the saving a cache actually produced was invisible.
+//! 1. The old price table carried only `input` and `output`, so `table_cost`
+//!    billed `cache_read` and `cache_write` tokens at 100% of the input rate.
+//!    Every real vendor discounts cache *reads* heavily - 50% for GPT-4o, 90%
+//!    for the Claude line - so a cache-heavy turn was overpriced by up to 10x,
+//!    and the saving a cache actually produced was invisible.
+//!
+//! SANCTIONED CHANGE (gh #260): the hand-curated `lca-core/resources/pricing.toml`
+//! this file was written against is gone; `lca-core` now prices from the
+//! embedded `models.dev` catalog in `lca_registry::models`. The rates are the
+//! same numbers from a different (and much larger) source, so every
+//! assertion's *intent* is unchanged - only the accessor name moved, and
+//! `rates_for` now takes the provider id, because the same model is two
+//! prices on two services. The cache-rate and breakdown semantics below are
+//! pinned exactly as they were.
 //! 2. `turn/mod.rs` assigned only `response.usage.cost`, leaving
 //!    `cost_input`, `cost_cache_read`, and `cost_cache_write` at `0.0`. Those
 //!    three fields are exactly what `lca_session::cache` reads to compute
@@ -18,7 +27,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
-use lca_core::pricing::{Price, price_for, table_cost};
+use lca_core::pricing::{PricedUsage, rates_for, table_cost};
 use lca_protocol::Usage;
 
 /// Build a usage record with explicit buckets.
@@ -35,18 +44,20 @@ fn usage(input: u64, cache_read: u64, cache_write: u64, output: u64) -> Usage {
 /// The published rates are in the table. A missing rate would silently fall
 /// back to the input rate and reproduce the defect.
 #[test]
-fn the_curated_table_carries_cache_rates() {
+fn the_catalog_carries_cache_rates() {
+    // SANCTIONED CHANGE (gh #260): `price_for(model)` became
+    // `rates_for(provider, model)`; the gpt-4o numbers are unchanged.
     // gpt-4o: input 2.50, cache read 1.25 (half), output 10.00.
-    let price = price_for("gpt-4o").expect("gpt-4o is listed");
-    assert_eq!(price.input_per_mtok, 2.50);
-    assert_eq!(price.output_per_mtok, 10.00);
+    let rates = rates_for("openai", "gpt-4o").expect("gpt-4o is listed");
+    assert_eq!(rates.input_per_mtok, 2.50);
+    assert_eq!(rates.output_per_mtok, 10.00);
     assert_eq!(
-        price.cache_read_per_mtok, 1.25,
+        rates.cache_read_per_mtok, 1.25,
         "the published cache-read rate, not the input rate"
     );
     assert_eq!(
-        price.cache_write_per_mtok, 2.50,
-        "gpt-4o cache writes bill at the input rate"
+        rates.cache_write_per_mtok, 2.50,
+        "gpt-4o charges no write premium, so a write bills at the input rate"
     );
 }
 
@@ -54,11 +65,12 @@ fn the_curated_table_carries_cache_rates() {
 /// premium - the shape that makes the defect most visible.
 #[test]
 fn a_premium_cache_write_rate_is_carried() {
-    let price = price_for("claude-sonnet-4-5").expect("listed");
-    assert_eq!(price.input_per_mtok, 3.00);
-    assert_eq!(price.cache_read_per_mtok, 0.30);
+    // SANCTIONED CHANGE (gh #260): provider-qualified lookup; same numbers.
+    let rates = rates_for("anthropic", "claude-sonnet-4-5").expect("listed");
+    assert_eq!(rates.input_per_mtok, 3.00);
+    assert_eq!(rates.cache_read_per_mtok, 0.30);
     assert_eq!(
-        price.cache_write_per_mtok, 3.75,
+        rates.cache_write_per_mtok, 3.75,
         "a cache write costs 1.25x input on this line"
     );
 }
@@ -70,8 +82,12 @@ fn a_premium_cache_write_rate_is_carried() {
 /// `2.50 + 2.50 + 2.50 + 10.00 = 17.50`.
 #[test]
 fn cache_reads_are_billed_at_the_discounted_rate() {
-    let cost =
-        table_cost("gpt-4o", &usage(1_000_000, 1_000_000, 1_000_000, 1_000_000)).expect("listed");
+    let cost = table_cost(
+        "openai",
+        "gpt-4o",
+        &usage(1_000_000, 1_000_000, 1_000_000, 1_000_000),
+    )
+    .expect("listed");
     assert!(
         (cost - 16.25).abs() < 1e-9,
         "2.50 input + 1.25 cache_read + 2.50 cache_write + 10.00 output = 16.25, got {cost}"
@@ -83,7 +99,12 @@ fn cache_reads_are_billed_at_the_discounted_rate() {
 #[test]
 fn a_cache_heavy_turn_is_cheaper_than_the_input_rate() {
     // 1M cache reads, no other input, 1M output.
-    let cost = table_cost("claude-sonnet-4-5", &usage(0, 1_000_000, 0, 1_000_000)).expect("listed");
+    let cost = table_cost(
+        "anthropic",
+        "claude-sonnet-4-5",
+        &usage(0, 1_000_000, 0, 1_000_000),
+    )
+    .expect("listed");
     // 0.30 + 15.00 = 15.30, versus 3.00 + 15.00 = 18.00 at the input rate.
     assert!((cost - 15.30).abs() < 1e-9, "got {cost}");
 }
@@ -101,7 +122,7 @@ fn the_one_hour_cache_tier_bills_at_twice_input() {
         cache_write_1h: 1_000_000,
         ..Default::default()
     };
-    let cost = table_cost("claude-sonnet-4-5", &usage).expect("listed");
+    let cost = table_cost("anthropic", "claude-sonnet-4-5", &usage).expect("listed");
     assert!(
         (cost - 6.00).abs() < 1e-9,
         "1M one-hour writes on claude-sonnet-4-5 bill at 2x input (6.00),          not the 3.75 five-minute rate: {cost}"
@@ -114,7 +135,7 @@ fn the_one_hour_cache_tier_bills_at_twice_input() {
         cache_write_1h: 0,
         ..Default::default()
     };
-    let short_cost = table_cost("claude-sonnet-4-5", &short).expect("listed");
+    let short_cost = table_cost("anthropic", "claude-sonnet-4-5", &short).expect("listed");
     assert!((short_cost - 3.75).abs() < 1e-9, "5m tier: {short_cost}");
 }
 
@@ -126,7 +147,7 @@ fn the_two_write_tiers_are_priced_separately() {
         cache_write_1h: 1_000_000,
         ..Default::default()
     };
-    let cost = table_cost("claude-sonnet-4-5", &both).expect("listed");
+    let cost = table_cost("anthropic", "claude-sonnet-4-5", &both).expect("listed");
     assert!(
         (cost - (3.75 + 6.00)).abs() < 1e-9,
         "1M five-minute (3.75) + 1M one-hour (6.00) = 9.75: {cost}"
@@ -138,10 +159,10 @@ fn the_two_write_tiers_are_priced_separately() {
 #[test]
 fn an_unlisted_model_still_prices_to_none() {
     assert_eq!(
-        table_cost("unknown-model", &usage(1_000_000, 0, 0, 0)),
+        table_cost("openai", "unknown-model", &usage(1_000_000, 0, 0, 0)),
         None
     );
-    assert_eq!(price_for("faux-1"), None);
+    assert_eq!(rates_for("fake", "faux-1"), None);
 }
 
 /// Every curated entry carries positive cache rates: a typo'd or missing rate
@@ -149,37 +170,39 @@ fn an_unlisted_model_still_prices_to_none() {
 /// defect, so the table is checked as a whole.
 #[test]
 fn every_entry_carries_positive_cache_rates() {
-    // The curated ids, spelled out rather than discovered, so a dropped entry
-    // fails here instead of silently shrinking the coverage.
-    for model in [
-        "gpt-4o",
-        "gpt-4o-mini",
-        "gpt-4.1",
-        "claude-sonnet-4-5",
-        "claude-opus-4-1",
-        "claude-haiku-4-5",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
+    // SANCTIONED CHANGE (gh #260): the ids are spelled out with their
+    // provider, because the catalog is keyed by both. These eight are also
+    // the rows the checked-in stub carries, so this row holds offline.
+    for (provider, model) in [
+        ("openai", "gpt-4o"),
+        ("openai", "gpt-4o-mini"),
+        ("openai", "gpt-4.1"),
+        ("anthropic", "claude-sonnet-4-5"),
+        ("anthropic", "claude-opus-4-1"),
+        ("anthropic", "claude-haiku-4-5"),
+        ("google", "gemini-2.5-pro"),
+        ("google", "gemini-2.5-flash"),
     ] {
-        let price = price_for(model).unwrap_or_else(|| panic!("{model} is listed"));
+        let rates =
+            rates_for(provider, model).unwrap_or_else(|| panic!("{provider}/{model} is listed"));
         assert!(
-            price.cache_read_per_mtok > 0.0,
+            rates.cache_read_per_mtok > 0.0,
             "{model} carries a positive cache-read rate"
         );
         assert!(
-            price.cache_write_per_mtok > 0.0,
+            rates.cache_write_per_mtok > 0.0,
             "{model} carries a positive cache-write rate"
         );
         assert!(
-            price.cache_read_per_mtok <= price.input_per_mtok,
+            rates.cache_read_per_mtok <= rates.input_per_mtok,
             "{model}: a cache read is never dearer than fresh input"
         );
         assert!(
-            price.cache_write_1h_per_mtok > 0.0,
+            rates.cache_write_1h_per_mtok > 0.0,
             "{model} carries a positive one-hour cache-write rate"
         );
         assert!(
-            price.cache_write_1h_per_mtok >= price.cache_write_per_mtok,
+            rates.cache_write_1h_per_mtok >= rates.cache_write_per_mtok,
             "{model}: the one-hour tier is never cheaper than the five-minute one"
         );
     }
@@ -188,7 +211,7 @@ fn every_entry_carries_positive_cache_rates() {
 /// A zero-token usage costs exactly nothing, not epsilon.
 #[test]
 fn zero_tokens_cost_zero() {
-    assert_eq!(table_cost("gpt-4o", &Usage::default()), Some(0.0));
+    assert_eq!(table_cost("openai", "gpt-4o", &Usage::default()), Some(0.0));
 }
 
 /// The breakdown a table-priced turn must populate. This row states the
@@ -197,8 +220,8 @@ fn zero_tokens_cost_zero() {
 #[test]
 fn the_breakdown_sums_to_the_total() {
     let usage = usage(1_000_000, 500_000, 250_000, 2_000_000);
-    let price = price_for("claude-opus-4-1").expect("listed");
-    let buckets = lca_core::pricing::PricedUsage::new(price, &usage);
+    let rates = rates_for("anthropic", "claude-opus-4-1").expect("listed");
+    let buckets = PricedUsage::new(rates, &usage);
     assert!(
         (buckets.cost_input - 15.00).abs() < 1e-9,
         "{}",
@@ -231,27 +254,31 @@ fn the_breakdown_sums_to_the_total() {
     );
 }
 
-/// The `Price` literal a caller constructs still has to state the cache rates,
-/// so a new entry cannot be added with only input and output.
+/// The `ModelRates` literal a caller constructs still has to state the cache
+/// rates, so a new source cannot be added with only input and output.
+///
+/// SANCTIONED CHANGE (gh #260): the type moved from `lca_core::pricing::Price`
+/// to `lca_registry::models::ModelRates` when the hand-curated table gave way
+/// to the catalog. Five fields, same names, same meaning.
 #[test]
-fn a_price_literal_names_both_cache_rates() {
-    let price = Price {
+fn a_rates_literal_names_both_cache_rates() {
+    let rates = lca_registry::models::ModelRates {
         input_per_mtok: 1.0,
         cache_read_per_mtok: 0.5,
         cache_write_per_mtok: 1.25,
         cache_write_1h_per_mtok: 2.0,
         output_per_mtok: 2.0,
     };
-    assert_eq!(price.cache_read_per_mtok, 0.5);
+    assert_eq!(rates.cache_read_per_mtok, 0.5);
 }
 
-/// The wiring half: a table-priced turn must persist the breakdown on the
+/// The wiring half: a catalog-priced turn must persist the breakdown on the
 /// assistant record, not just the total. This is the row that would have
 /// caught the defect at the turn level - `lca_session::cache` reads these
 /// three fields, and with them at `0.0` the cache-waste figure was always
 /// `$0.00` no matter how much was actually wasted.
 #[test]
-fn a_table_priced_turn_persists_the_per_bucket_breakdown() {
+fn a_catalog_priced_turn_persists_the_per_bucket_breakdown() {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -297,7 +324,10 @@ fn a_table_priced_turn_persists_the_per_bucket_breakdown() {
             Some(Duration::from_secs(30)),
         );
         // 1M input, 1M cache_read, 1M cache_write, 1M output on gpt-4o, with
-        // the provider reporting no dollar cost so the table must price it.
+        // the provider reporting no dollar cost so the catalog must price it.
+        // SANCTIONED CHANGE (gh #260): the provider id is now part of the
+        // lookup key, so the config names "openai" rather than the fixture's
+        // "fake". The priced numbers are unchanged.
         let provider = FakeProvider::builder()
             .turn(|t| {
                 t.text("ok")
@@ -305,7 +335,7 @@ fn a_table_priced_turn_persists_the_per_bucket_breakdown() {
             })
             .build();
         let config = AgentConfig {
-            provider: "fake".to_string(),
+            provider: "openai".to_string(),
             model: "gpt-4o".to_string(),
             retry_limit: 1,
             retry_base_delay: Duration::ZERO,

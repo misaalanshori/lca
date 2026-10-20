@@ -22,6 +22,7 @@ mod archive;
 mod catalog;
 mod git;
 mod http;
+pub mod models;
 
 pub(crate) use archive::manifest_declares_resources;
 pub use archive::{pack_archive, pack_archive_with_resources, read_archive};

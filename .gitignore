@@ -5,3 +5,5 @@ nohup.out
 fuzz/target
 fuzz/artifacts
 crash-*
+# gh #260: the model catalog is a build artifact, never committed.
+/target/models-catalog.json.gz

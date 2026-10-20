@@ -208,17 +208,18 @@ impl Agent<'_> {
                 }
             };
 
-            // Gh #125: a provider that reports no cost gets the curated
-            // table's math for listed models; a reported cost is never
-            // overwritten, and unlisted models stay tokens-only.
+            // Gh #125/#260: a provider that reports no cost gets the model
+            // catalog's math; a reported cost is never overwritten, and a
+            // model the catalog does not list stays tokens-only.
             if response.usage.cost == 0.0
-                && let Some(price) = super::pricing::price_for(&self.config.model)
+                && let Some(rates) =
+                    super::pricing::rates_for(&self.config.provider, &self.config.model)
             {
                 // Gh #274: the four buckets are persisted alongside the
                 // total, because `lca_session::cache` attributes a cache
                 // miss to a dollar figure per bucket (ADR-0017). With only
                 // `cost` set, that attribution was always `$0.00`.
-                let priced = super::pricing::PricedUsage::new(price, &response.usage);
+                let priced = super::pricing::PricedUsage::new(rates, &response.usage);
                 response.usage.cost = priced.total;
                 response.usage.cost_input = priced.cost_input;
                 response.usage.cost_cache_read = priced.cost_cache_read;
@@ -1021,18 +1022,42 @@ impl Agent<'_> {
 /// would grow until the provider rejects it. The estimate is a safety net,
 /// not a claim: the footer still shows `ctx ?` when the window is unknown,
 /// and `OPENAI_CONTEXT_WINDOW` (or a provider that reports one) overrides it.
-/// ponytail: a fixed 128k; a per-model catalog is the accurate upgrade.
 const FALLBACK_CONTEXT_WINDOW: u32 = 128_000;
 
 /// The effective window, shared with the front ends (gh #36 phase 1):
 /// they derive the summarization budget from the same window the
 /// trigger uses.
+///
+/// gh #260: this stays the two-argument form it always was, so no caller
+/// changes shape. A model whose window the front end could not resolve keeps
+/// the estimate here; the catalog fills that gap where the front end asks it
+/// (see [`catalog_context_window`]).
 pub fn effective_context_window(configured: u32) -> u32 {
     if configured > 0 {
         configured
     } else {
         FALLBACK_CONTEXT_WINDOW
     }
+}
+
+/// The catalog's context window for `provider`/`model`, when the model catalog
+/// knows one (gh #260).
+///
+/// The front end resolves a window from the provider's own model listing first
+/// and falls back here, so a provider that publishes none (an OpenAI-shaped
+/// endpoint answering without `limit`) still gets the real number rather than
+/// the footer's `ctx ?` and the compaction safety net.
+///
+/// **Not called from the turn loop.** The first lookup inflates and parses
+/// ~1.5 MB (measured at ~460 ms), which inside a turn would sit in the
+/// cancellation window and change what a cancel landing mid-turn interrupts.
+/// The turn loop therefore keeps its cheap configured-or-fallback window, and
+/// this is exposed for the front ends, which resolve once when the model is
+/// chosen. Wiring it into `extensions/openai-compatible`'s window resolution
+/// is the remaining step (see the cycle report).
+#[must_use]
+pub fn catalog_context_window(provider: &str, model: &str) -> Option<u32> {
+    lca_registry::models::lookup(provider, model)?.context_window()
 }
 
 fn accumulate_usage(total: &mut Usage, per_call: &Usage) {
@@ -1054,5 +1079,13 @@ mod window_tests {
     fn an_unknown_window_still_compacts() {
         assert_eq!(effective_context_window(1_000_000), 1_000_000);
         assert_eq!(effective_context_window(0), FALLBACK_CONTEXT_WINDOW);
+    }
+
+    // Verifies: gh #260 - the catalog supplies the window a provider did not
+    // publish, and an unknown model still reads as unknown (never a guess).
+    #[test]
+    fn the_catalog_supplies_an_unpublished_window() {
+        assert_eq!(catalog_context_window("openai", "gpt-4o"), Some(128_000));
+        assert_eq!(catalog_context_window("openai", "not-a-real-model"), None);
     }
 }

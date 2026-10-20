@@ -732,6 +732,7 @@ The dependency list stays short on purpose. Each entry below states what it does
 | cargo-deny | License and advisory checks | `cargo audit` |
 | html2md | HTML-to-Markdown conversion for the webfetch tool (gh #222) | A correct converter needs a real HTML parser (tag soup, entities, nested lists/tables); hand-rolling is a correctness trap. Footprint: html5ever, markup5ever_rcdom, percent-encoding (regex already in tree). Proven wasm32-wasip2-clean; script/style/chrome stripping stays a hand-rolled pre-pass (html2md does not strip). |
 | similar | Unified diffs for mid-session instruction updates (gh #217) | A correct line diff needs Myers/LCS over line interning; hand-rolling is a correctness trap. Footprint: none (dependency-free). |
+| flate2 (rust backend) | Inflates the embedded `models.dev` model catalog at first lookup (gh #260) | Hand-writing a DEFLATE decoder is not worth writing. Already in the graph through `zip`; pinned to `rust_backend` (miniz_oxide + crc32fast) so the build needs no C toolchain and no second crypto provider. Footprint: none new |
 
 Build-time tools do not ship in the binary. Only the library crates in the top half of the table become part of the release artifact.
 

@@ -7,6 +7,20 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Costs and context limits now cover real models, from a real catalog**
+  (gh #260). The hand-curated eight-model price table inside `lca-core` is
+  gone; prices, context windows, and reasoning flags come from a
+  build-time stripped [`models.dev`](https://models.dev) catalog embedded in
+  the binary (about 134 KiB gzipped, from 231 providers and 9,075 models),
+  plus an optional drop-in at `~/.lca/catalogs/models.json` that takes
+  precedence over it. Lookups are keyed by provider *and* model, so the same
+  model resold at two prices bills correctly on each. A model the catalog
+  does not list still records tokens only - no invented rates. `lca-core`
+  now names no vendor at all. Refreshing the catalog needs a rebuild: there
+  is still no runtime network call (FR-CFG-3). The catalog also carries each
+  model's context window; `lca_registry::models` and
+  `lca_core::catalog_context_window` expose it, and the provider
+  extension's own window resolution is the remaining place to wire it.
 - **`lca mcp add|remove|list|login|logout` manages servers from a shell**
   (gh #418 Phase F, gh #73; pi's `pi mcp`). The verbs work outside a session,
   so a script or an agent can run them through `bash`, and they are not gated

@@ -1,0 +1,87 @@
+{
+ "_stub": "The offline fallback catalog (gh #260). It is embedded when a build has no network, so `cargo check` and the test suite never need models.dev. It is deliberately tiny and stable: tests that pin exact rates use their own fixture catalog, never this file. Regenerate with `scripts/sync-models-catalog.py` when a rate here is known to be wrong.",
+ "anthropic": {
+  "models": {
+   "claude-haiku-4-5": {
+    "canonical_model_id": "anthropic/claude-haiku-4-5",
+    "cost": {"cache_read": 0.1, "cache_write": 1.25, "input": 1.0, "output": 5.0},
+    "limit": {"context": 200000, "output": 64000}
+   },
+   "claude-opus-4-1": {
+    "canonical_model_id": "anthropic/claude-opus-4-1",
+    "cost": {"cache_read": 1.5, "cache_write": 18.75, "input": 15.0, "output": 75.0},
+    "limit": {"context": 200000, "output": 32000}
+   },
+   "claude-sonnet-4-5": {
+    "canonical_model_id": "anthropic/claude-sonnet-4-5",
+    "cost": {"cache_read": 0.3, "cache_write": 3.75, "input": 3.0, "output": 15.0},
+    "limit": {"context": 200000, "output": 64000}
+   }
+  }
+ },
+ "deepseek": {
+  "models": {
+   "deepseek-chat": {
+    "canonical_model_id": "deepseek/deepseek-chat",
+    "cost": {"input": 0.27, "output": 1.1},
+    "limit": {"context": 128000, "output": 8192}
+   },
+   "deepseek-reasoner": {
+    "canonical_model_id": "deepseek/deepseek-reasoner",
+    "cost": {"input": 0.55, "output": 2.19},
+    "limit": {"context": 128000, "output": 65536}
+   }
+  }
+ },
+ "google": {
+  "models": {
+   "gemini-2.5-flash": {
+    "canonical_model_id": "google/gemini-2.5-flash",
+    "cost": {"cache_read": 0.03, "input": 0.3, "output": 2.5},
+    "limit": {"context": 1048576, "output": 65536}
+   },
+   "gemini-2.5-pro": {
+    "canonical_model_id": "google/gemini-2.5-pro",
+    "cost": {"cache_read": 0.125, "input": 1.25, "output": 10.0},
+    "limit": {"context": 1048576, "output": 65536}
+   }
+  }
+ },
+ "groq": {
+  "models": {
+   "llama-3.1-8b-instant": {
+    "cost": {"input": 0.05, "output": 0.08},
+    "limit": {"context": 131072, "output": 131072}
+   },
+   "llama-3.3-70b-versatile": {
+    "cost": {"input": 0.59, "output": 0.79},
+    "limit": {"context": 131072, "output": 32768}
+   }
+  }
+ },
+ "openai": {
+  "models": {
+   "gpt-4.1": {
+    "canonical_model_id": "openai/gpt-4.1",
+    "cost": {"cache_read": 0.5, "input": 2.0, "output": 8.0},
+    "limit": {"context": 1000000, "output": 32768}
+   },
+   "gpt-4o": {
+    "canonical_model_id": "openai/gpt-4o",
+    "cost": {"cache_read": 1.25, "input": 2.5, "output": 10.0},
+    "limit": {"context": 128000, "output": 16384}
+   },
+   "gpt-4o-mini": {
+    "canonical_model_id": "openai/gpt-4o-mini",
+    "cost": {"cache_read": 0.075, "input": 0.15, "output": 0.6},
+    "limit": {"context": 128000, "output": 16384}
+   },
+   "o3-mini": {
+    "canonical_model_id": "openai/o3-mini",
+    "cost": {"cache_read": 0.55, "input": 1.1, "output": 4.4},
+    "limit": {"context": 200000, "output": 100000},
+    "reasoning": true
+   }
+  }
+ }
+}

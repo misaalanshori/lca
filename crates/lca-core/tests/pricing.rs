@@ -1,6 +1,6 @@
-//! Token-derived cost (gh #125): the turn fills a zero reported cost
-//! from the curated table for listed models; unlisted models keep
-//! tokens-only (zero), and a reported cost is never overwritten.
+//! Token-derived cost (gh #125, gh #260): the turn fills a zero reported cost
+//! from the model catalog for listed models; unlisted models keep tokens-only
+//! (zero), and a reported cost is never overwritten.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 mod common;
@@ -9,14 +9,17 @@ use common::*;
 use lca_testkit::{FakeProvider, fake_usage};
 
 fn priced_config() -> lca_core::AgentConfig {
+    // Gh #260: pricing needs the provider id as well as the model, because
+    // the catalog keys on both. "openai" is where the fixture's gpt-4o lives.
     lca_core::AgentConfig {
+        provider: "openai".to_string(),
         model: "gpt-4o".to_string(),
         ..default_config()
     }
 }
 
-// Verifies: gh #125 - a listed model with no reported cost records the
-// table math (1M in @2.50 + 1M out @10.00).
+// Verifies: gh #125, gh #260 - a listed model with no reported cost records
+// the catalog math (1M in @2.50 + 1M out @10.00).
 #[tokio::test]
 async fn a_listed_model_fills_zero_reported_cost_from_the_table() {
     let provider = FakeProvider::builder()
@@ -41,12 +44,12 @@ async fn a_listed_model_fills_zero_reported_cost_from_the_table() {
         .sum::<f64>();
     assert!(
         (cost - 12.50).abs() < 1e-9,
-        "table math lands on the record: {cost}"
+        "catalog math lands on the record: {cost}"
     );
 }
 
-// Verifies: gh #125 - an unlisted model keeps tokens-only: no cost is
-// invented, and a provider-reported cost is never overwritten.
+// Verifies: gh #125, gh #260 - an unlisted model keeps tokens-only: no cost
+// is invented, and a provider-reported cost is never overwritten.
 #[tokio::test]
 async fn unlisted_models_keep_tokens_only_and_reported_cost_wins() {
     let provider = FakeProvider::builder()
