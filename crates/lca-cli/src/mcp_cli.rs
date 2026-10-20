@@ -121,29 +121,30 @@ pub(crate) fn run(cmd: &McpCmd, cwd: &Path, trusted: bool) -> i32 {
             let scope = if *local { Scope::Project } else { Scope::User };
             let cli = CliMcp::open_files_only(&data, cwd, trusted);
             match cli.remove(server, scope) {
-                Ok(outcome) => {
-                    if outcome.elsewhere.is_none() {
-                        println!(
-                            "Removed {} MCP server {:?} from {}.",
-                            scope_word(scope),
-                            server,
-                            outcome.path.display()
-                        );
-                        return exit::OK;
-                    }
-                    // pi's hint: the entry exists in the other scope, so name
-                    // it and the flag that would reach it.
-                    let other = outcome.elsewhere.unwrap_or(Scope::User);
-                    let hint = match other {
-                        Scope::Project => "use --local",
-                        Scope::User => "omit --local",
-                    };
-                    eprintln!(
-                        "error: no {} MCP server named {:?} in {}. It is defined in {other}; {hint}.",
+                Ok(outcome) if outcome.removed => {
+                    println!(
+                        "Removed {} MCP server {:?} from {}.",
                         scope_word(scope),
                         server,
-                        outcome.path.display(),
-                        other = scope_word(other)
+                        outcome.path.display()
+                    );
+                    exit::OK
+                }
+                Ok(outcome) => {
+                    // Nothing was removed. pi's shape: name the scope and the
+                    // file, then add the other-scope hint when the entry lives
+                    // there. A remove that removed nothing is a refusal, never
+                    // a success (gh #418 Phase F fix-up).
+                    let hint = match outcome.elsewhere {
+                        Some(Scope::Project) => " It is defined in project; use --local.",
+                        Some(Scope::User) => " It is defined in user; omit --local.",
+                        None => "",
+                    };
+                    eprintln!(
+                        "error: no {} MCP server named {:?} in {}.{hint} See what exists with: lca mcp list",
+                        scope_word(scope),
+                        server,
+                        outcome.path.display()
                     );
                     exit::INTERNAL
                 }

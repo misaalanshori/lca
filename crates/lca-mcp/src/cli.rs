@@ -135,7 +135,15 @@ pub struct RemoveOutcome {
     pub scope: Scope,
     /// The file that was checked.
     pub path: PathBuf,
-    /// `Some(source)` when the server exists in the *other* scope, so the
+    /// Whether this call actually removed an entry.
+    ///
+    /// gh #418 Phase F fix-up: the CLI used to read `elsewhere.is_none()` as
+    /// "removed", so a server present in *neither* scope returned
+    /// `elsewhere: None` and the command claimed `Removed …` with exit 0. The
+    /// distinction has to be a field, not an inference from another field's
+    /// absence.
+    pub removed: bool,
+    /// `Some(scope)` when the server exists in the *other* scope, so the
     /// caller can print the `--local` hint the spec requires.
     pub elsewhere: Option<Scope>,
 }
@@ -319,6 +327,7 @@ impl CliMcp {
             return Ok(RemoveOutcome {
                 scope,
                 path,
+                removed: true,
                 elsewhere: None,
             });
         }
@@ -330,6 +339,7 @@ impl CliMcp {
         Ok(RemoveOutcome {
             scope,
             path,
+            removed: false,
             elsewhere,
         })
     }

@@ -33,8 +33,17 @@ enum Tree {
 #[cfg(unix)]
 pub(crate) fn kill_process_group(pgid: u32) {
     if pgid > 1 {
+        // Silence both pipes: a group that already exited is the *common*
+        // case here (the child died on its own, and teardown still runs), and
+        // `/bin/kill` prints `kill: (-1234): No such process` on stderr for
+        // it. That line leaked into `lca mcp list`'s output once
+        // (gh #418 Phase F fix-up) - a teardown detail is not the user's
+        // business, and the exit status is deliberately discarded anyway.
         let _ = std::process::Command::new("/bin/kill")
             .args(kill_group_argv(pgid))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
     }
 }

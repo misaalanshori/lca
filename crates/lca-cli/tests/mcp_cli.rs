@@ -591,3 +591,117 @@ fn an_empty_credential_file_reads_as_no_credentials() {
         common::stdout(&output)
     );
 }
+
+// Verifies: gh #418 Phase F fix-up - `remove` on a server that exists in
+// **neither** scope is a named refusal, exit 1, claiming nothing. The first
+// version read "no `elsewhere`" as "removed", so a remove that removed nothing
+// printed `Removed …` and exited 0.
+#[test]
+fn removing_a_missing_server_claims_nothing_and_exits_one() {
+    let sandbox = sandbox("mcp-remove-missing");
+    let output = mcp(&sandbox, &["remove", "ghost"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a remove that removed nothing must fail: stdout={} stderr={}",
+        common::stdout(&output),
+        common::stderr(&output)
+    );
+    let combined = common::stdout(&output) + &common::stderr(&output);
+    assert!(
+        !combined.contains("Removed"),
+        "nothing was removed, so nothing may claim it was: {combined}"
+    );
+    assert!(
+        combined.contains("ghost"),
+        "the refusal names the server: {combined}"
+    );
+    // The copy tells the user what to do (the jargon purge: an error says the
+    // next action, not the subsystem's internal name).
+    assert!(
+        combined.contains("lca mcp list"),
+        "the refusal names the command that shows what exists: {combined}"
+    );
+    // Neither file was created by a refused remove.
+    assert!(!sandbox.home.join(".lca/mcp.json").is_file());
+    assert!(!sandbox.project().join(".lca/mcp.json").is_file());
+}
+
+// Verifies: gh #418 Phase F fix-up - the `--local`-shaped scopes each refuse a
+// missing server the same way (the user-scope case above, the project scope
+// here), so neither direction can regress alone.
+#[test]
+fn removing_a_missing_server_with_local_also_exits_one() {
+    let sandbox = sandbox("mcp-remove-missing-local");
+    let output = mcp(&sandbox, &["remove", "ghost", "--local"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        common::stdout(&output),
+        common::stderr(&output)
+    );
+    let combined = common::stdout(&output) + &common::stderr(&output);
+    assert!(!combined.contains("Removed"), "{combined}");
+    assert!(combined.contains("ghost"), "{combined}");
+}
+
+// Verifies: gh #418 Phase F fix-up - the §3.3 cross-scope case: absent from the
+// target scope but present in the other one, so the refusal names that scope
+// and the flag that would reach it, exit 1, and removes nothing.
+#[test]
+fn removing_a_server_that_lives_only_in_the_other_scope_hints_and_exits_one() {
+    // Both up front, and qualified: the first binding shadows the `sandbox`
+    // function for the rest of the scope.
+    let sandbox = common::sandbox("mcp-remove-only-elsewhere");
+    let mirror_box = common::sandbox("mcp-remove-only-elsewhere-mirror");
+    // The entry lives in the PROJECT file, so a user-scope remove must point
+    // at `--local`.
+    let added = mcp(&sandbox, &["add", "local-only", "--local", "--", "true"]);
+    assert_eq!(added.status.code(), Some(0), "{}", common::stderr(&added));
+    let project_file = sandbox.project().join(".lca/mcp.json");
+    let before = std::fs::read_to_string(&project_file).expect("read");
+
+    let output = mcp(&sandbox, &["remove", "local-only"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the entry is in the other scope: stdout={} stderr={}",
+        common::stdout(&output),
+        common::stderr(&output)
+    );
+    let text = common::stderr(&output);
+    assert!(
+        text.contains("use --local"),
+        "the hint names the flag that would work: {text}"
+    );
+    assert!(
+        !common::stdout(&output).contains("Removed"),
+        "nothing was removed: {}",
+        common::stdout(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&project_file).expect("read"),
+        before,
+        "the other scope's file is untouched"
+    );
+
+    // And the mirror: a project-scope remove of a user-scope entry says
+    // `omit --local`.
+    let added = mcp(&mirror_box, &["add", "user-only", "--", "true"]);
+    assert_eq!(added.status.code(), Some(0), "{}", common::stderr(&added));
+    let user_file = mirror_box.home.join(".lca/mcp.json");
+    let before = std::fs::read_to_string(&user_file).expect("read");
+    let output = mcp(&mirror_box, &["remove", "user-only", "--local"]);
+    assert_eq!(output.status.code(), Some(1), "{}", common::stdout(&output));
+    assert!(
+        common::stderr(&output).contains("omit --local"),
+        "{}",
+        common::stderr(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&user_file).expect("read"),
+        before,
+        "the user file is untouched"
+    );
+}
