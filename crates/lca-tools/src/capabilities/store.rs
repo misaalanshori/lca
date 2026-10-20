@@ -29,6 +29,15 @@ impl Capabilities {
 
     fn load_credentials(&self, path: &Path) -> Result<serde_json::Value, CapabilityError> {
         match std::fs::read_to_string(path) {
+            // An empty file means "nothing stored yet", not corruption: a
+            // store created but not yet written, or a crash between the
+            // create and the first `set`, leaves exactly this. Treating it as
+            // corrupt made every later read fail until the user deleted the
+            // file by hand (gh #418 Phase F caught it on macOS CI, where a
+            // `lca mcp login` raced its own credential write).
+            Ok(text) if text.trim().is_empty() => {
+                Ok(serde_json::Value::Object(serde_json::Map::new()))
+            }
             Ok(text) => serde_json::from_str(&text)
                 .map_err(|err| CapabilityError::Io(format!("credential store corrupt: {err}"))),
             // Absence means "no login yet", not an error.

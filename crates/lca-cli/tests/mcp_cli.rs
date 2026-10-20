@@ -528,3 +528,35 @@ fn removing_a_server_never_spawns_it() {
         "`remove` never spawns the server it is deleting"
     );
 }
+
+// Verifies: gh #418 Phase F - an empty credential file means "nothing stored
+// yet", not corruption. macOS CI produced exactly this during a `login` (a
+// store created but not yet written), and the old reader turned it into a
+// permanent "credential store corrupt" error that made every later sign-in
+// fail until the file was deleted by hand.
+#[test]
+fn an_empty_credential_file_reads_as_no_credentials() {
+    let sandbox = sandbox("mcp-empty-credentials");
+    let credentials = sandbox.home.join(".lca/credentials");
+    std::fs::create_dir_all(&credentials).expect("mkdir");
+    std::fs::write(credentials.join("mcp.json"), "").expect("write empty store");
+    let added = mcp(
+        &sandbox,
+        &["add", "remote", "--url", "https://example.invalid/mcp"],
+    );
+    assert_eq!(added.status.code(), Some(0), "{}", common::stderr(&added));
+    // `logout` reads the store before clearing it: with the old reader this
+    // failed with "credential store corrupt".
+    let output = mcp(&sandbox, &["logout", "remote"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an empty store is nothing stored, not corruption: {}",
+        common::stderr(&output)
+    );
+    assert!(
+        common::stdout(&output).contains("No stored credentials"),
+        "{}",
+        common::stdout(&output)
+    );
+}
