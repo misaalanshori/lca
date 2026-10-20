@@ -9,6 +9,15 @@
 
 use lca_registry::models::{self, Catalog, ModelDetails, parse_catalog};
 
+// The build script's decision logic, included rather than duplicated so the
+// rule "a CI build never fetches" is asserted against the code that runs
+// (gh #260 fix-up). Only `std` in there, so it compiles unchanged as a test
+// module.
+#[allow(dead_code, missing_docs)]
+mod build_support {
+    include!("../build_support.rs");
+}
+
 /// A three-provider fixture shaped exactly like the stripped artifact.
 fn fixture() -> Catalog {
     parse_catalog(
@@ -220,4 +229,168 @@ fn a_row_without_rates_still_reports_its_limit() {
         details.rates().is_none(),
         "no cost block means no billable number"
     );
+}
+
+// ---------------------------------------------------------------------------
+// gh #260 fix-up: NFR-17's reproducible double build
+// ---------------------------------------------------------------------------
+//
+// The pipeline's double build (`.github/workflows/publish.yml`) runs two
+// independent `CARGO_TARGET_DIR`s on one fresh checkout and compares the two
+// binary hashes. Before this fix both builds missed the cache and both
+// fetched models.dev across a network boundary, so an upstream or CDN
+// difference between the two responses changed a compressed blob inside the
+// binary and failed the gate for a reason unrelated to the commit.
+//
+// Two mechanisms make it deterministic, and these rows pin both of them.
+// They drive the exact functions `build.rs` runs, rather than a copy of the
+// rules: `build.rs` and this test `include!` the same `build_support.rs`.
+
+use std::ffi::OsStr;
+use std::path::Path;
+
+/// `OsStr` from a string literal.
+fn os(value: &str) -> &OsStr {
+    OsStr::new(value)
+}
+
+// Verifies: gh #260 fix-up (NFR-17) - a CI build never reaches the network.
+//
+// `CI` and `GITHUB_ACTIONS` both mean "offline", in every combination, and
+// the result is the stub even when a perfectly good cache is sitting right
+// there: a cached artifact is per-checkout state, and a fresh release
+// checkout has none, so a rule that trusted it would behave differently on
+// the pipeline than on a developer's machine.
+#[test]
+fn a_ci_build_chooses_the_stub_and_never_the_network() {
+    use build_support::{Origin, choose, in_ci};
+
+    assert!(in_ci(Some(os("1")), None), "CI alone is enough");
+    assert!(
+        in_ci(None, Some(os("true"))),
+        "GITHUB_ACTIONS alone is enough"
+    );
+    assert!(in_ci(Some(os("true")), Some(os("true"))));
+    assert!(!in_ci(None, None), "no marker, no CI");
+    assert!(
+        !in_ci(Some(os("false")), None),
+        "CI=false means what it says"
+    );
+    assert!(!in_ci(Some(os("0")), None));
+
+    for ci in [true] {
+        // Every CI combination lands on the stub, with or without a cache
+        // and with or without a refresh request.
+        for (refresh, cache_ok) in [(false, true), (false, false), (true, true), (true, false)] {
+            assert_eq!(
+                choose(false, false, ci, refresh, cache_ok),
+                Origin::Stub,
+                "a CI build resolves to the stub (refresh={refresh}, cache_ok={cache_ok})"
+            );
+        }
+        // And `refresh` in CI still cannot reach the network.
+        assert_ne!(choose(false, false, ci, true, false), Origin::Network);
+    }
+
+    // The development path is unchanged: cache, then network.
+    assert_eq!(choose(false, false, false, false, true), Origin::Cache);
+    assert_eq!(choose(false, false, false, false, false), Origin::Network);
+    assert_eq!(
+        choose(false, false, false, true, true),
+        Origin::Network,
+        "refresh ignores a warm cache"
+    );
+    // An explicit offline switch wins over the cache outside CI too.
+    assert_eq!(choose(false, true, false, false, true), Origin::Stub);
+    // A usable pinned input beats everything.
+    for (offline, ci) in [(false, false), (true, false), (false, true), (true, true)] {
+        assert_eq!(
+            choose(true, offline, ci, false, true),
+            Origin::Pinned,
+            "a pinned input is used even offline and in CI (offline={offline}, ci={ci})"
+        );
+    }
+}
+
+// Verifies: gh #260 fix-up (NFR-17) - the cache lives where the build is.
+//
+// The defect this row was written for: `build.rs` hard-coded
+// `<workspace>/target`, so a build that set `CARGO_TARGET_DIR` (the release
+// job's `target/repro-a` / `target/repro-b`, or any `--target-dir` user)
+// never found its own cache and refetched every time.
+#[test]
+fn the_cache_follows_the_target_dir() {
+    use build_support::{CACHE_FILE, cache_path};
+
+    let workspace = Path::new("/src");
+
+    // Unset: the conventional workspace target.
+    assert_eq!(
+        cache_path(None, workspace),
+        Path::new("/src/target").join(CACHE_FILE)
+    );
+    // Empty is the same as unset (cargo treats it that way).
+    assert_eq!(
+        cache_path(Some(os("")), workspace),
+        Path::new("/src/target").join(CACHE_FILE)
+    );
+    // The release job's shape: a relative target dir resolves at the
+    // workspace root, which is the working directory there.
+    assert_eq!(
+        cache_path(Some(os("target/repro-a")), workspace),
+        Path::new("/src/target/repro-a").join(CACHE_FILE)
+    );
+    assert_eq!(
+        cache_path(Some(os("target/repro-b")), workspace),
+        Path::new("/src/target/repro-b").join(CACHE_FILE)
+    );
+    // An absolute one stands as written.
+    assert_eq!(
+        cache_path(Some(os("/build/t")), workspace),
+        Path::new("/build/t").join(CACHE_FILE)
+    );
+    // Two distinct target dirs get two distinct caches: this is exactly why
+    // they cannot share one through the network, and why CI uses the stub.
+    assert_ne!(
+        cache_path(Some(os("target/repro-a")), workspace),
+        cache_path(Some(os("target/repro-b")), workspace)
+    );
+}
+
+// Verifies: gh #260 fix-up (NFR-17) - a CI build says what it shipped.
+//
+// The coverage cost is real: the stub is 13 models across 5 providers, not
+// models.dev's 9,075. A release built in CI must not report full coverage
+// silently, so the warning names the stub and the way to pin the full
+// catalog.
+#[test]
+fn the_ci_warning_names_the_stub_and_the_pin() {
+    use build_support::{Origin, warning};
+
+    let line = warning(Origin::Stub, true);
+    assert!(line.contains("CI build"), "{line}");
+    assert!(line.contains("stub"), "{line}");
+    assert!(line.contains("NFR-17"), "the reason is named: {line}");
+    assert!(
+        line.contains("LCA_MODELS_CATALOG"),
+        "the way out is named: {line}"
+    );
+    // Outside CI the same origin is not news.
+    let dev = warning(Origin::Stub, false);
+    assert!(!dev.contains("CI build"), "{dev}");
+}
+
+// Verifies: gh #260 fix-up (NFR-17) - the flags mean one thing.
+#[test]
+fn a_flag_reads_the_shapes_ci_sets() {
+    use build_support::flag;
+
+    // The values GitHub Actions and a shell actually export.
+    for on in ["1", "true", "TRUE", "yes", "anything"] {
+        assert!(flag(Some(os(on))), "{on} is on");
+    }
+    for off in ["", "0", "false", "FALSE", "no"] {
+        assert!(!flag(Some(os(off))), "{off:?} is off");
+    }
+    assert!(!flag(None), "unset is off");
 }

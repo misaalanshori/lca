@@ -21,6 +21,16 @@ Dates are UTC.
   model's context window; `lca_registry::models` and
   `lca_core::catalog_context_window` expose it, and the provider
   extension's own window resolution is the remaining place to wire it.
+
+  **A CI-built binary carries the checked-in stub catalog, not models.dev**
+  (13 models across 5 providers: `openai`, `anthropic`, `google`, `deepseek`,
+  `groq`). A release build never fetches: NFR-17's reproducible double build
+  runs two independent `CARGO_TARGET_DIR` builds and compares hashes, so a
+  network fetch in either half could fail the gate on unrelated upstream
+  variance. Build with `LCA_MODELS_CATALOG=<api.json>` to embed the full
+  matrix; the two builds then read the same pinned file and stay
+  byte-identical. Developer builds still fetch and cache as before, at
+  `$CARGO_TARGET_DIR/models-catalog.json.gz`.
 - **`lca mcp add|remove|list|login|logout` manages servers from a shell**
   (gh #418 Phase F, gh #73; pi's `pi mcp`). The verbs work outside a session,
   so a script or an agent can run them through `bash`, and they are not gated

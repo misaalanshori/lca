@@ -81,7 +81,15 @@ def strip(document: dict) -> dict:
 def read_source(source: str, local: str | None) -> dict:
     if local:
         with open(local, "rb") as handle:
-            return json.load(handle)
+            raw = handle.read()
+        # Accept a gzipped input too. `LCA_MODELS_CATALOG` is used by release
+        # builds to pin the catalog, and a pinned artifact is most useful as
+        # the already-stripped ~134 KiB gzip rather than the raw 5.6 MB
+        # download - a gzip is what the build embeds, so pinning it removes
+        # the strip step from the reproducibility argument entirely.
+        if raw[:2] == b"\x1f\x8b":
+            raw = gzip.decompress(raw)
+        return json.loads(raw)
     request = urllib.request.Request(
         source,
         headers={"user-agent": "lca-build-catalog/1"},

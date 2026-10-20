@@ -6,42 +6,60 @@
 //! (FR-CFG-3 - the only outbound request the agent makes unasked is the
 //! update check).
 //!
+//! The decision logic lives in `build_support.rs`, which the test suite
+//! `include!`s too, so "a CI build never fetches" is a function with an
+//! assertion rather than a line nothing can call.
+//!
 //! ## Where the bytes come from, highest precedence first
 //!
 //! 1. `LCA_MODELS_CATALOG=<path>`: a local `api.json`-shaped file, stripped
-//!    through `scripts/sync-models-catalog.py`. This is how a release pins
-//!    the input.
-//! 2. `<workspace>/target/models-catalog.json.gz`: the cached fetch, reused
-//!    verbatim. NFR-17 requires a tagged commit to build byte-identically,
-//!    and the network is not reproducible - so the first build in a checkout
-//!    fetches once and every later build (including the second half of the
-//!    pipeline's double build) reuses the same bytes. Delete the file, or set
-//!    `LCA_MODELS_CATALOG_REFRESH=1`, to refresh it.
-//! 3. The network, through the same script, which then fills the cache.
-//! 4. `resources/models_stub.json`, the checked-in fallback. Uncompressed on
-//!    purpose: `models::embedded` sniffs the gzip magic, so the build needs no
-//!    compression dependency of its own.
+//!    through `scripts/sync-models-catalog.py`.
+//! 2. **Nothing, when the build is in CI** (`CI` or `GITHUB_ACTIONS` set):
+//!    the checked-in `resources/models_stub.json`, with a warning that names
+//!    the coverage cost. A release build must be a function of its commit,
+//!    and the network is not.
+//! 3. `$CARGO_TARGET_DIR/models-catalog.json.gz` (else `<workspace>/target/`):
+//!    the cached development fetch, reused verbatim.
+//! 4. The network, through the same script, which then fills that cache.
+//! 5. `resources/models_stub.json`.
 //!
-//! `LCA_MODELS_CATALOG_OFFLINE=1` skips the network and the cache entirely
-//! and goes straight to the stub.
+//! ## Why the CI arm exists (NFR-17)
+//!
+//! `.github/workflows/publish.yml`'s reproducible double build runs two
+//! independent `CARGO_TARGET_DIR`s (`target/repro-a`, `target/repro-b`) on one
+//! fresh checkout and compares the two binary hashes. Neither sees a cache, so
+//! without this arm both would fetch `models.dev` across a network boundary,
+//! and any upstream or CDN difference between the two responses would change a
+//! compressed blob inside the binary - failing the gate for a reason that has
+//! nothing to do with the commit. Under CI the catalog is therefore the stub,
+//! deterministically.
+//!
+//! `LCA_MODELS_CATALOG=<path>` remains the way a release that wants the full
+//! catalog gets it: pinned input, same bytes both times. The file may be the
+//! raw `api.json` or the already-stripped gzip, so a release can commit the
+//! ~134 KiB artifact and pin it, and no step of its build touches a network.
+//!
+//! ## The developer path
+//!
+//! A local, non-CI build still fetches once and caches. `LCA_MODELS_CATALOG_OFFLINE=1`
+//! skips the network and the cache; `LCA_MODELS_CATALOG_REFRESH=1` refetches
+//! over the cached copy.
 //!
 //! Every failure warns and lands on a lower rung. A missing network is never a
 //! build failure: `cargo check` and the suite run offline (acceptance 6).
 
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The catalog size ceiling (acceptance 2). A fetch that strips to more than
-/// this falls back to the stub rather than growing the binary past NFR-1.
-const MAX_GZIP_BYTES: u64 = 200 * 1024;
-
-const SOURCE: &str = "https://models.dev/api.json";
+include!("build_support.rs");
 
 fn main() {
     for key in [
         "LCA_MODELS_CATALOG",
         "LCA_MODELS_CATALOG_OFFLINE",
         "LCA_MODELS_CATALOG_REFRESH",
+        "CARGO_TARGET_DIR",
+        "CI",
+        "GITHUB_ACTIONS",
     ] {
         println!("cargo:rerun-if-env-changed={key}");
     }
@@ -49,9 +67,14 @@ fn main() {
     let manifest_dir = PathBuf::from(
         std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| PathBuf::from(".").into()),
     );
-    let sync = manifest_dir.join("../../scripts/sync-models-catalog.py");
+    let workspace = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| manifest_dir.clone());
+    let sync = workspace.join("scripts/sync-models-catalog.py");
     let stub = manifest_dir.join("resources/models_stub.json");
-    let cache = manifest_dir.join("../../target/models-catalog.json.gz");
+    let cache = cache_path(std::env::var_os("CARGO_TARGET_DIR").as_deref(), &workspace);
     println!("cargo:rerun-if-changed={}", sync.display());
 
     // The artifact path is always OUT_DIR, so a byte-identical catalog still
@@ -62,59 +85,58 @@ fn main() {
     };
     let artifact = out_dir.join("models_catalog.json.gz");
 
-    if let Some(path) = std::env::var_os("LCA_MODELS_CATALOG").map(PathBuf::from) {
-        if strip(&sync, &path, &artifact) && within_ceiling(&artifact) {
-            embed(&artifact, "LCA_MODELS_CATALOG");
-            return;
-        }
-        println!(
-            "cargo:warning=cannot strip {}; falling back",
-            path.display()
-        );
+    let ci = in_ci(
+        std::env::var_os("CI").as_deref(),
+        std::env::var_os("GITHUB_ACTIONS").as_deref(),
+    );
+    let offline = flag(std::env::var_os("LCA_MODELS_CATALOG_OFFLINE").as_deref());
+    let refresh = flag(std::env::var_os("LCA_MODELS_CATALOG_REFRESH").as_deref());
+
+    // A pinned input the build cannot use is a warning, not a silent downgrade
+    // to the stub: a release that pinned something needs to know.
+    let pinned_path = std::env::var_os("LCA_MODELS_CATALOG").map(PathBuf::from);
+    let pinned = match &pinned_path {
+        Some(path) => strip(&sync, path, &artifact) && within_ceiling(&artifact),
+        None => false,
+    };
+    if pinned_path.is_some() && !pinned {
+        println!("cargo:warning=cannot use LCA_MODELS_CATALOG; falling through to the next source");
     }
 
-    if !offline() {
-        if !refresh() && within_ceiling(&cache) {
-            embed(&cache, "the cached fetch");
-            return;
-        }
-        if fetch(&sync, &artifact) && within_ceiling(&artifact) {
-            // Fill the cache for the next build; a failed copy is harmless.
+    let origin = choose(pinned, offline, ci, refresh, within_ceiling(&cache));
+    println!("cargo:warning={}", warning(origin, ci));
+
+    let embed_from = match origin {
+        Origin::Pinned => Some(artifact.clone()),
+        Origin::Stub => Some(stub.clone()),
+        Origin::Cache => Some(cache.clone()),
+        Origin::Network => fetch(&sync, &artifact).then(|| {
             if std::fs::copy(&artifact, &cache).is_err() {
                 println!(
                     "cargo:warning=cannot cache the catalog at {}; the next build will refetch",
                     cache.display()
                 );
             }
-            embed(&artifact, "models.dev");
-            return;
+            artifact.clone()
+        }),
+    };
+
+    // A rung that produced nothing usable falls to the stub, and says so.
+    let embed_from = match embed_from.filter(|path| path.is_file()) {
+        Some(path) => path,
+        None => {
+            if origin != Origin::Stub {
+                println!(
+                    "cargo:warning=no usable catalog; the model catalog stays on the checked-in stub"
+                );
+            }
+            stub.clone()
         }
-        println!("cargo:warning=no usable catalog from models.dev; staying on the stub");
-    } else {
-        println!(
-            "cargo:warning=LCA_MODELS_CATALOG_OFFLINE is set; the model catalog stays on the stub"
-        );
-    }
-
-    if !stub.is_file() {
-        println!(
-            "cargo:warning={} is missing; the catalog is empty",
-            stub.display()
-        );
-        return;
-    }
-    embed(&stub, "the stub");
-}
-
-fn embed(path: &Path, origin: &str) {
-    println!("cargo:rustc-env=LCA_MODELS_CATALOG_GZIP={}", path.display());
-    match std::fs::metadata(path) {
-        Ok(meta) => println!(
-            "cargo:warning=model catalog embedded from {origin} ({} bytes)",
-            meta.len()
-        ),
-        Err(err) => println!("cargo:warning=model catalog from {origin} is unreadable ({err})"),
-    }
+    };
+    println!(
+        "cargo:rustc-env=LCA_MODELS_CATALOG_GZIP={}",
+        embed_from.display()
+    );
 }
 
 fn within_ceiling(path: &Path) -> bool {
@@ -130,21 +152,6 @@ fn within_ceiling(path: &Path) -> bool {
         }
         Err(_) => false,
     }
-}
-
-fn offline() -> bool {
-    flag("LCA_MODELS_CATALOG_OFFLINE")
-}
-
-fn refresh() -> bool {
-    flag("LCA_MODELS_CATALOG_REFRESH")
-}
-
-fn flag(name: &str) -> bool {
-    std::env::var_os(name).is_some_and(|value| {
-        let value = value.to_string_lossy().to_ascii_lowercase();
-        !matches!(value.as_str(), "" | "0" | "false" | "no")
-    })
 }
 
 /// Strip a local `api.json`-shaped file into `out`.
