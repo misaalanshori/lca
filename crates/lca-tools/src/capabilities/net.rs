@@ -203,7 +203,14 @@ impl Capabilities {
         let adhoc_hit = adhoc.iter().find(|p| p.matches_host(&host));
         if let Some(pattern) = declared_hit.or(adhoc_hit) {
             let is_adhoc = adhoc_hit.is_some();
+            // A bracketed IPv6 literal (`[::1]`, how a URL spells one) has to
+            // lose its brackets before it can be parsed as an address; without
+            // that, a loopback IdP reached as `http://[::1]:PORT` was refused
+            // plain http even though `localhost` was granted (gh #418 Phase D,
+            // found by the portable-host fallback in the two-host test).
             let local_named = host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
                 .parse::<IpAddr>()
                 .map(is_local_address)
                 .unwrap_or(false)

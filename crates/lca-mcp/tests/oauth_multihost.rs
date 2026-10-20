@@ -15,8 +15,7 @@
 //! **Two hosts here, not two ports**: a `NetPattern` names a host, not a
 //! `host:port` pair, so `127.0.0.1:18980` and `127.0.0.1:18981` would both be
 //! covered by one `127.0.0.1` grant and the defect could not be expressed.
-//! `127.0.0.1` (the MCP server) and `127.0.0.2` (the identity provider) are
-//! distinct hosts, both loopback, so `http://` is legal for both.
+//! Both hosts are loopback, so plain `http://` is legal for both (RFC 8252).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
@@ -40,6 +39,25 @@ impl PermissionPrompt for Allow {
 
 /// A recorded request: method, path, raw headers, body.
 type Recorded = (String, String, String, String);
+
+/// The second loopback host to use for the IdP.
+///
+/// Two *hosts* are required (a `NetPattern` names a host, not a host:port
+/// pair), but which second host is bindable is platform-dependent: Linux
+/// accepts the whole 127.0.0.0/8, while macOS accepts `127.0.0.1` and
+/// `localhost` only (`EADDRNOTAVAIL` for `127.0.0.2`, which is how CI run
+/// 39342838847 found this). `localhost` and `127.0.0.1` are distinct host
+/// strings that both resolve to loopback, so `http://` is legal for both and
+/// the capability engine treats them as separate grants.
+fn second_host() -> &'static str {
+    for candidate in ["127.0.0.2", "localhost"] {
+        if let Ok(listener) = std::net::TcpListener::bind((candidate, 0)) {
+            drop(listener);
+            return candidate;
+        }
+    }
+    "localhost"
+}
 
 /// One raw-TCP host. Raw TCP rather than a real HTTP server because that is
 /// the shape `tests/common.rs` established and the engine speaks plain
@@ -122,10 +140,10 @@ fn host(
 
 /// A pattern rendered for an assertion message.
 fn describe(pattern: &lca_permissions::NetPattern) -> String {
-    // The pattern's own matching is what matters; a host probe recovers the
-    // text without widening the public API for a test.
-    let candidates = ["127.0.0.2", "127.0.0.1", "localhost"];
-    for candidate in candidates {
+    // A host probe recovers the text without widening the public API for a
+    // test. Both the MCP host and the dynamically chosen IdP host are probed,
+    // so an assertion can tell them apart on any platform.
+    for candidate in ["127.0.0.1", second_host(), "localhost"] {
         if pattern.matches_host(candidate) {
             return candidate.to_string();
         }
@@ -206,7 +224,7 @@ fn mcp_host(idp_base: &str) -> Host {
 /// host. `metadata_base` lets a row point discovery somewhere else (the
 /// scheme-validation rows do).
 fn idp_host(metadata_base: Option<&'static str>) -> Host {
-    host("127.0.0.2", move |path, _headers, base| {
+    host(second_host(), move |path, _headers, base| {
         let named = metadata_base.unwrap_or(base);
         if path.contains("oauth-protected-resource") {
             return (
@@ -312,6 +330,14 @@ fn the_401_challenge_survives_to_discovery() {
 // fetch was denied by the one-host grant.
 #[test]
 fn a_sign_in_reaches_an_authorization_server_on_another_host() {
+    // The premise of every row in this file: two *distinct* host strings, both
+    // loopback. A platform where they collapsed would make the cross-host
+    // rows prove nothing, so it is asserted rather than assumed.
+    assert_ne!(
+        second_host(),
+        "127.0.0.1",
+        "the IdP must be a different host string than the MCP server"
+    );
     let idp = idp_host(None);
     let mcp = mcp_host(&idp.base);
     let (caps, _root) = engine("cross-host", &["127.0.0.1"]);
@@ -419,8 +445,13 @@ fn an_oauth_flow_host_does_not_survive_into_tool_traffic() {
         !during.is_empty(),
         "the flow admitted at least one discovered host while it ran"
     );
+    // `localhost` may surface as its resolved `[::1]` spelling: the flow's
+    // grant is keyed by what the URL said, and a URL may name either. Accept
+    // both forms of the same host.
     assert!(
-        during.iter().any(|host| host.contains("127.0.0.2")),
+        during
+            .iter()
+            .any(|host| host.contains(second_host()) || host.contains("::1")),
         "the authorization server's host was among them: {during:?}"
     );
     assert!(
@@ -442,7 +473,7 @@ fn an_oauth_flow_host_does_not_survive_into_tool_traffic() {
     // And nothing about the IdP host reached the user's grant store.
     let grants_text = std::fs::read_to_string(root.join("grants.json")).unwrap_or_default();
     assert!(
-        !grants_text.contains("127.0.0.2"),
+        !grants_text.contains(second_host()),
         "the flow host was never persisted: {grants_text}"
     );
 }
