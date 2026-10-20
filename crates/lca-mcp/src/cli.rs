@@ -145,8 +145,12 @@ pub struct RemoveOutcome {
 /// Built by [`CliMcp::open`], which is the single entry point every verb uses;
 /// the CLI never assembles its own file paths or grants, so the `/mcp`
 /// interface and the shell cannot drift.
+///
+/// `manager` is `None` for the file-only verbs (`add`, `remove`): connecting a
+/// server to delete its config line would spawn a process for no reason, and
+/// the drop would then have to kill it.
 pub struct CliMcp {
-    manager: McpManager,
+    manager: Option<McpManager>,
     user_path: PathBuf,
     project_path: PathBuf,
     cwd: PathBuf,
@@ -166,15 +170,32 @@ impl CliMcp {
         cwd: &Path,
         trusted: bool,
     ) -> CliMcp {
-        let loaded = load_entries(data_dir, cwd, trusted);
+        Self::open_inner(Some(caps), data_dir, cwd, trusted)
+    }
+
+    /// Open without a manager: the file-only verbs (`add`, `remove`) never
+    /// touch a server, so they neither spawn one nor build an engine.
+    pub fn open_files_only(data_dir: &Path, cwd: &Path, trusted: bool) -> CliMcp {
+        Self::open_inner(None, data_dir, cwd, trusted)
+    }
+
+    fn open_inner(
+        caps: Option<std::sync::Arc<lca_tools::Capabilities>>,
+        data_dir: &Path,
+        cwd: &Path,
+        trusted: bool,
+    ) -> CliMcp {
         let user_path = user_config_path(data_dir);
         let project_path = project_config_path(cwd);
-        let manager = McpManager::load(
-            caps,
-            user_path.clone(),
-            trusted.then(|| project_path.clone()),
-            loaded.entries,
-        );
+        let manager = caps.map(|caps| {
+            let loaded = load_entries(data_dir, cwd, trusted);
+            McpManager::load(
+                caps,
+                user_path.clone(),
+                trusted.then(|| project_path.clone()),
+                loaded.entries,
+            )
+        });
         CliMcp {
             manager,
             user_path,
@@ -184,9 +205,16 @@ impl CliMcp {
         }
     }
 
-    /// The manager (the tests' seam; the CLI uses the named verbs below).
-    pub fn manager(&self) -> &McpManager {
-        &self.manager
+    /// The manager, for the verbs that need connections.
+    fn manager(&self) -> Result<&McpManager, String> {
+        self.manager
+            .as_ref()
+            .ok_or_else(|| "this command does not connect to any server".to_string())
+    }
+
+    /// The manager (the tests' seam).
+    pub fn manager_opt(&self) -> Option<&McpManager> {
+        self.manager.as_ref()
     }
 
     /// The path a verb writes for `scope`.
@@ -209,6 +237,9 @@ impl CliMcp {
 
     /// Add or replace one server (gh #418 Phase F, pi's `add`).
     ///
+    /// File-only: no server is contacted and none is spawned, which is why
+    /// [`CliMcp::open_files_only`] is the right constructor for it.
+    ///
     /// Refuses a spec that names both transports or neither, and refuses an
     /// option that only applies to the other transport — pi's rule, and the
     /// reason the error text names the transport rather than the flag.
@@ -223,7 +254,7 @@ impl CliMcp {
         if let (Some(secret), Some(config)) =
             (spec.oauth_client_secret.as_deref(), entry.http_config())
         {
-            crate::TokenStore::new(self.caps(), &config).set_client_secret(secret)?;
+            crate::TokenStore::new(self.caps()?, &config).set_client_secret(secret)?;
         }
         Ok(AddOutcome {
             path,
@@ -276,10 +307,11 @@ impl CliMcp {
     /// Each server already connects on its own worker (gh #418 Phase E), so
     /// "in parallel" is structural here rather than something this function
     /// arranges.
-    pub fn list(&self, budget: std::time::Duration) -> ListReport {
-        self.manager.wait_until_settled(budget);
-        let statuses = self.manager.bridge().statuses();
-        let entries = self.manager.entries();
+    pub fn list(&self, budget: std::time::Duration) -> Result<ListReport, String> {
+        let manager = self.manager()?;
+        manager.wait_until_settled(budget);
+        let statuses = manager.bridge().statuses();
+        let entries = manager.entries();
         let servers = statuses
             .iter()
             .map(|status| {
@@ -301,8 +333,7 @@ impl CliMcp {
                     .unwrap_or_default();
                 let (state, error, tools) = match &status.state {
                     crate::ServerStateKind::Connected => {
-                        let tools = self
-                            .manager
+                        let tools = manager
                             .bridge()
                             .tool_specs()
                             .map(|specs| {
@@ -350,10 +381,10 @@ impl CliMcp {
                 }
             })
             .collect();
-        ListReport {
+        Ok(ListReport {
             servers,
             errors: Vec::new(),
-        }
+        })
     }
 
     /// Load warnings (invalid entries are reported and skipped, never fatal).
@@ -367,14 +398,13 @@ impl CliMcp {
     /// the redirect-URL paste fallback lives in the flow itself so a headless
     /// or SSH run can still complete (FR-PROV-4's manual delivery seam).
     pub fn login(&self, name: &str, budget: std::time::Duration) -> Result<LoginOutcome, String> {
-        let entry = self
-            .manager
+        let manager = self.manager()?;
+        let entry = manager
             .entries()
             .into_iter()
             .find(|entry| entry.name == name)
             .ok_or_else(|| {
-                let configured: Vec<String> = self
-                    .manager
+                let configured: Vec<String> = manager
                     .entries()
                     .into_iter()
                     .map(|entry| entry.name)
@@ -403,14 +433,14 @@ impl CliMcp {
         }
         // Capture the challenge first, so RFC 9728 discovery has the hint a
         // 401 supplies (gh #418 Phase D's threading).
-        let _ = crate::remote::remember_unauthorized(&self.caps(), &config, &config.url);
+        let _ = crate::remote::remember_unauthorized(&self.caps()?, &config, &config.url);
         let deadline = std::time::Instant::now() + budget;
-        crate::sign_in(self.caps(), &config)?;
-        let auth_url = self.caps().oauth_opened().last().cloned();
+        crate::sign_in(self.caps()?, &config)?;
+        let auth_url = self.caps()?.oauth_opened().last().cloned();
         if auth_url.is_none() {
             return Err("the sign-in published no authorization URL".to_string());
         }
-        self.manager.drain_landed();
+        manager.drain_landed();
         let _ = deadline;
         let tools = self.tool_count(name);
         Ok(LoginOutcome { auth_url, tools })
@@ -418,8 +448,8 @@ impl CliMcp {
 
     /// Delete one server's stored OAuth credentials.
     pub fn logout(&self, name: &str) -> Result<LogoutOutcome, String> {
-        let entry = self
-            .manager
+        let manager = self.manager()?;
+        let entry = manager
             .entries()
             .into_iter()
             .find(|entry| entry.name == name)
@@ -429,7 +459,7 @@ impl CliMcp {
                 "MCP server {name:?} is a stdio server, which stores no credentials"
             ));
         };
-        let store = crate::TokenStore::new(self.caps(), &config);
+        let store = crate::TokenStore::new(self.caps()?, &config);
         let had = store.load()?.is_some();
         store.clear()?;
         Ok(LogoutOutcome { had })
@@ -438,13 +468,16 @@ impl CliMcp {
     /// The capabilities the manager's engine runs with (the sign-in paths need
     /// the same engine the session uses, so a flow host grant lands where the
     /// session would have put it).
-    fn caps(&self) -> std::sync::Arc<lca_tools::Capabilities> {
-        self.manager.caps()
+    fn caps(&self) -> Result<std::sync::Arc<lca_tools::Capabilities>, String> {
+        self.manager().map(McpManager::caps)
     }
 
     /// How many tools one server currently lists.
     fn tool_count(&self, name: &str) -> usize {
-        self.manager
+        let Ok(manager) = self.manager() else {
+            return 0;
+        };
+        manager
             .bridge()
             .tool_specs()
             .map(|specs| {

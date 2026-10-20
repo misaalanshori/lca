@@ -356,7 +356,15 @@ fn the_verbs_ignore_the_enablement_record() {
     sandbox.approve_loopback_net(serde_json::json!({
         "extensions": { "mcp": false },
     }));
-    let added = mcp(&sandbox, &["add", "echo", "--", "true"]);
+    // `true` is not a portable executable (macOS has no such binary, and the
+    // failure there was a silently empty report). The row is about enablement,
+    // not spawning, so it uses the fixture and asserts only that the
+    // *configured* server is listed.
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let added = mcp(&sandbox, &["add", "echo", "--", "python3", &fixture()]);
     assert_eq!(
         added.status.code(),
         Some(0),
@@ -391,6 +399,11 @@ fn logout_refuses_a_stdio_server_with_a_named_reason() {
 // (the Phase D harness shape): an MCP server whose 401 names a
 // `resource_metadata` document on an *identity-provider* host signs in, and the
 // command reports the tool count afterwards.
+// Unix-only: the row stands in for a desktop browser with an `xdg-open`
+// shim and a loopback callback. Windows launches through a different path
+// (no `xdg-open`), so the row would wait out its own timeout there rather
+// than test anything.
+#[cfg(unix)]
 #[test]
 fn login_signs_in_against_an_identity_provider_on_another_host() {
     // The MCP host 401s with a challenge pointing at the IdP, and the IdP
@@ -465,5 +478,53 @@ fn login_signs_in_against_an_identity_provider_on_another_host() {
     assert!(
         credentials.contains("cli-access"),
         "the access token is stored: {credentials}"
+    );
+}
+
+// Verifies: gh #418 Phase F - a file-only verb never spawns the server it is
+// editing. The first version of `remove` opened a manager (which connects),
+// so deleting a server *started* it: the spawn-probe marker appeared, and on a
+// piped stdout the orphaned child could take the process down with SIGPIPE.
+#[test]
+fn removing_a_server_never_spawns_it() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let sandbox = sandbox("mcp-remove-no-spawn");
+    let marker = sandbox.root.join("spawns.txt");
+    let marker_env = marker.to_str().expect("utf8").to_string();
+    // The fixture writes the marker as its first statement, so its presence
+    // proves a spawn happened.
+    let added = sandbox.run_env(
+        None,
+        &["mcp", "add", "echo", "--", "python3", &fixture()],
+        &[("LCA_SPAWN_MARKER", marker_env.as_str())],
+    );
+    assert_eq!(added.status.code(), Some(0), "{}", common::stderr(&added));
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap_or_default(),
+        "",
+        "`add` writes config and starts nothing"
+    );
+    let removed = sandbox.run_env(
+        None,
+        &["mcp", "remove", "echo"],
+        &[("LCA_SPAWN_MARKER", marker_env.as_str())],
+    );
+    assert_eq!(
+        removed.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&removed)
+    );
+    // A background connect would land the marker *after* `remove` exits, so
+    // give a stray worker a moment before asserting: a guard that can only
+    // fail on a slow machine is not a guard.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap_or_default(),
+        "",
+        "`remove` never spawns the server it is deleting"
     );
 }

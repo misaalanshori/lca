@@ -119,7 +119,7 @@ pub(crate) fn run(cmd: &McpCmd, cwd: &Path, trusted: bool) -> i32 {
         }
         McpCmd::Remove { server, local } => {
             let scope = if *local { Scope::Project } else { Scope::User };
-            let cli = open(&data, cwd, trusted);
+            let cli = CliMcp::open_files_only(&data, cwd, trusted);
             match cli.remove(server, scope) {
                 Ok(outcome) => {
                     if outcome.elsewhere.is_none() {
@@ -155,7 +155,13 @@ pub(crate) fn run(cmd: &McpCmd, cwd: &Path, trusted: bool) -> i32 {
         }
         McpCmd::List { json } => {
             let cli = open(&data, cwd, trusted);
-            let report = cli.list(std::time::Duration::from_secs(LIST_WAIT_SECONDS));
+            let report = match cli.list(std::time::Duration::from_secs(LIST_WAIT_SECONDS)) {
+                Ok(report) => report,
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return exit::INTERNAL;
+                }
+            };
             let errors = cli.config_errors(&data);
             let report = ListReport { errors, ..report };
             if *json {
