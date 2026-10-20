@@ -29,6 +29,7 @@
 //! host drives; `remote` is the streamable-HTTP and OAuth path; `wire` is the
 //! pure wire-protocol kit (SSE envelope, JSON-RPC selector, base64).
 
+pub mod cli;
 pub mod config;
 pub mod manager;
 pub mod native;

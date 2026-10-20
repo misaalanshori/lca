@@ -382,13 +382,20 @@ fn sign_in_flow(
         .as_ref()
         .and_then(|oauth| oauth.client_id.clone())
     {
-        Some(configured) => (
-            configured,
-            server
+        Some(configured) => {
+            // gh #418 Phase F: a secret `lca mcp add` stored lives in the
+            // credential namespace, not in `mcp.json`; the config file wins
+            // when it carries one (a hand-edited file is an explicit choice).
+            let from_config = server
                 .oauth
                 .as_ref()
-                .and_then(|oauth| oauth.client_secret.clone()),
-        ),
+                .and_then(|oauth| oauth.client_secret.clone());
+            let secret = match from_config {
+                Some(secret) => Some(secret),
+                None => TokenStore::new(caps.clone(), server).client_secret()?,
+            };
+            (configured, secret)
+        }
         None => register_client(caps.clone(), server, &meta, &redirect_uri, scope.as_deref())?,
     };
     let encode = percent_encode;

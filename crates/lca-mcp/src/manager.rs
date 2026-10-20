@@ -293,6 +293,15 @@ impl McpManager {
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// The capability engine this manager's bridge runs on.
+    ///
+    /// Exposed for the shell verbs (gh #418 Phase F): a `lca mcp login` must
+    /// drive the same engine a session would, or a flow host grant would land
+    /// somewhere the session never looks.
+    pub fn caps(&self) -> Arc<lca_tools::Capabilities> {
+        self.caps.clone()
+    }
+
     /// The bridge handle the registry serves.
     pub fn bridge(&self) -> Arc<crate::McpBridge> {
         self.bridge.clone()

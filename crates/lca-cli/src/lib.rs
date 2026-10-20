@@ -60,9 +60,28 @@ pub mod sigpipe;
 
 pub use headless::{HeadlessSink, exit_code, headless};
 pub use rpc::rpc;
+/// Whether this run treats the project as trusted, for the MCP shell verbs.
+///
+/// `--approve` and `--no-approve` win (FR-PERM-9's per-run forms); otherwise
+/// the persisted record decides. A store that cannot be opened is treated as
+/// untrusted, which is the safe direction: the project's `mcp.json` stays
+/// inert rather than silently participating.
+pub(crate) fn mcp_cli_trust(cwd: &std::path::Path, approve: bool, no_approve: bool) -> bool {
+    if no_approve {
+        return false;
+    }
+    if approve {
+        return true;
+    }
+    lca_permissions::GrantStore::open(&data_dir().join("grants.json"))
+        .map(|store| store.is_trusted(cwd))
+        .unwrap_or(false)
+}
+
 /// The `/login` picker flow (ADR-0033, `api-key-login-plan.md` D1): the
 /// state machine, with no I/O of its own.
 pub mod login;
+pub(crate) mod mcp_cli;
 
 /// The request-path consent for an endpoint host the manifest does not
 /// cover, and this run's `--allow-host` grant (gh #29, QA-004).

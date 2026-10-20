@@ -129,6 +129,30 @@ pub async fn run(cli: Cli) -> i32 {
         Route::Migrate { session } => migrate_command(&cwd, &session),
         Route::Ext(cmd) => ext::run(cmd, flags.offline).await,
         Route::Auth(cmd) => auth::run(&cmd, &cli.allow_host),
+        // gh #418 Phase F (gh #73): trust decides whether the project's
+        // `mcp.json` participates (FR-PERM-9); `--approve`/`--no-approve`
+        // override it for this run, exactly as they do elsewhere.
+        Route::Mcp {
+            cmd,
+            approve,
+            no_approve,
+        } => {
+            let trusted = crate::mcp_cli_trust(&cwd, approve, no_approve);
+            // The verbs block (a `list` waits for connections, a `login` waits
+            // for a browser), and the capability engine's `drive` requires a
+            // blocking region — it refuses to nest a runtime (ADR-0014). So
+            // the whole command runs on a dedicated thread, exactly like the
+            // turn workers do.
+            let cmd = *cmd;
+            let cwd = cwd.clone();
+            match std::thread::spawn(move || crate::mcp_cli::run(&cmd, &cwd, trusted)).join() {
+                Ok(code) => code,
+                Err(_) => {
+                    eprintln!("error: the mcp command failed unexpectedly");
+                    crate::exit::INTERNAL
+                }
+            }
+        }
         Route::Doctor => doctor::run(&crate::data_dir(), &cwd),
         Route::Bug { session, output } => {
             let out = output.clone().unwrap_or_else(|| cwd.clone());

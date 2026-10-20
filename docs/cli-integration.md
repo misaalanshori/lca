@@ -81,6 +81,36 @@ lca -p "no mcp" --no-mcp                              # no server spawns, no end
 lca -a -p "trusted run"                               # project files load for this run, nothing persists
 ```
 
+## Manage MCP servers
+
+```sh
+lca mcp add echo -- python3 ./servers/echo.py        # user file: ~/.lca/mcp.json
+lca mcp add local --local -- npx -y some-server      # this project's .lca/mcp.json
+lca mcp add docs --url https://mcp.example.com/mcp \
+    --header "X-Tenant=acme" --oauth-client-id my-client
+lca mcp list                                         # exits 1 on a failed server
+lca mcp list --json                                  # machine-readable: servers, errors
+lca mcp login docs                                   # browser + loopback; exit 0 when signed in
+lca mcp logout docs                                  # drop the stored credentials
+lca mcp remove echo                                  # add --local for the project file
+```
+
+The verbs work outside a session, so a script or an agent can run them
+through `bash`. They are **not** gated by `--no-mcp` or the enablement
+record: managing a disabled setup is the whole point. `list` connects each
+server for the length of the command and exits 1 if a config error exists or
+an enabled server is not connected; a server still connecting after the
+10-second window is reported as `connecting` rather than dropped. `remove`
+takes the scope it was asked for, and when the entry lives in the other
+one it names that scope and the flag that would reach it (exit 1).
+
+`--oauth-client-secret` is never written to `mcp.json` and never echoed
+back: it goes to the `mcp` credential namespace, because a config file gets
+copied, pasted, and committed. The value is still visible in `ps` while the
+command runs — that is the shape pi has too, and it is why
+`--bearer-token-env-var` exists for a token a server should read: it writes
+`Authorization: Bearer ${NAME}`, an indirection rather than a value.
+
 ## Long-lived control (`--mode rpc`)
 
 ```sh

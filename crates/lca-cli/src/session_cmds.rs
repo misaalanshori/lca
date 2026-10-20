@@ -118,6 +118,16 @@ pub enum Route {
         /// Treat this project as untrusted for the dump (gh #80).
         no_approve: bool,
     },
+    /// The MCP management verbs (gh #418 Phase F, gh #73).
+    Mcp {
+        /// Which verb (boxed: the arg bag is far larger than any other
+        /// variant, and `Route` stays cheap to compare and pass around).
+        cmd: Box<crate::cli_args::McpCmd>,
+        /// Trust this project for the run (`--approve`).
+        approve: bool,
+        /// Treat this project as untrusted (`--no-approve`).
+        no_approve: bool,
+    },
     /// The diagnostics dump (gh #81).
     Doctor,
     /// The local diagnostic bundle (gh #57).
@@ -522,6 +532,14 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
             }
         }
         Some(Command::Config) => Route::Config {
+            approve: cli.approve,
+            no_approve: cli.no_approve,
+        },
+        // gh #418 Phase F (gh #73): the shell management surface needs the
+        // project's trust state (FR-PERM-9 decides whether its `mcp.json`
+        // participates) and nothing else.
+        Some(Command::Mcp { cmd }) => Route::Mcp {
+            cmd: Box::new(cmd.clone()),
             approve: cli.approve,
             no_approve: cli.no_approve,
         },

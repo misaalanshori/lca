@@ -789,6 +789,44 @@ pub(crate) fn write_full_entry(path: &Path, entry: &ServerEntry) -> Result<(), S
     write_json_file(path, &file)
 }
 
+/// Remove one server from `path`, keeping every other entry and every
+/// unknown key. `Ok(false)` means the file held no such server.
+///
+/// gh #418 Phase F: `lca mcp remove` reports the scope it did *not* find the
+/// server in, so the caller distinguishes "removed" from "lives elsewhere".
+pub(crate) fn remove_entry(path: &Path, name: &str) -> Result<bool, String> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let mut file = read_json_file(path)?;
+    let Some(servers) = file
+        .get_mut("mcpServers")
+        .and_then(|servers| servers.as_object_mut())
+    else {
+        return Ok(false);
+    };
+    if servers.remove(name).is_none() {
+        return Ok(false);
+    }
+    write_json_file(path, &file)?;
+    Ok(true)
+}
+
+/// Whether `path` defines a full entry (or an override) for `name`.
+pub fn file_defines(path: &Path, name: &str) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    read_json_file(path)
+        .ok()
+        .and_then(|file| {
+            file.get("mcpServers")
+                .and_then(|servers| servers.get(name))
+                .map(|_| true)
+        })
+        .unwrap_or(false)
+}
+
 /// Write a knob-only project override (a user-level server edited
 /// under a trusted project), merging with whatever the file holds.
 pub(crate) fn write_project_override(

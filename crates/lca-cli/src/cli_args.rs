@@ -2,7 +2,7 @@
 //! split out of `lib.rs` for the file ceiling (gate 11). Everything is
 //! re-exported from the crate root, so no call site moved.
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 use crate::ext;
 use crate::version_static;
@@ -345,6 +345,15 @@ pub enum Command {
         #[command(subcommand)]
         cmd: ext::ExtCmd,
     },
+    // gh #418 Phase F (gh #73, pi's `pi mcp`): manage server config from a
+    // shell, so an agent can run it through `bash` and a script needs no JSON
+    // editing.
+    /// Add, remove, and check MCP servers; sign in and out.
+    Mcp {
+        /// What to do with the servers.
+        #[command(subcommand)]
+        cmd: McpCmd,
+    },
     // gh #81 (pi's diagnostics row).
     /// Print version, paths, extensions, config, sessions, crashes.
     Doctor,
@@ -434,6 +443,95 @@ pub enum AuthCmd {
         /// Accepted and ignored: the refusal names the provider.
         #[arg(long, value_name = "PROVIDER")]
         provider: Option<String>,
+    },
+}
+
+/// `lca mcp ...`: server management without starting a session
+/// (gh #418 Phase F, pi's `pi mcp`).
+///
+/// Every verb works outside a session, so an agent can run it through `bash`.
+/// The five verbs are the whole surface: `add`, `remove`, `list`, `login`,
+/// `logout`.
+/// The options `lca mcp add` takes.
+///
+/// A struct rather than inline fields: the bag dwarfs every other `McpCmd`
+/// variant and clippy refuses the size difference. `McpCmd` carries it boxed,
+/// so the enum stays cheap to pass around (it rides `Route`).
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct McpAddArgs {
+    /// The server's name: letters, digits, `_`, and `-`.
+    pub server: String,
+    /// Write the project's `.lca/mcp.json` instead of the user file.
+    #[arg(short = 'l', long = "local")]
+    pub local: bool,
+    /// A streamable-HTTP endpoint (mutually exclusive with `-- <command>`).
+    #[arg(long, value_name = "URL")]
+    pub url: Option<String>,
+    /// Environment variable for a stdio server, `KEY=VALUE` (repeatable).
+    #[arg(long = "env", value_name = "KEY=VALUE")]
+    pub env: Vec<String>,
+    /// Working directory for a stdio server.
+    #[arg(long, value_name = "DIR")]
+    pub cwd: Option<String>,
+    /// HTTP header, `KEY=VALUE` (repeatable).
+    #[arg(long = "header", value_name = "KEY=VALUE")]
+    pub header: Vec<String>,
+    /// Send `Authorization: Bearer ${NAME}` (HTTP only).
+    #[arg(long = "bearer-token-env-var", value_name = "NAME")]
+    pub bearer_token_env_var: Option<String>,
+    /// Pre-registered OAuth client id.
+    #[arg(long = "oauth-client-id", value_name = "ID")]
+    pub oauth_client_id: Option<String>,
+    /// OAuth client secret.
+    #[arg(long = "oauth-client-secret", value_name = "SECRET")]
+    pub oauth_client_secret: Option<String>,
+    /// Fixed OAuth callback port.
+    #[arg(long = "oauth-callback-port", value_name = "PORT")]
+    pub oauth_callback_port: Option<u16>,
+    /// Client name sent when registering with the OAuth server.
+    #[arg(long = "oauth-client-name", value_name = "NAME")]
+    pub oauth_client_name: Option<String>,
+    /// How the model reaches its tools.
+    #[arg(long, value_name = "MODE")]
+    pub exposure: Option<String>,
+    /// What the server offers, shown in the system prompt.
+    #[arg(long, value_name = "TEXT")]
+    pub description: Option<String>,
+    /// The stdio command and its arguments, after `--`.
+    #[arg(last = true, value_name = "COMMAND")]
+    pub command: Vec<String>,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum McpCmd {
+    /// Add or replace a server in `mcp.json`.
+    Add(Box<McpAddArgs>),
+    /// Remove a server from `mcp.json`.
+    Remove {
+        /// The server's name.
+        server: String,
+        /// Remove from the project's `.lca/mcp.json` instead of the user file.
+        #[arg(short = 'l', long = "local")]
+        local: bool,
+    },
+    /// Show state, tools, and errors (exits 1 on failure).
+    List {
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Sign in through the browser.
+    Login {
+        /// The server's name.
+        server: String,
+        /// Time limit for the whole sign-in, in seconds.
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<u64>,
+    },
+    /// Delete the stored OAuth credentials.
+    Logout {
+        /// The server's name.
+        server: String,
     },
 }
 

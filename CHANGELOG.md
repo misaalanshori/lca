@@ -7,6 +7,22 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **`lca mcp add|remove|list|login|logout` manages servers from a shell**
+  (gh #418 Phase F, gh #73; pi's `pi mcp`). The verbs work outside a session,
+  so a script or an agent can run them through `bash`, and they are not gated
+  by `--no-mcp` or the enablement record — managing a disabled setup is the
+  point. `add` writes the user file or, with `--local`, the project's, and
+  refuses an option that belongs to the other transport instead of ignoring
+  it. `list` connects each server for the length of the command, reports
+  state, tools, exposure, resources, and the stderr tail of a failure, and
+  exits 1 on a config error or a non-connected enabled server; `--json` is
+  machine-readable. `remove` takes the scope it was asked for and, when the
+  entry lives in the other one, names that scope and the flag that reaches it.
+  `login` captures the 401 challenge, runs the OAuth flow (browser plus the
+  loopback callback, with the pasted-redirect fallback for a headless run),
+  and reports the tool count. `logout` deletes the stored credentials.
+  `--oauth-client-secret` is never echoed and never written to `mcp.json`: it
+  goes to the `mcp` credential namespace.
 - **`--no-mcp` skips MCP for one run** (gh #418 Phase E, pi's flag of the
   same name). No server process starts and no remote endpoint is contacted.
   It is a per-run flag like `--no-tools`: it never writes the enablement

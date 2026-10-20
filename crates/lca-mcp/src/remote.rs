@@ -126,6 +126,30 @@ impl TokenStore {
         }
     }
 
+    /// Store a configured OAuth client secret apart from the config file.
+    ///
+    /// gh #418 Phase F: `lca mcp add --oauth-client-secret` must not leave the
+    /// secret in `mcp.json` (which is world-readable by default and shared by
+    /// copy-paste), so it goes to the extension's credential namespace under a
+    /// key derived from the same `token_key` the tokens use. A sign-in reads it
+    /// when the config carries none.
+    pub fn set_client_secret(&self, secret: &str) -> Result<(), String> {
+        self.caps
+            .credentials_set(&self.secret_key(), secret)
+            .map_err(|err| format!("cannot store the OAuth client secret: {err}"))
+    }
+
+    /// The configured client secret, when `add` stored one.
+    pub fn client_secret(&self) -> Result<Option<String>, String> {
+        self.caps
+            .credentials_get(&self.secret_key())
+            .map_err(|err| format!("cannot read the OAuth client secret: {err}"))
+    }
+
+    fn secret_key(&self) -> String {
+        self.key.replacen("mcp-oauth:", "mcp-oauth-secret:", 1)
+    }
+
     /// The stored tokens, if the server signed in before.
     pub fn load(&self) -> Result<Option<StoredToken>, String> {
         let raw = self
