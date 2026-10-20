@@ -29,6 +29,17 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **Self-update fetches are bounded in time and size** (gh #355). `lca update
+  --check` and `--changelog` awaited the release feed with no timeout, so a
+  stalled host hung the command indefinitely, and `install_binary` collected an
+  uncapped body into memory before the installer's verify-then-move path could
+  run — a hostile mirror could exhaust memory first. `plain_get` now carries a
+  30-second deadline over the whole request *and* body read, and an 8 MiB cap
+  enforced while the frames arrive (a declared `Content-Length` over the cap is
+  refused from the header, before any body is read). Every caller inherits both
+  — the self-update paths, the catalog fetch, and anything later — and a
+  refusal names the host and the limit. The daily background check keeps its
+  tighter 5-second FR-CFG-6 bound.
 - **A disabled MCP no longer spawns its servers or connects to its remotes**
   (gh #418 Phase E, gh #266). `registry::assemble` built the bridge *after*
   `apply_enablement` had already swept the registry, so `mcp` was never
