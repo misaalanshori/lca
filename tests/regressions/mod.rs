@@ -506,3 +506,9 @@ mod overflow_recovery_single_turn_ended;
 // values to text and re-derived the class by substring heuristics.
 #[path = "356-provider-bridge-preserves-error-class.rs"]
 mod provider_bridge_preserves_error_class;
+// GitHub #355: the self-update fetch paths (`latest_release`,
+// `install_binary`, and the catalog fetch) called `plain_get` with no
+// timeout and no size cap, so a stalled feed hung `lca update` and a
+// hostile mirror could exhaust memory before verify-then-move ran.
+#[path = "355-update-fetch-is-bounded.rs"]
+mod update_fetch_is_bounded;

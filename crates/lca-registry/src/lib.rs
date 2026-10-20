@@ -31,7 +31,9 @@ pub use catalog::{
     parse_catalog, read_cache, write_cache,
 };
 pub use git::{parse_git_source, resolve_git};
-pub use http::plain_get;
+pub use http::{
+    PLAIN_GET_MAX_BYTES, PLAIN_GET_TIMEOUT, plain_get, plain_get_within, plain_get_within_capped,
+};
 use http::{fetch_bytes, fetch_oci, http_client};
 
 /// The lockfile format version.
