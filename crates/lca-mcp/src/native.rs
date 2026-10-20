@@ -771,9 +771,9 @@ impl McpBridge {
     /// this after any edit): old sessions shut down, states refresh,
     /// and the same handle serves the new table.
     ///
-    /// Synchronous; the manager's own path is
-    /// [`McpBridge::rebuild_connecting`], which keeps the edit instant for the
-    /// same reason startup is (gh #418 Phase E).
+    /// Synchronous; the manager's own path is `rebuild_connecting`, which
+    /// keeps the edit instant for the same reason startup is (gh #418
+    /// Phase E).
     pub fn rebuild(
         &self,
         caps: Arc<lca_tools::Capabilities>,
