@@ -234,6 +234,29 @@ unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
 
+# Debug builds are the workspace's normal build (tests, clippy, agents).
+# Two knobs keep them small on the shared box (gh: two worktrees + gate runs
+# filled a 394 GB disk twice on 2026-10-20 and killed every worker mid-cycle):
+#
+#   debug = 0            no DWARF in any artifact. A panic still names the
+#                        file and line (Rust keeps panic location strings),
+#                        and `RUST_BACKTRACE=1` without line info is what a
+#                        test failure actually needs. This is the single
+#                        biggest consumer: `deps/` was 37 GB.
+#   incremental = false  incremental artifacts were a second 8 GB, and they
+#                        buy nothing here: every phase boundary runs
+#                        `cargo clean` and CI is always cold. Re-enable
+#                        locally with CARGO_INCREMENTAL=1 if a long
+#                        edit-compile loop wants it.
+[profile.dev]
+debug = 0
+incremental = false
+
+# Tests inherit `dev`; std's `test` profile needs it said explicitly.
+[profile.test]
+debug = 0
+incremental = false
+
 [profile.release]
 opt-level = 3
 lto = "fat"
