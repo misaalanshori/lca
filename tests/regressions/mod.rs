@@ -522,3 +522,11 @@ mod provider_bridge_preserves_error_class;
 // hostile mirror could exhaust memory before verify-then-move ran.
 #[path = "355-update-fetch-is-bounded.rs"]
 mod update_fetch_is_bounded;
+// GitHub #292: `provider-presets.toml` declared a canonical environment
+// variable per service and `api_key_for` read only the two universal
+// names, so exporting the documented variable left the user told to
+// authenticate. The guard drives the real request builder and also pins the
+// failure the fix must not introduce: another service's key must never be
+// sent to this endpoint.
+#[path = "292-preset-env-vars-authenticate.rs"]
+mod preset_env_vars_authenticate;

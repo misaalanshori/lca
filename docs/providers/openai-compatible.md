@@ -64,10 +64,33 @@ every row shows `model (service)` from the model's own `extras`, never
 the extension's crate name, so the row says which service and key will
 be billed.
 
-**The environment acts on the default profile.** `OPENAI_BASE_URL` and
-`OPENAI_API_KEY` keep their precedence (environment over what login
-persisted) and apply to default-profile models only; a named profile is
-its own, environment notwithstanding.
+**The environment resolves a profile's key in one documented order.**
+For the **default profile** that order is: `OPENAI_API_KEY`,
+`OPENCODE_API_KEY`, then the active preset's own declared `env` names in
+declaration order (gh #292), then what login persisted (the bare
+`api_key`). For a **named profile** it is: its preset's own declared `env`
+names, then its stored `profile.<id>.api_key`, then the bare `api_key`.
+The two universal names are the default profile's, so a named profile
+never resolves them — otherwise an `OPENAI_API_KEY` exported for direct
+OpenAI use would be sent to Groq and DeepSeek too, which is the same
+wrong-secret-to-the-wrong-endpoint mistake as reading another service's
+variable.
+
+Only the **active** preset's names are ever read, so a `GROQ_API_KEY` in
+the environment cannot authenticate a `deepseek` profile — the endpoint
+never receives a secret the user associated with a different service. A
+profile whose id is not in the preset table reads no environment at all
+and falls straight through to its stored credential.
+
+That makes the table's `env` column load-bearing rather than decorative:
+exporting the variable a provider's own documentation names is enough to
+authenticate it, without aliasing it to `OPENAI_API_KEY` or typing it into
+`/login` (gh #292). The endpoint still comes from the preset or the stored
+`base_url`; only the key resolution changed.
+
+**The base URL is unchanged.** `OPENAI_BASE_URL` keeps its precedence for
+the default profile and applies to default-profile models only; a named
+profile keeps its own endpoint, environment notwithstanding.
 
 ## `ModelInfo.extras` keys
 

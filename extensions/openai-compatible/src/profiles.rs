@@ -171,34 +171,109 @@ pub fn base_url_for<C: ProviderCap + ?Sized>(
         .unwrap_or_else(|| settings.base_url.clone())
 }
 
-/// The effective bearer token for one profile: the same precedence, with
-/// the default profile's environment check taking both of this provider's
-/// key names (`OPENAI_API_KEY`, `OPENCODE_API_KEY`).
+/// The effective bearer token for one profile, in the documented order.
+///
+/// **Default profile:** `OPENAI_API_KEY`, then `OPENCODE_API_KEY`, then
+/// the active preset's own declared `env` names in declaration order
+/// (gh #292), then what login persisted.
+///
+/// **Named profile:** its preset's names, then what login persisted. The
+/// two universal names are *this provider's default-profile* names and are
+/// deliberately not consulted for a named profile. `OPENAI_API_KEY`
+/// authenticates every profile that reached it, so a user who exported it
+/// because they use OpenAI directly would have that key sent to Groq and
+/// DeepSeek too the moment they logged into them - the same
+/// wrong-secret-to-the-wrong-endpoint leak the cross-provider rule below
+/// exists to prevent, arriving through the front door. gh #31's promise
+/// ("a named profile is its own, environment notwithstanding") is exactly
+/// that, and it still holds; what gh #292 adds is that a named profile now
+/// also reads the variable *its own service* documents.
+///
+/// gh #292: `provider-presets.toml` documents a variable per service
+/// (`DEEPSEEK_API_KEY`, `GROQ_API_KEY`, …) and `Preset` parsed the list,
+/// but nothing ever read it - so exporting the variable the docs named
+/// left a developer told to authenticate. The preset's names are the
+/// promise that its documented setup just works.
+///
+/// Only the **active** preset's names are consulted, and a named profile
+/// whose id is not in the table reads no environment at all: falling
+/// through to any other variable would let a stray `GROQ_API_KEY`
+/// authenticate a DeepSeek profile and send the wrong secret to the
+/// wrong endpoint.
 pub fn api_key_for<C: ProviderCap + ?Sized>(
     cap: &C,
     settings: &Settings,
     profile: &Profile,
 ) -> Option<String> {
-    if let Some(profile) = profile {
-        if let Some(key) = cap
-            .credentials_get(&scoped_key(profile, "api_key"))
-            .filter(|key| !key.is_empty())
-        {
-            return Some(key);
-        }
-        return cap
-            .credentials_get("api_key")
-            .filter(|key| !key.is_empty())
-            .or_else(|| settings.api_key.clone());
+    // The universal names are the default profile's, never a named one's.
+    if profile.is_none()
+        && let Some(key) = env_var("OPENAI_API_KEY").or_else(|| env_var("OPENCODE_API_KEY"))
+    {
+        return Some(key);
     }
-    env_var("OPENAI_API_KEY")
-        .or_else(|| env_var("OPENCODE_API_KEY"))
-        .or_else(|| {
-            cap.credentials_get("api_key")
+    preset_env_key(cap, profile).or_else(|| {
+        // What login persisted. A named profile reads its own
+        // `profile.<id>.api_key` first; the **bare** `api_key` / the
+        // environment-derived `settings.api_key` is the *default* profile's
+        // slot, so a named profile reaches it only when it has nothing of
+        // its own (`auth: "none"` presets store no key, and the bare slot
+        // is then how such a setup gets to its endpoint).
+        //
+        // Reading the bare slot first for a named profile - what gh #31
+        // did - stayed invisible while a named profile could see no
+        // environment at all. gh #292 makes it matter: `settings.api_key`
+        // is read from the universal variables, so an `OPENAI_API_KEY`
+        // exported for direct OpenAI use would otherwise travel to
+        // DeepSeek the moment a `deepseek` profile exists.
+        let stored = cap
+            .credentials_get(&credential_key(profile, "api_key"))
+            .filter(|key| !key.is_empty());
+        match stored {
+            Some(key) => Some(key),
+            None if profile.is_none() => cap
+                .credentials_get("api_key")
                 .filter(|key| !key.is_empty())
-                .or_else(|| settings.api_key.clone())
-        })
+                .or_else(|| settings.api_key.clone()),
+            // A named profile's last resort is a *stored* bare key, never
+            // the environment-derived `settings.api_key` that sits beside
+            // it.
+            None => cap.credentials_get("api_key").filter(|key| !key.is_empty()),
+        }
+    })
 }
+
+/// The first set variable among the active preset's declared `env` names
+/// (gh #292), in declaration order so a preset that lists two (`opencode-go`
+/// declares `OPENCODE_API_KEY` before `OPENAI_API_KEY`) resolves
+/// deterministically.
+///
+/// A profile with no discoverable preset declares no names, so this reads
+/// nothing and the caller falls through to the stored credential. An
+/// `auth = "none"` preset (Ollama, LM Studio) declares an empty list and
+/// is likewise unchanged.
+fn preset_env_key<C: ProviderCap + ?Sized>(cap: &C, profile: &Profile) -> Option<String> {
+    // A named profile's id IS its preset id (`login_submit` picks the
+    // preset by `answer.choice` and names the profile after it). The
+    // default profile carries no id of its own, so the endpoint's
+    // remembered preset is what names the service the user chose.
+    let id = match profile {
+        Some(id) => id.clone(),
+        None => cap
+            .credentials_get("preset")
+            .filter(|name| !name.is_empty())?,
+    };
+    // The same resource `load_presets` reads, taken through this generic
+    // `cap` rather than that function's `&dyn ProviderCap` sink. Both
+    // parse the one file with `parse_presets`, so the shapes cannot
+    // diverge - only the access path differs.
+    let bytes = cap.resource_read(PRESETS_RESOURCE).ok()?;
+    let presets = crate::parse_presets(&String::from_utf8_lossy(&bytes));
+    let preset = presets.iter().find(|preset| preset.id == id)?;
+    preset.env.iter().find_map(|name| env_var(name))
+}
+
+/// The extension's preset table, by the name its own `resources/` bag uses.
+const PRESETS_RESOURCE: &str = "provider-presets.toml";
 
 /// The label a row shows for one profile: the profile's own name, and
 /// for the default profile whatever that endpoint actually is - a stored
