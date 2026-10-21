@@ -33,7 +33,9 @@ pub use catalog::{
 };
 pub use git::{parse_git_source, resolve_git};
 pub use http::{
-    PLAIN_GET_MAX_BYTES, PLAIN_GET_TIMEOUT, plain_get, plain_get_within, plain_get_within_capped,
+    OCI_MAX_BYTES, OCI_MAX_REDIRECTS, OCI_TIMEOUT, PLAIN_GET_MAX_BYTES, PLAIN_GET_TIMEOUT, Proxies,
+    ProxyEndpoint, fetch_oci_public, fetch_oci_within, fetch_oci_within_capped,
+    parse_proxy_for_tests, plain_get, plain_get_within, plain_get_within_capped,
 };
 use http::{fetch_bytes, fetch_oci, http_client};
 

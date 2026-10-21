@@ -53,6 +53,23 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **`lca ext install` pulls from a real registry again** (gh #308). Three
+  defects sat in one fetch path. The post-401 retry checked `is_success()` and
+  nothing else, so the *normal* ghcr blob shape - 401, then a token, then a 307
+  to the CDN - died with `HTTP 307 Temporary Redirect after authorization`;
+  the redirect loop existed, on the one attempt that did not need it. The token
+  parse read only `token` and ignored the spec's `access_token`, so a registry
+  answering the other field left the retry anonymous. And the client was a bare
+  connector: no `HTTP_PROXY`/`HTTPS_PROXY` (the `net` client has had them since
+  gh #145), no byte cap, no timeout - so a hostile or stalled registry was
+  accumulated in full *before* the digest ran, which inverts
+  digest-before-install. All three now share one redirect loop with one
+  five-hop budget and the same cross-origin rule (a redirect to the CDN drops
+  the bearer; it never needed it and forwarding it is a leak), accept either
+  token field and refuse by name - quoting the endpoint - when neither is
+  present, and bound every fetch in time and bytes *while reading*. The proxy
+  rules are the `net` client's, spelled out in `docs/environment-variables.md`
+  so the two cannot drift.
 - **Copilot's discovered models keep their real context windows** (gh #283).
   Live discovery mapped every model from GitHub's `/models` to
   `context_window: 0`, discarding the curated table's windows. Zero is not
