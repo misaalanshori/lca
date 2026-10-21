@@ -53,6 +53,23 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **The antigravity request no longer sends your system prompt twice** (gh
+  #280). `build_request` pulled every system message into `systemInstruction`
+  (correct) and then walked the same messages into `contents` again, because
+  the role match ended in a `_ => "user"` wildcard that swallowed
+  `MessageRole::System`. So every request carried the whole preamble twice:
+  once as instructions, once as a prior user turn. That billed the largest
+  fixed block in the request on every turn, framed directives as if you had
+  said them - a fidelity problem and a prompt-injection surface - and put the
+  preamble in the leading `contents` slot, so the cacheable prefix shifted
+  whenever anything upstream touched the instructions. A system message is now
+  never a turn, and the arms name every role so the next variant cannot fall
+  into `"user"` the same way. Extra system messages (a transform could add one)
+  merge into `systemInstruction.parts`, the array shape pi-antigravity uses,
+  rather than being dropped; uncollected blocks are appended, already-collected
+  ones are not repeated, and `parts` is never empty. Tool turns, the
+  `thoughtSignature` sibling placement, and the model-fallback path are
+  untouched.
 - **A second compaction no longer forgets the first one's summary when the
   model is unavailable** (gh #281). The mechanical fallback - what runs when
   the summarization call fails or has no budget - selected the host's carried
