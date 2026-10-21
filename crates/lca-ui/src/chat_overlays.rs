@@ -12,7 +12,10 @@ use crate::chat_pickers::TRUST_OPTIONS;
 // composed through [`Chat::picker_overlay`], so a new picker gets the row too.
 const HINT_MOVE: &str = "↑↓ move · enter apply · esc close";
 const HINT_FILTER: &str = "↑↓ move · enter apply · esc close · type to filter";
-const HINT_TREE: &str = "↑↓ move · ←/→ fold · f filter · e label · enter show · esc close";
+/// The cells the tree's cursor prefix takes from a row (`" > "`).
+const TREE_ROW_INSET: usize = 3;
+const HINT_TREE: &str =
+    "↑↓ move · ←/→ fold · alt+←/→ branch · f filter · e label · enter show · esc close";
 const HINT_GRANTS: &str = "↑↓ move · enter revoke · esc close";
 const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
 const HINT_SETTINGS_EDIT: &str = "type the value · enter apply · esc cancel";
@@ -172,7 +175,12 @@ impl Chat {
             if picker.visible_len() == 0 {
                 body.push("  (no matches)".to_string());
             }
-            for (row, line) in picker.paint_rows(&self.theme).iter().enumerate() {
+            // Gh #394: rows paint at their column budget (the box's inner
+            // width less the cells the cursor prefix takes), so the pan and
+            // truncate arithmetic sees the width the frame actually has.
+            let row_width = usize::from(crate::render::picker_inner_width(width))
+                .saturating_sub(TREE_ROW_INSET);
+            for (row, line) in picker.paint_rows(&self.theme, row_width).iter().enumerate() {
                 let cur = if row == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {line}"));
             }

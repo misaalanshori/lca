@@ -71,6 +71,20 @@ pub fn picker_overlay_options(
     }
 }
 
+/// The cells a picker's rows have to paint in, for a terminal `width`
+/// (gh #394): the same overlay layout the painter resolves, minus the
+/// frame's two border cells and two padding cells per side.
+///
+/// The tree navigator needs this because its rows clamp and pan
+/// horizontally; deriving the number here keeps one layout rule behind
+/// both the frame and the row arithmetic, so a row can never be painted
+/// wider than the box that holds it.
+pub fn picker_inner_width(term_width: u16) -> u16 {
+    let options = picker_overlay_options(1, 0);
+    let rect = resolve_overlay_layout(&options, term_width, 1, 1);
+    rect.width.saturating_sub(4)
+}
+
 /// The rolling window over a picker's items (gh #226, pi's
 /// `getVisibleRange` in `select-list.ts`): `selected` centered when
 /// there is room, clamped at both ends. Pure, so the painter and the

@@ -23,6 +23,7 @@ mod chat_render;
 mod chat_search;
 mod chat_shell;
 mod chat_tabs;
+mod chat_tree;
 pub mod dialogs;
 pub mod ext_widgets;
 pub mod footer;

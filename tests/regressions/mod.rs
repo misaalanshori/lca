@@ -279,6 +279,11 @@ mod gh179_antigravity_realigns;
 // `/exit` behind it.
 #[path = "gh212-panel-toggle-traps-exit.rs"]
 mod gh212_panel_toggle_traps_exit;
+// GitHub #394: the `/tree` navigator's layout math marched a long linear
+// session off the right edge (one gutter per ancestor). The four fixes and
+// their frame-level guards live here and in `chat_tree_tests.rs`.
+#[path = "394-tree-layout-math.rs"]
+mod gh394_tree_layout_math;
 // GitHub #81: an induced panic writes the crash file with its rows.
 #[path = "gh81-crash-log-writes-a-file.rs"]
 mod gh81_crash_log_writes_a_file;
