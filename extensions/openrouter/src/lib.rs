@@ -305,6 +305,10 @@ impl<'a> ChatDriver<'a> {
                     break;
                 }
             }
+            // Gh #278: headers before close - the host drops a response from
+            // its handle table on close, so a later read is `NotFound` and the
+            // server's `retry-after` is lost.
+            let headers = retry_after_of(cap, handle);
             let _ = cap.net_close_response(handle);
             let text = String::from_utf8_lossy(&detail);
             let message = format!(
@@ -313,7 +317,14 @@ impl<'a> ChatDriver<'a> {
             );
             let classified = lca_wire_openai::failure_for_status(status, &message);
             return Err(StreamFailure {
-                message,
+                // Only a throttle carries the token: a 401's answer is to
+                // re-authenticate, not to wait (the anthropic gating, one
+                // status set for the OpenAI-shaped family).
+                message: if matches!(status, 429 | 500 | 502 | 503 | 529) {
+                    with_retry_after(message, headers.as_deref())
+                } else {
+                    message
+                },
                 class: classified.class,
                 retryable: classified.retryable,
             });
@@ -526,6 +537,35 @@ fn discover_models(cap: &dyn ProviderCap) -> Option<(Vec<lca_protocol::ModelInfo
         });
     }
     Some((models, dropped))
+}
+
+/// The response's `retry-after`, read while the handle is still live
+/// (gh #278): `net_close_response` drops the response from the host's table,
+/// so a read afterwards is `NotFound` and the server's backoff intent is
+/// lost. Called before the close, on the error path only.
+///
+/// Returns the value verbatim - the host's retry parser accepts seconds and
+/// an IMF-fixdate (`crates/lca-core/src/turn/stream.rs`), so the extension
+/// forwards the server's words rather than reinterpreting them.
+fn retry_after_of(cap: &dyn ProviderCap, handle: u32) -> Option<String> {
+    cap.net_response_headers(handle)
+        .ok()?
+        .iter()
+        .find_map(|(key, value)| {
+            key.eq_ignore_ascii_case("retry-after")
+                .then(|| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+}
+
+/// Append the gh #52 token the host's retry engine reads. Absent or empty is
+/// silence, never a zero delay: an unparseable header must fall back to the
+/// exponential schedule, not to "retry immediately".
+fn with_retry_after(message: String, retry_after: Option<&str>) -> String {
+    match retry_after.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => format!("{message} retry-after: {value}"),
+        None => message,
+    }
 }
 
 /// The catalog read, with the skip count: the rows actually discovered and

@@ -138,3 +138,127 @@ fn without_a_login_the_re_login_error_names_the_way_back() {
         "no bearer-less call crosses"
     );
 }
+
+// ---------------------------------------------------------------------------
+// gh #278: the `retry-after` header must be read before the handle closes
+// ---------------------------------------------------------------------------
+
+/// A capability that models the host's handle lifecycle: closing removes the
+/// response, so a header read afterwards is `NotFound`. A double that always
+/// answers headers cannot catch an ordering bug, which is why the anthropic
+/// sibling's original test stayed green over the defect.
+struct LifecycleCap {
+    reads: std::sync::Mutex<u32>,
+    closed: std::sync::atomic::AtomicBool,
+    retry_after: Option<&'static str>,
+    status: u16,
+}
+
+impl LifecycleCap {
+    fn throttled(retry_after: Option<&'static str>) -> LifecycleCap {
+        LifecycleCap {
+            reads: std::sync::Mutex::new(0),
+            closed: std::sync::atomic::AtomicBool::new(false),
+            retry_after,
+            status: 429,
+        }
+    }
+}
+
+impl lca_protocol::ProviderCap for LifecycleCap {
+    fn net_request(
+        &self,
+        _method: &str,
+        _url: &str,
+        _headers: &[(&str, &str)],
+        _body: Option<&[u8]>,
+    ) -> Result<u32, lca_protocol::CapabilityError> {
+        Ok(1)
+    }
+    fn net_response_status(&self, _handle: u32) -> Result<u16, lca_protocol::CapabilityError> {
+        Ok(self.status)
+    }
+    fn net_read_body(
+        &self,
+        _handle: u32,
+        _max: usize,
+    ) -> Result<Option<Vec<u8>>, lca_protocol::CapabilityError> {
+        let mut reads = self.reads.lock().expect("reads");
+        *reads += 1;
+        if *reads == 1 {
+            Ok(Some(
+                br#"{"error":{"message":"rate limited","code":429}}"#.to_vec(),
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+    fn net_close_response(&self, _handle: u32) -> Result<(), lca_protocol::CapabilityError> {
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+    fn net_response_headers(
+        &self,
+        _handle: u32,
+    ) -> Result<Vec<(String, String)>, lca_protocol::CapabilityError> {
+        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(lca_protocol::CapabilityError::NotFound(
+                "unknown handle 1".to_string(),
+            ));
+        }
+        Ok(self
+            .retry_after
+            .map(|value| vec![("retry-after".to_string(), value.to_string())])
+            .unwrap_or_default())
+    }
+    fn credentials_get(&self, key: &str) -> Option<String> {
+        (key == "access").then(|| "sk-or-mock".to_string())
+    }
+    fn credentials_set(
+        &self,
+        _key: &str,
+        _value: &str,
+    ) -> Result<(), lca_protocol::CapabilityError> {
+        Ok(())
+    }
+    fn credentials_delete(&self, _key: &str) -> Result<(), lca_protocol::CapabilityError> {
+        Ok(())
+    }
+}
+
+// Verifies: gh #278 - openrouter lost the server's `retry-after` entirely
+// (it never read the header at all) and would have hit `NotFound` had it
+// read after the close. Both halves are pinned: the value reaches the error
+// text, and the handle is still closed.
+#[test]
+fn a_throttled_response_carries_its_retry_after() {
+    let cap = LifecycleCap::throttled(Some("5"));
+    let err =
+        match openrouter::ChatDriver::open(&cap, "https://mock/v1/chat/completions", &[], b"{}") {
+            Err(err) => err,
+            Ok(_) => panic!("the 429 surfaces"),
+        };
+    assert!(err.retryable, "a 429 stays retryable");
+    assert!(
+        err.message.contains("retry-after: 5"),
+        "the server delay rides the message: {}",
+        err.message
+    );
+    assert!(
+        cap.closed.load(std::sync::atomic::Ordering::SeqCst),
+        "and the handle is still closed"
+    );
+}
+
+// Verifies: gh #278 design rule 3 - no header means no token, so the host
+// falls back to its exponential schedule rather than retrying immediately.
+#[test]
+fn a_throttle_without_the_header_carries_no_delay() {
+    let cap = LifecycleCap::throttled(None);
+    let err =
+        match openrouter::ChatDriver::open(&cap, "https://mock/v1/chat/completions", &[], b"{}") {
+            Err(err) => err,
+            Ok(_) => panic!("the 429 surfaces"),
+        };
+    assert!(!err.message.contains("retry-after"), "{}", err.message);
+}
