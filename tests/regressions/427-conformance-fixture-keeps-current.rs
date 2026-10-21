@@ -52,8 +52,8 @@ use lca_ext_host::{ExtHost, ExtensionLimits, HostEnvironment};
 
 /// Every committed conformance fixture, sorted for a stable walk.
 fn fixtures() -> Vec<std::path::PathBuf> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("extensions/conformance/fixtures");
+    let dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("extensions/conformance/fixtures");
     let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|err| panic!("the fixtures directory exists: {err}"))
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
@@ -151,7 +151,11 @@ fn host(tag: &str) -> ExtHost {
 #[test]
 fn no_committed_fixture_sits_unconsumed_in_the_repository() {
     let sources = source_files();
-    assert!(sources.len() > 100, "the walk saw the repo: {}", sources.len());
+    assert!(
+        sources.len() > 100,
+        "the walk saw the repo: {}",
+        sources.len()
+    );
     let texts: Vec<String> = sources
         .iter()
         .map(|path| std::fs::read_to_string(path).unwrap_or_default())
@@ -159,7 +163,11 @@ fn no_committed_fixture_sits_unconsumed_in_the_repository() {
 
     let mut orphans = Vec::new();
     for fixture in fixtures() {
-        let name = fixture.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = fixture
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         // The full, package-qualified path as a STRING LITERAL (the trailing
         // `"`): another extension's `fixtures/component.wasm` must not count
         // as a consumer of this package's file of the same name - that
@@ -190,10 +198,13 @@ fn every_committed_fixture_links_against_the_current_host() {
     let listed = fixtures();
     assert!(!listed.is_empty(), "the package still commits a fixture");
     for path in listed {
-        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let bytes = std::fs::read(&path)
-            .unwrap_or_else(|err| panic!("read {name}: {err}"));
-        let mut extension = host(&name.replace('.', "-"))
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let bytes = std::fs::read(&path).unwrap_or_else(|err| panic!("read {name}: {err}"));
+        let extension = host(&name.replace('.', "-"))
             .load(&bytes, MANIFEST)
             .unwrap_or_else(|err| {
                 panic!(
