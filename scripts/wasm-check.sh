@@ -48,6 +48,19 @@ if [ -z "$packages" ]; then
 fi
 
 echo "wasm-check: building $packages for $target"
+# gh #427: force the conformance artifact to be produced by *this* run.
+#
+# A cached target (CI restores one through rust-cache) makes `cargo build`
+# report the package fresh and leave a previous artifact in place - and that
+# artifact is hard-linked to the fingerprint's copy, so deleting the visible
+# file just makes cargo re-link the stale inode back. The byte comparison
+# below then reads bytes this run did not produce; it fired falsely on CI
+# once for exactly that reason. Dropping the package's fingerprint is what
+# actually invalidates it. Everything else in the cache still applies, so the
+# cost is one compress+link, not a compile of the graph.
+conformance_artifact="${CARGO_TARGET_DIR:-target}/$target/release/conformance.wasm"
+rm -f "$conformance_artifact" "$(dirname "$conformance_artifact")/deps/conformance.wasm"
+rm -rf "$(dirname "$conformance_artifact")"/.fingerprint/conformance-*
 # shellcheck disable=SC2086
 cargo build --release --target "$target" --quiet $(for p in $packages; do echo "-p $p"; done)
 echo "wasm-check: every extension component builds"
@@ -57,12 +70,15 @@ echo "wasm-check: every extension component builds"
 # byte comparison. CARGO_TARGET_DIR redirects the artifact, not this path
 # (gh #260's lesson), so the lookup follows it.
 fixture=extensions/conformance/fixtures/tool-world.wasm
-built="${CARGO_TARGET_DIR:-target}/$target/release/conformance.wasm"
 if [ -f "$fixture" ]; then
-    if ! cmp -s "$built" "$fixture"; then
+    if [ ! -f "$conformance_artifact" ]; then
+        echo "wasm-check: the build produced no $conformance_artifact; the package shape changed" >&2
+        exit 1
+    fi
+    if ! cmp -s "$conformance_artifact" "$fixture"; then
         echo "wasm-check: $fixture is stale against the conformance source (gh #427)" >&2
         echo "  the committed component no longer matches a fresh build - reinstall it:" >&2
-        echo "  cp $built $fixture" >&2
+        echo "  cp $conformance_artifact $fixture" >&2
         exit 1
     fi
     echo "wasm-check: committed conformance fixture matches a fresh build"
