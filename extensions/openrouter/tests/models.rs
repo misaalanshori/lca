@@ -249,3 +249,46 @@ fn the_skip_message_names_both_counts() {
         "openrouter: skipped 7 malformed catalog entries; 1 model usable"
     );
 }
+
+// Verifies: gh #295 - the skip notice rides the first row's documented
+// `extras`, so it crosses the ABI to the host in both delivery modes.
+// Attached once, not per row: one notice is a signal, one per row is noise.
+#[test]
+fn the_skip_notice_rides_the_first_rows_extras() {
+    let mock = mock_server();
+    mock.fail_once("/models", 200, Some(&catalog_with(r#"{"id":null}"#)));
+    let cap = sandbox("openrouter", "notice", &mock, openrouter::manifest_grants());
+    lca_protocol::ProviderCap::credentials_set(&*cap, "access", "sk-or-mock").expect("seed");
+    let models = openrouter::list_models(cap.as_ref());
+    assert_eq!(
+        models[0]
+            .extras
+            .get(openrouter::SKIPPED_EXTRA)
+            .map(String::as_str),
+        Some("1"),
+        "the first row carries the drop count: {:?}",
+        models[0].extras
+    );
+    assert!(
+        models[1..]
+            .iter()
+            .all(|model| !model.extras.contains_key(openrouter::SKIPPED_EXTRA)),
+        "only the first row carries it"
+    );
+}
+
+// Verifies: gh #295 - a clean catalog attaches no notice. The marker means
+// "something was dropped", so its absence has to be the normal case.
+#[test]
+fn a_clean_catalog_carries_no_skip_notice() {
+    let mock = mock_server();
+    let cap = sandbox("openrouter", "clean", &mock, openrouter::manifest_grants());
+    lca_protocol::ProviderCap::credentials_set(&*cap, "access", "sk-or-mock").expect("seed");
+    let models = openrouter::list_models(cap.as_ref());
+    assert!(
+        models
+            .iter()
+            .all(|model| !model.extras.contains_key(openrouter::SKIPPED_EXTRA)),
+        "nothing was dropped, so nothing is marked"
+    );
+}
