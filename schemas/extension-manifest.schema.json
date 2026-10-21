@@ -120,6 +120,10 @@
         "env_base_url": {
           "type": "string",
           "description": "Environment variable carrying a base-URL override, consulted before stored credentials when computing the ad hoc net grant."
+        },
+        "identity": {
+          "type": "boolean",
+          "description": "This provider signs in through its own `provider-identity` login (an OAuth or device-code flow it runs itself) rather than through declared `login-options` presets. The host lists such a provider in the `/login` picker with one synthesized row and routes the pick to that flow. Declarative on purpose: the host must not run a login to discover that a login exists."
         }
       }
     },

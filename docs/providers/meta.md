@@ -22,7 +22,7 @@ hosts = ["auth.meta.com", "api.meta.ai"]
 namespace = "meta"
 ```
 
-No options, no loopback: `/login meta` runs the identity flow directly.
+No `login-options` presets, no loopback: the manifest declares `[login] identity = true`, so a bare `/login` lists this provider as `Sign in with meta` and choosing it runs the device flow directly (gh #297). `/login meta` and `/meta.login` reach the same handler.
 
 ## Requests
 

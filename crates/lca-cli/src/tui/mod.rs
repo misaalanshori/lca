@@ -19,7 +19,7 @@ mod hooks;
 mod hub;
 pub(crate) use hub::OFFICIAL_CATALOG_URL;
 mod label_hooks;
-mod login;
+pub mod login;
 mod model_select;
 mod pending_step;
 mod runner;

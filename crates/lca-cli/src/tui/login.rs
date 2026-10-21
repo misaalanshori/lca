@@ -32,24 +32,160 @@ fn identity_instead_of_picker(argument: &str, names: &[String], owned_by_target:
     !argument.is_empty() && names.iter().any(|name| name == argument) && owned_by_target == 0
 }
 
+/// The option id a synthesized row carries (gh #297). Named, not a literal
+/// scattered through the picker: [`pick_route`] matches it to route the pick
+/// into the provider's own `provider-identity` login.
+pub const IDENTITY_LOGIN_ID: &str = "sign-in";
+
+/// Which path a picker choice takes (gh #297, ADR-0033).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickRoute {
+    /// A declared preset option: hand the answer to `login-submit`, the
+    /// extension stores the secret and returns its settings.
+    Submit,
+    /// A provider's own flow: run `provider-identity` `login` instead.
+    IdentityLogin,
+}
+
+/// The route a `(provider, choice)` pick takes.
+///
+/// `login-submit` is the *preset* protocol (ADR-0033): the host renders the
+/// option's fields and the extension stores what was typed. A provider whose
+/// sign-in is a self-contained OAuth/device dance exports `provider-identity`
+/// `login` and declares no presets, so a synthesized row for it must run that
+/// flow. `login-submit`'s trait default returns an empty setting list, so
+/// routing there would report success having done nothing at all.
+pub fn pick_route(_provider: &str, choice: &str) -> PickRoute {
+    if choice == IDENTITY_LOGIN_ID {
+        PickRoute::IdentityLogin
+    } else {
+        PickRoute::Submit
+    }
+}
+
+/// Whether a provider signs in through its own `provider-identity` login,
+/// read from its manifest's `[login] identity = true` (gh #297).
+///
+/// **Declared, never discovered.** The obvious implementation calls
+/// `identity_login()` and treats `NotSupported` as "no flow" - but that call
+/// *runs* the flow, so discovery would open a browser (or block on a device
+/// poll) for every installed subscription provider the moment `/login` opens.
+/// Measured the hard way: it hung the picker indefinitely.
+///
+/// Reading the declaration keeps discovery free and is inspectable: a user can
+/// see in `extension.toml` that a provider offers a sign-in, and the manifest
+/// is the consent surface the capability catalog already relies on.
+///
+/// Absent means absent: a provider that never declared one contributes no
+/// picker row, and `llama` (keyless until configured) stays out.
+fn declares_identity_login(handle: &lca_ext_native::NativeHandle) -> bool {
+    let Some(text) = handle.manifest_text() else {
+        return false;
+    };
+    let Ok(manifest) = text.parse::<toml::Value>() else {
+        return false;
+    };
+    manifest
+        .get("login")
+        .and_then(|login| login.get("identity"))
+        .and_then(|flag| flag.as_bool())
+        .unwrap_or(false)
+}
+
+/// What the host learned about one provider, for [`gather_from`].
+///
+/// `declared` is the provider's `login-options` answer (`None` when the call
+/// failed); `can_sign_in` is whether its `provider-identity` `login` exists.
+/// Keeping the two apart is the point: a provider can *declare* presets and
+/// be unable to run a flow (`openai-compatible` with no OAuth), or *declare
+/// none* and be perfectly able to sign in (every subscription provider).
+pub struct ProviderFacts {
+    /// The provider's extension name.
+    pub name: String,
+    /// Its `login-options` answer; `None` when that call failed.
+    pub declared: Option<Vec<lca_protocol::LoginOption>>,
+    /// Whether its `provider-identity` `login` exists.
+    pub can_sign_in: bool,
+}
+
+/// Build the picker's rows from what the host learned (gh #297).
+///
+/// Two rules, in order:
+///
+/// 1. Every option a provider declared becomes a row, attributed to it.
+/// 2. A provider that declared **none** but *can* sign in gets one
+///    synthesized row, so it is discoverable without knowing the
+///    `/login <name>` spelling. This is the backstop: a provider that grows
+///    an identity login and forgets its option is still listed, so the
+///    invisibility class cannot recur.
+///
+/// A provider that cannot sign in and declared nothing contributes nothing -
+/// the negative that keeps the picker honest. A provider that declared
+/// options gets no synthetic row on top of them.
+///
+/// Rows come in `facts` order, so the picker reads as the registry does and
+/// two frames of one session are identical.
+pub fn gather_from(facts: &[ProviderFacts]) -> Vec<(String, lca_protocol::LoginOption)> {
+    let mut out: Vec<(String, lca_protocol::LoginOption)> = Vec::new();
+    for fact in facts {
+        let declared = fact.declared.as_deref().unwrap_or_default();
+        if !declared.is_empty() {
+            out.extend(
+                declared
+                    .iter()
+                    .cloned()
+                    .map(|option| (fact.name.clone(), option)),
+            );
+            continue;
+        }
+        if !fact.can_sign_in {
+            continue;
+        }
+        out.push((
+            fact.name.clone(),
+            lca_protocol::LoginOption {
+                id: IDENTITY_LOGIN_ID.to_string(),
+                name: format!("Sign in with {}", fact.name),
+                kind: "oauth".to_string(),
+                host: String::new(),
+                fields: Vec::new(),
+                extras: Default::default(),
+            },
+        ));
+    }
+    out
+}
+
 impl Ui {
     /// Every picker choice: each enabled provider extension's own options
     /// (custom endpoints included, gh #188), plus the user's named
     /// custom endpoints (D1's override layer). The host appends
     /// nothing: an empty set answers with the way out.
     fn gather(&self, scope: &[String]) -> Vec<(String, lca_protocol::LoginOption)> {
-        let mut out: Vec<(String, lca_protocol::LoginOption)> = Vec::new();
+        // Gh #297: ask each provider two questions and hand the answers to
+        // the pure decision below. `login_options` says what the provider
+        // *declares*; `provider-identity` `login` says whether it can sign
+        // in at all (`NotSupported` when it has no flow, ADR-0012). Both are
+        // cheap - every first-party provider answers from a constant or a
+        // stored credential, no network - and asking rather than guessing is
+        // what keeps the picker's membership rule the provider's own.
+        let mut facts: Vec<ProviderFacts> = Vec::new();
         for name in scope {
             let Some(handle) = self.registry().provider(name).cloned() else {
                 continue;
             };
-            let name = name.clone();
-            let result = lca_core::drive_blocking(async move { handle.login_options().await });
-            match result {
-                Ok(options) => out.extend(options.into_iter().map(|o| (name.clone(), o))),
-                Err(err) => tracing::warn!("{name} login options: {err}"),
-            }
+            let declared =
+                lca_core::drive_blocking(async move { handle.login_options().await }).ok();
+            let Some(handle) = self.registry().provider(name).cloned() else {
+                continue;
+            };
+            facts.push(ProviderFacts {
+                name: name.clone(),
+                declared,
+                can_sign_in: declares_identity_login(&handle),
+            });
         }
+        let mut out = gather_from(&facts);
         // D1's override layer keeps the openai-compatible attribution:
         // the file's own grammar (base_url/auth/models) is that
         // extension's preset shape. The default-host filter below it is
@@ -65,6 +201,9 @@ impl Ui {
             "openai-compatible",
             needs.as_ref(),
         ));
+        // Gh #297: the backstop. A provider with an identity login and no
+        // declared presets gets one synthesized row, so it is discoverable
+        // without knowing the `/login <name>` spelling.
         out
     }
 
@@ -574,6 +713,27 @@ impl Ui {
     pub(super) fn login_pick(self: &Arc<Self>) -> lca_ui::LoginPick {
         let ui = self.clone();
         Arc::new(move |provider: &str, choice: &str| -> LoginNext {
+            // Gh #297 acceptance 2: a synthesized row is the provider's own
+            // flow, not a preset. Run `provider-identity` `login` - the same
+            // handler `/<provider>.login` and the scoped `/login <name>`
+            // route reach. `login-submit` is the preset protocol, whose
+            // trait default answers "ok" having stored nothing, so a pick
+            // that went that way would look like a successful sign-in and
+            // leave the user with no credential.
+            if pick_route(provider, choice) == PickRoute::IdentityLogin {
+                // Take the pick out of the flow so a later `login_complete`
+                // cannot find a half-open preset for it.
+                let _ = ui
+                    .flow
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .pick(provider, choice);
+                let Some(handle) = ui.registry().provider(provider).cloned() else {
+                    return LoginNext::Message(format!("`{provider}` cannot log in"));
+                };
+                ui.spawn_identity_login(handle);
+                return LoginNext::Message(WAIT_LABEL.to_string());
+            }
             let step = ui
                 .flow
                 .lock()
@@ -913,3 +1073,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "login_picker_tests.rs"]
+mod picker_coverage_tests;

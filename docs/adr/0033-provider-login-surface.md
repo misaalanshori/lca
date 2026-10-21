@@ -72,3 +72,43 @@ for providers whose flow is self-contained (antigravity's OAuth). Conformance
 gains options round-trip and submit cases in both delivery modes; the host
 gains one new dispatch method pair. Wire identity (ADR-0031's V1/V2) is
 unchanged by this record.
+
+## Annotation — 2026-10-21 (gh #297): a provider whose sign-in is its own flow is declared, not discovered
+
+This record defines the picker as fed by `login-options`. That left an
+unstated case, and the interface resolved it silently and wrongly: a
+provider that signs in through `provider-identity` `login` (an OAuth or
+device-code dance it runs itself) declares no presets, so it contributed no
+picker row at all. `/login` therefore listed only the preset providers;
+`antigravity`, `codex`, `grok`, `kimi-coding`, `meta` (and `openrouter`,
+same shape) were reachable only by knowing the undocumented
+`/login <name>` spelling.
+
+Two additions, both within this record's split:
+
+1. **`[login] identity = true` in the manifest** declares that a provider
+   signs in through its own flow. The host lists such a provider with one
+   synthesized row (`Sign in with <name>`, kind `oauth`, no fields) and
+   routes that pick to `provider-identity` `login`. The declaration lives
+   in the manifest because the manifest is already the consent surface, and
+   because the alternative — *asking* a provider whether it can sign in, by
+   calling `identity_login()` and reading `NotSupported` — **runs the
+   flow**: it opens a browser or blocks on a device poll for every
+   installed subscription provider the moment `/login` opens. That was
+   implemented, measured, and reverted; it hung the picker.
+2. **The pick path is now two-valued.** A choice carrying the synthesized
+   row's id goes to the provider's own `login`; everything else goes to
+   `login-submit` as before. This half is load-bearing rather than
+   cosmetic: none of these providers implements `login-submit`, whose trait
+   default returns `Ok(vec![])` having stored nothing, so a synthesized row
+   routed down the submit path would report a completed sign-in and leave
+   the user with no credential — worse than the invisible row it replaced.
+
+Consequences: a provider that declares an identity flow and forgets nothing
+else is visible with no host change, so a future provider cannot be hidden
+the same way; a provider that declares no flow still contributes no row
+(`llama` is keyless until configured); and a provider with declared presets
+is untouched — the rule only fills in providers that declared none. The
+manifest schema's `login` table is additive by design ("unknown keys are
+ignored by older hosts"), so the key needs no ABI line.
+
