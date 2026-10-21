@@ -27,10 +27,33 @@ pub struct Mock {
 /// The recorded chat stream every turn replays.
 pub const STREAM_FIXTURE: &str = include_str!("../fixtures/chat-stream.sse");
 
-/// The mock catalog: a picker row, a policy-enabled row, a disabled
-/// row, and a tool-less row.
+/// The mock catalog, in the shape GitHub's `/models` really answers
+/// (gh #283): `name`, `capabilities.family`, `capabilities.limits` with
+/// `max_context_window_tokens` / `max_prompt_tokens` /
+/// `max_output_tokens`, and `capabilities.supports` with `tool_calls`
+/// and `reasoning_effort`. The field names are not guesses: they are the
+/// ones opencode's `github-copilot/models.ts` decodes from the live API
+/// (`remote.capabilities.limits.max_context_window_tokens`), corroborated
+/// by the models.dev captures that report Copilot's per-model limits.
+///
+/// The rows are chosen so every precedence rule has a witness:
+/// - `gpt-4o` is curated (128k) and the endpoint says *less* (64k): the
+///   curated window must win, because it is the vendor-documented one.
+/// - `claude-3.5-sonnet` is curated (200k) and the endpoint agrees.
+/// - `mock/new-model` is uncatalogued but the endpoint declares 150k:
+///   the endpoint's number is used rather than dropped.
+/// - `mock/unlimited-model` is uncatalogued with no `limits` at all: it
+///   stays `0` (unknown, never a fabricated number).
+/// - the disabled and tool-less policy rows stay for the gh #184 filters.
 pub const MODELS_FIXTURE: &str = r#"{"data":[
-{"id":"gpt-4o","model_picker_enabled":true,"capabilities":{"supports":{"tool_calls":true}}},
+{"id":"gpt-4o","name":"GPT-4o","model_picker_enabled":true,
+ "capabilities":{"family":"gpt-4o","limits":{"max_context_window_tokens":64000,"max_prompt_tokens":56000,"max_output_tokens":8000},"supports":{"tool_calls":true}}},
+{"id":"claude-3.5-sonnet","name":"Claude 3.5 Sonnet","model_picker_enabled":true,
+ "capabilities":{"family":"claude-3.5-sonnet","limits":{"max_context_window_tokens":200000,"max_prompt_tokens":180000,"max_output_tokens":20000},"supports":{"tool_calls":true,"vision":true}}},
+{"id":"mock/new-model","name":"Brand New Model","model_picker_enabled":true,
+ "capabilities":{"family":"new","limits":{"max_context_window_tokens":150000,"max_prompt_tokens":140000,"max_output_tokens":10000},"supports":{"tool_calls":true,"reasoning_effort":["low","medium","high"]}}},
+{"id":"mock/unlimited-model","model_picker_enabled":true,
+ "capabilities":{"family":"unknown","supports":{"tool_calls":true}}},
 {"id":"mock/policy-model","model_picker_enabled":false,"policy":{"state":"enabled"},"capabilities":{"supports":{"tool_calls":true}}},
 {"id":"mock/disabled-model","model_picker_enabled":true,"policy":{"state":"disabled"}},
 {"id":"mock/text-only","model_picker_enabled":true,"capabilities":{"supports":{"tool_calls":false}}}

@@ -33,7 +33,19 @@ Two notes against the September spec: `worlds` is `provider` only (FR-PROV-10, t
 
 ## Requests
 
-Chat bodies over `POST {base}/chat/completions` where the base comes from the token's `proxy-ep` (`proxy.` becomes `api.`, pi's rule), then the enterprise shape, then the individual default: the bearer, pi's Copilot header block (`User-Agent`, `Editor-Version`, `Editor-Plugin-Version`, `Copilot-Integration-Id`), and `X-GitHub-Api-Version`. Model-policy auto-enabling (pi's best-effort POSTs) stays out of the login path — enabling happens on github.com; the live catalog lists picker-enabled and policy-enabled rows and skips disabled and tool-less ones, with the issue's five rows as the offline floor.
+Chat bodies over `POST {base}/chat/completions` where the base comes from the token's `proxy-ep` (`proxy.` becomes `api.`, pi's rule), then the enterprise shape, then the individual default: the bearer, pi's Copilot header block (`User-Agent`, `Editor-Version`, `Editor-Plugin-Version`, `Copilot-Integration-Id`), and `X-GitHub-Api-Version`. Model-policy auto-enabling (pi's best-effort POSTs) stays out of the login path — enabling happens on github.com.
+
+## Models
+
+`GET {base}/models` is the account's own catalog: picker-enabled and policy-enabled rows list, disabled and tool-less ones do not (gh #184). Two sources size each row, in precedence order — the same discipline `openai-compatible`'s four-source ladder applies, narrowed to what this gateway publishes:
+
+1. **The curated table** (`CURATED_MODELS`) wins for an id it knows. Its figures are vendor-documented; the endpoint's are the account's view and can be a narrower tier, so `gpt-4o` reports the table's 128000 even if the account is offered 64000. A wrong denominator silently mis-triggers compaction (FR-SESS-4), which is worse than a missing one.
+2. **The endpoint's declared window** — `capabilities.limits.max_context_window_tokens`, falling back to `max_prompt_tokens` when only that is present — for an id the table does not know, so a newly-offered model is sized from the only figure published about it rather than reported unknown.
+3. **`0`** when neither source answers, honestly. The footer keeps `ctx ?` and compaction stays off; this provider never invents a number, because a fabricated window is the failure mode the whole ladder exists to prevent.
+
+The same mapping keeps the rest of what the endpoint publishes: `max_output_tokens` rides `ModelInfo.max_tokens`, the display `name` replaces the echoed id (blank falls back to the id), and the capability hints ride the documented `extras` vocabulary — `capabilities.supports.vision` becomes `image.vision` (gh #39) and `capabilities.supports.reasoning_effort` joins into `thinking_levels` (gh #242), so the picker offers only the levels the account's model accepts. A hint the endpoint omits stays **absent**, which means unknown; it is never synthesized as `false`. Copilot ships as a component, so the guest forwards these extras across the WIT boundary (gh #283) — the record always carried them.
+
+The offline floor is the five curated rows, all fully sized.
 
 ## login, logout, usage
 

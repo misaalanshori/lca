@@ -226,7 +226,16 @@ impl ModelsGuest for GitHubCopilotWasm {
                 name: model.name,
                 context_window: model.context_window,
                 max_tokens: model.max_tokens,
-                extras: Vec::new(),
+                // Gh #283: the endpoint's capability hints must cross the
+                // sandbox boundary, or the fix only exists for a native
+                // build of a provider that ships as a component. The WIT
+                // record has always carried `extras`; dropping them here
+                // was a silent truncation, not a limit of the ABI.
+                extras: model
+                    .extras
+                    .into_iter()
+                    .map(|(key, value)| ExtraPair { key, value })
+                    .collect(),
             })
             .collect()
     }
