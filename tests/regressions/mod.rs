@@ -573,3 +573,11 @@ mod stream_guard_refire_and_trust;
 // than swallowed, and that a wholly malformed payload still falls back.
 #[path = "295-openrouter-catalog-resilience.rs"]
 mod openrouter_catalog_resilience;
+// GitHub #278: `net_close_response` drops a response from the host's handle
+// table, so reading `retry-after` afterwards was `NotFound` and the server's
+// backoff intent was silently lost. anthropic closed first and read second;
+// openrouter and openai-compatible never read the header at all. The guard
+// drives all three through a capability that models the real lifecycle, which
+// is the thing the shipped doubles could not do.
+#[path = "278-retry-after-read-before-close.rs"]
+mod retry_after_read_before_close;

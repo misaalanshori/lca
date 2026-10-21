@@ -69,6 +69,25 @@ Dates are UTC.
   therefore leaves the prompt-jump binding, which keeps `Shift+Up` and
   `Ctrl+Up`; `Alt+E` survives as the second dequeue spelling. The abort
   rescue itself is unchanged and now pinned by a regression row.
+- **A rate-limited provider's `retry-after` is honoured again** (gh #278).
+  Every provider reads the HTTP `retry-after` header and appends it to the
+  error text, where the host's retry engine parses it (gh #52) — but the
+  anthropic extension closed the response handle *before* reading the headers.
+  `net_close_response` drops the response from the host's handle table, so the
+  read answered `NotFound`, the `&&` chain short-circuited, and the server's
+  backoff intent was silently discarded: the client retried on its own
+  exponential schedule instead of the delay the server asked for. Two sibling
+  extensions had the same class of defect reached differently —
+  `openrouter` and `openai-compatible` (the default provider) never read the
+  header at all, so a 429's delay was lost either way. All three now read it
+  while the handle is live and forward the value verbatim; the host already
+  accepts both seconds and an IMF-fixdate and clamps with
+  `provider.retry_max_delay_ms`, so a hostile `retry-after: 86400` cannot
+  wedge a session. The token is attached only for throttling statuses
+  (429/500/502/503/529) — a 401's answer is to re-authenticate, not to wait.
+  The shipped test for this passed over the defect because its capability
+  double returned headers unconditionally regardless of the close; the guards
+  now model the real lifecycle, which is what makes the ordering observable.
 - **One malformed entry no longer discards the whole OpenRouter catalog**
   (gh #295). `discover_models` read the gateway's `/models` array with
   `entry.get("id")?.as_str()?` inside its loop — `?` returns from the
