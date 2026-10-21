@@ -30,6 +30,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
+// `Duration` is only used by the unix-gated rows below, so the import carries
+// the same gate; without it `windows-latest` clippy fails on an unused import
+// (the sibling of the `Tmux` gate added in 972d39bc).
+#[cfg(unix)]
 use std::time::Duration;
 
 mod common;
