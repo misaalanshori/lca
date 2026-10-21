@@ -32,7 +32,14 @@ use exports::lca::ext::provider_login::{
 };
 use exports::lca::ext::provider_models::{Guest as ModelsGuest, ModelInfo as WasmModel};
 use lca::ext::types::{ExtraPair, Usage as WasmUsage};
-use lca::host::{credentials, net, oauth};
+use lca::host::{credentials, log, net, oauth};
+
+/// One diagnostics line through the always-granted `log` import (gh #295:
+/// a partial catalog read must be observable). Thin wrapper so the crate's
+/// shared sentence stays the only thing that formats the message.
+pub(crate) fn log_warn(message: &str) {
+    log::warn(message);
+}
 
 use crate::{IdentityOutcomeAlias, run_login, run_logout, run_usage};
 

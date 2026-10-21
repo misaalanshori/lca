@@ -83,6 +83,9 @@ question = { path = "extensions/question" }
 # gh #300: the re-fire and trust-parity guard drives the extension's real
 # scanner and its one trust-gated loader, in both delivery modes' shapes.
 stream-guard = { path = "extensions/stream-guard" }
+# gh #295: the catalog-resilience guard drives the extension's real discovery
+# loop through a capability that serves a malformed gateway payload.
+openrouter = { path = "extensions/openrouter" }
 openai-compatible = { path = "extensions/openai-compatible" }
 serde_json.workspace = true
 tokio.workspace = true

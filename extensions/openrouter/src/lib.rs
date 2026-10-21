@@ -388,10 +388,23 @@ pub const CURATED_MODELS: [(&str, &str, u32); 3] = [
 /// publishes and the preset discovery already reads), the curated
 /// floor otherwise.
 pub fn list_models(cap: &dyn ProviderCap) -> Vec<lca_protocol::ModelInfo> {
-    if let Some(live) = discover_models(cap)
-        && !live.is_empty()
-    {
+    let (live, dropped) = discover_report(cap);
+    if !live.is_empty() {
+        // Gh #295: report the partial answer where the user will see it.
+        // A gateway catalog can be several hundred rows; dropping some is
+        // survivable, dropping them *silently* is what this project keeps
+        // closing. `log` is the extension's diagnostic channel in both
+        // delivery modes ("never reach the model or the session log"), so a
+        // skip lands in diagnostics and not in the transcript.
+        if dropped > 0 {
+            report_skipped(dropped, live.len());
+        }
         return live;
+    }
+    if dropped > 0 {
+        // Every row was malformed: still the curated floor, but say why
+        // the live catalog contributed nothing.
+        report_skipped(dropped, 0);
     }
     CURATED_MODELS
         .iter()
@@ -405,9 +418,44 @@ pub fn list_models(cap: &dyn ProviderCap) -> Vec<lca_protocol::ModelInfo> {
         .collect()
 }
 
+/// Name a partial catalog read in diagnostics (gh #295). One line, with the
+/// counts, so "returned 40 of 300 and said nothing" cannot happen again.
+#[cfg(not(target_arch = "wasm32"))]
+fn report_skipped(dropped: usize, kept: usize) {
+    // The native twin has no `log` import (that is the guest's channel), so
+    // it speaks on the same stream the binary uses for provider warnings.
+    eprintln!("warning: {}", skip_message(dropped, kept));
+}
+
+/// The guest's half of [`report_skipped`]: the always-granted `log` import.
+///
+/// Both modes carry the same sentence, so the message is one fact rather
+/// than two implementations that drift.
+#[cfg(target_arch = "wasm32")]
+fn report_skipped(dropped: usize, kept: usize) {
+    wasm_mode::log_warn(&skip_message(dropped, kept));
+}
+
+/// The sentence both modes emit for a partial catalog (gh #295).
+pub fn skip_message(dropped: usize, kept: usize) -> String {
+    format!(
+        "openrouter: skipped {dropped} malformed catalog entr{}; {kept} model{} usable",
+        if dropped == 1 { "y" } else { "ies" },
+        if kept == 1 { "" } else { "s" }
+    )
+}
+
 /// One bounded catalog read (the openai-compatible discovery shape,
 /// cut to what a gateway catalog needs: id + `context_length`).
-fn discover_models(cap: &dyn ProviderCap) -> Option<Vec<lca_protocol::ModelInfo>> {
+///
+/// Returns the rows it could use and how many it had to drop, so a
+/// partial answer is never silent (gh #295's reporting rule). `None`
+/// means the read itself failed — unreachable gateway, non-2xx status,
+/// unparseable body, or no `data` array — and the caller takes the
+/// curated fallback. A payload that parses but yields no usable row is
+/// `Some((vec![], dropped))`: the caller still falls back, and it can
+/// say why.
+fn discover_models(cap: &dyn ProviderCap) -> Option<(Vec<lca_protocol::ModelInfo>, usize)> {
     let key = access_key(cap).ok()?;
     let base = endpoint(cap, "api_base", API_BASE_DEFAULT);
     let url = format!("{}{MODELS_PATH}", base.trim_end_matches('/'));
@@ -437,16 +485,32 @@ fn discover_models(cap: &dyn ProviderCap) -> Option<Vec<lca_protocol::ModelInfo>
     let json: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&body)).ok()?;
     let data = json.get("data")?.as_array()?;
     let mut models = Vec::new();
+    let mut dropped = 0usize;
     for entry in data {
-        let id = entry.get("id")?.as_str()?;
-        if id.is_empty() {
+        // Gh #295: a malformed row is skipped, not fatal. `?` here used to
+        // return `None` for the whole payload, so one experimental or
+        // notice-shaped entry (`{"id":null}`, `{"message":…}`) collapsed a
+        // several-hundred-row catalog to the three curated rows. Skipping
+        // keeps the rest; the count rides back so the drop is observable.
+        let Some(id) = entry
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty())
+        else {
+            dropped += 1;
             continue;
-        }
+        };
+        // Everything else keeps its tolerant handling: a missing or
+        // odd `context_length` is a zero window, never a rejection (the
+        // gh #34 ground-truth rule), and a window of 0 means "unknown"
+        // rather than "too small".
         let window = entry
             .get("context_length")
             .and_then(|value| value.as_u64())
             .and_then(|window| u32::try_from(window).ok())
             .unwrap_or(0);
+        // Order is the gateway's: rows are pushed as read and never
+        // sorted, so a skip cannot reorder the survivors.
         models.push(lca_protocol::ModelInfo {
             id: id.to_string(),
             name: id.to_string(),
@@ -455,7 +519,19 @@ fn discover_models(cap: &dyn ProviderCap) -> Option<Vec<lca_protocol::ModelInfo>
             extras: Default::default(),
         });
     }
-    (!models.is_empty()).then_some(models)
+    Some((models, dropped))
+}
+
+/// The catalog read, with the skip count: the rows actually discovered and
+/// how many entries were dropped as malformed (gh #295). The count is what
+/// makes a partial answer reportable rather than silent.
+pub fn discover_report(cap: &dyn ProviderCap) -> (Vec<lca_protocol::ModelInfo>, usize) {
+    match discover_models(cap) {
+        Some((models, dropped)) => (models, dropped),
+        // The read itself failed: no rows, nothing skipped — the caller's
+        // fallback is not a partial answer.
+        None => (Vec::new(), 0),
+    }
 }
 
 /// The outcome alias identity returns on the success path.
