@@ -127,41 +127,55 @@ fn rpc_replays_prompt_steer_follow_up_cancel_shutdown() {
 // half: the unit rows pin the sink's line, this one pins that RPC actually
 // drives it, in order, on the same stream a client reads.
 //
-// No sleep and no cancel, so it is not exposed to the load flake that
-// quarantined the #56 happy path above: a tool call keeps the turn open
-// exactly long enough for the accept to land, and the turn then completes
-// normally.
+// **Timing is absorbed, behavior never is** - the house pattern from
+// `conformance_diff.rs`'s pty-io row, and the same one the sibling
+// cancelled-queue row uses. The steer is written to a pipe up front, so under
+// load it can arrive after the turn's only tool call has already returned and
+// the boundary has passed; the drain then never happens and the precondition
+// (a `queue-flushed` on the stream) is simply not met. That is a miss in the
+// *scenario*: retried once, and a second miss fails loud. No assertion is
+// relaxed and no sleep widens the window.
 #[test]
 fn an_accepted_steer_is_announced_before_it_drains() {
-    let runtime = rt();
-    let mock = runtime.block_on(start_mock(vec![
-        // Turn 1: a tool call gives the steer time to arrive mid-turn.
-        Reply::Sse(sse_tool_call("shell", r#"{"command":"sleep 1"}"#)),
-        // Turn 1 continues after the drain, and the injected message shows.
-        Reply::Sse(sse_text("after the tool")),
-        // Turn 2 (the follow-up) answers.
-        Reply::Sse(sse_text("followed up")),
-    ]));
-    let box_ = sandbox("rpc-queue-queued");
-    let script = [
-        cmd("p1", "prompt", r#""message":"sleep please""#),
-        cmd("s1", "steer", r#""message":"a note""#),
-        cmd("f1", "follow_up", r#""message":"later""#),
-        cmd("d1", "shutdown", ""),
-    ]
-    .concat();
-    let output = box_.run_with_stdin(
-        Some(&mock),
-        &["--yolo", "--model", "zen-free", "--mode", "rpc"],
-        &script,
-    );
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "clean exit: {}",
-        stderr(&output)
-    );
-    let records = json_lines(&output);
+    // One attempt; `None` when the precondition (a steer drain) was not met.
+    let attempt = || -> Option<Vec<serde_json::Value>> {
+        let runtime = rt();
+        let mock = runtime.block_on(start_mock(vec![
+            // Turn 1: a tool call gives the steer time to arrive mid-turn.
+            Reply::Sse(sse_tool_call("shell", r#"{"command":"sleep 1"}"#)),
+            // Turn 1 continues after the drain, and the injected message shows.
+            Reply::Sse(sse_text("after the tool")),
+            // Turn 2 (the follow-up) answers.
+            Reply::Sse(sse_text("followed up")),
+        ]));
+        let box_ = sandbox("rpc-queue-queued");
+        let script = [
+            cmd("p1", "prompt", r#""message":"sleep please""#),
+            cmd("s1", "steer", r#""message":"a note""#),
+            cmd("f1", "follow_up", r#""message":"later""#),
+            cmd("d1", "shutdown", ""),
+        ]
+        .concat();
+        let output = box_.run_with_stdin(
+            Some(&mock),
+            &["--yolo", "--model", "zen-free", "--mode", "rpc"],
+            &script,
+        );
+        let records = json_lines(&output);
+        // The precondition this scenario needs: the drain actually happened.
+        let drained = records.iter().any(|line| line["type"] == "queue-flushed");
+        drained.then_some(records)
+    };
+
+    // Sequential, not a tuple: `(attempt(), attempt())` would evaluate both
+    // eagerly and run the whole journey twice even when the first is fine.
+    let records = match attempt().or_else(attempt) {
+        Some(records) => records,
+        None => panic!(
+            "the steer never drained in two attempts; the accept/drain \
+             ordering is not landing inside the turn"
+        ),
+    };
 
     // Both accepts are present, with the mode each was submitted under.
     let queued: Vec<&serde_json::Value> = records
@@ -189,14 +203,6 @@ fn an_accepted_steer_is_announced_before_it_drains() {
     let accepts = position("queue-queued");
     let flushes = position("queue-flushed");
     assert!(
-        !flushes.is_empty(),
-        "the steer drain is on the stream too: {:?}",
-        records
-            .iter()
-            .map(|l| l["type"].as_str().unwrap_or(""))
-            .collect::<Vec<_>>()
-    );
-    assert!(
         accepts[0] < flushes[0],
         "accept at {} must precede the drain at {}: {accepts:?} {flushes:?}",
         accepts[0],
@@ -217,31 +223,57 @@ fn an_accepted_steer_is_announced_before_it_drains() {
 // injected" is a distinct fact from "never arrived", and a client that saw a
 // flush here would think the model had read the message when it had not.
 //
-// The turn is cancelled from the mock side (a long tool call plus a cancel),
-// so the drain genuinely cannot happen.
+// **Timing is absorbed, behavior never is** - the house pattern from
+// `conformance_diff.rs`'s pty-io row. The script is fire-and-forget on a
+// pipe, so under load the cancel can reach the run before the turn has begun
+// streaming inside its tool call, and the scenario then never reaches the
+// state this row is about. That is a miss in the *scenario*, not in the
+// product: it is retried once, and a second miss fails loud. The assertions
+// are never relaxed and no sleep widens the window - a sleep is only a
+// slower race.
 #[test]
 fn a_cancelled_queue_announces_the_accept_and_no_drain() {
-    let runtime = rt();
-    let mock = runtime.block_on(start_mock(vec![
-        // One long tool call; the cancel below lands during it, so the turn
-        // ends before the next boundary and `drain_steer` never runs.
-        Reply::Sse(sse_tool_call("shell", r#"{"command":"sleep 20"}"#)),
-        Reply::Sse(sse_text("never reached")),
-    ]));
-    let box_ = sandbox("rpc-queue-cancelled");
-    let script = [
-        cmd("p1", "prompt", r#""message":"long sleep""#),
-        cmd("s1", "steer", r#""message":"dropped note""#),
-        cmd("c1", "cancel", ""),
-        cmd("d1", "shutdown", ""),
-    ]
-    .concat();
-    let output = box_.run_with_stdin(
-        Some(&mock),
-        &["--yolo", "--model", "zen-free", "--mode", "rpc"],
-        &script,
-    );
-    let records = json_lines(&output);
+    // One attempt at the whole journey; `None` when the precondition (a
+    // cancelled turn-end) was not met this time.
+    let attempt = || -> Option<Vec<serde_json::Value>> {
+        let runtime = rt();
+        let mock = runtime.block_on(start_mock(vec![
+            // One long tool call; the cancel below lands during it, so the
+            // turn ends before the next boundary and `drain_steer` never runs.
+            Reply::Sse(sse_tool_call("shell", r#"{"command":"sleep 20"}"#)),
+            Reply::Sse(sse_text("never reached")),
+        ]));
+        let box_ = sandbox("rpc-queue-cancelled");
+        let script = [
+            cmd("p1", "prompt", r#""message":"long sleep""#),
+            cmd("s1", "steer", r#""message":"dropped note""#),
+            cmd("c1", "cancel", ""),
+            cmd("d1", "shutdown", ""),
+        ]
+        .concat();
+        let output = box_.run_with_stdin(
+            Some(&mock),
+            &["--yolo", "--model", "zen-free", "--mode", "rpc"],
+            &script,
+        );
+        let records = json_lines(&output);
+        // The precondition this scenario needs: the turn really was cancelled.
+        let cancelled = records
+            .iter()
+            .any(|line| line["type"] == "turn-end" && line["stop_reason"] == "cancelled");
+        cancelled.then_some(records)
+    };
+
+    // Sequential, not a tuple: `(attempt(), attempt())` would evaluate both
+    // eagerly and run the whole journey twice even when the first is fine.
+    let records = match attempt().or_else(attempt) {
+        Some(records) => records,
+        None => panic!(
+            "the scenario never reached a cancelled turn in two attempts; \
+             the steer/cancel ordering is not landing on a streaming turn"
+        ),
+    };
+
     // Prove the script actually ran: the steer's response says "queued".
     // Without this the two assertions below could pass on a stream where
     // nothing was ever accepted (a vacuous green).
@@ -259,17 +291,6 @@ fn a_cancelled_queue_announces_the_accept_and_no_drain() {
         .collect();
     assert_eq!(accepts.len(), 1, "the steer was accepted: {accepts:?}");
     assert_eq!(accepts[0]["mode"], "steer");
-    // And the run really was cancelled before a boundary.
-    assert!(
-        records
-            .iter()
-            .any(|line| line["type"] == "turn-end" && line["stop_reason"] == "cancelled"),
-        "the turn ended cancelled: {:?}",
-        records
-            .iter()
-            .filter(|l| l["type"] == "turn-end")
-            .collect::<Vec<_>>()
-    );
     // The honest half: no flush for a message no boundary ever drained.
     let drained: Vec<&serde_json::Value> = records
         .iter()
