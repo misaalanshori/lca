@@ -538,7 +538,10 @@ impl Drop for ChatDriver<'_> {
 /// `parseGitHubCopilotModelCatalog` minus the policy fallback: rows
 /// the picker enables and policies not disabled; enabling happens on
 /// github.com).
-fn parse_models(text: &str) -> Vec<(String, bool)> {
+/// Parse the gateway's `/models` answer into rows, applying gh #184's
+/// filters (tool-less and policy-disabled rows never list) and keeping
+/// every field the provider can honestly use (gh #283).
+fn parse_models(text: &str) -> Vec<LiveRow> {
     let json: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
     let Some(data) = json.get("data").and_then(|value| value.as_array()) else {
         return Vec::new();
@@ -573,7 +576,10 @@ fn parse_models(text: &str) -> Vec<(String, bool)> {
             continue;
         }
         if picker || policy == "enabled" {
-            rows.push((id.to_string(), picker));
+            rows.push(LiveRow {
+                id: id.to_string(),
+                ..LiveRow::from_entry(item)
+            });
         }
     }
     rows
@@ -592,21 +598,19 @@ pub const CURATED_MODELS: [(&str, &str, u32); 5] = [
 
 /// The model catalog: the gateway's own `/models` when the token is
 /// live (per-account policies included), the curated floor otherwise.
+///
+/// Gh #283: a live row's numbers come from `resolve_row`, not from a
+/// hardcoded zero. A zero window means the footer shows `ctx ?` and the
+/// FR-SESS-4 threshold falls back to `docs/compaction.md`'s 128k
+/// estimate - right only for a model whose real window is 128k. Copilot's
+/// curated figures are 200k, so stamping zero on every row gave those
+/// sessions a threshold far below the real one.
 pub fn list_models(cap: &dyn ProviderCap) -> Vec<lca_protocol::ModelInfo> {
     if let Ok(token) = access_token(cap)
         && let Some(live) = discover_models(cap, &token)
         && !live.is_empty()
     {
-        return live
-            .into_iter()
-            .map(|(id, _)| lca_protocol::ModelInfo {
-                id: id.clone(),
-                name: id,
-                context_window: 0,
-                max_tokens: 0,
-                extras: Default::default(),
-            })
-            .collect();
+        return live.into_iter().map(resolve_row).collect();
     }
     CURATED_MODELS
         .iter()
@@ -620,8 +624,148 @@ pub fn list_models(cap: &dyn ProviderCap) -> Vec<lca_protocol::ModelInfo> {
         .collect()
 }
 
+/// One discovered row, with its numbers resolved (gh #283).
+///
+/// Precedence, mirroring `docs/providers/openai-compatible.md`'s
+/// four-source order adapted to what this gateway publishes:
+///
+/// 1. **The curated table** wins for an id it knows. Its figures are
+///    vendor-documented; the endpoint's are the account's own view and
+///    can be a narrower tier. A wrong denominator silently mis-triggers
+///    compaction, which that page calls out as worse than a missing one.
+/// 2. **The endpoint's declared window** when the table does not know the
+///    id - `capabilities.limits.max_context_window_tokens`, falling back
+///    to `max_prompt_tokens` when only that is present (opencode's
+///    decoder reads the pair the same way).
+/// 3. **`0`** otherwise, honestly. The footer renders `ctx ?` and the
+///    compaction estimate governs; a fabricated number is the one thing
+///    this must never do.
+///
+/// Everything non-structural (display name, modality hints) rides
+/// `extras` under the vocabulary the tree already reads, so no ABI
+/// change: `image.vision` from `capabilities.supports.vision` and
+/// `thinking_levels` from `capabilities.supports.reasoning_effort`.
+/// A hint the endpoint omits stays *absent* (unknown), never `false`.
+fn resolve_row(row: LiveRow) -> lca_protocol::ModelInfo {
+    let curated = CURATED_MODELS.iter().find(|(id, _, _)| *id == row.id);
+    let window = curated
+        .map(|(_, _, window)| *window)
+        .or_else(|| row.declared_window())
+        .unwrap_or(0);
+    let mut extras = std::collections::BTreeMap::new();
+    if let Some(vision) = row.vision {
+        extras.insert(
+            lca_protocol::IMAGE_VISION_EXTRA.to_string(),
+            vision.to_string(),
+        );
+    }
+    if !row.reasoning_effort.is_empty() {
+        extras.insert(
+            lca_protocol::THINKING_LEVELS_EXTRA.to_string(),
+            row.reasoning_effort.join(","),
+        );
+    }
+    lca_protocol::ModelInfo {
+        name: match (curated, row.name) {
+            (Some((_, curated_name, _)), _) => (*curated_name).to_string(),
+            (None, Some(name)) if !name.is_empty() => name,
+            // No name from either source: the id, never a blank row.
+            (None, _) => row.id.clone(),
+        },
+        id: row.id,
+        context_window: window,
+        max_tokens: row.max_output_tokens.unwrap_or(0),
+        extras,
+    }
+}
+
+/// One row of the gateway's `/models` answer, keeping the fields this
+/// provider can honestly use (`LiveRow::from_entry`).
+#[derive(Debug, Clone, Default)]
+struct LiveRow {
+    /// The model id the gateway keys on.
+    id: String,
+    /// The endpoint's display name, when it supplies one.
+    name: Option<String>,
+    /// `capabilities.limits.max_context_window_tokens`.
+    max_context_window_tokens: Option<u32>,
+    /// `capabilities.limits.max_prompt_tokens` - the window fallback.
+    max_prompt_tokens: Option<u32>,
+    /// `capabilities.limits.max_output_tokens`.
+    max_output_tokens: Option<u32>,
+    /// `capabilities.supports.vision`, absent when unreported.
+    vision: Option<bool>,
+    /// `capabilities.supports.reasoning_effort`, empty when unreported.
+    reasoning_effort: Vec<String>,
+}
+
+impl LiveRow {
+    /// The endpoint's window for this row, if it declared one.
+    fn declared_window(&self) -> Option<u32> {
+        self.max_context_window_tokens
+            .filter(|tokens| *tokens > 0)
+            .or(self.max_prompt_tokens.filter(|tokens| *tokens > 0))
+    }
+
+    /// Read the fields this provider uses off one `/models` entry.
+    ///
+    /// The paths are GitHub's, not guesses: `capabilities.limits.
+    /// max_context_window_tokens` / `max_prompt_tokens` /
+    /// `max_output_tokens` and `capabilities.supports.vision` /
+    /// `reasoning_effort` are what the live API answers and what
+    /// opencode's `github-copilot/models.ts` decodes. A missing field
+    /// stays `None`, so "the endpoint did not say" never turns into a
+    /// number or a `false`.
+    fn from_entry(item: &serde_json::Value) -> Self {
+        fn number(item: &serde_json::Value, path: &[&str]) -> Option<u32> {
+            let mut cursor = item;
+            for key in path {
+                cursor = cursor.get(*key)?;
+            }
+            cursor.as_u64().and_then(|value| u32::try_from(value).ok())
+        }
+        let capabilities = item.get("capabilities");
+        let field = |path: &[&str]| -> Option<&serde_json::Value> {
+            let mut cursor = capabilities?;
+            for key in path {
+                cursor = cursor.get(*key)?;
+            }
+            Some(cursor)
+        };
+        LiveRow {
+            id: item
+                .get("id")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            name: item
+                .get("name")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+                .filter(|name| !name.is_empty()),
+            max_context_window_tokens: number(
+                item,
+                &["capabilities", "limits", "max_context_window_tokens"],
+            ),
+            max_prompt_tokens: number(item, &["capabilities", "limits", "max_prompt_tokens"]),
+            max_output_tokens: number(item, &["capabilities", "limits", "max_output_tokens"]),
+            vision: field(&["supports", "vision"]).and_then(serde_json::Value::as_bool),
+            reasoning_effort: field(&["supports", "reasoning_effort"])
+                .and_then(serde_json::Value::as_array)
+                .map(|levels| {
+                    levels
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
 /// One bounded catalog read over the token-derived base.
-fn discover_models(cap: &dyn ProviderCap, token: &str) -> Option<Vec<(String, bool)>> {
+fn discover_models(cap: &dyn ProviderCap, token: &str) -> Option<Vec<LiveRow>> {
     let base = api_base(cap);
     let url = format!("{}/models", base.trim_end_matches('/'));
     let bearer = format!("Bearer {token}");

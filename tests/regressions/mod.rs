@@ -289,6 +289,13 @@ mod gh394_tree_layout_math;
 // `previous-summary` marker records rendered empty and vanished.
 #[path = "281-mechanical-compaction-carries-summaries.rs"]
 mod gh281_mechanical_compaction_carries_summaries;
+// GitHub #283: Copilot's live model discovery stamped `context_window: 0`
+// on every row, discarding the curated table's real windows - and 0 means
+// "unknown and never compacts", so a session could grow until the provider
+// rejected it. Guards the resolver and the sandbox hand-off, which drift
+// independently because the shipped provider is a WASM component.
+#[path = "283-discovered-models-keep-their-windows.rs"]
+mod gh283_discovered_models_keep_their_windows;
 // GitHub #297: the `/login` picker hid every subscription provider whose
 // sign-in is its own `provider-identity` flow rather than a declared preset.
 #[path = "297-login-lists-every-provider.rs"]

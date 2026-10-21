@@ -53,6 +53,25 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **Copilot's discovered models keep their real context windows** (gh #283).
+  Live discovery mapped every model from GitHub's `/models` to
+  `context_window: 0`, discarding the curated table's windows. Zero is not
+  "small" here - the footer reads it as `ctx ?` and the FR-SESS-4 threshold
+  falls back to `docs/compaction.md`'s 128k estimate, which is right only for
+  a model whose real window happens to be 128k. Copilot's curated figures are
+  200k, so every Claude and o-series session was using a threshold far below
+  the real one: it compacted early, and the footer told the user nothing. Rows now resolve through the
+  precedence the `openai-compatible` provider already uses, narrowed to what
+  this gateway publishes: the curated table wins for an id it knows (its
+  figures are vendor-documented; the account's tier can be narrower), the
+  endpoint's `capabilities.limits.max_context_window_tokens` sizes an
+  uncatalogued id (falling back to `max_prompt_tokens`, as opencode's decoder
+  does), and nothing is invented when neither answers - the footer keeps
+  `ctx ?`. The same mapping stops echoing the id as the name and forwards the
+  endpoint's `max_output_tokens` and capability hints (`image.vision`,
+  `thinking_levels`) through the extras channel; that last part needed the
+  WASM guest to stop dropping extras, since the provider ships as a
+  component. Guard: `tests/regressions/283-discovered-models-keep-their-windows.rs`.
 - **`/login` now lists every provider that can sign in** (gh #297). Six
   subscription providers - `antigravity`, `codex`, `grok`, `kimi-coding`,
   `meta` and `openrouter` - sign in through their own OAuth or device-code
