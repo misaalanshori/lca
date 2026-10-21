@@ -77,6 +77,21 @@ Dates are UTC.
   `PRODUCED_ELSEWHERE` exception is gone and the guard is green - the proof
   the doc and the code agree again. Guard:
   `tests/regressions/426-queue-queued-is-emitted.rs`.
+- **The slowest end-to-end install row now has a budget it can actually meet**
+  (gh #429). `e2e_install`'s Phase 5 exit test — the one that installs from OCI
+  *and* an HTTPS archive, grants, runs a turn, updates and removes — took 66–71 s
+  under 2× load against a 120 s cap: passing, but with only ~1.7× margin, so a
+  slower runner would eventually fail it for a reason unrelated to the product.
+  The doubled-fixture theory turned out to be wrong, and measurement said so:
+  fixture setup is 0.12 s of a 42 s idle run, while 94% is two turns at ~12 s
+  each, because every turn-shaped spawn loads an installed WASM component and
+  `wasmtime::component::Component::new` costs 21.8 s in a test build against
+  1.7 s in release. Sharing setup could not have helped and splitting would have
+  spread a fixed per-process cost across rows without lowering the total, so the
+  row gets a nextest override scoped to its exact name, budgeted at twice the
+  worst of seven loaded measurements (50–104 s) with the stage breakdown and the
+  arithmetic in the config, and verified in both directions: a sibling row is
+  still terminated at the default 120 s while this one survives past it.
 - **The taskbar spinner survives a long turn, and tab status covers
   compaction, shell runs, and install consent** (gh #369). `OSC 9;4`
   progress was written once at turn start, but terminal emulators put a
