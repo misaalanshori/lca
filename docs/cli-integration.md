@@ -111,6 +111,12 @@ command runs — that is the shape pi has too, and it is why
 `--bearer-token-env-var` exists for a token a server should read: it writes
 `Authorization: Bearer ${NAME}`, an indirection rather than a value.
 
+The tool-scoping flags change **what the model is told**, not just what it may
+call: the system prompt's tool list comes from the run's effective set, so
+`--no-tools` leaves the prompt with no tool section at all and `-t read,grep`
+lists exactly those two. Prompt and request cannot disagree, because both read
+one resolution.
+
 ## Long-lived control (`--mode rpc`)
 
 ```sh

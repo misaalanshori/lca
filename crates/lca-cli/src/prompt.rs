@@ -184,15 +184,41 @@ fn read_context_dir(dir: &std::path::Path) -> Vec<ContextFile> {
         .collect()
 }
 
-/// The agent's system prompt for one process (gh #43, #68, #74): the
-/// sectioned assembly over everything the run gathered - files, flags,
-/// trust, skills. Both front ends call this once at startup. A flag
-/// naming a missing file fails the startup (the `Err` carries why).
-pub fn agent_system_prompt(
+/// The tool names this run actually offers, in declaration order (gh #271).
+///
+/// One resolution, shared with the request: built-ins filtered through the
+/// registry's active set, then the extension tools the registry declares —
+/// the same pair `build_request` composes, so the prompt cannot advertise a
+/// tool the declaration omits. That is exactly what `--no-tools` used to do.
+pub fn effective_tools(registry: &lca_core::ExtensionRegistry) -> Vec<String> {
+    let mut names: Vec<String> = lca_core::BUILTIN_TOOLS
+        .iter()
+        .filter(|name| registry.is_builtin_active(name))
+        .map(|name| (*name).to_string())
+        .collect();
+    names.extend(
+        registry
+            .declared_tool_specs()
+            .into_iter()
+            .map(|spec| spec.name),
+    );
+    names
+}
+
+/// [`agent_system_prompt`] with the run's **effective** tool set (gh #271).
+///
+/// The prompt used to hardcode `lca_core::BUILTIN_TOOLS`, so `--no-tools` told
+/// the model about eight tools the request did not declare -- the prompt
+/// actively contradicting the declaration in the same request. The caller now
+/// passes what the run actually offers, resolved from the registry by the same
+/// predicate the request's declaration uses ([`crate::invoke::effective_tools`]),
+/// so there is one resolution rather than a second filter that can drift.
+pub fn agent_system_prompt_for(
     cwd: &std::path::Path,
     model_id: &str,
     flags: &crate::CliFlags,
     trusted: bool,
+    tool_names: &[&str],
 ) -> Result<String, String> {
     let data = crate::data_dir();
     let files = load_prompt_files(
@@ -225,7 +251,7 @@ pub fn agent_system_prompt(
     let mcp_servers = lca_mcp::manager::servers_section(&mcp.entries);
     Ok(compose_system_prompt(&PromptInputs {
         preamble,
-        tool_names: lca_core::BUILTIN_TOOLS,
+        tool_names,
         context_files: files.context_files,
         appends: files.appends,
         skills_catalog: catalog.as_deref(),
@@ -557,10 +583,12 @@ mod loader_tests {
         let skill = dir.join("SKILL.md");
         std::fs::write(&skill, "description: first words\n---\nBody.\n").expect("write");
         let flags = crate::CliFlags::default();
-        let before = agent_system_prompt(&cwd, "m", &flags, true).expect("build");
+        let before = agent_system_prompt_for(&cwd, "m", &flags, true, lca_core::BUILTIN_TOOLS)
+            .expect("build");
         assert!(before.contains("first words"), "v1 catalogued:\n{before}");
         std::fs::write(&skill, "description: second thoughts\n---\nBody.\n").expect("edit");
-        let after = agent_system_prompt(&cwd, "m", &flags, true).expect("rebuild");
+        let after = agent_system_prompt_for(&cwd, "m", &flags, true, lca_core::BUILTIN_TOOLS)
+            .expect("rebuild");
         assert!(
             after.contains("second thoughts") && !after.contains("first words"),
             "v2 replaces v1:\n{after}"

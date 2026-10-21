@@ -207,8 +207,20 @@ pub async fn rpc(
                         grants,
                         &mut state.prompt_impl,
                         proposals,
-                        agent_config,
+                        agent_config.clone(),
                     );
+                    // gh #269: the same nested-completion backend `headless`
+                    // and the TUI runner install. Without it an RPC session's
+                    // compaction had no backend and silently degraded to the
+                    // mechanical excerpt summary, and an extension asking for
+                    // the `completion` capability had nothing to call - in the
+                    // very entry point a daemon client uses.
+                    let nested = std::sync::Arc::new(lca_core::ext_provider::ProviderBackend::new(
+                        provider.clone(),
+                        agent_config.model.clone(),
+                        session_ref.id().to_string(),
+                    ));
+                    agent.set_nested_backend(nested);
                     let outcome = agent
                         .run_turn_queued(&text_owned, $queue, &[], &mut turn_sink, &flag)
                         .await;

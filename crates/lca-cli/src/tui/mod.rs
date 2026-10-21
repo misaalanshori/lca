@@ -516,7 +516,12 @@ fn agent_config_for(
     flags: &crate::CliFlags,
     trusted: bool,
 ) -> Result<AgentConfig, String> {
-    let system_prompt = crate::prompt::agent_system_prompt(cwd, model_id, flags, trusted)?;
+    // gh #271: advertise what the run offers, from the same resolution the
+    // request's declaration uses (never a second filter).
+    let effective = crate::prompt::effective_tools(registry);
+    let names: Vec<&str> = effective.iter().map(String::as_str).collect();
+    let system_prompt =
+        crate::prompt::agent_system_prompt_for(cwd, model_id, flags, trusted, &names)?;
     Ok(AgentConfig {
         provider: provider_name.to_string(),
         model: model_id.to_string(),

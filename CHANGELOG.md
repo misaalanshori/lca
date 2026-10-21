@@ -53,6 +53,17 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **`--mode rpc` sessions wire the nested completion backend** (gh #269).
+  `headless` and the interactive runner both build one and install it on the
+  agent; the RPC entry point did not, so LLM compaction in a daemon session
+  silently fell back to the mechanical excerpt summary and an extension asking
+  for the `completion` capability had nothing to call.
+- **The system prompt advertises only the tools the run offers** (gh #271). It
+  hardcoded every built-in, so `lca -p "…" --no-tools` told the model about
+  tools the same request did not declare — an invitation to wasted turns and
+  "tool not found" errors. The prompt's tool list now comes from the run's
+  effective set, the same resolution the request's declaration reads, so the
+  two cannot disagree.
 - **The environment variables each provider's preset declares now
   authenticate it** (gh #292). `provider-presets.toml` documents a canonical
   variable per service — `DEEPSEEK_API_KEY`, `GROQ_API_KEY`,
