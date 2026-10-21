@@ -80,6 +80,53 @@ pub fn select_formatter(path: &str, has_file: impl Fn(&str) -> bool) -> Option<F
     }
 }
 
+/// Whether a workspace-relative path lies under a directory a bare run must
+/// not touch (`lca_tools::SKIP_DIRS`: VCS internals and build output).
+///
+/// Matching is **component-wise**, not a substring test, and that is the whole
+/// subtlety: `src/targeted/x.rs` is an ordinary source file whose directory
+/// merely starts with `target`, and `src/.gitignore` is a config file whose
+/// name merely starts with `.git`. Only a path component equal to a skip name
+/// counts. A leading `./` or a trailing slash is tolerated, since a user types
+/// both.
+///
+/// Native-only, like the walk it serves: `lca-tools` is a desktop dependency
+/// (its capability engine needs the host), so the WASM half - which can only
+/// log and never spawn - does not compile these three helpers.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_skipped_path(path: &str) -> bool {
+    path.split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .any(|component| lca_tools::SKIP_DIRS.contains(&component))
+}
+
+/// The skip root a path lies under, for the refusal message. `None` when the
+/// path is formattable.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn skip_root(path: &str) -> Option<&'static str> {
+    path.split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .find_map(|component| {
+            lca_tools::SKIP_DIRS
+                .iter()
+                .find(|root| **root == component)
+                .copied()
+        })
+}
+
+/// Why an explicitly named path is refused (acceptance 2), or `None` when it
+/// is formattable. The message names the root and the reason, because a
+/// refusal a user cannot understand reads as a bug.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn refusal_reason(path: &str) -> Option<String> {
+    skip_root(path).map(|root| {
+        format!(
+            "{path}: refused - `{root}/` holds generated or version-control content; \
+             run the formatter on source files instead"
+        )
+    })
+}
+
 /// Extract the touched path from a tool call's arguments — but only
 /// for the file-mutating tools. Any other tool's `path` field (a
 /// `read` included) never triggers a format.
@@ -108,6 +155,11 @@ pub enum HookOutcome {
     /// The formatter was attempted but warned (missing, denied,
     /// failing): the result stays untouched either way.
     Warning(String),
+    /// The path lies under a directory a bare run never touches
+    /// (gh #357: VCS internals, build output). Named separately from
+    /// [`HookOutcome::Skipped`] so the refusal is visible rather than
+    /// silent.
+    Refused(String),
 }
 
 /// The process surface the hook needs: spawn, wait, and the failure
@@ -123,12 +175,61 @@ pub trait ProcessView {
     fn read_stderr(&self, handle: u32) -> String;
 }
 
-/// The config-probing surface: existence plus directory listing.
+/// The filesystem surface the formatter needs: existence probes (to pick a
+/// config-aware formatter) and the two calls a workspace walk is built from.
+///
+/// `list` is deliberately **one level**: the recursive, skip-aware walk is
+/// [`walk_workspace`], a free function over this trait. Keeping the recursion
+/// out of the implementation is what lets a test drive the real walker over a
+/// fabricated tree instead of re-implementing it.
 pub trait FsView {
     /// Whether a workspace-relative path exists.
     fn exists(&self, path: &str) -> bool;
-    /// Workspace-relative entries under a directory.
+    /// Workspace-relative entries directly under `dir`, one level.
     fn list(&self, dir: &str) -> Vec<String>;
+    /// `(is_dir, len)` for a workspace-relative path, or `None` when it is
+    /// unreadable or outside the granted scope.
+    fn stat(&self, path: &str) -> Option<(bool, u64)>;
+}
+
+/// Recursively collect every file under `dir`, never descending into a
+/// directory named in [`lca_tools::SKIP_DIRS`].
+///
+/// Gh #357. Two properties this carries:
+///
+/// * **The skip is evaluated at descent time**, not by filtering afterwards.
+///   Not descending is the entire saving: `.git/objects` on a real repo is
+///   tens of thousands of stat calls across the capability boundary, and no
+///   post-filter can un-pay that.
+/// * **Matching is component-wise** (the same rule [`is_skipped_path`] uses),
+///   so `src/targeted/` and `src/.gitignore.rs` are ordinary content while
+///   `nested/target/gen.rs` is not.
+///
+/// An unreadable directory ends that subtree and nothing else: a permission
+/// denial deep in the tree must not abort the walk.
+#[must_use]
+#[cfg(not(target_arch = "wasm32"))]
+pub fn walk_workspace(fs: &dyn FsView, dir: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    for entry in fs.list(dir) {
+        let path = if dir.is_empty() {
+            entry.clone()
+        } else {
+            format!("{dir}/{entry}")
+        };
+        let path = path.trim_end_matches('/').to_string();
+        match fs.stat(&path) {
+            Some((false, _)) => files.push(path),
+            Some((true, _)) => {
+                if is_skipped_path(&path) {
+                    continue;
+                }
+                files.extend(walk_workspace(fs, &path));
+            }
+            None => {}
+        }
+    }
+    files
 }
 
 /// The toggleable state: on by default, flipped by command.
@@ -168,6 +269,7 @@ impl FormatterState {
 
     /// Handle one tool result: the outcome matrix. The caller maps
     /// every outcome to an identity result patch.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn handle_result(
         &self,
         process: &dyn ProcessView,
@@ -190,12 +292,20 @@ impl FormatterState {
 
     /// Format one file through its formatter: the shared core of the
     /// hook and the `run` command.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn format_file(
         &self,
         process: &dyn ProcessView,
         fs: &dyn FsView,
         path: &str,
     ) -> HookOutcome {
+        // Gh #357: a path under a VCS or build root is refused, never
+        // formatted - even when the user named it explicitly. This is the one
+        // gate both the hook and `run <path>` pass through, so an explicit
+        // path and a model-touched path get the same answer.
+        if let Some(reason) = refusal_reason(path) {
+            return HookOutcome::Refused(reason);
+        }
         let Some(command) = select_formatter(path, |probe| fs.exists(probe)) else {
             return HookOutcome::Skipped(format!("no formatter for {path}"));
         };
@@ -238,6 +348,7 @@ impl FormatterState {
     /// The `formatter` command: `on`, `off`, `run [path]` (a file, or
     /// the whole workspace when empty). Reports plain text for the
     /// notice area.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn handle_command(
         &self,
         process: &dyn ProcessView,
@@ -262,9 +373,17 @@ impl FormatterState {
             }
             "run" => {
                 let targets: Vec<String> = match words.next() {
+                    // An explicitly named path is still passed through
+                    // [`FormatterState::format_file`], which refuses a skip
+                    // root with a reason (gh #357 acceptance 2) - so naming
+                    // `target/gen/out.rs` reports the refusal rather than
+                    // silently formatting build output.
                     Some(path) => vec![path.to_string()],
-                    None => fs
-                        .list("")
+                    // The bare run: the skip-aware walk, then the extension
+                    // filter. `walk_workspace` never descends into
+                    // `lca_tools::SKIP_DIRS`, so generated and VCS content is
+                    // neither stat'ed nor formatted (gh #357).
+                    None => walk_workspace(fs, "")
                         .into_iter()
                         .filter(|path| select_formatter(path, |probe| fs.exists(probe)).is_some())
                         .collect(),
@@ -278,7 +397,9 @@ impl FormatterState {
                         HookOutcome::Formatted { program } => {
                             lines.push(format!("{target}: {program}"));
                         }
-                        HookOutcome::Skipped(reason) | HookOutcome::Warning(reason) => {
+                        HookOutcome::Skipped(reason)
+                        | HookOutcome::Warning(reason)
+                        | HookOutcome::Refused(reason) => {
                             lines.push(format!("{target}: {reason}"));
                         }
                     }
@@ -307,33 +428,16 @@ mod native {
             self.fs_stat("workspace", path).is_ok()
         }
 
+        /// One level only. The recursion lives in
+        /// [`super::walk_workspace`], so the skip rule has exactly one
+        /// implementation and a test can drive it without a real filesystem.
         fn list(&self, dir: &str) -> Vec<String> {
-            walk_workspace(self, dir)
+            self.fs_list("workspace", dir).unwrap_or_default()
         }
-    }
 
-    /// Recursive workspace walk through the `fs` capability: files
-    /// only, directories descended, denials stopping that subtree.
-    fn walk_workspace(cap: &lca_tools::Capabilities, dir: &str) -> Vec<String> {
-        let mut files = Vec::new();
-        let entries = match cap.fs_list("workspace", dir) {
-            Ok(entries) => entries,
-            Err(_) => return files,
-        };
-        for entry in entries {
-            let path = if dir.is_empty() {
-                entry.clone()
-            } else {
-                format!("{dir}/{entry}")
-            };
-            let path = path.trim_end_matches('/').to_string();
-            match cap.fs_stat("workspace", &path) {
-                Ok((false, _)) => files.push(path),
-                Ok((true, _)) => files.extend(walk_workspace(cap, &path)),
-                Err(_) => {}
-            }
+        fn stat(&self, path: &str) -> Option<(bool, u64)> {
+            self.fs_stat("workspace", path).ok()
         }
-        files
     }
 
     impl ProcessView for lca_tools::Capabilities {

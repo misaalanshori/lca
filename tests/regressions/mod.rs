@@ -393,6 +393,11 @@ mod webfetch_interactive_consent;
 // attacker-chosen bytes outside `catalogs/`.
 #[path = "348-catalog-id-traversal.rs"]
 mod catalog_id_traversal;
+// GitHub #357: `/formatter run` walked the whole workspace with no
+// exclusions, reformatting `target/**` build output and stat'ing every file
+// under `.git/objects` through the capability boundary.
+#[path = "357-formatter-skip-vcs-and-build-roots.rs"]
+mod formatter_skip_vcs_and_build_roots;
 // GitHub #350: `read_archive` decompressed zip members with no read
 // ceiling, so a tiny archive could expand to gigabytes in RAM.
 #[path = "350-archive-read-ceiling.rs"]

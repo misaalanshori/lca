@@ -34,7 +34,7 @@ pub use capabilities::{
     STATE_VALUE_MAX_BYTES, decode_query_component, loopback_oauth_page, parse_callback_query,
 };
 pub use open::{UrlLauncher, open_url, url_launchers, windows_url_launcher};
-pub use ops::{Entry, ExecOutcome, NativeOps, SessionEnv, Stat, ToolOps};
+pub use ops::{Entry, ExecOutcome, NativeOps, SKIP_DIRS, SessionEnv, Stat, ToolOps};
 pub use paths::{is_inside, resolve_target, sha256_hex};
 pub use process::{TreeChild, read_up_to, spawn_direct, write_all};
 pub use pty::PtyChild;
