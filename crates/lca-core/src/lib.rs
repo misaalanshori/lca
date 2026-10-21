@@ -32,7 +32,7 @@ pub use ext_provider::ExtensionProvider;
 pub use registry::{
     BUILTIN_COMMANDS, BUILTIN_TOOL_ALIASES, BUILTIN_TOOLS, CollisionReport, ExtensionRegistry,
 };
-pub use turn::effective_context_window;
+pub use turn::{catalog_context_window, effective_context_window};
 // The turn types live in the protocol layer so the interface and the
 // embedding SDK can render them without depending on this crate.
 pub use lca_protocol::{StopReason, TurnEvent, TurnOutcome, TurnStatus};
@@ -317,6 +317,16 @@ impl<'a> Agent<'a> {
         // only drop references, so an on-demand reachability sweep
         // (`lca session gc`) is the upgrade path when disk use matters.
         tools.set_spill_dir(Some(session.dir().join("attachments")));
+        // gh #260: point the model catalog at the configured data home, so a
+        // user drop-in at `<data>/catalogs/models.json` overrides the
+        // embedded rates. The first call wins, so a session's prices cannot
+        // change under the user mid-run; an empty `data_dir` (a bare
+        // `AgentConfig`, as the unit fixtures build) reads the embedded
+        // catalog alone.
+        if !config.data_dir.as_os_str().is_empty() {
+            lca_registry::models::set_user_data_dir(config.data_dir.clone());
+        }
+
         // #39: the resolved model's image behavior reaches the tools.
         tools.set_image_policy(config.image_policy);
         // gh #43: the `skill` tool loads through the same roots the

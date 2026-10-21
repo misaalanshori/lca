@@ -21,6 +21,11 @@ lca-debug = { path = "../lca-debug" }
 #   a header check.
 # zip - reads (and, for tests and authors, packs) the ADR-0010 archive;
 #   DEFLATE must not be hand-written - SRDD "Dependencies need a reason".
+# flate2 - inflates the embedded model catalog at first lookup (gh #260).
+#   Already in the graph through zip, on the `rust_backend` path; this is a
+#   direct edge pinned to that same backend (miniz_oxide + crc32fast, no C
+#   toolchain, no zlib-rs), not a new package. miniz_oxide alone cannot read
+#   a gzip wrapper, and hand-parsing that header is not worth writing.
 # lca-ext-abi - the ABI-window rule the catalog filter shares with the
 #   manifest check (single source, no duplicated version logic).
 sha2.workspace = true
@@ -34,6 +39,7 @@ http-body-util.workspace = true
 hyper-rustls.workspace = true
 tokio.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 lca-ext-abi = { path = "../lca-ext-abi" }
 
 [dev-dependencies]

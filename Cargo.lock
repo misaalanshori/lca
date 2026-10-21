@@ -1638,6 +1638,7 @@ dependencies = [
  "lca-permissions",
  "lca-protocol",
  "lca-provider",
+ "lca-registry",
  "lca-session",
  "lca-testkit",
  "lca-tools",
@@ -1760,6 +1761,7 @@ dependencies = [
 name = "lca-registry"
 version = "0.6.0"
 dependencies = [
+ "flate2",
  "http-body-util",
  "hyper",
  "hyper-rustls",

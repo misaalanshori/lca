@@ -18,6 +18,9 @@ lca-provider = { path = "../lca-provider" }
 lca-ext-abi = { path = "../lca-ext-abi" }
 lca-tools = { path = "../lca-tools" }
 lca-permissions = { path = "../lca-permissions" }
+# gh #260: the model catalog (prices, context limits) lives in the registry,
+# so `lca-core` names no vendor and no model. One lookup call per turn.
+lca-registry = { path = "../lca-registry" }
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true

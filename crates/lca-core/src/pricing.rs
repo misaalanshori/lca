@@ -1,95 +1,44 @@
-//! Curated model pricing (gh #125): per-1M-token USD rates from
-//! `resources/pricing.toml`, driving token-derived cost where the
-//! provider reports none. Only verified entries exist; an unlisted
-//! model prices to `None` (tokens-only downstream), never to a guess.
+//! Token-derived pricing (gh #125, gh #260): when a provider reports no cost,
+//! the turn prices its usage from the embedded model catalog.
+//!
+//! The catalog is `lca_registry::models` - a build-time stripped `models.dev`
+//! document plus the user's drop-in at `~/.lca/catalogs/models.json`. This
+//! module holds the arithmetic only: it names no vendor and no model, so
+//! `lca-core` keeps zero vendor knowledge (gh #260's whole point).
+//!
+//! ## The buckets
+//!
+//! Four rates, billed separately because vendors price them separately:
+//!
+//! * fresh input, at the input rate;
+//! * cache reads, heavily discounted by every vendor;
+//! * cache writes, which can carry a premium (the Claude line bills 1.25x
+//!   input) - split further into the five-minute tier and the one-hour tier,
+//!   which Anthropic bills at 2x input;
+//! * output.
+//!
+//! The breakdown is persisted, not just summed, because `lca_session::cache`
+//! attributes a cache miss to a dollar figure per bucket (ADR-0017). Before
+//! gh #274 those fields stayed `0.0` on every catalog-priced turn, so a cache
+//! saving measured as exactly `$0.00`.
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
+use lca_protocol::Usage;
+use lca_registry::models::{self, ModelRates};
 
-/// USD per 1M tokens.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Price {
-    /// Billed input tokens not served from cache.
-    pub input_per_mtok: f64,
-    /// Input tokens served from the prompt cache. Vendors discount these
-    /// heavily (gh #274); an entry that omits the rate falls back to
-    /// `input_per_mtok`.
-    pub cache_read_per_mtok: f64,
-    /// Input tokens written to the prompt cache. Some vendors charge a
-    /// premium over fresh input (the Claude line bills 1.25x).
-    pub cache_write_per_mtok: f64,
-    /// Input tokens written to the extended (one-hour) cache tier. This tier
-    /// is not the ordinary write tier: Anthropic bills it at **2x input**,
-    /// not at the 1.25x five-minute rate, and `cache-write-hour` is recorded
-    /// separately for exactly that reason (FR-CORE-8). Falls back to
-    /// `2 * input_per_mtok`, which is the published rule, when a table
-    /// omits it.
-    pub cache_write_1h_per_mtok: f64,
-    /// Output side.
-    pub output_per_mtok: f64,
-}
-
-fn table() -> &'static HashMap<String, Price> {
-    static TABLE: OnceLock<HashMap<String, Price>> = OnceLock::new();
-    TABLE.get_or_init(|| {
-        // A file we ship: a typo here must not panic a running agent.
-        // Malformed content prices to an empty table (tokens-only
-        // everywhere), and the non-empty test below fails the build.
-        let parsed: toml::Table =
-            toml::from_str(include_str!("../resources/pricing.toml")).unwrap_or_default();
-        let mut map = HashMap::new();
-        for (model, rates) in &parsed {
-            let input = rates.get("input").and_then(|v| v.as_float());
-            let output = rates.get("output").and_then(|v| v.as_float());
-            if let (Some(input), Some(output)) = (input, output) {
-                // An entry that predates the cache columns keeps its old
-                // flat behaviour rather than pricing cache at zero.
-                let cache_read = rates
-                    .get("cache_read")
-                    .and_then(|v| v.as_float())
-                    .unwrap_or(input);
-                let cache_write = rates
-                    .get("cache_write")
-                    .and_then(|v| v.as_float())
-                    .unwrap_or(input);
-                // The one-hour tier bills at 2x input on Anthropic, which is
-                // the only vendor publishing that tier; defaulting to the
-                // 5-minute write rate would under-bill it by ~60%.
-                let cache_write_1h = rates
-                    .get("cache_write_1h")
-                    .and_then(|v| v.as_float())
-                    .unwrap_or(input * 2.0);
-                map.insert(
-                    model.to_ascii_lowercase(),
-                    Price {
-                        input_per_mtok: input,
-                        cache_read_per_mtok: cache_read,
-                        cache_write_per_mtok: cache_write,
-                        cache_write_1h_per_mtok: cache_write_1h,
-                        output_per_mtok: output,
-                    },
-                );
-            }
-        }
-        map
-    })
-}
-
-/// The curated price for a configured model name, if listed. A
-/// `profile/` prefix is stripped first (`antigravity/gpt-4o` prices as
-/// `gpt-4o`); matching lowercases. Unlisted names price to `None`.
-pub fn price_for(model: &str) -> Option<Price> {
-    let bare = model.rsplit('/').next().unwrap_or(model);
-    table().get(&bare.to_ascii_lowercase()).copied()
-}
-
-/// The per-bucket dollar cost of one usage record under a price.
+/// Resolve the rates for `provider`/`model`, or `None` when the catalog has
+/// none.
 ///
-/// The four buckets sum to `total`. The turn loop copies three of them onto
-/// the usage record it persists, because `lca_session::cache` attributes a
-/// cache miss to a dollar figure per bucket (ADR-0017) - before gh #274 those
-/// fields stayed `0.0` on every table-priced turn, so a cache saving measured
-/// as exactly `$0.00`.
+/// `None` is the honest answer and the caller's cue to record tokens only: a
+/// model nobody verified never gets an invented price (gh #125's rule, kept
+/// by gh #260).
+#[must_use]
+pub fn rates_for(provider: &str, model: &str) -> Option<ModelRates> {
+    models::lookup(provider, model)?.rates()
+}
+
+/// The per-bucket dollar cost of one usage record under a set of rates.
+///
+/// The four buckets sum to `total`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PricedUsage {
     /// Billed input tokens at the input rate.
@@ -106,20 +55,20 @@ pub struct PricedUsage {
 }
 
 impl PricedUsage {
-    /// Price `usage` under `price`.
+    /// Price `usage` under `rates`.
     #[must_use]
-    pub fn new(price: Price, usage: &lca_protocol::Usage) -> PricedUsage {
+    pub fn new(rates: ModelRates, usage: &Usage) -> PricedUsage {
         let per_mtok = |tokens: u64, rate: f64| tokens as f64 / 1_000_000.0 * rate;
-        let cost_input = per_mtok(usage.input, price.input_per_mtok);
-        let cost_cache_read = per_mtok(usage.cache_read, price.cache_read_per_mtok);
+        let cost_input = per_mtok(usage.input, rates.input_per_mtok);
+        let cost_cache_read = per_mtok(usage.cache_read, rates.cache_read_per_mtok);
         // The one-hour tier is a cache write for accounting purposes but not
         // for billing: Anthropic charges 2x input for it against 1.25x for
         // the five-minute tier, so folding them together under-bills a
         // long-lived cache by a wide margin. `cost_cache_write` carries both,
         // since the persisted record has one cache-write cost field.
-        let cost_cache_write = per_mtok(usage.cache_write, price.cache_write_per_mtok)
-            + per_mtok(usage.cache_write_1h, price.cache_write_1h_per_mtok);
-        let cost_output = per_mtok(usage.output, price.output_per_mtok);
+        let cost_cache_write = per_mtok(usage.cache_write, rates.cache_write_per_mtok)
+            + per_mtok(usage.cache_write_1h, rates.cache_write_1h_per_mtok);
+        let cost_output = per_mtok(usage.output, rates.output_per_mtok);
         PricedUsage {
             cost_input,
             cost_cache_read,
@@ -130,66 +79,62 @@ impl PricedUsage {
     }
 }
 
-/// The token-derived cost of one usage record under a model name.
-///
-/// Each bucket bills at its own rate: `cache_read` is discounted, and
-/// `cache_write` can carry a premium. `None` when the model is unlisted.
+/// The token-derived cost of one usage record, or `None` when the catalog has
+/// no rates for the model.
 #[must_use]
-pub fn table_cost(model: &str, usage: &lca_protocol::Usage) -> Option<f64> {
-    Some(PricedUsage::new(price_for(model)?, usage).total)
+pub fn table_cost(provider: &str, model: &str, usage: &Usage) -> Option<f64> {
+    Some(PricedUsage::new(rates_for(provider, model)?, usage).total)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Verifies: gh #125 - a listed model prices by the book; an
-    // unlisted one prices to `None` (never a made-up number).
-    #[test]
-    fn known_models_price_and_unknown_models_do_not() {
-        let price = price_for("gpt-4o").expect("listed");
-        // SANCTIONED CHANGE (gh #274): the literal now names the cache
-        // rates, because `Price` carries them. gpt-4o bills cache reads at
-        // half of input and cache writes at the input rate.
-        assert_eq!(
-            price,
-            Price {
-                input_per_mtok: 2.50,
-                cache_read_per_mtok: 1.25,
-                cache_write_per_mtok: 2.50,
-                cache_write_1h_per_mtok: 5.00,
-                output_per_mtok: 10.00,
-            }
-        );
-        // Profiles qualify the name; the bare id still matches.
-        assert_eq!(price_for("antigravity/gpt-4o"), Some(price));
-        assert_eq!(price_for("GPT-4O"), Some(price));
-        assert_eq!(price_for("gpt-5"), None, "unverified: tokens-only");
-        assert_eq!(price_for("faux-1"), None, "test models: tokens-only");
-        assert_eq!(price_for(""), None, "empty: tokens-only");
-    }
-
-    // Verifies: gh #125, gh #274 - the cost math over every bucket, each at
-    // its own rate, and the breakdown summing to the total.
-    #[test]
-    fn cost_math_covers_every_bucket() {
-        let usage = lca_protocol::Usage {
+    /// One million tokens in every bucket, so each rate reads as a literal.
+    fn full_usage() -> Usage {
+        Usage {
             input: 1_000_000,
             output: 1_000_000,
             cache_read: 1_000_000,
             cache_write: 1_000_000,
             cache_write_1h: 0,
             ..Default::default()
-        };
-        // SANCTIONED CHANGE (gh #274): cache reads bill at 1.25, not at the
-        // 2.50 input rate, so the total is 16.25 rather than 17.50.
-        let cost = table_cost("gpt-4o", &usage).expect("listed");
+        }
+    }
+
+    // Verifies: gh #125 - a listed model prices by the catalog; an unlisted
+    // one prices to `None` (never a made-up number).
+    #[test]
+    fn known_models_price_and_unknown_models_do_not() {
+        let rates = rates_for("openai", "gpt-4o").expect("the catalog lists gpt-4o");
+        assert_eq!(rates.input_per_mtok, 2.50);
+        assert_eq!(rates.cache_read_per_mtok, 1.25);
+        assert_eq!(rates.cache_write_per_mtok, 2.50, "falls back to input");
+        assert_eq!(rates.cache_write_1h_per_mtok, 5.00, "2x input");
+
+        // Profiles qualify the name; the bare id still matches.
+        assert_eq!(rates_for("openai", "antigravity/gpt-4o"), Some(rates));
+        assert_eq!(rates_for("openai", "GPT-4O"), None, "matching is exact");
+        assert!(rates_for("openai", "not-a-real-model").is_none());
         assert!(
-            (cost - (2.50 + 1.25 + 2.50 + 10.00)).abs() < 1e-9,
-            "1M input @2.50 + 1M cache_read @1.25 + 1M cache_write @2.50 + 1M output @10.00 = 16.25: {cost}"
+            rates_for("fake", "faux-1").is_none(),
+            "test models: no entry"
         );
-        let breakdown =
-            super::PricedUsage::new(super::price_for("gpt-4o").expect("listed"), &usage);
+        assert!(rates_for("openai", "").is_none(), "empty: no entry");
+    }
+
+    // Verifies: gh #125, gh #274 - the cost math over every bucket, each at
+    // its own rate, and the breakdown summing to the total.
+    #[test]
+    fn cost_math_covers_every_bucket() {
+        let rates = rates_for("openai", "gpt-4o").expect("listed");
+        let cost = table_cost("openai", "gpt-4o", &full_usage()).expect("listed");
+        // 2.50 input + 1.25 cache_read + 2.50 cache_write + 10.00 output.
+        assert!(
+            (cost - 16.25).abs() < 1e-9,
+            "1M per bucket on gpt-4o is 16.25: {cost}"
+        );
+        let breakdown = PricedUsage::new(rates, &full_usage());
         assert!((breakdown.cost_input - 2.50).abs() < 1e-9);
         assert!((breakdown.cost_cache_read - 1.25).abs() < 1e-9);
         assert!((breakdown.cost_cache_write - 2.50).abs() < 1e-9);
@@ -198,27 +143,32 @@ mod tests {
             (breakdown.total - cost).abs() < 1e-9,
             "the breakdown sums to the total"
         );
-        assert_eq!(table_cost("unknown-model", &usage), None);
+        assert!(table_cost("openai", "not-a-real-model", &full_usage()).is_none());
     }
 
-    // Verifies: gh #125, the zero-hallucination row - the table is
-    // non-empty (a typo'd file fails here, not in production), every
-    // entry carries positive rates, and a zero-token usage costs
+    // Verifies: gh #125's zero-hallucination row - a zero-token usage costs
     // exactly nothing (not "unknown", not epsilon).
     #[test]
-    fn zero_tokens_cost_zero_and_every_entry_is_positive() {
-        assert!(!table().is_empty(), "the curated table parsed");
-        let empty = lca_protocol::Usage::default();
-        assert_eq!(table_cost("gpt-4o", &empty), Some(0.0));
-        for (model, price) in table().iter() {
-            assert!(
-                price.input_per_mtok > 0.0
-                    && price.output_per_mtok > 0.0
-                    && price.cache_read_per_mtok > 0.0
-                    && price.cache_write_per_mtok > 0.0
-                    && price.cache_write_1h_per_mtok > 0.0,
-                "{model} carries positive rates for every bucket"
-            );
-        }
+    fn zero_tokens_cost_zero() {
+        assert_eq!(table_cost("openai", "gpt-4o", &Usage::default()), Some(0.0));
+    }
+
+    // Verifies: gh #260 - the same model on two providers is two prices, and
+    // the provider argument is what picks between them.
+    #[test]
+    fn the_provider_argument_selects_the_price() {
+        let groq = rates_for("groq", "llama-3.3-70b-versatile").expect("groq lists it");
+        assert_eq!(groq.input_per_mtok, 0.59);
+        // A provider that does not list it falls back to a canonical row,
+        // which is a price from somewhere rather than a guess.
+        assert!(rates_for("some-reseller", "llama-3.3-70b-versatile").is_some());
+    }
+
+    // Verifies: gh #260 - an unlisted provider still prices a model another
+    // provider lists (the issue's canonical fallback).
+    #[test]
+    fn an_unlisted_provider_uses_the_canonical_fallback() {
+        let rates = rates_for("some-reseller", "gpt-4o").expect("the fallback finds it");
+        assert_eq!(rates.input_per_mtok, 2.50);
     }
 }
