@@ -93,6 +93,71 @@ fn a_painted_pane_missing_its_needle_is_still_a_failure() {
     );
 }
 
+// Verifies: the harness contract - the socket-directory lookup asks **our own**
+// server, never the default one.
+//
+// An earlier version probed the default socket, so two concurrent test binaries
+// raced on the same default server (starting and killing sessions there) and a
+// manager's machine got test traffic on its default socket - the exact rule the
+// harness exists to keep. The row proves the lookup is safe by running it while
+// a *default*-socket session is alive and checking that session survives.
+#[cfg(unix)]
+#[test]
+fn the_socket_directory_lookup_never_touches_the_default_socket() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    // A sentinel session on the DEFAULT socket (no `-L`), the thing that must
+    // not be disturbed.
+    let sentinel = format!("lca-default-sentinel-{}", std::process::id());
+    let started = std::process::Command::new("tmux")
+        .args(["new-session", "-d", "-s", &sentinel, "sleep 60"])
+        .status();
+    let had_default = started.map(|status| status.success()).unwrap_or(false);
+    // Whether or not a default server existed before, the lookup must work.
+    let session = Tmux::new("socket-dir-lookup");
+    session.spawn_raw("sh -c 'echo lookup-ok; sleep 30'");
+    let pane = session.wait_for("lookup-ok", std::time::Duration::from_secs(20));
+    assert!(pane.contains("lookup-ok"), "{pane}");
+
+    // The property, stated directly: the path the harness works from is OUR
+    // socket, not the default one. A probe of the default socket still yields
+    // a directory (which is why a path-only assertion would pass), so the
+    // check is on the *file name*: it must be this binary's socket.
+    let path = common::tmux_socket_path_for_tests().expect("tmux names our socket");
+    assert_eq!(
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
+        Some(common::tmux_socket_for_tests().to_string()),
+        "the derived socket path belongs to this binary's server: {}",
+        path.display()
+    );
+    assert_ne!(
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
+        Some("default".to_string()),
+        "the default socket is never the source: {}",
+        path.display()
+    );
+    if had_default {
+        // Our reaping and probing ran during this row; the default session is
+        // still ours and still there.
+        let listed = std::process::Command::new("tmux")
+            .args(["has-session", "-t", &sentinel])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        assert!(
+            listed,
+            "the default socket's session survived the harness's lookup"
+        );
+        let _ = std::process::Command::new("tmux")
+            .args(["kill-session", "-t", &sentinel])
+            .status();
+    }
+}
+
 // Verifies: the harness contract - an **empty** pane is a terminal that did not
 // come up, so the wait re-spawns once and succeeds when the second paint lands.
 //
