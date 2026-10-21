@@ -220,17 +220,28 @@ pub fn mechanical_summary(excerpts: &[Excerpt]) -> String {
     // Carry forward anything an earlier summary already distilled: a
     // re-compaction's range covers the previous compaction record,
     // and the host's marker rides in-band (gh #36 phase 2).
+    //
+    // Gh #281: each excerpt is decoded with *its own* kind. This used to
+    // pass a hardcoded "compaction", which reads `summary` - a key the
+    // host's marker record does not have, because its text lives under
+    // `data.text`. Every carried-forward summary therefore rendered as ""
+    // and disappeared from the fallback, precisely when the model is
+    // unavailable and a long session needs its history most. The filter
+    // above is what decides membership; the kind decides how to read it.
     let earlier: Vec<String> = excerpts
         .iter()
         .filter(|(kind, body)| {
             kind == "compaction" || (kind == "custom" && is_previous_summary_body(body))
         })
-        .map(|(_, body)| {
-            record_text("compaction", body)
+        .map(|(kind, body)| {
+            record_text(kind, body)
                 .chars()
                 .take(600)
                 .collect::<String>()
         })
+        // An empty summary carries nothing, so it must not leave a stray
+        // "Earlier summary:" header or an empty slot in the joined line.
+        .filter(|text| !text.is_empty())
         .collect();
     let earlier_line = if earlier.is_empty() {
         String::new()

@@ -206,3 +206,186 @@ fn the_prompt_iterates_a_capped_previous_summary() {
     let tagged = text;
     assert!(tagged.starts_with("ssss"), "head kept, tail cut");
 }
+
+// ---- gh #281: the mechanical path must carry the host's marker ----
+//
+// The host carries the previous summary forward as a `custom` record whose
+// `custom_type` is `lca_protocol::PREVIOUS_SUMMARY_TYPE` ("previous-summary"),
+// with the text under `data.text`. `mechanical_summary` filtered for those
+// records correctly but then decoded every one of them with
+// `record_text("compaction", body)`, and the `compaction` branch reads
+// `summary` - a key a custom record does not have. Every carried summary
+// therefore rendered as the empty string and vanished from the fallback,
+// which is exactly the path that runs when the model is unavailable and a
+// long session most needs its history.
+
+/// The marker body the host writes (`previous_summary_marker` in
+/// `crates/lca-core/src/compact.rs`), built here rather than through that
+/// private constructor.
+fn previous_summary_body(text: &str) -> String {
+    serde_json::json!({
+        "v": 1,
+        "t": "custom",
+        "id": "previous-summary",
+        "custom_type": lca_protocol::PREVIOUS_SUMMARY_TYPE,
+        "data": { "text": text },
+    })
+    .to_string()
+}
+
+// Verifies: gh #281 - a carried-forward summary in the host's marker record
+// reaches the mechanical fallback. On the pre-fix tree this fails: the text
+// decodes to "" and "Earlier summary" is absent entirely.
+#[test]
+fn the_mechanical_fallback_carries_the_hosts_previous_summary_marker() {
+    let excerpts = vec![
+        (
+            "custom".to_string(),
+            previous_summary_body("codeword quartz-77"),
+        ),
+        (
+            "user".to_string(),
+            r#"{"v":1,"t":"user","id":"02","content":"carry on"}"#.to_string(),
+        ),
+    ];
+    let summary = mechanical_summary(&excerpts);
+    assert!(
+        summary.contains("quartz-77"),
+        "the carried summary survives the fallback: {summary}"
+    );
+    assert!(
+        summary.contains("Earlier summary:"),
+        "it is labelled as one: {summary}"
+    );
+}
+
+// Verifies: gh #281 - the negative that keeps the filter honest: an
+// unrelated `custom` record is not a summary and must not be lifted into
+// "Earlier summary".
+#[test]
+fn an_unrelated_custom_record_is_not_a_carried_summary() {
+    let excerpts = vec![
+        (
+            "custom".to_string(),
+            r#"{"v":1,"t":"custom","id":"05","custom_type":"system-prompt-change","data":{"text":"the prompt changed"}}"#
+                .to_string(),
+        ),
+        (
+            "user".to_string(),
+            r#"{"v":1,"t":"user","id":"06","content":"go on"}"#.to_string(),
+        ),
+    ];
+    let summary = mechanical_summary(&excerpts);
+    assert!(
+        !summary.contains("Earlier summary:"),
+        "an unrelated custom record is not a summary: {summary}"
+    );
+    assert!(
+        !summary.contains("the prompt changed"),
+        "its payload stays out of the carried line: {summary}"
+    );
+}
+
+// Verifies: gh #281 - the old filter's failure pinned from the other side: a
+// record that merely mentions the word "compaction" was mistaken for a
+// summary by a substring match. Text is not a type.
+#[test]
+fn a_record_mentioning_compaction_is_not_a_summary() {
+    let excerpts = vec![
+        (
+            "user".to_string(),
+            r#"{"v":1,"t":"user","id":"07","content":"what does compaction do here?"}"#
+                .to_string(),
+        ),
+        (
+            "assistant".to_string(),
+            r#"{"v":1,"t":"assistant","id":"08","content":[{"type":"text","text":"Compaction summarizes old turns."}]}"#
+                .to_string(),
+        ),
+    ];
+    let summary = mechanical_summary(&excerpts);
+    assert!(
+        !summary.contains("Earlier summary:"),
+        "prose about compaction is not a compaction record: {summary}"
+    );
+}
+
+// Verifies: gh #281 - the fallback's own 600-char cap still bounds a carried
+// summary, so one enormous earlier summary cannot crowd out the rest of the
+// mechanical text (the shape is unchanged; only which records feed it is).
+#[test]
+fn an_oversized_carried_summary_still_truncates() {
+    let long = "q".repeat(5000);
+    let excerpts = vec![
+        ("custom".to_string(), previous_summary_body(&long)),
+        (
+            "user".to_string(),
+            r#"{"v":1,"t":"user","id":"09","content":"and then"}"#.to_string(),
+        ),
+    ];
+    let summary = mechanical_summary(&excerpts);
+    let carried = summary
+        .split("Earlier summary: ")
+        .nth(1)
+        .expect("the carried line exists")
+        .split('\n')
+        .next()
+        .unwrap_or_default();
+    assert_eq!(
+        carried.chars().count(),
+        600,
+        "the mechanical cap holds at 600 chars, not 5000"
+    );
+    assert!(carried.starts_with('q'), "head kept, tail cut");
+}
+
+// Verifies: gh #281 - a `compaction` record and a marker record in the same
+// range both survive, in log order, joined as the mechanical text always
+// joined them.
+#[test]
+fn a_compaction_record_and_a_marker_both_carry_forward() {
+    let excerpts = vec![
+        (
+            "compaction".to_string(),
+            r#"{"v":1,"t":"compaction","summary":"first pass: alpha"}"#.to_string(),
+        ),
+        (
+            "custom".to_string(),
+            previous_summary_body("second pass: beta"),
+        ),
+        (
+            "user".to_string(),
+            r#"{"v":1,"t":"user","id":"0a","content":"continue"}"#.to_string(),
+        ),
+    ];
+    let summary = mechanical_summary(&excerpts);
+    let earlier = summary
+        .split("Earlier summary: ")
+        .nth(1)
+        .expect("the carried line exists")
+        .split('\n')
+        .next()
+        .unwrap_or_default();
+    assert!(
+        earlier.contains("alpha") && earlier.contains("beta"),
+        "both carry, in order: {earlier}"
+    );
+}
+
+// Verifies: gh #281 - an empty or absent carried summary leaves no stray
+// "Earlier summary" header behind (the design's rule 4).
+#[test]
+fn an_empty_carried_summary_leaves_no_header() {
+    let excerpts = vec![
+        ("custom".to_string(), previous_summary_body("")),
+        (
+            "user".to_string(),
+            r#"{"v":1,"t":"user","id":"0b","content":"still here"}"#.to_string(),
+        ),
+    ];
+    let summary = mechanical_summary(&excerpts);
+    assert!(
+        !summary.contains("Earlier summary:"),
+        "no header for nothing: {summary}"
+    );
+}
