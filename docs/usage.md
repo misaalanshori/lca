@@ -77,7 +77,13 @@ Every session persists as an append-only log; `/resume` reopens any
 of them, `/name` titles the current one, `/session` shows its file,
 id, message count, tokens, and cost. `/fork` clones the tip into a
 new session; `/tree` walks the branch history; `/compact` replaces
-old history with a summary so a long session stays affordable. From
+old history with a summary so a long session stays affordable.
+
+In `/tree`, a session with no forks reads as a flat list - rows indent
+only where the history actually forks, so a hundred-turn conversation
+still fits a narrow pane. The branch you are on sorts first, `f` cycles
+which kinds of row show, `←`/`→` fold and unfold, and `Alt+←`/`Alt+→`
+fold a branch or jump to the next one. From
 outside, `lca resume` lists the project's sessions, and
 `lca -c -p "continue"` appends a headless turn to the latest one
 (see [CLI integration](cli-integration.md)).

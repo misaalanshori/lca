@@ -58,8 +58,12 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     // picker chrome: the questions echo in the transcript too.
     session.send(&["/tree", "Enter"]);
     let pane = session.wait_for("Message branches", std::time::Duration::from_secs(15));
+    // SANCTIONED CHANGE (gh #394): fix 4 replaced the connector's dash
+    // cell with the fold glyph, so the pair paints as `├⊟`/`└⊟` - one
+    // column narrower, never `├─`/`└─`. The intent (both connector
+    // ends visible) is unchanged.
     assert!(
-        pane.contains("├─") && pane.contains("└─"),
+        pane.contains("\u{251c}") && pane.contains("\u{2514}"),
         "the fork paints branch connectors:\n{pane}"
     );
     assert!(
@@ -78,19 +82,23 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let pane = loop {
         let pane = session.capture();
-        if (!pane.contains("├─") && !pane.contains("└─")) || std::time::Instant::now() > deadline
+        if (!pane.contains('\u{251c}') && !pane.contains('\u{2514}'))
+            || std::time::Instant::now() > deadline
         {
             break pane;
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
     };
     assert!(
-        !pane.contains("├─") && !pane.contains("└─"),
+        !pane.contains('\u{251c}') && !pane.contains('\u{2514}'),
         "the folded subtree hides:\n{pane}"
     );
     session.send(&["Right"]);
-    let pane = session.wait_for("└─", std::time::Duration::from_secs(10));
-    assert!(pane.contains("├─"), "unfold restores the subtree:\n{pane}");
+    let pane = session.wait_for("\u{2514}", std::time::Duration::from_secs(10));
+    assert!(
+        pane.contains('\u{251c}'),
+        "unfold restores the subtree:\n{pane}"
+    );
 
     // `f` cycles default -> no-tools -> user-only -> labeled-only.
     session.send(&["f"]);

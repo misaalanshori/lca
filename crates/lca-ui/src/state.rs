@@ -528,6 +528,15 @@ pub type TrustApply = Arc<dyn Fn(TrustChoice) -> String + Send + Sync>;
 /// startup, Pi's `hasTrustRequiringProjectResources`).
 pub type TrustNeeded = Arc<dyn Fn() -> bool + Send + Sync>;
 pub use crate::chat_models::{LabelRecord, SessionTree, TreeFilterMode, TreeRow, TreeRowKind};
+pub use crate::chat_pickers::TreeFilter;
+pub use crate::chat_tree::TreePicker;
+
+/// Open a `/tree` navigator over rows under a filter's config spelling
+/// (gh #394): the seam the regression suite opens the navigator through,
+/// so a shipped-defect guard can assert the painted frame without a host.
+pub fn tree_picker(rows: Vec<TreeRow>, filter: &str) -> TreePicker {
+    TreePicker::from_filter_name(rows, filter)
+}
 pub use crate::ui_state::UiState;
 
 /// Branches at a record id in place and returns the replayed chain

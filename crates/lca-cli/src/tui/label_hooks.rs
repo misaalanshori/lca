@@ -122,8 +122,10 @@ impl Ui {
                         depth: row.depth,
                         kind,
                         text: row.text,
+                        call: row.call,
                         label: row.label,
                         live: row.live,
+                        live_leaf: row.live_leaf,
                     }
                 })
                 .collect()

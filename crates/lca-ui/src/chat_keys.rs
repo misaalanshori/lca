@@ -157,6 +157,23 @@ impl Chat {
                 }
                 return Some(Action::Continue);
             }
+            // gh #394: the dual-action branch keys are read through the
+            // binding table, because the arrow-modifier dialects
+            // (`CSI 1;3D`, `ESC b`) do not all round-trip through
+            // `parse_key`. Fold the fork you are on, else walk the segment;
+            // plain Left/Right keep their gh #231 meanings.
+            let word_left = self.keybindings.matches(data, "tui.editor.cursorWordLeft");
+            let word_right = self.keybindings.matches(data, "tui.editor.cursorWordRight");
+            if word_left {
+                picker.fold_or_up();
+                self.tree_picker = Some(picker);
+                return Some(Action::Continue);
+            }
+            if word_right {
+                picker.unfold_or_down();
+                self.tree_picker = Some(picker);
+                return Some(Action::Continue);
+            }
             match key {
                 Some("escape") => {}
                 Some("enter") => {

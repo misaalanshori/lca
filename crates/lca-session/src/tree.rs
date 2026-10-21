@@ -38,10 +38,107 @@ pub struct EntryRow {
     /// One-line row text, bare of kind markers (the navigator paints
     /// those; gh #231).
     pub text: String,
+    /// The argument summary of the tool call a `Tool` row answers
+    /// (gh #394 fix 3): `[read: src/main.rs:1-50]` instead of the opaque
+    /// result head. `None` on every other kind, and on a result whose call
+    /// is not in this log.
+    pub call: Option<String>,
     /// The live bookmark on this record, when one names it.
     pub label: Option<String>,
     /// Whether the record is on the live chain.
     pub live: bool,
+    /// Whether the record is the live chain's tip - the leaf the
+    /// navigator's cursor opens on (gh #394 fix 3, pi's `currentLeafId`).
+    pub live_leaf: bool,
+}
+
+/// One tool call rendered the way pi's `formatToolCall` renders it
+/// (gh #394 fix 3): the argument that identifies the call, shortened to a
+/// home-relative path where one applies, capped so a row stays one line.
+fn tool_call_label(name: &str, arguments: &str) -> String {
+    /// pi caps a shell command's rendering at this many cells.
+    const COMMAND_CAP: usize = 50;
+    /// The catch-all rendering's JSON cap (pi's `slice(0, 40)`).
+    const ARGS_CAP: usize = 40;
+    fn shorten(path: &str) -> String {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .ok();
+        match home {
+            Some(home) if !home.is_empty() && path.starts_with(&home) => {
+                format!("~{}", &path[home.len()..])
+            }
+            _ => path.to_string(),
+        }
+    }
+    fn one_line(text: &str) -> String {
+        text.replace(['\n', '\t'], " ").trim().to_string()
+    }
+    let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
+    let string = |key: &str| -> Option<String> {
+        args.get(key)
+            .and_then(|value| match value {
+                serde_json::Value::String(text) => Some(text.clone()),
+                serde_json::Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            })
+            .map(|text| one_line(&text))
+    };
+    let path = || {
+        string("path")
+            .map(|path| shorten(&path))
+            .unwrap_or_default()
+    };
+    match name {
+        "read" => match (string("offset"), string("limit")) {
+            (None, None) => format!("[read: {}]", path()),
+            (offset, limit) => {
+                let start = offset.unwrap_or_else(|| "1".to_string());
+                match limit {
+                    Some(limit) => {
+                        let start_number: u64 = start.parse().unwrap_or(1);
+                        let limit_number: u64 = limit.parse().unwrap_or(0);
+                        let end = start_number.saturating_add(limit_number.saturating_sub(1));
+                        format!("[read: {}:{start}-{end}]", path())
+                    }
+                    None => format!("[read: {}:{start}-]", path()),
+                }
+            }
+        },
+        // `list` is also callable as `ls`; `glob` as `find` (specs.rs).
+        "list" | "ls" => format!("[list: {}]", path()),
+        "write" => format!("[write: {}]", path()),
+        "edit" => format!("[edit: {}]", path()),
+        "glob" | "find" => format!(
+            "[glob: {} in {}]",
+            string("pattern").unwrap_or_default(),
+            path()
+        ),
+        "grep" => format!(
+            "[grep: /{}/ in {}]",
+            string("pattern").unwrap_or_default(),
+            path()
+        ),
+        "shell" => {
+            let command = string("command").unwrap_or_default();
+            let short: String = command.chars().take(COMMAND_CAP).collect();
+            let ellipsis = if command.chars().count() > COMMAND_CAP {
+                "..."
+            } else {
+                ""
+            };
+            format!("[shell: {short}{ellipsis}]")
+        }
+        other => {
+            let rendered = one_line(arguments);
+            let short: String = rendered.chars().take(ARGS_CAP).collect();
+            if short.is_empty() {
+                format!("[{other}]")
+            } else {
+                format!("[{other}: {short}]")
+            }
+        }
+    }
 }
 
 /// Build entry rows from resolved audit records (gh #37): candidates
@@ -51,6 +148,7 @@ pub struct EntryRow {
 fn entry_rows(
     records: &[lca_protocol::Record],
     live: &std::collections::BTreeSet<String>,
+    live_leaf: Option<&str>,
     marks: &std::collections::BTreeMap<String, String>,
 ) -> Vec<EntryRow> {
     use std::collections::BTreeMap;
@@ -122,6 +220,22 @@ fn entry_rows(
         }
         None
     }
+    // Gh #394 fix 3: a `toolResult` names only `call_id` and no arguments,
+    // so the arguments live in the assistant's `ToolCall` block. Index them
+    // by call id and render a pi-shaped summary, so a row reads
+    // `[read: src/main.rs:1-50]` rather than an opaque id.
+    let calls: BTreeMap<&str, (&str, &str)> = records
+        .iter()
+        .filter_map(|record| match record {
+            lca_protocol::Record::ToolCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } => Some((call_id.as_str(), (name.as_str(), arguments.as_str()))),
+            _ => None,
+        })
+        .collect();
     let mut children: BTreeMap<Option<&str>, Vec<&lca_protocol::Record>> = BTreeMap::new();
     let mut order: BTreeMap<&str, usize> = BTreeMap::new();
     for (index, record) in records.iter().enumerate() {
@@ -139,12 +253,15 @@ fn entry_rows(
         siblings.sort_by_key(|r| order.get(r.id().unwrap_or_default()));
     }
     let mut rows = Vec::new();
+    #[allow(clippy::too_many_arguments)] // the walk's carried state, one arg each
     fn emit(
         parent: Option<&str>,
         depth: usize,
         children: &BTreeMap<Option<&str>, Vec<&lca_protocol::Record>>,
         live: &std::collections::BTreeSet<String>,
+        live_leaf: Option<&str>,
         marks: &std::collections::BTreeMap<String, String>,
+        calls: &BTreeMap<&str, (&str, &str)>,
         rows: &mut Vec<EntryRow>,
     ) {
         let Some(siblings) = children.get(&parent) else {
@@ -154,25 +271,37 @@ fn entry_rows(
             let id = record.id().unwrap_or_default().to_string();
             let (kind, text) =
                 row_kind_text(record).unwrap_or((EntryKind::Assistant, String::new()));
+            let call = match record {
+                lca_protocol::Record::ToolResult { call_id, .. } => calls
+                    .get(call_id.as_str())
+                    .map(|(name, arguments)| tool_call_label(name, arguments)),
+                _ => None,
+            };
             rows.push(EntryRow {
                 id: id.clone(),
                 depth,
                 kind,
                 text,
+                call,
                 label: marks.get(&id).cloned(),
                 live: live.contains(&id),
+                live_leaf: live_leaf == Some(id.as_str()),
             });
             emit(
                 Some(record.id().unwrap_or_default()),
                 depth + 1,
                 children,
                 live,
+                live_leaf,
                 marks,
+                calls,
                 rows,
             );
         }
     }
-    emit(None, 0, &children, live, marks, &mut rows);
+    emit(
+        None, 0, &children, live, live_leaf, marks, &calls, &mut rows,
+    );
     rows
 }
 
@@ -187,8 +316,9 @@ impl SessionStore {
     /// and session framing stay out (labels surface as row marks).
     pub fn entry_tree(&self, session: &Session) -> Result<Vec<EntryRow>> {
         let audit = self.resolved(session, ViewMode::Audit)?;
-        let live: std::collections::BTreeSet<String> = self
-            .resolved(session, ViewMode::Display)
+        let shown = self.resolved(session, ViewMode::Display).ok();
+        let live: std::collections::BTreeSet<String> = shown
+            .as_ref()
             .map(|shown| {
                 shown
                     .records
@@ -197,8 +327,14 @@ impl SessionStore {
                     .collect()
             })
             .unwrap_or_default();
+        // Gh #394 fix 3: the live *leaf* is the display view's last
+        // record, the one the navigator's cursor opens on and the only
+        // row no filter may hide (pi's `currentLeafId`).
+        let live_leaf = shown
+            .as_ref()
+            .and_then(|shown| shown.records.iter().rev().find_map(|r| r.id()));
         let marks = self.labels(session).unwrap_or_default();
-        Ok(entry_rows(&audit.records, &live, &marks))
+        Ok(entry_rows(&audit.records, &live, live_leaf, &marks))
     }
 
     /// Bookmark `record_id` as `label` (gh #37, ADR-0046): appends a

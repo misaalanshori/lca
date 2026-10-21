@@ -53,6 +53,27 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **`/tree` no longer walks a long conversation off the screen** (gh #394).
+  The navigator indented one gutter per *visible ancestor*, so a linear
+  40-turn session - no forks at all - indented its eightieth row by 160
+  columns and pushed the whole transcript past the right edge. Indentation
+  now grows only where the history really forks, plus one grouping level
+  beneath a fresh fork, so a linear chain stays at column 0 however long it
+  is; the recompute runs after every filter, so hiding a dead-end branch
+  releases its indent too. Three further rules landed with it, all pi's
+  `tree-selector.ts`: the branch holding the live leaf sorts first at every
+  level (stable, so two frames of one session are byte-identical), a filter
+  change walks `parent[]` to the nearest visible ancestor instead of
+  clamping the numeric index, and folded branches paint `⊟`/`⊞` in the
+  connector cell (zero extra columns) with `Alt+←`/`Alt+→` folding a branch
+  or jumping to the next one. A deeply indented selection pans horizontally
+  with the cursor gutter pinned, and no row is ever painted wider than the
+  box. Tool-result rows now render their call's arguments
+  (`[read: src/main.rs:1-50]`), and a textless tool-dispatch assistant row
+  hides unless it is the live leaf. The navigator's layout math moved to
+  `crates/lca-ui/src/chat_tree.rs` (the file ceiling), and the guard is
+  `tests/regressions/394-tree-layout-math.rs` plus two real-terminal rows in
+  `crates/lca-cli/tests/e2e_tree_layout.rs`.
 - **`--mode rpc` sessions wire the nested completion backend** (gh #269).
   `headless` and the interactive runner both build one and install it on the
   agent; the RPC entry point did not, so LLM compaction in a daemon session
