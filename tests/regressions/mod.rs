@@ -393,6 +393,11 @@ mod webfetch_interactive_consent;
 // attacker-chosen bytes outside `catalogs/`.
 #[path = "348-catalog-id-traversal.rs"]
 mod catalog_id_traversal;
+// GitHub #264: `HeadlessSink::on_event` had no arm for
+// `TurnEvent::ExtensionEvent`, so the `extension-event` row the headless docs
+// promise fell into the catch-all and never reached a script.
+#[path = "264-extension-event-dropped-from-json.rs"]
+mod extension_event_dropped_from_json;
 // GitHub #357: `/formatter run` walked the whole workspace with no
 // exclusions, reformatting `target/**` build output and stat'ing every file
 // under `.git/objects` through the capability boundary.
