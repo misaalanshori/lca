@@ -651,6 +651,13 @@ impl<'a> MessagesDriver<'a> {
                     break;
                 }
             }
+            // Gh #278: read the headers BEFORE closing. `net_close_response`
+            // drops the response from the host's handle table, so a read
+            // afterwards is `NotFound` - which is exactly how the server's
+            // `retry-after` used to be lost on a 429/529. Body first, then
+            // headers, then close: the body read must precede the close too,
+            // and the header read costs nothing extra in between.
+            let headers = cap.net_response_headers(handle).ok();
             let _ = cap.net_close_response(handle);
             let text = String::from_utf8_lossy(&detail);
             // Gh #52: the host's retry honors the server's delay, which
@@ -658,7 +665,7 @@ impl<'a> MessagesDriver<'a> {
             // `retry-after: <secs>` or the raw HTTP-date, verbatim.
             let mut message = format!("provider returned HTTP {status}: {}", error_line(&text));
             if matches!(status, 429 | 500 | 502 | 503 | 529)
-                && let Ok(headers) = cap.net_response_headers(handle)
+                && let Some(headers) = headers
                 && let Some(value) = headers.iter().find_map(|(key, value)| {
                     key.eq_ignore_ascii_case("retry-after")
                         .then(|| value.trim())
