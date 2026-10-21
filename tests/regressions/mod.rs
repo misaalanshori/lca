@@ -639,3 +639,12 @@ mod antigravity_system_prompt_duplicated;
 // requests rather than in one function's return value.
 #[path = "308-oci-pull-auth-and-bounds.rs"]
 mod oci_pull_auth_and_bounds;
+// GitHub #427: the committed `extensions/conformance/fixtures/component.wasm`
+// went stale against ABI 0.6 (commit 2ccf187 added the hook worlds to wit/ and
+// the source without rebuilding any fixture; the orphan twin added in
+// df3663e had no consumer to notice). Installing it failed with "no exported
+// instance named 'lca:ext/hook-message-end@0.6.0'" - a link error that looks
+// like a host bug. The guard pins both halves of the mechanism: no fixture
+// without a consumer naming it, and every fixture links on the current host.
+#[path = "427-conformance-fixture-keeps-current.rs"]
+mod conformance_fixture_keeps_current;
