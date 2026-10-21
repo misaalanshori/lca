@@ -406,6 +406,15 @@ per-field: a **key is asterisks and never renders**; a base URL or a model
 id renders as typed, because typing those blind is worse than any leak of a
 value that is not secret.
 
+A subscription provider signs in by identity rather than by key. Such an
+extension marks itself with `[login] identity = true` in its manifest, and
+the host then synthesizes one `Sign in with <name>` row for it (gh #297);
+the row's id is `sign-in` and it is the same id an extension may declare
+itself. Selecting it runs the extension's `identity-login` flow instead of
+opening a field list. Every provider with subscription auth therefore
+appears in the picker even though it declares no options - before gh #297
+the picker was empty for exactly the providers a new user most likely has.
+
 Submit goes to the extension's `login-submit`, which stores the key in its
 own credentials namespace and returns opaque `setting: value` pairs. The
 host persists those without interpreting them, then offers the ad hoc `net`
@@ -431,10 +440,12 @@ never launches a browser or a paste prompt.
 ## `/attach` and its notice
 
 `/attach <path>` stages an image for the **next** message and reports
-"attached <path> - it goes with your next message" as a transient notice:
-it clears on the next redraw. The staging itself is durable - the bytes are
-in the session's attachment store immediately, and `lca session gc <id>`
-only reclaims a hash no resolved record references - so a notice that has
-scrolled away is not evidence the attachment was lost. The message that
-carries it shows the `[image attachment <hash8>, <media>, <n> bytes]` stub,
-which is the confirmation that it travelled.
+"attached <hash8> - it goes with your next message" as a transient notice
+(the hash prefix, not the path: it is the handle the stub and the store
+share): it clears on the next redraw. The staging itself is durable - the
+bytes are in the session's attachment store immediately, and
+`lca session gc <id>` only reclaims a hash no resolved record references -
+so a notice that has scrolled away is not evidence the attachment was lost.
+The message that carries it shows the
+`[image attachment <hash8>, <media>, <n> bytes]` stub, which is the
+confirmation that it travelled.
