@@ -56,10 +56,11 @@ Dates are UTC.
 - **Copilot's discovered models keep their real context windows** (gh #283).
   Live discovery mapped every model from GitHub's `/models` to
   `context_window: 0`, discarding the curated table's windows. Zero is not
-  "small" in this tree - it means *unknown and never compacts*, because
-  FR-SESS-4's threshold needs a window to divide by - so a Copilot session
-  could grow until the provider rejected it, the exact failure
-  `docs/compaction.md` exists to prevent. Rows now resolve through the
+  "small" here - the footer reads it as `ctx ?` and the FR-SESS-4 threshold
+  falls back to `docs/compaction.md`'s 128k estimate, which is right only for
+  a model whose real window happens to be 128k. Copilot's curated figures are
+  200k, so every Claude and o-series session was using a threshold far below
+  the real one: it compacted early, and the footer told the user nothing. Rows now resolve through the
   precedence the `openai-compatible` provider already uses, narrowed to what
   this gateway publishes: the curated table wins for an id it knows (its
   figures are vendor-documented; the account's tier can be narrower), the

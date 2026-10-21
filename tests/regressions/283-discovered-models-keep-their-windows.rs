@@ -2,10 +2,11 @@
 //! `context_window: 0` on every row, discarding the curated table's real
 //! windows.
 //!
-//! `0` is not "small" in this tree - it means *unknown and never compacts*,
-//! because FR-SESS-4's threshold needs a window to divide by. So the defect
-//! let a Copilot session grow until the provider rejected it, which is the
-//! failure `docs/compaction.md` exists to prevent.
+//! `0` is not "small" here: the footer reads it as `ctx ?`, and FR-SESS-4's
+//! threshold falls back to `docs/compaction.md`'s 128k estimate - correct
+//! only for a model whose real window is 128k. Copilot's curated figures are
+//! 200k, so the defect gave every Claude and o-series session a threshold far
+//! below the real one (early compaction) while the footer said nothing.
 //!
 //! This file guards the two halves that can silently drift apart: the
 //! numbers the extension resolves (behaviour, from its own suite) and the
