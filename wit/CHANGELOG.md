@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6 development window — gh #302: the `tool` world imports `net`
+
+One import added to the `tool` world:
+
+```wit
+import lca:host/net@0.6.0;
+```
+
+**Breaking for the contract, additive for old artifacts.** A world that gains
+an import requires every component built against the new `wit/` to satisfy it,
+so a rebuilt guest must map the interface (thirteen tool-world crates gained the
+one `with:` line). But the host satisfies an import whether the guest calls it
+or not — the rule established for `tools` in gh #77 — so a component built
+*before* this line still links and runs. That is the claim "additive" makes, and
+it is proven rather than asserted:
+`tests/regressions/302-tool-world-net-import.rs` loads `tool-legacy`'s
+committed component (built against a tool world with no network at all).
+
+**Why:** `extensions/webfetch` had no way to reach the network in WASM mode, so
+its tool existed only on the native path and returned a deferral in the
+sandbox. With this import both halves run the same `fetch` → `convert`
+pipeline over a `NetView`, which is what NFR-25 asks. The interactive per-host
+consent behaviour landed earlier under the same issue and is unchanged: a
+request from the `tool` world asks for an ungranted host (the model or user
+chose that URL), every other world keeps the plain deny, and `[capabilities.net]`
+is still required — the import grants nothing by itself.
+
+**No label bump.** This is an in-place window change (ADR-0028); `lca 0.6.x`
+ships `abi 0.6`.
+
 ## 0.6.0 (ABI train, 2026-10-07 — cycles 3+4: gh #172 + #124, gh #77 + #45)
 
 The train's last break, then the freeze: the `tool-catalog` world

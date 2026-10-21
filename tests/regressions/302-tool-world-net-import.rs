@@ -161,7 +161,16 @@ fn the_import_does_not_grant_the_capability_by_itself() {
     let declaration = lca_ext_host::Manifest::parse(LEGACY_MANIFEST).expect("parses");
     assert!(
         declaration.net.is_empty() && !declaration.net_declared,
-        "the fixture's manifest declares no net: {declaration:?}"
+        "the legacy fixture's manifest declares no net: {declaration:?}"
+    );
+
+    // And the other half of the same rule: a manifest that DOES declare the
+    // capability still declares it, unchanged by the import - the conformance
+    // package is the witness (its manifest grants one host).
+    let granted = lca_ext_host::Manifest::parse(MANIFEST).expect("conformance parses");
+    assert!(
+        granted.net_declared && !granted.net.is_empty(),
+        "a manifest naming hosts still declares them: {granted:?}"
     );
     // The import exists on the world, but the grant does not: the engine's
     // own gate is what decides, and it is unchanged.

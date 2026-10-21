@@ -93,6 +93,16 @@ impl Fixture {
                 fs_declared: true,
                 process: true,
                 pty: true,
+                // gh #302: the manifest grants exactly this host, so the
+                // native fixture must too - otherwise the two modes differ
+                // for a reason that is the *fixture*, not the product, and
+                // the net rows would compare "not granted" against a real
+                // attempt. Both sides must start from the same grant.
+                net_declared: true,
+                net: vec![
+                    lca_permissions::parse_net_pattern("conformance.example.com")
+                        .expect("the manifest's own host parses"),
+                ],
                 ..Default::default()
             },
             self.roots.clone(),
@@ -154,6 +164,13 @@ fn spawn_args(program: &str, marker: &str) -> String {
             r#"{{"mode":"spawn","program":"{program}","args":["/C","echo","{marker}"],"cwd":"workspace"}}"#
         )
     }
+}
+
+/// A `net-fetch` scenario (gh #302): the tool world's new `net` import,
+/// exercised as a whole GET so the comparison covers request, status, body
+/// and close rather than one call.
+fn net_fetch_args(url: &str) -> String {
+    format!(r#"{{"mode":"net-fetch","url":"{url}"}}"#)
 }
 
 fn pty_args(program: &str, marker: &str) -> String {
@@ -229,6 +246,15 @@ async fn native_and_wasm_modes_produce_identical_results() {
         // platform where one runs is a platform where both run.
         spawn_args("echo", "diff-marker").replace("\"mode\":\"spawn\"", "\"mode\":\"process-io\""),
         pty_args("echo", "pty-marker").replace("\"mode\":\"pty\"", "\"mode\":\"pty-io\""),
+        // gh #302: the `tool` world now imports `net`, so the matrix has to
+        // cover it in both modes. Three hosts, because the interesting part
+        // is not that a granted host works - it is that the *refusals* are
+        // identical. The granted one is the manifest's own host (the fixture
+        // grants exactly `conformance.example.com`); the other two are
+        // ungranted and must fail the same way in both modes.
+        net_fetch_args("https://conformance.example.com/probe"), // granted
+        net_fetch_args("https://ungranted.example.com/probe"),   // denied
+        net_fetch_args("https://conformance.example.com:8443/x"), // port not allowed
     ];
     for scenario in &scenarios {
         let wasm_result = wasm.execute_tool(&call(scenario)).await.expect("wasm");

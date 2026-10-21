@@ -397,10 +397,72 @@ pub fn fetch(request: &FetchRequest, net: &dyn NetView) -> Result<String, String
             request.timeout_secs
         ));
     }
-    let handle = net.request("GET", &request.url, &[])?;
-    let outcome = fetch_via(request, net, handle);
-    net.close(handle);
-    outcome
+    // Follow redirects in the *shared* pipeline, so both delivery modes get
+    // the same answer (NFR-25). The net capability hands back the 3xx as an
+    // ordinary response - it does not chase it, because a redirect changes
+    // the host being asked and that is a consent question, not a transport
+    // detail - so the loop lives here, where one implementation serves both
+    // modes.
+    let mut url = request.url.clone();
+    let mut hops = 0u8;
+    loop {
+        let handle = net.request("GET", &url, &[])?;
+        let status = net.status(handle);
+        let location = match status {
+            Ok(code) if (300..400).contains(&code) => {
+                net.headers(handle).ok().and_then(|headers| {
+                    headers
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case("location"))
+                        .map(|(_, value)| value.clone())
+                })
+            }
+            _ => None,
+        };
+        if let Some(location) = location {
+            net.close(handle);
+            if hops == MAX_REDIRECTS {
+                return Err(format!(
+                    "{url} kept redirecting; webfetch follows at most {MAX_REDIRECTS} hops"
+                ));
+            }
+            hops += 1;
+            url = resolve_redirect(&url, &location)?;
+            continue;
+        }
+        let outcome = fetch_via(request, net, handle);
+        net.close(handle);
+        return outcome;
+    }
+}
+
+/// How many redirects one fetch may follow. Five is what a docs site's
+/// http->https -> canonical -> locale chain needs, and it bounds a loop.
+pub const MAX_REDIRECTS: u8 = 5;
+
+/// Resolve a `Location` against the URL that answered it: absolute passes
+/// through, an origin-relative value keeps the scheme and host, and anything
+/// else refuses rather than guessing (a relative path with no leading slash
+/// would need full RFC 3986 resolution, which a fetch tool does not need and
+/// a wrong guess would silently request the wrong page).
+fn resolve_redirect(base: &str, location: &str) -> Result<String, String> {
+    if location.starts_with("http://") || location.starts_with("https://") {
+        return Ok(location.to_string());
+    }
+    if !location.starts_with('/') {
+        return Err(format!(
+            "webfetch cannot follow the redirect to `{location}` - it is relative to a path, and only absolute and origin-relative locations are resolved"
+        ));
+    }
+    let scheme_end = base
+        .find("://")
+        .ok_or_else(|| format!("webfetch cannot parse `{base}`"))?;
+    let after_scheme = scheme_end + 3;
+    let host_end = base[after_scheme..]
+        .find('/')
+        .map(|offset| after_scheme + offset)
+        .unwrap_or(base.len());
+    Ok(format!("{}{location}", &base[..host_end]))
 }
 
 fn fetch_via(request: &FetchRequest, net: &dyn NetView, handle: u32) -> Result<String, String> {
