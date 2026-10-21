@@ -186,6 +186,12 @@ impl Selection {
         self.focus = None;
         self.anchor_range = None;
         self.dragging = false;
+        // Gh #403 gap 1: this mirror is written by `start` and read by
+        // nothing, but leaving a stale count on a cleared selection invites
+        // exactly the bug the reset exists to prevent - a later reader could
+        // trust it. The renderer's own `click_count` is the authoritative
+        // one; this just stops the copy from disagreeing.
+        self.click_count = 0;
     }
 
     /// Whether anything is selected.

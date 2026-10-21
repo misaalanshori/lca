@@ -53,6 +53,18 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **Replacing the transcript drops the old selection** (gh #403 gap 1). A
+  selection lives in *content* coordinates, so after a `/resume` switch, a
+  `/tree` branch jump, a fork, a clone, or an import the old rectangles
+  pointed at rows holding different text - highlights over content nobody
+  selected, and a copy that returned bytes from a transcript that was gone.
+  The reset now happens at the one seam every replacement path shares (a
+  transcript *generation* that only a clear moves) rather than at five call
+  sites, so a sixth path cannot forget it, and it drops the multi-click run
+  as well as the rectangles (pi's `resetTextSelection` shape) so the next
+  click cannot continue an old word-or-line run. A resize, a streaming
+  delta, and a marker repaint leave the generation alone and keep the
+  selection, which is pinned in the other direction.
 - **`/bug`, `/export`, and `/import` run** (gh #443). Each had a working
   implementation and a `/help` line, but the interface router admits a name
   only when it is in `slash_commands`, and none of the three were — so all

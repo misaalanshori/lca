@@ -27,7 +27,7 @@ use crate::state::{
 use lca_tui::engine::core::{MouseButton, MouseEvent};
 
 /// The active screen renderer.
-enum Screen {
+pub(crate) enum Screen {
     /// Fullscreen with app-owned selection.
     Alt(AltScreenRenderer),
     /// The terminal's own scrollback and selection.
@@ -89,7 +89,7 @@ impl Screen {
         matches!(self, Screen::Alt(r) if r.copy_on_select)
     }
 
-    fn selected_text(&self) -> String {
+    pub(crate) fn selected_text(&self) -> String {
         match self {
             Screen::Alt(r) => r.selected_text(),
             Screen::Main(_) => String::new(),
@@ -167,43 +167,6 @@ impl Screen {
     }
 }
 
-/// A Shift+wheel gesture's prompt step (gh #173): wheel-up steps back,
-/// wheel-down steps forward. `None` for anything missing either half -
-/// a plain wheel keeps scrolling, an unmodified press keeps selecting.
-fn shift_wheel_jump(mouse: &lca_tui::engine::alt_screen::SgrMouse) -> Option<i32> {
-    if mouse.bits & 64 == 0 || mouse.bits & 4 == 0 {
-        return None;
-    }
-    Some(if mouse.bits & 3 == 0 { -1 } else { 1 })
-}
-
-/// Wheel lines for a numeric setting (gh #82, gh #206): `auto` resolves
-/// to pi's own one-line baseline - the velocity curve scales it from
-/// there, so no platform sniff is needed.
-fn wheel_lines_for(tuning: &crate::state::DisplayTuning) -> u8 {
-    match tuning.fullscreen_wheel_lines.as_str() {
-        "auto" => 1,
-        text => text.parse().unwrap_or(1),
-    }
-}
-
-/// Sync the fullscreen tunables onto a screen (gh #82): copy and
-/// wheel behavior follow config, so a `/settings` cycle applies on
-/// the next switch.
-fn apply_screen_tuning(screen: &mut Screen, tuning: &crate::state::DisplayTuning) {
-    if let Screen::Alt(alt) = screen {
-        alt.copy_on_select = tuning.fullscreen_copy_on_select;
-        alt.wheel_lines = wheel_lines_for(tuning);
-        // Gh #206: `auto` is the velocity curve now (pi's shape), so a
-        // mode flip restarts the gesture.
-        let auto = tuning.fullscreen_wheel_lines.as_str() == "auto";
-        if alt.wheel_auto != auto {
-            alt.wheel_auto = auto;
-            alt.reset_wheel();
-        }
-    }
-}
-
 /// The fullscreen-exit notice (gh #82): the resume hint names the
 /// live session; anything else (or no id) stays quiet. Pure for the
 /// row that pins it.
@@ -217,7 +180,7 @@ fn exit_hint(tuning: &crate::state::DisplayTuning, session_id: &str) -> Option<S
     }
 }
 
-fn switch_screen(screen: &mut Screen, fullscreen: bool, term: &mut dyn Terminal) {
+pub(crate) fn switch_screen(screen: &mut Screen, fullscreen: bool, term: &mut dyn Terminal) {
     match (screen.is_fullscreen(), fullscreen) {
         (true, false) => {
             screen.leave(term, true);
@@ -568,7 +531,7 @@ fn handle_input(
             chat.dismiss_tooltip();
             // Gh #173: Shift+wheel steps between prompts (the loop pins
             // the target); a plain wheel scrolls, as before.
-            if let Some(delta) = shift_wheel_jump(&mouse) {
+            if let Some(delta) = crate::run_selection::shift_wheel_jump(&mouse) {
                 chat.jump_prompt(delta);
                 return InputResult::Continue;
             }
@@ -836,7 +799,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     } else {
         Screen::Main(MainScreenRenderer::new())
     };
-    apply_screen_tuning(&mut screen, &chat.display_tuning());
+    crate::run_selection::apply_screen_tuning(&mut screen, &chat.display_tuning());
     terminal.set_title(&format!(
         "lca — {}",
         chat.world.options.workspace.to_string_lossy()
@@ -848,6 +811,15 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
 
     let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx);
     let mut dirty = true;
+    // Gh #403 gap 1: the transcript generation this loop has already
+    // accounted for. The seam below resets the selection whenever the
+    // *whole transcript was replaced*, which is the one state change that
+    // makes a selection address text that no longer exists. Appends (a
+    // streaming delta), resizes, and marker repaints leave the earlier rows
+    // exactly where they were, so the user's selection over them is still
+    // valid and survives - that direction is pinned by tests too, because a
+    // reset that fires too often is the mirror-image bug.
+    let mut seen_generation = chat.transcript.generation();
 
     let result = 'main: loop {
         // Turn lifecycle (R16: `TurnState` owns the running turn).
@@ -912,7 +884,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         if screen.is_fullscreen() != chat.screen_mode {
             let was_fullscreen = screen.is_fullscreen();
             switch_screen(&mut screen, chat.screen_mode, &mut terminal);
-            apply_screen_tuning(&mut screen, &chat.display_tuning());
+            crate::run_selection::apply_screen_tuning(&mut screen, &chat.display_tuning());
             // Gh #82: leaving fullscreen can name the resume command.
             if was_fullscreen && !chat.screen_mode {
                 let tuning = chat.display_tuning();
@@ -928,6 +900,20 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                     chat.say(hint);
                 }
             }
+            dirty = true;
+        }
+
+        // Gh #403 gap 1: one seam for every path that replaces the
+        // transcript - a `/resume` switch, a `/tree` branch jump, a fork, a
+        // clone, and `/import` all land on `replay_records`, which is the
+        // only place that clears the transcript and therefore the only place
+        // that bumps the generation. Putting the reset here rather than at
+        // those four call sites is deliberate: four call sites is how the
+        // fifth gets missed.
+        let generation =
+            crate::run_selection::reset_selection_if_replaced(&mut screen, &chat, seen_generation);
+        if generation != seen_generation {
+            seen_generation = generation;
             dirty = true;
         }
 

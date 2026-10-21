@@ -409,6 +409,42 @@ impl AltScreenRenderer {
         self.selection.clear();
     }
 
+    /// Drop the selection **and the multi-click run** (gh #403 gap 1): the
+    /// reset for a transcript the host is about to replace.
+    ///
+    /// Distinct from [`clear_selection`](Self::clear_selection) on purpose.
+    /// A picker press clears the rectangles because a release must not copy
+    /// what the picker ate, but the click run is still about the same screen.
+    /// A *replacement* is different: the rows address different text, so
+    /// leaving `click_count` at 2 or 3 lets the user's next single click
+    /// continue the old run and select a word or a whole line they never
+    /// asked for. pi draws the same line - its `resetTextSelection()` clears
+    /// the selection and drops `lastClick`.
+    pub fn reset_text_selection(&mut self) {
+        self.selection.clear();
+        self.click_count = 0;
+        self.last_click = None;
+        self.press_cell = None;
+        self.drag_edge = None;
+    }
+
+    /// The renderer's multi-click run (gh #403 gap 1): what `handle_input`
+    /// reads to pick the next click's granularity.
+    ///
+    /// Exposed for tests because the run loop's reset has to clear *this*
+    /// counter, not the selection's mirrored copy - asserting only the copy
+    /// would pass while a stale run kept turning the next click into a word
+    /// or a line grab.
+    pub fn click_run(&self) -> u8 {
+        self.click_count
+    }
+
+    /// Seed the click run, so a test can build the state a real double-click
+    /// leaves behind without synthesizing timestamps.
+    pub fn set_click_run(&mut self, count: u8) {
+        self.click_count = count;
+    }
+
     /// Lines one wheel event moves (gh #206): the fixed setting, or
     /// the velocity curve in `auto` mode - with Alt multiplying by
     /// five either way (pi's `ALT_WHEEL_SCROLL_MULTIPLIER`). `now_ms`
