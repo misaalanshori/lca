@@ -30,10 +30,19 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
+// `Duration` is only used by the unix-gated rows below, so the import carries
+// the same gate; without it `windows-latest` clippy fails on an unused import
+// (the sibling of the `Tmux` gate added in 972d39bc).
+#[cfg(unix)]
 use std::time::Duration;
 
 mod common;
 
+// Every row here drives a real tmux pane, and `Tmux` itself is
+// `#[cfg(unix)]` in `common` (the harness is a Unix pty). Without this gate
+// the whole module fails to compile on `windows-latest` - which is what
+// happened: batch-15 landed this file ungated and the Windows clippy leg went
+// red (`cannot find type Tmux in this scope`). gh #444's neighbour.
 #[cfg(unix)]
 use common::*;
 
@@ -44,6 +53,7 @@ use common::*;
 /// reports a highlight on every frame and asserts nothing. A selection is
 /// distinguishable by width - it spans more than the single caret cell - and
 /// by living above the composer. Both are required here.
+#[cfg(unix)]
 fn has_highlight(sgr: &str) -> bool {
     sgr.lines().any(|line| {
         let mut rest = line;
@@ -77,6 +87,7 @@ fn has_highlight(sgr: &str) -> bool {
 /// The robust form is to strip the escapes from the SGR capture and locate
 /// the needle there, then map that index against the plain capture, which
 /// does emit one line per row.
+#[cfg(unix)]
 fn locate(pane: &str, plain: &str, needle: &str) -> Option<(u16, u16)> {
     // The plain capture is one line per screen row. Find the needle there
     // for the row, then use the plain row's own column offset.
@@ -95,6 +106,7 @@ fn locate(pane: &str, plain: &str, needle: &str) -> Option<(u16, u16)> {
 ///
 /// The press and the motion carry button 0 (`\x1b[<0;…M` / `\x1b[<32;…M`);
 /// the release is the `m` form. Coordinates are 1-based cells.
+#[cfg(unix)]
 fn drag_over(session: &Tmux, row: u16, start_col: u16, end_col: u16) {
     let y = row + 1;
     session.send_literal(&format!("\x1b[<0;{};{y}M", start_col + 1));
@@ -104,6 +116,7 @@ fn drag_over(session: &Tmux, row: u16, start_col: u16, end_col: u16) {
 
 // Verifies: gh #403 gap 1 - after a transcript replacement the selection is
 // gone, and the pane shows no reverse-video span.
+#[cfg(unix)]
 #[test]
 fn a_transcript_replacement_clears_the_highlighted_rows() {
     if !tmux_available() {
@@ -224,6 +237,7 @@ fn a_transcript_replacement_clears_the_highlighted_rows() {
 // Verifies: gh #403 gap 1, the mirror image - a resize does NOT replace the
 // transcript, so the selection must still be painted afterwards. Without
 // this row a "clear on every frame" fix would pass the row above.
+#[cfg(unix)]
 #[test]
 fn a_resize_keeps_the_highlighted_rows() {
     if !tmux_available() {

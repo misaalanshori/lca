@@ -667,3 +667,8 @@ mod three_commands_reachable;
 // The seam is the transcript generation; the guard pins that it stays one.
 #[path = "403-stale-selection-cleared.rs"]
 mod stale_selection_cleared;
+
+// Gh #391: collapsed previews keep the tail, the timer ticks and freezes,
+// and `!`/`!!` are distinguishable without colour.
+#[path = "391-tool-card-preview-and-timer.rs"]
+mod tool_card_preview_and_timer;

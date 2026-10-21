@@ -53,6 +53,23 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **A collapsed tool card shows the tail, ticks while it runs, and tells
+  `!` from `!!`** (gh #391). Three gaps in the preview pass, and the first
+  was the serious one: the preview sliced five *logical* lines and then
+  wrapped them, so one 4,000-character minified line became ~50 visual rows
+  inside a card that called itself collapsed - and the five kept lines were
+  the `Compiling …` boilerplate while the pass/fail summary sat at the tail.
+  It now wraps first, keeps the last five *visual* rows for shells with the
+  `… (N earlier lines, ctrl+o to expand)` marker above them, and keeps the
+  head for tools that read top-down (`ls`, `grep`), all cached per width. A
+  running card shows `Elapsed 4.2s` ticking on pi's three duration tiers and
+  freezes to the recorded `Took` when it settles - a replayed session shows
+  its historical time and never animates - driven by the interface's existing
+  tick rather than a second clock. `!!` now draws quiet where `!` keeps the
+  accent color, and both wear the marker the user typed, so the context
+  boundary survives a terminal with no color (NFR-28). The tool layer's
+  in-band `[full output: …]` footer is stripped before the preview, so it no
+  longer spends two of the five tail rows.
 - **Replacing the transcript drops the old selection** (gh #403 gap 1). A
   selection lives in *content* coordinates, so after a `/resume` switch, a
   `/tree` branch jump, a fork, a clone, or an import the old rectangles

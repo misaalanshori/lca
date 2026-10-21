@@ -251,7 +251,7 @@ fn tool_body_click_collapses_without_scroll_jump() {
     // renders in scrollback, where no mouse event can arrive.
     session.send(&["/fullscreen", "Enter"]);
     session.wait_for("app-owned screen", std::time::Duration::from_secs(15));
-    session.wait_for("more lines", std::time::Duration::from_secs(15));
+    session.wait_for("earlier lines", std::time::Duration::from_secs(15));
     // Expand through the header first. The 40-line body overflows the
     // pane, so the receipt is the full body reaching the scrollback
     // history - never a single viewport row, which the bottom-anchored
@@ -268,7 +268,7 @@ fn tool_body_click_collapses_without_scroll_jump() {
             .lines()
             .enumerate()
             .find_map(|(row, line)| line.contains("seq 1 40").then_some(row));
-        let marker = pane.contains("more lines");
+        let marker = pane.contains("earlier lines");
         let body = pane.lines().any(|line| body_number(line).is_some());
         if !marker && body {
             break true;
@@ -288,7 +288,7 @@ fn tool_body_click_collapses_without_scroll_jump() {
                 let mut done = false;
                 while std::time::Instant::now() < inner {
                     let pane = session.capture();
-                    if !pane.contains("more lines")
+                    if !pane.contains("earlier lines")
                         && pane.lines().any(|line| body_number(line) == Some(40))
                     {
                         done = true;
@@ -363,7 +363,7 @@ fn tool_body_click_collapses_without_scroll_jump() {
     // timing.
     let pane = loop {
         let pane = session.capture();
-        if pane.contains("more lines") || std::time::Instant::now() > deadline {
+        if pane.contains("earlier lines") || std::time::Instant::now() > deadline {
             break pane;
         }
         let live_header = pane
@@ -384,7 +384,7 @@ fn tool_body_click_collapses_without_scroll_jump() {
             let inner = std::time::Instant::now() + std::time::Duration::from_secs(5);
             let mut done = false;
             while std::time::Instant::now() < inner {
-                if session.capture().contains("more lines") {
+                if session.capture().contains("earlier lines") {
                     done = true;
                     break;
                 }
@@ -398,13 +398,18 @@ fn tool_body_click_collapses_without_scroll_jump() {
         }
     };
     assert!(
-        pane.contains("more lines"),
+        pane.contains("earlier lines"),
         "the body click collapsed the card:\n{pane}"
     );
+    // Gh #391 gap 1: the collapsed shell card keeps its **tail**, so a click
+    // on a high body line can leave it visible. What proves the collapse is
+    // that the *head* is folded away again (the preview shows 36..40, not
+    // 1..5), plus the marker above it.
     assert!(
-        !pane.lines().any(|line| body_number(line) == Some(clicked)),
-        "the clicked body line left:\n{pane}"
+        !pane.lines().any(|line| body_number(line) == Some(1)),
+        "the head is folded away by the collapse:\n{pane}"
     );
+    let _ = clicked;
     pane.lines()
         .find(|line| line.contains("seq 1 40"))
         .expect("the header stays in view");

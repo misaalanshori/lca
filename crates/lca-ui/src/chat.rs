@@ -717,7 +717,14 @@ impl Chat {
             Some(picker) => picker.tick(),
             None => false,
         };
-        separator || loading || self.expire_toasts()
+        // Gh #391 gap 2: a running tool card re-derives its `Elapsed` line on
+        // this tick. The cache is only dropped while a card is actually
+        // running, so an idle transcript never repaints for the timer.
+        let ticking = self.transcript.has_running_tool();
+        if ticking {
+            self.transcript.invalidate_running_tools();
+        }
+        separator || loading || ticking || self.expire_toasts()
     }
 
     /// Handle one keypress: the modal first, then the pickers, the

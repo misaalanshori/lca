@@ -23,8 +23,11 @@ impl Chat {
         // command for the model's context only when it is not `!!`.
         // The editor's own run, so the card takes pi's `bashMode` title
         // instead of the model card's `toolTitle` (FR-UI-14).
+        // Gh #391 gap 3: `!!` withholds its output from the model, so the
+        // card draws quiet rather than in `bashMode` - the context boundary
+        // is glance-visible instead of being a second `!` to notice.
         self.transcript
-            .start_manual_tool("bash", command.to_string());
+            .start_manual_tool_excluding("bash", command.to_string(), excluded);
         let (tx, rx) = std::sync::mpsc::sync_channel(256);
         let cancel = run_shell(command, excluded, tx);
         self.shell = Some(ShellRun {

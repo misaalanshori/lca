@@ -873,9 +873,17 @@ fn clicking_a_tool_body_collapses_that_card() {
         ClickOutcome::ToolToggled
     ));
     let collapsed = strip(&chat.viewport(w, h, 0).join("\n"));
+    // Gh #391 gap 1: a collapsed shell card keeps its **tail**, so `f` (the
+    // last line) is legitimately visible now. What this row is about is that
+    // the click collapsed the card, which the omission marker shows - the head
+    // `a` is gone and the marker is back.
     assert!(
-        !collapsed.lines().any(|line| line.trim() == "f"),
+        collapsed.lines().any(|line| line.contains("earlier lines")),
         "the body click collapsed the card: {collapsed:?}"
+    );
+    assert!(
+        !collapsed.lines().any(|line| line.trim() == "a"),
+        "the head is folded away again: {collapsed:?}"
     );
 }
 
