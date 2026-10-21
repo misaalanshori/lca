@@ -284,6 +284,11 @@ mod gh212_panel_toggle_traps_exit;
 // their frame-level guards live here and in `chat_tree_tests.rs`.
 #[path = "394-tree-layout-math.rs"]
 mod gh394_tree_layout_math;
+// GitHub #281: the mechanical compaction fallback decoded every carried
+// summary with a hardcoded `compaction` kind, so the host's
+// `previous-summary` marker records rendered empty and vanished.
+#[path = "281-mechanical-compaction-carries-summaries.rs"]
+mod gh281_mechanical_compaction_carries_summaries;
 // GitHub #401: three queue-UX gaps - the abort rescue is pinned and now
 // announces + merges the draft, a submit during a compaction parks and
 // flushes when it ends, and the dequeue key is discoverable in the dock.

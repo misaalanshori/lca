@@ -53,6 +53,20 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **A second compaction no longer forgets the first one's summary when the
+  model is unavailable** (gh #281). The mechanical fallback - what runs when
+  the summarization call fails or has no budget - selected the host's carried
+  `previous-summary` marker records correctly but then decoded every one of
+  them with a hardcoded `compaction` kind. That branch reads a `summary` key;
+  a marker record keeps its text under `data.text`, so each carried summary
+  decoded to the empty string and vanished. The practical effect: on a long
+  session that had to compact more than once without a working model, the
+  `Earlier summary:` line was blank or absent and every distilled fact from
+  the first pass was gone. Each excerpt is now decoded by its own kind, an
+  empty summary leaves no stray header, and the 600-character cap and
+  ordering are unchanged. Guard:
+  `tests/regressions/281-mechanical-compaction-carries-summaries.rs`, plus six
+  rows in `extensions/compaction-default/tests/compaction.rs`.
 - **The queued-message band behaves like pi's, and a compaction no longer
   refuses your typing** (gh #401). Three queue-UX gaps around the shipped
   abort rescue: (1) stopping a turn now says
