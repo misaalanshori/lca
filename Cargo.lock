@@ -1788,6 +1788,7 @@ dependencies = [
  "clap",
  "compaction-default",
  "formatter",
+ "hash-edit",
  "image",
  "lca-cli",
  "lca-config",

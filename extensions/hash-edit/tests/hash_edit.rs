@@ -178,11 +178,17 @@ fn non_utf8_refuses() {
 }
 
 // Verifies: the manifest test contract — the tool world, workspace
-// read-write for the files it edits.
+// read-write for the files it edits, and (gh #285) the `hooks-tool-result`
+// world that supplies the anchors the tool resolves against. Without the hook
+// world the tool is uncallable in production, so the manifest is part of the
+// fix rather than incidental.
 #[test]
 fn manifest_grants_match_the_manifest() {
     let manifest = hash_edit::MANIFEST;
-    assert!(manifest.contains("worlds = [\"tool\"]"), "{manifest}");
+    assert!(
+        manifest.contains("worlds = [\"tool\", \"hooks-tool-result\"]"),
+        "tool plus the result hook that supplies anchors: {manifest}"
+    );
     let grants = hash_edit::manifest_grants();
     assert_eq!(grants.fs.len(), 1, "workspace read-write only");
     assert!(
@@ -202,4 +208,242 @@ fn the_tool_spec_names_path_and_edits() {
     assert!(params.contains("start_hash"), "{params}");
     assert!(params.contains("end_hash"), "{params}");
     assert!(params.contains("new_text"), "{params}");
+}
+
+// ---------------------------------------------------------------------------
+// gh #285: the read hook that makes the tool callable at all
+// ---------------------------------------------------------------------------
+
+/// The exact shape the built-in `read` emits per line
+/// (`crates/lca-tools/src/lib.rs`: `{:6}\t{line}`), plus a file body.
+fn numbered(body: &str) -> String {
+    let mut out = String::new();
+    for (index, line) in body.split('\n').enumerate() {
+        out.push_str(&format!("{:6}\t{line}\n", index + 1));
+    }
+    out
+}
+
+// Verifies: gh #285 acceptance 1 - an ordinary `read` result gains hashes the
+// tool accepts, so the model can obtain anchors from the read it already
+// performs. Before the fix `annotate` had no production caller and the model
+// could never see a hash.
+#[test]
+fn an_ordinary_read_result_gains_usable_hashes() {
+    let body = "fn main() {\n    let x = 1;\n}\n";
+    let read = numbered(body);
+    let annotated =
+        hash_edit::annotate_read_result("read", &read).expect("a read result annotates");
+    // The model reads the hash out of the gutter.
+    let second = hash_edit::line_hash("    let x = 1;");
+    assert!(
+        annotated.contains(&second),
+        "the line's hash appears in the annotated result: {annotated}"
+    );
+    // And the tool accepts what the hook produced, on the real bytes.
+    let anchor = hash_edit::line_hash("    let x = 1;");
+    let edits = [edit(&anchor, &anchor, "    let x = 2;")];
+    let out = apply_edits(body.as_bytes(), &edits).expect("the annotated hash anchors");
+    assert_eq!(
+        String::from_utf8(out).expect("utf8"),
+        "fn main() {\n    let x = 2;\n}\n"
+    );
+}
+
+// Verifies: gh #285 - the annotated result keeps the file's own text readable.
+// A gutter is added, nothing is removed: the model can still read the code, and
+// a line's content after the gutter is byte-identical to the original.
+#[test]
+fn annotation_adds_a_gutter_without_changing_the_text() {
+    let read = numbered("alpha\nbeta\n");
+    let annotated = hash_edit::annotate_read_result("read", &read).expect("annotates");
+    for line in annotated.lines() {
+        let body = line.split('\t').nth(1).unwrap_or("");
+        assert!(
+            !body.contains(&hash_edit::line_hash(body)),
+            "the file's own text is not rewritten: {line}"
+        );
+    }
+    assert!(annotated.contains("alpha") && annotated.contains("beta"));
+}
+
+// Verifies: gh #285 - a non-`read` tool result passes through byte-identical.
+// An annotation hook that touched grep/shell output would corrupt text nobody
+// asked it to describe.
+#[test]
+fn a_non_read_result_passes_through_byte_identical() {
+    for name in ["grep", "list", "shell", "glob", "write", "edit"] {
+        let text = "alpha\nbeta\n";
+        assert_eq!(
+            hash_edit::annotate_read_result(name, text),
+            None,
+            "`{name}` is not a read"
+        );
+    }
+}
+
+// Verifies: gh #285 - an unparseable read (no `{:6}\t` numbers) passes through
+// rather than being mangled. The hook must never make a result worse.
+#[test]
+fn an_unparseable_read_passes_through() {
+    for text in [
+        "no line numbers here\nnor here\n",
+        "1\ttab but one digit is not the gutter\n",
+        "",
+        "  12\tmissing the sixth column\n",
+    ] {
+        assert_eq!(
+            hash_edit::annotate_read_result("read", text),
+            None,
+            "unparseable read passes through: {text:?}"
+        );
+    }
+}
+
+// Verifies: gh #285 - a `read` result carrying its continuation notice still
+// annotates the lines and leaves the notice alone. The notice has no gutter, so
+// it is not a line; annotating it would give the model a fake anchor.
+#[test]
+fn a_continuation_notice_is_not_annotated() {
+    let mut read = numbered("alpha\nbeta\n");
+    read.push_str("[3 more lines in file. Use offset=3 to continue.]");
+    let annotated = hash_edit::annotate_read_result("read", &read).expect("annotates");
+    assert!(
+        annotated.contains("[3 more lines in file. Use offset=3 to continue.]"),
+        "the notice survives verbatim: {annotated}"
+    );
+    let notice_line = annotated
+        .lines()
+        .find(|line| line.contains("3 more lines"))
+        .expect("notice present");
+    assert!(
+        !notice_line.starts_with(|c: char| c.is_ascii_hexdigit() && c != ' '),
+        "the notice did not gain a hash gutter: {notice_line}"
+    );
+}
+
+// Verifies: gh #285 - CRLF survives. `read` normalizes to `\n` (`split('\n')`),
+// so a CRLF body reaches the hook already normalized; a stray `\r` in a body
+// must still hash the way the tool will hash it (trimmed).
+#[test]
+fn a_body_with_a_stray_carriage_return_hashes_as_the_tool_will() {
+    let read = format!("{:6}\talpha\r\n", 1);
+    let annotated = hash_edit::annotate_read_result("read", &read).expect("annotates");
+    let hash = hash_edit::line_hash("alpha\r");
+    assert!(annotated.contains(&hash), "{annotated}");
+    // And that is the hash the tool resolves against the same bytes.
+    let resolved = apply_edits(b"alpha\r\n", &[edit(&hash, "", "ALPHA")]);
+    assert!(resolved.is_ok(), "the hook's hash resolves in the tool");
+}
+
+// Verifies: gh #285 - the safety property is unchanged: a stale hash still
+// refuses. Annotating must not make the tool more permissive.
+#[test]
+fn a_stale_hash_still_refuses() {
+    let annotated = hash_edit::annotate_read_result("read", &numbered("one\ntwo\n")).expect("ok");
+    let stale = hash_edit::line_hash("line that is not in the file");
+    assert!(
+        annotated.contains("one"),
+        "the read annotated (sanity): {annotated}"
+    );
+    let refused = apply_edits(b"one\ntwo\n", &[edit(&stale, "", "x")]);
+    assert!(
+        matches!(refused, Err(EditError::Mismatch { .. })),
+        "a stale anchor refuses: {refused:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// gh #285 (second defect): read-before-edit is a *host* gate, not ours
+// ---------------------------------------------------------------------------
+
+/// The built-in `edit` tool refuses when the file was not read this session
+/// (`ToolExecutor`'s `ReadTracker`, `crates/lca-tools/src/lib.rs`). `hash_edit`
+/// writes through `Capabilities::fs_write`, so it bypasses that tracker.
+///
+/// This row documents the boundary honestly rather than pretending a guard
+/// exists: the tracker is private to `ToolExecutor`, no `lca-tools` API exposes
+/// it to an extension, and `ToolExecutor` is never handed to one. A
+/// `hash_edit` write therefore *cannot* consult it from inside this crate —
+/// the fix belongs in `crates/lca-tools/**`, which this cycle may not touch.
+///
+/// What this crate *can* do, and now does, is make the read that satisfies the
+/// tracker unavoidable: the hashes only exist because the model read the file
+/// through the built-in `read` (see `annotate_read_result`). An unstale hash
+/// implies a fresh read of those exact bytes, because a changed file no longer
+/// matches the anchor and `apply_edits` refuses. So the safety property the
+/// tracker exists to provide — "never write over a file you have not seen the
+/// current contents of" — holds by construction here, without the tracker.
+#[test]
+fn an_anchor_cannot_resolve_against_a_changed_file() {
+    let original = b"alpha\nbeta\n";
+    let read = numbered("alpha\nbeta\n");
+    let annotated = hash_edit::annotate_read_result("read", &read).expect("annotates");
+    let anchor = hash_edit::line_hash("alpha");
+    assert!(annotated.contains(&anchor), "the read supplied the anchor");
+
+    // The file changes underneath the model after the read: the ``alpha`` line
+    // is gone. The same anchor must now refuse rather than write blind.
+    let changed = b"ALPHA REWRITTEN\ngamma\n";
+    let refused = apply_edits(changed, &[edit(&anchor, "", "alpha")]);
+    assert!(
+        matches!(refused, Err(EditError::Mismatch { .. })),
+        "a changed file invalidates the anchor, so no stale write lands: {refused:?}"
+    );
+
+    // And while the file is untouched, the same anchor resolves — the loop the
+    // hook enables.
+    assert!(apply_edits(original, &[edit(&anchor, "", "ALPHA")]).is_ok());
+}
+
+// Verifies: gh #285 - the native handle declares the world the registry
+// dispatches `tool_result` on. The manifest says `hooks-tool-result`; the
+// registry filters on `World::HooksToolResult`, so a handle that omits it
+// never annotates and the tool is uncallable again.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_handle_declares_the_tool_result_world() {
+    use lca_ext_abi::{ExtensionDispatch, World};
+    let root = std::env::temp_dir().join(format!("lca-he-worlds-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for dir in ["project", "private", "config", "data", "tmp"] {
+        std::fs::create_dir_all(root.join(dir)).expect("mkdir");
+    }
+    struct Deny;
+    impl lca_permissions::PermissionPrompt for Deny {
+        fn ask(&mut self, _a: &lca_permissions::Action) -> lca_permissions::Decision {
+            lca_permissions::Decision::Denied
+        }
+        fn review_proposals(&mut self, _d: &lca_permissions::ProposalDiff) -> bool {
+            false
+        }
+    }
+    let prompt: std::sync::Arc<std::sync::Mutex<dyn lca_permissions::PermissionPrompt>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Deny));
+    let store = std::sync::Arc::new(std::sync::Mutex::new(
+        lca_permissions::GrantStore::open(&root.join("grants.json")).expect("grants"),
+    ));
+    let cap = std::sync::Arc::new(lca_tools::Capabilities::new(
+        "hash-edit",
+        hash_edit::manifest_grants(),
+        lca_permissions::ScopeRoots {
+            workspace: root.join("project"),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        },
+        prompt,
+        store,
+        root.join("project"),
+        None,
+    ));
+    let handle = hash_edit::HashEdit::new(cap);
+    let worlds = handle.worlds();
+    assert!(
+        worlds.contains(&World::HooksToolResult),
+        "tool_result dispatches on World::HooksToolResult: {worlds:?}"
+    );
+    assert!(worlds.contains(&World::Tool), "and it is still a tool");
+    let _ = std::fs::remove_dir_all(&root);
 }

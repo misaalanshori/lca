@@ -339,6 +339,21 @@ deny is the verdict. The `context` and `context_with_system` points
 are the `context-transform` world, which already sees the full
 transcript including the system prompt: no second surface.
 
+`hooks-tool-result` is how an extension makes its own arguments obtainable.
+The useful shape, worked by `hash-edit` (gh #285): a tool that resolves its
+edits by *content hash* has no way to show the model those hashes, because
+`read` is a built-in that answers with decimal line numbers. So the
+extension also exports `hooks-tool-result` and rewrites a successful `read`
+of a text file into an annotated listing — a hashed gutter in front of each
+line — which the model then copies into the tool's arguments. One read, one
+tool, no second read path and no new capability. Two rules make such a hook
+safe: rewrite **only** the results you own (`call.name == "read"`, status
+`ok`, text), and leave anything you cannot parse **byte-identical** — an
+annotation hook that mangles a result is worse than one that does nothing.
+A hook that mutates a result the model is reasoning about is the one place
+`hooks-tool-result` can do real harm, so its default must be the identity
+patch.
+
 The `ui` world renders. It returns a widget tree for a named region: text spans, styled text (independent foreground/background as a role or `#RRGGBB`, plus bold/dim/italic/underline), markdown (the host's own engine, highlighted fences included), buttons (an id plus a label), tables (headers plus rows, auto-aligned), scroll containers (a viewport height over child nodes, with a scrollbar thumb), images with a media type and bytes, boxes (an optional title plus a border role and background tint), rows, columns, a spinner, a progress bar, and a key-value list. See the capability catalog for the regions and the rendering model. An extension cannot write terminal escape sequences; text spans carry data only.
 
 Interaction arrives through the `interaction` world: keys, submissions, and dismissals as before, plus mouse - `click-widget(id)` for a declared button, `click(col, row)` relative to the region's content origin, and `scroll(+1/-1)` for the wheel. Clicks map on the modal and panel regions; the footer and status-line regions stay display-only (their rows pack native and extension statuses together, so a cell cannot name one owner). Input of every kind goes to the first extension registered for the region.
