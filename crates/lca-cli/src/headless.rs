@@ -947,6 +947,20 @@ fn wire(
     // below holds its scrutinee guard through the whole literal, so a
     // second `lock(grants)` inside it would self-deadlock.
     let trusted_now = lock(grants).is_trusted(cwd);
+    // gh #271: the prompt must advertise what the run offers. Resolved here,
+    // after `apply_tool_selection` ran and before the config literal below
+    // moves `registry`, from the same predicate the request's declaration uses.
+    let system_prompt = {
+        let effective = crate::prompt::effective_tools(&registry);
+        let names: Vec<&str> = effective.iter().map(String::as_str).collect();
+        match crate::prompt::agent_system_prompt_for(cwd, &model_id, flags, trusted_now, &names) {
+            Ok(prompt) => prompt,
+            Err(err) => {
+                eprintln!("error: {err}");
+                return Err(exit::USAGE);
+            }
+        }
+    };
     let agent_config = AgentConfig {
         provider: provider_name.to_string(),
         model: model_id.clone(),
@@ -965,14 +979,7 @@ fn wire(
         compaction_keep_recent_tokens: config.compaction_keep_recent_tokens(),
         model_context_window,
         completion_backend,
-        system_prompt: match crate::prompt::agent_system_prompt(cwd, &model_id, flags, trusted_now)
-        {
-            Ok(prompt) => prompt,
-            Err(err) => {
-                eprintln!("error: {err}");
-                return Err(exit::USAGE);
-            }
-        },
+        system_prompt,
         skills_roots: skills_roots(cwd, flags),
         skills_inject_matched: config.skills_inject_matched(),
         edit_requires_read: config.tool_edit_requires_read(),

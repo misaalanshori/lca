@@ -530,3 +530,12 @@ mod update_fetch_is_bounded;
 // sent to this endpoint.
 #[path = "292-preset-env-vars-authenticate.rs"]
 mod preset_env_vars_authenticate;
+
+// GitHub #269: `--mode rpc` built the Agent without the nested completion
+// backend, so RPC compaction degraded to the mechanical excerpt summary.
+#[path = "269-rpc-nested-backend.rs"]
+mod rpc_nested_backend;
+// GitHub #271: the system prompt advertised every built-in tool regardless of
+// `--no-tools` / `-t` / `--exclude-tools`, contradicting the request.
+#[path = "271-prompt-advertises-effective-tools.rs"]
+mod prompt_advertises_effective_tools;
