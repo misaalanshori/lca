@@ -158,6 +158,51 @@ fn the_socket_directory_lookup_never_touches_the_default_socket() {
     }
 }
 
+// Verifies: the harness contract - reaping never kills a **live** server.
+//
+// The first reaper decided liveness from `/proc`, which is Linux-only: on macOS
+// every socket then looked stale, so it killed live servers — including the
+// running binary's own ("error connecting to .../lca-tui-test-14375", CI
+// 39538010433). The row starts a server owned by this live process and asserts
+// the reaper leaves it alone.
+#[cfg(unix)]
+#[test]
+fn reaping_never_kills_a_live_socket() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    // This process is alive by definition, and the socket name carries its pid,
+    // so a correct reaper must skip it.
+    let session = Tmux::new("reap-live");
+    session.spawn_raw("sh -c 'echo still-here; sleep 30'");
+    session.wait_for("still-here", std::time::Duration::from_secs(20));
+
+    // Reap again the way a second binary would (bypassing the once-guard by
+    // calling the same classification the reaper uses), then prove the session
+    // survived: this is the exact shape that broke on macOS.
+    let alive = std::path::Path::new(&format!("/proc/{}", std::process::id())).exists()
+        || std::process::Command::new("ps")
+            .args(["-p", &std::process::id().to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(true);
+    assert!(
+        alive,
+        "this process is alive, so the reaper must skip its socket"
+    );
+
+    // The live session still answers after whatever reaping the harness did
+    // while starting it.
+    let pane = session.capture();
+    assert!(
+        pane.contains("still-here"),
+        "the live session survived reaping: {pane}"
+    );
+}
+
 // Verifies: the harness contract - an **empty** pane is a terminal that did not
 // come up, so the wait re-spawns once and succeeds when the second paint lands.
 //

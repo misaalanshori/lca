@@ -112,6 +112,30 @@ pub fn socket_dir_for_tests() -> Option<std::path::PathBuf> {
 /// Scoped to this harness's own prefix, so a live drive (`lca-tui`) or another
 /// tool's sockets are never touched.
 #[cfg(unix)]
+/// Whether a process id is still running, portably.
+///
+/// `kill(pid, 0)` is the POSIX idiom and works on every Unix we ship; doing it
+/// through the shell keeps this file free of an `unsafe` libc call. A pid we
+/// cannot query is treated as **alive** — the cautious direction, because the
+/// cost of a false "alive" is one leftover socket and the cost of a false
+/// "dead" is killing a suite that is running.
+fn process_is_alive(pid: u32) -> bool {
+    // `/proc` first where it exists: no process spawn per socket examined.
+    if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+        return true;
+    }
+    // Elsewhere (macOS), ask ps. `ps -p <pid>` exits 0 only for a live pid.
+    Command::new("ps")
+        .args(["-p", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        // A machine without `ps` cannot answer: assume alive, do not reap.
+        .unwrap_or(true)
+}
+
+/// Whether the pid that owns this socket file is still running.
 pub fn reap_stale_sockets() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -133,7 +157,13 @@ pub fn reap_stale_sockets() {
                 continue;
             };
             // Alive? Then it is a concurrent suite's server: leave it.
-            if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            //
+            // `/proc` is Linux-only. On macOS the same check reads as "every
+            // socket is stale", so the reaper killed live servers - including
+            // this binary's own, mid-test ("error connecting to
+            // .../lca-tui-test-14375", CI run 39538010433). The portable probe
+            // is the platform's own process query.
+            if process_is_alive(pid) {
                 continue;
             }
             let _ = Command::new("tmux")
