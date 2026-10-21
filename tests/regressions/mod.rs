@@ -282,6 +282,12 @@ mod gh212_panel_toggle_traps_exit;
 // GitHub #394: the `/tree` navigator's layout math marched a long linear
 // session off the right edge (one gutter per ancestor). The four fixes and
 // their frame-level guards live here and in `chat_tree_tests.rs`.
+// GitHub #369: the OSC 9;4 progress indicator was written once per turn
+// (terminals watchdog it away after ~10-15 s), and OSC 7501 tab status
+// covered turns only - a background `/compact`, a `!`/`!!` run, and the
+// install-consent prompt were invisible to a tab bar.
+#[path = "369-osc-keepalive-and-status-coverage.rs"]
+mod gh369_osc_keepalive_and_status_coverage;
 #[path = "394-tree-layout-math.rs"]
 mod gh394_tree_layout_math;
 // GitHub #281: the mechanical compaction fallback decoded every carried

@@ -18,6 +18,10 @@ pub struct FakeTerminal {
     buffer: StdinBuffer,
     input: Option<InputHandler>,
     resize: Option<ResizeHandler>,
+    /// The last `set_progress` value (gh #369): the UI's badge/progress
+    /// sync asserts the arm/disarm edges, which the byte stream alone
+    /// cannot distinguish from a keepalive refresh.
+    progress: bool,
 }
 
 impl FakeTerminal {
@@ -62,6 +66,11 @@ impl FakeTerminal {
         if let Some(handler) = self.resize.as_mut() {
             handler();
         }
+    }
+
+    /// Whether the taskbar spinner is currently armed (gh #369).
+    pub fn progress(&self) -> bool {
+        self.progress
     }
 
     /// Take everything written so far.
@@ -140,7 +149,16 @@ impl Terminal for FakeTerminal {
         self.write(&format!("\x1b]0;{title}\x07"));
     }
 
-    fn set_progress(&mut self, _active: bool) {}
+    fn set_progress(&mut self, active: bool) {
+        self.progress = active;
+        // Write the documented bytes too, so a byte-level golden still sees
+        // exactly what a real terminal would (gh #369).
+        self.write(if active {
+            "\x1b]9;4;3\x07"
+        } else {
+            "\x1b]9;4;0\x07"
+        });
+    }
 
     fn set_program_status(&mut self, state: ProgramState) {
         // The test double always reports: mode logic is covered

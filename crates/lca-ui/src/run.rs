@@ -851,10 +851,10 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
 
     let result = 'main: loop {
         // Turn lifecycle (R16: `TurnState` owns the running turn).
-        if turns.reap(&mut chat, &mut terminal) {
+        if turns.reap(&mut chat) {
             dirty = true;
         }
-        if turns.start(&mut chat, &runner, &mut terminal) {
+        if turns.start(&mut chat, &runner) {
             dirty = true;
         }
         if turns.drain(&mut chat) {
@@ -937,8 +937,12 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             dirty = true;
         }
 
-        // Gh #213: the tab badge follows the lifecycle, on change only.
+        // Gh #213/#369: the tab badge and the taskbar spinner follow the
+        // lifecycle (turn, compaction, shell), on change only.
         turns.sync_program_status(&chat, &mut terminal);
+        // Gh #369: the OSC 9;4 keepalive rides this loop's 50 ms tick rather
+        // than a new thread; it writes only while the indicator is armed.
+        terminal.tick_progress();
 
         if dirty {
             let width = terminal.columns();
@@ -1008,7 +1012,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
 }
 
 /// The running turn's mutable state (R16), so the loop body stays a loop.
-struct TurnState {
+pub(crate) struct TurnState {
     active: Option<std::thread::JoinHandle<TurnOutcome>>,
     turn_rx: Option<Receiver<lca_protocol::TurnEvent>>,
     /// The session's prompt receiver: kept for the whole session, so a
@@ -1022,9 +1026,12 @@ struct TurnState {
     cancel: Option<lca_tools::CancelFlag>,
     aborted: bool,
     /// The last reported tab-badge state (gh #213, change-only emits).
-    program_status: Option<lca_tui::engine::program_status::ProgramState>,
+    pub(crate) program_status: Option<lca_tui::engine::program_status::ProgramState>,
     /// The finished turn's outcome (`None` pre-first-turn and post-abort).
-    last_ok: Option<bool>,
+    pub(crate) last_ok: Option<bool>,
+    /// Whether `OSC 9;4` progress is currently on (gh #369): tracked so the
+    /// spinner is armed once per working period, not once per frame.
+    pub(crate) progress_active: bool,
 }
 
 impl TurnState {
@@ -1044,11 +1051,12 @@ impl TurnState {
             aborted: false,
             program_status: None,
             last_ok: None,
+            progress_active: false,
         }
     }
 
     /// Reap a finished turn (returns whether one finished).
-    fn reap(&mut self, chat: &mut Chat, terminal: &mut dyn Terminal) -> bool {
+    fn reap(&mut self, chat: &mut Chat) -> bool {
         let Some(handle) = self.active.take_if(|h| h.is_finished()) else {
             return false;
         };
@@ -1092,11 +1100,9 @@ impl TurnState {
         self.last_ok = Some(outcome.error.is_none());
         chat.turn_running = false;
         chat.current_steer = None;
-        // Gh #82: OSC 9;4 progress is current behavior; the key
-        // switches it off.
-        if chat.display_tuning().show_progress {
-            terminal.set_progress(false);
-        }
+        // Gh #369: the taskbar spinner is now driven by the unified
+        // `sync_program_status` (turn, compaction, and shell all count), so
+        // the hand-maintained arm/disarm here is gone - one owner, one edge.
         // Steering lifecycle (ADR-0038): an aborted turn returns its queue
         // to the editor; a completed turn runs the queued messages in order.
         // Gh #213: the resting badge follows the outcome (an abort
@@ -1111,19 +1117,8 @@ impl TurnState {
         true
     }
 
-    /// Mirror the lifecycle to the tab badge (gh #213).
-    fn sync_program_status(&mut self, chat: &Chat, terminal: &mut dyn Terminal) {
-        crate::status::sync_badge(
-            chat,
-            chat.turn_running,
-            self.last_ok,
-            &mut self.program_status,
-            terminal,
-        );
-    }
-
     /// Start a submitted turn (returns whether one started).
-    fn start(&mut self, chat: &mut Chat, runner: &TurnRunner, terminal: &mut dyn Terminal) -> bool {
+    fn start(&mut self, chat: &mut Chat, runner: &TurnRunner) -> bool {
         if chat.turn_running {
             return false;
         }
@@ -1143,9 +1138,8 @@ impl TurnState {
             queue,
         };
         chat.begin_turn(steer);
-        if chat.display_tuning().show_progress {
-            terminal.set_progress(true);
-        }
+        // Gh #369: arming happens in `sync_program_status`, from the same
+        // `WorkKind` the badge uses; nothing to do here.
         self.turn_rx = Some(event_rx);
         self.active = Some(runner(text, channels, cancel));
         true
@@ -1197,4 +1191,4 @@ impl TurnState {
 
 #[cfg(test)]
 #[path = "run_tests.rs"]
-mod tests;
+pub(crate) mod tests;

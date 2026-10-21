@@ -53,6 +53,21 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **The taskbar spinner survives a long turn, and tab status covers
+  compaction, shell runs, and install consent** (gh #369). `OSC 9;4`
+  progress was written once at turn start, but terminal emulators put a
+  ~10-15 s watchdog on the sequence so a crashed CLI cannot spin a taskbar
+  forever - so any turn longer than that (most of them) silently lost its
+  indicator mid-flight. It is now re-emitted once a second from the
+  interface's own 50 ms tick, not a new thread, and stops dead when the turn
+  does. `OSC 7501` tab status covered turns only: a background `/compact`
+  and an inline `!`/`!!` run now badge `working` (one `WorkKind` feeds both
+  the badge and the spinner, so they cannot disagree), and the `/extensions`
+  install-consent prompt - the one modal missing from the blocked list -
+  badges `blocked`. States still emit on transition only, and a
+  suspend/resume (`$EDITOR`) now restores the badge instead of leaving the
+  tab blank. Guard:
+  `tests/regressions/369-osc-keepalive-and-status-coverage.rs`.
 - **`lca ext install` pulls from a real registry again** (gh #308). Three
   defects sat in one fetch path. The post-401 retry checked `is_success()` and
   nothing else, so the *normal* ghcr blob shape - 401, then a token, then a 307

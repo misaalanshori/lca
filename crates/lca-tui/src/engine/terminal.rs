@@ -32,6 +32,90 @@ use super::sys;
 const KITTY_QUERY: &str = "\x1b[>7u\x1b[?u\x1b[c";
 const PROGRESS_ACTIVE: &str = "\x1b]9;4;3\x07";
 const PROGRESS_CLEAR: &str = "\x1b]9;4;0\x07";
+
+/// How often a live `OSC 9;4;3` indicator is refreshed (gh #369).
+///
+/// Terminal emulators put a watchdog on `OSC 9;4` (roughly 10-15 s) so a
+/// crashed CLI does not leave a spinner turning forever. A turn routinely
+/// outlives that, so a single write at the start silently loses the
+/// indicator mid-turn. pi refreshes every second
+/// (`TERMINAL_PROGRESS_KEEPALIVE_MS`); so do we.
+pub const PROGRESS_KEEPALIVE_MS: Duration = Duration::from_millis(1000);
+
+/// Where the keepalive's bytes go. Separate from [`Terminal`] so the
+/// cadence can be driven by a fake clock in a test rather than a sleeping
+/// thread, and so the one place that decides *when* to write stays a pure
+/// function of time.
+pub trait ProgressGate {
+    /// Emit `OSC 9;4;3` (indeterminate progress).
+    fn write_progress_active(&self);
+    /// Emit `OSC 9;4;0` (clear).
+    fn write_progress_clear(&self);
+}
+
+/// The `OSC 9;4` keepalive's clock and arming state (gh #369).
+///
+/// Pure: no thread, no timer. [`Self::tick`] is called from the existing
+/// tick seam (the UI loop's 50 ms `recv_timeout`), and it decides from the
+/// caller-supplied `now` whether a refresh is due. That keeps the cadence
+/// testable without sleeping and means the interface gains no new thread.
+#[derive(Debug, Default)]
+pub struct ProgressKeepalive {
+    /// Whether the indicator is currently wanted.
+    active: bool,
+    /// When the last `OSC 9;4;3` went out (the arming write included).
+    last_emit: Option<Instant>,
+}
+
+impl ProgressKeepalive {
+    /// A keepalive that has never been armed.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Arm or disarm the indicator. Writing `true` while already armed is
+    /// deliberately not a re-emit: a second turn starting must not reset
+    /// the clock, or a fast succession of turns would drift toward a burst.
+    pub fn set_progress(&mut self, gate: &dyn ProgressGate, active: bool, now: Instant) {
+        if active {
+            if !self.active {
+                self.active = true;
+                gate.write_progress_active();
+            }
+            if self.last_emit.is_none() {
+                self.last_emit = Some(now);
+            }
+        } else {
+            if self.active {
+                self.active = false;
+                gate.write_progress_clear();
+            }
+            self.last_emit = None;
+        }
+    }
+
+    /// Whether the indicator is currently armed.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Refresh the indicator when a full window has passed. A no-op while
+    /// disarmed, which is what keeps an idle interface silent.
+    pub fn tick(&mut self, gate: &dyn ProgressGate, now: Instant) {
+        if !self.active {
+            return;
+        }
+        let Some(last) = self.last_emit else {
+            return;
+        };
+        if now.duration_since(last) >= PROGRESS_KEEPALIVE_MS {
+            gate.write_progress_active();
+            self.last_emit = Some(now);
+        }
+    }
+}
 const DEFAULT_SEQUENCE_TIMEOUT_MS: u64 = 50;
 const DEFAULT_ESCAPE_TIMEOUT_MS: u64 = 10;
 const DEFAULT_SSH_ESCAPE_TIMEOUT_MS: u64 = 100;
@@ -73,6 +157,13 @@ pub trait Terminal: Send {
     fn set_title(&mut self, title: &str);
     /// Drive the taskbar progress indicator.
     fn set_progress(&mut self, active: bool);
+
+    /// Refresh the `OSC 9;4` indicator if its window has elapsed (gh #369).
+    ///
+    /// Called from the interface's existing tick seam. A terminal with no
+    /// indicator armed does nothing; the default is a no-op so the fake
+    /// terminal and any other implementation are unaffected.
+    fn tick_progress(&mut self) {}
     /// Report a lifecycle state over OSC 7501 (gh #213): working,
     /// blocked, done, error, idle, and clear on shutdown. Reports only
     /// when the terminal opted in (see `program_status`); otherwise a
@@ -178,6 +269,36 @@ impl Shared {
     }
 }
 
+/// Writes the `OSC 9;4` bytes the keepalive asks for, echoing them to the
+/// write log when one is configured (gh #369: a capture must show the
+/// keepalive, or the live-verification path could not prove it).
+struct TerminalWriter {
+    log: Option<PathBuf>,
+}
+
+impl TerminalWriter {
+    fn emit(&self, data: &str) {
+        write_stdout(data);
+        if let Some(path) = &self.log
+            && let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+        {
+            let _ = f.write_all(data.as_bytes());
+        }
+    }
+}
+
+impl ProgressGate for TerminalWriter {
+    fn write_progress_active(&self) {
+        self.emit(PROGRESS_ACTIVE);
+    }
+    fn write_progress_clear(&self) {
+        self.emit(PROGRESS_CLEAR);
+    }
+}
+
 /// A real terminal over process stdin/stdout.
 pub struct ProcessTerminal {
     shared: Arc<Shared>,
@@ -185,7 +306,14 @@ pub struct ProcessTerminal {
     reader: Option<JoinHandle<()>>,
     keyboard_protocol_pushed: bool,
     write_log: Option<PathBuf>,
-    progress: Arc<AtomicBool>,
+    /// The `OSC 9;4` indicator's arming state and clock (gh #369). Uses the
+    /// same `write_log`-backed writer as every other sequence, so a
+    /// `LCA_TUI_WRITE_LOG` capture records the keepalive too.
+    progress: ProgressKeepalive,
+    /// The last non-`clear` badge state, re-emitted after a `start()`
+    /// (gh #369: `$EDITOR` stops the terminal, which clears the badge; the
+    /// resumed interface must restore it rather than leave the tab blank).
+    program_status: Option<ProgramState>,
     /// Whether the alternate screen is active, folded from the `?1049h` and
     /// `?1049l` sequences that cross [`Terminal::write`]. The renderers
     /// drive those through the trait, so this tracks what the terminal is
@@ -219,8 +347,21 @@ impl ProcessTerminal {
             reader: None,
             keyboard_protocol_pushed: false,
             write_log: resolve_write_log(),
-            progress: Arc::new(AtomicBool::new(false)),
+            progress: ProgressKeepalive::new(),
+            program_status: None,
             in_alt_screen: false,
+        }
+    }
+
+    /// A [`ProgressGate`] over this terminal's own writer.
+    ///
+    /// An owned handle rather than borrowing `self`, because
+    /// [`ProgressKeepalive::set_progress`] takes `&mut self.progress` at the
+    /// same time: two disjoint fields, which the borrow checker accepts only
+    /// if the gate does not capture `self` wholesale.
+    fn writer(&self) -> TerminalWriter {
+        TerminalWriter {
+            log: self.write_log.clone(),
         }
     }
 
@@ -276,6 +417,13 @@ impl Terminal for ProcessTerminal {
         // an unaware terminal ignores the unknown OSC. Skipped when
         // reporting is forced off, forced on (no detection needed), or
         // stripped by the multiplexer.
+        // Gh #369: a suspend/resume (`$EDITOR`) `stop`s the terminal, which
+        // writes `state=clear`; putting the remembered badge back means the
+        // tab bar is not left blank for the rest of the session. pi does the
+        // same in `start()` (`writeProgramStatus`).
+        if let Some(state) = self.program_status {
+            self.raw_write(&format_program_status(state));
+        }
         if program_status_mode(env_var).needs_query() && !multiplexer_strips_osc(env_var) {
             self.raw_write(PROGRAM_STATUS_QUERY);
         }
@@ -285,9 +433,10 @@ impl Terminal for ProcessTerminal {
         // Gh #213: reset the tab badge when reporting flowed (a
         // no-op when it never did).
         self.set_program_status(ProgramState::Clear);
-        if self.progress.swap(false, Ordering::SeqCst) {
-            self.raw_write(PROGRESS_CLEAR);
-        }
+        // Gh #369: disarm through the keepalive, so a pending refresh clock
+        // cannot outlive the interface and stray-write after exit.
+        self.progress
+            .set_progress(&self.writer(), false, Instant::now());
         self.raw_write("\x1b[?2004l");
         if self.keyboard_protocol_pushed || self.shared.kitty.load(Ordering::SeqCst) {
             self.raw_write("\x1b[<u");
@@ -401,16 +550,21 @@ impl Terminal for ProcessTerminal {
     }
 
     fn set_progress(&mut self, active: bool) {
-        if active {
-            self.raw_write(PROGRESS_ACTIVE);
-            self.progress.store(true, Ordering::SeqCst);
-        } else {
-            self.progress.store(false, Ordering::SeqCst);
-            self.raw_write(PROGRESS_CLEAR);
-        }
+        self.progress
+            .set_progress(&self.writer(), active, Instant::now());
+    }
+
+    fn tick_progress(&mut self) {
+        self.progress.tick(&self.writer(), Instant::now());
     }
 
     fn set_program_status(&mut self, state: ProgramState) {
+        // Gh #369: remember the last non-`clear` state so `start()` can put
+        // it back after a suspend (the external editor), which `stop()`s and
+        // therefore clears the badge.
+        if state != ProgramState::Clear {
+            self.program_status = Some(state);
+        }
         if program_status_active(&self.shared) {
             self.raw_write(&format_program_status(state));
         }
@@ -780,302 +934,5 @@ fn tmux_forwards_hyperlinks() -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn restart_clears_the_shutdown_flag() {
-        // The external editor stops and restarts the terminal; without a
-        // reset the new reader thread sees the old shutdown flag and dies.
-        let mut term = ProcessTerminal::new();
-        term.start(Box::new(|_| {}), Box::new(|| {}));
-        term.stop();
-        assert!(term.shared.shutdown.load(Ordering::SeqCst));
-        term.start(Box::new(|_| {}), Box::new(|| {}));
-        assert!(!term.shared.shutdown.load(Ordering::SeqCst));
-        term.stop();
-    }
-
-    #[test]
-    fn negotiation_replies_parse() {
-        assert_eq!(
-            parse_negotiation("\x1b[?7u"),
-            Some(Negotiation::KittyFlags(7))
-        );
-        assert_eq!(
-            parse_negotiation("\x1b[?0u"),
-            Some(Negotiation::KittyFlags(0))
-        );
-        assert_eq!(
-            parse_negotiation("\x1b[?62;1;2c"),
-            Some(Negotiation::DeviceAttributes)
-        );
-        assert_eq!(parse_negotiation("\x1b[A"), None);
-    }
-
-    #[test]
-    fn fake_terminal_routes_input_and_output() {
-        let mut term = FakeTerminal::new(80, 24);
-        let got = Arc::new(Mutex::new(Vec::<String>::new()));
-        let sink = got.clone();
-        term.start(
-            Box::new(move |s| sink.lock().unwrap().push(s)),
-            Box::new(|| {}),
-        );
-        term.feed("\x1b[Ax");
-        term.write("hello");
-        assert_eq!(
-            *got.lock().unwrap(),
-            vec!["\x1b[A".to_string(), "x".to_string()]
-        );
-        assert_eq!(term.take_output(), "hello");
-    }
-
-    // Verifies: gh #213 - OSC 7501 traffic never reaches input, and
-    // status reports encode to exact bytes on the fake terminal.
-    #[test]
-    fn fake_terminal_swallows_program_status_traffic() {
-        let mut term = FakeTerminal::new(80, 24);
-        let got = Arc::new(Mutex::new(Vec::<String>::new()));
-        let sink = got.clone();
-        term.start(
-            Box::new(move |s| sink.lock().unwrap().push(s)),
-            Box::new(|| {}),
-        );
-        term.feed("\x1b]7501;?\x1b\\x");
-        assert_eq!(*got.lock().unwrap(), vec!["x".to_string()]);
-        term.set_program_status(ProgramState::Working);
-        term.set_program_status(ProgramState::Clear);
-        assert_eq!(
-            term.take_output(),
-            "\x1b]7501;state=working:app=lca\x1b\\\x1b]7501;state=clear\x1b\\"
-        );
-    }
-
-    #[test]
-    #[allow(unsafe_code)] // SAFETY: single-threaded test process; restored immediately
-    fn escape_timeout_is_env_overridable() {
-        unsafe { std::env::set_var("PI_TUI_ESC_TIMEOUT", "42") };
-        assert_eq!(resolve_escape_timeout_ms(), 42);
-        unsafe { std::env::remove_var("PI_TUI_ESC_TIMEOUT") };
-    }
-
-    // Verifies: R8(a) - pi's adaptive lone-ESC window. The SSH branch is
-    // exercised through the extracted decision, because a test that mutates
-    // `SSH_CONNECTION` would race every other env-sensitive test in the
-    // workspace.
-    #[test]
-    fn the_escape_window_adapts_to_the_transport() {
-        assert_eq!(
-            escape_timeout_for(None, false),
-            DEFAULT_ESCAPE_TIMEOUT_MS,
-            "localhost keeps pi's 10 ms window"
-        );
-        assert_eq!(
-            escape_timeout_for(None, true),
-            DEFAULT_SSH_ESCAPE_TIMEOUT_MS,
-            "SSH raises it to 100 ms: latency lets ESC+char straddle packets"
-        );
-        assert_eq!(
-            escape_timeout_for(Some(42), true),
-            42,
-            "the env override wins over the transport"
-        );
-        assert_eq!(
-            escape_timeout_for(Some(0), true),
-            DEFAULT_SSH_ESCAPE_TIMEOUT_MS,
-            "a zero override is ignored, not adopted"
-        );
-    }
-
-    // Verifies: R8(c) - the never-swap-a-layer rule. Exactly one key
-    // disambiguation layer is ever active: DA starts `modifyOtherKeys`, a
-    // later Kitty answer retires it, and a repeated reply changes nothing.
-    #[test]
-    fn the_negotiation_keeps_exactly_one_key_layer_active() {
-        let term = ProcessTerminal::new();
-        let shared = &term.shared;
-        let mut out: Vec<String> = Vec::new();
-
-        // DA arrives first: the terminal does not speak Kitty, so the
-        // fallback layer starts. Sentinel, not a timeout.
-        assert!(
-            apply_negotiation(shared, "\x1b[?62;1;2c", &mut |s| out.push(s.to_string())),
-            "DA is consumed"
-        );
-        assert!(shared.modify_other_keys.load(Ordering::SeqCst));
-        assert!(!shared.kitty.load(Ordering::SeqCst));
-        assert_eq!(out, vec!["\x1b[>4;2m".to_string()]);
-
-        // A repeated DA adds nothing (the layer is already the active one).
-        assert!(apply_negotiation(shared, "\x1b[?62;1;2c", &mut |s| out.push(s.to_string())));
-        assert_eq!(out.len(), 1, "no second enable is emitted");
-
-        // A Kitty answer retires modifyOtherKeys and starts Kitty: never both.
-        assert!(apply_negotiation(shared, "\x1b[?7u", &mut |s| out.push(s.to_string())));
-        assert!(shared.kitty.load(Ordering::SeqCst));
-        assert!(
-            !shared.modify_other_keys.load(Ordering::SeqCst),
-            "the Kitty layer retired the fallback"
-        );
-        assert_eq!(out.last().map(String::as_str), Some("\x1b[>4;0m"));
-        assert!(
-            crate::engine::keys::is_kitty_protocol_active(),
-            "the parser's Kitty state follows"
-        );
-
-        // Kitty arrives first elsewhere (no prior DA): it starts directly
-        // and never enables the fallback.
-        let term = ProcessTerminal::new();
-        let shared = &term.shared;
-        let mut out: Vec<String> = Vec::new();
-        assert!(apply_negotiation(shared, "\x1b[?1u", &mut |s| out.push(s.to_string())));
-        assert!(shared.kitty.load(Ordering::SeqCst));
-        assert!(!shared.modify_other_keys.load(Ordering::SeqCst));
-        assert!(
-            out.is_empty(),
-            "the enable sequence is write-free when it is already off"
-        );
-        // Leave the process-wide parser flag as the test found it.
-        set_kitty_protocol_active(false);
-    }
-
-    /// An environment reader over a fixed map: `[(key, value), ...]`.
-    /// `+ use<>` keeps the argument's lifetime out of the return type: the
-    /// closure owns its copy of the map (edition-2024 RPIT would otherwise
-    /// capture it and outlive the caller's temporary array).
-    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
-        let map: std::collections::HashMap<String, String> = pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect();
-        move |key| map.get(key).cloned()
-    }
-
-    // Verifies: M2 - pi's capability ladder (terminal-image.ts), the probe
-    // included, decides between OSC 8 and the `text (url)` fallback.
-    #[test]
-    fn the_hyperlink_ladder_matches_pis() {
-        // Unknown terminal: off, so a URL never vanishes from the screen.
-        let term = env_of(&[("TERM", "xterm-256color")]);
-        assert!(!detect_hyperlinks_with(|| false, term));
-
-        // screen never forwards OSC 8.
-        let term = env_of(&[("TERM", "screen-256color")]);
-        assert!(!detect_hyperlinks_with(
-            || panic!("no tmux under screen"),
-            term
-        ));
-
-        // Known-capable terminals answer on their own environment marker.
-        for key in [
-            "KITTY_WINDOW_ID",
-            "GHOSTTY_RESOURCES_DIR",
-            "WEZTERM_PANE",
-            "WARP_SESSION_ID",
-            "ITERM_SESSION_ID",
-            "WT_SESSION",
-        ] {
-            let term = env_of(&[("TERM", "xterm-256color"), (key, "1")]);
-            assert!(detect_hyperlinks_with(|| false, term), "{key} is capable");
-        }
-
-        let term = env_of(&[("TERM", "xterm-256color"), ("TERM_PROGRAM", "alacritty")]);
-        assert!(detect_hyperlinks_with(|| false, term));
-
-        let term = env_of(&[
-            ("TERM", "xterm-256color"),
-            ("TERMINAL_EMULATOR", "jetbrains-jediterm"),
-        ]);
-        assert!(
-            !detect_hyperlinks_with(|| false, term),
-            "JetBrains' IDE terminal is off"
-        );
-    }
-
-    // Verifies: M2 - under tmux the client's own `client_termfeatures`
-    // decides (pi's probeTmuxHyperlinks), not a blanket no.
-    #[test]
-    fn under_tmux_the_client_probe_decides() {
-        let tmux = env_of(&[
-            ("TERM", "xterm-256color"),
-            ("TMUX", "/tmp/tmux-1000/default,1,0"),
-        ]);
-        assert!(
-            detect_hyperlinks_with(|| true, tmux),
-            "a forwarding client turns it on"
-        );
-        let tmux = env_of(&[
-            ("TERM", "xterm-256color"),
-            ("TMUX", "/tmp/tmux-1000/default,1,0"),
-        ]);
-        assert!(
-            !detect_hyperlinks_with(|| false, tmux),
-            "a non-forwarding client keeps it off"
-        );
-    }
-
-    // Verifies: M2 - LCA_HYPERLINKS mirrors PI_HYPERLINKS: the override
-    // wins over detection (the receipt path under tmux).
-    #[test]
-    fn the_hyperlinks_override_wins_over_detection() {
-        let off = env_of(&[
-            ("TERM", "xterm-256color"),
-            ("LCA_HYPERLINKS", "0"),
-            ("KITTY_WINDOW_ID", "1"),
-        ]);
-        assert!(
-            !detect_hyperlinks_with(|| true, off),
-            "0 forces the fallback"
-        );
-        let on = env_of(&[("TERM", "xterm-256color"), ("LCA_HYPERLINKS", "1")]);
-        assert!(detect_hyperlinks_with(|| false, on), "1 forces OSC 8");
-        let junk = env_of(&[("TERM", "xterm-256color"), ("LCA_HYPERLINKS", "yes-please")]);
-        assert!(
-            !detect_hyperlinks_with(|| false, junk),
-            "only 1|0 count as an override"
-        );
-    }
-
-    // Verifies: gh #33 - the drop leaves the alternate screen only while it
-    // is still active. A second `?1049l` restores the cursor the switch
-    // saved (the top-left) and undoes the exit park, which is what put the
-    // shell prompt back on the transcript in fullscreen mode.
-    #[test]
-    fn the_drop_leaves_the_alt_screen_only_while_it_is_active() {
-        let active = teardown_sequence(true);
-        assert!(active.contains("\x1b[?1049l"), "{active:?}");
-        assert!(active.ends_with("\x1b[?7h\x1b[?25h"), "{active:?}");
-
-        let gone = teardown_sequence(false);
-        assert!(
-            !gone.contains("1049"),
-            "no screen switch once the teardown has run: {gone:?}"
-        );
-        assert!(gone.ends_with("\x1b[?7h\x1b[?25h"), "{gone:?}");
-        for seq in ["\x1b[?1000l", "\x1b[?1002l", "\x1b[?1003l", "\x1b[?1006l"] {
-            assert!(gone.contains(seq), "mouse tracking is always off: {gone:?}");
-        }
-    }
-
-    // Verifies: gh #33 - the flag the drop reads is folded from the
-    // renderers' own sequences, so it tracks the screen rather than a
-    // separate bookkeeping call.
-    #[test]
-    fn the_screen_switch_sequences_fold_into_the_drop_flag() {
-        let mut term = ProcessTerminal::new();
-        assert!(
-            !term.in_alt_screen,
-            "a fresh terminal is on the main screen"
-        );
-
-        term.write("\x1b[?1049h\x1b[?7l\x1b[2J\x1b[H\x1b[?25l");
-        assert!(term.in_alt_screen, "enter switches the flag on");
-
-        term.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\r\n\x1b[?7h\x1b[?25h");
-        assert!(
-            !term.in_alt_screen,
-            "the renderer's leave switches it off, so the drop has nothing to undo"
-        );
-    }
-}
+#[path = "terminal_tests.rs"]
+mod tests;
