@@ -718,8 +718,13 @@ mod wasm_mode {
         }
 
         fn write(&self, path: &str, bytes: &[u8]) -> Result<(), lca_protocol::CapabilityError> {
+            // gh #436: the host now refuses a stale write when
+            // `tool.edit_requires_read` is on, and its message is the one the
+            // built-in `edit` gives. Keep it rather than flattening every
+            // refusal to "fs write refused" - the user needs to know to read
+            // the file again.
             fs::write("workspace", path, bytes)
-                .map_err(|_| lca_protocol::CapabilityError::Io("fs write refused".to_string()))?;
+                .map_err(|err| lca_protocol::CapabilityError::Io(format!("{err:?}")))?;
             Ok(())
         }
     }
@@ -835,6 +840,7 @@ mod wasm_hook {
 /// resolves in another, and a change-then-revert revives a stale one. An
 /// anchor proves "this text was in *some* read"; the flag promises "this file
 /// was read recently", which only the tracker can answer.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn checked_edit(
     root: &std::path::Path,
     path: &str,
