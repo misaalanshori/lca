@@ -53,6 +53,31 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **`stream-guard` reports each match once, and its WASM mode honours project
+  trust** (gh #300). Two defects with one shape — the extension's delivery
+  modes disagreed with each other and with common sense.
+  - **Re-fire storm.** `Scanner::feed` appended deltas to a rolling 4 KiB
+    window and emitted a match when a rule hit, but never advanced past the
+    matched span, so the same text re-matched on every subsequent delta for
+    the rest of the window — one `.unwrap()` in a long answer produced a hit
+    per remaining token. The window was also never reset across turns, so
+    turn N's match re-fired on turn N+1's first token. Each rule now keeps a
+    cursor to the end of what it has already reported, so only new text is
+    examined: a rule that legitimately matches again still fires, and a
+    pattern split across deltas still matches (the window is unchanged). The
+    handle now also declares the `Hooks` world, which is where the registry
+    dispatches `pre-turn`; declaring only `HooksStream` is why its
+    `on_pre_turn` was dead code and the window lived across turns.
+  - **Trust bypass.** The WASM guest read `.lca/extensions/stream-guard/rules.toml`
+    unconditionally while the native handle refuses workspace rules unless the
+    project is trusted, so an untrusted repository could inject stream rules
+    simply by being opened — a consent-mandating surface honouring consent in
+    one delivery mode and not the other. The guest now loads through the one
+    trust-gated `load_rules`, which means an installed WASM `stream-guard`
+    scans the user's global rules and not the project's. A WASM guest has no
+    host import that answers "is this project trusted"; the documented route
+    (`docs/extension-authoring.md`) is to refuse the trust-dependent half with
+    a reason, which is what `project-memory` already does.
 - **`--mode rpc` sessions wire the nested completion backend** (gh #269).
   `headless` and the interactive runner both build one and install it on the
   agent; the RPC entry point did not, so LLM compaction in a daemon session
