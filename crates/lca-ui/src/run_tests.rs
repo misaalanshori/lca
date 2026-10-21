@@ -739,3 +739,49 @@ fn program_status_follows_the_lifecycle() {
         )
     );
 }
+
+// Verifies: gh #401 item 1 (pi's `onEscape` -> `restoreQueuedMessagesToEditor`)
+// - an aborted turn returns the queue to the editor from the LOOP's own
+// abort path (`TurnState::reap`), not merely from `Chat::restore_pending`.
+// This row fails the moment `chat.restore_pending()` leaves the abort
+// branch: the queue then stays in `pending` and the editor stays empty.
+#[test]
+fn an_aborted_turn_restores_the_queue_through_the_reap_path() {
+    let (prompt_tx, prompt_rx) = std::sync::mpsc::sync_channel(4);
+    let (_dialog_tx, dialog_rx) = std::sync::mpsc::sync_channel(4);
+    let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx);
+    let mut chat = chat();
+    let mut term = FakeTerminal::new(80, 24);
+    chat.begin_turn(lca_protocol::steer_queue());
+    chat.queue_submit("steer me".into(), lca_protocol::SubmitMode::Steer);
+    chat.queue_submit("follow me".into(), lca_protocol::SubmitMode::FollowUp);
+    // The user typed while the turn ran; the draft must survive the merge.
+    chat.editor.set_text("half-typed");
+    // A finished turn handle, as the Escape key leaves behind.
+    let handle = std::thread::spawn(|| lca_protocol::TurnOutcome {
+        status: lca_protocol::TurnStatus::Error,
+        stop_reason: lca_protocol::StopReason::Cancelled,
+        usage: lca_protocol::Usage::default(),
+        error: None,
+    });
+    turns.active = Some(handle);
+    turns.aborted = true;
+    // Joining a freshly-spawned handle: give the thread a moment to land.
+    for _ in 0..200 {
+        if turns.active.as_ref().is_some_and(|h| h.is_finished()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(turns.reap(&mut chat, &mut term), "the turn reaped");
+    assert!(chat.pending.is_empty(), "the queue left the dock");
+    assert_eq!(
+        chat.editor.text(),
+        "steer me\n\nfollow me\n\nhalf-typed",
+        "queue first, draft last: nothing lost, nothing auto-sent"
+    );
+    assert_eq!(
+        chat.last_notice().as_deref(),
+        Some("Restored 2 queued messages to editor")
+    );
+}

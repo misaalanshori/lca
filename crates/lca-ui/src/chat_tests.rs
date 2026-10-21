@@ -66,6 +66,24 @@ pub(super) fn chat() -> Chat {
     Chat::new(options(), Arc::new(KeybindingsManager::new()))
 }
 
+/// A chat whose slash commands reach `drained`, for rows that assert
+/// what *dispatched* rather than what rendered (gh #401's compaction
+/// flush, which runs a leading queued command before the turn).
+pub(super) fn chat_with_commands(
+    drained: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+) -> Chat {
+    let mut options = options();
+    options.slash_commands = vec!["/inspect".into()];
+    options.invoke_command = std::sync::Arc::new(move |name, argument| {
+        drained
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((name.to_string(), argument.to_string()));
+        CommandEffect::None
+    });
+    Chat::new(options, Arc::new(KeybindingsManager::new()))
+}
+
 pub(super) fn strip(lines: &[String]) -> Vec<String> {
     lines.iter().map(|l| strip_terminal_sequences(l)).collect()
 }
@@ -392,51 +410,6 @@ fn dialogs_anchor_and_center_in_both_screen_modes() {
     );
 }
 
-// Verifies: FR-CORE-11 - a message submitted while a turn runs queues
-// (steer) instead of starting a second turn, and shows in the band.
-#[test]
-fn steering_queues_while_a_turn_runs() {
-    let mut chat = chat();
-    let steer = lca_protocol::steer_queue();
-    chat.begin_turn(steer.clone());
-    for c in "mid-turn note".chars() {
-        chat.handle_key(&c.to_string());
-    }
-    assert_eq!(chat.handle_key("\r"), Action::Continue);
-    assert_eq!(chat.pending.len(), 1);
-    assert_eq!(chat.pending[0].mode, lca_protocol::SubmitMode::Steer);
-    assert_eq!(
-        steer.lock().unwrap().len(),
-        1,
-        "the steer reached the running turn's boundary queue"
-    );
-    let text = strip(&chat.render(80)).join("\n");
-    assert!(text.contains("mid-turn note"), "the pending band shows it");
-}
-
-// Verifies: FR-CORE-12 - an aborted turn returns its queue to the editor.
-#[test]
-fn abort_restores_pending_to_the_editor() {
-    let mut chat = chat();
-    chat.begin_turn(lca_protocol::steer_queue());
-    chat.queue_submit("one".into(), lca_protocol::SubmitMode::Steer);
-    chat.queue_submit("two".into(), lca_protocol::SubmitMode::FollowUp);
-    chat.restore_pending();
-    assert!(chat.pending.is_empty());
-    assert_eq!(chat.editor.text(), "one\ntwo");
-}
-
-// Verifies: FR-CORE-11 - follow-ups auto-run in order at turn end.
-#[test]
-fn follow_ups_run_in_order() {
-    let mut chat = chat();
-    chat.queue_submit("first".into(), lca_protocol::SubmitMode::FollowUp);
-    chat.queue_submit("second".into(), lca_protocol::SubmitMode::FollowUp);
-    assert_eq!(chat.take_next_pending().as_deref(), Some("first"));
-    assert_eq!(chat.take_next_pending().as_deref(), Some("second"));
-    assert!(chat.take_next_pending().is_none());
-}
-
 // Verifies: FR-UI-14 - `!cmd` runs and shows a bash card; `!!` is
 // excluded from context.
 #[test]
@@ -642,9 +615,16 @@ fn fullscreen_toggles_and_persists() {
     assert_eq!(*persisted.lock().unwrap(), Some(true));
 }
 
-// Verifies: FR-UI-11 - Alt+Up/Down hop between the user's own messages.
+// Verifies: FR-UI-11 - Shift/Ctrl+Up and Shift/Ctrl+Down hop between the
+// user's own messages.
+//
+// SANCTIONED CHANGE (gh #401): this row pinned `Alt+Up`/`Alt+Down` for the
+// jump. `Alt+Up` is pi's `app.message.dequeue` key, so the jump's arrows
+// lost their Alt spelling and keep Shift and Ctrl (the two LCA already
+// bound). The row's intent - the arrow chords hop between prompts - is
+// unchanged.
 #[test]
-fn alt_up_and_down_jump_between_prompts() {
+fn the_arrow_chords_jump_between_prompts() {
     let mut chat = chat();
     chat.world.resize(80, 24);
     chat.transcript.push_user("first question");
@@ -652,10 +632,12 @@ fn alt_up_and_down_jump_between_prompts() {
     chat.transcript.finish_assistant();
     chat.transcript.push_user("second question");
     assert!(chat.transcript.user_offsets(80, &chat.theme).len() >= 2);
-    assert_eq!(chat.handle_key("\x1b[1;3A"), Action::Continue); // Alt+Up
+    assert_eq!(chat.handle_key("\x1b[1;2A"), Action::Continue); // Shift+Up
     assert!(chat.jump_target.is_some());
     assert!(chat.take_jump_scroll(80, 24).is_some());
-    assert_eq!(chat.handle_key("\x1b[1;3B"), Action::Continue); // Alt+Down
+    assert_eq!(chat.handle_key("\x1b[1;2B"), Action::Continue); // Shift+Down
+    assert!(chat.jump_target.is_some());
+    assert_eq!(chat.handle_key("\x1b[1;5A"), Action::Continue); // Ctrl+Up
     assert!(chat.jump_target.is_some());
 }
 
@@ -1138,6 +1120,10 @@ mod viewport_tests;
 #[cfg(test)]
 #[path = "chat_label_tests.rs"]
 mod label_tests;
+
+#[cfg(test)]
+#[path = "chat_steering_tests.rs"]
+mod steering_tests;
 
 #[cfg(test)]
 #[path = "chat_queue_tests.rs"]

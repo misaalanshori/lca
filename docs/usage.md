@@ -54,6 +54,13 @@ that runs after the task. `Esc` stops the turn. `Esc Esc` with an
 empty editor opens the branch tree (or fork picker, or nothing —
 `/settings` decides under `ui.double_escape_action`).
 
+Queued messages sit above the editor as `Steering:` and `Follow-up:`
+lines. Stopping the turn with `Esc` puts the whole queue back in the
+editor, ahead of anything you typed meanwhile, so nothing is lost and
+nothing is sent without you. `Alt+Up` does the same on demand while
+the turn keeps running. Typing during `/compact` queues the message
+for the moment compaction finishes instead of being refused.
+
 ## Change the model or settings
 
 Type `/` to search every command; `/help` lists them all with one

@@ -53,6 +53,22 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **The queued-message band behaves like pi's, and a compaction no longer
+  refuses your typing** (gh #401). Three queue-UX gaps around the shipped
+  abort rescue: (1) stopping a turn now says
+  `Restored N queued messages to editor` and merges the queue *ahead of*
+  whatever you typed while waiting, `\n\n`-separated with the caret at the
+  end - before, the restore was silent and a live draft overwrote it; (2) a
+  prompt typed during `/compact` or an auto-compaction is queued for after
+  it (`Queued message for after compaction`) instead of being turned away,
+  then flushes in order - leading commands, then the first prompt starting
+  the turn, the rest behind it - and rolls back whole if no turn can start;
+  (3) the band labels messages `Steering:` / `Follow-up:` (pi's words) and
+  hints `↳ alt+up to edit all queued messages` from the live binding
+  registry, with `Alt+Up` (pi's key) doing the restore on demand. `Alt+Up`
+  therefore leaves the prompt-jump binding, which keeps `Shift+Up` and
+  `Ctrl+Up`; `Alt+E` survives as the second dequeue spelling. The abort
+  rescue itself is unchanged and now pinned by a regression row.
 - **One malformed entry no longer discards the whole OpenRouter catalog**
   (gh #295). `discover_models` read the gateway's `/models` array with
   `entry.get("id")?.as_str()?` inside its loop — `?` returns from the
