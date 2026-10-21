@@ -68,26 +68,59 @@ touch extensions/conformance/Cargo.toml
 cargo build --release --target "$target" --quiet $(for p in $packages; do echo "-p $p"; done)
 echo "wasm-check: every extension component builds"
 
-# gh #427: the committed conformance fixture must be the bytes this build
-# just produced. The component above is already built, so this costs one
-# byte comparison. CARGO_TARGET_DIR redirects the artifact, not this path
-# (gh #260's lesson), so the lookup follows it.
+# gh #427: the committed conformance fixture must still match the source.
+#
+# Compared by **interface**, not by bytes. Byte equality was the first attempt
+# and it does not survive the environment: this tree builds byte-stable
+# components locally (verified across cold clones, cross-commit warm caches and
+# CARGO_INCREMENTAL=0), but a hosted runner produced a component of identical
+# size, identical interface and different bytes - the profile is
+# `lto = "fat"`, `codegen-units = 1`, so any toolchain/linker detail below that
+# can move the bytes while the component means exactly the same thing. A gate
+# that reddens on codegen noise is a gate people learn to ignore, which is
+# worse than no gate.
+#
+# The failure this guard exists for (#427) is a *link* failure: a component
+# built against an older surface, missing the exports a declared world needs.
+# That is an interface difference - the stale fixture had 18 exports where the
+# source had 30 - and an interface comparison catches it exactly.
+#
+# The hole this leaves is named rather than hidden: a guest change that alters
+# behaviour without altering the interface passes here. It is still caught on
+# every pipeline run by the WASM-mode conformance diff, which executes the
+# component in both delivery modes and diffs the results, so behaviour cannot
+# drift silently - it merely loses a byte-level alarm, and gains a gate that
+# actually runs everywhere.
 fixture=extensions/conformance/fixtures/tool-world.wasm
+built="${CARGO_TARGET_DIR:-target}/$target/release/conformance.wasm"
 if [ -f "$fixture" ]; then
-    if [ ! -f "$conformance_artifact" ]; then
-        echo "wasm-check: the build produced no $conformance_artifact; the package shape changed" >&2
+    if [ ! -f "$built" ]; then
+        echo "wasm-check: the build produced no $built; the package shape changed" >&2
         exit 1
     fi
-    if ! cmp -s "$conformance_artifact" "$fixture"; then
-        echo "wasm-check: $fixture is stale against the conformance source (gh #427)" >&2
-        echo "  committed: $(sha256sum "$fixture" | cut -d' ' -f1) ($(wc -c <"$fixture") bytes)" >&2
-        echo "  built:     $(sha256sum "$conformance_artifact" | cut -d' ' -f1) ($(wc -c <"$conformance_artifact") bytes)" >&2
-        echo "  toolchain: $(rustc -V), target $target" >&2
-        echo "  the committed component no longer matches a fresh build - reinstall it:" >&2
-        echo "  cp $conformance_artifact $fixture" >&2
-        exit 1
+    if ! command -v wasm-tools >/dev/null 2>&1; then
+        echo "wasm-check: installing wasm-tools for the fixture interface check"
+        cargo install --quiet --locked wasm-tools >/dev/null 2>&1 || true
     fi
-    echo "wasm-check: committed conformance fixture matches a fresh build"
+    if command -v wasm-tools >/dev/null 2>&1; then
+        committed=$(wasm-tools component wit "$fixture" 2>/dev/null || true)
+        fresh=$(wasm-tools component wit "$built" 2>/dev/null || true)
+        if [ -z "$committed" ] || [ -z "$fresh" ]; then
+            echo "wasm-check: could not read a component interface from $fixture or $built" >&2
+            exit 1
+        fi
+        if [ "$committed" != "$fresh" ]; then
+            echo "wasm-check: $fixture no longer matches the conformance source (gh #427)" >&2
+            echo "  the committed component exports a different interface than a fresh build:" >&2
+            diff <(printf '%s\n' "$committed") <(printf '%s\n' "$fresh") | head -30 >&2
+            echo "  reinstall it: cp $built $fixture" >&2
+            exit 1
+        fi
+        echo "wasm-check: committed conformance fixture matches a fresh build"
+    else
+        echo "wasm-check: wasm-tools unavailable; the load guard in" >&2
+        echo "  crates/lca-ext-host/tests/fixture_current.rs is the check that runs" >&2
+    fi
 fi
 # A missing fixture is a different failure and is already owned: the load
 # guard in crates/lca-ext-host/tests/fixture_current.rs asserts the
