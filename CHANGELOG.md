@@ -53,6 +53,19 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **A headless client can see that its message was accepted, not just
+  drained** (gh #426). `docs/headless.md` documented `queue-queued` with a
+  `mode` field and nothing emitted it, so a `--mode json`/`--mode rpc` script
+  saw the `queue-flushed` drain without ever seeing the accept - and "queued
+  and later injected" was indistinguishable from "never queued at all", which
+  is the one thing the steering queue exists to distinguish. The accept now
+  goes out from the same sink as the drain, the moment the queue takes the
+  message, so it always precedes the flush; `mode` is the ADR-0038 submit mode
+  actually used (`steer` / `follow-up`), never a default. A cancelled queue
+  announces its accept and no drain, as it should. The #264 drift guard's
+  `PRODUCED_ELSEWHERE` exception is gone and the guard is green - the proof
+  the doc and the code agree again. Guard:
+  `tests/regressions/426-queue-queued-is-emitted.rs`.
 - **The taskbar spinner survives a long turn, and tab status covers
   compaction, shell runs, and install consent** (gh #369). `OSC 9;4`
   progress was written once at turn start, but terminal emulators put a
