@@ -28,7 +28,9 @@ fn read(rel: &str) -> String {
 // dock grow by one.
 #[test]
 fn the_status_row_is_reserved_not_conditional() {
-    let footer = read("crates/lca-ui/src/footer.rs");
+    // The footer became a directory in gh #389 (the git discovery and cache
+    // moved beside it); the row contract is still this file's.
+    let footer = read("crates/lca-ui/src/footer/mod.rs");
     let render = footer
         .find("pub fn render(&self, width: u16, theme: &Theme)")
         .expect("Footer::render exists");

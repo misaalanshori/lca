@@ -309,7 +309,7 @@ impl Chat {
         for line in &world.options.initial_lines {
             transcript.push_raw(line.clone());
         }
-        let footer = Footer {
+        let mut footer = Footer {
             cwd: world.options.workspace.to_string_lossy().to_string(),
             yolo: world.options.yolo,
             context_window: *world
@@ -319,6 +319,11 @@ impl Chat {
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
             ..Default::default()
         };
+        // Gh #389 gap 2: one read here, so the first frame names the branch.
+        // Every later read is the tick's, never a frame's.
+        footer
+            .git
+            .prime(&footer.cwd.clone(), std::time::Instant::now(), None);
         let screen_mode = world.options.fullscreen;
         // Pi's folder-trust prompt: open the picker at startup only when the
         // project has something to gate and no decision yet (ADR-0039).
@@ -724,7 +729,16 @@ impl Chat {
         if ticking {
             self.transcript.invalidate_running_tools();
         }
-        separator || loading || ticking || self.expire_toasts()
+        // Gh #389 gap 2: the git branch is re-read on this tick's cadence, not
+        // in `render`. The footer repaints on every streaming delta, so a
+        // filesystem read there scaled with `.git` latency on the UI thread;
+        // here it costs one read per 2 s at worst, and the value is only
+        // dropped from the footer when it actually changed.
+        let branch =
+            self.footer
+                .git
+                .refresh_if_stale(&self.footer.cwd, std::time::Instant::now(), None);
+        separator || loading || ticking || branch || self.expire_toasts()
     }
 
     /// Handle one keypress: the modal first, then the pickers, the
