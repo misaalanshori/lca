@@ -127,7 +127,11 @@ pub fn login_submit(
         ));
     }
     let enterprise = answer.value("enterprise-domain").unwrap_or("");
-    if enterprise.is_empty() {
+    // Blank and all-whitespace both mean "the default domain": a stray space
+    // is not a domain choice, and `parse_enterprise_domain` refuses
+    // whitespace *inside* a value rather than trimming it. Checking here
+    // keeps the "empty means github.com" contract the option declares.
+    if enterprise.trim().is_empty() {
         let _ = cap.credentials_delete("enterprise_domain");
     } else {
         // Gh #282: validate before anything is stored or requested. A pasted

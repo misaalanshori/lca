@@ -579,3 +579,39 @@ fn a_legacy_stored_domain_still_routes() {
         "the legacy value still resolves to the enterprise inference host: {url}"
     );
 }
+
+// Verifies: gh #282 - a blank or all-whitespace field still means the
+// default domain, which is what the option's own contract says ("empty
+// means github.com"). The validator refuses whitespace *inside* a hostname;
+// it must not turn a stray space into a failure the user cannot understand.
+#[test]
+fn a_blank_field_means_the_default_domain() {
+    let mock = mock_server();
+    for (label, field) in [("empty", ""), ("spaces", "   "), ("tab", "\t")] {
+        let cap = sandbox(
+            "github-copilot",
+            &format!("blank-{label}"),
+            &mock,
+            github_copilot::manifest_grants(),
+        );
+        // Seed a stored enterprise domain so "cleared" is observable.
+        lca_protocol::ProviderCap::credentials_set(
+            cap.as_ref(),
+            "enterprise_domain",
+            "old.corp.com",
+        )
+        .expect("seed");
+        let mut values = std::collections::BTreeMap::new();
+        values.insert("enterprise-domain".to_string(), field.to_string());
+        let answer = lca_protocol::LoginAnswer {
+            choice: github_copilot::CHOICE_DEVICE.to_string(),
+            values,
+        };
+        let _ = github_copilot::login_submit(cap.as_ref(), cap.as_ref(), &answer);
+        assert_eq!(
+            stored(&cap, "enterprise_domain"),
+            None,
+            "`{label}` clears the stored domain rather than failing"
+        );
+    }
+}
