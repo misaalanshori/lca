@@ -294,6 +294,8 @@ mod gh281_mechanical_compaction_carries_summaries;
 // "unknown and never compacts", so a session could grow until the provider
 // rejected it. Guards the resolver and the sandbox hand-off, which drift
 // independently because the shipped provider is a WASM component.
+#[path = "282-enterprise-hosts-offered.rs"]
+mod gh282_enterprise_hosts_offered;
 #[path = "283-discovered-models-keep-their-windows.rs"]
 mod gh283_discovered_models_keep_their_windows;
 // GitHub #297: the `/login` picker hid every subscription provider whose
