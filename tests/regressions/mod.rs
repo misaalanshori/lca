@@ -692,3 +692,8 @@ mod hash_edit_read_tracker;
 // BOM), so an edit never adds a blank line the user did not type.
 #[path = "388-editor-trailing-newline.rs"]
 mod editor_trailing_newline;
+
+// Gh #389 (closes #330): the footer's git branch is right in every repository
+// shape, costs no I/O per frame, and stops printing zeroes.
+#[path = "389-footer-git-truth.rs"]
+mod footer_git_truth;

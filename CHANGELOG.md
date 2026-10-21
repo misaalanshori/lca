@@ -53,6 +53,26 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **The footer tells the truth about git, and stops reading the disk on every
+  frame** (gh #389, closing #330). The branch was read from `<cwd>/.git/HEAD`
+  and nothing else, so it vanished when you ran the agent from a subdirectory,
+  from a linked worktree (where `.git` is a *file*), or on a detached HEAD —
+  and a `reftable` repository (Git ≥2.45) printed the placeholder `.invalid` as
+  if it were a branch name. Discovery now walks up to the repository root,
+  follows the `gitdir:` indirection, shows a detached HEAD as its short object
+  id, and resolves a `reftable` HEAD through `git --no-optional-locks` (so it
+  never takes `.git/index.lock` out from under your own commit). The walk is
+  bounded, and it is cached on a 2-second cadence driven by the existing tick
+  rather than done per repaint: the footer repaints on every streaming delta, so
+  a read there scaled with filesystem latency on the UI thread — a thousand
+  frames now perform zero reads. An expired cache keeps the last known branch
+  rather than blanking, because a footer flickering between `main` and nothing
+  is worse than one that is a second stale. Also: a fresh session no longer
+  prints `↑0 ↓0 R0 W0 0.0%` (each counter appears only when it carries
+  information), `~` shortening respects a path boundary so `$HOME2/x` is not
+  rendered as yours (`USERPROFILE` is now consulted on native Windows shells),
+  and a long row degrades by dropping the provider prefix, then the context
+  cell, before it truncates.
 - **`$EDITOR` no longer adds a blank line to the prompt** (gh #388 gap 4).
   Every POSIX editor — `vim`, `nvim`, `nano` — terminates the file it saves
   with a newline, and the buffer was read back verbatim, so editing a one-line
