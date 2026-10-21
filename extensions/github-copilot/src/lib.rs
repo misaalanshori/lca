@@ -303,6 +303,18 @@ fn base_from_token(token: &str) -> Option<String> {
 pub const ENTERPRISE_HOSTNAME_HELP: &str =
     "enter an enterprise hostname like `ghe.example.com` (no scheme, path, port, or wildcard)";
 
+/// The same help, for the one shape a user most plausibly gets wrong.
+///
+/// pi repairs a pasted `https://host/` silently (`normalizeDomain` builds a
+/// URL and keeps the hostname). LCA refuses instead, for a reason that is
+/// not pedantry: pi also swallows a **port** (`ghe.corp.com:8443` →
+/// `ghe.corp.com`), silently redirecting the sign-in to a different
+/// endpoint than the one typed - and the port a user types is often the
+/// one their instance actually serves. Refusing says so; repairing decides
+/// for them. The copy names the corrected form so the fix is one keystroke.
+pub const ENTERPRISE_URL_HELP: &str =
+    "drop the `https://` and the trailing `/` - just the hostname";
+
 /// Validate the `enterprise-domain` login field (gh #282): it is a
 /// hostname, and nothing else.
 ///
@@ -328,7 +340,10 @@ pub fn parse_enterprise_domain(raw: &str) -> Result<String, String> {
         return Err(refuse("it contains whitespace - remove the spaces"));
     }
     if raw.contains("://") {
-        return Err(refuse("it carries a scheme"));
+        return Err(format!(
+            "`{raw}` is not a hostname: it carries a scheme - {ENTERPRISE_URL_HELP}; \
+             {ENTERPRISE_HOSTNAME_HELP}"
+        ));
     }
     if raw.contains('/') {
         return Err(refuse("it carries a path"));

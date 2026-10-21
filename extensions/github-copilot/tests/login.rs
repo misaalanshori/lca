@@ -215,6 +215,27 @@ fn the_enterprise_field_must_be_a_hostname() {
     }
 }
 
+// Verifies: gh #282 - the refusal names the repaired form for the one
+// mistake users actually make. This is a deliberate divergence from pi,
+// which repairs silently: pi's `normalizeDomain` also swallows a port
+// (`ghe.corp.com:8443` becomes `ghe.corp.com`), quietly redirecting the
+// sign-in to a different endpoint than the one typed. Refusing says so;
+// repairing decides for the user.
+#[test]
+fn a_pasted_url_is_refused_with_the_repaired_form() {
+    let err = github_copilot::parse_enterprise_domain("https://ghe.corp.com/").unwrap_err();
+    assert!(
+        err.contains("drop the `https://` and the trailing `/`"),
+        "the message names the fix: {err}"
+    );
+    // And the refusal is what a port gets too, rather than pi's silent drop.
+    let port = github_copilot::parse_enterprise_domain("ghe.corp.com:8443").unwrap_err();
+    assert!(
+        port.contains("port"),
+        "a port is named, never silently discarded: {port}"
+    );
+}
+
 // Verifies: gh #282 - the shapes that ARE a hostname parse to the
 // lowercase form, so a user typing mixed case still matches the
 // manifest and the derived hosts consistently.
