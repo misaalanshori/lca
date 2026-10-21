@@ -1,12 +1,28 @@
 //! Shared e2e helpers: SSE builders, the loopback mock provider, the
 //! sandboxed HOME/state fixture, the OCI mock registry helpers, and the
 //! tmux/session-log readers.
+
 //!
 //! Verifies: NFR-22 (the suite runs with no network access: the only
 //! server is a loopback mock started by the test itself).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 #![allow(dead_code)] // a shared helper module: each test crate uses a subset.
+#![allow(unused_imports)] // ...and re-exports are per-binary for the same reason.
+
+// gh #413: the socket-name and reaping rules live in their own module so the
+// 1,200-line ceiling (gate 11) has room for the harness's other helpers.
+#[cfg(unix)]
+mod sockets;
+#[cfg(unix)]
+pub use sockets::reap_stale_sockets;
+// The contract rows read these; most e2e binaries use only `tmux_socket`, so
+// the unused-in-this-binary warning is expected and silenced with the module's
+// own `dead_code` allowance.
+#[cfg(unix)]
+use sockets::tmux_socket;
+#[cfg(unix)]
+pub use sockets::{socket_path_for_tests as tmux_socket_path_for_tests, tmux_socket_for_tests};
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -503,85 +519,6 @@ pub struct Tmux {
 // `Tmux` created in one binary still shares that one server, which is what
 // the tests expect.
 #[cfg(unix)]
-fn tmux_socket() -> &'static str {
-    static SOCKET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    SOCKET.get_or_init(|| format!("lca-tui-test-{}", std::process::id()))
-}
-
-/// The socket this binary's sessions live on (the contract rows read it).
-#[cfg(unix)]
-pub fn tmux_socket_for_tests() -> &'static str {
-    tmux_socket()
-}
-
-/// The directory tmux keeps its sockets in, asked of tmux itself.
-///
-/// `tmux` prints it for `show-options`-style queries on no socket; the stable
-/// way is the parent of a live socket path, so a throwaway session is started
-/// on the default socket and its own path read back.
-#[cfg(unix)]
-fn tmux_socket_dir() -> Option<std::path::PathBuf> {
-    let out = Command::new("tmux")
-        .args(["display-message", "-p", "#{socket_path}"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let path = text.trim();
-    if path.is_empty() {
-        return None;
-    }
-    std::path::Path::new(path)
-        .parent()
-        .map(|dir| dir.to_path_buf())
-}
-
-/// Reap socket files left by test binaries that are no longer running.
-///
-/// A test process is not unwound when nextest finishes a binary, so a `Drop`
-/// on the harness never fires and the server outlives its tests: this box
-/// reached 134 (then 116) leftover `lca-tui-test-<pid>` sockets. Reaping from
-/// the *next* run is the reliable point — every process that owns one of these
-/// sockets is gone, so the name is dead by construction — and it costs one
-/// directory read per test binary.
-///
-/// Scoped to this harness's own prefix, so a live drive (`lca-tui`) or another
-/// tool's sockets are never touched.
-#[cfg(unix)]
-fn reap_stale_sockets() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        // tmux puts its sockets under `$TMUX_TMPDIR` (or the temp dir) in a
-        // `tmux-<uid>` directory. Asking tmux for the parent avoids guessing
-        // the uid, and a tmux that cannot answer simply means nothing to reap.
-        let Some(dir) = tmux_socket_dir() else {
-            return;
-        };
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let Some(pid) = name
-                .strip_prefix("lca-tui-test-")
-                .and_then(|rest| rest.parse::<u32>().ok())
-            else {
-                continue;
-            };
-            // Alive? Then it is a concurrent suite's server: leave it.
-            if std::path::Path::new(&format!("/proc/{pid}")).exists() {
-                continue;
-            }
-            let _ = Command::new("tmux")
-                .args(["-L", &name, "kill-server"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-            let _ = std::fs::remove_file(entry.path());
-        }
-    });
-}
-
-#[cfg(unix)]
 impl Tmux {
     pub fn new(tag: &str) -> Tmux {
         reap_stale_sockets();
@@ -802,6 +739,29 @@ impl Tmux {
         );
     }
 
+    /// How long a pane gets before the harness treats it as not-yet-painted.
+    ///
+    /// The caller's `timeout` stays the contract for *product* assertions; this
+    /// is the extra the harness allows a blank pane, because a blank pane says
+    /// nothing about the product. Measured on this box: a WASM-bearing session
+    /// takes 21-23 s to first paint on an idle 4-core machine (the component
+    /// JIT), against the 30 s budgets the rows carry — so two suites at once
+    /// halve the CPU and blow the budget on rows that are perfectly correct.
+    ///
+    /// Scaling by the machine's load average is the honest knob: it is the
+    /// quantity that actually rose, and it costs nothing when the box is idle.
+    #[cfg(unix)]
+    fn load_factor() -> u32 {
+        let load = std::fs::read_to_string("/proc/loadavg")
+            .ok()
+            .and_then(|text| text.split_whitespace().next()?.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        // 1.0x below light load, then +1x per core-ish of pressure, capped so a
+        // pathological runner cannot extend a suite for hours.
+        let factor = (load / 4.0).floor() as u32 + 1;
+        factor.clamp(1, 4)
+    }
+
     /// Poll the pane until `needle` appears (150 ms cadence). The timeout
     /// is wall-clock margin for a loaded machine, not a performance claim:
     /// a full parallel `cargo test -p lca-cli` blew a 10 s paste budget
@@ -817,7 +777,12 @@ impl Tmux {
     /// A pane with *content* that lacks the needle keeps the panic: a painted
     /// screen missing its expected text is a real failure.
     pub fn wait_for(&self, needle: &str, timeout: std::time::Duration) -> String {
-        let pane = self.poll_for(needle, timeout);
+        // A loaded machine slows first paint; the caller's budget is about the
+        // product, so the harness adds its own allowance for a pane that has
+        // not painted at all. A painted-but-wrong pane is checked below and is
+        // unaffected.
+        let budget = timeout * Self::load_factor();
+        let pane = self.poll_for(needle, budget);
         if let Some(pane) = pane {
             return pane;
         }
@@ -839,9 +804,11 @@ impl Tmux {
             );
         };
         eprintln!(
-            "harness: the pane for `{}` was blank after {timeout:?}; re-spawning the \
-             session once (empty pane = the terminal did not come up, gh #413)",
-            self.name
+            "harness: the pane for `{}` was blank after {budget:?} (budget {timeout:?} x{} \
+             load); re-spawning the session once (empty pane = the terminal did not \
+             come up, gh #413)",
+            self.name,
+            Self::load_factor()
         );
         let _ = Command::new("tmux")
             .args(["-L", tmux_socket(), "kill-session", "-t", &self.name])
@@ -868,7 +835,7 @@ impl Tmux {
         // JIT), so two concurrent suites on four cores push it past *any*
         // fixed per-attempt budget. The harness heals a terminal that did not
         // come up; it cannot manufacture CPU.
-        match self.poll_for(needle, timeout) {
+        match self.poll_for(needle, budget) {
             Some(pane) => pane,
             // The second chance is bounded and final: a pane that still lacks
             // the needle after a re-spawn is a failure either way.

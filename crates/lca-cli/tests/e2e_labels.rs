@@ -51,11 +51,31 @@ fn label_add_list_and_jump_in_a_real_terminal() {
     );
 
     // Jump: a branch forks at the mark and the TUI switches to it.
+    //
+    // harness: fold-aware wait, gh #413's class. The `branched at …` line is a
+    // *transient notice* (a `say`), and under load it can fade before a
+    // painted frame is captured - the second concurrent-suite run caught it on
+    // a painted pane, which is a wait problem rather than a product one. The
+    // durable evidence of the same event is the fork itself: a second session
+    // log appears under the state dir, and the row reads it below. So wait for
+    // the fork (durable), and accept the notice when it is still on screen.
     session.send(&["/jump checkpoint", "Enter"]);
-    session.wait_for(
-        "branched at 'checkpoint'",
-        std::time::Duration::from_secs(20),
-    );
+    let fork_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let pane = session.capture();
+        if pane.contains("branched at 'checkpoint'") {
+            break;
+        }
+        // Two session logs means the jump forked, which is what the notice
+        // announced; the message itself may already have faded.
+        if session_logs(&sandbox.state_dir()).len() >= 2 {
+            break;
+        }
+        if std::time::Instant::now() > fork_deadline {
+            panic!("`branched at 'checkpoint'` never appeared and no fork was written:\n{pane}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
 
     // The logs carry the label record (FR-SESS-10's export row rides
     // the same line shape the store test pins). Two sessions exist now
