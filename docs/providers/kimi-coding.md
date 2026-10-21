@@ -22,7 +22,7 @@ hosts = ["auth.kimi.com", "api.kimi.com"]
 namespace = "kimi-coding"
 ```
 
-No options, no loopback: `/login kimi-coding` runs the identity flow directly.
+No `login-options` presets, no loopback: the manifest declares `[login] identity = true`, so a bare `/login` lists this provider as `Sign in with kimi-coding` and choosing it runs the device flow directly (gh #297). `/login kimi-coding` and `/kimi-coding.login` reach the same handler.
 
 ## Requests
 

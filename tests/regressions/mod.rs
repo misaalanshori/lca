@@ -289,6 +289,14 @@ mod gh394_tree_layout_math;
 // `previous-summary` marker records rendered empty and vanished.
 #[path = "281-mechanical-compaction-carries-summaries.rs"]
 mod gh281_mechanical_compaction_carries_summaries;
+// GitHub #297: the `/login` picker hid every subscription provider whose
+// sign-in is its own `provider-identity` flow rather than a declared preset.
+#[path = "297-login-lists-every-provider.rs"]
+mod gh297_login_lists_every_provider;
+// Gh #297's other half: the picker reads `[login] identity = true`, so the
+// six manifests must actually declare it (and key-only packages must not).
+#[path = "297-providers-declare-their-sign-in.rs"]
+mod gh297_providers_declare_their_sign_in;
 // GitHub #401: three queue-UX gaps - the abort rescue is pinned and now
 // announces + merges the draft, a submit during a compaction parks and
 // flushes when it ends, and the dequeue key is discoverable in the dock.

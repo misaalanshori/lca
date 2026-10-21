@@ -53,6 +53,27 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **`/login` now lists every provider that can sign in** (gh #297). Six
+  subscription providers - `antigravity`, `codex`, `grok`, `kimi-coding`,
+  `meta` and `openrouter` - sign in through their own OAuth or device-code
+  flow and declared no picker presets, and the picker only listed providers
+  with presets. A user with a ChatGPT Plus, SuperGrok, Meta, Kimi or Google
+  subscription saw a picker that did not mention any of them, and could only
+  sign in by already knowing the undocumented `/login <name>` spelling. Those
+  providers now declare `[login] identity = true` in their manifest, and a
+  bare `/login` shows `Sign in with <provider>` for each; choosing the row
+  runs that provider's own flow.
+
+  Declared rather than discovered, deliberately: the only way to *ask* a
+  provider whether it can sign in is to call its `identity_login`, which
+  starts the flow - opening a browser or blocking on a device poll for every
+  installed subscription provider the moment `/login` opens. The declarative
+  marker also means the pick path had to learn a second route: these
+  providers do not implement `login-submit`, whose trait default answers
+  "ok" having stored nothing, so a synthesized row routed down the submit
+  path would have reported a successful sign-in and left no credential.
+  Guard: `tests/regressions/297-login-lists-every-provider.rs` and
+  `tests/regressions/297-providers-declare-their-sign-in.rs`.
 - **A second compaction no longer forgets the first one's summary when the
   model is unavailable** (gh #281). The mechanical fallback - what runs when
   the summarization call fails or has no budget - selected the host's carried

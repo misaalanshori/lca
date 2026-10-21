@@ -183,7 +183,16 @@ impl LoginFlow {
             .map(|(provider, option)| {
                 let mut row = picker_row(provider, option);
                 if row.hint.is_empty() {
-                    row.hint = "base URL + key + model".to_string();
+                    // Gh #297: the generic fallback is the *preset* shape
+                    // (base URL + key + model). A row with no host and an
+                    // OAuth kind is a provider's own sign-in, and describing
+                    // it as a key entry is exactly the confusing copy that
+                    // made these providers feel absent.
+                    row.hint = if option.kind == "oauth" && option.host.is_empty() {
+                        "browser or device sign-in".to_string()
+                    } else {
+                        "base URL + key + model".to_string()
+                    };
                 }
                 row
             })
@@ -950,5 +959,67 @@ mod subst_tests {
             None,
         );
         assert!(entries.is_empty(), "a state-dir symlink yields nothing");
+    }
+}
+
+#[cfg(test)]
+mod identity_row_hint_tests {
+    use super::*;
+
+    // Verifies: gh #297 - a synthesized subscription row is described as a
+    // sign-in, not as the preset shape. Before this it inherited the generic
+    // `base URL + key + model` hint, which described an OAuth row as a key
+    // entry and made the provider look like something it is not.
+    #[test]
+    fn a_synthesized_row_says_sign_in_not_key_entry() {
+        let options = vec![(
+            "codex".to_string(),
+            LoginOption {
+                id: "sign-in".to_string(),
+                name: "Sign in with codex".to_string(),
+                kind: "oauth".to_string(),
+                host: String::new(),
+                fields: Vec::new(),
+                extras: Default::default(),
+            },
+        )];
+        let mut flow = LoginFlow::default();
+        let next = flow.offer(options);
+        let lca_ui::LoginNext::Picker { options } = next else {
+            panic!("a picker opens");
+        };
+        assert_eq!(options.len(), 1);
+        assert!(
+            options[0].hint.contains("sign-in"),
+            "the hint describes the flow: {}",
+            options[0].hint
+        );
+        assert!(
+            !options[0].hint.contains("key"),
+            "an OAuth row is not a key entry: {}",
+            options[0].hint
+        );
+    }
+
+    // Verifies: gh #297 - a preset row keeps its own hint (a real host shows
+    // it; a hosted preset with no host still reads as the key shape).
+    #[test]
+    fn a_preset_row_keeps_the_preset_hint() {
+        let options = vec![(
+            "openai-compatible".to_string(),
+            LoginOption {
+                id: "openai".to_string(),
+                name: "OpenAI".to_string(),
+                kind: "api-key".to_string(),
+                host: "keys.example.com".to_string(),
+                fields: vec!["api-key".to_string()],
+                extras: Default::default(),
+            },
+        )];
+        let mut flow = LoginFlow::default();
+        let lca_ui::LoginNext::Picker { options } = flow.offer(options) else {
+            panic!("a picker opens");
+        };
+        assert_eq!(options[0].hint, "keys.example.com", "the host is the hint");
     }
 }
