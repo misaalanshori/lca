@@ -695,14 +695,16 @@ impl Chat {
                     false
                 }
             }
-            crate::state::CompactState::Running => {
+            crate::state::CompactState::Running(reason) => {
                 if self.compacting {
                     false
                 } else {
                     self.compacting = true;
-                    // The separator's working spinner says it; a
-                    // transcript line for the start would double it.
-                    self.separator.working();
+                    // Gh #388 gap 2: a compaction is a first-class separator
+                    // state, not "working with a notice elsewhere". The
+                    // reason rides through from the host so a threshold cut
+                    // the user did not ask for says so.
+                    self.separator.compacting(reason);
                     true
                 }
             }

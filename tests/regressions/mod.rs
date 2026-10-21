@@ -672,3 +672,8 @@ mod stale_selection_cleared;
 // and `!`/`!!` are distinguishable without colour.
 #[path = "391-tool-card-preview-and-timer.rs"]
 mod tool_card_preview_and_timer;
+
+// Gh #388 gap 2: the dock keeps its row count across a turn, and
+// `Compacting` is a first-class separator state with its reason.
+#[path = "388-dock-height-and-compacting.rs"]
+mod dock_height_and_compacting;

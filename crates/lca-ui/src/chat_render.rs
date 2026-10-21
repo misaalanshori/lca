@@ -136,7 +136,7 @@ impl Chat {
     /// transcript plus the extension status rows above the dock - and
     /// what does not: the dock (a blank row, the separator, the notice,
     /// the queued messages, the popup, the editor, the footer).
-    fn sections(&self, width: u16) -> (Vec<String>, Vec<String>) {
+    pub(crate) fn sections(&self, width: u16) -> (Vec<String>, Vec<String>) {
         let mut transcript = self.transcript.render(width, &self.theme);
 
         // Extension footer regions (FR-UI-1) ride with the fixed part of

@@ -1075,6 +1075,12 @@ impl Chat {
         self.submitted = Some(text);
         Action::Submit
     }
+    /// Put the separator into a compaction with a reason (gh #388 gap 2
+    /// tests). The live path calls the same setter from `poll_compact`.
+    #[cfg(test)]
+    pub(crate) fn mark_compacting_for_test(&mut self, reason: crate::CompactionReason) {
+        self.separator.compacting(reason);
+    }
 }
 
 /// The visible text of a line with ANSI stripped (for search matching).

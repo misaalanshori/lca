@@ -59,7 +59,7 @@ pub use lca_tui::widgets::markdown::{
     MarkdownMessageType, MarkdownTransformContext, MarkdownTransformer,
 };
 pub use run::run;
-pub use separator::{Separator, SeparatorState};
+pub use separator::{CompactionReason, Separator, SeparatorState};
 pub use state::{
     Action, CacheMissNotice, CommandInvoker, DialogExchange, DialogModal, LabelRecord, LoginCancel,
     LoginComplete, LoginConfirm, LoginNext, LoginPick, LoginPoll, LoginRequest, McpAction, McpPoll,

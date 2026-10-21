@@ -634,9 +634,18 @@ fn a_background_compaction_drives_the_working_state() {
 
     // The command starts summarizing: the separator's working
     // spinner says so (gh #239 — no transcript line for the start).
-    *state.lock().unwrap() = CompactState::Running;
+    *state.lock().unwrap() = CompactState::Running(crate::CompactionReason::Manual);
     assert!(chat.poll_compact(), "the start is a repaint");
-    assert_eq!(chat.separator.state(), &crate::SeparatorState::Working);
+    // Gh #388 gap 2 replaced `Working` here with a first-class `Compacting`
+    // state carrying the reason, so a compacting interface names what it is
+    // doing in the row a turn uses. Sanctioned by the brief; the reason
+    // itself is pinned in `dock_tests::every_compaction_reason_is_displayed`.
+    assert_eq!(
+        chat.separator.state(),
+        &crate::SeparatorState::Compacting {
+            reason: crate::CompactionReason::Manual
+        }
+    );
     assert!(
         chat.last_notice().is_none() && chat.toasts.is_empty(),
         "the start stays out of history: {:?}",
