@@ -274,14 +274,16 @@ fn tool_card_titles_and_arguments_carry_the_roles_pi_gives() {
         "the command rides in the bold title: {header:?}"
     );
 
-    // The editor's own `!` run: bashMode, bold (pi's bash component).
+    // The editor's own `!` run: bashMode, bold (pi's bash component), and
+    // gh #391 gap 3 gives it the `!` marker the user typed so the plain
+    // theme can tell it from `!!` (NFR-28).
     let mut t = Transcript::new();
     t.start_manual_tool("bash", r#"{"command":"ls -la"}"#);
     t.finish_tool(ToolStatus::Ok, Some("total 0".into()));
     let header = header_of(&t);
     assert!(
-        header.contains("\x1b[1;38;2;181;189;104mbash ls -la\x1b[22;39m"),
-        "the editor's run titles itself in bashMode: {header:?}"
+        header.contains("\x1b[1;38;2;181;189;104m!bash ls -la\x1b[22;39m"),
+        "the editor's run titles itself in bashMode with its `!`: {header:?}"
     );
 
     // An unknown tool: bold name, plain JSON arguments (pi's card
@@ -648,16 +650,34 @@ fn tool_arguments_render_as_a_one_line_summary() {
 // Verifies: R8 - a command card shows a bounded preview when collapsed.
 #[test]
 fn a_shell_card_previews_its_output() {
+    // Gh #391 gap 1 changed which five rows: a shell card keeps the **tail**
+    // (the summary lives at the bottom) with the omission marker **above**
+    // it, so the rows and the wording both differ from the head-slice this
+    // row originally pinned. Sanctioned by the brief; the tail contract is
+    // pinned in `transcript::preview_tests`.
     let mut t = Transcript::new();
     t.start_tool("shell", r#"{"command":"ls"}"#);
     let output: String = (1..=8).map(|i| format!("line {i}\n")).collect();
     t.finish_tool(ToolStatus::Ok, Some(output));
     let out = strip(&t.render(60, &plain()));
     assert!(out.iter().any(|l| l.contains("> shell ls ok")), "{out:?}");
-    assert!(out.iter().any(|l| l.contains("line 1")), "{out:?}");
-    assert!(out.iter().any(|l| l.contains("line 5")), "{out:?}");
-    assert!(!out.iter().any(|l| l.contains("line 6")), "{out:?}");
-    assert!(out.iter().any(|l| l.contains("3 more lines")), "{out:?}");
+    assert!(!out.iter().any(|l| l.contains("line 1")), "{out:?}");
+    assert!(out.iter().any(|l| l.contains("line 4")), "{out:?}");
+    assert!(out.iter().any(|l| l.contains("line 8")), "{out:?}");
+    assert!(out.iter().any(|l| l.contains("3 earlier lines")), "{out:?}");
+    // The marker sits ABOVE the kept tail.
+    let marker = out
+        .iter()
+        .position(|l| l.contains("3 earlier lines"))
+        .expect("the marker row");
+    let first_kept = out
+        .iter()
+        .position(|l| l.contains("line 4"))
+        .expect("the first kept row");
+    assert!(
+        marker < first_kept,
+        "the marker names what precedes the tail, so it comes first: {out:?}"
+    );
 }
 
 // Verifies: R8 - a read card stays one line when collapsed.
@@ -871,7 +891,7 @@ fn tool_clicks_expand_one_card_only() {
     t.finish_tool(ToolStatus::Ok, Some("1\n2\n3\n4\n5\n6".to_string()));
     let collapsed = strip(&t.render(60, &plain()));
     assert!(
-        collapsed.iter().any(|l| l.contains("more lines")),
+        collapsed.iter().any(|l| l.contains("earlier lines")),
         "both cards preview: {collapsed:?}"
     );
     assert!(t.toggle_entry_tool(0), "the first card expands");
@@ -880,9 +900,17 @@ fn tool_clicks_expand_one_card_only() {
         one.iter().any(|l| l.trim() == "f"),
         "card zero shows all six lines"
     );
+    // Gh #391 gap 1: a collapsed shell card now keeps its **tail**, so the
+    // second card's preview legitimately shows `6`. What the row is about is
+    // that only card zero expanded - card one still prints an omission
+    // marker instead of all six rows.
     assert!(
-        !one.iter().any(|l| l.trim() == "6"),
+        one.iter().any(|l| l.contains("earlier lines")),
         "card one still previews: {one:?}"
+    );
+    assert!(
+        !one.iter().any(|l| l.trim() == "1"),
+        "card one's head stays collapsed away: {one:?}"
     );
     assert!(!t.tools_expanded(), "the global stays collapsed");
 }
@@ -1008,7 +1036,12 @@ fn finished_cards_render_their_recorded_duration() {
     t.start_tool("read", "a.txt");
     t.finish_tool(ToolStatus::Denied, None);
     let text = strip(&t.render(60, &plain())).join("\n");
-    assert!(text.contains("Took 45ms"), "millis render:\n{text}");
+    // Gh #391 gap 2 adopted pi's `formatToolDuration` tiers verbatim
+    // (`render-utils.ts:100`: `${seconds.toFixed(1)}s` below a minute), so a
+    // sub-second duration now reads `0.0s` rather than the old `45ms`
+    // spelling. Sanctioned by the brief; the tiers themselves are pinned in
+    // `duration_tests`.
+    assert!(text.contains("Took 0.0s"), "sub-second render:\n{text}");
     assert!(text.contains("Took 1.4s"), "seconds render:\n{text}");
     assert_eq!(
         text.matches("Took ").count(),

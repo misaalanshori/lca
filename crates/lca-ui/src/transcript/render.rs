@@ -393,6 +393,8 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
         manual,
         expanded: card_expanded,
         duration_ms,
+        started_at,
+        excluded,
     } = entry
     else {
         return;
@@ -413,16 +415,29 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
     // `BashExecutionComponent`; a path or pattern argument is `accent`;
     // a shell command rides inside the bold title (`formatShellCall`);
     // an unknown tool's JSON arguments stay plain (the card fallback).
-    let name_style = theme.role_bold(if *manual {
-        Role::BashMode
-    } else {
-        Role::ToolTitle
+    // Gh #391 gap 3: `!` (context-included) keeps pi's `bashMode`; `!!`
+    // (eyes-only) draws quiet. A **mode**, not a decoration - so the plain
+    // theme needs a textual cue too, which is why the title carries the
+    // doubled marker below (NFR-28: colour is never the only signal).
+    let name_style = theme.role_bold(match (manual, excluded) {
+        (true, true) => Role::Dim,
+        (true, false) => Role::BashMode,
+        (false, _) => Role::ToolTitle,
     });
     let shell = matches!(name.as_str(), "bash" | "shell");
     let path_tool = matches!(
         name.as_str(),
         "read" | "write" | "edit" | "list" | "ls" | "glob" | "grep"
     );
+    // Gh #391 gap 3: the editor's own runs wear the marker the user typed, so
+    // `!` and `!!` stay distinguishable with no colour at all (NFR-28). A
+    // model-requested shell keeps its plain name.
+    let head = if *manual {
+        if *excluded { "!!" } else { "!" }
+    } else {
+        ""
+    };
+    let name = &format!("{head}{name}");
     let (title, args_span) = if summary.is_empty() {
         (name_style(name), String::new())
     } else if shell {
@@ -437,15 +452,28 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
     };
     let header = format!("{} {title}{args_span} {status_text}", (theme.tool)(">"));
     let mut rows = vec![truncate_to_width(&header, inner, "…", false)];
-    // Gh #214: the recorded execution time rides under the header —
-    // `None` (refusals, old replays) renders no timing line.
+    // Gh #214 + gh #391 gap 2: the timing line.
+    //
+    // A **settled** card shows its recorded duration and never moves again -
+    // including a replayed historical card, whose `started_at` is `None` and
+    // which must not resume a count that already finished. A **running**
+    // card shows `Elapsed …`, re-derived from `started_at` every frame; the
+    // interface's existing tick invalidates the cache once a second while a
+    // tool runs, so no second clock is introduced (the #369 lesson: two
+    // clocks is how they disagree).
     if let Some(ms) = duration_ms {
-        let took = if *ms < 1000 {
-            format!("Took {ms}ms")
-        } else {
-            format!("Took {:.1}s", *ms as f64 / 1000.0)
-        };
-        rows.push(format!("  {}", (theme.role(Role::Muted))(&took)));
+        rows.push(format!(
+            "  {}",
+            (theme.role(Role::Muted))(&format!("Took {}", format_duration_ms(*ms)))
+        ));
+    } else if *status == ToolStatus::Running
+        && let Some(started) = started_at
+    {
+        let elapsed = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        rows.push(format!(
+            "  {}",
+            (theme.role(Role::Muted))(&format!("Elapsed {}", format_duration_ms(elapsed)))
+        ));
     }
     // gh #9 / EFG-016: a structured diff renders as pi's diff card -
     // the diff's own line kinds in the two diff roles, bounded like
@@ -481,26 +509,44 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
     // `BASH_PREVIEW_LINES` = 5, `ls.ts` 20, `grep.ts` 15) and a one-line
     // card for the rest; Ctrl+O expands to the full result.
     if let Some(result) = result {
-        let preview = preview_lines(name);
-        let total = result.lines().count();
+        // gh #391 gap 4: the LLM-facing spillover footer is bookkeeping, not
+        // output. It is stripped before anything else so it can never spend
+        // one of the five tail rows, and the card's own truncation warning
+        // below is the single place that fact is shown.
+        let body = super::preview::strip_truncation_footer(result);
+        let preview = super::preview::preview_lines(name);
+        let total = body.lines().count();
         if expanded {
-            for line in wrap_text_with_ansi(result, inner.saturating_sub(2)) {
+            // Expanded shows everything, but still collapses `\r` progress
+            // repaints: the terminal kept only the last segment, and an
+            // expanded card printing every repaint is unreadable.
+            let collapsed = super::preview::collapse_carriage_returns(body);
+            for line in wrap_text_with_ansi(&collapsed, inner.saturating_sub(2)) {
                 rows.push(format!("  {}", (theme.role(Role::ToolOutput))(&line)));
             }
         } else if preview > 0 && total > 0 {
-            let shown: String = result.lines().take(preview).collect::<Vec<_>>().join("\n");
-            for line in wrap_text_with_ansi(&shown, inner.saturating_sub(2)) {
-                rows.push(format!("  {}", (theme.role(Role::ToolOutput))(&line)));
-            }
-            if total > preview {
-                rows.push(format!(
+            // gh #391 gap 1: wrap first, slice **visual** rows, and keep the
+            // tail for shells - `preview.rs` carries the why.
+            let built = super::preview::build_preview(name, body, inner.saturating_sub(2));
+            let marker = |omitted: usize| {
+                format!(
                     "  {}",
                     (theme.role(Role::Muted))(&format!(
-                        "… ({} more lines, {} to expand)",
-                        total - preview,
+                        "… ({omitted} earlier lines, {} to expand)",
                         lca_tui::engine::keybindings::key_text("app.tools.expand")
                     ))
-                ));
+                )
+            };
+            // The omission marker names what precedes a tail, so it sits
+            // above it; a head preview names what follows, so below.
+            if built.omitted > 0 && built.marker_above {
+                rows.push(marker(built.omitted));
+            }
+            for line in &built.rows {
+                rows.push(format!("  {}", (theme.role(Role::ToolOutput))(line)));
+            }
+            if built.omitted > 0 && !built.marker_above {
+                rows.push(marker(built.omitted));
             }
         } else if total > 1 {
             rows.push(format!(
@@ -547,13 +593,20 @@ fn diff_role(line: &str) -> Role {
     }
 }
 
-/// The collapsed preview line count for a tool, from pi's per-tool
-/// renderers: `bash` 5, `ls` 20, `grep` 15; the rest show one line.
-fn preview_lines(name: &str) -> usize {
-    match name {
-        "bash" | "shell" => 5,
-        "list" | "ls" => 20,
-        "grep" => 15,
-        _ => 0,
+/// pi's `formatToolDuration` tiers (`render-utils.ts:95-170`): `4.2s` under a
+/// minute, `1m 30s` under an hour, `2h 3m 4s` above. Sub-second durations keep
+/// one decimal so a fast tool does not read as `0s`.
+pub(super) fn format_duration_ms(ms: u64) -> String {
+    if ms < 60_000 {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    } else if ms < 3_600_000 {
+        let minutes = ms / 60_000;
+        let seconds = (ms % 60_000) / 1000;
+        format!("{minutes}m {seconds}s")
+    } else {
+        let hours = ms / 3_600_000;
+        let minutes = (ms % 3_600_000) / 60_000;
+        let seconds = (ms % 60_000) / 1000;
+        format!("{hours}h {minutes}m {seconds}s")
     }
 }

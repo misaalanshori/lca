@@ -29,8 +29,10 @@ The editor holds one message. `Enter` sends it; `Shift+Enter` inserts
 a newline (or `Ctrl+J` where the terminal eats modified keys).
 `Tab` completes file paths. `!command` runs a shell command and
 sends its output with your message; `!!command` runs one the model
-never sees. Paste an image and it rides the turn when the model
-takes vision (`/attach` does the same from a path).
+never sees. The card says which one you ran: `!bash …` in the accent
+color, `!!bash …` quiet, so the context boundary is visible at a glance
+and still readable with color off. Paste an image and it rides the turn
+when the model takes vision (`/attach` does the same from a path).
 
 ## Follow the work
 

@@ -84,6 +84,13 @@ pub enum Entry {
         /// This card's expansion, when a click toggled it (gh #166);
         /// `None` follows the global Ctrl+O default.
         expanded: Option<bool>,
+        /// When the call started (gh #391 gap 2): the live `Elapsed` timer
+        /// reads it while the card runs. `None` for a replayed historical
+        /// card, which must show its recorded `Took` and never animate.
+        started_at: Option<std::time::Instant>,
+        /// The editor's `!!` run (gh #391 gap 3): output withheld from the
+        /// model's context. Draws quiet where `!` draws in `bashMode`.
+        excluded: bool,
     },
     /// A transient notice (command output, info).
     Notice(String),
@@ -453,12 +460,26 @@ impl Transcript {
             manual: false,
             expanded: None,
             duration_ms: None,
+            // gh #391 gap 2: a live card times itself from here.
+            started_at: Some(std::time::Instant::now()),
+            excluded: false,
         });
     }
 
     /// Record a `!`/`!!` run from the editor (FR-UI-14): the same card,
     /// with pi's `bashMode` title instead of `toolTitle`.
     pub fn start_manual_tool(&mut self, name: impl Into<String>, args: impl Into<String>) {
+        self.start_manual_tool_excluding(name, args, false);
+    }
+
+    /// Record a `!`/`!!` run, saying whether its output is withheld from the
+    /// model (gh #391 gap 3). `!!` draws quiet, `!` in `bashMode`.
+    pub fn start_manual_tool_excluding(
+        &mut self,
+        name: impl Into<String>,
+        args: impl Into<String>,
+        excluded: bool,
+    ) {
         self.entries.push(Entry::Tool {
             name: name.into(),
             args: args.into(),
@@ -468,6 +489,8 @@ impl Transcript {
             manual: true,
             expanded: None,
             duration_ms: None,
+            started_at: Some(std::time::Instant::now()),
+            excluded,
         });
     }
 
@@ -735,7 +758,86 @@ impl Transcript {
             manual: false,
             expanded: None,
             duration_ms: None,
+            started_at: Some(std::time::Instant::now()),
+            excluded: false,
         });
+    }
+
+    /// Rewind a card's clock (gh #391 gap 2 tests).
+    ///
+    /// The timer derives its text from `started_at`, so a row can move the
+    /// clock instead of sleeping four seconds - the assertion stays about the
+    /// derivation rather than about wall time.
+    #[cfg(test)]
+    pub(super) fn set_started_at_for_test(&mut self, index: usize, at: std::time::Instant) {
+        if let Some(Entry::Tool { started_at, .. }) = self.entries.get_mut(index) {
+            *started_at = Some(at);
+        }
+    }
+
+    /// Push a card the way a **replay** would (gh #391 gap 2): a recorded
+    /// duration and no live clock, so it must render its exact `Took` and
+    /// never animate.
+    #[cfg(test)]
+    pub(super) fn push_historical_tool_for_test(
+        &mut self,
+        name: &str,
+        args: &str,
+        result: &str,
+        duration_ms: u64,
+    ) {
+        self.entries.push(Entry::Tool {
+            name: name.to_string(),
+            args: args.to_string(),
+            status: ToolStatus::Ok,
+            result: Some(result.to_string()),
+            diff: None,
+            manual: false,
+            expanded: None,
+            duration_ms: Some(duration_ms),
+            started_at: None,
+            excluded: false,
+        });
+    }
+
+    /// Whether any tool card is still running (gh #391 gap 2).
+    ///
+    /// The interface's tick uses this to decide whether the `Elapsed` line
+    /// needs a repaint: a transcript with no running card must not be
+    /// invalidated once a second forever, and a running one must be, or the
+    /// timer freezes at whatever the first frame said.
+    pub fn has_running_tool(&self) -> bool {
+        self.entries.iter().any(|entry| {
+            matches!(
+                entry,
+                Entry::Tool {
+                    status: ToolStatus::Running,
+                    ..
+                }
+            )
+        })
+    }
+
+    /// Drop the cached render of every running tool card (gh #391 gap 2), so
+    /// the next frame re-derives `Elapsed` from its `started_at`. Called from
+    /// the interface tick; a settled card keeps its cache and therefore its
+    /// frozen `Took`.
+    pub fn invalidate_running_tools(&mut self) {
+        let mut cache = self.cache.borrow_mut();
+        if cache.len() != self.entries.len() {
+            cache.resize(self.entries.len(), None);
+        }
+        for (index, entry) in self.entries.iter().enumerate() {
+            if matches!(
+                entry,
+                Entry::Tool {
+                    status: ToolStatus::Running,
+                    ..
+                }
+            ) {
+                cache[index] = None;
+            }
+        }
     }
 
     /// Render every entry to styled lines at `width`.
@@ -861,8 +963,15 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
     format!("[image {media_type}, {dimensions}, {} bytes]", bytes.len())
 }
 
+mod preview;
 mod render;
 use render::*;
 
 #[cfg(test)]
+#[path = "preview_tests.rs"]
+mod preview_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "timer_tests.rs"]
+mod timer_tests;
