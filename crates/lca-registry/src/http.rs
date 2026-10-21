@@ -147,7 +147,7 @@ impl Proxies {
     }
 }
 
-/// Parse one proxy variable (the tests' seam: [`parse_proxy`] is private, and a
+/// Parse one proxy variable (the tests' seam: the inner parser is private, and a
 /// row that pins the env parser's behaviour is cheaper than one that mutates
 /// the process environment).
 pub fn parse_proxy_for_tests(value: &str) -> Option<ProxyEndpoint> {
@@ -540,7 +540,7 @@ pub const OCI_MAX_REDIRECTS: u32 = 5;
 
 /// Resolve a reference through the OCI dance with the shipped bounds.
 ///
-/// The public seam for tests and any future caller: [`fetch_oci`] is this
+/// The public seam for tests and any future caller: the inner `fetch_oci` is this
 /// function taking the client and the mutable token cache, so an exercised
 /// bound is the shipped bound (the `plain_get` shape, gh #355).
 pub async fn fetch_oci_public(
