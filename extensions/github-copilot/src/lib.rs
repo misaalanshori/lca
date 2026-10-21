@@ -600,10 +600,11 @@ pub const CURATED_MODELS: [(&str, &str, u32); 5] = [
 /// live (per-account policies included), the curated floor otherwise.
 ///
 /// Gh #283: a live row's numbers come from `resolve_row`, not from a
-/// hardcoded zero. `context_window: 0` means *unknown and never
-/// compacts* (FR-SESS-4's threshold divides by it), so stamping it on
-/// every discovered row let a Copilot session grow until the provider
-/// rejected it - the failure `docs/compaction.md` exists to prevent.
+/// hardcoded zero. A zero window means the footer shows `ctx ?` and the
+/// FR-SESS-4 threshold falls back to `docs/compaction.md`'s 128k
+/// estimate - right only for a model whose real window is 128k. Copilot's
+/// curated figures are 200k, so stamping zero on every row gave those
+/// sessions a threshold far below the real one.
 pub fn list_models(cap: &dyn ProviderCap) -> Vec<lca_protocol::ModelInfo> {
     if let Ok(token) = access_token(cap)
         && let Some(live) = discover_models(cap, &token)
@@ -636,8 +637,9 @@ pub fn list_models(cap: &dyn ProviderCap) -> Vec<lca_protocol::ModelInfo> {
 ///    id - `capabilities.limits.max_context_window_tokens`, falling back
 ///    to `max_prompt_tokens` when only that is present (opencode's
 ///    decoder reads the pair the same way).
-/// 3. **`0`** otherwise, honestly. The footer already renders `ctx ?`;
-///    a fabricated number is the one thing this must never do.
+/// 3. **`0`** otherwise, honestly. The footer renders `ctx ?` and the
+///    compaction estimate governs; a fabricated number is the one thing
+///    this must never do.
 ///
 /// Everything non-structural (display name, modality hints) rides
 /// `extras` under the vocabulary the tree already reads, so no ABI

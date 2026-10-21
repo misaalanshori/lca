@@ -68,9 +68,9 @@ fn ids_of(models: &[lca_protocol::ModelInfo]) -> Vec<&str> {
 
 // Verifies: gh #283 - the defect itself. Live discovery used to stamp
 // `context_window: 0` on every row, discarding the curated table's real
-// windows, so a Copilot session could grow until the provider rejected it
-// (0 means "unknown and never compacts", and FR-SESS-4's threshold needs a
-// window to divide by). The witness is a catalog with curated ids *and* an
+// windows. A zero window leaves the footer at `ctx ?` and hands FR-SESS-4's
+// threshold the 128k fallback estimate, so Copilot's 200k models compacted
+// as if they had 128k. The witness is a catalog with curated ids *and* an
 // uncatalogued one: the curated rows must carry their windows, and only the
 // uncatalogued-unknown row may be 0.
 #[test]
