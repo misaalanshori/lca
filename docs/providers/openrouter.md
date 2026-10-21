@@ -39,6 +39,8 @@ Chat bodies over `POST {api_base}/chat/completions`: the bearer (provisioned or 
 
 The gateway's own `/models` when it answers (every entry's `context_length` rides — the field OpenRouter publishes), the preset's three curated rows otherwise, never an empty picker.
 
+One malformed catalog row does not cost the rest (gh #295). An entry needs a non-empty string `id` to be listed; anything else — `{"id": null}`, a deprecation or rate-limit notice shaped `{"message": …}`, a numeric id — is skipped, and the rows around it keep their gateway order. The skip is reported, not swallowed: a log line names how many entries were dropped and how many are usable, so a partial catalog never looks like a complete one. A payload with nothing usable still takes the curated fallback above — resilience is not an empty picker. The first row's `extras` carries `catalog-skipped` with the dropped count, so a caller reading the model list sees the partial answer without parsing a log.
+
 ## Limits
 
 OAuth and keyed turns never run live in CI — the suite drives the mock gateway, and the live smoke skips without an operator-provided key (NFR-23).

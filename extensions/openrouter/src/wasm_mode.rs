@@ -32,7 +32,14 @@ use exports::lca::ext::provider_login::{
 };
 use exports::lca::ext::provider_models::{Guest as ModelsGuest, ModelInfo as WasmModel};
 use lca::ext::types::{ExtraPair, Usage as WasmUsage};
-use lca::host::{credentials, net, oauth};
+use lca::host::{credentials, log, net, oauth};
+
+/// One diagnostics line through the always-granted `log` import (gh #295:
+/// a partial catalog read must be observable). Thin wrapper so the crate's
+/// shared sentence stays the only thing that formats the message.
+pub(crate) fn log_warn(message: &str) {
+    log::warn(message);
+}
 
 use crate::{IdentityOutcomeAlias, run_login, run_logout, run_usage};
 
@@ -219,16 +226,30 @@ impl GuestCompletionStream for QueuedStream {
 
 impl ModelsGuest for OpenRouterWasm {
     fn list_models(_settings: Vec<ExtraPair>) -> Vec<WasmModel> {
+        // `crate::list_models` already carries the gh #295 notice on the
+        // first row (platform-neutral, so this mode and the native twin
+        // share one implementation); the guest only has to stop dropping
+        // `extras` on the floor.
         crate::list_models(&GUEST_CAP)
             .into_iter()
-            .map(|model| WasmModel {
-                id: model.id,
-                name: model.name,
-                context_window: model.context_window,
-                max_tokens: model.max_tokens,
-                extras: Vec::new(),
-            })
+            .map(to_wasm_model)
             .collect()
+    }
+}
+
+fn to_wasm_model(model: lca_protocol::ModelInfo) -> WasmModel {
+    WasmModel {
+        id: model.id,
+        name: model.name,
+        context_window: model.context_window,
+        max_tokens: model.max_tokens,
+        // Before gh #295 the guest discarded every extra, so the skip
+        // notice could not cross even once it existed.
+        extras: model
+            .extras
+            .into_iter()
+            .map(|(key, value)| ExtraPair { key, value })
+            .collect(),
     }
 }
 
