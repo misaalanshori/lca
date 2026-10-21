@@ -146,6 +146,96 @@ fn split_ending(line: &str) -> (&str, &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The read hook: where the model's anchors come from (gh #285)
+// ---------------------------------------------------------------------------
+
+/// The width the built-in `read` pads its line number to
+/// (`crates/lca-tools/src/lib.rs`: `format!("{:6}\t{line}")`).
+const READ_NUMBER_WIDTH: usize = 6;
+
+/// Annotate a **`read`** result with the hashes `hash_edit` requires
+/// (gh #285), or `None` when this result is not something to annotate.
+///
+/// This is the missing link the issue describes: `annotate` existed and the
+/// tool demanded its output, but nothing in production ever called it, so the
+/// tool was uncallable. The `hooks-tool-result` world supplies the seam.
+///
+/// **Shape: a hashed gutter.** The built-in `read` already prefixes every line
+/// with a right-aligned line number and a tab; the hook inserts the 3-char hash
+/// in front of that number, so a line becomes
+///
+/// ```text
+/// <nnn>\t<6-wide number>\t<original text>
+/// ```
+///
+/// The original text after the second tab is byte-identical to what `read`
+/// produced, so the model reads the code it asked for and copies the anchor
+/// beside it. (The brief offered a per-line suffix or a hashed gutter; the
+/// gutter wins because it cannot be confused with the file's own content, and a
+/// trailing suffix would mutate the last character region the model may quote.)
+///
+/// **Refusal is the default.** Anything the hook cannot parse passes through
+/// untouched: a non-`read` tool, a line without the `{:6}\t` gutter, a
+/// continuation notice, an empty body. An annotation hook that mangles a result
+/// is worse than one that does nothing.
+pub fn annotate_read_result(tool: &str, content: &str) -> Option<String> {
+    // Only the built-in read: `grep`, `list`, `shell`, and an extension's own
+    // output are not file listings with stable line identity.
+    if tool != "read" {
+        return None;
+    }
+    if content.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(content.len() + content.len() / 4);
+    let mut annotated_any = false;
+    for line in content.split_inclusive('\n') {
+        let (body, ending) = split_ending(line);
+        match split_read_gutter(body) {
+            Some((number, text)) => {
+                out.push_str(&line_hash(text));
+                out.push('\t');
+                out.push_str(number);
+                out.push('\t');
+                out.push_str(text);
+                out.push_str(ending);
+                annotated_any = true;
+            }
+            // Not a numbered line: a continuation notice, a blank, or a
+            // shape this hook does not own. Verbatim.
+            None => {
+                out.push_str(body);
+                out.push_str(ending);
+            }
+        }
+    }
+    // A `read` whose every line was unparseable is not a read this hook
+    // understands; passing it through untouched is the honest answer.
+    annotated_any.then_some(out)
+}
+
+/// Split one `read` line into its `{:6}\t` prefix and the file text after it.
+///
+/// Strict on purpose: exactly `READ_NUMBER_WIDTH` characters that are all ASCII
+/// digits or the padding space, then a tab. A `read` result always looks like
+/// that; anything else did not come from the built-in `read` and is left alone.
+fn split_read_gutter(body: &str) -> Option<(&str, &str)> {
+    let (number, rest) = body.split_at_checked(READ_NUMBER_WIDTH)?;
+    if !number
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b' ')
+    {
+        return None;
+    }
+    // A fully blank number field is padding for a blank line? `read` never
+    // emits that (it always writes the number), so refuse it.
+    if !number.bytes().any(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    rest.strip_prefix('\t').map(|text| (number, text))
+}
+
 /// Resolve one anchor: the unique line index carrying it within
 /// `lines[start_from..]`, or the refusal. A hash two suffix lines
 /// share refuses rather than guessing.
@@ -460,7 +550,10 @@ mod native {
         }
 
         fn worlds(&self) -> Vec<World> {
-            vec![World::Tool]
+            // Gh #285: `HooksToolResult` is what supplies the model's anchors.
+            // Without it the tool existed but could never be called, because
+            // nothing produced the hashes it demands.
+            vec![World::Tool, World::HooksToolResult]
         }
 
         fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, DispatchError> {
@@ -558,6 +651,28 @@ mod native {
         fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
             Box::pin(std::future::ready(Ok(())))
         }
+
+        fn on_tool_result<'a>(
+            &'a self,
+            call: &'a lca_protocol::ToolCall,
+            result: &'a lca_protocol::ToolResult,
+        ) -> DispatchFuture<'a, Result<lca_protocol::ToolResultPatch, DispatchError>> {
+            // Gh #285: annotate a successful built-in `read` so the model sees
+            // the hashes `hash_edit` resolves against. Everything else is the
+            // identity patch, and an unparseable read is the identity patch -
+            // an annotation hook must never make a result worse.
+            let patch = if result.status == lca_protocol::ToolResultStatus::Ok {
+                annotate_read_result(&call.name, &result.content)
+                    .map(|content| lca_protocol::ToolResultPatch {
+                        content: Some(content),
+                        is_error: None,
+                    })
+                    .unwrap_or_default()
+            } else {
+                lca_protocol::ToolResultPatch::default()
+            };
+            Box::pin(std::future::ready(Ok(patch)))
+        }
     }
 }
 
@@ -650,4 +765,55 @@ mod wasm_mode {
     }
 
     export_hash_edit!(HashEditWasm);
+}
+
+// ---------------------------------------------------------------------------
+// WASM delivery mode: the result hook that supplies the anchors (gh #285)
+//
+// The hook world imports the log alone, so the guest annotates from the result
+// text it was handed and never touches the filesystem. That is enough: the
+// hashes are a pure function of the text `read` already produced.
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims
+mod wasm_hook {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "hooks-tool-result",
+        export_macro_name: "export_hash_edit_hook",
+        with: {
+            "lca:host/log@0.6.0": generate,
+        },
+    });
+
+    use exports::lca::ext::hook_tool_result::{Guest, ToolCall, ToolResult, ToolResultPatch};
+
+    pub struct HashEditHook;
+
+    impl Guest for HashEditHook {
+        fn on_tool_result(call: ToolCall, outcome: ToolResult) -> ToolResultPatch {
+            let identity = ToolResultPatch {
+                content: None,
+                is_error: None,
+            };
+            // Only a successful read: an error result has no line list, and a
+            // failed one must not be rewritten.
+            if outcome.status != "ok" {
+                return identity;
+            }
+            let Some(text) = outcome.content.as_deref() else {
+                return identity;
+            };
+            match crate::annotate_read_result(&call.name, text) {
+                Some(content) => ToolResultPatch {
+                    content: Some(content),
+                    is_error: None,
+                },
+                None => identity,
+            }
+        }
+    }
+
+    export_hash_edit_hook!(HashEditHook);
 }
