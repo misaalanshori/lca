@@ -19,7 +19,7 @@ pub(super) fn tree_row(id: &str, depth: usize, text: &str) -> crate::state::Tree
     }
 }
 
-pub(super) fn options() -> UiOptions {
+pub(crate) fn options() -> UiOptions {
     UiOptions {
         prompt_slot: Default::default(),
         dialog_slot: Default::default(),
