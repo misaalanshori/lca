@@ -14,6 +14,7 @@ pub(crate) use attach::stage_initial_attachments;
 pub(crate) use commands::settings_text;
 pub(crate) use model_select::OfferedCache;
 mod display;
+mod editor;
 mod extman;
 mod hooks;
 mod hub;

@@ -677,3 +677,8 @@ mod tool_card_preview_and_timer;
 // `Compacting` is a first-class separator state with its reason.
 #[path = "388-dock-height-and-compacting.rs"]
 mod dock_height_and_compacting;
+
+// Gh #388 gap 4: `$EDITOR` strips exactly one trailing terminator (and a
+// BOM), so an edit never adds a blank line the user did not type.
+#[path = "388-editor-trailing-newline.rs"]
+mod editor_trailing_newline;
