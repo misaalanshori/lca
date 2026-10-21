@@ -64,6 +64,20 @@ Dates are UTC.
   "tool not found" errors. The prompt's tool list now comes from the run's
   effective set, the same resolution the request's declaration reads, so the
   two cannot disagree.
+- **The `question` tool declares one schema in both delivery modes** (gh #298).
+  The WASM guest hand-wrote a shortened copy of the tool's parameter schema
+  with the `items` object missing, so a WASM-mode model was told `questions`
+  was an untyped array. It answered with plain strings
+  (`{"questions": ["Which port?"]}`) — the shape the schema invited — and the
+  tool rejected them, because its parser requires `header` and `question` per
+  entry. The failure got sharper when gh #306's validator began enforcing an
+  array's `items`: the same answer now fails the host's own check before the
+  guest's parser ever runs. Both modes now build the schema with one
+  constructor (`question_tool_spec`, at the crate root so it compiles for
+  `wasm32` as well), and a test asserts the two outputs are byte-identical
+  rather than spot-checking a field. `hash-edit` and `webfetch` already
+  worked this way; `question` was the outlier. `docs/extension-authoring.md`
+  now states the rule for dual-mode extensions.
 - **The environment variables each provider's preset declares now
   authenticate it** (gh #292). `provider-presets.toml` documents a canonical
   variable per service — `DEEPSEEK_API_KEY`, `GROQ_API_KEY`,

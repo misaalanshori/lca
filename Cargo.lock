@@ -1811,6 +1811,7 @@ dependencies = [
  "lca-wire-openai",
  "openai-compatible",
  "project-memory",
+ "question",
  "serde_json",
  "skills",
  "tokio",
