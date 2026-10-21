@@ -586,3 +586,11 @@ mod openrouter_catalog_resilience;
 // is the thing the shipped doubles could not do.
 #[path = "278-retry-after-read-before-close.rs"]
 mod retry_after_read_before_close;
+// GitHub #285: `hash_edit` demanded 3-char content hashes that only `annotate`
+// produced, and `annotate` had no production caller - so the tool could never
+// be called. Its writes also bypassed `ToolExecutor`'s read tracker. The guard
+// pins the read -> annotate -> edit loop, the pass-through cases that keep the
+// hook from corrupting results, and records honestly that the tracker half
+// needs a `crates/lca-tools` API this cycle may not add.
+#[path = "285-hash-edit-uncallable.rs"]
+mod hash_edit_uncallable;

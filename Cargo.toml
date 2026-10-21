@@ -89,6 +89,9 @@ openrouter = { path = "extensions/openrouter" }
 # gh #278: the retry-after guard drives the three providers' real error paths
 # through one lifecycle-modelling capability, so ordering is observable.
 anthropic = { path = "extensions/anthropic" }
+# gh #285: the hash-edit guard drives the real annotate/apply_edits loop and
+# the handle's world declaration, so the read -> edit path is observable.
+hash-edit = { path = "extensions/hash-edit" }
 openai-compatible = { path = "extensions/openai-compatible" }
 serde_json.workspace = true
 tokio.workspace = true
