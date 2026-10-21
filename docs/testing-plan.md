@@ -203,6 +203,14 @@ Platform gating is part of the contract, not an afterthought. tmux has no Window
 
 These tests use the fake provider, like every category except the env-gated live smoke: a real terminal does not require a real model.
 
+The harness itself has a contract, because the tests' honesty depends on it (gh #413's class; six ledger entries for one row and two false fix-up hunts). Three rules:
+
+- **The socket is per test binary.** Its name carries the process id (`lca-tui-test-<pid>`), never the default socket and never one shared name, so two suites — two worktrees, one machine — cannot drive each other's tmux server. The server is killed at process exit, so no socket files accumulate.
+- **An empty pane is a harness condition, a painted pane is a fact.** When a budget expires on a *blank* pane the terminal never came up: the wait re-spawns the same named session once, with the same command, says so on stderr, and re-polls a bounded second time. When the pane *has content* but lacks the expected text, the wait fails as before — that is a real product failure, and hiding it behind a retry would be the worst of both.
+- **Waits are fold-aware.** A selector paints its rows over several frames, so a row that must be asserted is *waited for*, not slept through: `wait_for_all` waits until every needle the assertion reads is on screen in one frame. Waiting for one label and asserting a second raced the render; the assertion itself is unchanged.
+
+The contract is pinned by `crates/lca-cli/tests/harness_contract.rs`, which drives fake commands (a blank pane that heals on the second spawn, a painted pane that must fail) so the harness's own behaviour is tested without a product binary.
+
 ## 15. Installer tests
 
 The installers are product surface (SRDD `FR-INSTALL-*`), so they get their own suite, their own CI job, and their own gate rather than being folded into an existing category: `tests/install/test_install_sh.sh`, `tests/install/test_install_ps1.ps1`, and `scripts/install-check.sh`, the last of which is gate 10 in `docs/release-policy.md`.

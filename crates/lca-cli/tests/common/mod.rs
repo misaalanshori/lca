@@ -487,28 +487,118 @@ pub fn tmux_available() -> bool {
 #[cfg(unix)]
 pub struct Tmux {
     pub name: String,
+    /// The exact `new-session` command this pane was spawned with, kept so a
+    /// pane that never painted can be re-spawned (gh #413's class).
+    spawn_command: std::sync::Mutex<Option<String>>,
 }
 
 // The real-terminal tests get their own private tmux socket: never the
 // default socket (standing rule), and separate from the manual drive
 // socket (`lca-tui`) so a test run cannot disturb a live drive.
+//
+// **Per test-binary process** (gh #413's class): one fixed name was shared by
+// every real-terminal test *and* by any second suite on the same machine, so
+// two concurrent runs drove each other's servers. The pid gives each
+// `cargo nextest run -p lca-cli` its own server; the `OnceLock` means every
+// `Tmux` created in one binary still shares that one server, which is what
+// the tests expect.
 #[cfg(unix)]
-const TMUX_SOCKET: &str = "lca-tui-test";
+fn tmux_socket() -> &'static str {
+    static SOCKET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SOCKET.get_or_init(|| format!("lca-tui-test-{}", std::process::id()))
+}
+
+/// The socket this binary's sessions live on (the contract rows read it).
+#[cfg(unix)]
+pub fn tmux_socket_for_tests() -> &'static str {
+    tmux_socket()
+}
+
+/// The directory tmux keeps its sockets in, asked of tmux itself.
+///
+/// `tmux` prints it for `show-options`-style queries on no socket; the stable
+/// way is the parent of a live socket path, so a throwaway session is started
+/// on the default socket and its own path read back.
+#[cfg(unix)]
+fn tmux_socket_dir() -> Option<std::path::PathBuf> {
+    let out = Command::new("tmux")
+        .args(["display-message", "-p", "#{socket_path}"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let path = text.trim();
+    if path.is_empty() {
+        return None;
+    }
+    std::path::Path::new(path)
+        .parent()
+        .map(|dir| dir.to_path_buf())
+}
+
+/// Reap socket files left by test binaries that are no longer running.
+///
+/// A test process is not unwound when nextest finishes a binary, so a `Drop`
+/// on the harness never fires and the server outlives its tests: this box
+/// reached 134 (then 116) leftover `lca-tui-test-<pid>` sockets. Reaping from
+/// the *next* run is the reliable point — every process that owns one of these
+/// sockets is gone, so the name is dead by construction — and it costs one
+/// directory read per test binary.
+///
+/// Scoped to this harness's own prefix, so a live drive (`lca-tui`) or another
+/// tool's sockets are never touched.
+#[cfg(unix)]
+fn reap_stale_sockets() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // tmux puts its sockets under `$TMUX_TMPDIR` (or the temp dir) in a
+        // `tmux-<uid>` directory. Asking tmux for the parent avoids guessing
+        // the uid, and a tmux that cannot answer simply means nothing to reap.
+        let Some(dir) = tmux_socket_dir() else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(pid) = name
+                .strip_prefix("lca-tui-test-")
+                .and_then(|rest| rest.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            // Alive? Then it is a concurrent suite's server: leave it.
+            if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                continue;
+            }
+            let _ = Command::new("tmux")
+                .args(["-L", &name, "kill-server"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            let _ = std::fs::remove_file(entry.path());
+        }
+    });
+}
 
 #[cfg(unix)]
 impl Tmux {
     pub fn new(tag: &str) -> Tmux {
+        reap_stale_sockets();
         let name = format!("lca-smoke-{}-{tag}", std::process::id());
         let _ = Command::new("tmux")
-            .args(["-L", TMUX_SOCKET, "kill-session", "-t", &name])
+            .args(["-L", tmux_socket(), "kill-session", "-t", &name])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
-        Tmux { name }
+        Tmux {
+            name,
+            spawn_command: std::sync::Mutex::new(None),
+        }
     }
 
     pub fn tmux(args: &[&str]) -> Output {
-        let mut full = vec!["-L", TMUX_SOCKET];
+        let mut full = vec!["-L", tmux_socket()];
         full.extend_from_slice(args);
         Command::new("tmux").args(&full).output().expect("run tmux")
     }
@@ -549,7 +639,7 @@ impl Tmux {
         use std::io::Write as _;
         let buffer = format!("lca-paste-{}", std::process::id());
         let mut child = Command::new("tmux")
-            .args(["-L", TMUX_SOCKET, "load-buffer", "-b", &buffer, "-"])
+            .args(["-L", tmux_socket(), "load-buffer", "-b", &buffer, "-"])
             .stdin(std::process::Stdio::piped())
             .spawn()
             .expect("spawn tmux load-buffer");
@@ -653,22 +743,41 @@ impl Tmux {
             config = sandbox.home.join(".config").display(),
             bin = env!("CARGO_BIN_EXE_lca"),
         );
-        let out = Self::tmux(&[
-            "new-session",
-            "-d",
-            "-s",
-            &self.name,
-            "-x",
-            "140",
-            "-y",
-            "40",
-            &command,
-        ]);
+        self.spawn_raw(&command);
+    }
+
+    /// Start this session with an arbitrary shell command.
+    ///
+    /// The harness's own seam: `spawn` builds the `lca` command line, and the
+    /// contract row drives a fake one to prove `wait_for`'s empty-pane
+    /// self-healing (gh #413). The command is remembered either way, so a
+    /// blank pane can be re-spawned.
+    pub fn spawn_raw(&self, command: &str) {
+        *self
+            .spawn_command
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(command.to_string());
+        let out = Self::new_session(&self.name, command);
         assert!(
             out.status.success(),
             "tmux new-session: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// `new-session -d` for one named session at the harness's standard size.
+    fn new_session(name: &str, command: &str) -> Output {
+        Self::tmux(&[
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-x",
+            "140",
+            "-y",
+            "40",
+            command,
+        ])
     }
 
     pub fn send(&self, keys: &[&str]) {
@@ -697,15 +806,89 @@ impl Tmux {
     /// is wall-clock margin for a loaded machine, not a performance claim:
     /// a full parallel `cargo test -p lca-cli` blew a 10 s paste budget
     /// once while every focused run passed (2026-10-01).
+    ///
+    /// **Self-healing on an empty pane** (gh #413's class). If the budget
+    /// expires and the pane is *blank*, the session never painted - the
+    /// server could not start the process under load, which is a harness
+    /// condition, not a product assertion. That case re-spawns the same named
+    /// session with the same command **once** and re-polls a bounded second
+    /// time, saying so on stderr so the run stays honest about what happened.
+    ///
+    /// A pane with *content* that lacks the needle keeps the panic: a painted
+    /// screen missing its expected text is a real failure.
     pub fn wait_for(&self, needle: &str, timeout: std::time::Duration) -> String {
+        let pane = self.poll_for(needle, timeout);
+        if let Some(pane) = pane {
+            return pane;
+        }
+        let first = self.capture();
+        if !first.trim().is_empty() {
+            // Painted but wrong: a genuine product failure, unchanged.
+            panic!("`{needle}` never appeared in the pane:\n{first}");
+        }
+        // Blank pane after a whole budget: the terminal never came up.
+        let command = self
+            .spawn_command
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let Some(command) = command else {
+            panic!(
+                "`{needle}` never appeared and the pane is blank; this session was not \
+                 spawned through `Tmux::spawn`, so the harness cannot re-spawn it"
+            );
+        };
+        eprintln!(
+            "harness: the pane for `{}` was blank after {timeout:?}; re-spawning the \
+             session once (empty pane = the terminal did not come up, gh #413)",
+            self.name
+        );
+        let _ = Command::new("tmux")
+            .args(["-L", tmux_socket(), "kill-session", "-t", &self.name])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let out = Self::new_session(&self.name, &command);
+        if !out.status.success() {
+            // `kill-session` on the last session stops the server, so the
+            // re-spawn can race a socket that is going away ("server exited
+            // unexpectedly"). One more attempt is the honest repair: the
+            // second `new-session` starts a fresh server.
+            let retry = Self::new_session(&self.name, &command);
+            if !retry.status.success() {
+                panic!(
+                    "`{needle}` never appeared and the re-spawn failed: {}",
+                    String::from_utf8_lossy(&retry.stderr)
+                );
+            }
+        }
+        // The second attempt starts its own deadline (a re-spawned process
+        // begins from zero). Note what this cannot fix: a WASM-bearing
+        // session takes 26-28 s to first paint on an idle box (the component
+        // JIT), so two concurrent suites on four cores push it past *any*
+        // fixed per-attempt budget. The harness heals a terminal that did not
+        // come up; it cannot manufacture CPU.
+        match self.poll_for(needle, timeout) {
+            Some(pane) => pane,
+            // The second chance is bounded and final: a pane that still lacks
+            // the needle after a re-spawn is a failure either way.
+            None => panic!(
+                "`{needle}` never appeared in the pane after a re-spawn:\n{}",
+                self.capture()
+            ),
+        }
+    }
+
+    /// Poll until `needle` appears, or `None` when the budget spends.
+    fn poll_for(&self, needle: &str, timeout: std::time::Duration) -> Option<String> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let pane = self.capture();
             if pane.contains(needle) {
-                return pane;
+                return Some(pane);
             }
             if std::time::Instant::now() > deadline {
-                panic!("`{needle}` never appeared in the pane:\n{pane}");
+                return None;
             }
             std::thread::sleep(std::time::Duration::from_millis(150));
         }
@@ -735,10 +918,13 @@ impl Tmux {
 impl Drop for Tmux {
     fn drop(&mut self) {
         let _ = Command::new("tmux")
-            .args(["-L", TMUX_SOCKET, "kill-session", "-t", &self.name])
+            .args(["-L", tmux_socket(), "kill-session", "-t", &self.name])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
+        // The server is reaped by the next binary's `reap_stale_sockets`:
+        // a test process is not unwound when nextest finishes with it, so a
+        // counter here would never reach zero and 134 sockets accumulated.
     }
 }
 

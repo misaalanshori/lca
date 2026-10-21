@@ -29,6 +29,30 @@ fn wait_for_gone(session: &Tmux, needle: &str, timeout: std::time::Duration) {
     }
 }
 
+/// Wait until **every** needle is on screen at once, then return that frame.
+///
+/// The fold-aware wait gh #413 asked for: a selector paints its rows over
+/// several frames, so waiting for one label and asserting another races the
+/// render. The timeout is the same loud panic as [`Tmux::wait_for`] and reports
+/// the last frame it saw.
+#[cfg(unix)]
+fn wait_for_all(session: &Tmux, needles: &[&str], timeout: std::time::Duration) -> String {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let pane = session.capture();
+        if needles.iter().all(|needle| pane.contains(needle)) {
+            return pane;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!(
+                "not every needle {:?} appeared in the pane at once:\n{pane}",
+                needles
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+}
+
 /// The `/settings` selector's header line: present exactly while the
 /// selector overlay is open, so its absence proves a close landed.
 #[cfg(unix)]
@@ -66,7 +90,17 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     // `wait_for("thinking")` matched footer/status text before the
     // selector opened (macOS CI).
     session.send(&["/settings", "Enter"]);
-    let pane = session.wait_for("Theme", std::time::Duration::from_secs(15));
+    // harness: fold-aware wait, gh #413. The selector paints its rows over
+    // several frames, so waiting for the *first* label and then asserting the
+    // second raced the render (third hit 2026-10-17: `Theme` on screen,
+    // `Permissions` one frame behind, under full-suite load). Wait for the
+    // screen the assertion actually reads: both curated labels present at
+    // once. The assertion below is unchanged.
+    let pane = wait_for_all(
+        &session,
+        &["Theme", "Permissions"],
+        std::time::Duration::from_secs(20),
+    );
     assert!(
         pane.contains("Theme") && pane.contains("Permissions"),
         "the curated rows are listed:\n{pane}"
