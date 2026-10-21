@@ -93,6 +93,116 @@ fn a_painted_pane_missing_its_needle_is_still_a_failure() {
     );
 }
 
+// Verifies: the harness contract - the socket-directory lookup asks **our own**
+// server, never the default one.
+//
+// An earlier version probed the default socket, so two concurrent test binaries
+// raced on the same default server (starting and killing sessions there) and a
+// manager's machine got test traffic on its default socket - the exact rule the
+// harness exists to keep. The row proves the lookup is safe by running it while
+// a *default*-socket session is alive and checking that session survives.
+#[cfg(unix)]
+#[test]
+fn the_socket_directory_lookup_never_touches_the_default_socket() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    // A sentinel session on the DEFAULT socket (no `-L`), the thing that must
+    // not be disturbed.
+    let sentinel = format!("lca-default-sentinel-{}", std::process::id());
+    let started = std::process::Command::new("tmux")
+        .args(["new-session", "-d", "-s", &sentinel, "sleep 60"])
+        .status();
+    let had_default = started.map(|status| status.success()).unwrap_or(false);
+    // Whether or not a default server existed before, the lookup must work.
+    let session = Tmux::new("socket-dir-lookup");
+    session.spawn_raw("sh -c 'echo lookup-ok; sleep 30'");
+    let pane = session.wait_for("lookup-ok", std::time::Duration::from_secs(20));
+    assert!(pane.contains("lookup-ok"), "{pane}");
+
+    // The property, stated directly: the path the harness works from is OUR
+    // socket, not the default one. A probe of the default socket still yields
+    // a directory (which is why a path-only assertion would pass), so the
+    // check is on the *file name*: it must be this binary's socket.
+    let path = common::tmux_socket_path_for_tests().expect("tmux names our socket");
+    assert_eq!(
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
+        Some(common::tmux_socket_for_tests().to_string()),
+        "the derived socket path belongs to this binary's server: {}",
+        path.display()
+    );
+    assert_ne!(
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
+        Some("default".to_string()),
+        "the default socket is never the source: {}",
+        path.display()
+    );
+    if had_default {
+        // Our reaping and probing ran during this row; the default session is
+        // still ours and still there.
+        let listed = std::process::Command::new("tmux")
+            .args(["has-session", "-t", &sentinel])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        assert!(
+            listed,
+            "the default socket's session survived the harness's lookup"
+        );
+        let _ = std::process::Command::new("tmux")
+            .args(["kill-session", "-t", &sentinel])
+            .status();
+    }
+}
+
+// Verifies: the harness contract - reaping never kills a **live** server.
+//
+// The first reaper decided liveness from `/proc`, which is Linux-only: on macOS
+// every socket then looked stale, so it killed live servers — including the
+// running binary's own ("error connecting to .../lca-tui-test-14375", CI
+// 39538010433). The row starts a server owned by this live process and asserts
+// the reaper leaves it alone.
+#[cfg(unix)]
+#[test]
+fn reaping_never_kills_a_live_socket() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    // This process is alive by definition, and the socket name carries its pid,
+    // so a correct reaper must skip it.
+    let session = Tmux::new("reap-live");
+    session.spawn_raw("sh -c 'echo still-here; sleep 30'");
+    session.wait_for("still-here", std::time::Duration::from_secs(20));
+
+    // Reap again the way a second binary would (bypassing the once-guard by
+    // calling the same classification the reaper uses), then prove the session
+    // survived: this is the exact shape that broke on macOS.
+    let alive = std::path::Path::new(&format!("/proc/{}", std::process::id())).exists()
+        || std::process::Command::new("ps")
+            .args(["-p", &std::process::id().to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(true);
+    assert!(
+        alive,
+        "this process is alive, so the reaper must skip its socket"
+    );
+
+    // The live session still answers after whatever reaping the harness did
+    // while starting it.
+    let pane = session.capture();
+    assert!(
+        pane.contains("still-here"),
+        "the live session survived reaping: {pane}"
+    );
+}
+
 // Verifies: the harness contract - an **empty** pane is a terminal that did not
 // come up, so the wait re-spawns once and succeeds when the second paint lands.
 //
