@@ -12,3 +12,10 @@ redirect_path = "/callback"
 
 [capabilities.credentials]
 namespace = "antigravity"
+
+# Gh #297: this provider signs in through its own `provider-identity`
+# login (an OAuth or device-code flow it runs itself) and declares no
+# `login-options` presets. The declaration is what puts it in the /login
+# picker: the host must not run the flow to discover that the flow exists.
+[login]
+identity = true

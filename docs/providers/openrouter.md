@@ -33,7 +33,7 @@ Chat bodies over `POST {api_base}/chat/completions`: the bearer (provisioned or 
 
 ## login, logout, usage
 
-`login` runs the identity flow directly (no picker presets — the host routes an option-less provider to it, like codex). `logout` clears the namespace (keys are revoked on the site). `usage` is the credential-validity probe — the key never expires, so a present key is `Ok` with empty counts.
+`login` runs the identity flow directly. The manifest declares `[login] identity = true` (gh #297), so a bare `/login` lists it as `Sign in with openrouter` alongside the preset providers; the host routes that row to this flow rather than to `login-submit`, which this extension does not implement. `logout` clears the namespace (keys are revoked on the site). `usage` is the credential-validity probe — the key never expires, so a present key is `Ok` with empty counts.
 
 ## Models
 
