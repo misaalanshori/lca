@@ -654,3 +654,10 @@ mod oci_pull_auth_and_bounds;
 // without a consumer naming it, and every fixture links on the current host.
 #[path = "427-conformance-fixture-keeps-current.rs"]
 mod conformance_fixture_keeps_current;
+
+// Gh #443: `/bug`, `/export`, `/import` were implemented and advertised but
+// absent from `slash_commands`, so the router refused them. The named guard
+// pins the registration/dispatch/help triangle; the class guards live beside
+// the code they scan.
+#[path = "443-three-commands-reachable.rs"]
+mod three_commands_reachable;

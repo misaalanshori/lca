@@ -94,20 +94,20 @@ Skills and extensions add their own `/`-commands to the same menu.
 
 ### The full command surface
 
-`/help` is not the whole list — it renders the descriptions it has, and
-a few commands are missing from it. This table is every command the
-interface actually dispatches; the one-line text is `/help`'s where
-`/help` has one. Three further names appear in `/help` but are not
-wired into the dispatcher, so they cannot be listed here as working —
-see below.
+This table is every command the interface dispatches, and `/help` lists
+the same set with the same one-line text — the two cannot drift apart
+(gh #443 added the guard that proves it). Skills and extensions add
+their own `/`-commands to the same menu.
 
 | Command | What it does |
 | --- | --- |
 | `/attach <path>` | attach an image file to the next message |
+| `/bug` | write a local diagnostic bundle |
 | `/changelog` | show the latest released changes |
 | `/clone [name]` | duplicate this session at its tip and switch |
 | `/compact` | summarize the session to free context |
 | `/exit` | leave the interface (`/quit` is the same) |
+| `/export` | write the session out (add html for the transcript page) |
 | `/ext` | manage extensions (enable/disable, compaction strategy) |
 | `/extensions` | open the extension hub |
 | `/fork [n]` | fork a branch at a message (picker, or the nth) |
@@ -115,6 +115,7 @@ see below.
 | `/grants` | review this project's grants and rules |
 | `/help` | list commands and keys |
 | `/hotkeys` | list every key binding |
+| `/import` | import JSONL lines as a new session |
 | `/jump <name>` | branch at a bookmark and switch |
 | `/label [n] <name>` | bookmark a message |
 | `/labels` | list every bookmark |
@@ -139,16 +140,18 @@ see below.
 | `/trust` | trust the project folder |
 | `/usage` | show the provider's usage, when it has one |
 
-Three commands have an implementation and a `/help` line but are not
-wired into the dispatcher, so they answer `unknown command`: `/bug`,
-`/export`, and `/import`. They are tracked as gh #443. Until it lands,
-use the CLI spellings, which work:
+`/bug`, `/export`, and `/import` do the same work as their CLI
+spellings (`lca bug`, `lca export`, `lca import`), so either surface
+works:
 
 ```
-lca bug                    # write a diagnostic bundle for this project
-lca export <session>       # write a session out (--html for the page)
-lca import <file.jsonl>    # import JSONL lines as a new session
+/bug                     # write a diagnostic bundle for this project
+/export                  # write this session out (/export html for the page)
+/import <file.jsonl>     # import JSONL lines as a new session
 ```
+
+`/bug`'s bundle contains the transcript. It is written next to your
+project, not uploaded, and sharing it is a deliberate act.
 
 ## Sessions, branches, and starting over
 

@@ -1105,8 +1105,11 @@ pub(super) fn highlight_matches(line: &str, query: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "chat_command_guards.rs"]
+mod command_guards;
+#[cfg(test)]
 #[path = "chat_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 #[cfg(test)]
 #[path = "usage_tests.rs"]
 mod usage_tests;

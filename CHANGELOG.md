@@ -53,14 +53,23 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **`/bug`, `/export`, and `/import` run** (gh #443). Each had a working
+  implementation and a `/help` line, but the interface router admits a name
+  only when it is in `slash_commands`, and none of the three were — so all
+  three answered `unknown command` and their code was unreachable. The host's
+  own command list is now one constant (`HANDLED_NAMES`) that `slash_commands`
+  derives from, and two guards keep the triangle honest: every registered name
+  has a dispatch arm (a listed-but-unhandled name used to fall through to the
+  extension dispatcher and silently do nothing), and every routed command has
+  a `/help` line (which is how `/label`, `/labels`, `/jump`, `/rename`, and
+  `/extensions` were reachable but invisible).
 - **The user guide now names every command users can run, and stops
   promising a reload it does not do** (gh #419). `docs/usage.md` read like
   an exhaustive command list while omitting nine that ship; it is now a
   complete table, with `/help`'s own one-line text. Three of those commands
-  - `/bug`, `/export`, `/import` - turn out to answer `unknown command` and
-  always have, so the guide says so and names the working CLI spellings
-  (`lca bug`, `lca export`, `lca import`); that defect is gh #443. Three
-  docs promised `/reload` applies keybinding edits without a restart, which
+  - `/bug`, `/export`, `/import` - turned out to answer `unknown command`
+  (fixed above in gh #443). Separately, three docs promised `/reload`
+  applies keybinding edits without a restart, which
   is true everywhere except the prompt editor, which keeps its startup key
   map - measured in a pane, tracked as gh #332, and now stated as what
   works, what does not, and what to do about it.

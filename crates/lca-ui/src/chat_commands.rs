@@ -904,7 +904,7 @@ fn latest_changelog_section() -> String {
 }
 
 /// One-line descriptions for the interface's own commands.
-fn command_help(command: &str) -> &'static str {
+pub(crate) fn command_help(command: &str) -> &'static str {
     match command {
         "/help" => "list commands and keys",
         "/hotkeys" => "list every key binding",
@@ -934,6 +934,7 @@ fn command_help(command: &str) -> &'static str {
         "/attach" => "attach an image to the next message",
         "/paste" => "paste the clipboard image to the next message",
         "/ext" => "manage extensions (enable/disable, compaction strategy)",
+        "/extensions" => "browse and install extensions from the hub",
         "/export" => "write the session out (add html for the transcript page)",
         "/import" => "import JSONL lines as a new session",
         "/bug" => "write a local diagnostic bundle",
