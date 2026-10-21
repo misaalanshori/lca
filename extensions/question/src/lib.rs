@@ -203,6 +203,73 @@ pub fn ask_all(dialogs: &dyn Dialogs, questions: &[Question]) -> String {
 // Native delivery mode
 // ---------------------------------------------------------------------------
 
+/// The `question` tool spec the model sees, built for **both** delivery
+/// modes.
+///
+/// gh #298: the WASM guest used to carry a hand-written copy of this
+/// schema with the `items` object missing, so a WASM-mode model was told
+/// `questions` was an untyped array and answered with plain strings - which
+/// the guest's own parser then rejected. The copy is gone: the guest calls
+/// this function, exactly as `hash-edit` and `webfetch` already share one
+/// spec between their two modes. Two literals that must stay equal are a
+/// defect waiting for the next edit; one literal cannot drift from itself.
+///
+/// Only `lca-protocol` and `serde_json` are needed, so it builds on
+/// `wasm32` as well as natively - it is deliberately outside the
+/// `#[cfg(not(target_arch = "wasm32"))]` module below.
+pub fn question_tool_spec() -> lca_protocol::ToolSpec {
+    lca_protocol::ToolSpec {
+        name: "question".to_string(),
+        description:
+            "Ask the user structured clarification questions mid-turn; resumes with their answers."
+                .to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "header": {"type": "string"},
+                            "question": {"type": "string"},
+                            "options": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": {"type": "string"},
+                                        "description": {"type": "string"}
+                                    },
+                                    "required": ["label"]
+                                }
+                            },
+                            "multiple": {"type": "boolean", "default": false}
+                        },
+                        "required": ["header", "question"]
+                    }
+                }
+            },
+            "required": ["questions"]
+        }),
+        exposure: lca_protocol::ToolExposure::Direct,
+        namespace: None,
+        annotations: None,
+        extras: Default::default(),
+    }
+}
+
+/// The parameters a WASM-mode model is declared, as JSON text - the same
+/// value the native spec carries, through the same constructor (gh #298).
+///
+/// The WIT `tool-schema` export takes `parameters` as a string rather than
+/// a typed document, so the one conversion lives here beside the one
+/// schema. Both delivery modes call this, so the parity test cannot pass
+/// while either mode drifts.
+pub fn question_schema_parameters() -> String {
+    question_tool_spec().parameters.to_string()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
@@ -231,48 +298,6 @@ mod native {
         /// Build from the host's dialog slot.
         pub fn new(dialogs: lca_permissions::SharedDialogs) -> QuestionTool {
             QuestionTool { dialogs }
-        }
-    }
-
-    /// The `question` tool spec the model sees.
-    pub fn question_tool_spec() -> lca_protocol::ToolSpec {
-        lca_protocol::ToolSpec {
-            name: "question".to_string(),
-            description: "Ask the user structured clarification questions mid-turn; resumes with their answers."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "questions": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "header": {"type": "string"},
-                                "question": {"type": "string"},
-                                "options": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "label": {"type": "string"},
-                                            "description": {"type": "string"}
-                                        },
-                                        "required": ["label"]
-                                    }
-                                },
-                                "multiple": {"type": "boolean", "default": false}
-                            },
-                            "required": ["header", "question"]
-                        }
-                    }
-                },
-                "required": ["questions"]
-            }),
-            exposure: lca_protocol::ToolExposure::Direct,
-            namespace: None,
-            annotations: None,
-            extras: Default::default(),
         }
     }
 
@@ -386,8 +411,10 @@ mod native {
     }
 }
 
+// gh #298: `question_tool_spec` lives at the crate root now, because both
+// delivery modes construct the schema from it; only the handle is native.
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{QuestionTool, question_tool_spec};
+pub use native::QuestionTool;
 
 // ---------------------------------------------------------------------------
 // WASM delivery mode: the tool world over the dialogs import
@@ -435,14 +462,16 @@ mod wasm_mode {
 
     impl SchemaGuest for QuestionWasm {
         fn get_schema() -> Schema {
-            // The schema mirrors `question_tool_spec`; the guest has
-            // no protocol import cost worth the shared constructor.
+            // gh #298: the same constructor the native spec uses. The guest
+            // used to hand-write a shortened copy (no `items`), which told
+            // the model `questions` was an untyped array; the model then
+            // answered with plain strings and this guest's own parser
+            // rejected them. One schema, two modes.
+            let spec = super::question_tool_spec();
             Schema {
-                name: "question".to_string(),
-                description: "Ask the user structured clarification questions mid-turn; resumes with their answers."
-                    .to_string(),
-                parameters: r#"{"type":"object","properties":{"questions":{"type":"array"}},"required":["questions"]}"#
-                    .to_string(),
+                name: spec.name,
+                description: spec.description,
+                parameters: super::question_schema_parameters(),
                 extras: Vec::new(),
             }
         }

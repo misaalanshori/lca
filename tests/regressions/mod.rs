@@ -530,3 +530,11 @@ mod update_fetch_is_bounded;
 // sent to this endpoint.
 #[path = "292-preset-env-vars-authenticate.rs"]
 mod preset_env_vars_authenticate;
+// GitHub #298: the WASM guest hand-wrote a shortened copy of the `question`
+// tool's schema with `items` missing, so a WASM-mode model was told
+// `questions` was an untyped array and answered with plain strings - which
+// the guest's own parser then rejected. The guard pins exact schema parity
+// between the two delivery modes and the double rejection of the shape the
+// truncated schema invited.
+#[path = "298-question-wasm-schema-parity.rs"]
+mod question_wasm_schema_parity;
