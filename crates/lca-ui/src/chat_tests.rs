@@ -1179,3 +1179,7 @@ fn a_model_without_a_set_offers_every_level() {
 #[cfg(test)]
 #[path = "chat_ctrl_c_tests.rs"]
 mod ctrl_c_tests;
+
+#[cfg(test)]
+#[path = "dock_tests.rs"]
+mod dock_tests;

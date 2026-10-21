@@ -90,7 +90,9 @@ fn model_switch_confirmation_lands_in_the_transcript() {
 #[test]
 fn compaction_summary_lands_in_the_transcript() {
     let mut chat = chat();
-    let state = Arc::new(Mutex::new(lca_ui::CompactState::Running));
+    let state = Arc::new(Mutex::new(lca_ui::CompactState::Running(
+        lca_ui::CompactionReason::Manual,
+    )));
     let poll = state.clone();
     chat.world.options.hooks.poll_compact = Some(Arc::new(move || poll.lock().unwrap().clone()));
     assert!(chat.poll_compact(), "the start repaints");

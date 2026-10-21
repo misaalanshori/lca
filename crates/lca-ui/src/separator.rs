@@ -40,6 +40,45 @@ pub enum SeparatorState {
         /// When the backoff ends.
         deadline: Instant,
     },
+    /// A compaction is running (gh #388 gap 2): it reads `Compacting` in the
+    /// same row a turn reads `Working`, with the reason on screen.
+    ///
+    /// It used to be handled *outside* the separator, which is why a
+    /// compacting interface had no status row of its own - the dock's status
+    /// row said nothing while the session was being summarized, and the only
+    /// evidence was the transcript's own notice once it finished.
+    Compacting {
+        /// Why the compaction started.
+        reason: CompactionReason,
+    },
+}
+
+/// Why a compaction started (gh #388 gap 2).
+///
+/// The reason is shown, not merely carried: a threshold compaction fires
+/// without the user asking, so "why is my session being rewritten" needs an
+/// answer on screen. One short word keeps the row from ever wrapping, and the
+/// state word wins over the reason when the width forces a choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionReason {
+    /// The user ran `/compact`.
+    Manual,
+    /// The context crossed its threshold.
+    Threshold,
+    /// A provider reported an overflow, so the range was cut to recover.
+    Overflow,
+}
+
+impl CompactionReason {
+    /// The short word the separator shows.
+    #[must_use]
+    pub fn word(self) -> &'static str {
+        match self {
+            CompactionReason::Manual => "manual",
+            CompactionReason::Threshold => "threshold",
+            CompactionReason::Overflow => "overflow",
+        }
+    }
 }
 
 /// The separator row and its animation clock.
@@ -86,6 +125,11 @@ impl Separator {
             max,
             deadline: Instant::now() + Duration::from_millis(delay_ms),
         };
+    }
+
+    /// Say a compaction started, and why (gh #388 gap 2).
+    pub fn compacting(&mut self, reason: CompactionReason) {
+        self.state = SeparatorState::Compacting { reason };
     }
 
     /// Say the turn ended (or nothing is running): the rest state. pi
@@ -174,6 +218,16 @@ impl Separator {
         let (spinner, label_style, label) = match &self.state {
             SeparatorState::Idle => return border(&"─".repeat(width)),
             SeparatorState::Working => (border.clone(), border.clone(), "Working".to_string()),
+            // Gh #388 gap 2: a compaction is work, so it takes the working
+            // row (pi paints a running indicator the same way) and names its
+            // reason. The state word leads, so a narrow row drops the reason
+            // rather than the state - the same priority the label truncation
+            // already implements below.
+            SeparatorState::Compacting { reason } => (
+                border.clone(),
+                border.clone(),
+                format!("Compacting ({})", reason.word()),
+            ),
             SeparatorState::Retrying {
                 attempt,
                 max,

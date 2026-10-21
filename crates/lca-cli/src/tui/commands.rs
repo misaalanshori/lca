@@ -287,13 +287,14 @@ impl Ui {
                     .compact_state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if *state == lca_ui::CompactState::Running {
+                if matches!(*state, lca_ui::CompactState::Running(_)) {
                     // One compaction at a time; the notice says so.
                     return CommandEffect::ShowWidget(
                         "a compaction is already running".to_string(),
                     );
                 }
-                *state = lca_ui::CompactState::Running;
+                // The user asked for it, so the separator names it (gh #388).
+                *state = lca_ui::CompactState::Running(lca_ui::CompactionReason::Manual);
                 drop(state);
 
                 let state = self.compact_state.clone();

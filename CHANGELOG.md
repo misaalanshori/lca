@@ -53,6 +53,17 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **The dock keeps its height, and compaction has a status row of its own**
+  (gh #388 gap 2). The footer's status line was pushed only once there was
+  something to say, so the first turn added a row and every later frame kept
+  it: the dock grew by a row the moment a turn started, moving the whole
+  transcript above it. The row is now reserved whether or not it has text, so
+  a turn's start and end leave the dock's row count unchanged. Separately,
+  compaction used to be handled *outside* the separator - a compacting
+  interface showed `Working` with no way to tell why, or nothing at all. It is
+  now a first-class `SeparatorState::Compacting` carrying its reason
+  (`manual`, `threshold`, `overflow`), rendered in the same row a turn uses and
+  agreeing with the tab badge and taskbar spinner about what counts as work.
 - **A collapsed tool card shows the tail, ticks while it runs, and tells
   `!` from `!!`** (gh #391). Three gaps in the preview pass, and the first
   was the serious one: the preview sliced five *logical* lines and then

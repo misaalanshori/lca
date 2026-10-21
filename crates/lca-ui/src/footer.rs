@@ -219,15 +219,20 @@ impl Footer {
         }
         lines.push(truncate_to_width(&line, width, "…", false));
 
-        if !self.statuses.is_empty() {
-            let joined = self.statuses.join(" • ");
-            lines.push(truncate_to_width(
-                &(theme.footer)(&joined),
-                width,
-                "…",
-                false,
-            ));
-        }
+        // Gh #388 gap 2: the status row is **reserved**, not conditional.
+        //
+        // It used to be pushed only when `statuses` was non-empty, so the
+        // first turn added a row and every later frame kept it: the dock grew
+        // by one row the moment a turn started, which moved the whole
+        // transcript above it. A row that is always present - empty until
+        // there is something to say - makes the dock's height constant, which
+        // is the entire point of the anti-jitter status.
+        let joined = self.statuses.join(" • ");
+        lines.push(if joined.is_empty() {
+            String::new()
+        } else {
+            truncate_to_width(&(theme.footer)(&joined), width, "…", false)
+        });
         lines
     }
 

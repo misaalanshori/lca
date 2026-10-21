@@ -149,8 +149,8 @@ pub enum CompactState {
     /// Nothing in flight.
     #[default]
     Idle,
-    /// Summarizing now.
-    Running,
+    /// Summarizing now, for the reason the separator names (gh #388 gap 2).
+    Running(crate::CompactionReason),
     /// Finished - or failed; the string is the notice to show either way.
     Done(String),
 }
