@@ -512,3 +512,49 @@ fn the_declared_hosts_match_the_manifest() {
         "same set, same size: {from_file:?}"
     );
 }
+
+// Verifies: gh #282 - a domain stored by an older build (which accepted a
+// pasted URL) still drives the flow. The validator governs new writes; a
+// credential written before it must keep working, or an upgrade would
+// strand every existing enterprise account.
+#[test]
+fn a_legacy_stored_domain_still_routes() {
+    let mock = mock_server();
+    let cap = sandbox(
+        "github-copilot",
+        "legacy-domain",
+        &mock,
+        github_copilot::manifest_grants(),
+    );
+    for key in [
+        "api_base",
+        "device_code_endpoint",
+        "device_token_endpoint",
+        "copilot_token_endpoint",
+    ] {
+        lca_protocol::ProviderCap::credentials_delete(cap.as_ref(), key).expect("unseed");
+    }
+    // The shape the old code stored verbatim.
+    lca_protocol::ProviderCap::credentials_set(
+        cap.as_ref(),
+        "enterprise_domain",
+        "https://GHE.Corp.COM/",
+    )
+    .expect("seed legacy");
+    lca_protocol::ProviderCap::credentials_set(cap.as_ref(), "access", "tid=enterprise")
+        .expect("seed token");
+    lca_protocol::ProviderCap::credentials_set(cap.as_ref(), "expires", &u64::MAX.to_string())
+        .expect("seed expiry");
+    let request = lca_protocol::CompletionRequest {
+        messages: Vec::new(),
+        tools: Vec::new(),
+        model: "gpt-4o".to_string(),
+        stable_prefix: 0,
+        extras: Default::default(),
+    };
+    let (url, _, _) = github_copilot::build_request(cap.as_ref(), &request).expect("builds");
+    assert!(
+        url.starts_with("https://copilot-api.ghe.corp.com/"),
+        "the legacy value still resolves to the enterprise inference host: {url}"
+    );
+}
