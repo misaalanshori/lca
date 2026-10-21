@@ -249,9 +249,16 @@ async fn native_and_wasm_modes_produce_identical_results() {
         // The pty echo tail races too (`exit 0 ` vs `exit 0 pty-marker`,
         // macOS CI): one retry absorbs it. A second mismatch is a real
         // divergence, not timing — assert it loud.
-        if normalize(wasm_result.clone()) != normalize(native_result.clone())
-            && scenario.contains("\"mode\":\"pty-io\"")
-        {
+        //
+        // It is not specific to the io twins: the plain `pty` scenario runs the
+        // same program through the same terminal transport, so it loses the
+        // same trailing bytes under load. Gating the retry on `pty-io` alone
+        // left `mode:pty` to fail on the first race, which is what happened on
+        // macOS CI. Both pty flavours get the retry; `spawn` has no terminal in
+        // the path and keeps the strict single comparison.
+        let pty_scenario =
+            scenario.contains("\"mode\":\"pty\"") || scenario.contains("\"mode\":\"pty-io\"");
+        if normalize(wasm_result.clone()) != normalize(native_result.clone()) && pty_scenario {
             let wasm_retry = wasm.execute_tool(&call(scenario)).await.expect("wasm");
             let native_retry = native.execute_tool(&call(scenario)).await.expect("native");
             assert_eq!(
