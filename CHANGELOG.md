@@ -67,6 +67,24 @@ Dates are UTC.
   ordering are unchanged. Guard:
   `tests/regressions/281-mechanical-compaction-carries-summaries.rs`, plus six
   rows in `extensions/compaction-default/tests/compaction.rs`.
+- **`hash_edit` can finally be called** (gh #285). The tool resolves line
+  ranges by 3-character content hashes, and the only function that produced
+  those hashes had **no caller outside the crate's own tests**: the built-in
+  `read` answers with decimal line numbers, and the extension exported neither
+  a `tool_result` hook nor a `hash_read` tool. So the model could never see an
+  anchor, and a tool whose arguments cannot be constructed is a tool that does
+  nothing — it shipped, was listed, and was unusable. It now also exports the
+  `hooks-tool-result` world and annotates a successful text `read` with a hashed
+  gutter in front of each line, so the anchors arrive with the read the model
+  was already going to perform: one read, one tool, no second read path, no new
+  capability. Only `read` results are touched, only when the line-number format
+  parses, and anything unparseable passes through byte-identical — an
+  annotation hook must never make a result worse. Its writes still bypass
+  `ToolExecutor`'s read tracker, because the tracker is private to `crates/lca-tools`
+  and unreachable from an extension (a follow-up needs that API change); what
+  holds instead is the property the tracker exists for — an anchor only exists
+  because a read produced it, and a changed file stops matching it, so no stale
+  write lands.
 - **The queued-message band behaves like pi's, and a compaction no longer
   refuses your typing** (gh #401). Three queue-UX gaps around the shipped
   abort rescue: (1) stopping a turn now says

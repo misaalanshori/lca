@@ -1,7 +1,7 @@
 name = "hash-edit"
 version = "0.1.0"
 abi = "0.6"
-worlds = ["tool"]
+worlds = ["tool", "hooks-tool-result"]
 description = "High-precision content-hash anchored file editor."
 
 [capabilities.fs]
