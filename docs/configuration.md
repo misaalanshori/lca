@@ -61,9 +61,17 @@ action name (a typo that would otherwise silently do nothing), a key
 value that names no key (`ctrl+xyz` keeps defaults for its action),
 a key claimed by two actions, or a file that does not parse. `/reload`
 applies an edit without restarting (settings, extensions, prompts,
-themes, keybindings); the provider/model generation, credentials, the
-shell backend, markdown transformers, and already-applied interface
-chrome follow after restart.
+themes, and the key map `/hotkeys` prints); the provider/model
+generation, credentials, the shell backend, markdown transformers, and
+already-applied interface chrome follow after restart.
+
+One exception, tracked as gh #332: a reloaded `tui.editor.*` or
+`tui.input.*` binding is updated everywhere except the prompt editor,
+which keeps the key map it was built with, so a new cursor or newline
+binding does not take effect until you restart. Use `/hotkeys` to
+confirm what was read — it prints the reloaded map — and restart if the
+binding you changed is an editor one. Everything else, including
+app-level hotkeys, reloads in place.
 
 ## Diagnostics
 

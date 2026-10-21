@@ -122,6 +122,18 @@ Terms as used across this document set specifically. Several of these have a bro
 
 **WIT.** WebAssembly Interface Types, the interface-description language the Component Model uses to define worlds and their imports and exports. The `.wit` files under `wit/` are the normative source for the extension ABI's shape.
 
-**World.** A named bundle of typed functions a component can export: `provider`, `tool`, `command`, `hooks`, `ui`, `compaction`, or `context-transform`. An extension implements as many worlds as it needs; nothing about implementing one constrains which others it can also implement.
+**World.** A named bundle of typed functions a component can export. Sixteen exist, the authoritative list being the `worlds` enum in `schemas/extension-manifest.schema.json`: `provider`, `tool`, `tool-catalog`, `command`, `hooks`, the eight per-point hook worlds (`hooks-message`, `hooks-tool-call`, `hooks-tool-result`, `hooks-stream`, `hooks-settle`, `hooks-compaction`, `hooks-cache`, `hooks-trust`), `ui`, `compaction`, and `context-transform`. An extension implements as many worlds as it needs; nothing about implementing one constrains which others it can also implement. The `ui` world carries interaction (mouse, keys) as an export rather than a separate world.
 
 **Workspace.** Two distinct things share this word, and context is what disambiguates them. The `workspace` scope, lowercase, unqualified, is the `fs` capability's name for the current project's root directory, defined in `docs/capabilities.md`. The Cargo workspace, always paired with "Cargo" in this document set when meant, is the single top-level `Cargo.toml` that ties together every crate under `crates/` and `extensions/`, defined in ADR-0002. The two are unrelated; a reader who sees "workspace" without "Cargo" attached should assume the `fs` scope is meant.
+
+**Fork-point.** The `fork-point` session record, which opens a forked session's log: it names the parent session and the record identifier the fork was taken at. Not the fork itself - a fork is a new session directory, and this record is how its log declares where it came from. See `docs/session-log-format.md` and ADR-0046.
+
+**Branch point.** A `branch-point` session record: it navigates within one log by naming the record the branch continues from (`target_id`). Later records chain through it and the ancestry walk treats it as transparent. Distinct from `fork-point`, which opens a *new* session; a branch point stays inside one log.
+
+**Branch summary.** A `branch-summary` session record: what an abandoned path learned. `parent` names the navigation point, `from_id` the abandoned tip, `summary` the lesson, which assembly injects as context where the new branch continues - like a compaction summary, but for a path rather than a range.
+
+**Bookmark.** A user's named marker on one entry, stored as a `label` session record and cleared by writing it absent; `/label` writes one, `/labels` lists them, `/jump` branches at one. Not model-visible. Distinct from a git tag and from a `branch-point`.
+
+**Compaction queue.** Prompts typed while a `/compact` runs. The compaction owns the session, so a submit cannot start a turn; the message parks here and flushes when compaction ends, rather than being refused (gh #401). Distinct from the steer and follow-up queues, which drain at model-call boundaries and turn end.
+
+**Mechanical summary.** The summary a compaction strategy produces without a model call. `compaction-default`'s is the leading user requests plus the last exchange, carried forward with any earlier compaction summary already in range (gh #281) - what a summary can still get right when no completion is available. It is the fallback when the summarizing round-trip fails, so a failed compaction still frees context instead of leaving the session stuck. See ADR-0015.
