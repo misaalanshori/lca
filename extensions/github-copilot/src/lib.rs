@@ -78,8 +78,12 @@ pub(crate) fn endpoint(cap: &dyn ProviderCap, key: &str, default: &str) -> Strin
 pub const MANIFEST: &str = include_str!("../extension.toml");
 
 /// The GitHub domain: the stored enterprise domain, else github.com.
-/// A custom domain's hosts ride the ad-hoc grant the login-time
-/// request prompts for (least privilege keeps them out of the file).
+///
+/// Gh #282: new writes go through [`parse_enterprise_domain`], so the
+/// trimming below is for values stored by an older build (which accepted a
+/// pasted `https://…/`). Kept rather than removed: a stored credential is
+/// not migrated by an upgrade, and a bare `trim_start_matches` here is
+/// cheaper than making an existing enterprise account re-enter its domain.
 fn domain(cap: &dyn ProviderCap) -> String {
     let enterprise = stored(cap, "enterprise_domain").trim().to_string();
     if enterprise.is_empty() {
@@ -89,7 +93,9 @@ fn domain(cap: &dyn ProviderCap) -> String {
             .trim_start_matches("https://")
             .trim_start_matches("http://")
             .trim_end_matches('/')
-            .to_string()
+            // Hostnames are case-insensitive; the derived hosts and the
+            // manifest patterns compare lowercase (gh #282).
+            .to_ascii_lowercase()
     }
 }
 
