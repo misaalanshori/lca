@@ -594,3 +594,14 @@ mod retry_after_read_before_close;
 // needs a `crates/lca-tools` API this cycle may not add.
 #[path = "285-hash-edit-uncallable.rs"]
 mod hash_edit_uncallable;
+// GitHub #280: `build_request` extracted every System message into
+// `systemInstruction` and then serialized the same messages into `contents`
+// again, because the role match's `_ => "user"` arm caught
+// `MessageRole::System`. The preamble was billed twice on every turn, arrived
+// framed as something the user had said, and occupied the leading `contents`
+// slot so the cacheable prefix shifted whenever the instructions changed. The
+// guard pins the serialized shape (not a role match), the merge-instead-of-drop
+// behaviour for extra System messages, and that the tool-turn signature stayed
+// a sibling of `functionCall`.
+#[path = "280-antigravity-system-prompt-duplicated.rs"]
+mod antigravity_system_prompt_duplicated;
