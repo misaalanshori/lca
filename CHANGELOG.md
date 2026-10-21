@@ -53,6 +53,24 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **The environment variables each provider's preset declares now
+  authenticate it** (gh #292). `provider-presets.toml` documents a canonical
+  variable per service — `DEEPSEEK_API_KEY`, `GROQ_API_KEY`,
+  `MISTRAL_API_KEY`, `CEREBRAS_API_KEY`, and so on for 21 presets — and the
+  preset parser read the list, but key resolution consulted only
+  `OPENAI_API_KEY` and `OPENCODE_API_KEY`. A developer who exported the
+  variable their provider's own page names was told to authenticate, because
+  the request went out with no `authorization` header at all; the only ways
+  forward were aliasing the variable or typing the secret into `/login`. The
+  declared names were decorative data making a promise nothing kept. Key
+  resolution is now one documented order for every profile:
+  `OPENAI_API_KEY`, `OPENCODE_API_KEY`, then the active preset's own names in
+  declaration order, then the stored credential. Only the *active* preset's
+  names are read — a `GROQ_API_KEY` in the environment still cannot
+  authenticate a `deepseek` profile, so a valid secret never travels to an
+  endpoint the user did not associate with it — and a profile whose id is not
+  in the preset table reads no environment at all. The two universal names
+  keep working unchanged for the default profile.
 - **`lca -p --mode json` emits `extension-event`** (gh #264). The sink that
   serializes a turn had no arm for extension lifecycle events, so every one of
   them fell into the catch-all and vanished. A script waiting for a `disabled`

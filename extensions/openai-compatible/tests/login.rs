@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 use lca_protocol::{CapabilityError, LoginAnswer, ProviderCap};
 use openai_compatible::{
-    Settings, login_options, login_submit, parse_presets, run_login, run_logout,
+    Settings, login_options, login_submit, parse_presets, profiles, run_login, run_logout,
 };
 
 const PRESETS: &[u8] = include_bytes!("../resources/provider-presets.toml");
@@ -469,4 +469,267 @@ fn a_bearer_endpoint_without_a_key_still_fails() {
         matches!(run_login(&cap, &settings), IdentityOutcome::Failed(_)),
         "a bearer endpoint without a key is not ready"
     );
+}
+
+// ---------------------------------------------------------------------------
+// gh #292: preset-declared environment variables must authenticate
+// ---------------------------------------------------------------------------
+
+/// Run `body` with exactly `vars` set, every other name cleared.
+///
+/// The house pattern for a test that touches the process environment
+/// (`lca_testkit::fixture::env_lock`, as `tests/models.rs` uses) serializes
+/// it against the rest of this crate's env-touching rows; the save/restore
+/// keeps a panic from leaking a key into a later test.
+fn with_env<F: FnOnce()>(vars: &[(&str, &str)], body: F) {
+    const NAMES: &[&str] = &[
+        "OPENAI_API_KEY",
+        "OPENCODE_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "GROQ_API_KEY",
+        "MISTRAL_API_KEY",
+        "LCA_TEST_292_FIRST",
+        "LCA_TEST_292_SECOND",
+    ];
+    let _guard = lca_testkit::fixture::env_lock();
+    let saved: Vec<(&str, Option<String>)> = NAMES
+        .iter()
+        .map(|name| (*name, std::env::var(name).ok()))
+        .collect();
+    for name in NAMES {
+        unsafe { std::env::remove_var(name) };
+    }
+    for (name, value) in vars {
+        unsafe { std::env::set_var(name, value) };
+    }
+    body();
+    for (name, value) in saved {
+        match value {
+            Some(value) => unsafe { std::env::set_var(name, value) },
+            None => unsafe { std::env::remove_var(name) },
+        }
+    }
+}
+
+// Verifies: gh #292 acceptance 1 and 3 - the documented variable for a
+// preset authenticates that preset's profile.
+#[test]
+fn a_preset_declared_environment_variable_authenticates_its_profile() {
+    with_env(&[("DEEPSEEK_API_KEY", "FAKESECRET-292-DEEP")], || {
+        let cap = cap();
+        let settings = settings_for("https://api.deepseek.com/v1", None);
+        assert_eq!(
+            profiles::api_key_for(&cap, &settings, &Some("deepseek".to_string())).as_deref(),
+            Some("FAKESECRET-292-DEEP"),
+            "DEEPSEEK_API_KEY is the preset's own documented variable"
+        );
+    });
+}
+
+// Verifies: gh #292 - the cross-provider negative. Only the *active*
+// preset's names are consulted, so a key exported for another service
+// never authenticates this one. Without this row the fix degenerates into
+// a multi-key grab bag that sends the wrong secret to the wrong endpoint.
+#[test]
+fn another_providers_environment_variable_never_authenticates_this_profile() {
+    with_env(&[("GROQ_API_KEY", "FAKESECRET-292-GROQ")], || {
+        let cap = cap();
+        let settings = settings_for("https://api.deepseek.com/v1", None);
+        assert_eq!(
+            profiles::api_key_for(&cap, &settings, &Some("deepseek".to_string())),
+            None,
+            "GROQ_API_KEY belongs to groq, not deepseek"
+        );
+    });
+}
+
+// Verifies: gh #292 acceptance 2 - a stored credential still works when no
+// environment variable is set.
+#[test]
+fn a_stored_profile_credential_still_authenticates_without_the_environment() {
+    with_env(&[], || {
+        let cap = cap();
+        cap.credentials_set("profile.deepseek.api_key", "FAKESECRET-292-STORED")
+            .expect("seed");
+        let settings = settings_for("https://api.deepseek.com/v1", None);
+        assert_eq!(
+            profiles::api_key_for(&cap, &settings, &Some("deepseek".to_string())).as_deref(),
+            Some("FAKESECRET-292-STORED")
+        );
+    });
+}
+
+// Verifies: gh #292 - the environment beats what login persisted, keeping
+// the documented ladder one shape for every profile.
+#[test]
+fn a_preset_declared_variable_beats_the_stored_credential() {
+    with_env(&[("DEEPSEEK_API_KEY", "FAKESECRET-292-ENV")], || {
+        let cap = cap();
+        cap.credentials_set("profile.deepseek.api_key", "FAKESECRET-292-STORED")
+            .expect("seed");
+        let settings = settings_for("https://api.deepseek.com/v1", None);
+        assert_eq!(
+            profiles::api_key_for(&cap, &settings, &Some("deepseek".to_string())).as_deref(),
+            Some("FAKESECRET-292-ENV")
+        );
+    });
+}
+
+// Verifies: gh #292 - a preset's own names resolve in declaration order.
+//
+// The shipped table cannot show this: `opencode-go` is its only two-name
+// preset and both names are the *universal* ones, which the documented
+// ladder resolves at step 1 whatever a preset says. So this row injects a
+// two-name preset through the capability's own resource read - the same
+// seam the real table arrives through - which is the only way to observe
+// order at all. Both names are chosen so neither is universal.
+#[test]
+fn a_presets_own_names_resolve_in_declaration_order() {
+    const TWO_NAMES: &str = r#"
+[[preset]]
+id = "twonames"
+name = "Two Names"
+base_url = "https://two.example/v1"
+env = ["LCA_TEST_292_FIRST", "LCA_TEST_292_SECOND"]
+"#;
+    with_env(
+        &[
+            ("LCA_TEST_292_FIRST", "FAKESECRET-292-FIRST"),
+            ("LCA_TEST_292_SECOND", "FAKESECRET-292-SECOND"),
+        ],
+        || {
+            let mut cap = cap();
+            cap.resources.insert(
+                "provider-presets.toml".to_string(),
+                TWO_NAMES.as_bytes().to_vec(),
+            );
+            let settings = settings_for("https://two.example/v1", None);
+            assert_eq!(
+                profiles::api_key_for(&cap, &settings, &Some("twonames".to_string())).as_deref(),
+                Some("FAKESECRET-292-FIRST"),
+                "the name declared first wins"
+            );
+        },
+    );
+}
+
+// Verifies: gh #292 - a profile with no discoverable preset reads no
+// environment at all. Guessing from the base URL could authenticate a
+// profile with a key the user never associated with it.
+#[test]
+fn a_profile_without_a_matching_preset_reads_no_environment() {
+    with_env(
+        &[
+            ("DEEPSEEK_API_KEY", "FAKESECRET-292-DEEP"),
+            ("GROQ_API_KEY", "FAKESECRET-292-GROQ"),
+        ],
+        || {
+            let cap = cap();
+            cap.credentials_set("profile.unknown.api_key", "FAKESECRET-292-OWN")
+                .expect("seed");
+            let settings = settings_for("https://example.invalid/v1", None);
+            assert_eq!(
+                profiles::api_key_for(&cap, &settings, &Some("unknown".to_string())).as_deref(),
+                Some("FAKESECRET-292-OWN"),
+                "no matching preset: the stored credential is the only source"
+            );
+        },
+    );
+}
+
+// Verifies: gh #292 - the default profile keeps resolving the two universal
+// names it always did, so an install configured by the environment alone is
+// unchanged.
+#[test]
+fn the_default_profile_still_reads_the_universal_names() {
+    with_env(&[("OPENAI_API_KEY", "FAKESECRET-292-UNIVERSAL")], || {
+        let cap = cap();
+        let settings = settings_for("https://api.openai.com/v1", None);
+        assert_eq!(
+            profiles::api_key_for(&cap, &settings, &None).as_deref(),
+            Some("FAKESECRET-292-UNIVERSAL")
+        );
+    });
+}
+
+// Verifies: gh #292 does not change gh #31's fallback - a named profile
+// with nothing of its own still reaches the bare stored key, which is how
+// an `auth = "none"` preset setup gets to its endpoint. Inserting the
+// preset lookup must not quietly drop that step.
+#[test]
+fn a_named_profile_still_falls_back_to_the_bare_stored_key() {
+    with_env(&[], || {
+        let cap = cap();
+        cap.credentials_set("api_key", "FAKESECRET-292-BARE")
+            .expect("seed");
+        let settings = settings_for("https://api.deepseek.com/v1", None);
+        assert_eq!(
+            profiles::api_key_for(&cap, &settings, &Some("deepseek".to_string())).as_deref(),
+            Some("FAKESECRET-292-BARE")
+        );
+    });
+}
+
+// Verifies: gh #292 - `OPENAI_API_KEY` authenticates the *default* profile
+// only, and never a named one. The universal name is this provider's
+// default-profile name; resolving it for every profile would send an
+// OpenAI key to Groq and DeepSeek the moment a user logged into them, which
+// is the same wrong-secret-to-the-wrong-endpoint leak the cross-provider
+// rule prevents - arriving through the front door instead.
+#[test]
+fn the_universal_names_never_authenticate_a_named_profile() {
+    with_env(
+        &[
+            ("OPENAI_API_KEY", "FAKESECRET-292-UNIVERSAL"),
+            ("OPENCODE_API_KEY", "FAKESECRET-292-UNIVERSAL-2"),
+        ],
+        || {
+            let cap = cap();
+            cap.credentials_set("profile.deepseek.api_key", "FAKESECRET-292-OWN")
+                .expect("seed");
+            let settings = settings_for("https://api.deepseek.com/v1", None);
+            assert_eq!(
+                profiles::api_key_for(&cap, &settings, &Some("deepseek".to_string())).as_deref(),
+                Some("FAKESECRET-292-OWN"),
+                "a named profile keeps its own key; the universal name is the \
+                 default profile's"
+            );
+            // And with nothing stored, the named profile still reads no
+            // universal name: no key is the honest answer.
+            let bare = crate::cap();
+            assert_eq!(
+                profiles::api_key_for(&bare, &settings, &Some("deepseek".to_string())),
+                None,
+                "no stored key and no preset variable: nothing to send"
+            );
+        },
+    );
+}
+
+// Verifies: gh #292 - the environment-derived `settings.api_key` never
+// reaches a named profile. `settings.api_key` is read from the universal
+// variables, so a named profile that fell back to it would carry the
+// *default* profile's secret to another service. This is the row that pins
+// the fix's last step: a stored bare key is still reachable (`auth:
+// "none"` setups need it), but the environment copy beside it is not.
+#[test]
+fn the_environment_derived_settings_key_never_reaches_a_named_profile() {
+    with_env(&[], || {
+        let cap = cap();
+        // The environment's key, as `Settings::default` would have read it.
+        let settings = settings_for(
+            "https://api.deepseek.com/v1",
+            Some("FAKESECRET-292-FROM-ENV"),
+        );
+        assert_eq!(
+            profiles::api_key_for(&cap, &settings, &Some("deepseek".to_string())),
+            None,
+            "a deepseek profile must not receive OPENAI_API_KEY's value"
+        );
+        // The default profile still uses it: that is its own slot.
+        assert_eq!(
+            profiles::api_key_for(&cap, &settings, &None).as_deref(),
+            Some("FAKESECRET-292-FROM-ENV")
+        );
+    });
 }
