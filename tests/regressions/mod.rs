@@ -687,3 +687,8 @@ mod dock_height_and_compacting;
 // an anchor proves "some read", never "a recent read of this file".
 #[path = "436-hash-edit-read-tracker.rs"]
 mod hash_edit_read_tracker;
+
+// Gh #388 gap 4: `$EDITOR` strips exactly one trailing terminator (and a
+// BOM), so an edit never adds a blank line the user did not type.
+#[path = "388-editor-trailing-newline.rs"]
+mod editor_trailing_newline;

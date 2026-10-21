@@ -53,6 +53,16 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **`$EDITOR` no longer adds a blank line to the prompt** (gh #388 gap 4).
+  Every POSIX editor — `vim`, `nvim`, `nano` — terminates the file it saves
+  with a newline, and the buffer was read back verbatim, so editing a one-line
+  prompt came back as two lines with an empty second one. Fix the typo, get a
+  message with a blank line you never typed. Exactly **one** terminator is now
+  stripped, never `trim_end()`: a prompt you deliberately ended with a blank
+  line keeps it. CRLF and a lone CR count as terminators (so a Windows editor
+  leaves no stray carriage return in the composer), a leading UTF-8 BOM is
+  stripped, an empty buffer clears the prompt rather than reusing the old text,
+  and undecodable bytes refuse the edit instead of silently mangling it.
 - **The dock keeps its height, and compaction has a status row of its own**
   (gh #388 gap 2). The footer's status line was pushed only once there was
   something to say, so the first turn added a row and every later frame kept
