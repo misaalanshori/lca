@@ -168,3 +168,66 @@ fn creating_a_new_file_is_never_gated() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// Verifies: gh #436 - the registry files a path under its canonical form, so
+// the same file reached by two spellings is one record.
+//
+// This is not hypothetical: macOS resolves `/var` through a symlink to
+// `/private/var` and temporary directories land there, so a read recorded from
+// the path the OS handed out and a write resolved through the scope root
+// produced two different keys and the write was refused as "never read". It
+// failed on macOS and Windows CI while passing on Linux, which is exactly the
+// shape of bug this row exists to keep out.
+#[test]
+fn the_same_file_reached_by_two_spellings_is_one_record() {
+    lca_tools::reset_read_registry();
+    lca_tools::set_edit_requires_read(true);
+    let (root, cap) = engine("spellings");
+    let direct = root.join("workspace/target.txt");
+    std::fs::write(&direct, "alpha\n").unwrap();
+
+    // A path that names the same file through a different spelling: the
+    // parent, a redundant `.`, and a symlink where the platform allows one.
+    let roundabout = root.join("workspace/./target.txt");
+    let bytes = std::fs::read(&roundabout).unwrap();
+    lca_tools::note_read(&roundabout, &bytes);
+    assert!(
+        lca_tools::has_fresh_read(&direct, &bytes),
+        "a read recorded through one spelling must satisfy a check through another"
+    );
+
+    cap.fs_write("workspace", "target.txt", b"beta\n")
+        .expect("the roundabout read unlocks the write");
+    assert_eq!(std::fs::read_to_string(&direct).unwrap(), "beta\n");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Verifies: gh #436 - and a *different* file that merely shares bytes is still
+// its own record: canonicalization unifies spellings, never distinct files.
+#[test]
+fn two_different_files_with_identical_bytes_are_separate_records() {
+    lca_tools::reset_read_registry();
+    lca_tools::set_edit_requires_read(true);
+    let (root, cap) = engine("distinct");
+    let read_file = root.join("workspace/read.txt");
+    let other = root.join("workspace/other.txt");
+    std::fs::write(&read_file, "same contents\n").unwrap();
+    std::fs::write(&other, "same contents\n").unwrap();
+
+    let bytes = std::fs::read(&read_file).unwrap();
+    lca_tools::note_read(&read_file, &bytes);
+
+    let err = cap
+        .fs_write("workspace", "other.txt", b"changed\n")
+        .expect_err("reading a different file does not authorise this one");
+    assert!(
+        err.to_string().contains("changed since it was last read"),
+        "{err}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&other).unwrap(),
+        "same contents\n",
+        "the unread file is untouched"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

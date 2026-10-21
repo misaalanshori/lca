@@ -167,7 +167,18 @@ pub fn note_read(path: &Path, bytes: &[u8]) {
     let mut registry = read_registry()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    registry.insert(path.to_path_buf(), fingerprint(bytes));
+    registry.insert(registry_key(path), fingerprint(bytes));
+}
+
+/// The key a path is filed under.
+///
+/// Canonicalized so the *same file* reached by two spellings is one entry: the
+/// built-in tools record the path they resolved, `fs_write` records the path
+/// its scope resolved, and on macOS `/var` is a symlink to `/private/var` while
+/// Windows mixes `\\?\` verbatim prefixes with plain paths. Falls back to the
+/// path as given when it cannot be canonicalized (a file about to be created).
+fn registry_key(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Whether the read-before-edit gate is on for this process (gh #117's
@@ -200,7 +211,7 @@ pub fn has_fresh_read(path: &Path, current: &[u8]) -> bool {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     registry
-        .get(path)
+        .get(&registry_key(path))
         .is_some_and(|known| *known == fingerprint(current))
 }
 
