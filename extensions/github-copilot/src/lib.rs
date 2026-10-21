@@ -78,8 +78,12 @@ pub(crate) fn endpoint(cap: &dyn ProviderCap, key: &str, default: &str) -> Strin
 pub const MANIFEST: &str = include_str!("../extension.toml");
 
 /// The GitHub domain: the stored enterprise domain, else github.com.
-/// A custom domain's hosts ride the ad-hoc grant the login-time
-/// request prompts for (least privilege keeps them out of the file).
+///
+/// Gh #282: new writes go through [`parse_enterprise_domain`], so the
+/// trimming below is for values stored by an older build (which accepted a
+/// pasted `https://…/`). Kept rather than removed: a stored credential is
+/// not migrated by an upgrade, and a bare `trim_start_matches` here is
+/// cheaper than making an existing enterprise account re-enter its domain.
 fn domain(cap: &dyn ProviderCap) -> String {
     let enterprise = stored(cap, "enterprise_domain").trim().to_string();
     if enterprise.is_empty() {
@@ -89,7 +93,9 @@ fn domain(cap: &dyn ProviderCap) -> String {
             .trim_start_matches("https://")
             .trim_start_matches("http://")
             .trim_end_matches('/')
-            .to_string()
+            // Hostnames are case-insensitive; the derived hosts and the
+            // manifest patterns compare lowercase (gh #282).
+            .to_ascii_lowercase()
     }
 }
 
@@ -120,15 +126,20 @@ pub fn login_submit(
             answer.choice
         ));
     }
-    let enterprise = answer
-        .value("enterprise-domain")
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if enterprise.is_empty() {
+    let enterprise = answer.value("enterprise-domain").unwrap_or("");
+    // Blank and all-whitespace both mean "the default domain": a stray space
+    // is not a domain choice, and `parse_enterprise_domain` refuses
+    // whitespace *inside* a value rather than trimming it. Checking here
+    // keeps the "empty means github.com" contract the option declares.
+    if enterprise.trim().is_empty() {
         let _ = cap.credentials_delete("enterprise_domain");
     } else {
-        cap.credentials_set("enterprise_domain", &enterprise)
+        // Gh #282: validate before anything is stored or requested. A pasted
+        // URL or a stray wildcard would otherwise reach a `net` pattern and a
+        // URL, and the failure would surface as a fetch error far from the
+        // field the user can fix.
+        let domain = parse_enterprise_domain(enterprise)?;
+        cap.credentials_set("enterprise_domain", &domain)
             .map_err(|err| format!("cannot store the domain: {err}"))?;
     }
     run_device_login(cap, oauth)
@@ -164,7 +175,8 @@ fn run_device_login(cap: &dyn ProviderCap, oauth: &dyn OauthCap) -> Result<(), I
         "device_code_endpoint",
         &format!("https://{domain}/login/device/code"),
     );
-    let authorization = request_device_code(cap, &auth_url, CLIENT_ID, Some(SCOPE))?;
+    let authorization = request_device_code(cap, &auth_url, CLIENT_ID, Some(SCOPE))
+        .map_err(|err| enterprise_grant_failure(err, &domain))?;
     // The host shows the code beside the page and polls nothing — the
     // poll below is the whole wait (device flows never loop back).
     let _ = oauth.oauth_open(&device_code_url(&authorization));
@@ -268,7 +280,11 @@ fn api_base(cap: &dyn ProviderCap) -> String {
     }
     let domain = domain(cap);
     if domain != GITHUB_DOMAIN_DEFAULT {
-        return format!("https://copilot-api.{domain}");
+        // Gh #282: the same derivation `enterprise_hosts` grants, so the
+        // consented host and the requested host are one answer. Diverging
+        // here is how a grant for `copilot-api.<d>` would not cover the
+        // request or vice versa.
+        return enterprise_inference_url(&domain);
     }
     API_BASE_DEFAULT.to_string()
 }
@@ -284,6 +300,202 @@ fn base_from_token(token: &str) -> Option<String> {
         None => proxy.to_string(),
     };
     Some(format!("https://{api}"))
+}
+
+/// What the enterprise field must look like (gh #282), one line the
+/// host's message and this provider's own refusal share.
+pub const ENTERPRISE_HOSTNAME_HELP: &str =
+    "enter an enterprise hostname like `ghe.example.com` (no scheme, path, port, or wildcard)";
+
+/// The same help, for the one shape a user most plausibly gets wrong.
+///
+/// pi repairs a pasted `https://host/` silently (`normalizeDomain` builds a
+/// URL and keeps the hostname). LCA refuses instead, for a reason that is
+/// not pedantry: pi also swallows a **port** (`ghe.corp.com:8443` →
+/// `ghe.corp.com`), silently redirecting the sign-in to a different
+/// endpoint than the one typed - and the port a user types is often the
+/// one their instance actually serves. Refusing says so; repairing decides
+/// for them. The copy names the corrected form so the fix is one keystroke.
+pub const ENTERPRISE_URL_HELP: &str =
+    "drop the `https://` and the trailing `/` - just the hostname";
+
+/// Validate the `enterprise-domain` login field (gh #282): it is a
+/// hostname, and nothing else.
+///
+/// The field feeds a URL (`https://{domain}/login/device/code`) and a
+/// `net` pattern, so every shape that is not a bare hostname is a
+/// mistake worth catching at the field, where the user can fix it in
+/// place: a pasted `https://…` URL, a path, a port, stray whitespace, or
+/// a user-supplied wildcard (a wildcard is a grant decision, never a
+/// domain). Returns the lowercased hostname.
+pub fn parse_enterprise_domain(raw: &str) -> Result<String, String> {
+    if raw.is_empty() {
+        return Err(format!(
+            "no enterprise hostname given; {ENTERPRISE_HOSTNAME_HELP}"
+        ));
+    }
+    let refuse =
+        |why: &str| format!("`{raw}` is not a hostname: {why}; {ENTERPRISE_HOSTNAME_HELP}");
+    // Whitespace is refused rather than trimmed: this value becomes a URL
+    // and a `net` pattern, and silently "fixing" what the user typed is how
+    // a domain they did not mean gets consented to. The message names the
+    // fix instead.
+    if raw.chars().any(char::is_whitespace) {
+        return Err(refuse("it contains whitespace - remove the spaces"));
+    }
+    if raw.contains("://") {
+        return Err(format!(
+            "`{raw}` is not a hostname: it carries a scheme - {ENTERPRISE_URL_HELP}; \
+             {ENTERPRISE_HOSTNAME_HELP}"
+        ));
+    }
+    if raw.contains('/') {
+        return Err(refuse("it carries a path"));
+    }
+    if raw.contains('@') {
+        return Err(refuse("it carries user info"));
+    }
+    if raw.contains(':') {
+        return Err(refuse("it carries a port"));
+    }
+    if raw.contains('*') {
+        return Err(refuse("a wildcard is a grant decision, not a domain"));
+    }
+    let domain = raw.to_ascii_lowercase();
+    // A hostname is dot-separated labels of `[a-z0-9-]`, each 1..=63
+    // characters, not starting or ending with a hyphen, with at least two
+    // labels (an enterprise account always names a real domain).
+    let labels: Vec<&str> = domain.split('.').collect();
+    if labels.len() < 2 {
+        return Err(refuse("an enterprise domain needs at least two labels"));
+    }
+    for label in &labels {
+        if label.is_empty() {
+            return Err(refuse("it has an empty label"));
+        }
+        if label.len() > 63 {
+            return Err(refuse("a label is longer than 63 characters"));
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err(refuse("a label starts or ends with a hyphen"));
+        }
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err(refuse("it contains a character a hostname cannot carry"));
+        }
+    }
+    Ok(domain)
+}
+
+/// The ad-hoc `net` hosts an enterprise `domain` needs (gh #282), in the
+/// order the flow reaches them: the domain itself (device code and token
+/// exchange), `api.<domain>` (the Copilot token mint), and
+/// `copilot-api.<domain>` (inference, pi's `getGitHubCopilotBaseUrl`
+/// enterprise fallback).
+///
+/// Empty for the default domain and for any host the manifest already
+/// declares: an enterprise account is the only case that reaches a host
+/// the shipped manifest cannot know, and asking for one that is already
+/// granted would be a prompt for a decision the user has made.
+///
+/// One derivation feeds both the grant offer and `api_base`, so the hosts
+/// consented to and the hosts requested cannot drift (gh #282's other
+/// half is exactly that drift).
+#[must_use]
+pub fn enterprise_hosts(domain: &str) -> Vec<String> {
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    if domain.is_empty() || domain == GITHUB_DOMAIN_DEFAULT {
+        return Vec::new();
+    }
+    let mut hosts = Vec::new();
+    for candidate in [
+        domain.clone(),
+        format!("api.{domain}"),
+        format!("copilot-api.{domain}"),
+    ] {
+        if is_declared_host(&candidate) {
+            continue;
+        }
+        if !hosts.contains(&candidate) {
+            hosts.push(candidate);
+        }
+    }
+    hosts
+}
+
+/// Turn a refusal at the device-code request into the fix (gh #282).
+///
+/// An enterprise domain's hosts are field data, so the `net` offer that
+/// runs after a successful submit never gets the chance to name them: the
+/// submit's own first request is what gets denied, and the flow has no
+/// recovery from inside the sandbox. What the user needs is the three host
+/// names and the command that grants them - not `matches no granted
+/// pattern` with no way forward.
+///
+/// Everything that is not a grant refusal passes through untouched; a 404
+/// from a live enterprise host, a DNS failure and a malformed answer are
+/// all real answers and must read as themselves.
+fn enterprise_grant_failure(err: IdentityFailure, domain: &str) -> IdentityFailure {
+    if domain == GITHUB_DOMAIN_DEFAULT {
+        return err;
+    }
+    let denied = err.0.contains("permission denied") || err.0.contains("not granted");
+    if !denied {
+        return err;
+    }
+    let hosts = enterprise_hosts(domain);
+    if hosts.is_empty() {
+        return err;
+    }
+    let allow = hosts
+        .iter()
+        .map(|host| format!("--allow-host {host}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    IdentityFailure(format!(
+        "{} - this account's enterprise hosts are not granted. Sign in from an \
+         interactive `lca` (it offers them for consent), or grant them for one run \
+         with `{allow}`; `lca /grants` lists what is stored.",
+        err.0
+    ))
+}
+
+/// The hosts this provider's manifest declares, as text (gh #282).
+///
+/// This derivation runs inside the component as well as natively, so it
+/// cannot use `manifest_grants` (native-only, and it needs
+/// `lca-permissions`) or `lca_ext_host` (not a guest dependency). The list
+/// is therefore spelled once here and `the_declared_hosts_match_the_manifest`
+/// pins it against `extension.toml` in both directions, so the two cannot
+/// drift without a test failing.
+pub const DECLARED_HOSTS: [&str; 6] = [
+    "github.com",
+    "api.github.com",
+    "api.githubcopilot.com",
+    "api.individual.githubcopilot.com",
+    "api.business.githubcopilot.com",
+    "api.enterprise.githubcopilot.com",
+];
+
+/// Whether `host` is one the manifest already declares - exact or a
+/// wildcard suffix, with no port, which is all this provider's manifest
+/// uses. Kept beside [`DECLARED_HOSTS`] so the rule has one home.
+#[must_use]
+pub fn is_declared_host(host: &str) -> bool {
+    DECLARED_HOSTS.iter().any(|declared| {
+        if let Some(suffix) = declared.strip_prefix('*') {
+            // A manifest wildcard is stored with its leading dot.
+            host.ends_with(suffix) && host.len() > suffix.len()
+        } else {
+            host == *declared
+        }
+    })
+}
+
+/// The inference URL an enterprise `domain` uses (gh #282): pi's
+/// `getGitHubCopilotBaseUrl` enterprise fallback. Shared with
+/// [`enterprise_hosts`] so the granted host is the requested host.
+fn enterprise_inference_url(domain: &str) -> String {
+    format!("https://copilot-api.{domain}")
 }
 
 /// The Copilot token, minted first when it is within five minutes of
@@ -809,3 +1021,81 @@ pub use native::GitHubCopilot;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm_mode;
+
+#[cfg(test)]
+mod enterprise_grant_failure_tests {
+    use super::{ENTERPRISE_HOSTNAME_HELP, enterprise_grant_failure, enterprise_hosts};
+    use lca_subscription::IdentityFailure;
+
+    // Verifies: gh #282 - grant advice is only for grant refusals. A live
+    // enterprise host that answers 404, or fails DNS, must read as its own
+    // answer: rewriting it as "your hosts are not granted" would send the
+    // user to fix something that is not broken.
+    //
+    // A unit row rather than an integration one: exercising this through
+    // `login_submit` would mean a real request to a fake domain, which
+    // hangs on DNS instead of failing fast.
+    #[test]
+    fn a_non_grant_failure_is_left_alone() {
+        for message in [
+            "device authorization failed: 404 Not Found",
+            "dns: failed to resolve ghe.corp.com",
+            "tls: certificate error",
+            "invalid device code response",
+        ] {
+            let out =
+                enterprise_grant_failure(IdentityFailure(message.to_string()), "ghe.corp.com");
+            assert_eq!(
+                out.0, message,
+                "`{message}` is not a consent failure and must pass through"
+            );
+        }
+    }
+
+    // Verifies: gh #282 - a grant refusal on an enterprise domain carries
+    // every derived host and the command that grants it.
+    #[test]
+    fn a_grant_refusal_on_an_enterprise_domain_names_the_fix() {
+        let err = IdentityFailure(
+            "permission denied: ghe.corp.com:443 matches no granted pattern".to_string(),
+        );
+        let out = enterprise_grant_failure(err, "ghe.corp.com");
+        for host in enterprise_hosts("ghe.corp.com") {
+            assert!(
+                out.0.contains(&format!("--allow-host {host}")),
+                "the fix for `{host}` is spelled out: {}",
+                out.0
+            );
+        }
+        assert!(
+            out.0.contains("interactive"),
+            "and it points at the path that offers consent: {}",
+            out.0
+        );
+        assert!(
+            out.0.contains("matches no granted pattern"),
+            "the original refusal is preserved: {}",
+            out.0
+        );
+    }
+
+    // Verifies: gh #282 - the default domain's failures are never rewritten
+    // (acceptance 2): nothing to grant, so nothing to advise.
+    #[test]
+    fn the_default_domain_is_never_rewritten() {
+        let err = IdentityFailure(
+            "permission denied: github.com:443 matches no granted pattern".to_string(),
+        );
+        let out = enterprise_grant_failure(err.clone(), "github.com");
+        assert_eq!(out.0, err.0, "github.com behaves exactly as before");
+        assert!(!out.0.contains("--allow-host"));
+    }
+
+    // Verifies: gh #282 - the help line is a hostname instruction, so the
+    // refusal teaches rather than merely rejects.
+    #[test]
+    fn the_field_help_names_a_hostname() {
+        assert!(ENTERPRISE_HOSTNAME_HELP.contains("hostname"));
+        assert!(ENTERPRISE_HOSTNAME_HELP.contains("no scheme"));
+    }
+}
