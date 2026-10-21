@@ -80,6 +80,9 @@ formatter = { path = "extensions/formatter" }
 # gh #298: the schema-parity guard compares the native spec with the WASM
 # export's parameters and runs both through the host validator (#306).
 question = { path = "extensions/question" }
+# gh #300: the re-fire and trust-parity guard drives the extension's real
+# scanner and its one trust-gated loader, in both delivery modes' shapes.
+stream-guard = { path = "extensions/stream-guard" }
 openai-compatible = { path = "extensions/openai-compatible" }
 serde_json.workspace = true
 tokio.workspace = true

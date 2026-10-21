@@ -547,3 +547,11 @@ mod prompt_advertises_effective_tools;
 // truncated schema invited.
 #[path = "298-question-wasm-schema-parity.rs"]
 mod question_wasm_schema_parity;
+// GitHub #300: `Scanner::feed` never advanced past a matched span, so one
+// occurrence re-fired on every later delta for the rest of the 4 KiB window
+// (and across turn boundaries); and the WASM guest read workspace stream
+// rules without the native path's `project_trusted` gate, so an untrusted
+// repository could inject rules. Both defects, with the trust one written as
+// a security assertion on the rule set in force.
+#[path = "300-stream-guard-refire-and-trust.rs"]
+mod stream_guard_refire_and_trust;

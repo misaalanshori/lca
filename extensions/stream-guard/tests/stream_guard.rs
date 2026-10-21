@@ -152,3 +152,299 @@ fn manifest_grants_match_the_manifest() {
         "{manifest}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// gh #300: one match, one emit
+// ---------------------------------------------------------------------------
+
+// Verifies: gh #300 acceptance 1 - a single occurrence reports *once*,
+// not once per delta for the next window. The defect: the matched text
+// stayed in the window, so every later delta re-matched it.
+#[test]
+fn one_occurrence_reports_once_not_once_per_delta() {
+    let mut scanner = Scanner::new(rules());
+    let mut fired = Vec::new();
+    // The match lands in delta 3 of 12; deltas 4..12 are ordinary text
+    // that keeps the matched span inside the 4096-char window.
+    let deltas = [
+        "let x = ",
+        "opt",
+        ".unwrap();",
+        " then ",
+        "more ",
+        "text ",
+        "keeps ",
+        "coming ",
+        "after ",
+        "the ",
+        "match ",
+        "here",
+    ];
+    for delta in deltas {
+        for hit in scanner.feed("text-delta", delta) {
+            fired.push(hit.rule);
+        }
+    }
+    assert_eq!(
+        fired,
+        vec!["no-unwrap".to_string()],
+        "the same span must not re-fire on later deltas: {fired:?}"
+    );
+}
+
+// Verifies: gh #300 - the rule is not silenced for a fixed distance; it
+// fires again when *new* text contains it. This is the row that keeps
+// the fix from degenerating into "suppress this rule for N chars".
+#[test]
+fn the_same_rule_fires_again_on_new_text() {
+    let mut scanner = Scanner::new(rules());
+    let mut fired = Vec::new();
+    for delta in [
+        "first ",
+        "opt.unwrap(); ",
+        "then another ",
+        "opt.unwrap(); ",
+        "done",
+    ] {
+        for hit in scanner.feed("text-delta", delta) {
+            fired.push(hit.rule);
+        }
+    }
+    assert_eq!(
+        fired,
+        vec!["no-unwrap".to_string(), "no-unwrap".to_string()],
+        "two distinct occurrences are two matches: {fired:?}"
+    );
+}
+
+// Verifies: gh #300 - the positive control. A pattern split across delta
+// boundaries still matches, which is the whole reason the window exists.
+// A fix that shrank or bypassed the window would break this row.
+#[test]
+fn a_pattern_split_across_deltas_still_matches() {
+    let mut scanner = Scanner::new(rules());
+    assert!(scanner.feed("text-delta", "a Box").is_empty());
+    let hits = scanner.feed("text-delta", "::leak(x)");
+    assert_eq!(hits.len(), 1, "the window, not the chunk, is the unit");
+    assert_eq!(hits[0].rule, "no-box-leak");
+}
+
+// Verifies: gh #300 acceptance 2 - the window resets at a turn
+// boundary, so turn N's match cannot fire on turn N+1's first delta.
+#[test]
+fn a_match_does_not_survive_into_the_next_turn() {
+    let mut scanner = Scanner::new(rules());
+    assert_eq!(scanner.feed("text-delta", "opt.unwrap();").len(), 1);
+    scanner.reset();
+    assert!(
+        scanner.feed("text-delta", "clean start").is_empty(),
+        "the previous turn's text is gone, so nothing re-fires"
+    );
+    // And the reset did not disable the rules.
+    assert_eq!(
+        scanner.feed("text-delta", "opt.unwrap();").len(),
+        1,
+        "rules still fire after a reset"
+    );
+}
+
+// Verifies: gh #300's stated overlap rule - two rules matching the same
+// span each report once (dedup is per rule, not global), and the pair
+// does not re-report on the next delta.
+#[test]
+fn two_rules_matching_one_span_each_report_once() {
+    let rules = parse_rules_toml(
+        r#"
+[[rule]]
+id = "mentions-ok"
+pattern = 'OK'
+reminder = "first"
+
+[[rule]]
+id = "mentions-ok-loud"
+pattern = 'OK\+'
+reminder = "second"
+"#,
+    )
+    .expect("parse");
+    let mut scanner = Scanner::new(rules);
+    let first = scanner.feed("text-delta", "status OK+");
+    let mut ids: Vec<String> = first.iter().map(|hit| hit.rule.clone()).collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec!["mentions-ok".to_string(), "mentions-ok-loud".to_string()],
+        "both rules report once for the same span"
+    );
+    assert!(
+        scanner.feed("text-delta", " still going").is_empty(),
+        "neither re-reports on the next delta"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// gh #300: trust parity across delivery modes (the security guard)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_arch = "wasm32"))]
+struct DenyPrompt;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl lca_permissions::PermissionPrompt for DenyPrompt {
+    fn ask(&mut self, _action: &lca_permissions::Action) -> lca_permissions::Decision {
+        lca_permissions::Decision::Denied
+    }
+    fn review_proposals(&mut self, _diff: &lca_permissions::ProposalDiff) -> bool {
+        false
+    }
+}
+
+/// An in-memory filesystem view: the same shape both modes read through.
+struct FakeFs {
+    files: std::collections::BTreeMap<(String, String), String>,
+}
+
+impl FakeFs {
+    fn with(paths: &[(&str, &str)]) -> FakeFs {
+        let mut files = std::collections::BTreeMap::new();
+        for (path, text) in paths {
+            let (scope, rel) = path
+                .split_once(':')
+                .expect("fixture paths are `scope:path`");
+            files.insert((scope.to_string(), rel.to_string()), text.to_string());
+        }
+        FakeFs { files }
+    }
+}
+
+impl stream_guard::FsView for FakeFs {
+    fn read(
+        &self,
+        scope: &str,
+        path: &str,
+    ) -> Result<Option<String>, lca_protocol::CapabilityError> {
+        Ok(self
+            .files
+            .get(&(scope.to_string(), path.to_string()))
+            .cloned())
+    }
+}
+
+const PROJECT_RULES: &str = r#"
+[[rule]]
+id = "injected-by-the-repo"
+pattern = 'password'
+reminder = "the repository decided this is worth saying"
+"#;
+
+// Verifies: gh #300 acceptance 3 - an untrusted workspace's rules are
+// never loaded. This is the security assertion: a repository the user
+// has not trusted cannot put words in the guard's mouth.
+#[test]
+fn an_untrusted_workspace_contributes_no_rules() {
+    let fs = FakeFs::with(&[
+        (
+            "workspace:.lca/extensions/stream-guard/rules.toml",
+            PROJECT_RULES,
+        ),
+        (
+            "private:rules.toml",
+            "[[rule]]\nid = \"global\"\npattern = 'x'\nreminder = \"r\"\n",
+        ),
+    ]);
+    let (rules, _) = stream_guard::load_rules(&fs, false);
+    let ids: Vec<&str> = rules.iter().map(|rule| rule.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["global"],
+        "only the user's own global rules survive an untrusted project"
+    );
+}
+
+// Verifies: gh #300 - a trusted workspace's rules do load. The mirror of
+// the row above, so the gate is shown to be a gate and not an outage.
+#[test]
+fn a_trusted_workspace_contributes_its_rules() {
+    let fs = FakeFs::with(&[(
+        "workspace:.lca/extensions/stream-guard/rules.toml",
+        PROJECT_RULES,
+    )]);
+    let (rules, _) = stream_guard::load_rules(&fs, true);
+    let ids: Vec<&str> = rules.iter().map(|rule| rule.id.as_str()).collect();
+    assert_eq!(ids, vec!["injected-by-the-repo"]);
+}
+
+// Verifies: gh #300 - exactly one predicate decides whether workspace
+// rules load, and the WASM guest routes through that predicate rather
+// than reaching for the file itself. The defect was a second, ungated
+// read in the guest; a source-level pin is the guard that keeps it gone,
+// because the WASM half cannot be instantiated from this crate's tests.
+#[test]
+fn the_wasm_guest_reads_rules_through_the_shared_loader() {
+    let source = include_str!("../src/lib.rs");
+    let wasm_half = source
+        .split("mod wasm_mode")
+        .nth(1)
+        .expect("the WASM module is in this file");
+    assert!(
+        wasm_half.contains("super::load_rules"),
+        "the guest must load through the one trust-gated path"
+    );
+    assert!(
+        !wasm_half.contains("PROJECT_RULES_PATH"),
+        "the guest must not name the workspace rules path itself, or it can \
+         bypass the trust gate again"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// gh #300: the turn-boundary hook is reachable
+// ---------------------------------------------------------------------------
+
+// Verifies: gh #300 acceptance 2's wiring. The registry dispatches
+// `pre-turn` (where the window reset lives) only to handles declaring
+// `World::Hooks`, and `stream-event` only to `World::HooksStream`. A
+// handle that declares the stream world alone gets stream events and
+// never the turn boundary, so `on_pre_turn` was dead code and the window
+// survived across turns. This row pins both worlds on the handle.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_handle_declares_the_worlds_the_turn_boundary_needs() {
+    use lca_ext_abi::{ExtensionDispatch, World};
+    let root = std::env::temp_dir().join(format!("lca-sg-worlds-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for dir in ["project", "private", "config", "data", "tmp"] {
+        std::fs::create_dir_all(root.join(dir)).expect("mkdir");
+    }
+    let prompt: std::sync::Arc<std::sync::Mutex<dyn lca_permissions::PermissionPrompt>> =
+        std::sync::Arc::new(std::sync::Mutex::new(DenyPrompt));
+    let store = std::sync::Arc::new(std::sync::Mutex::new(
+        lca_permissions::GrantStore::open(&root.join("grants.json")).expect("grants"),
+    ));
+    let cap = std::sync::Arc::new(lca_tools::Capabilities::new(
+        "stream-guard",
+        stream_guard::manifest_grants(),
+        lca_permissions::ScopeRoots {
+            workspace: root.join("project"),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        },
+        prompt,
+        store,
+        root.join("project"),
+        None,
+    ));
+    let handle = stream_guard::StreamGuard::new(cap, true);
+    let worlds = handle.worlds();
+    assert!(
+        worlds.contains(&World::Hooks),
+        "the turn boundary dispatches on World::Hooks: {worlds:?}"
+    );
+    assert!(
+        worlds.contains(&World::HooksStream),
+        "stream events dispatch on World::HooksStream: {worlds:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
