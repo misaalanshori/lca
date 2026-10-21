@@ -241,6 +241,17 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
                     break;
                 }
             }
+            // Gh #278: headers before close. The host drops a response from
+            // its handle table on close, so a read afterwards is `NotFound`;
+            // this path used to never read them at all, which lost the
+            // server's `retry-after` on a 429 just as surely.
+            let retry_after = cap.net_response_headers(handle).ok().and_then(|headers| {
+                headers.iter().find_map(|(key, value)| {
+                    key.eq_ignore_ascii_case("retry-after")
+                        .then(|| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                })
+            });
             let _ = cap.net_close_response(handle);
             let text = String::from_utf8_lossy(&detail);
             let message = error_message(&text, status);
@@ -266,7 +277,13 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
             // double-prefixed by the kit's envelope).
             let classified = lca_wire_openai::failure_for_status(status, &message);
             return Err(StreamFailure {
-                message,
+                // Only a throttle carries the token: a 401's answer is to
+                // re-authenticate, not to wait.
+                message: if matches!(status, 429 | 500 | 502 | 503 | 529) {
+                    with_retry_after(message, retry_after.as_deref())
+                } else {
+                    message
+                },
                 class: classified.class,
                 retryable: classified.retryable,
             });
@@ -941,6 +958,16 @@ mod wasm_mode;
 /// OpenCode Go rejection of a dangling tool call is
 /// `{"model":"deepseek-v4.1-flash"}`). Fall back to a short raw body so a
 /// failure is never reported as just "unknown error".
+/// Append the gh #52 token the host's retry engine reads (gh #278). Absent or
+/// empty is silence, never a zero delay: a garbled header must fall back to
+/// the exponential schedule, not to "retry immediately".
+fn with_retry_after(message: String, retry_after: Option<&str>) -> String {
+    match retry_after.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => format!("{message} retry-after: {value}"),
+        None => message,
+    }
+}
+
 fn error_message(body: &str, status: u16) -> String {
     let text = body.trim();
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {

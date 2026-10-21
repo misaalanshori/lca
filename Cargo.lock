@@ -1783,6 +1783,7 @@ dependencies = [
 name = "lca-regressions"
 version = "0.0.0"
 dependencies = [
+ "anthropic",
  "antigravity",
  "clap",
  "compaction-default",

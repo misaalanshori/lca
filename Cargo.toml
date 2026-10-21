@@ -86,6 +86,9 @@ stream-guard = { path = "extensions/stream-guard" }
 # gh #295: the catalog-resilience guard drives the extension's real discovery
 # loop through a capability that serves a malformed gateway payload.
 openrouter = { path = "extensions/openrouter" }
+# gh #278: the retry-after guard drives the three providers' real error paths
+# through one lifecycle-modelling capability, so ordering is observable.
+anthropic = { path = "extensions/anthropic" }
 openai-compatible = { path = "extensions/openai-compatible" }
 serde_json.workspace = true
 tokio.workspace = true
