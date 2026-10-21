@@ -53,6 +53,19 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **One malformed entry no longer discards the whole OpenRouter catalog**
+  (gh #295). `discover_models` read the gateway's `/models` array with
+  `entry.get("id")?.as_str()?` inside its loop — `?` returns from the
+  *function*, not the iteration, so a single non-conforming row
+  (`{"id": null}`, a deprecation or rate-limit notice shaped
+  `{"message": …}`, a numeric id) discarded every row and fell back to the
+  preset's three curated models. A 300-model catalog became three, silently.
+  A row now needs a non-empty string `id` to be listed and is otherwise
+  skipped in place, so the surviving rows keep their gateway order; the drop
+  is counted and reported through each mode's diagnostic channel (the guest's
+  `log` import, the native twin's warning stream) rather than swallowed, so a
+  partial catalog never looks complete. A payload with nothing usable still
+  takes the curated fallback — resilience is not an empty picker.
 - **`stream-guard` reports each match once, and its WASM mode honours project
   trust** (gh #300). Two defects with one shape — the extension's delivery
   modes disagreed with each other and with common sense.
