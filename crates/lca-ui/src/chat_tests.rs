@@ -12,8 +12,10 @@ pub(super) fn tree_row(id: &str, depth: usize, text: &str) -> crate::state::Tree
         depth,
         kind: crate::state::TreeRowKind::User,
         text: text.to_string(),
+        call: None,
         label: None,
         live: false,
+        live_leaf: false,
     }
 }
 

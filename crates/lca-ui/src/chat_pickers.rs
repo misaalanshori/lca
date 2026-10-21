@@ -1,4 +1,13 @@
 //! The runtime pickers, split from `chat.rs` (the 1,200-line ceiling).
+//! The `/tree` navigator lives in `chat_tree.rs` (gh #394 split by
+//! concern: its layout math outgrew this file), re-exported here so
+//! `chat_pickers::TreePicker` still names it.
+
+pub use crate::chat_tree::TreePicker;
+
+/// The row text `lca-session` gives an assistant record that carried no
+/// prose at all - only tool calls (gh #394 fix 3).
+pub const TEXTLESS_DISPATCH: &str = "(tool call)";
 
 /// A running `!`/`!!` command (R4): streamed output, a cancel handle, and
 /// the command text for the finishing notice.
@@ -65,344 +74,23 @@ impl TreeFilter {
         }
     }
 
-    /// Whether a row shows under this filter (gh #231).
-    fn passes(self, row: &crate::state::TreeRow) -> bool {
+    /// Whether a row shows under this filter (gh #231, gh #394).
+    ///
+    /// A textless assistant row - one that was nothing but tool calls - is
+    /// noise under both look-at-the-conversation filters, because its tool
+    /// rows already say what happened (pi's `applyFilter` rule). The live
+    /// leaf is exempt, so the cursor always has a visible home.
+    pub(crate) fn passes(self, row: &crate::state::TreeRow) -> bool {
         use crate::state::TreeRowKind;
+        let textless_dispatch =
+            row.kind == TreeRowKind::Assistant && row.text == TEXTLESS_DISPATCH && !row.live_leaf;
         match self {
             TreeFilter::All => true,
             TreeFilter::UserOnly => row.kind == TreeRowKind::User,
             TreeFilter::LabeledOnly => row.label.is_some(),
-            TreeFilter::NoTools => {
-                row.kind != TreeRowKind::Tool
-                    && !(row.kind == TreeRowKind::Assistant && row.text == "(tool call)")
-            }
-            TreeFilter::Default => row.kind != TreeRowKind::Tool,
+            TreeFilter::NoTools => !textless_dispatch && row.kind != TreeRowKind::Tool,
+            TreeFilter::Default => !textless_dispatch && row.kind != TreeRowKind::Tool,
         }
-    }
-}
-
-/// One visible row: the source index plus the recomputed visual
-/// structure (gh #231). Hidden chains collapse, so `depth` counts
-/// visible ancestors and connectors sit on the visible tree.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct VisibleRow {
-    /// Index into the picker's full row list.
-    index: usize,
-    /// Visible parent's row index (`None` at the visible roots).
-    vparent: Option<usize>,
-    /// Visible ancestor count (the indent).
-    depth: usize,
-    /// `true` for `└─`, `false` for `├─`; `None` on single chains.
-    last: Option<bool>,
-    /// Per ancestor level: `true` paints `│`, `false` paints spaces.
-    gutters: Vec<bool>,
-}
-
-/// The `/tree` DAG navigator (FR-UI-16, gh #231): pi's tree-selector
-/// shape on S37C's rolling-window chrome - connectors, role markers,
-/// fold/unfold, filter cycling, and label editing.
-pub struct TreePicker {
-    /// Every structured row, pre-order (the hook's order).
-    pub rows: Vec<crate::state::TreeRow>,
-    /// The highlighted row (an index into the visible list).
-    pub selected: usize,
-    /// The active filter (pi's `filterMode`).
-    pub filter: TreeFilter,
-    /// Folded record ids (their subtrees hide).
-    pub folded: std::collections::BTreeSet<String>,
-    /// The label input buffer while `e` edits (`None` navigates).
-    pub editing: Option<String>,
-    /// The visible rows, recomputed on every state change.
-    visible: Vec<VisibleRow>,
-}
-
-impl TreePicker {
-    /// Open the navigator over structured rows under a filter.
-    pub fn new(rows: Vec<crate::state::TreeRow>, filter: TreeFilter) -> TreePicker {
-        let mut picker = TreePicker {
-            rows,
-            selected: 0,
-            filter,
-            folded: std::collections::BTreeSet::new(),
-            editing: None,
-            visible: Vec::new(),
-        };
-        picker.rebuild();
-        // Gh #248: the cursor opens on the live leaf (pi's
-        // `realLeafId` anchoring), never row 0 - the deepest live
-        // row wins; no live row keeps the top.
-        if let Some(at) = picker
-            .visible
-            .iter()
-            .rposition(|shown| picker.rows[shown.index].live)
-        {
-            picker.selected = at;
-        }
-        picker
-    }
-
-    /// The visible row count.
-    pub fn visible_len(&self) -> usize {
-        self.visible.len()
-    }
-
-    /// The visible row's bookmark, when one names it.
-    pub fn visible_label(&self, at: usize) -> Option<String> {
-        self.visible
-            .get(at)
-            .and_then(|shown| self.rows[shown.index].label.clone())
-    }
-
-    /// The selected record's id, when a row shows.
-    pub fn selected_id(&self) -> Option<String> {
-        self.visible
-            .get(self.selected)
-            .map(|shown| self.rows[shown.index].id.clone())
-    }
-
-    /// Switch filters (pi clears folds here): the selection rides its
-    /// record id, else clamps to the view.
-    pub fn set_filter(&mut self, filter: TreeFilter) {
-        let id = self.selected_id();
-        self.filter = filter;
-        self.folded.clear();
-        self.rebuild();
-        self.restore(id);
-    }
-
-    /// Fold (or unfold) the selected row's subtree; returns `false`
-    /// when the row has no visible children to fold.
-    pub fn toggle_fold_at(&mut self, at: usize) -> bool {
-        let Some(id) = self
-            .visible
-            .get(at)
-            .map(|shown| self.rows[shown.index].id.clone())
-        else {
-            return false;
-        };
-        if !self.folded.remove(&id) {
-            if !self.has_visible_children(&id) {
-                return false;
-            }
-            self.folded.insert(id);
-        }
-        let current = self.selected_id();
-        self.rebuild();
-        self.restore(current);
-        true
-    }
-
-    /// Move the selection to the selected row's visible parent.
-    /// Returns `false` at a root.
-    pub fn move_to_parent(&mut self) -> bool {
-        let Some(parent) = self
-            .visible
-            .get(self.selected)
-            .and_then(|shown| shown.vparent)
-        else {
-            return false;
-        };
-        if let Some(at) = self.visible.iter().position(|row| row.index == parent) {
-            self.selected = at;
-            return true;
-        }
-        false
-    }
-
-    /// Move the selection to the selected row's first visible child.
-    /// Returns `false` on a leaf.
-    pub fn move_to_first_child(&mut self) -> bool {
-        let Some(shown) = self.visible.get(self.selected).map(|row| row.index) else {
-            return false;
-        };
-        if let Some(at) = self
-            .visible
-            .iter()
-            .position(|row| row.vparent == Some(shown))
-        {
-            self.selected = at;
-            return true;
-        }
-        false
-    }
-
-    /// Clamp the selection into the view (call after external moves).
-    pub fn clamp_selected(&mut self) {
-        self.selected = self.selected.min(self.visible.len().saturating_sub(1));
-    }
-
-    /// The painted body rows: gutters, connectors, role markers,
-    /// bookmark and live marks (gh #231).
-    /// Paint every visible row (gh #231's connectors and markers,
-    /// gh #248's pi roles): dim gutters, a per-kind role prefix,
-    /// the warning bookmark, pi's accent `• ` on the live chain, and
-    /// the live leaf's `◀`. `Theme::plain()` renders byte-identical
-    /// to the old unstyled rows, so unit asserts read through `strip`.
-    pub fn paint_rows(&self, theme: &crate::theme::Theme) -> Vec<String> {
-        use crate::state::TreeRowKind;
-        use crate::theme::Role;
-        let dim = theme.role(Role::Dim);
-        self.visible
-            .iter()
-            .map(|shown| {
-                let row = &self.rows[shown.index];
-                let mut line = String::new();
-                let mut gutters = String::new();
-                for gutter in &shown.gutters {
-                    gutters.push_str(if *gutter { "\u{2502} " } else { "  " });
-                }
-                match shown.last {
-                    Some(true) => gutters.push_str("\u{2514}\u{2500} "),
-                    Some(false) => gutters.push_str("\u{251c}\u{2500} "),
-                    None => {
-                        if shown.depth > 0 {
-                            gutters.push_str("  ");
-                        }
-                    }
-                }
-                line.push_str(&dim(&gutters));
-                // Pi's active-path marker sits between the connectors
-                // and the entry text.
-                if row.live {
-                    line.push_str(&theme.role(Role::Accent)("• "));
-                }
-                let content = match row.kind {
-                    TreeRowKind::User => {
-                        format!("{}{}", theme.role(Role::Accent)("user: "), row.text)
-                    }
-                    TreeRowKind::Assistant => {
-                        format!("{}{}", theme.role(Role::Success)("assistant: "), row.text)
-                    }
-                    TreeRowKind::Tool => theme.role(Role::Muted)(&format!("tool: {}", row.text)),
-                    TreeRowKind::Summary => {
-                        format!("{}{}", theme.role(Role::Warning)("summary: "), row.text)
-                    }
-                    TreeRowKind::Compaction => {
-                        theme.role(Role::BorderAccent)(&format!("compaction: {}", row.text))
-                    }
-                    TreeRowKind::Custom => theme.role(Role::Dim)(&format!("custom: {}", row.text)),
-                    TreeRowKind::CustomMessage => {
-                        format!(
-                            "{}{}",
-                            theme.role(Role::CustomMessageLabel)("message: "),
-                            row.text
-                        )
-                    }
-                };
-                line.push_str(&content);
-                if let Some(label) = &row.label {
-                    line.push_str(&theme.role(Role::Warning)(&format!(" [{label}]")));
-                }
-                if row.live {
-                    line.push_str(" \u{25c0}");
-                }
-                if self.editing.is_some() && self.visible.get(self.selected) == Some(shown) {
-                    line.push_str(&format!(
-                        " \u{2710} {}",
-                        self.editing.as_deref().unwrap_or_default()
-                    ));
-                }
-                line
-            })
-            .collect()
-    }
-
-    /// Rebuild the visible list from rows, filter, and folds.
-    pub(crate) fn rebuild(&mut self) {
-        // Full-tree parents from the depth sequence: each row's parent
-        // is its nearest preceding row with a smaller depth.
-        let mut parent: Vec<Option<usize>> = vec![None; self.rows.len()];
-        let mut stack: Vec<usize> = Vec::new();
-        for (index, row) in self.rows.iter().enumerate() {
-            while stack
-                .last()
-                .is_some_and(|top| self.rows[*top].depth >= row.depth)
-            {
-                stack.pop();
-            }
-            parent[index] = stack.last().copied();
-            stack.push(index);
-        }
-        // Visible rows: filter passes and no folded ancestor.
-        let mut hidden = vec![false; self.rows.len()];
-        let mut shown: Vec<usize> = Vec::new();
-        for (index, row) in self.rows.iter().enumerate() {
-            let under_fold = parent[index]
-                .is_some_and(|up| self.folded.contains(&self.rows[up].id) || hidden[up]);
-            hidden[index] = under_fold;
-            if !under_fold && self.filter.passes(row) {
-                shown.push(index);
-            }
-        }
-        // Visible structure: nearest visible ancestor + siblings.
-        let in_view: std::collections::BTreeSet<usize> = shown.iter().copied().collect();
-        let mut visible_parent: Vec<Option<usize>> = vec![None; self.rows.len()];
-        for index in &shown {
-            let mut next = parent[*index];
-            while next.is_some_and(|up| !in_view.contains(&up)) {
-                next = parent[next.unwrap_or(usize::MAX)];
-            }
-            visible_parent[*index] = next;
-        }
-        let mut children: std::collections::BTreeMap<Option<usize>, Vec<usize>> =
-            std::collections::BTreeMap::new();
-        for index in &shown {
-            children
-                .entry(visible_parent[*index])
-                .or_default()
-                .push(*index);
-        }
-        self.visible = shown
-            .iter()
-            .map(|index| {
-                let mut chain: Vec<usize> = Vec::new();
-                let mut next = visible_parent[*index];
-                while let Some(up) = next {
-                    chain.push(up);
-                    next = visible_parent[up];
-                }
-                chain.reverse();
-                let depth = chain.len();
-                let gutters = chain
-                    .iter()
-                    .map(|ancestor| {
-                        let siblings = &children[&visible_parent[*ancestor]];
-                        siblings.last() != Some(ancestor)
-                    })
-                    .collect();
-                let siblings = &children[&visible_parent[*index]];
-                let last = (siblings.len() > 1).then(|| siblings.last() == Some(index));
-                VisibleRow {
-                    index: *index,
-                    vparent: visible_parent[*index],
-                    depth,
-                    last,
-                    gutters,
-                }
-            })
-            .collect();
-    }
-
-    /// Restore the selection onto a record id, else clamp.
-    pub(crate) fn restore(&mut self, id: Option<String>) {
-        if let Some(id) = id
-            && let Some(at) = self
-                .visible
-                .iter()
-                .position(|shown| self.rows[shown.index].id == id)
-        {
-            self.selected = at;
-            return;
-        }
-        self.clamp_selected();
-    }
-
-    /// Whether a record id has visible children (foldable).
-    fn has_visible_children(&self, id: &str) -> bool {
-        let Some(at) = self.rows.iter().position(|row| row.id == id) else {
-            return false;
-        };
-        self.visible.iter().any(|shown| shown.vparent == Some(at))
     }
 }
 

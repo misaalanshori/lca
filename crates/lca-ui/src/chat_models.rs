@@ -136,10 +136,20 @@ pub struct TreeRow {
     pub kind: TreeRowKind,
     /// One-line row body, bare of kind markers.
     pub text: String,
+    /// The resolved label of the tool call a [`TreeRowKind::Tool`] row
+    /// answers, when the log carries the call (gh #394 fix 3):
+    /// `[read: src/main.rs:1-50]`. `None` on every other kind.
+    pub call: Option<String>,
     /// The live bookmark on this record, when one names it.
     pub label: Option<String>,
     /// Whether the record is on the live chain.
     pub live: bool,
+    /// Whether the record is the live *leaf* - the deepest record on the
+    /// live chain, which the navigator's cursor opens on and which no
+    /// filter may hide (gh #394 fix 3, pi's `currentLeafId` exemption).
+    /// `live` alone is not enough: every record on the active path is
+    /// live, and only the tip is the leaf.
+    pub live_leaf: bool,
 }
 
 /// The record kind behind a [`TreeRow`] (gh #231).

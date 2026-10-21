@@ -516,3 +516,126 @@ fn abandoned_custom_messages_leave_the_display_view() {
         "audit keeps it"
     );
 }
+
+// Verifies: gh #394 fix 3 - a tool result row carries its call's resolved
+// arguments, so the tree navigator can say `[read: /x:1-50]` instead of
+// echoing the result head. A result whose call is missing from the log
+// carries none, and every other kind carries none.
+#[test]
+fn entry_tree_resolves_a_tool_result_to_its_calls_arguments() {
+    use lca_protocol::{FORMAT_VERSION, Record};
+    let store = store("entry-tree-call-label");
+    let project = scratch("entry-tree-call-label-project");
+    let session = store.create_session(&project, "test").expect("create");
+    store
+        .append(&session, user_record("u", "read it"))
+        .expect("user");
+    for (id, call_id, name, arguments) in [
+        (
+            "c-read",
+            "k1",
+            "read",
+            "{\"path\":\"/x\",\"offset\":1,\"limit\":50}",
+        ),
+        (
+            "c-grep",
+            "k2",
+            "grep",
+            "{\"pattern\":\"needle\",\"path\":\"src\"}",
+        ),
+        ("c-pager", "k3", "read", "{\"path\":\"/y\"}"),
+        (
+            "c-shell",
+            "k4",
+            "shell",
+            "{\"command\":\"cargo test -p lca-ui\"}",
+        ),
+    ] {
+        store
+            .append(
+                &session,
+                Record::ToolCall {
+                    v: FORMAT_VERSION,
+                    ts: 2,
+                    id: id.to_string(),
+                    parent: Some("u".to_string()),
+                    call_id: call_id.to_string(),
+                    name: name.to_string(),
+                    arguments: arguments.to_string(),
+                    source: lca_protocol::ToolSource::Builtin,
+                },
+            )
+            .expect("call");
+        store
+            .append(
+                &session,
+                Record::ToolResult {
+                    v: FORMAT_VERSION,
+                    ts: 3,
+                    id: format!("{id}-result"),
+                    parent: Some(id.to_string()),
+                    call_id: call_id.to_string(),
+                    status: lca_protocol::ToolResultStatus::Ok,
+                    content: Some("the file bytes".to_string()),
+                    attachment: None,
+                    truncated: false,
+                    duration_ms: None,
+                    exit_code: None,
+                    full_output_path: None,
+                    images: Vec::new(),
+                    nested: Vec::new(),
+                },
+            )
+            .expect("result");
+    }
+    // A result whose call never landed in this log.
+    store
+        .append(
+            &session,
+            Record::ToolResult {
+                v: FORMAT_VERSION,
+                ts: 4,
+                id: "orphan".to_string(),
+                parent: Some("u".to_string()),
+                call_id: "missing".to_string(),
+                status: lca_protocol::ToolResultStatus::Ok,
+                content: Some("orphan bytes".to_string()),
+                attachment: None,
+                truncated: false,
+                duration_ms: None,
+                exit_code: None,
+                full_output_path: None,
+                images: Vec::new(),
+                nested: Vec::new(),
+            },
+        )
+        .expect("orphan");
+    let rows = store.entry_tree(&session).expect("tree");
+    let by_id: std::collections::HashMap<&str, &lca_session::EntryRow> =
+        rows.iter().map(|row| (row.id.as_str(), row)).collect();
+    assert_eq!(
+        by_id["c-read-result"].call.as_deref(),
+        Some("[read: /x:1-50]"),
+        "read resolves path and line window"
+    );
+    assert_eq!(
+        by_id["c-grep-result"].call.as_deref(),
+        Some("[grep: /needle/ in src]"),
+        "grep resolves its pattern and root"
+    );
+    assert_eq!(
+        by_id["c-pager-result"].call.as_deref(),
+        Some("[read: /y]"),
+        "an unbounded read names only the path"
+    );
+    assert_eq!(
+        by_id["c-shell-result"].call.as_deref(),
+        Some("[shell: cargo test -p lca-ui]"),
+        "shell resolves its command"
+    );
+    assert_eq!(
+        by_id["orphan"].call, None,
+        "a result with no call in the log carries no label"
+    );
+    assert_eq!(by_id["u"].call, None, "only results carry a call label");
+}
