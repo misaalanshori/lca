@@ -128,6 +128,11 @@ pub async fn rpc(
     };
     let mut session_sink = event_sink();
     session_sink.emit_session_start(session.id());
+    // Gh #426: the accept is emitted when the queue takes a message, which
+    // is between turns and not inside any turn's sink - so it needs its own
+    // handle on the same writer. Same channel, same taxonomy, so the accept
+    // and the `queue-flushed` drain stay in arrival order on one stream.
+    let mut queue_sink = event_sink();
     let mut turn_state = Some(TurnState { tools, prompt_impl });
 
     // At most one run at a time; a second prompt while running needs an
@@ -270,13 +275,20 @@ pub async fn rpc(
     // the shared queue; follow-ups submit after the run).
     macro_rules! enqueue {
         ($command:expr, $message:expr) => {{
+            // Gh #426: the accept, emitted the moment the queue takes the
+            // message and before anything can drain it - so a client sees
+            // `queue-queued` (accepted) ahead of `queue-flushed` (drained),
+            // and "accepted but never injected" is distinguishable from
+            // "never arrived". The mode is the one actually used.
             if $command == "steer" {
                 super::lock(&agent_config.steer).push(lca_protocol::QueuedMessage {
                     text: $message,
                     mode: lca_protocol::SubmitMode::Steer,
                 });
+                queue_sink.emit_queue_queued(lca_protocol::SubmitMode::Steer);
             } else {
                 follow_ups.push($message);
+                queue_sink.emit_queue_queued(lca_protocol::SubmitMode::FollowUp);
             }
         }};
     }

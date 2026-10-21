@@ -126,12 +126,13 @@ fn extension_events_keep_arrival_order_and_do_not_coalesce() {
 #[test]
 fn every_documented_event_type_has_a_producer() {
     // Kinds documented but deliberately produced outside `on_event`:
-    // `session-start` opens the stream before any turn, and
-    // `queue-queued` is a known gap (gh #264's report records it; the
-    // steering queue emits nothing headless yet). Listing them here is
-    // the "assert the silence explicitly" rule - an omission is a bug,
-    // an entry in this list is a decision.
-    const PRODUCED_ELSEWHERE: &[&str] = &["session-start", "queue-queued"];
+    // `session-start` opens the stream before any turn. `queue-queued` used
+    // to be listed here as a known gap (gh #264 recorded it, gh #426 fixed
+    // it): the accept is now emitted by `HeadlessSink::emit_queue_queued`,
+    // the same sink that emits the `queue-flushed` drain. An entry in this
+    // list is a decision, an omission is a bug - so the list is now the one
+    // kind that genuinely has no turn event behind it.
+    const PRODUCED_ELSEWHERE: &[&str] = &["session-start"];
 
     let doc = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/headless.md"),

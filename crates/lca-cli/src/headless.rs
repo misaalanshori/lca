@@ -87,6 +87,30 @@ impl HeadlessSink {
         let _ = writeln!(self.out, "{line}");
     }
 
+    /// The accept half of the steering queue (gh #426).
+    ///
+    /// `docs/headless.md` documents `queue-queued` with a `mode`; until this
+    /// method existed nothing emitted it, so a `--mode json` script saw the
+    /// `queue-flushed` drain without ever seeing the accept - making "queued
+    /// and later injected" indistinguishable from "never queued at all".
+    ///
+    /// One emitter, two call sites (`-p --mode json` and RPC), so the two
+    /// delivery modes cannot fork a second vocabulary. `mode` is the ADR-0038
+    /// [`lca_protocol::SubmitMode`] the caller actually used - never a
+    /// default - and this line carries no text: the accept says the queue
+    /// took it, the drain says what it was.
+    ///
+    /// Ordering is the contract: both halves go through this one sink, so
+    /// emission order is arrival order (accept, then drain).
+    pub fn emit_queue_queued(&mut self, mode: lca_protocol::SubmitMode) {
+        if self.json {
+            self.emit(serde_json::json!({
+                "type": "queue-queued",
+                "mode": mode.marker(),
+            }));
+        }
+    }
+
     /// The session header pi's JSON mode opens with (our `session-start`
     /// record shape, not pi's file shape).
     pub fn emit_session_start(&mut self, id: &str) {
@@ -713,6 +737,16 @@ pub async fn headless(
                 Err(code) => return code,
             }
         } else {
+            // Gh #426: nothing is emitted here, and that is the honest
+            // answer. `-p` has no steering queue: piped stdin is read to
+            // EOF before the first turn (`invoke::read_piped_stdin`), so no
+            // message can be accepted *mid-turn*, and successive `-p`
+            // messages are successive turns rather than queue entries.
+            // `run_turn_with_attachments` therefore records `queue: None`,
+            // and emitting a `queue-queued` with a made-up mode would claim
+            // an accept no queue performed - the same dishonesty this
+            // batch's brief forbids for `queue-flushed`. A `-p` script sees
+            // the accept where one exists: RPC's `streamingBehavior`.
             (message.clone(), Vec::new())
         };
         // gh #418 Phase E: the first turn waits (bounded) for servers whose
@@ -1008,158 +1042,8 @@ fn wire(
 }
 
 #[cfg(test)]
-mod sink_tests {
-    use super::*;
-    use lca_core::TurnSink;
-
-    pub(super) struct VecWriter(pub(super) std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl std::io::Write for VecWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn sink() -> (HeadlessSink, std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
-        let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let sink = HeadlessSink::with_writer(true, false, Box::new(VecWriter(out.clone())));
-        (sink, out)
-    }
-
-    fn lines(out: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> Vec<serde_json::Value> {
-        let bytes = out
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        String::from_utf8(bytes)
-            .expect("utf8")
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("json line"))
-            .collect()
-    }
-
-    fn tool_call() -> lca_protocol::ToolCall {
-        lca_protocol::ToolCall {
-            call_id: "call-1".to_string(),
-            name: "shell".to_string(),
-            arguments: "{}".to_string(),
-            parent_call_id: None,
-        }
-    }
-
-    // Verifies: gh #44 (the golden turn): a scripted turn emits the
-    // taxonomy in order - turn-start, message-start, text deltas,
-    // tool-call, tool-update, tool-result, usage, turn-end - so a
-    // transcript rebuilds offline.
-    #[test]
-    fn the_json_stream_reconstructs_the_transcript() {
-        let (mut sink, out) = sink();
-        sink.emit_session_start("session-1");
-        sink.on_event(TurnEvent::TurnStarted);
-        sink.on_event(TurnEvent::MessageStarted { role: "user" });
-        sink.on_event(TurnEvent::MessageEnded { role: "user" });
-        sink.on_event(TurnEvent::MessageStarted { role: "assistant" });
-        sink.on_event(TurnEvent::TextDelta("Hello ".into()));
-        sink.on_event(TurnEvent::TextDelta("world".into()));
-        sink.on_event(TurnEvent::ToolStarted(tool_call()));
-        sink.on_event(TurnEvent::ToolOutputChunk {
-            call_id: "call-1".into(),
-            chunk: "partial".into(),
-        });
-        sink.on_event(TurnEvent::ToolFinished(lca_protocol::ToolResult::ok(
-            "call-1", "done",
-        )));
-        sink.on_event(TurnEvent::Usage(lca_protocol::Usage::default()));
-        sink.on_event(TurnEvent::AssistantText("Hello world".into()));
-        sink.on_event(TurnEvent::MessageEnded { role: "assistant" });
-        sink.on_event(TurnEvent::TurnEnded {
-            status: TurnStatus::Ok,
-            stop_reason: StopReason::Stop,
-        });
-
-        let types: Vec<String> = lines(&out)
-            .iter()
-            .map(|line| line["type"].as_str().unwrap_or("").to_string())
-            .collect();
-        assert_eq!(
-            types,
-            vec![
-                "session-start",
-                "turn-start",
-                "message-start",
-                "message-end",
-                "message-start",
-                "text-delta",
-                "text-delta",
-                "tool-call",
-                "tool-update",
-                "tool-result",
-                "usage",
-                "text",
-                "message-end",
-                "turn-end",
-            ]
-        );
-        let records = lines(&out);
-        assert_eq!(records[0]["id"], "session-1");
-        assert_eq!(records[2]["role"], "user");
-        assert_eq!(records[5]["delta"], "Hello ");
-        assert_eq!(records[7]["name"], "shell");
-        assert_eq!(records[8]["chunk"], "partial");
-    }
-
-    // Verifies: gh #44 (queue and compaction surface): a flushed steer
-    // and a compaction round-trip name their modes and reasons.
-    #[test]
-    fn queue_and_compaction_events_name_their_modes() {
-        let (mut sink, out) = sink();
-        sink.on_event(TurnEvent::UserInjected {
-            text: "faster".into(),
-            mode: "steer".into(),
-        });
-        sink.on_event(TurnEvent::CompactionStarted {
-            reason: "threshold".into(),
-        });
-        sink.on_event(TurnEvent::CompactionEnded {
-            reason: "threshold".into(),
-            success: true,
-        });
-        sink.on_event(TurnEvent::RetryScheduled {
-            attempt: 1,
-            max: 3,
-            delay_ms: 2000,
-            error: "overloaded".into(),
-        });
-        sink.on_event(TurnEvent::RetryFinished { success: true });
-        let records = lines(&out);
-        let types: Vec<&str> = records
-            .iter()
-            .map(|line| line["type"].as_str().unwrap_or(""))
-            .collect();
-        assert_eq!(
-            types,
-            vec![
-                "queue-flushed",
-                "compaction-start",
-                "compaction-end",
-                "error",
-                "retry-scheduled",
-                "retry-end",
-            ]
-        );
-        assert_eq!(records[0]["mode"], "steer");
-        assert_eq!(records[2]["success"], true);
-        assert_eq!(records[4]["max_attempts"], 3);
-    }
-}
+#[path = "sink_tests.rs"]
+mod sink_tests;
 
 #[cfg(test)]
 #[path = "headless_tests.rs"]

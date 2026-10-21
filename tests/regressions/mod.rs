@@ -286,10 +286,16 @@ mod gh212_panel_toggle_traps_exit;
 // (terminals watchdog it away after ~10-15 s), and OSC 7501 tab status
 // covered turns only - a background `/compact`, a `!`/`!!` run, and the
 // install-consent prompt were invisible to a tab bar.
+// GitHub #426: `docs/headless.md` documented `queue-queued` with a `mode`
+// and nothing emitted it, so a headless script could not tell "queued and
+// later injected" from "never queued at all". Pins that the drift guard's
+// exception is gone and one emitter serves both delivery modes.
 #[path = "369-osc-keepalive-and-status-coverage.rs"]
 mod gh369_osc_keepalive_and_status_coverage;
 #[path = "394-tree-layout-math.rs"]
 mod gh394_tree_layout_math;
+#[path = "426-queue-queued-is-emitted.rs"]
+mod gh426_queue_queued_is_emitted;
 // GitHub #281: the mechanical compaction fallback decoded every carried
 // summary with a hardcoded `compaction` kind, so the host's
 // `previous-summary` marker records rendered empty and vanished.
