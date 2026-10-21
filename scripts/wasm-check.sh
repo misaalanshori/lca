@@ -50,17 +50,20 @@ fi
 echo "wasm-check: building $packages for $target"
 # gh #427: force the conformance artifact to be produced by *this* run.
 #
-# A cached target (CI restores one through rust-cache) makes `cargo build`
-# report the package fresh and leave a previous artifact in place - and that
-# artifact is hard-linked to the fingerprint's copy, so deleting the visible
-# file just makes cargo re-link the stale inode back. The byte comparison
-# below then reads bytes this run did not produce; it fired falsely on CI
-# once for exactly that reason. Dropping the package's fingerprint is what
-# actually invalidates it. Everything else in the cache still applies, so the
-# cost is one compress+link, not a compile of the graph.
+# A cached target (CI restores one through rust-cache) can hold a component
+# built from a different revision, and cargo will report the package fresh
+# because the cached fingerprint matches that older source - so the byte
+# comparison below reads bytes this run never produced and reports a correct
+# fixture as stale. It did exactly that on CI twice.
+#
+# Touching the crate's sources is what makes cargo recompile it: it changes
+# the mtime every unit input is checked against, which covers fingerprints,
+# hard-linked deps copies and any other bookkeeping the cache restored. The
+# source is left byte-identical (the mtime is metadata, not content), and the
+# cost is one compile+link of this one crate rather than a rebuild of the graph.
 conformance_artifact="${CARGO_TARGET_DIR:-target}/$target/release/conformance.wasm"
-rm -f "$conformance_artifact" "$(dirname "$conformance_artifact")/deps/conformance.wasm"
-rm -rf "$(dirname "$conformance_artifact")"/.fingerprint/conformance-*
+find extensions/conformance/src -name '*.rs' -exec touch {} +
+touch extensions/conformance/Cargo.toml
 # shellcheck disable=SC2086
 cargo build --release --target "$target" --quiet $(for p in $packages; do echo "-p $p"; done)
 echo "wasm-check: every extension component builds"
@@ -77,6 +80,9 @@ if [ -f "$fixture" ]; then
     fi
     if ! cmp -s "$conformance_artifact" "$fixture"; then
         echo "wasm-check: $fixture is stale against the conformance source (gh #427)" >&2
+        echo "  committed: $(sha256sum "$fixture" | cut -d' ' -f1) ($(wc -c <"$fixture") bytes)" >&2
+        echo "  built:     $(sha256sum "$conformance_artifact" | cut -d' ' -f1) ($(wc -c <"$conformance_artifact") bytes)" >&2
+        echo "  toolchain: $(rustc -V), target $target" >&2
         echo "  the committed component no longer matches a fresh build - reinstall it:" >&2
         echo "  cp $conformance_artifact $fixture" >&2
         exit 1
