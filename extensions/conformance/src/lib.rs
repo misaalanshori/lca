@@ -95,6 +95,14 @@ pub trait Cap {
     fn pty_wait(&self, handle: u32) -> Result<i32, CapabilityError>;
     /// Release the handle.
     fn pty_kill(&self, handle: u32) -> Result<(), CapabilityError>;
+    /// A whole GET through the mode's `net` path (gh #302): the `tool`
+    /// world gained the `net` import, so the conformance obligation is
+    /// that a tool-world guest reaches the network through it -
+    /// granted, denied, and unlisted host alike. One method, not five:
+    /// the point is that the whole sequence crosses, and a guest that
+    /// delegated only `request` would pass a narrower probe while still
+    /// being unable to fetch.
+    fn net_fetch(&self, url: &str) -> Result<(u16, Vec<u8>), CapabilityError>;
 }
 
 /// The identity probe's capability surface: credentials plus the loopback
@@ -125,6 +133,14 @@ pub trait IdentityCap {
     /// `lca:host/net`, and a guest that does not delegate loses
     /// `retry-after` - and with it any server-directed backoff.
     fn net_response_headers(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError>;
+    /// A whole GET through the mode's `net` path (gh #302): start,
+    /// status, headers, body, close. The `tool` world gained this
+    /// import, so the conformance obligation is that a tool-world guest
+    /// reaches the network through it - granted, denied, and unlisted
+    /// host alike. One method, not five, because the point is that the
+    /// whole sequence crosses; a guest that delegates only `request`
+    /// would pass a narrower probe while still being unable to fetch.
+    fn net_fetch(&self, url: &str) -> Result<(u16, Vec<u8>), CapabilityError>;
 }
 
 /// The resource the provider probe reads, proving the delegation crossed
@@ -380,6 +396,34 @@ pub fn run_shared(
             text: "conformance ok".to_string(),
             extras: Default::default(),
         },
+        // gh #302: fetch one URL through the mode's `net` path. The
+        // reply is `status:bytes`, so granted, denied, and unlisted all
+        // compare across delivery modes - a denial is an error outcome
+        // carrying the host's own sentence.
+        "net-fetch" => {
+            let url = args
+                .get("url")
+                .and_then(|value| value.as_str())
+                .unwrap_or("https://example.com/");
+            match cap.net_fetch(url) {
+                Ok((status, body)) => ModeOutcome {
+                    ok: true,
+                    text: format!(
+                        "status {status}: {}",
+                        String::from_utf8_lossy(&body)
+                            .chars()
+                            .take(120)
+                            .collect::<String>()
+                    ),
+                    extras: Default::default(),
+                },
+                Err(err) => ModeOutcome {
+                    ok: false,
+                    text: err.to_string(),
+                    extras: Default::default(),
+                },
+            }
+        }
         // #49: declared structured output. The model reads `text`;
         // the `structured_content` extras key carries the JSON
         // verbatim for programmatic callers. `ok: false` keeps its

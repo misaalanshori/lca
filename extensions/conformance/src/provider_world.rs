@@ -107,6 +107,29 @@ impl crate::IdentityCap for GuestIdentityCap {
     ) -> Result<Vec<(String, String)>, crate::CapabilityError> {
         net::response_headers(handle).map_err(map_net)
     }
+    /// Gh #302: the provider guest is not the world that gained the
+    /// import, but the trait is shared, so it answers the same way -
+    /// through `lca:host/net`, which the provider world imported all
+    /// along.
+    fn net_fetch(&self, url: &str) -> Result<(u16, Vec<u8>), crate::CapabilityError> {
+        let handle = net::request("GET", url, &[], None).map_err(map_net)?;
+        let outcome = (|| {
+            let status = net::response_status(handle).map_err(map_net)?;
+            let mut body = Vec::new();
+            while let Some(chunk) = net::read_body(handle, 64 * 1024).map_err(map_net)? {
+                if chunk.is_empty() {
+                    break;
+                }
+                body.extend_from_slice(&chunk);
+                if body.len() >= 1024 * 1024 {
+                    break;
+                }
+            }
+            Ok((status, body))
+        })();
+        let _ = net::close_response(handle);
+        outcome
+    }
 }
 
 /// Protocol usage -> the WIT record (cost buckets in reserved extras,

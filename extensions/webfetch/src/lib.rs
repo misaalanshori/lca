@@ -12,14 +12,15 @@
 //! Bounds: the read loop stops at 1 MiB input (memory safety for the
 //! sandbox); the returned text truncates at 50 KiB with an omission
 //! marker (token safety for the model). Timeouts clamp to 1–120s
-//! (default 30) and wrap the native fetch; the WASM guest defers
-//! entirely (see below).
+//! (default 30) and wrap the whole fetch.
 //!
-//! Delivery note: only the provider world imports `net`, so a
-//! tool-world guest cannot fetch. The WASM half validates arguments
-//! and reports the deferral plainly; fetching is native-only until
-//! the tool world gains a `net` import (additive and link-safe for
-//! old components, but a contract change either way).
+//! Delivery note: both halves run the **same** pipeline
+//! (`fetch` → `convert`), over a `NetView` the mode supplies — the native
+//! half over the capability engine, the WASM half over the `lca:host/net`
+//! import the `tool` world gained in gh #302. So the two modes produce the
+//! same bytes for the same input (NFR-25), and the consent behaviour is the
+//! capability's own in both: an ungranted host asks on a user-initiated
+//! call, and a denial surfaces the same permission error either way.
 //!
 //! # Unsafe-code exemption
 //!
@@ -695,19 +696,78 @@ mod wasm_mode {
             "lca:host/tools@0.6.0": generate,
             "lca:host/resources@0.6.0": generate,
             "lca:host/state@0.6.0": generate,
+            "lca:host/net@0.6.0": generate,
         },
     });
 
     use exports::lca::ext::execute::{Guest as ExecuteTrait, ToolResult as WasmResult};
     use exports::lca::ext::tool_schema::{Guest as SchemaGuest, Schema};
     use lca::ext::types::ToolCall;
+    use lca::host::net;
 
-    // The tool world has no `net` import (only the provider world
-    // does), so the guest cannot fetch. It validates the arguments
-    // and says so plainly — an explicit deferral, not a silent one.
-    // The unblocker is a `net` import on the tool world (additive:
-    // old components do not import it and keep linking); until
-    // then, fetching is the native half's job.
+    /// The `net` import, as a [`super::NetView`] - so the WASM half runs
+    /// the *same* fetch pipeline the native half does (`super::fetch`),
+    /// which is what NFR-25 asks: one implementation, two delivery modes,
+    /// identical bytes.
+    ///
+    /// Gh #302 added `lca:host/net` to the `tool` world for this. The
+    /// consent rules are the capability's, unchanged: the host asks for an
+    /// ungranted host because a `tool`-world request is a call the model or
+    /// user deliberately made, and a denial comes back as the same
+    /// permission error the native path returns.
+    struct HostNet;
+
+    impl super::NetView for HostNet {
+        fn request(
+            &self,
+            method: &str,
+            url: &str,
+            headers: &[(&str, &str)],
+        ) -> Result<u32, String> {
+            net::request(
+                method,
+                url,
+                &headers
+                    .iter()
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect::<Vec<_>>(),
+                None,
+            )
+            .map_err(map_net)
+        }
+
+        fn status(&self, handle: u32) -> Result<u16, String> {
+            net::response_status(handle).map_err(map_net)
+        }
+
+        fn headers(&self, handle: u32) -> Result<Vec<(String, String)>, String> {
+            net::response_headers(handle).map_err(map_net)
+        }
+
+        fn read_body(&self, handle: u32, max: usize) -> Result<Option<Vec<u8>>, String> {
+            net::read_body(handle, max as u64).map_err(map_net)
+        }
+
+        fn close(&self, handle: u32) {
+            let _ = net::close_response(handle);
+        }
+    }
+
+    /// The host's `net` error as the string the pipeline reports. The
+    /// `permission` variant carries the host's own sentence (the consent
+    /// refusal or the unmatched pattern), so a denial reads the same in
+    /// both modes.
+    fn map_net(err: net::Error) -> String {
+        match err {
+            net::Error::Permission(detail) => detail,
+            net::Error::NotGranted(detail) => detail,
+            net::Error::Dns(detail) => detail,
+            net::Error::Tls(detail) => detail,
+            net::Error::Io(detail) => detail,
+            net::Error::Invalid(detail) => detail,
+        }
+    }
+
     pub struct WebfetchWasm;
 
     impl SchemaGuest for WebfetchWasm {
@@ -731,13 +791,20 @@ mod wasm_mode {
                 truncated: false,
                 extras: Vec::new(),
             };
-            if let Err(reason) = super::parse_webfetch_args(&call.arguments) {
-                return fail(reason);
+            let request = match super::parse_webfetch_args(&call.arguments) {
+                Ok(request) => request,
+                Err(reason) => return fail(reason),
+            };
+            match super::fetch(&request, &HostNet) {
+                Ok(text) => WasmResult {
+                    call_id: call.call_id,
+                    status: "ok".to_string(),
+                    content: Some(text),
+                    truncated: false,
+                    extras: Vec::new(),
+                },
+                Err(reason) => fail(reason),
             }
-            fail(
-                "webfetch needs the native half: the tool world has no net import (gh #222)"
-                    .to_string(),
-            )
         }
     }
 

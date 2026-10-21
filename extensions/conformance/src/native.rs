@@ -171,6 +171,28 @@ impl Cap for NativeCap {
     fn pty_kill(&self, handle: u32) -> Result<(), CapabilityError> {
         self.cap.pty_kill(handle)
     }
+    /// Gh #302: a whole GET over the capability engine - the same shape
+    /// the WASM half runs over the import, so the two modes' answers
+    /// differ only when the host itself does.
+    fn net_fetch(&self, url: &str) -> Result<(u16, Vec<u8>), CapabilityError> {
+        let handle = self.cap.net_request_asking("GET", url, &[], None)?;
+        let outcome = (|| {
+            let status = self.cap.net_response_status(handle)?;
+            let mut body = Vec::new();
+            while let Some(chunk) = self.cap.net_read_body(handle, 64 * 1024)? {
+                if chunk.is_empty() {
+                    break;
+                }
+                body.extend_from_slice(&chunk);
+                if body.len() >= 1024 * 1024 {
+                    break;
+                }
+            }
+            Ok((status, body))
+        })();
+        let _ = self.cap.net_close_response(handle);
+        outcome
+    }
 }
 
 impl crate::IdentityCap for NativeCap {
@@ -200,6 +222,29 @@ impl crate::IdentityCap for NativeCap {
     }
     fn net_response_headers(&self, handle: u32) -> Result<Vec<(String, String)>, CapabilityError> {
         self.cap.net_response_headers(handle)
+    }
+
+    // Gh #302: the same whole-GET shape the WASM half runs over the
+    // import, here over the capability engine - so the two modes'
+    // answers differ only when the host itself does.
+    fn net_fetch(&self, url: &str) -> Result<(u16, Vec<u8>), CapabilityError> {
+        let handle = self.cap.net_request_asking("GET", url, &[], None)?;
+        let outcome = (|| {
+            let status = self.cap.net_response_status(handle)?;
+            let mut body = Vec::new();
+            while let Some(chunk) = self.cap.net_read_body(handle, 64 * 1024)? {
+                if chunk.is_empty() {
+                    break;
+                }
+                body.extend_from_slice(&chunk);
+                if body.len() >= 1024 * 1024 {
+                    break;
+                }
+            }
+            Ok((status, body))
+        })();
+        let _ = self.cap.net_close_response(handle);
+        outcome
     }
 }
 

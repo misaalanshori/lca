@@ -11,11 +11,12 @@ wit_bindgen::generate!({
         "lca:host/resources@0.6.0": generate,
         "lca:host/state@0.6.0": generate,
         "lca:host/tools@0.6.0": generate,
+        "lca:host/net@0.6.0": generate,
     },
 });
 
 use lca::ext::types::ToolCall;
-use lca::host::{fs, process, pty, resources, state};
+use lca::host::{fs, net, process, pty, resources, state};
 
 use crate::{Cap, mode_and_args, schema_json};
 use exports::lca::ext::execute::Guest as ExecuteTrait;
@@ -53,6 +54,18 @@ fn map_pty(err: pty::Error) -> crate::CapabilityError {
         pty::Error::NotFound(d) => E::NotFound(d),
         pty::Error::Io(d) => E::Io(d),
         pty::Error::Invalid(d) => E::Invalid(d),
+    }
+}
+
+fn map_net(err: net::Error) -> crate::CapabilityError {
+    use crate::CapabilityError as E;
+    match err {
+        net::Error::Permission(d) => E::Permission(d),
+        net::Error::NotGranted(d) => E::NotGranted(d),
+        net::Error::Dns(d) => E::Io(format!("dns: {d}")),
+        net::Error::Tls(d) => E::Io(format!("tls: {d}")),
+        net::Error::Io(d) => E::Io(d),
+        net::Error::Invalid(d) => E::Invalid(d),
     }
 }
 
@@ -203,6 +216,29 @@ impl Cap for GuestCap {
     }
     fn pty_kill(&self, handle: u32) -> Result<(), crate::CapabilityError> {
         pty::kill(handle).map_err(map_pty)
+    }
+    /// Gh #302: a whole GET through `lca:host/net`, which the `tool`
+    /// world now imports. This is the conformance obligation the import
+    /// carries - if the guest stops delegating, granted/denied/unlisted
+    /// all collapse into one shape and the matrix catches it.
+    fn net_fetch(&self, url: &str) -> Result<(u16, Vec<u8>), crate::CapabilityError> {
+        let handle = net::request("GET", url, &[], None).map_err(map_net)?;
+        let outcome = (|| {
+            let status = net::response_status(handle).map_err(map_net)?;
+            let mut body = Vec::new();
+            while let Some(chunk) = net::read_body(handle, 64 * 1024).map_err(map_net)? {
+                if chunk.is_empty() {
+                    break;
+                }
+                body.extend_from_slice(&chunk);
+                if body.len() >= 1024 * 1024 {
+                    break;
+                }
+            }
+            Ok((status, body))
+        })();
+        let _ = net::close_response(handle);
+        outcome
     }
 }
 

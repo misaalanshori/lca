@@ -699,6 +699,7 @@ mod wasm_mode {
             "lca:host/tools@0.6.0": generate,
             "lca:host/resources@0.6.0": generate,
             "lca:host/state@0.6.0": generate,
+            "lca:host/net@0.6.0": generate,
         },
     });
 
