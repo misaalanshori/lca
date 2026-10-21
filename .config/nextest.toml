@@ -8,3 +8,49 @@
 # instead of an anonymous job that lives for six hours.
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 2 }
+
+# gh #429: `e2e_install`'s Phase 5 exit test is the one row whose cost is
+# dominated by test-profile wasmtime compilation, and it needs its own
+# ceiling.
+#
+# Measured 2026-10-21 on this worktree, stage breakdown of
+# a_clean_machine_installs_from_oci_and_https_then_runs_a_turn:
+#
+#     fixtures (mock registry, skills zip, archive server, model)   0.02 s
+#     sandbox                                                       0.00 s
+#     OCI install + consent                                         0.08 s
+#     HTTPS archive install + consent                               0.02 s
+#     ext list / config / info blocks                              0.16 s
+#     turn one, denied (loads the installed WASM provider)         12.1 s
+#     turn two, granted (loads it again)                          14.3 s
+#     ext update / remove / decline path                           0.18 s
+#
+# So 94% of the row is two turns, and each turn is a process that loads an
+# installed component. `wasmtime::component::Component::new` on the
+# 558 KB openai-compatible fixture costs:
+#
+#     test profile (debug_assertions = true)   21.8 s
+#     release profile                           1.7 s
+#
+# a ~12x compilation penalty, paid again by every turn-shaped spawn in every
+# e2e row. That is why sharing the fixture setup (the issue's option 3)
+# cannot help - the shared part is 0.12 s of 42 s - and why splitting the
+# row (option 2) would split a 12 s fixed cost per process across rows
+# without reducing the total. The honest cost is per-spawn compilation in a
+# test build, which is a product characteristic, not slack in this row.
+#
+# Budget arithmetic. Loaded wall-clock for this row, run concurrently with a
+# second full suite (`-p lca-core`), six samples including the issue's own
+# measurement: 50.3, 63.8, 66, 71, 78.5, 85.9, 103.6 s. p95 = 85.9 s,
+# worst = 103.6 s. Taking worst x 2 = 207.2 s rounds to 210 s: a 2.0x margin
+# over the worst observed run, so a slower runner or a third concurrent
+# suite has real room, while a genuine regression still trips it long before
+# the pipeline's patience runs out.
+#
+# Scope. The filter names the test, not the binary: the other four rows in
+# `e2e_install` (`ext_list_names_builtins_explicitly` and neighbours) keep
+# the 60s/2 budget above, and a new row added to this binary inherits it too
+# rather than silently getting 210 s.
+[[profile.default.overrides]]
+filter = 'test(=a_clean_machine_installs_from_oci_and_https_then_runs_a_turn)'
+slow-timeout = { period = "210s", terminate-after = 1 }
