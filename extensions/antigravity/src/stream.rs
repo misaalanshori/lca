@@ -333,11 +333,52 @@ pub fn build_request(
         .flat_map(|message| message.tool_calls.iter())
         .map(|call| (call.call_id.as_str(), call.name.as_str()))
         .collect();
+    // The System text this call sends, gathered before the turn loop so every
+    // System message is merged once, in order, with no duplicate (gh #280).
+    // `system` is what `StreamDriver::open` collected - the same blocks joined
+    // with "\n" - so a block it already carries is not added again, and a block
+    // it does not carry (a caller that pre-filtered, a future transform) is
+    // appended rather than dropped. pi-antigravity takes several parts here for
+    // the same reason: `systemParts` accumulates the prompt plus every injected
+    // skill block (`src/stream/stream.ts:891-897`).
+    let mut system_parts: Vec<serde_json::Value> = Vec::new();
+    if !system.is_empty() {
+        system_parts.push(serde_json::json!({ "text": system }));
+    }
+    for message in &request.messages {
+        if message.role != lca_protocol::MessageRole::System {
+            continue;
+        }
+        for block in &message.content {
+            if let lca_protocol::ContentBlock::Text { text } = block
+                && !text.is_empty()
+                && !system.contains(text.as_str())
+            {
+                system_parts.push(serde_json::json!({ "text": text }));
+            }
+        }
+    }
+    // Never an empty `parts`: it is a different message on this gateway, and
+    // the pre-fix code always sent one part. pi's fallback sends its own
+    // default instruction block here rather than nothing.
+    if system_parts.is_empty() {
+        system_parts.push(serde_json::json!({ "text": "" }));
+    }
     for message in &request.messages {
         let role = match message.role {
-            lca_protocol::MessageRole::Tool => "user",
+            // gh #280: a System message is the root prompt, never a turn. It is
+            // already in `systemInstruction`, so serializing it into `contents`
+            // too sent the whole preamble twice - once as instructions, once
+            // framed as a prior user utterance - wasting input tokens and
+            // shifting the cached prefix the moment anything upstream changed
+            // (the same class as gh #299). The arm is explicit, and every role
+            // is named, so the next variant added to `MessageRole` cannot fall
+            // into "user" the way this one silently did.
+            lca_protocol::MessageRole::System => continue,
+            // Gemini's turn vocabulary is user/model only: a tool result is
+            // reported back as the user side, a tool call as the model side.
+            lca_protocol::MessageRole::User | lca_protocol::MessageRole::Tool => "user",
             lca_protocol::MessageRole::Assistant => "model",
-            _ => "user",
         };
         let mut parts = Vec::new();
         let text: String = message
@@ -490,7 +531,7 @@ pub fn build_request(
         "contents": contents,
         "systemInstruction": {
             "role": "user",
-            "parts": [{ "text": system }],
+            "parts": system_parts,
         },
         "sessionId": format!("{}", now_epoch() * 1000),
         "labels": labels,
