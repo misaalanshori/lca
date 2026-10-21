@@ -8,8 +8,19 @@ use std::sync::{Arc, Mutex};
 use lca_protocol::Record;
 use lca_ui::{ShellEvent, ShellHandle, UiHooks};
 
+/// Whether project-local extensions wait on trust (gh #138): the
+/// directory exists and holds at least one entry, so there is
+/// something for the trust prompt to gate. Empty or absent costs a
+/// stat, never a prompt.
+fn project_extensions_wait(cwd: &std::path::Path) -> bool {
+    std::fs::read_dir(cwd.join(".lca").join("extensions"))
+        .map(|entries| entries.take(1).any(|entry| entry.is_ok()))
+        .unwrap_or(false)
+}
+
 use super::Ui;
 use super::collect_markdown_transformers;
+use super::editor::external_editor;
 
 /// Write text to the system clipboard through a native command, returning
 /// `true` only when the command succeeded (R6). A `false` lets the
@@ -831,78 +842,6 @@ impl Ui {
     }
 }
 
-/// Open `$EDITOR`/`$VISUAL` on the prompt text (P6).
-/// Whether project-local extensions wait on trust (gh #138): the
-/// directory exists and holds at least one entry, so there is
-/// something for the trust prompt to gate. Empty or absent costs a
-/// stat, never a prompt.
-fn project_extensions_wait(cwd: &std::path::Path) -> bool {
-    std::fs::read_dir(cwd.join(".lca").join("extensions"))
-        .map(|entries| entries.take(1).any(|entry| entry.is_ok()))
-        .unwrap_or(false)
-}
-
-fn external_editor(text: &str) -> Option<String> {
-    let editor = std::env::var("VISUAL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.is_empty()))?;
-    external_editor_with(&editor, text, &std::env::temp_dir())
-}
-
-/// The testable core of [`external_editor`]: split the editor command on
-/// shell words and spawn it directly with the buffer path as its own argv
-/// element (#121). Paths with spaces need quoting nowhere: neither the
-/// split nor the spawn rejoins words, and the buffer file carries a
-/// unique name. An editor string that does not split (an unbalanced
-/// quote) falls back to the platform shell — the one case that genuinely
-/// needs one.
-fn external_editor_with(editor: &str, text: &str, dir: &std::path::Path) -> Option<String> {
-    let buffer = tempfile::Builder::new()
-        .prefix("lca-prompt-")
-        .suffix(".md")
-        .tempfile_in(dir)
-        .ok()?;
-    // Close the handle before spawning: on Windows an open file cannot be
-    // opened again by the editor. The path stays reserved (and deleted on
-    // drop) through the guard below.
-    let path = buffer.into_temp_path();
-    std::fs::write(&path, text).ok()?;
-    let status = match shell_words::split(editor) {
-        Ok(words) => {
-            let (program, args) = words.split_first()?;
-            std::process::Command::new(program)
-                .args(args)
-                .arg(&path)
-                .status()
-                .ok()?
-        }
-        Err(_) => run_through_shell(&format!("{editor} {}", path.display())).ok()?,
-    };
-    let edited = std::fs::read_to_string(&path).ok();
-    status.success().then_some(edited).flatten()
-}
-
-/// Run one command line through the platform shell: `sh -c` on Unix,
-/// `cmd /C` on Windows. Only the fallback for an editor string no word
-/// splitter accepts — everything else spawns directly.
-fn run_through_shell(command: &str) -> std::io::Result<std::process::ExitStatus> {
-    #[cfg(windows)]
-    {
-        std::process::Command::new("cmd")
-            .arg("/C")
-            .arg(command)
-            .status()
-    }
-    #[cfg(not(windows))]
-    {
-        std::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .status()
-    }
-}
-
 /// Persist a `/theme`/`/thinking` pick to the config file (E2); a write
 /// failure is a warning the user can still act on, never a crash.
 pub(super) fn persist_ui_setting(key: &str, value: Option<String>) {
@@ -978,7 +917,7 @@ pub(super) fn initial_screen_mode(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     // Verifies: S1 (ADR-0037 third annotation) - a fresh session defaults
@@ -1042,6 +981,10 @@ mod tests {
     // The python probe mirrors scripts/traceability.sh: the repo already
     // requires a python on PATH, so the mock editor is one everywhere
     // (Windows CI included).
+    pub(crate) fn python_on_path_for_tests() -> String {
+        python_on_path()
+    }
+
     fn python_on_path() -> String {
         for candidate in ["python3", "python", "py"] {
             let probing = std::process::Command::new(candidate)
@@ -1055,54 +998,6 @@ mod tests {
             }
         }
         panic!("a python is required on PATH (scripts/traceability.sh needs one too)");
-    }
-
-    /// A mock `$EDITOR`: appends a marker line to the file named by its
-    /// first argument. Written into `dir` (which may contain spaces).
-    fn mock_editor(dir: &std::path::Path) -> (String, std::path::PathBuf) {
-        let script = dir.join("mock editor.py");
-        std::fs::write(
-            &script,
-            "import sys\npath = sys.argv[1]\ntext = open(path, encoding=\"utf-8\").read()\nopen(path, \"w\", encoding=\"utf-8\").write(text + \"[edited]\\n\")\n",
-        )
-        .expect("write mock editor");
-        let editor = format!("{} \"{}\"", python_on_path(), script.display());
-        (editor, script)
-    }
-
-    // Verifies: #121 (the editor command splits on shell words, spawns
-    // directly with the buffer path as its own argv element, and round
-    // trips through a directory with spaces — on every platform).
-    #[test]
-    fn the_editor_launches_through_spaces_directly() {
-        let root = lca_testkit::scratch_path("lca-editor-spaces");
-        let dir = root.join("dir with spaces");
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let (editor, _) = mock_editor(&dir);
-        let edited = external_editor_with(&editor, "hello", &dir).expect("editor runs");
-        assert!(
-            edited.contains("hello") && edited.contains("[edited]"),
-            "round trip through the spaced path: {edited:?}"
-        );
-    }
-
-    // Verifies: #121 (a plain `program --flag` editor splits the same way).
-    #[test]
-    fn the_editor_splits_flags_from_the_program() {
-        let root = lca_testkit::scratch_path("lca-editor-flags");
-        std::fs::create_dir_all(&root).expect("mkdir");
-        let script = root.join("edit.py");
-        std::fs::write(
-            &script,
-            "import sys\npath = sys.argv[1]\nopen(path, \"w\", encoding=\"utf-8\").write(\"flagged\\n\")\n",
-        )
-        .expect("write mock editor");
-        let editor = format!("{} \"{}\"", python_on_path(), script.display());
-        let edited = external_editor_with(&editor, "hello", &root).expect("editor runs");
-        assert!(
-            edited.contains("flagged"),
-            "program and flag split, path appended: {edited:?}"
-        );
     }
 }
 
