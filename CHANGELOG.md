@@ -70,6 +70,22 @@ Dates are UTC.
   present, and bound every fetch in time and bytes *while reading*. The proxy
   rules are the `net` client's, spelled out in `docs/environment-variables.md`
   so the two cannot drift.
+- **An enterprise Copilot account gets its hosts validated and a refusal
+  that says what to do** (gh #282). `login_options` asks for an
+  `enterprise-domain`, and the flow then requests
+  `https://<enterprise>/login/device/code` — but the ad-hoc `net` grant
+  offer only ever saw the manifest's declared host (`github.com`), because
+  the enterprise domain is field data. The offer runs *after* a successful
+  `login-submit`, so the submit's own first request was denied with
+  `matches no granted pattern` and no way forward. The field is now
+  validated as a hostname (a scheme, path, port, user info, wildcard or
+  whitespace is refused at the field with the command that fixes it), the
+  three hosts an enterprise account needs are derived in one place and
+  shared with the inference URL so the granted host is the requested host,
+  and an ungranted enterprise login now names every derived host plus
+  `--allow-host` for each and points at the interactive path. `github.com`
+  derives no extra hosts and its failures are never rewritten. Guard:
+  `tests/regressions/282-enterprise-hosts-offered.rs`.
 - **Copilot's discovered models keep their real context windows** (gh #283).
   Live discovery mapped every model from GitHub's `/models` to
   `context_window: 0`, discarding the curated table's windows. Zero is not
