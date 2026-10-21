@@ -661,3 +661,9 @@ mod conformance_fixture_keeps_current;
 // the code they scan.
 #[path = "443-three-commands-reachable.rs"]
 mod three_commands_reachable;
+
+// Gh #403 gap 1: a transcript replacement must not keep the previous
+// transcript's selection (a wrong-data path, not just a stale highlight).
+// The seam is the transcript generation; the guard pins that it stays one.
+#[path = "403-stale-selection-cleared.rs"]
+mod stale_selection_cleared;

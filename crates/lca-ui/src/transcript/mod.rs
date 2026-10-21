@@ -177,6 +177,14 @@ pub struct Transcript {
     /// rendered; a streaming append invalidates only the last entry, so a
     /// long transcript is not re-rendered from scratch on every delta.
     cache: std::cell::RefCell<Vec<CachedRender>>,
+    /// How many times the whole transcript was *replaced* (gh #403).
+    ///
+    /// Only [`Transcript::clear`] bumps this - appends never do. The run loop
+    /// compares it against its own last-seen value to decide whether a
+    /// selection still addresses text that exists; an append leaves the
+    /// earlier rows exactly where they were, so a selection over them is
+    /// still valid and must survive.
+    generation: u64,
 }
 
 impl Transcript {
@@ -541,9 +549,22 @@ impl Transcript {
 
     /// Drop every entry (R3's session switch): the new session starts its
     /// own transcript.
+    ///
+    /// Bumps [`Transcript::generation`], which is what tells the run loop a
+    /// selection no longer addresses live rows (gh #403 gap 1).
     pub fn clear(&mut self) {
         self.invalidate_cache();
         self.entries.clear();
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// How many whole-transcript replacements have happened (gh #403).
+    ///
+    /// Distinguishes "the user's selection still addresses these rows" from
+    /// "these rows are different text now". Appends, streaming deltas, and
+    /// resizes leave it alone; only [`Transcript::clear`] moves it.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Append a replay of persisted records with the rendering the live

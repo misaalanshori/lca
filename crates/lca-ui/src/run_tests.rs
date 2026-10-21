@@ -625,12 +625,18 @@ fn shift_wheel_gestures_step_and_plain_ones_do_not() {
         y: 1,
         press: true,
     };
-    assert_eq!(super::shift_wheel_jump(&gesture(64 + 4)), Some(-1));
-    assert_eq!(super::shift_wheel_jump(&gesture(65 + 4)), Some(1));
-    assert_eq!(super::shift_wheel_jump(&gesture(64)), None);
-    assert_eq!(super::shift_wheel_jump(&gesture(65)), None);
-    assert_eq!(super::shift_wheel_jump(&gesture(4)), None);
-    assert_eq!(super::shift_wheel_jump(&gesture(0)), None);
+    assert_eq!(
+        crate::run_selection::shift_wheel_jump(&gesture(64 + 4)),
+        Some(-1)
+    );
+    assert_eq!(
+        crate::run_selection::shift_wheel_jump(&gesture(65 + 4)),
+        Some(1)
+    );
+    assert_eq!(crate::run_selection::shift_wheel_jump(&gesture(64)), None);
+    assert_eq!(crate::run_selection::shift_wheel_jump(&gesture(65)), None);
+    assert_eq!(crate::run_selection::shift_wheel_jump(&gesture(4)), None);
+    assert_eq!(crate::run_selection::shift_wheel_jump(&gesture(0)), None);
 }
 
 // Verifies: gh #82 - the exit hint names the live session for
@@ -667,7 +673,7 @@ fn screen_switch_applies_copy_and_wheel_tuning() {
         Screen::Alt(alt) => assert!(alt.copy_on_select, "on by default"),
         Screen::Main(_) => panic!("should be fullscreen"),
     }
-    super::apply_screen_tuning(&mut screen, &tuning);
+    crate::run_selection::apply_screen_tuning(&mut screen, &tuning);
     match &screen {
         Screen::Alt(alt) => {
             assert!(!alt.copy_on_select, "config wins over the default");
