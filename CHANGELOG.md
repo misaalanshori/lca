@@ -103,6 +103,22 @@ Dates are UTC.
   extension dispatcher and silently do nothing), and every routed command has
   a `/help` line (which is how `/label`, `/labels`, `/jump`, `/rename`, and
   `/extensions` were reachable but invisible).
+- **`tool.edit_requires_read` now governs extension editors too** (gh #436).
+  The setting promised "refuse an edit to a file this session has not read",
+  but `hash_edit` wrote through the capability engine's `fs_write`, which never
+  consulted the read tracker the built-in `edit` uses — so the staleness guard
+  had a hole exactly one extension wide. The issue left the fix as an owner
+  call: make the tracker govern, or document an anchor-guarded exception. The
+  exception is false, and three measured paths say so: a 3-character line hash
+  carries no file identity (an anchor fetched from one file edits another), a
+  change-then-revert revives a stale anchor, and only duplicate lines are
+  caught. An anchor proves "this text was in *some* read"; the flag promises
+  "this file was read recently". So `lca-tools` now keeps one process-scoped
+  read record that the built-in `read` writes and both editors consult, with a
+  single shared refusal string — two editors answering differently for one rule
+  would have been the same defect in a new place. Creating a new file is never
+  gated (nothing to be stale against), and with the flag off, blind edits still
+  land, as pi does.
 - **The user guide now names every command users can run, and stops
   promising a reload it does not do** (gh #419). `docs/usage.md` read like
   an exhaustive command list while omitting nine that ship; it is now a

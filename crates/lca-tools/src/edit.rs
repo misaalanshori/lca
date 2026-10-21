@@ -121,6 +121,9 @@ impl crate::ToolExecutor {
         match self.ops.write(&target, out.as_bytes()) {
             Ok(()) => {
                 self.tracker.record(&target, out.as_bytes());
+                // gh #436: keep the shared registry in step, so an extension
+                // edit that follows a built-in edit sees a fresh read.
+                crate::note_read(&target, out.as_bytes());
                 let mut result = ToolResult::ok(
                     call.call_id.clone(),
                     format!("Successfully replaced {} block(s) in {path}.", pairs.len()),

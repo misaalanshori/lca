@@ -718,8 +718,13 @@ mod wasm_mode {
         }
 
         fn write(&self, path: &str, bytes: &[u8]) -> Result<(), lca_protocol::CapabilityError> {
+            // gh #436: the host now refuses a stale write when
+            // `tool.edit_requires_read` is on, and its message is the one the
+            // built-in `edit` gives. Keep it rather than flattening every
+            // refusal to "fs write refused" - the user needs to know to read
+            // the file again.
             fs::write("workspace", path, bytes)
-                .map_err(|_| lca_protocol::CapabilityError::Io("fs write refused".to_string()))?;
+                .map_err(|err| lca_protocol::CapabilityError::Io(format!("{err:?}")))?;
             Ok(())
         }
     }
@@ -816,4 +821,52 @@ mod wasm_hook {
     }
 
     export_hash_edit_hook!(HashEditHook);
+}
+
+// ---------------------------------------------------------------------------
+// The read-before-edit gate (gh #436)
+// ---------------------------------------------------------------------------
+
+/// Run one `hash_edit` for `root`'s workspace under the host's
+/// `tool.edit_requires_read` rule.
+///
+/// This is [`run_hash_edit`] plus the FR-TOOL-2 check the built-in `edit`
+/// makes, using the **same** shared read registry (`lca_tools::has_fresh_read`)
+/// and the **same** refusal text (`lca_tools::stale_read_refusal`) — two
+/// editors answering differently for one rule is the defect this fixes.
+///
+/// Anchors alone are not the guarantee (gh #436): a 3-character hash of the
+/// trimmed line carries no file identity, so an anchor read from one file
+/// resolves in another, and a change-then-revert revives a stale one. An
+/// anchor proves "this text was in *some* read"; the flag promises "this file
+/// was read recently", which only the tracker can answer.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn checked_edit(
+    root: &std::path::Path,
+    path: &str,
+    edits: &[Edit],
+    requires_read: bool,
+) -> Result<String, String> {
+    let target = if std::path::Path::new(path).is_absolute() {
+        std::path::PathBuf::from(path)
+    } else {
+        root.join(path)
+    };
+    if requires_read
+        && let Ok(existing) = std::fs::read(&target)
+        && !lca_tools::has_fresh_read(&target, &existing)
+    {
+        return Err(lca_tools::stale_read_refusal(path));
+    }
+    // Read → check → apply → write, in the same order the built-in `edit`
+    // uses, so a refusal never touches the file.
+    let original = std::fs::read(&target).map_err(|err| format!("{path}: {err}"))?;
+    let updated = apply_edits(&original, edits).map_err(|err| err.to_string())?;
+    std::fs::write(&target, &updated).map_err(|err| format!("{path}: {err}"))?;
+    Ok(format!(
+        "edited {path}: {} bytes -> {} bytes, {} edit(s)",
+        original.len(),
+        updated.len(),
+        edits.len()
+    ))
 }

@@ -677,3 +677,13 @@ mod tool_card_preview_and_timer;
 // `Compacting` is a first-class separator state with its reason.
 #[path = "388-dock-height-and-compacting.rs"]
 mod dock_height_and_compacting;
+// GitHub #436: `hash_edit` wrote through `Capabilities::fs_write`, which never
+// consulted the `ReadTracker` the built-in `edit` checks - so
+// `tool.edit_requires_read` had a hole exactly one extension wide. The issue
+// left this as an owner call between making the tracker govern (A) and
+// documenting an anchor-guarded exception (B). The guard pins the evidence that
+// B is false: a 3-char line hash carries no file identity (an anchor from one
+// file resolves in another) and a change-then-revert revives a stale anchor, so
+// an anchor proves "some read", never "a recent read of this file".
+#[path = "436-hash-edit-read-tracker.rs"]
+mod hash_edit_read_tracker;
