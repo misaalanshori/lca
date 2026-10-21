@@ -225,6 +225,42 @@ fn the_partial_answer_is_reportable() {
     assert_eq!(ids(&openrouter::list_models(&cap)), GOOD);
 }
 
+/// The notice is machine-visible, not just a log line: it rides the first
+/// row's documented `extras`, which is the one channel that crosses the ABI
+/// in both delivery modes. A log message would be a dead write in the guest
+/// (`captured_logs` is a test accessor the host never drains).
+#[test]
+fn the_skip_notice_crosses_the_boundary_on_the_first_row() {
+    let cap = CatalogCap::serving(&catalog_with(r#"{"id":null}"#));
+    let rows = openrouter::list_models(&cap);
+    assert_eq!(
+        rows[0]
+            .extras
+            .get(openrouter::SKIPPED_EXTRA)
+            .map(String::as_str),
+        Some("1"),
+        "the count is on the first row: {:?}",
+        rows[0].extras
+    );
+    assert!(
+        rows[1..]
+            .iter()
+            .all(|row| !row.extras.contains_key(openrouter::SKIPPED_EXTRA)),
+        "attached once, not per row"
+    );
+}
+
+/// And a clean catalog carries nothing, so the marker means what it says.
+#[test]
+fn a_clean_catalog_carries_no_notice() {
+    let cap = CatalogCap::serving(r#"{"data":[{"id":"a"},{"id":"b"}]}"#);
+    let rows = openrouter::list_models(&cap);
+    assert!(
+        rows.iter()
+            .all(|row| !row.extras.contains_key(openrouter::SKIPPED_EXTRA))
+    );
+}
+
 /// The context window keeps its tolerant handling: a present
 /// `context_length` rides, a missing or non-numeric one is an unknown (0)
 /// window rather than a rejection. gh #34's ground-truth rule, restated

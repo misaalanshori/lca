@@ -389,34 +389,40 @@ pub const CURATED_MODELS: [(&str, &str, u32); 3] = [
 /// floor otherwise.
 pub fn list_models(cap: &dyn ProviderCap) -> Vec<lca_protocol::ModelInfo> {
     let (live, dropped) = discover_report(cap);
-    if !live.is_empty() {
-        // Gh #295: report the partial answer where the user will see it.
-        // A gateway catalog can be several hundred rows; dropping some is
-        // survivable, dropping them *silently* is what this project keeps
-        // closing. `log` is the extension's diagnostic channel in both
-        // delivery modes ("never reach the model or the session log"), so a
-        // skip lands in diagnostics and not in the transcript.
-        if dropped > 0 {
-            report_skipped(dropped, live.len());
-        }
-        return live;
-    }
+    let mut rows = if !live.is_empty() {
+        live
+    } else {
+        CURATED_MODELS
+            .iter()
+            .map(|(id, name, window)| lca_protocol::ModelInfo {
+                id: (*id).to_string(),
+                name: (*name).to_string(),
+                context_window: *window,
+                max_tokens: 0,
+                extras: Default::default(),
+            })
+            .collect()
+    };
+    // Gh #295: a partial catalog must never look complete on screen. The
+    // notice rides the documented `ModelInfo.extras` channel, on the first
+    // row only (one notice, not one per row), so it crosses the ABI to the
+    // host in both delivery modes and a test can assert it. It is attached
+    // ahead of the `log`/stderr warning below because those two are
+    // platform-split; this is the half that is one implementation.
     if dropped > 0 {
-        // Every row was malformed: still the curated floor, but say why
-        // the live catalog contributed nothing.
-        report_skipped(dropped, 0);
+        if let Some(first) = rows.first_mut() {
+            first
+                .extras
+                .insert(SKIPPED_EXTRA.to_string(), dropped.to_string());
+        }
+        report_skipped(dropped, rows.len());
     }
-    CURATED_MODELS
-        .iter()
-        .map(|(id, name, window)| lca_protocol::ModelInfo {
-            id: (*id).to_string(),
-            name: (*name).to_string(),
-            context_window: *window,
-            max_tokens: 0,
-            extras: Default::default(),
-        })
-        .collect()
+    rows
 }
+
+/// The `ModelInfo.extras` key carrying the gh #295 skip count on the first
+/// catalog row. Reads as "how many entries were dropped", never a secret.
+pub const SKIPPED_EXTRA: &str = "catalog-skipped";
 
 /// Name a partial catalog read in diagnostics (gh #295). One line, with the
 /// counts, so "returned 40 of 300 and said nothing" cannot happen again.
