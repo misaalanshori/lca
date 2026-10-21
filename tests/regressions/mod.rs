@@ -284,6 +284,11 @@ mod gh212_panel_toggle_traps_exit;
 // their frame-level guards live here and in `chat_tree_tests.rs`.
 #[path = "394-tree-layout-math.rs"]
 mod gh394_tree_layout_math;
+// GitHub #401: three queue-UX gaps - the abort rescue is pinned and now
+// announces + merges the draft, a submit during a compaction parks and
+// flushes when it ends, and the dequeue key is discoverable in the dock.
+#[path = "401-queue-rescue-and-compaction.rs"]
+mod gh401_queue_rescue_and_compaction;
 // GitHub #81: an induced panic writes the crash file with its rows.
 #[path = "gh81-crash-log-writes-a-file.rs"]
 mod gh81_crash_log_writes_a_file;

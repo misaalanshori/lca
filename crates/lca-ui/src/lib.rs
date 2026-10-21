@@ -19,6 +19,7 @@ mod chat_mouse;
 mod chat_overlays;
 mod chat_pickers;
 mod chat_poll;
+mod chat_queue;
 mod chat_render;
 mod chat_search;
 mod chat_shell;

@@ -83,3 +83,44 @@ the record here, the current decision text is the corrected one, and this
 annotation is the trail between them. Future edits to a decision follow
 the rule the cycle-3 audit broke: append an annotation, never rewrite the
 paragraph.
+
+## Annotation — 2026-10-21 (gh #401): three consequences the decision text assumed but the interface did not yet honour
+
+The decision above already routes a message through a queue during a
+compaction ("During compaction the queue holds and flushes after (the
+compaction-queue sibling)"). What shipped did the queuing for slash
+commands only: a *message* typed while `/compact` ran was refused with
+"a compaction is already running", which is the policy this ADR rules
+out. Three additions close the gap, none of them a change of decision:
+
+1. **The compaction queue is now real** (pi's `compactionQueuedMessages`,
+   `queueCompactionMessage`, `flushCompactionQueue`). A message submitted
+   during a compaction parks, the dock says `Queued message for after
+   compaction`, and the flush is ordered: leading commands dispatch
+   first, the first prompt starts the turn (or joins the running one when
+   the compaction was mid-turn), the rest re-queue behind it, and a flush
+   that cannot start a turn rolls the whole queue back rather than
+   dropping it. Extension commands still run immediately, which is what
+   keeps a slash line responsive under a compaction.
+2. **The restore announces and merges** (pi's
+   `restoreQueuedMessagesToEditor`). Aborting a turn, or pressing the
+   dequeue key, returns the queue to the editor *ahead of* the live
+   draft, `\n\n`-separated, with the caret at the end, and says
+   `Restored N queued messages to editor`. The queue is older than the
+   draft, which is why it comes first; nothing is auto-sent either way.
+   This is the concrete answer to "an aborted turn returns every queued
+   message to the editor, in order" for the case where the user typed
+   while waiting.
+3. **The queue is discoverable.** The band labels a queued message
+   `Steering:` or `Follow-up:` (pi's words; it previously said
+   `[steer]`/`[next]`), and carries a `↳ <key> to edit all queued
+   messages` hint whose key resolves from the live binding registry, so
+   a rebound dequeue still tells the truth. `app.message.dequeue`'s
+   primary key moved to `alt+up` (pi's key for it) with `alt+e` kept as a
+   second spelling; `alt+up` therefore left `app.prompt.previous`, which
+   keeps `shift+up` and `ctrl+up`. With a queue waiting the dequeue key
+   wins over the jump, which is pi's precedence.
+
+The record marker is untouched: a message flushed out of the compaction
+queue still writes `Record::User.queue` with the mode it was submitted
+in, because that is what it was.

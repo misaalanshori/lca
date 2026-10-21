@@ -686,6 +686,10 @@ impl Chat {
                 if self.compacting {
                     self.compacting = false;
                     self.separator.idle();
+                    // Gh #401: a compaction that ended without a `Done`
+                    // handoff (a host that only raises/lowers the state)
+                    // still owes the queue its flush.
+                    self.flush_compaction_queue();
                     true
                 } else {
                     false
@@ -706,6 +710,9 @@ impl Chat {
                 self.compacting = false;
                 self.separator.idle();
                 self.say(notice);
+                // Gh #401 (pi's `flushCompactionQueue`): what the user
+                // typed while it ran now goes where it belongs.
+                self.flush_compaction_queue();
                 true
             }
         }

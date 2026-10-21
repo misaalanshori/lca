@@ -190,8 +190,12 @@ impl Chat {
         }
 
         // The pending-messages band (ADR-0038): queued commands show as
-        // commands, never as messages (composer-polish fold-in).
-        for pending in &self.pending {
+        // commands, never as messages (composer-polish fold-in). Gh #401:
+        // the labels and the dequeue hint are pi's
+        // (`updatePendingMessagesDisplay`), and a message parked by a
+        // compaction sits in the same band, so one dock tells the whole
+        // story of what is waiting.
+        for pending in self.pending.iter().chain(self.compaction_queued.iter()) {
             if pending.is_command {
                 dock.push((self.theme.dim)(&format!(
                     "  ⏳ [command] {}",
@@ -200,16 +204,23 @@ impl Chat {
                 continue;
             }
             let mark = match pending.mode {
-                lca_protocol::SubmitMode::Steer => "steer",
-                lca_protocol::SubmitMode::FollowUp => "next",
+                lca_protocol::SubmitMode::Steer => "Steering",
+                lca_protocol::SubmitMode::FollowUp => "Follow-up",
             };
-            dock.push((self.theme.dim)(&format!("  ⏳ [{mark}] {}", pending.text)));
+            dock.push((self.theme.dim)(&format!("  ⏳ {mark}: {}", pending.text)));
         }
-        if !self.pending.is_empty() {
-            dock.push((self.theme.dim)(&format!(
-                "  {} queued · Alt+E restores them to the editor",
-                self.pending.len()
-            )));
+        let queued = self.pending.len() + self.compaction_queued.len();
+        if queued > 0 {
+            // The key comes from the live registry, so a rebound dequeue
+            // still tells the truth (the rule /hotkeys follows).
+            let key = self.keybindings.primary_key("app.message.dequeue");
+            if key.is_empty() {
+                dock.push((self.theme.dim)(&format!("  {queued} queued")));
+            } else {
+                dock.push((self.theme.dim)(&format!(
+                    "  ↳ {key} to edit all queued messages"
+                )));
+            }
         }
 
         // The autocomplete popup, when open (gh #175): the window rows

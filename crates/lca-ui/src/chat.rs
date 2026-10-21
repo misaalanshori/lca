@@ -114,6 +114,16 @@ pub struct Chat {
     pub world: UiState,
     /// Messages queued while a turn runs (ADR-0038).
     pub pending: Vec<PendingMessage>,
+    /// Messages parked while a compaction runs (gh #401, pi's
+    /// `compactionQueuedMessages`): a compaction is a model round-trip that
+    /// owns the session, so a submit during it cannot start a turn - but
+    /// refusing the text loses what the user typed. They flush through
+    /// [`Self::flush_compaction_queue`] when it ends.
+    ///
+    /// Kept apart from [`Self::pending`] so the dock can say *why* a
+    /// message is waiting, but every clear/restore path treats the two as
+    /// one queue (pi's `getAllQueuedMessages`).
+    pub compaction_queued: Vec<PendingMessage>,
     /// How queued follow-ups flush at turn end (gh #76): `OneAtATime`
     /// pops one per turn end (historical); `All` flushes every pending
     /// follow-up as one joined submission. Set from `queue.follow_up_mode`.
@@ -335,6 +345,7 @@ impl Chat {
             separator: Separator::new(),
             world,
             pending: Vec::new(),
+            compaction_queued: Vec::new(),
             follow_up_mode: world_follow_up_mode,
             current_steer: None,
             submitted: None,
@@ -796,6 +807,19 @@ impl Chat {
             return Action::Continue;
         }
 
+        // Gh #401 item 3: with a queue waiting, the dequeue key takes the
+        // queue back into the editor before anything else claims it -
+        // above the *editor*, because `Alt+Up` is also a cursor move there
+        // and the editor would swallow it. With no queue the key falls
+        // through to its other meanings (jump between prompts). The same
+        // restore path as the abort rescue and the dock's hint.
+        if (!self.pending.is_empty() || !self.compaction_queued.is_empty())
+            && self.keybindings.matches(data, "app.message.dequeue")
+        {
+            self.restore_pending();
+            return Action::Continue;
+        }
+
         // The extension panel toggle is a host binding, not an extension's.
         if self.keybindings.matches(data, "app.panel.toggle") {
             self.world.panel_open = !self.world.panel_open;
@@ -950,15 +974,14 @@ impl Chat {
                 Action::Continue
             };
         }
-        if !self.pending.is_empty() && self.keybindings.matches(data, "app.message.dequeue") {
-            // Edit-all-queued: return the queue to the editor (ADR-0038).
-            self.restore_pending();
-            return Action::Continue;
-        }
-        if self.turn_running && self.keybindings.matches(data, "app.message.followUp") {
+        if self.keybindings.matches(data, "app.message.followUp")
+            && (self.turn_running || self.compacting)
+        {
             // Queue a follow-up for turn end (ADR-0038) - unless it is a
             // slash command, which dispatches as a command, never as
-            // model text (composer-polish fold-in).
+            // model text (composer-polish fold-in). Gh #401: the same key
+            // works during a compaction, where the message parks in the
+            // compaction queue with its follow-up mode intact.
             let text = self.editor.submit();
             if text.trim().is_empty() {
                 return Action::Continue;
@@ -969,6 +992,10 @@ impl Chat {
                     return Action::Continue;
                 }
                 return self.dispatch_command(text.trim());
+            }
+            if self.compacting && !self.turn_running {
+                self.queue_for_compaction(text, lca_protocol::SubmitMode::FollowUp);
+                return Action::Continue;
             }
             self.queue_submit(text, lca_protocol::SubmitMode::FollowUp);
             return Action::Continue;
@@ -988,6 +1015,13 @@ impl Chat {
 
     /// Handle a submitted editor buffer.
     fn on_submit(&mut self, text: String) -> Action {
+        self.submit_text(text, lca_protocol::SubmitMode::Steer)
+    }
+
+    /// Submit a buffer in one mode (gh #401). `Enter` submits as a steer,
+    /// `Alt+Enter` as a follow-up; the mode only matters when the submit
+    /// cannot start a turn, where it decides how the queue drains.
+    fn submit_text(&mut self, text: String, mode: lca_protocol::SubmitMode) -> Action {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Action::Continue;
@@ -1006,6 +1040,14 @@ impl Chat {
             }
             return self.dispatch_command(trimmed);
         }
+        // Gh #401 (pi's `queueCompactionMessage`): a compaction owns the
+        // session, so a submit during it parks in the compaction queue
+        // and flushes when it ends. Extension commands above still run
+        // immediately, which is pi's rule and keeps `/...` responsive.
+        if self.compacting && !self.turn_running {
+            self.queue_for_compaction(text, mode);
+            return Action::Continue;
+        }
         // A turn needs a model; say so rather than failing deep in the
         // provider with a transport error.
         if self.model_label().trim().is_empty() {
@@ -1018,123 +1060,13 @@ impl Chat {
         // than starting a second turn. Enter steers (injected at the next
         // boundary); Alt+Enter queues a follow-up for turn end.
         if self.turn_running {
-            self.queue_submit(text, lca_protocol::SubmitMode::Steer);
+            self.queue_submit(text, mode);
             return Action::Continue;
         }
         self.transcript.push_user(text.clone());
         self.submitted_queue = None;
         self.submitted = Some(text);
         Action::Submit
-    }
-
-    /// Queue a message submitted while a turn runs (ADR-0038). `Steer`
-    /// entries also go to the running turn's boundary queue.
-    pub fn queue_submit(&mut self, text: String, mode: lca_protocol::SubmitMode) {
-        if mode == lca_protocol::SubmitMode::Steer
-            && let Some(steer) = &self.current_steer
-        {
-            steer
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(lca_protocol::QueuedMessage {
-                    text: text.clone(),
-                    mode,
-                });
-        }
-        self.pending.push(PendingMessage {
-            text,
-            mode,
-            is_command: false,
-        });
-    }
-
-    /// Queue a slash command submitted while a turn runs: it rides the
-    /// pending queue in order but stays out of the running turn's steer
-    /// queue (command text is never model input), and [`Self::take_next_pending`]
-    /// dispatches it when the turn ends.
-    pub fn queue_command(&mut self, text: String, mode: lca_protocol::SubmitMode) {
-        self.pending.push(PendingMessage {
-            text,
-            mode,
-            is_command: true,
-        });
-    }
-
-    /// Pop the next queued message to auto-submit at turn end, in order.
-    /// Leading queued commands dispatch first (they never become model
-    /// text and never join the transcript as user messages); the first
-    /// queued message behind them flushes as the next turn, if any.
-    /// Gh #76: `All` follow-up mode flushes every pending follow-up as
-    /// one joined submission instead (steer entries flush one per call
-    /// either way - the boundary already delivered them).
-    pub fn take_next_pending(&mut self) -> Option<String> {
-        // Queued commands run first, as commands: dispatch each one in
-        // order and stop flushing if one of them submitted a prompt of
-        // its own (the rest wait behind that turn).
-        while self.pending.first().is_some_and(|next| next.is_command) {
-            let command = self.pending.remove(0);
-            let _ = self.dispatch_command(&command.text);
-            if self.submitted.is_some() {
-                return None;
-            }
-        }
-        if self.pending.is_empty() {
-            return None;
-        }
-        if self.follow_up_mode == lca_protocol::QueueMode::All {
-            return self.take_all_pending();
-        }
-        let next = self.pending.remove(0);
-        self.transcript.push_user(next.text.clone());
-        // The flush keeps the marker the message was queued with: a steer
-        // that never reached a boundary is still "submitted while a turn
-        // was running", and the record this turn writes has to say so.
-        self.submitted_queue = Some(next.mode);
-        Some(next.text)
-    }
-
-    /// Flush every pending message as one joined submission (gh #76's
-    /// `all` follow-up mode): commands already dispatched above, so
-    /// only texts remain; the first message's marker rides the turn.
-    fn take_all_pending(&mut self) -> Option<String> {
-        if self.pending.is_empty() {
-            return None;
-        }
-        let drained: Vec<PendingMessage> = std::mem::take(&mut self.pending);
-        let mode = drained.first().map(|next| next.mode);
-        let mut texts = Vec::new();
-        for next in &drained {
-            texts.push(next.text.clone());
-        }
-        // Gh #254: one joined submission writes one turn record, so
-        // the transcript carries one user entry — one entry per
-        // drained message forked phantom indexes the host cannot map.
-        let joined = texts.join("\n\n");
-        self.transcript.push_user(joined.clone());
-        self.submitted_queue = mode;
-        Some(joined)
-    }
-
-    /// Restore the queued messages to the editor, in order (FR-CORE-12).
-    pub fn restore_pending(&mut self) {
-        if self.pending.is_empty() {
-            return;
-        }
-        // A restored message must not also be injected at the next boundary.
-        if let Some(steer) = &self.current_steer {
-            steer
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clear();
-        }
-        let mut text = String::new();
-        for (i, pending) in self.pending.drain(..).enumerate() {
-            if i > 0 {
-                text.push('\n');
-            }
-            text.push_str(&pending.text);
-        }
-        self.editor.insert_str(&text);
     }
 }
 

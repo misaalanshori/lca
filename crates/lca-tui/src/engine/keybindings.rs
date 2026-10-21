@@ -211,13 +211,20 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
             def!(&["alt+enter"], "Queue a follow-up message"),
         ),
         (
+            // Gh #401: pi's `app.message.dequeue` is Alt+Up; Alt+E stays as
+            // the second spelling LCA shipped first. Both take the queue
+            // back to the editor, and the dock hint prints the primary.
             "app.message.dequeue",
-            def!(&["alt+e"], "Edit all queued messages"),
+            def!(&["alt+up", "alt+e"], "Edit all queued messages"),
         ),
         (
             "app.prompt.previous",
+            // Gh #401: `alt+up` moved to `app.message.dequeue` (pi's key
+            // for it). Shift+Up and Ctrl+Up keep jumping; with a queue
+            // waiting, the dequeue key wins over both, which is the
+            // documented precedence and what pi does.
             def!(
-                &["shift+up", "alt+up", "ctrl+up"],
+                &["shift+up", "ctrl+up"],
                 "Jump to the previous prompt (pinned to top)"
             ),
         ),
