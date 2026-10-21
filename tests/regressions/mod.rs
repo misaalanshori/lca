@@ -560,3 +560,11 @@ mod question_wasm_schema_parity;
 // a security assertion on the rule set in force.
 #[path = "300-stream-guard-refire-and-trust.rs"]
 mod stream_guard_refire_and_trust;
+// GitHub #295: `discover_models` did `entry.get("id")?.as_str()?` inside its
+// loop, so one non-conforming catalog row (`{"id":null}`, a notice object, a
+// numeric id) returned `None` for the whole payload and collapsed a
+// several-hundred-model gateway catalog to the preset's three curated rows.
+// The guard pins that the good rows survive, that the drop is counted rather
+// than swallowed, and that a wholly malformed payload still falls back.
+#[path = "295-openrouter-catalog-resilience.rs"]
+mod openrouter_catalog_resilience;
