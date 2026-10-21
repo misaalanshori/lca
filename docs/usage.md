@@ -63,8 +63,8 @@ for the moment compaction finishes instead of being refused.
 
 ## Change the model or settings
 
-Type `/` to search every command; `/help` lists them all with one
-line each. The everyday set:
+Type `/` to search every command; `/help` lists them, one line each. The
+everyday set:
 
 - `/model`, `/thinking` — model and reasoning level.
 - `/login`, `/logout`, `/usage` — provider access and spend.
@@ -72,11 +72,80 @@ line each. The everyday set:
 - `/tree`, `/fork`, `/clone` — explore without losing the thread.
 - `/resume`, `/name`, `/session` — find and title sessions.
 - `/trust`, `/grants`, `/permissions` — what the project may do.
-- `/reload` — re-read settings, extensions, themes, keybindings.
+- `/reload` — re-read settings, extensions, themes, keys (restart for
+  a changed `tui.editor.*` or `tui.input.*` binding; see
+  [Configuration](configuration.md#key-bindings)).
 - `/settings`, `/theme`, `/fullscreen` — the interface itself.
-- `/export`, `/attach`, `/mcp`, `/skill` — artifacts and resources.
+- `/attach`, `/paste` — stage an image for the next message.
+- `/mcp`, `/ext`, `/skill` — servers, extensions, and skills.
 
 Skills and extensions add their own `/`-commands to the same menu.
+
+### Bookmarks and book copies
+
+- `/label [message-index] <name>` — bookmark a message; with no index,
+  the latest one.
+- `/labels` — list every bookmark, oldest name first.
+- `/jump <name>` — branch at a bookmark and switch to the copy.
+
+### Rotate the model quickly
+
+- `/scoped-models` — choose which models `Ctrl+P` cycles through.
+
+### The full command surface
+
+`/help` is not the whole list — it renders the descriptions it has, and
+a few commands are missing from it. This table is the complete set the
+interface dispatches; the one-line text is `/help`'s where it has one.
+
+| Command | What it does |
+| --- | --- |
+| `/attach <path>` | attach an image file to the next message |
+| `/changelog` | show the latest released changes |
+| `/clone [name]` | duplicate this session at its tip and switch |
+| `/compact` | summarize the session to free context |
+| `/exit` | leave the interface (`/quit` is the same) |
+| `/ext` | manage extensions (enable/disable, compaction strategy) |
+| `/extensions` | open the extension hub |
+| `/fork [n]` | fork a branch at a message (picker, or the nth) |
+| `/fullscreen` | toggle terminal scrollback and app-owned screen |
+| `/grants` | review this project's grants and rules |
+| `/help` | list commands and keys |
+| `/hotkeys` | list every key binding |
+| `/import` | import JSONL lines as a new session — **see gh #443** |
+| `/jump <name>` | branch at a bookmark and switch |
+| `/label [n] <name>` | bookmark a message |
+| `/labels` | list every bookmark |
+| `/login` | sign in to a provider |
+| `/logout` | clear the provider's stored key |
+| `/mcp` | manage MCP servers (status, reconnect, enable, exposure, login) |
+| `/model` | list or switch the session's model |
+| `/name <name>` | rename this session (`/rename` is the same) |
+| `/paste` | paste the clipboard image to the next message |
+| `/permissions` | manage allow/deny rules (session, project, global) |
+| `/reload` | re-run discovery without restarting |
+| `/resume` | search and reopen a session |
+| `/scoped-models` | choose the quick-cycle rotation (`Ctrl+P`) |
+| `/session` | show this session's tokens, cache, and cost |
+| `/settings` | show the merged configuration and where each value came from |
+| `/skill [name]` | list or load a skill |
+| `/stats` | show session statistics (a native extension fills this slot) |
+| `/theme` | pick a theme with live preview |
+| `/thinking` | set the reasoning level |
+| `/tree` | browse the session's entry tree and branch in place |
+| `/trust` | trust the project folder |
+| `/usage` | show the provider's usage, when it has one |
+
+Three commands have an implementation and a `/help` line but are not
+wired into the dispatcher, so they answer `unknown command`: `/bug`,
+`/export`, and `/import`. They are tracked as gh #443. Until it lands,
+use the CLI spellings, which work:
+
+```
+lca bug                    # write a diagnostic bundle for this project
+lca export <session>       # write a session out (--html for the page)
+lca import <file.jsonl>    # import JSONL lines as a new session
+```
 
 ## Sessions, branches, and starting over
 
