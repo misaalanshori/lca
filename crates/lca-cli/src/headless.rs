@@ -232,6 +232,31 @@ impl TurnSink for HeadlessSink {
                     "success": success,
                 }));
             }
+            TurnEvent::ExtensionEvent {
+                extension,
+                event,
+                detail,
+            } => {
+                // Gh #264: this arm was missing, so the row `docs/headless.md`
+                // documents fell into the catch-all and every script
+                // integrating with `--mode json` silently never saw an
+                // extension's lifecycle events. One arm serves `--mode json`
+                // and `--mode rpc` - both drive this sink, so there is no
+                // second emitter to keep in step.
+                //
+                // The field names are the documented ones. The issue's sketch
+                // said `topic`/`payload`; the variant and the docs both say
+                // `event`/`detail`, and the docs are the contract scripts
+                // read, so the variant's names win and nothing is remapped.
+                if self.json {
+                    self.emit(serde_json::json!({
+                        "type": "extension-event",
+                        "extension": extension,
+                        "event": event,
+                        "detail": detail,
+                    }));
+                }
+            }
             TurnEvent::UserInjected { text, mode } if self.json => {
                 self.emit(serde_json::json!({
                     "type": "queue-flushed",
@@ -980,7 +1005,7 @@ mod sink_tests {
     use super::*;
     use lca_core::TurnSink;
 
-    struct VecWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    pub(super) struct VecWriter(pub(super) std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
     impl std::io::Write for VecWriter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -1130,16 +1155,5 @@ mod sink_tests {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // A tool-using turn emits one assistant message before the tool and one
-    // after; plain headless glued them into one run-on line.
-    #[test]
-    fn plain_headless_separates_multiple_assistant_messages() {
-        let mut sink = HeadlessSink::new(false, false);
-        sink.on_event(TurnEvent::AssistantText("I'll read the file.".into()));
-        sink.on_event(TurnEvent::AssistantText("The answer is 42.".into()));
-        assert_eq!(sink.plain, "I'll read the file.\n\nThe answer is 42.");
-    }
-}
+#[path = "headless_tests.rs"]
+mod tests;

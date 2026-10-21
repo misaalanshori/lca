@@ -53,7 +53,7 @@ and fields may be added, never removed or retyped (release policy).
 | `tool-result` | `id`, `call_id`, `status`, `content`, `truncated`, `exit_code`, `full_output_path`, `nested` | A tool call finished. `status` is `ok`, `error`, `denied`, or `timeout`; the last two fields ride only shell results that spilled (gh #40). |
 | `usage` | `input`, `output`, `cache_read`, `cache_write`, `cache_write_1h`, `cost` | The turn's usage, cache counts present when the provider reports them. |
 | `extension-event` | `extension`, `event`, `detail` | A load, disable, trap, capability denial, or cache divergence. |
-| `queue-queued` | `mode` | A `steer`/`follow_up` message was accepted into the queue. |
+| `queue-queued` | `mode` | A `steer`/`follow_up` message was accepted into the queue. Documented but not yet emitted (gh #264's report records the gap): the queue emits nothing headless today, so a script sees the drain (`queue-flushed`) without the accept. |
 | `queue-flushed` | `mode`, `text` | A queued message entered the turn. |
 | `compaction-start` | `reason` | Compaction began (`threshold` or `manual`). |
 | `compaction-end` | `reason`, `success` | Compaction finished; the record holds the summary. |

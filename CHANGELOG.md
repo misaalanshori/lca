@@ -53,6 +53,16 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **`lca -p --mode json` emits `extension-event`** (gh #264). The sink that
+  serializes a turn had no arm for extension lifecycle events, so every one of
+  them fell into the catch-all and vanished. A script waiting for a `disabled`
+  event to learn an extension was evicted waited forever; one counting
+  lifecycle events undercounted — silently, with no error and no gap marker,
+  against a row the docs promised. `--mode rpc` shares the same sink, so one
+  arm fixes both and there is no second emitter to drift. Text mode stays
+  silent, as for every other host diagnostic. A new row in the sink's tests
+  reads the event table out of `docs/headless.md` and fails if any documented
+  kind has no producer, so a future refactor cannot re-drop one.
 - **`/formatter run` no longer reformats build output or walks Git internals**
   (gh #357). A bare run descended every directory the workspace allowed, so it
   handed `target/**/*.rs` (build-script output) to `rustfmt --write` — rebuild
