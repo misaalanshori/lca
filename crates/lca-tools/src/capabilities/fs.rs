@@ -15,15 +15,36 @@ impl Capabilities {
     }
 
     /// Write a file inside a granted scope, creating its parent.
+    ///
+    /// **FR-TOOL-2 applies here too** (gh #436): when the operator turned on
+    /// `tool.edit_requires_read`, an extension that overwrites an existing
+    /// file must have seen its current contents this session - the same rule
+    /// the built-in `edit` enforces. Without this, the staleness guard had a
+    /// hole exactly one extension wide (`hash_edit`).
     pub fn fs_write(&self, scope: &str, path: &str, bytes: &[u8]) -> Result<(), CapabilityError> {
         if !self.grants.fs_declared {
             return Err(self.undeclared("fs"));
         }
         let resolved = self.resolve(scope, path, true)?;
+        // A new file has nothing to be stale against, so only an overwrite is
+        // gated; reading the target first also gives the check the bytes it
+        // compares.
+        if crate::edit_requires_read()
+            && let Ok(existing) = std::fs::read(&resolved)
+            && !crate::has_fresh_read(&resolved, &existing)
+        {
+            return Err(CapabilityError::Permission(format!(
+                "The file {path} changed since it was last read (or was never read this session). \
+                 Read it again before editing."
+            )));
+        }
         if let Some(parent) = resolved.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(resolved, bytes)?;
+        std::fs::write(&resolved, bytes)?;
+        // The write is itself a read of the new contents, so a following edit
+        // (built-in or extension) sees a fresh record.
+        crate::note_read(&resolved, bytes);
         Ok(())
     }
 
