@@ -53,6 +53,22 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **The conformance fixture can no longer go stale against the ABI** (gh #427).
+  The committed `extensions/conformance/fixtures/component.wasm` failed to
+  link with `no exported instance named 'lca:ext/hook-message-end@0.6.0'` —
+  a link error that looks like a host bug to anyone installing it. The
+  package's fixtures had no refresh step anywhere (the publish workflow
+  refreshes five other extensions' fixtures, never this one), so when the hook
+  worlds landed in `wit/` the source moved on and the binaries did not. The
+  stale file was an **unconsumed twin**: byte-identical to `tool-world.wasm`
+  when it was added by the 0.5.0 release commit, referenced by nothing in
+  history — so it was removed rather than rebuilt, which would have doubled the
+  very rebuild-both-or-drift trap that caused this. The fixture tests actually
+  load stays, byte-identical to a fresh build, and three guards keep it that
+  way: `scripts/wasm-check.sh` byte-compares it against its own build on every
+  push, a load guard in `lca-ext-host` links every fixture against every world
+  the manifest declares, and a regression row refuses to let any committed
+  fixture sit without a test file that names it.
 - **`lca ext install` pulls from a real registry again** (gh #308). Three
   defects sat in one fetch path. The post-401 retry checked `is_success()` and
   nothing else, so the *normal* ghcr blob shape - 401, then a token, then a 307
