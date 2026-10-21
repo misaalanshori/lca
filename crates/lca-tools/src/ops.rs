@@ -184,7 +184,21 @@ impl Default for NativeOps {
     }
 }
 
-const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules"];
+/// Directories a workspace-wide walk never descends into: VCS internals and
+/// build output.
+///
+/// One list, shared by every walker in the tree (`glob`/`grep` here, and the
+/// `formatter` extension's own bare-run walk, gh #357). Two lists drift, and
+/// the drift is invisible until one of them rewrites a generated file - so
+/// anything that wants a skip rule imports this rather than spelling one out.
+///
+/// The bar for an entry is "descending can never produce a file a walker
+/// wants": matching is by whole path component, so a directory merely
+/// *containing* one of these names (`src/targeted/`) is untouched. Language
+/// caches (`.venv`, `__pycache__`) are deliberately **not** here - they are
+/// per-tool conventions rather than universal roots, and `.gitignore` already
+/// names them in every project that has them.
+pub const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules"];
 
 impl ToolOps for NativeOps {
     fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {

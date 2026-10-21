@@ -53,6 +53,17 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **`/formatter run` no longer reformats build output or walks Git internals**
+  (gh #357). A bare run descended every directory the workspace allowed, so it
+  handed `target/**/*.rs` (build-script output) to `rustfmt --write` — rebuild
+  churn at best, divergent generated code at worst — and stat'ed every file
+  under `.git/objects` through the capability boundary for nothing. It now
+  skips `.git`, `target`, and `node_modules` at descent time, using the same
+  `lca_tools::SKIP_DIRS` constant the `glob`/`grep` walker already used rather
+  than a second copy that could drift. Matching is by path *component*, so
+  `src/targeted/x.rs` still formats. Naming a generated path explicitly
+  (`/formatter run target/gen/out.rs`) is refused with a reason instead of
+  being formatted, and the auto-format hook refuses one the same way.
 - **Self-update fetches are bounded in time and size** (gh #355). `lca update
   --check` and `--changelog` awaited the release feed with no timeout, so a
   stalled host hung the command indefinitely, and `install_binary` collected an

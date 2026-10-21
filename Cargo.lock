@@ -1786,6 +1786,7 @@ dependencies = [
  "antigravity",
  "clap",
  "compaction-default",
+ "formatter",
  "image",
  "lca-cli",
  "lca-config",

@@ -74,6 +74,9 @@ skills = { path = "extensions/skills" }
 # gh #296: the memory-freeze guard drives the real `ProjectMemory` handle
 # through its whole learn/transform lifecycle.
 project-memory = { path = "extensions/project-memory" }
+# gh #357: the shipped-defect guard drives the extension's real walker and
+# command surface over a fabricated tree (same pattern as `skills` above).
+formatter = { path = "extensions/formatter" }
 openai-compatible = { path = "extensions/openai-compatible" }
 serde_json.workspace = true
 tokio.workspace = true
