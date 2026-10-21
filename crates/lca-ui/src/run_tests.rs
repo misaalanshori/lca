@@ -79,7 +79,7 @@ fn options() -> UiOptions {
     }
 }
 
-fn chat() -> Chat {
+pub(crate) fn chat() -> Chat {
     Chat::new(options(), Arc::new(KeybindingsManager::new()))
 }
 
@@ -729,8 +729,13 @@ fn program_status_follows_the_lifecycle() {
     chat.turn_running = false;
     turns.last_ok = Some(true);
     turns.sync_program_status(&chat, &mut term);
+    // SANCTIONED CHANGE (gh #369): this row used to compare the raw stream,
+    // which now also carries the taskbar spinner's `OSC 9;4` arm/disarm (a
+    // running turn arms it, the resting edge clears it). The badge contract
+    // this row pins is unchanged, so it reads the 7501 channel alone - see
+    // `progress_arms_for_compaction_and_shell_runs` for the 9;4 side.
     assert_eq!(
-        term.take_output(),
+        badges(&term.take_output()),
         concat!(
             "\x1b]7501;state=idle:app=lca\x1b\\",
             "\x1b]7501;state=working:app=lca\x1b\\",
@@ -751,7 +756,6 @@ fn an_aborted_turn_restores_the_queue_through_the_reap_path() {
     let (_dialog_tx, dialog_rx) = std::sync::mpsc::sync_channel(4);
     let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx);
     let mut chat = chat();
-    let mut term = FakeTerminal::new(80, 24);
     chat.begin_turn(lca_protocol::steer_queue());
     chat.queue_submit("steer me".into(), lca_protocol::SubmitMode::Steer);
     chat.queue_submit("follow me".into(), lca_protocol::SubmitMode::FollowUp);
@@ -773,7 +777,7 @@ fn an_aborted_turn_restores_the_queue_through_the_reap_path() {
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    assert!(turns.reap(&mut chat, &mut term), "the turn reaped");
+    assert!(turns.reap(&mut chat), "the turn reaped");
     assert!(chat.pending.is_empty(), "the queue left the dock");
     assert_eq!(
         chat.editor.text(),
@@ -784,4 +788,143 @@ fn an_aborted_turn_restores_the_queue_through_the_reap_path() {
         chat.last_notice().as_deref(),
         Some("Restored 2 queued messages to editor")
     );
+}
+
+// ---- gh #369: compaction and shell runs badge `working` ----
+
+/// Only the OSC 7501 bytes from a frame's output (gh #369): the same frame
+/// also drives `OSC 9;4`, so a badge assertion filters to its own channel.
+/// Sequences are ST-terminated (`\x1b\\`), which is why the split keeps it.
+fn badges(output: &str) -> String {
+    let mut out = String::new();
+    let mut rest = output;
+    while let Some(start) = rest.find("\x1b]7501;") {
+        let tail = &rest[start..];
+        let end = tail.find("\x1b\\").map_or(tail.len(), |i| i + 2);
+        out.push_str(&tail[..end]);
+        rest = &tail[end..];
+    }
+    out
+}
+
+/// A `TurnState` with nothing in flight.
+fn quiet_turns() -> TurnState {
+    let (prompt_tx, prompt_rx) = std::sync::mpsc::sync_channel(4);
+    let (_dialog_tx, dialog_rx) = std::sync::mpsc::sync_channel(4);
+    TurnState::new(prompt_tx, prompt_rx, dialog_rx)
+}
+
+// Verifies: gh #369 - a background `/compact` is work the user is waiting
+// on, so the tab badges `working`. Before this, `sync_program_status`
+// passed only `chat.turn_running`, so a compaction running in another
+// window left the badge on its resting state.
+#[test]
+fn a_background_compaction_badges_working() {
+    let mut turns = quiet_turns();
+    let mut chat = chat();
+    let mut term = FakeTerminal::new(80, 24);
+    turns.sync_program_status(&chat, &mut term);
+    term.take_output();
+    chat.compacting = true;
+    turns.sync_program_status(&chat, &mut term);
+    assert_eq!(
+        badges(&term.take_output()),
+        "\x1b]7501;state=working:app=lca\x1b\\",
+        "compaction badges working"
+    );
+    // And the resting edge puts the badge back.
+    chat.compacting = false;
+    turns.last_ok = Some(true);
+    turns.sync_program_status(&chat, &mut term);
+    assert_eq!(
+        badges(&term.take_output()),
+        "\x1b]7501;state=done:app=lca\x1b\\",
+        "and it settles to done"
+    );
+}
+
+// Verifies: gh #369 - an inline `!`/`!!` shell run badges `working` for the
+// same reason: the user started it and is waiting on it.
+#[test]
+fn a_shell_run_badges_working() {
+    let mut turns = quiet_turns();
+    let mut chat = chat();
+    let mut term = FakeTerminal::new(80, 24);
+    assert!(!chat.shell_running(), "nothing runs yet");
+    // Drive the real shell state rather than a stand-in field: a `ShellRun`
+    // is just its channels, so no process is spawned.
+    let (_tx, rx) = std::sync::mpsc::channel();
+    chat.shell = Some(crate::chat_pickers::ShellRun {
+        output: rx,
+        cancel: std::sync::Arc::new(|| {}),
+        command: "echo hi".to_string(),
+        excluded: false,
+    });
+    assert!(chat.shell_running());
+    turns.sync_program_status(&chat, &mut term);
+    assert_eq!(
+        badges(&term.take_output()),
+        "\x1b]7501;state=working:app=lca\x1b\\",
+        "a shell run badges working"
+    );
+    chat.shell = None;
+    turns.sync_program_status(&chat, &mut term);
+    assert_eq!(
+        badges(&term.take_output()),
+        "\x1b]7501;state=idle:app=lca\x1b\\",
+        "and it settles back to idle"
+    );
+}
+
+// Verifies: gh #369 - transitions only. Repeating a frame with the same
+// working state writes nothing, which is the "no per-frame spam" rule and
+// what keeps an idle interface from repainting.
+#[test]
+fn badge_and_progress_emit_on_transition_only() {
+    let mut turns = quiet_turns();
+    let mut chat = chat();
+    let mut term = FakeTerminal::new(80, 24);
+    chat.compacting = true;
+    turns.sync_program_status(&chat, &mut term);
+    assert!(!term.take_output().is_empty(), "the entry frame writes");
+    for _ in 0..5 {
+        turns.sync_program_status(&chat, &mut term);
+        assert!(
+            term.take_output().is_empty(),
+            "a repeated frame writes nothing"
+        );
+    }
+}
+
+// Verifies: gh #369 - the taskbar spinner arms for a compaction and a shell
+// run too, not just a turn (acceptance 2). `FakeTerminal` records the
+// `set_progress` calls, so this asserts the arm/disarm edges without a real
+// terminal.
+#[test]
+fn progress_arms_for_compaction_and_shell_runs() {
+    let mut turns = quiet_turns();
+    let mut chat = chat();
+    let mut term = FakeTerminal::new(80, 24);
+
+    chat.compacting = true;
+    turns.sync_program_status(&chat, &mut term);
+    assert!(term.progress(), "compaction arms the spinner");
+
+    chat.compacting = false;
+    turns.last_ok = Some(true);
+    turns.sync_program_status(&chat, &mut term);
+    assert!(!term.progress(), "and it disarms when compaction ends");
+
+    let (_tx, rx) = std::sync::mpsc::channel();
+    chat.shell = Some(crate::chat_pickers::ShellRun {
+        output: rx,
+        cancel: std::sync::Arc::new(|| {}),
+        command: "echo hi".to_string(),
+        excluded: false,
+    });
+    turns.sync_program_status(&chat, &mut term);
+    assert!(term.progress(), "a shell run arms the spinner");
+    chat.shell = None;
+    turns.sync_program_status(&chat, &mut term);
+    assert!(!term.progress(), "and it disarms when the run ends");
 }

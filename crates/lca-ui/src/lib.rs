@@ -31,6 +31,7 @@ pub mod footer;
 pub mod render;
 pub mod resume;
 pub mod run;
+mod run_status;
 pub mod separator;
 pub mod state;
 mod status;
