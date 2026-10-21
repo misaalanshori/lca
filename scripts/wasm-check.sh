@@ -12,7 +12,10 @@
 #
 # This checks every extension crate builds for the component target on
 # every push. It is a build only: no fixtures are refreshed here (that is
-# a deliberate, reviewed step).
+# a deliberate, reviewed step) - but the conformance fixture is VERIFIED
+# against the build below, because a committed component with no refresh
+# step anywhere (not here, not the publish workflow's five other packages)
+# silently went stale against ABI 0.6 once already (gh #427).
 #
 # Verifies: docs/testing-plan.md section 13 (an extension component must
 # actually build for the target it ships on), FR-EXT-1.
@@ -48,3 +51,22 @@ echo "wasm-check: building $packages for $target"
 # shellcheck disable=SC2086
 cargo build --release --target "$target" --quiet $(for p in $packages; do echo "-p $p"; done)
 echo "wasm-check: every extension component builds"
+
+# gh #427: the committed conformance fixture must be the bytes this build
+# just produced. The component above is already built, so this costs one
+# byte comparison. CARGO_TARGET_DIR redirects the artifact, not this path
+# (gh #260's lesson), so the lookup follows it.
+fixture=extensions/conformance/fixtures/tool-world.wasm
+built="${CARGO_TARGET_DIR:-target}/$target/release/conformance.wasm"
+if [ -f "$fixture" ]; then
+    if ! cmp -s "$built" "$fixture"; then
+        echo "wasm-check: $fixture is stale against the conformance source (gh #427)" >&2
+        echo "  the committed component no longer matches a fresh build - reinstall it:" >&2
+        echo "  cp $built $fixture" >&2
+        exit 1
+    fi
+    echo "wasm-check: committed conformance fixture matches a fresh build"
+fi
+# A missing fixture is a different failure and is already owned: the load
+# guard in crates/lca-ext-host/tests/fixture_current.rs asserts the
+# directory still lists at least one component that links.
