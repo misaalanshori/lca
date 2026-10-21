@@ -1775,6 +1775,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml",
+ "tower-service",
  "tracing",
  "zip",
 ]

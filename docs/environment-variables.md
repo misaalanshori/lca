@@ -49,10 +49,12 @@ into existence.
 `HTTP_PROXY` / `HTTPS_PROXY` (lowercase honored), `ALL_PROXY` as
 fallback, `NO_PROXY` for bypasses (curl tail match, `:port`
 qualifiers, `*`). They route the `net` host client's outbound
-requests only; loopback targets need an explicit `NO_PROXY` entry
-or they route into the proxy too. Read once per client build — a
-change needs a restart. A proxy URL carries credentials, so it
-lives here by decision and never in a config file.
+requests and the extension registry's own fetches (`lca ext
+install`, the OCI blob pulls and archive downloads behind it);
+loopback targets need an explicit `NO_PROXY` entry or they route
+into the proxy too. Read once per client build — a change needs a
+restart. A proxy URL carries credentials, so it lives here by
+decision and never in a config file, and never in a log line.
 
 ## What shell children see
 

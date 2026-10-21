@@ -37,6 +37,11 @@ hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
 hyper-rustls.workspace = true
+# tower-service - the tiny `Service` trait `HttpConnector` implements. The
+# proxy layer (gh #308) wraps that connector, so it names the trait directly.
+# Already in the workspace graph via the `net` capability client (gh #145);
+# this adds an edge, not a package.
+tower-service.workspace = true
 tokio.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

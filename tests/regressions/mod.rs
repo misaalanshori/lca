@@ -620,3 +620,14 @@ mod hash_edit_uncallable;
 // a sibling of `functionCall`.
 #[path = "280-antigravity-system-prompt-duplicated.rs"]
 mod antigravity_system_prompt_duplicated;
+// GitHub #308: three defects in one OCI fetch path. The post-401 retry ignored
+// redirects, so the normal ghcr blob-pull shape (401 -> token -> 307 to the
+// CDN -> 200) died as "HTTP 307 after authorization"; the token parse read only
+// `token` and ignored the spec's `access_token`; and the client had no proxy
+// support, no byte cap and no timeout - so a hostile or stalled registry was
+// accumulated in full before the digest could run, inverting the
+// digest-before-install guarantee. The guard drives the public path against a
+// scripted loopback registry, because each defect lives in the sequence of
+// requests rather than in one function's return value.
+#[path = "308-oci-pull-auth-and-bounds.rs"]
+mod oci_pull_auth_and_bounds;
