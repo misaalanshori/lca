@@ -53,6 +53,17 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **The user guide now names every command users can run, and stops
+  promising a reload it does not do** (gh #419). `docs/usage.md` read like
+  an exhaustive command list while omitting nine that ship; it is now a
+  complete table, with `/help`'s own one-line text. Three of those commands
+  - `/bug`, `/export`, `/import` - turn out to answer `unknown command` and
+  always have, so the guide says so and names the working CLI spellings
+  (`lca bug`, `lca export`, `lca import`); that defect is gh #443. Three
+  docs promised `/reload` applies keybinding edits without a restart, which
+  is true everywhere except the prompt editor, which keeps its startup key
+  map - measured in a pane, tracked as gh #332, and now stated as what
+  works, what does not, and what to do about it.
 - **A headless client can see that its message was accepted, not just
   drained** (gh #426). `docs/headless.md` documented `queue-queued` with a
   `mode` field and nothing emitted it, so a `--mode json`/`--mode rpc` script

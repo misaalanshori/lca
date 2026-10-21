@@ -95,8 +95,11 @@ Skills and extensions add their own `/`-commands to the same menu.
 ### The full command surface
 
 `/help` is not the whole list — it renders the descriptions it has, and
-a few commands are missing from it. This table is the complete set the
-interface dispatches; the one-line text is `/help`'s where it has one.
+a few commands are missing from it. This table is every command the
+interface actually dispatches; the one-line text is `/help`'s where
+`/help` has one. Three further names appear in `/help` but are not
+wired into the dispatcher, so they cannot be listed here as working —
+see below.
 
 | Command | What it does |
 | --- | --- |
@@ -112,7 +115,6 @@ interface dispatches; the one-line text is `/help`'s where it has one.
 | `/grants` | review this project's grants and rules |
 | `/help` | list commands and keys |
 | `/hotkeys` | list every key binding |
-| `/import` | import JSONL lines as a new session — **see gh #443** |
 | `/jump <name>` | branch at a bookmark and switch |
 | `/label [n] <name>` | bookmark a message |
 | `/labels` | list every bookmark |
@@ -124,6 +126,7 @@ interface dispatches; the one-line text is `/help`'s where it has one.
 | `/paste` | paste the clipboard image to the next message |
 | `/permissions` | manage allow/deny rules (session, project, global) |
 | `/reload` | re-run discovery without restarting |
+| `/rename <name>` | rename this session (`/name` is pi's spelling) |
 | `/resume` | search and reopen a session |
 | `/scoped-models` | choose the quick-cycle rotation (`Ctrl+P`) |
 | `/session` | show this session's tokens, cache, and cost |
