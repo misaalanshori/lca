@@ -100,9 +100,13 @@ fn every_committed_conformance_fixture_links_against_the_declared_worlds() {
     );
 
     for path in fixtures {
-        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let bytes = std::fs::read(&path)
-            .unwrap_or_else(|err| panic!("read the fixture {name}: {err}"));
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let bytes =
+            std::fs::read(&path).unwrap_or_else(|err| panic!("read the fixture {name}: {err}"));
         let mut host = ExtHost::new(limits(), env(&name.replace('.', "-")));
         let loaded = host.load(&bytes, MANIFEST).unwrap_or_else(|err| {
             panic!(
