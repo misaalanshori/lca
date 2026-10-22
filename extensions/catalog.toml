@@ -30,7 +30,7 @@ name = "antigravity"
 version = "1.0.1"
 abi = "0.6"
 category = "provider"
-description = "Google Antigravity models, including image generation, via subscription login."
+description = "Google Antigravity's Gemini and Claude models, via subscription login."
 oci_ref = "ghcr.io/misaalanshori/lca/antigravity:abi-0.6"
 capabilities = ["net", "oauth", "credentials"]
 

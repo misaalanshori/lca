@@ -15,7 +15,7 @@ name = "antigravity"
 version = "1.0.0"
 abi = "0.6"
 worlds = ["provider"]
-description = "Google Antigravity models, including image generation, via subscription login."
+description = "Google Antigravity's Gemini and Claude models, via subscription login."
 
 [capabilities.net]
 hosts = ["generativelanguage.googleapis.com", "*.googleapis.com"]
@@ -31,7 +31,9 @@ Every capability here is load-bearing: `net` names Google's API surface, one exa
 
 ## vendor-event usage
 
-Carries image generation results and any Gemini-specific streaming detail the typed provider events don't have a dedicated case for, such as safety-filter metadata on a response. This is the exact situation `vendor-event` exists for: a real vendor concept that doesn't map onto text, reasoning, or a tool call, travelling through the reserved case rather than forcing an ABI break to add one.
+Carries any Gemini-specific streaming detail the typed provider events don't have a dedicated case for, such as safety-filter metadata on a response. This is the exact situation `vendor-event` exists for: a real vendor concept that doesn't map onto text, reasoning, or a tool call, travelling through the reserved case rather than forcing an ABI break to add one.
+
+Today the only vendor event this extension emits is `thinking-signature` (below), which rides that channel for replay. **Image generation is not implemented here** (gh #279): the provider streams text, reasoning, tool calls, usage and errors, and `lca_protocol::StreamEvent` has no variant an image result could arrive in. `ContentBlock::Image` exists, but it is the request side — an attached image becomes Gemini's `inlineData` part — which is image *input*, not generation. The vendor reference (`pi-antigravity`) does generate images, through a separate direct image endpoint plus a `generate_image` tool; LCA has neither, so the manifest does not advertise the capability.
 
 ## login, logout, usage
 
