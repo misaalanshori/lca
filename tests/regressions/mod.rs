@@ -757,6 +757,11 @@ mod deny_rule_actually_matches;
 #[path = "459-stderr-tail-never-blocks.rs"]
 mod stderr_tail_never_blocks;
 
+// Gh #463: from `$HOME` the project-extension directory is the data home, so the
+// scan read the install tree and wrongly warned for every installed extension.
+#[path = "463-data-home-is-not-a-project.rs"]
+mod data_home_is_not_a_project;
+
 // Gh #458: a flag whose value is a program (or a shell string) reviews -
 // `vim -c ':!id'`, `tar --to-command=id`, and the four sibling tar flags the
 // enumeration found.
