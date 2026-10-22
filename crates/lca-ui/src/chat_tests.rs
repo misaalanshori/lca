@@ -1188,3 +1188,7 @@ mod ctrl_c_tests;
 #[cfg(test)]
 #[path = "dock_tests.rs"]
 mod dock_tests;
+
+#[cfg(test)]
+#[path = "key_hint_tests.rs"]
+mod key_hint_tests;

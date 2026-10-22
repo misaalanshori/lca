@@ -215,7 +215,10 @@ fn a_long_diff_truncates_with_the_usual_more_lines_hint() {
         "the collapse names what is hidden: {joined}"
     );
     assert!(
-        joined.contains(&lca_tui::engine::keybindings::key_text("app.tools.expand")),
+        joined.contains(
+            &lca_tui::engine::keybindings::KeybindingsManager::new()
+                .display_keys("app.tools.expand")
+        ),
         "and the key that shows it: {joined}"
     );
     let collapsed = rows.iter().filter(|row| row.contains("+new")).count();

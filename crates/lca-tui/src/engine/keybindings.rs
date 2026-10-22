@@ -28,10 +28,49 @@ macro_rules! def {
     };
 }
 
-/// The primary key for an action from the default table, for a hint that
-/// cannot lie when the interface is rebound through `with_user_bindings`.
-pub fn key_text(action: &str) -> String {
+/// The **default** key for an action, ignoring any user override.
+///
+/// Named for what it is. It used to be called `key_text` and documented as a
+/// hint that "cannot lie when the interface is rebound" - while building a fresh
+/// default manager on every call, so it lied in exactly that case (gh #410).
+/// Fourteen UI sites used it and every hint printed the default key after a
+/// rebind.
+///
+/// Use [`KeybindingsManager::key_hint`] (or `display_keys`) for anything a reader
+/// sees. This one is for a caller that genuinely wants the shipped default - a
+/// settings screen showing "default: ctrl+o", say - and it is the only place the
+/// default table is consulted without a manager.
+pub fn default_key_text(action: &str) -> String {
     KeybindingsManager::new().primary_key(action)
+}
+
+/// Format one resolved key id for display: `option` for `alt` on macOS, and
+/// optional sentence-start capitalization (pi's `formatKeyText`).
+///
+/// The macOS spelling exists because `alt` is not a key printed on a Mac
+/// keyboard; pi renames it, so a hint that says `alt+left` there names a key the
+/// user cannot find.
+pub fn format_key_text(key: &str, capitalize: bool) -> String {
+    let part = |part: &str| {
+        let display = if cfg!(target_os = "macos") && part.eq_ignore_ascii_case("alt") {
+            "option"
+        } else {
+            part
+        };
+        if capitalize {
+            let mut chars = display.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        } else {
+            display.to_string()
+        }
+    };
+    key.split('/')
+        .map(|binding| binding.split('+').map(part).collect::<Vec<_>>().join("+"))
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// The full default keybinding table, transcribed from pi's
@@ -469,9 +508,35 @@ impl KeybindingsManager {
         &self.invalid_keys
     }
 
-    /// The primary key for an action, for a hint (`ctrl+o`).
+    /// The primary key for an action (`ctrl+o`), or empty when unbound.
     pub fn primary_key(&self, action: &str) -> String {
         self.keys(action).into_iter().next().unwrap_or_default()
+    }
+
+    /// Every key for an action as one display string: `/`-joined bindings,
+    /// `+`-joined chord parts, `option` for `alt` on macOS.
+    ///
+    /// This is the string a hint shows, and it comes from **this** manager, so a
+    /// user override or an explicit unbind is what the reader sees (gh #410).
+    /// Empty means "unbound": a caller must render no hint at all rather than a
+    /// blank key press.
+    pub fn display_keys(&self, action: &str) -> String {
+        let keys = self.keys(action);
+        if keys.is_empty() {
+            return String::new();
+        }
+        let joined = keys.join("/");
+        format_key_text(&joined, false)
+    }
+
+    /// [`Self::display_keys`], capitalize for the start of a sentence.
+    pub fn display_keys_capitalized(&self, action: &str) -> String {
+        let keys = self.keys(action);
+        if keys.is_empty() {
+            return String::new();
+        }
+        let joined = keys.join("/");
+        format_key_text(&joined, true)
     }
 
     /// The description for an action, if defined.

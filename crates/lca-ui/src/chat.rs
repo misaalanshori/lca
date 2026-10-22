@@ -48,11 +48,14 @@ pub struct PendingMessage {
 /// startup; this is our wording on pi's shape. One dim line on the
 /// first frame, never a modal. Headless mode never builds a `Chat`, so
 /// it never prints this (the scripting contract).
-fn startup_hint() -> String {
+fn startup_hint(keybindings: &lca_tui::engine::keybindings::KeybindingsManager) -> String {
+    // Gh #410: the live manager, not the default table. This line is the first
+    // thing a user reads, so a rebind that does not reach it is the most visible
+    // version of the bug.
     format!(
         "{} interrupt · {} clear/exit · / commands",
-        lca_tui::engine::keybindings::key_text("app.interrupt"),
-        lca_tui::engine::keybindings::key_text("app.clear"),
+        keybindings.display_keys("app.interrupt"),
+        keybindings.display_keys("app.clear"),
     )
 }
 
@@ -302,10 +305,11 @@ impl Chat {
         // hardware cursor keeps the job it already had.
         editor.set_paint_caret(theme.colored);
         let mut transcript = Transcript::new();
-        // gh #23: one dim key-hint line on the first frame (pi's
-        // startup shape, our wording). Key names come from the default
-        // table, so the line cannot name a key that does nothing.
-        transcript.push_raw((theme.dim)(&startup_hint()));
+        // gh #23: one dim key-hint line on the first frame (pi's startup shape,
+        // our wording). Gh #410: the key names come from the **live** manager, so
+        // a rebind reaches the first line a user reads.
+        transcript.push_raw((theme.dim)(&startup_hint(&keybindings)));
+        transcript.set_keybindings(keybindings.clone());
         for line in &world.options.initial_lines {
             transcript.push_raw(line.clone());
         }
