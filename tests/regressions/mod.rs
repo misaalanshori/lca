@@ -734,6 +734,12 @@ mod unknown_world_is_refused;
 // isolation, and shutdown still pinned.
 #[path = "286-no-thread-spawn-per-call.rs"]
 mod no_thread_spawn_per_call;
+
+// Gh #336: a JSON-RPC error with `id: null` surfaces the server's own words on
+// both MCP selectors instead of LCA's guess, with notifications and foreign ids
+// unchanged.
+#[path = "336-null-id-error-surface.rs"]
+mod null_id_error_surface;
 // GitHub #449: two `conformance_diff` rows compiled the WASM fixture more than
 // once, so they sat at ~1.6x nextest's default cap and timed out on a loaded
 // runner. The measurement put the cost in `wasmtime::component::Component::new`
