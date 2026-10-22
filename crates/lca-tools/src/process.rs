@@ -261,8 +261,13 @@ pub fn spawn_direct(program: &str, args: &[String], cwd: &Path) -> std::io::Resu
     Ok(TreeChild { child, tree })
 }
 
-/// Read up to `max` bytes, blocking until at least one byte arrives or the
+/// Read up to `max` bytes, **blocking** until at least one byte arrives or the
 /// stream closes (`None` = EOF).
+///
+/// This is the ABI's `read-stderr`/`read-stdout` contract: an extension asking for
+/// output waits for it. Do not use it to ask "is there anything yet" - on a live
+/// child with an empty pipe it waits for data that may never come. See
+/// [`read_buffered`] for that.
 pub fn read_up_to(reader: &mut impl Read, max: usize) -> std::io::Result<Option<Vec<u8>>> {
     let mut buffer = vec![0u8; max.clamp(1, 64 * 1024)];
     let read = reader.read(&mut buffer)?;
@@ -281,9 +286,112 @@ pub fn write_all(writer: &mut impl Write, bytes: &[u8]) -> std::io::Result<u64> 
     Ok(bytes.len() as u64)
 }
 
+/// Read whatever is **already buffered** on a child's stderr, without waiting
+/// (gh #459).
+///
+/// Returns `Ok(None)` at end of stream - the child closed its end - and
+/// `Ok(Some(empty))` when the pipe is open but has nothing right now.
+///
+/// That distinction is the whole point. [`read_up_to`] cannot express the second
+/// case at all: it blocks on a live child with an empty pipe, which is how the
+/// error-surfacing path came to hang before it could surface an error. A caller
+/// collecting an error tail from a server that is **still alive** needs "it has
+/// written nothing yet" as an answer, not as a wait.
+///
+/// POSIX flips the descriptor to `O_NONBLOCK` for one read and restores the flags
+/// before returning; Windows peeks the pipe first. Both are the shapes `pty.rs`
+/// already uses for the ConPTY output pipe, where a blocking read deadlocked every
+/// consumer.
+#[cfg(unix)]
+#[allow(unsafe_code)] // documented crate exemption: F_GETFL/F_SETFL on our own pipe
+pub fn read_buffered(
+    reader: &mut std::process::ChildStderr,
+    max: usize,
+) -> std::io::Result<Option<Vec<u8>>> {
+    use std::os::unix::io::AsRawFd;
+    let fd = reader.as_raw_fd();
+    // SAFETY: our own descriptor, and F_GETFL/F_SETFL with libc::O_NONBLOCK is the
+    // portable POSIX spelling (the constant differs between Linux and macOS, which
+    // is why libc decides it rather than a literal here).
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut buffer = vec![0u8; max.clamp(1, 64 * 1024)];
+    let read = reader.read(&mut buffer);
+    // Restore before doing anything else, so a later blocking caller still blocks
+    // even when this read errored.
+    // SAFETY: same descriptor, restoring the flags we just read.
+    unsafe {
+        libc::fcntl(fd, libc::F_SETFL, flags);
+    }
+    match read {
+        Ok(0) => Ok(None),
+        Ok(read) => {
+            buffer.truncate(read);
+            Ok(Some(buffer))
+        }
+        // Nothing buffered: the pipe is open and empty. Not an error, and not EOF.
+        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(Some(Vec::new())),
+        Err(err) => Err(err),
+    }
+}
+
+/// Read whatever is **already buffered** on a child's stderr, without waiting
+/// (gh #459) - the Windows half.
+///
+/// `PeekNamedPipe` first, so "no data" is a fact rather than a blocking read; then a
+/// read only when the pipe says there is something. `Ok(None)` at end of stream (the
+/// child closed its end, which Windows reports as a broken pipe), `Ok(Some(empty))`
+/// when the pipe is open and empty. The Unix half above carries the full rationale;
+/// both must exist or one platform keeps the hang.
+#[cfg(windows)]
+#[allow(unsafe_code)] // documented crate exemption: PeekNamedPipe on our own pipe
+pub fn read_buffered(
+    reader: &mut std::process::ChildStderr,
+    max: usize,
+) -> std::io::Result<Option<Vec<u8>>> {
+    use std::os::windows::io::AsRawHandle;
+    let mut available: u32 = 0;
+    // SAFETY: the handle is an open pipe end; the out param is a valid u32.
+    let ok = unsafe {
+        windows_sys::Win32::System::Pipes::PeekNamedPipe(
+            reader.as_raw_handle() as *mut _,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            &mut available,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        let err = std::io::Error::last_os_error();
+        return match err.kind() {
+            // The child closed its end: EOF, not a failure.
+            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof => Ok(None),
+            _ => Err(err),
+        };
+    }
+    if available == 0 {
+        // Open and empty. Windows has no cheap "is EOF" separate from a failed
+        // peek, and a closed pipe reports `BrokenPipe` above, so this is "nothing
+        // yet" - exactly the case the POSIX half maps `WouldBlock` to.
+        return Ok(Some(Vec::new()));
+    }
+    let mut buffer = vec![0u8; max.clamp(1, 64 * 1024)];
+    let read = reader.read(&mut buffer)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    buffer.truncate(read);
+    Ok(Some(buffer))
+}
 #[cfg(test)]
 mod tests {
-    use super::{kill_group_argv, read_up_to, without_verbatim};
+    use super::{kill_group_argv, read_buffered, read_up_to, without_verbatim};
     use std::path::Path;
 
     // Verifies: the group-kill operand is unambiguous on every procps.
@@ -340,5 +448,55 @@ mod tests {
             .expect("read")
             .expect("some");
         assert_eq!(chunk.len(), 100);
+    }
+
+    // Verifies: gh #459 - the bounded read distinguishes the three states, and
+    // "open but empty" is not EOF. `read_up_to` cannot express that third state at
+    // all: on a live pipe with no data it waits, which is how the error-surfacing
+    // path came to hang.
+    #[test]
+    fn read_buffered_separates_empty_from_eof() {
+        // A live, silent child: the pipe is open and has nothing.
+        let mut silent = std::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn a silent child");
+        let mut stderr = silent.stderr.take().expect("piped stderr");
+        match read_buffered(&mut stderr, 64).expect("read") {
+            Some(bytes) => assert!(
+                bytes.is_empty(),
+                "open and empty is `Some(empty)`, not EOF and not a wait: {bytes:?}"
+            ),
+            None => panic!("a live child's pipe is open, so it is not EOF"),
+        }
+        let _ = silent.kill();
+        let _ = silent.wait();
+
+        // A child that wrote and exited: its bytes, then EOF.
+        let mut done = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("printf 'boom' >&2")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn a writing child");
+        let mut stderr = done.stderr.take().expect("piped stderr");
+        let _ = done.wait();
+        let mut collected = Vec::new();
+        while let Some(bytes) = read_buffered(&mut stderr, 64).expect("read") {
+            if bytes.is_empty() {
+                break;
+            }
+            collected.extend_from_slice(&bytes);
+        }
+        assert_eq!(
+            String::from_utf8_lossy(&collected),
+            "boom",
+            "a closed pipe drains to the end, which is what the tail is for"
+        );
     }
 }
