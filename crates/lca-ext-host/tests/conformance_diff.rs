@@ -20,6 +20,8 @@ use lca_protocol::{CommandEffect, HookAction, ToolCall};
 
 #[path = "conformance_diff/args.rs"]
 mod args;
+#[path = "conformance_diff/serve_http.rs"]
+mod serve_http;
 use args::{call, env_get_args, net_fetch_args, pty_args, spawn_args};
 
 const FIXTURE: &[u8] = include_bytes!("../../../extensions/conformance/fixtures/tool-world.wasm");
@@ -201,10 +203,20 @@ async fn native_and_wasm_modes_produce_identical_results() {
     // Identity and shape.
     assert_eq!(wasm.name(), native.name());
     assert_eq!(wasm.worlds(), native.worlds());
+    // The count is a guard against a world silently dropping out of the
+    // fixture's manifest: the list is asserted, not just the number, so a
+    // dropped world and an added one cannot cancel each other out.
     assert_eq!(
         wasm.worlds().len(),
-        16,
-        "tool, tool-catalog, command, hooks, the eight hooks-*, provider, compaction, context-transform, ui"
+        17,
+        "tool, tool-catalog, command, hooks, the eight hooks-*, provider, compaction, context-transform, ui, serve-http"
+    );
+    // Gh #363: the `serve-http` world is the newest, and this is the row that
+    // notices if it ever stops being declared.
+    assert!(
+        wasm.worlds().contains(&World::ServeHttp),
+        "the fixture must exercise every world, including serve-http: {:?}",
+        wasm.worlds()
     );
     assert_eq!(wasm.delivery(), DeliveryMode::Wasm);
     assert_eq!(native.delivery(), DeliveryMode::Native);

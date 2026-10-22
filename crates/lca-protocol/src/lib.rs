@@ -8,6 +8,8 @@
 
 pub mod capability;
 pub mod dispatch;
+/// The inbound HTTP capability's contract (gh #363, ADR-0049).
+pub mod http;
 pub mod login;
 pub mod message;
 pub mod provider;

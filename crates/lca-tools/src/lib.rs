@@ -27,6 +27,12 @@ pub mod truncate;
 pub use bridge::{BridgeError, bridge_stream};
 pub use capabilities::CompletionBackend;
 pub use capabilities::SharedBackend;
+/// The inbound HTTP listener (gh #363, ADR-0049): the host owns the socket,
+/// the guest answers a request.
+pub use capabilities::serve_http::{
+    self as serve_http, Bound, DEFAULT_PORT, HttpResponse, IncomingRequest, Listener,
+    MAX_BODY_BYTES, PORT_ATTEMPTS, Refusal, Routed, ServeHttpNamespace, SessionToken,
+};
 pub use capabilities::{BrowserError, CompletionError};
 pub use capabilities::{
     BrowserOpener, Capabilities, CapabilityGrants, Denial, RESOURCE_FILE_MAX_BYTES,

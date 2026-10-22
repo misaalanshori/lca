@@ -142,6 +142,22 @@ Not stopped either: an extension reading a variable it *was* granted and sending
 it somewhere the user also approved. That is `credentials`' residual in a
 different variable, and the `net` allow list is the boundary that bounds it.
 
+### An extension serving a local port is driven by something the user did not start
+
+An extension with `serve-http` is reachable at `http://127.0.0.1:<port>/<session>/<extension>/`. Something other than the user's own browser — another local process, a web page they already have open, or a page reached through DNS rebinding — sends it a request, and the extension acts on the user's workspace through its other grants.
+
+Stopped, by two checks the host owns and the extension cannot reach around. The listener binds `127.0.0.1` and nothing else (there is no address field in the manifest), it requires a per-process token on every request, and it refuses a request whose `Host` header does not name the listener itself. A request failing either check is refused *before* the extension is called, and the refusal does not reveal which namespaces are mounted (ADR-0049).
+
+Loopback alone was the tempting simplification and it is not enough, which is why the token is mandatory rather than optional. Three shapes reach a loopback port: another local process (the token stops it), a cross-origin `POST` from an open page, which needs no CORS preflight and need not read the response (the token stops it, because the page does not have it), and DNS rebinding, where an attacker-controlled name resolves to `127.0.0.1` so the bind check has already passed (the `Host` check stops it, and records it as a rebinding attempt rather than an ordinary denial).
+
+The token is generated per process from the platform CSPRNG, compared in constant time, and never logged: not to the session record, not to a diagnostic dump, and not to `ext info`. It appears once, in the session's notice line. A token that leaked into a log would be readable by any extension holding `fs`, which would make the whole gate theatre.
+
+Not fully stopped: **a local process that reads the token out of the user's screen, or off the command line of a tool the user ran**, can then act with the extension's full authority. That is the same residual as a stolen session cookie, and it is bounded by the extension's other grants rather than by the listener.
+
+Not stopped: **an extension's handler may be reached by a request the host could not distinguish from a legitimate one**, once the token is correct. The host checks that a request is addressed to it and carries the secret; it does not — and cannot — judge whether the *content* of the request is something the extension should act on. A `serve-http` extension that performs a workspace write because a `POST` told it to is doing exactly what it was granted, and the risk of a CSRF-shaped action inside the extension's own routes belongs to the extension's design. The listener's job is to make the traffic attributable and bounded, not to make an extension's own protocol safe.
+
+Not covered in this phase, and named rather than implied: there is no rate limiting on the port, so a hostile local process can hammer it (each request is still bounded by the extension's own fuel budget, and a request body is capped at 8 MB); there is no TLS, which is honest for `http://` on loopback; and WebSocket upgrades are refused rather than bridged, so there is no long-lived channel to reason about yet.
+
 ### One extension reads another's tokens
 
 Stopped by namespace isolation. A credential namespace must equal the extension name, enforced at manifest validation. There is no cross-namespace read at any level, and the `fs` capability cannot reach the credential store because the store lives in the agent's own state directory, which the host excludes from every `fs` resolution.

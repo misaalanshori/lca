@@ -84,6 +84,7 @@ pub(super) struct InstanceCache {
     )>,
     hooks_cache: Option<(Store<HostState>, lca_ext_abi::host::hooks_cache::HooksCache)>,
     hooks_trust: Option<(Store<HostState>, lca_ext_abi::host::hooks_trust::HooksTrust)>,
+    serve_http: Option<(Store<HostState>, lca_ext_abi::host::serve_http::ServeHttp)>,
 }
 
 impl InstanceCache {
@@ -250,5 +251,13 @@ impl Inner {
         hooks_trust,
         lca_ext_abi::host::hooks_trust::HooksTrust,
         CallError::InvalidArguments("no hooks-trust world".into())
+    );
+    cached_world!(
+        serve_http,
+        checkout_serve_http,
+        checkin_serve_http,
+        serve_http,
+        lca_ext_abi::host::serve_http::ServeHttp,
+        CallError::InvalidArguments("no serve-http world".into())
     );
 }

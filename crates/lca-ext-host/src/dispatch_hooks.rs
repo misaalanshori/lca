@@ -375,6 +375,13 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
             .map_err(|err| to_dispatch(err, self.name()))
     }
 
+    fn serve_http_mount(
+        &self,
+        session: &str,
+    ) -> Option<std::sync::Arc<dyn lca_protocol::http::ServeHttpNamespace>> {
+        crate::serve_http::mount_for(self, session)
+    }
+
     fn interrupt(&self) {
         // FR-CONC-1: epoch interruption, independent of the fuel budget.
         // Flag first: a store built concurrently must see it, because its

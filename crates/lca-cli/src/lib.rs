@@ -56,6 +56,8 @@ pub use persist::{
 };
 mod registry;
 mod session_cmds;
+/// The session's inbound HTTP listener lifecycle (gh #363, ADR-0049).
+pub mod session_http;
 mod session_maint;
 /// Restoring `SIGPIPE`'s default disposition (GitHub issue #19).
 pub mod sigpipe;

@@ -34,6 +34,26 @@ Dates are UTC.
   before the first tick and the row failed while the product was correct — it now
   reads the set from the browser opener, which runs synchronously inside
   `sign_in_flow`, so the observation cannot miss.
+- **An extension can serve a web interface, and the host owns the socket**
+  (gh #363). Every network capability so far pointed outward; there was no way
+  for an extension to *answer* a browser. A manifest can now declare
+  `[capabilities.serve-http]`, and the host mounts that extension at
+  `http://127.0.0.1:<port>/<session-id>/<extension-name>/` on one loopback
+  listener shared by every extension that asked. The extension never binds a
+  socket or holds a port: the host reads the request and calls the extension's
+  handler, with the path prefix already stripped so `index.html` and
+  `./style.css` work wherever it is mounted. Loopback is not private, so the
+  token is mandatory rather than optional — any local program can reach the
+  port, any web page you have open can POST to it, and a hostile name can
+  resolve to `127.0.0.1` through DNS rebinding. A request without the token, or
+  with a `Host` header that is not the listener's own, is refused before the
+  extension is called. The token is generated per session, compared in constant
+  time, and never logged: it is shown once in the session's notice, which names
+  the port actually bound. A port in use moves to the next one, and no free port
+  means the feature reports unavailable while the session carries on — the agent
+  never fails to start because a web view could not listen. WebSocket bridging,
+  a dedicated-port mode, and a root dashboard are deliberately not in this
+  release.
 - **Sandboxed extensions can read the environment variables they declare**
   (gh #170). A WASM extension started with an empty environment, so an extension
   that fell back to an API-key variable worked when compiled in and broke as a

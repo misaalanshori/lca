@@ -419,6 +419,16 @@ pub fn consent_lines(manifest: &str) -> Result<Vec<String>, Error> {
             "ui" => lines.push(
                 "Show a segment in the status line and content in the side panel.".to_string(),
             ),
+            // Gh #363 / ADR-0049: the inbound HTTP grant. The reach is stated
+            // plainly - "on this machine" is not "private to LCA", and a user
+            // approving a local port should know that any program on it can
+            // connect, not just this agent. The port is not named here because
+            // it is not known until the session starts (the fallback may land
+            // elsewhere); the session's own notice names the one bound.
+            "serve-http" => lines.push(format!(
+                "{} Serve a web interface on this machine, reachable by any program on it.",
+                reason(value, "reason")
+            )),
             other => {
                 return Err(Error::Invalid(format!(
                     "unknown capability `{other}` in the manifest"

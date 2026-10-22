@@ -93,6 +93,10 @@ pub enum World {
     HooksCache,
     /// Vote on project trust (`hooks-trust` world, gh #45).
     HooksTrust,
+    /// Answer HTTP requests the host's own listener accepted
+    /// (`serve-http` world, gh #363, ADR-0049). The direction is
+    /// inverted: the host calls in, the guest never binds a socket.
+    ServeHttp,
 }
 
 /// One nested tool request (gh #77): a tool calling another through
@@ -511,6 +515,21 @@ pub mod dispatch {
             Vec::new()
         }
 
+        /// This handle's `serve-http` mount, when it declared the capability
+        /// (gh #363, ADR-0049). `None` means "no route": the session mounts
+        /// only what this returns, so an extension without the grant is absent
+        /// from the port rather than reachable-but-refusing.
+        ///
+        /// The trait object is the protocol crate's, not this crate's, because
+        /// the listener lives in `lca-tools` and the contract at the bottom is
+        /// what lets the two name each other (see `lca_protocol::http`).
+        fn serve_http_mount(
+            &self,
+            _session: &str,
+        ) -> Option<std::sync::Arc<dyn lca_protocol::http::ServeHttpNamespace>> {
+            None
+        }
+
         /// The tree for one region (`ui` world, ADR-0003, FR-UI-1).
         /// Synchronous on purpose: this runs on a frame's clock, and a
         /// native handle answers immediately while a WASM handle joins
@@ -682,6 +701,11 @@ pub mod host {
     pub mod hooks_trust {
         wasmtime::component::bindgen!({ path: "../../wit", world: "hooks-trust" });
     }
+
+    /// The `serve-http` world (gh #363): the host's listener calls in.
+    pub mod serve_http {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "serve-http" });
+    }
 }
 
 /// Every world's manifest spelling, in vocabulary order.
@@ -714,6 +738,7 @@ pub const WORLDS: &[(&str, World)] = &[
     ("compaction", World::Compaction),
     ("context-transform", World::ContextTransform),
     ("ui", World::Ui),
+    ("serve-http", World::ServeHttp),
 ];
 
 /// The manifest spelling of `world`.

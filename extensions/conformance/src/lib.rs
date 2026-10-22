@@ -1036,3 +1036,104 @@ mod transform_world;
 #[cfg(target_arch = "wasm32")]
 #[allow(unsafe_code)] // generated wit-bindgen export shims
 mod ui_world;
+
+// ---------------------------------------------------------------------------
+// WASM delivery mode: the serve-http world (gh #363, ADR-0049)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)] // generated wit-bindgen export shims
+mod serve_http_world;
+
+// ---------------------------------------------------------------------------
+// The `serve-http` script both delivery modes share (NFR-25)
+// ---------------------------------------------------------------------------
+
+/// One request as the conformance probe receives it, in the mode-independent
+/// shape both halves convert from (WIT records on one side, the host's own
+/// record on the other).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServeHttpProbe {
+    /// Request method.
+    pub method: String,
+    /// The stripped path the host handed over.
+    pub path: String,
+    /// Everything after `?`.
+    pub query: String,
+    /// Headers with lower-cased names.
+    pub headers: Vec<(String, String)>,
+    /// Request body.
+    pub body: Vec<u8>,
+}
+
+/// What the probe answers, identical in both delivery modes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServeHttpOutcome {
+    /// A real response.
+    Answer {
+        /// Status code.
+        status: u16,
+        /// Headers.
+        headers: Vec<(String, String)>,
+        /// Body.
+        body: Vec<u8>,
+    },
+    /// The capability was not granted (the WIT `error::not-granted` case).
+    NotGranted(String),
+    /// The handler failed (the WIT `error::failed` case).
+    Failed(String),
+}
+
+/// The path the probe expects to be stripped *to*, so a host that forwarded the
+/// mounted path produces a visibly different answer rather than a plausible one.
+pub const SERVE_HTTP_PREFIX_PATH: &str = "/index.html";
+
+/// The shared `serve-http` script: one function, two delivery modes.
+///
+/// The three answers the obligation requires:
+///
+/// - **Granted**: the mounted path `/index.html` reaches the handler as
+///   `/index.html`, and the answer names it. This is the prefix-stripping
+///   contract, and a host that passed `/<session>/<ext>/index.html` through
+///   would fail it in both modes at once.
+/// - **Parameter mismatch**: a path that is not the expected one still answers,
+///   but with a distinguishing body, so a wrong route is visible rather than
+///   silently accepted.
+/// - **Denied**: a request carrying the denial marker answers `not-granted`,
+///   which is the shape a host that revoked the grant produces.
+pub fn serve_http_answer(base_url: &str, request: &ServeHttpProbe) -> ServeHttpOutcome {
+    // A host that revoked the grant mid-session produces this: the guest's own
+    // refusal path, exercised without needing a second manifest.
+    if request
+        .headers
+        .iter()
+        .any(|(name, value)| name.eq_ignore_ascii_case("x-conformance-deny") && value == "1")
+    {
+        return ServeHttpOutcome::NotGranted("serve-http is not granted".to_string());
+    }
+    if request.method != "GET" {
+        return ServeHttpOutcome::Failed(format!(
+            "the probe only answers GET, got {}",
+            request.method
+        ));
+    }
+    // The stripping assertion. `base_url` is the mount point the host
+    // computed, so echoing both proves the two agree without either side
+    // having to construct the other's value.
+    let body = if request.path == SERVE_HTTP_PREFIX_PATH {
+        format!(
+            "stripped={};base={base_url};query={}",
+            request.path, request.query
+        )
+    } else {
+        format!("unexpected path {};base={base_url}", request.path)
+    };
+    ServeHttpOutcome::Answer {
+        status: 200,
+        headers: vec![(
+            "content-type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        )],
+        body: body.into_bytes(),
+    }
+}

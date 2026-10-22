@@ -133,6 +133,7 @@ fix. The vocabulary is:
 | `compaction` | replace a record range with a summary |
 | `context-transform` | reshape or reject the outgoing message list |
 | `ui` | render a widget tree into the four regions |
+| `serve-http` | answer HTTP requests on the host's own loopback listener (gh #363) |
 
 The `hooks-*` names are a **fixed set**, not a `hooks-` prefix: `hooks-tpyo` is
 refused exactly like any other typo, because a prefix rule would accept it.
@@ -411,6 +412,21 @@ The `context-transform` world reshapes the message list on its way out to the mo
 A transform that modifies content early in the message list, rather than only appending near the end, breaks the provider's prompt cache for the rest of the conversation. The host measures this cross-turn, per ADR-0017, by comparing what goes out against the previous turn's stable content: the first diverging turn is narrowed and recorded as an extension event rather than failing, and a transform whose output is byte-stable across turns settles and stops narrowing. A transform whose output drifts, a timestamp or a counter baked into an old message, keeps the cache broken and costs real money and latency every turn. Write a transform so it only touches the most recent messages unless there is a specific reason to reach further back; `docs/testing-plan.md` has the test scenarios that catch this if it happens anyway.
 
 The `provider` world exports model listing, a completion call that returns a stream resource, and the authentication functions, plus `login`, `logout`, and `usage`, each always exported and each returning a defined "not supported" result when a provider doesn't have one. Promoting these three to world-level exports, rather than leaving them as ad hoc commands each author names differently, is what lets the host offer a generic `/login` picker across every installed provider and a `/usage` that follows whichever one is currently active, alongside the automatically namespaced per-provider form. See ADR-0012. It is the largest surface and the one with the most failure modes. Read the next section before attempting one.
+
+The `serve-http` world lets an extension answer HTTP requests instead of making them. Declare the grant and export a single `handle` function:
+
+```toml
+[capabilities.serve-http]
+reason = "Serves the browser mirror of this session."
+```
+
+The host owns the listener. It binds `127.0.0.1` (port `8080`, then up to `8089`), requires a per-process token, checks that the `Host` header names the listener, and mounts your extension at `http://127.0.0.1:<port>/<session-id>/<extension-name>/`. Only then does it call `handle`.
+
+The one thing to get right: **the path you receive is already stripped.** A request for `/<session>/<ext>/style.css` reaches you as `/style.css`, so your `index.html` can say `<link href="./style.css">` and work wherever it is mounted. Do not build URLs by prepending anything, and do not try to discover your own mount point from the request. `base-url` arrives as an argument — the full mount with its trailing slash — precisely so you never have to guess the port or read it from the environment.
+
+Two rules on the response. The host owns `content-length`, `connection`, and any header value containing a newline, so setting them does nothing; return your body and let the host frame it. And a refusal is an ordinary response: return a `4xx`/`5xx` status rather than the WIT `error` variant, which is reserved for "the grant is gone" and "the handler itself failed" and produces a host-written error page.
+
+Loopback is not private, and the consent line says so. Any program on the machine can reach the port, and a web page the user has open can `POST` to it. The token is what makes the drive-by case fail, and the host keeps it out of your sight: it is consumed before the request reaches you, so it is not in `headers` and you cannot log or forward it. Treat every request you receive as having been authenticated to the agent, not to the individual user — if your routes do something consequential, that decision is yours, not the listener's. See [ADR-0049](adr/0049-inbound-http-capability.md) for what is deferred (WebSocket bridging, a dedicated-port mode, a root dashboard).
 
 ## Resources and state
 

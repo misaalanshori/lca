@@ -12,6 +12,12 @@ debug-trace = ["lca-debug/debug-trace"]
 
 [dependencies]
 lca-debug = { path = "../lca-debug" }
+# The `serve-http` listener's per-process auth token (gh #363): a
+# capability that gates a local port needs a CSPRNG, not a counter or a
+# timestamp. Same crate `lca-mcp` and `lca-subscription` already use for
+# their PKCE verifiers, so the random source is one vetted dependency
+# rather than a new one.
+getrandom = "0.3"
 lca-protocol = { path = "../lca-protocol" }
 # gh #58: shell-like argument splitting for prompt templates (the same
 # splitter the CLI uses for `$EDITOR`; already on the vetted list).

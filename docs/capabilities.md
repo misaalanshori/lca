@@ -162,6 +162,64 @@ Values never enter the session log, never appear in a session export, are never 
 
 This capability exists because a sandboxed component gets an empty environment while a native-linked extension reads the process directly (gh #170). Before it, the same provider worked compiled-in and broke as a `.wasm`, and `lca-cli` carried a hardcoded workaround for one provider's base-URL variable. See [ADR-0048](adr/0048-capability-gated-environment.md).
 
+### serve-http
+
+Grants the right to answer HTTP requests that arrive on the host's own loopback
+listener. The extension never binds a socket, holds no port, and never sees a
+connection.
+
+```toml
+[capabilities.serve-http]
+reason = "Serves the browser mirror of this session."
+```
+
+Import interface: none. This is the one capability whose grant is on an
+**export**: `lca:host` already has `log`, and the direction of initiation is
+inverted — the host calls the extension, so there is nothing for the extension to
+call and nothing for the sandbox to gate at the import boundary. That is a
+consequence of the shape rather than a shortcut: every other capability is an
+import the host satisfies, and this one is a route the host offers.
+
+The host binds a single listener per process on `127.0.0.1` (port `8080`, then
+`8081`…`8089`), and mounts each granted extension under
+`http://127.0.0.1:<port>/<session-id>/<extension-name>/`. A request's path is
+**stripped** of that prefix before the extension sees it, so its own `index.html`
+and `./style.css` work wherever it is mounted. The handler also receives the
+mounted `base-url` so an absolute link can be built without guessing the port.
+
+**Loopback only, and the token is mandatory.** There is no address field and no
+`0.0.0.0` consent path: a capability that can be told to expose itself is a
+different capability with a different threat story. Loopback alone is not enough,
+for three separate reasons — any local process can reach the port; any web page
+the user has open can `POST` to it without a CORS preflight; and an
+attacker-controlled name resolving to `127.0.0.1` reaches it through DNS
+rebinding. So every request must carry the per-process token (as `?token=` or an
+`Authorization: Bearer` header), and the `Host` header must name the listener
+itself. A request missing either is refused before the extension is called, and
+the refusal does not reveal which namespaces exist.
+
+The token is a secret: generated per process from the platform's CSPRNG,
+compared in constant time, never logged, never written to the session record,
+never shown by `ext info`. It is displayed once, in the session's notice line,
+which is the only place it belongs.
+
+**Bind failures degrade.** A port in use moves to the next one; no free port in
+the range means the capability reports unavailable and the session continues. The
+agent never fails to start because a web UI could not listen, and the notice names
+the port actually bound rather than the one it asked for.
+
+WebSocket upgrades are refused cleanly (`501`) rather than bridged, and there is
+no root dashboard: both are named deferrals in [ADR-0049](adr/0049-inbound-http-capability.md),
+along with the dedicated-port mode (the issue's Mode B).
+
+Consent text names the reach honestly, because "on this machine" is not "private
+to LCA": "Serve a web interface on this machine, reachable by any program on it,
+at http://127.0.0.1:<port>/."
+
+On denial: the extension has no route at all — the host mounts only what it
+granted — so a request naming an ungranted extension is a `404` with the same
+body as any other unknown namespace.
+
 ### credentials
 
 Grants read and write access to one namespace in the credential store. The namespace is the extension's own identity and cannot be another extension's.

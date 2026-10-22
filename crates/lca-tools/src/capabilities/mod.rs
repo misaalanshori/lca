@@ -36,6 +36,11 @@ mod pinned_tests;
 mod proxy;
 #[cfg(test)]
 mod query_tests;
+/// The inbound HTTP listener (gh #363, ADR-0049). Public because the host
+/// builds the namespace list and the session lifecycle owns the `Listener`.
+pub mod serve_http;
+#[cfg(test)]
+mod serve_http_tests;
 mod store;
 mod tls;
 mod traits;
@@ -109,6 +114,10 @@ pub struct CapabilityGrants {
     /// The `tools` capability, when declared (gh #77): call other
     /// tools through the host.
     pub tools: bool,
+    /// The `serve-http` capability's parameters (gh #363, ADR-0049), when
+    /// declared. The listener is the host's; this is what the extension
+    /// claimed, and its `Some(..)` is also "may be mounted on the port".
+    pub serve_http: Option<lca_permissions::ServeHttpSettings>,
 }
 
 type HttpClient = Client<hyper_rustls::HttpsConnector<proxy::ProxyTcp>, Full<hyper::body::Bytes>>;
