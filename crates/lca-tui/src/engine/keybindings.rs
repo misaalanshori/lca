@@ -45,14 +45,25 @@ pub fn default_key_text(action: &str) -> String {
 }
 
 /// Format one resolved key id for display: `option` for `alt` on macOS, and
-/// optional sentence-start capitalization (pi's `formatKeyText`).
+/// optional capitalization of **each** chord part (pi's `formatKeyText`, whose
+/// `formatKeyPart` upper-cases every part, so `ctrl+e` renders `Ctrl+E`).
 ///
 /// The macOS spelling exists because `alt` is not a key printed on a Mac
 /// keyboard; pi renames it, so a hint that says `alt+left` there names a key the
 /// user cannot find.
 pub fn format_key_text(key: &str, capitalize: bool) -> String {
+    format_key_text_for(key, capitalize, cfg!(target_os = "macos"))
+}
+
+/// [`format_key_text`] with the platform's `alt` spelling given explicitly.
+///
+/// `cfg!` is a compile-time constant, so the macOS branch cannot be exercised on
+/// the machine most of this project is tested on. Taking the flag as a parameter
+/// keeps the rule testable everywhere (pi renames `alt` to `option` because a Mac
+/// keyboard has no key printed `alt`).
+pub fn format_key_text_for(key: &str, capitalize: bool, macos: bool) -> String {
     let part = |part: &str| {
-        let display = if cfg!(target_os = "macos") && part.eq_ignore_ascii_case("alt") {
+        let display = if macos && part.eq_ignore_ascii_case("alt") {
             "option"
         } else {
             part
@@ -529,7 +540,8 @@ impl KeybindingsManager {
         format_key_text(&joined, false)
     }
 
-    /// [`Self::display_keys`], capitalize for the start of a sentence.
+    /// [`Self::display_keys`] with each chord part capitalized (`Ctrl+E`), pi's
+    /// `keyDisplayText` form for a sentence start.
     pub fn display_keys_capitalized(&self, action: &str) -> String {
         let keys = self.keys(action);
         if keys.is_empty() {
@@ -560,6 +572,77 @@ mod tests {
         assert!(kb.matches("\x1b[1;2A", "app.prompt.previous"));
         assert!(kb.matches("\x1b[1;2B", "app.prompt.next"));
         assert!(!kb.matches("\x1b[1;2A", "app.prompt.next"));
+    }
+
+    // Verifies: gh #410 - a hint's display form follows pi's `formatKeyText`:
+    // `alt` reads as `option` on macOS (a Mac keyboard prints no key called
+    // `alt`), a chord keeps its `+` parts, and a multi-binding list joins with
+    // `/`.
+    #[test]
+    fn key_display_follows_pis_formatting_rules() {
+        assert_eq!(
+            format_key_text_for("alt+left", false, true),
+            "option+left",
+            "macOS spells `alt` as `option`"
+        );
+        assert_eq!(
+            format_key_text_for("alt+left", false, false),
+            "alt+left",
+            "other platforms keep `alt`"
+        );
+        assert_eq!(
+            format_key_text_for("ctrl+x+ctrl+e", false, false),
+            "ctrl+x+ctrl+e",
+            "a chord keeps every part"
+        );
+        assert_eq!(
+            format_key_text_for("shift+up/ctrl+p", false, false),
+            "shift+up/ctrl+p",
+            "multiple bindings join with `/`"
+        );
+        // pi's `formatKeyPart` capitalizes **every** part, not only the first
+        // character of the whole string: `ctrl+e` renders `Ctrl+E`.
+        assert_eq!(
+            format_key_text_for("ctrl+e", true, false),
+            "Ctrl+E",
+            "the capitalized form capitalizes each chord part, as pi does"
+        );
+        assert_eq!(
+            format_key_text_for("ctrl+c", true, false),
+            "Ctrl+C",
+            "so a single modifier+letter form reads naturally at a sentence start"
+        );
+        // Only the `alt` *part* is renamed, never a key that merely contains it.
+        assert_eq!(
+            format_key_text_for("altitude", true, true),
+            "Altitude",
+            "a key id containing `alt` is not a modifier"
+        );
+    }
+
+    // Verifies: gh #410 - the manager's display form is the live one.
+    //
+    // The whole defect in one row: a rebound action must display the override, an
+    // unbound one must display nothing at all, and the default table must not leak
+    // through either.
+    #[test]
+    fn display_keys_follows_the_override_and_the_unbind() {
+        let mut user = BTreeMap::new();
+        user.insert(
+            "app.tools.expand".to_string(),
+            vec!["ctrl+e".to_string(), "ctrl+g".to_string()],
+        );
+        user.insert("app.thinking.toggle".to_string(), Vec::new());
+        let kb = KeybindingsManager::with_user_bindings(user);
+
+        assert_eq!(kb.display_keys("app.tools.expand"), "ctrl+e/ctrl+g");
+        assert_eq!(
+            kb.display_keys("app.thinking.toggle"),
+            "",
+            "an explicit unbind displays nothing, so a caller omits the hint"
+        );
+        assert_eq!(kb.display_keys("app.interrupt"), "escape");
+        assert_eq!(kb.primary_key("app.tools.expand"), "ctrl+e");
     }
 
     #[test]
