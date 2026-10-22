@@ -14,7 +14,7 @@
 //! - **No free port degrades, never crashes.** A web UI is a convenience; the
 //!   agent must not fail to start because a port collision happened. The
 //!   capability reports unavailable and the session continues.
-//! - **The token is shown, not logged.** [`SessionHttp::notice`] is the one
+//! - **The token is shown, not logged.** `SessionHttp::notice` is the one
 //!   renderer, and it is what the interface displays; nothing here writes the
 //!   token to a file, a session record, or a diagnostic stream.
 

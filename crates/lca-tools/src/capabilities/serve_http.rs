@@ -774,8 +774,13 @@ impl Capabilities {
         self.grants.serve_http.is_some()
     }
 
-    /// [`Capabilities::refused`] for callers outside this module (the host's
-    /// `serve-http` mount records through the engine, not around it).
+    /// Record and answer a refusal, for callers outside the capability engine
+    /// (the host's `serve-http` mount records through the engine rather than
+    /// around it, so a denial lands in the extension's own journal).
+    ///
+    /// The same contract as the engine's internal `refused`, which stays
+    /// private because a denial is only meaningful with the capability family
+    /// that produced it.
     pub fn refused_for(
         &self,
         capability: &str,
