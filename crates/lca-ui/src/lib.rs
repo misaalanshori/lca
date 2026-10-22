@@ -13,6 +13,10 @@ mod chat_ext_commands;
 mod chat_extman;
 mod chat_hub;
 mod chat_keys;
+/// The `/mcp` manager modal (gh #418 Phase G).
+mod chat_mcp;
+mod chat_mcp_keys;
+mod chat_mcp_render;
 mod chat_modals;
 mod chat_models;
 mod chat_mouse;
@@ -27,9 +31,11 @@ mod chat_search;
 mod chat_shell;
 mod chat_tabs;
 mod chat_tree;
+mod command_help_table;
 pub mod dialogs;
 pub mod ext_widgets;
 pub mod footer;
+mod mcp_types;
 pub mod render;
 pub mod resume;
 pub mod run;
@@ -50,6 +56,10 @@ pub use chat_extman::{
     ExtensionManager, ListManaged, ManagedData, ManagedEntry, SetManagedStrategy, ToggleManaged,
 };
 pub use chat_hub::{ConfirmInstall, FetchExtensions, HubData, InstallConsent, InstallPoll};
+pub use chat_mcp::{
+    EXPOSURE_LEVELS, McpActionRow, McpManager, McpScreen, detail_actions, exposure_options,
+    stderr_rows,
+};
 pub use chat_pickers::HubRow;
 pub use chat_pickers::ModelPicker;
 pub use chat_render::ClickOutcome;
@@ -66,11 +76,13 @@ pub use run::run;
 pub use separator::{CompactionReason, Separator, SeparatorState};
 pub use state::{
     Action, CacheMissNotice, CommandInvoker, DialogExchange, DialogModal, LabelRecord, LoginCancel,
-    LoginComplete, LoginConfirm, LoginNext, LoginPick, LoginPoll, LoginRequest, McpAction, McpPoll,
-    ModelRow, PickerOption, ProjectOverride, ProjectSettingPersist, PromptRequest,
-    RegionInteractor, RegionRenderer, SettingRow, SettingsRows, ShellEvent, ShellHandle,
-    ShellRunner, SwitchConfirm, TreeFilterMode, TreeRow, TreeRowKind, TurnChannels, TurnRunner,
-    UiHooks, UiOptions, UiState, display_path, sanitize_block, sanitize_text,
+    LoginComplete, LoginConfirm, LoginNext, LoginPick, LoginPoll, LoginRequest, McpAction,
+    McpBeginSignIn, McpCancelSignIn, McpDetail, McpList, McpPoll, McpServerDetail, McpServerRow,
+    McpSnapshot, McpSubmitRedirect, McpToolRow, ModelRow, PickerOption, ProjectOverride,
+    ProjectSettingPersist, PromptRequest, RegionInteractor, RegionRenderer, SettingRow,
+    SettingsRows, ShellEvent, ShellHandle, ShellRunner, SwitchConfirm, TreeFilterMode, TreeRow,
+    TreeRowKind, TurnChannels, TurnRunner, UiHooks, UiOptions, UiState, display_path,
+    sanitize_block, sanitize_text,
 };
 pub use state::{CompactPoll, CompactState};
 pub use theme::Theme;

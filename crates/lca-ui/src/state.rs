@@ -134,6 +134,11 @@ pub type McpAction = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
 /// as a notice once, `None` keeps waiting (the login-poll shape).
 pub type McpPoll = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
+pub use crate::mcp_types::{
+    McpBeginSignIn, McpCancelSignIn, McpDetail, McpList, McpServerDetail, McpServerRow,
+    McpSnapshot, McpSubmitRedirect, McpToolRow,
+};
+
 /// What a background `/compact` is doing. The command's summarization
 /// call runs on its own thread (it is a model round-trip, and freezing
 /// the interface for it is how pi ended up with a dedicated compaction
@@ -834,6 +839,17 @@ pub struct UiHooks {
     pub mcp_action: Option<McpAction>,
     /// Poll a background `/mcp login` (gh #53); absent with the rest.
     pub poll_mcp: Option<McpPoll>,
+    /// The `/mcp` modal's server list (gh #418 Phase G). Absent where the modal
+    /// cannot exist (headless), which is what keeps the verb form working there.
+    pub mcp_list: Option<McpList>,
+    /// The modal's per-server detail fetch (gh #418 Phase G).
+    pub mcp_detail: Option<McpDetail>,
+    /// Start an interactive sign-in and answer its URL (gh #418 §3.4 item 3).
+    pub mcp_begin_sign_in: Option<McpBeginSignIn>,
+    /// Deliver a pasted redirect URL to a waiting flow (the SSH case).
+    pub mcp_submit_redirect: Option<McpSubmitRedirect>,
+    /// Abandon a waiting sign-in flow on `Esc`.
+    pub mcp_cancel_sign_in: Option<McpCancelSignIn>,
     /// Fetch hub rows: installed plus catalogs, merged (#227). The
     /// chat runs it on a worker, never the interface thread.
     pub fetch_extensions: Option<crate::chat_hub::FetchExtensions>,

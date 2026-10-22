@@ -841,3 +841,16 @@ mod env_capability;
 // can POST to 127.0.0.1 without a preflight.
 #[path = "363-inbound-http-capability.rs"]
 mod inbound_http_capability;
+// GitHub #418 Phase G: the `/mcp` manager modal, and the boundary it sits on.
+// Bare `/mcp` was a flat text block; it is now a server list, a per-server detail
+// with the actions that state supports, a tool inspector, an exposure picker, and
+// an OAuth sign-in screen with a paste field for the SSH case.
+//
+// The rows here are cross-crate on purpose. `lca-ui`'s own module has the screen
+// journeys; what no single crate can check is the contract *between* them: the
+// picker's four levels are the config parser's four, the documented transient
+// statuses are the function's, the manager's modal types carry data rather than
+// display instructions (ADR-0047's boundary, expressed where a test can read it),
+// and the scriptable verbs still answer with a notice rather than a widget.
+#[path = "418-mcp-manager-modal.rs"]
+mod mcp_manager_modal;

@@ -632,6 +632,23 @@ impl Chat {
             );
             return true;
         }
+        // Gh #418 Phase G: the `/mcp` manager modal. Before the `/ext` manager
+        // so a session that somehow opened both shows MCP (it is the one whose
+        // actions can be destructive).
+        if let Some(manager) = &self.mcp_manager {
+            let (title, body, hint) = crate::chat_mcp_render::mcp_overlay(manager);
+            self.picker_overlay(
+                viewport,
+                width,
+                height,
+                &title,
+                &body,
+                &hint,
+                &self.theme,
+                None,
+            );
+            return true;
+        }
         if let Some(manager) = &self.extension_manager {
             let mut body = vec![String::new()];
             let mut last_section = String::new();
