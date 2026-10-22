@@ -12,6 +12,7 @@
 mod action;
 mod authorize;
 mod net;
+pub mod rule_entry;
 mod rules;
 mod scope;
 pub mod sensitive;

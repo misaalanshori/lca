@@ -504,9 +504,20 @@ impl Ui {
                 ));
             }
         };
+        // Gh #261: what the user typed is *compiled* into a pattern the matcher
+        // can actually compare. `/permissions deny read muffin-recipe.txt` used
+        // to store the verb as part of the glob (`read muffin-recipe.txt`), which
+        // no action value ever equals, so the rule matched nothing and the read
+        // ran while the confirmation said it had worked.
+        let compiled = match lca_permissions::rule_entry::compile(&pattern, &self.cwd) {
+            Ok(compiled) => compiled,
+            // A rule that cannot match anything is refused *here*, with the
+            // accepted forms named - storing a dead rule is how this bug happened.
+            Err(rejection) => return CommandEffect::ShowWidget(rejection.to_string()),
+        };
         let mut store = self.grants.lock().unwrap_or_else(|p| p.into_inner());
-        match store.add_rule(&self.cwd, rule_scope, decision, pattern.clone()) {
-            Ok(()) => CommandEffect::ShowWidget(format!("{decision_word} rule `{pattern}`")),
+        match store.add_rule(&self.cwd, rule_scope, decision, compiled.pattern.clone()) {
+            Ok(()) => CommandEffect::ShowWidget(confirm_rule(decision_word, &compiled)),
             Err(err) => CommandEffect::ShowWidget(format!("could not add rule: {err}")),
         }
     }
@@ -1080,5 +1091,81 @@ mod command_registration_guards {
                 "the arm reader missed /{expected}; arms seen: {arms:?}"
             );
         }
+    }
+}
+
+/// The `/permissions` confirmation line (gh #261).
+///
+/// This line is the only feedback the user gets, and the old one was ambiguous:
+/// `deny rule read muffin-recipe.txt` read as though the whole string were the
+/// pattern. It now states the pattern that will actually be matched, and - when
+/// compiling changed the text - also what happens for the action kind, so a user
+/// can see the promise and the form together.
+fn confirm_rule(
+    decision_word: &str,
+    compiled: &lca_permissions::rule_entry::CompiledRule,
+) -> String {
+    let scope_note = match compiled.verb {
+        None => String::new(),
+        Some(verb) => {
+            let verb = match verb {
+                lca_permissions::rule_entry::RuleVerb::Read => "read",
+                lca_permissions::rule_entry::RuleVerb::Write => "write",
+            };
+            format!(" for {verb} actions")
+        }
+    };
+    if compiled.pattern == compiled.typed {
+        // Nothing was rewritten: say it once.
+        format!("{decision_word} rule `{}`{scope_note}", compiled.pattern)
+    } else {
+        // The stored form differs from what was typed: say both, so the user is
+        // never surprised later by a pattern they did not literally write.
+        format!(
+            "{decision_word} rule `{}`{scope_note} (from `{}`)",
+            compiled.pattern, compiled.typed
+        )
+    }
+}
+
+#[cfg(test)]
+mod rule_entry_tests {
+    use super::confirm_rule;
+
+    // Verifies: gh #261 - the confirmation names the pattern that will actually
+    // be matched, and says so unambiguously when it differs from what was typed.
+    //
+    // The message was half the defect: `deny rule read muffin-recipe.txt` read as
+    // though the whole string were the pattern. A user who reads that and gets no
+    // effect has no way to tell whether the rule or the matcher is wrong.
+    #[test]
+    fn the_permission_confirmation_names_the_matched_pattern() {
+        let cwd = std::path::Path::new("/home/me/proj");
+        // A relative path compiles to a spanning glob: both forms must appear.
+        let compiled =
+            lca_permissions::rule_entry::compile("read muffin-recipe.txt", cwd).expect("compiles");
+        let line = confirm_rule("deny", &compiled);
+        assert!(
+            line.contains("*muffin-recipe.txt"),
+            "the line states the pattern that will match: {line}"
+        );
+        assert!(
+            line.contains("from `read muffin-recipe.txt`"),
+            "and what the user typed, so the rewrite is not silent: {line}"
+        );
+        assert!(
+            line.contains("for read actions"),
+            "and which action kind it is about: {line}"
+        );
+
+        // An anchored glob passes through, so there is nothing to explain away.
+        let plain =
+            lca_permissions::rule_entry::compile("*muffin-recipe.txt", cwd).expect("compiles");
+        let line = confirm_rule("deny", &plain);
+        assert_eq!(line, "deny rule `*muffin-recipe.txt`", "{line}");
+
+        // A bare shell rule is stated once, with no action-kind note.
+        let shell = lca_permissions::rule_entry::compile("git push*", cwd).expect("compiles");
+        assert_eq!(confirm_rule("allow", &shell), "allow rule `git push*`");
     }
 }
