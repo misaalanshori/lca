@@ -86,6 +86,27 @@ impl ServeHttpNamespace for Stub {
     fn record_refusal(&self, _parameter: &str, _reason: &str) {}
 }
 
+/// Serializes rows that bind the listener's port range.
+///
+/// The listener tries `8080..8089` - a fixed range, because that is what a user's
+/// machine looks like (one process per port). `nextest` runs rows in parallel, so
+/// two rows binding at once contend for the same ten ports and the loser sees a
+/// *neighbour's* socket: `dropping_the_listener_frees_the_port` failed exactly
+/// that way, not because shutdown was broken but because another row had already
+/// taken the port it was trying to rebind.
+///
+/// A test-only base-port parameter in the production API would have hidden this
+/// by giving every row its own range, which no real session has. Holding a lock
+/// models reality: one listener at a time per machine.
+static PORT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Take the port lock. Every row that binds holds it until it finishes.
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    PORT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Bind a listener over one stub and return it with the stub.
 fn start(extension: &str, session: &str) -> (Listener, Arc<Stub>) {
     let stub = Stub::new(extension, session);
@@ -127,6 +148,8 @@ fn get_with_token(listener: &Listener, path: &str) -> String {
 
 #[test]
 fn the_listener_binds_loopback_and_never_a_wildcard() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // The one invariant that a manifest cannot argue with: there is no
     // address parameter to get wrong, so the assertion is that the bound
     // address is literally a loopback address on the port we were told.
@@ -142,6 +165,8 @@ fn the_listener_binds_loopback_and_never_a_wildcard() {
 
 #[test]
 fn a_request_with_the_token_is_served_and_reaches_the_extension() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     let (listener, stub) = start("ui-example", "sess-1");
     let (status, headers, body) = raw(
         listener.bound().addr,
@@ -157,6 +182,8 @@ fn a_request_with_the_token_is_served_and_reaches_the_extension() {
 
 #[test]
 fn a_request_without_the_token_is_refused_before_the_extension_is_called() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     let (listener, stub) = start("ui-example", "sess-1");
     let request = format!(
         "GET /sess-1/ui-example/index.html HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
@@ -176,6 +203,8 @@ fn a_request_without_the_token_is_refused_before_the_extension_is_called() {
 
 #[test]
 fn a_wrong_token_is_refused_exactly_like_no_token() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     let (listener, stub) = start("ui-example", "sess-1");
     let request = format!(
         "GET /sess-1/ui-example/ HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
@@ -198,6 +227,8 @@ fn a_wrong_token_is_refused_exactly_like_no_token() {
 
 #[test]
 fn a_bearer_header_authenticates_where_a_query_token_cannot_be_set() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // A `fetch` cannot put the token in the URL of a navigation but can set a
     // header; both forms are accepted so a page can call its own backend.
     let (listener, stub) = start("ui-example", "sess-1");
@@ -214,6 +245,8 @@ fn a_bearer_header_authenticates_where_a_query_token_cannot_be_set() {
 
 #[test]
 fn a_foreign_host_header_is_refused_as_a_rebinding_attempt() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // The DNS-rebinding case: an attacker's name resolves to 127.0.0.1, so
     // the loopback bind has already passed and only this check is left.
     let (listener, stub) = start("ui-example", "sess-1");
@@ -235,6 +268,8 @@ fn a_foreign_host_header_is_refused_as_a_rebinding_attempt() {
 
 #[test]
 fn the_extension_receives_a_stripped_path_so_relative_assets_work() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // The requirement that makes a static UI possible: the guest is told
     // `/style.css`, not `/<session>/<ext>/style.css`, so its own HTML can say
     // `./style.css` and it works wherever it is mounted.
@@ -254,6 +289,8 @@ fn the_extension_receives_a_stripped_path_so_relative_assets_work() {
 
 #[test]
 fn the_extension_is_told_its_own_base_url_with_the_trailing_slash() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // `base-url` is what lets an extension build an absolute link without
     // guessing the port; the trailing slash is what makes `base + "app.js"`
     // work by concatenation.
@@ -271,6 +308,8 @@ fn the_extension_is_told_its_own_base_url_with_the_trailing_slash() {
 
 #[test]
 fn the_query_string_arrives_separately_from_the_path() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     let (listener, _stub) = start("ui-example", "sess-1");
     let (_, _, body) = raw(
         listener.bound().addr,
@@ -282,6 +321,8 @@ fn the_query_string_arrives_separately_from_the_path() {
 
 #[test]
 fn an_unknown_namespace_is_a_404_that_does_not_enumerate() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     let (listener, stub) = start("ui-example", "sess-1");
     let (status, _, body) = raw(
         listener.bound().addr,
@@ -296,6 +337,8 @@ fn an_unknown_namespace_is_a_404_that_does_not_enumerate() {
 
 #[test]
 fn the_session_segment_must_match_so_a_stale_tab_cannot_reach_a_new_session() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     let (listener, stub) = start("ui-example", "sess-1");
     let (status, _, _) = raw(
         listener.bound().addr,
@@ -307,6 +350,8 @@ fn the_session_segment_must_match_so_a_stale_tab_cannot_reach_a_new_session() {
 
 #[test]
 fn a_failing_handler_answers_500_and_the_listener_keeps_serving() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // One bad handler must not take the port down: the agent's web UI is a
     // convenience, and a single trapped request turning off the listener would
     // make every other extension's UI vanish too.
@@ -332,6 +377,8 @@ fn a_failing_handler_answers_500_and_the_listener_keeps_serving() {
 
 #[test]
 fn a_websocket_upgrade_is_refused_cleanly_rather_than_bridged() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // ADR-0049 defers bridging. The honest answer is a refusal a client can
     // read, not a hang or a 200 the client will misread as an upgrade.
     let (listener, stub) = start("ui-example", "sess-1");
@@ -348,6 +395,8 @@ fn a_websocket_upgrade_is_refused_cleanly_rather_than_bridged() {
 
 #[test]
 fn an_oversized_body_is_refused_by_its_declared_length() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     let (listener, stub) = start("ui-example", "sess-1");
     let request = format!(
         "POST /sess-1/ui-example/upload?token={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: {}\r\n\r\n",
@@ -362,6 +411,8 @@ fn an_oversized_body_is_refused_by_its_declared_length() {
 
 #[test]
 fn a_guest_cannot_inject_a_header_or_lie_about_the_length() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // The host owns the framing: a guest-supplied `content-length` or a header
     // value carrying a newline would let an extension forge the response
     // envelope the client parses.
@@ -410,6 +461,8 @@ fn a_guest_cannot_inject_a_header_or_lie_about_the_length() {
 
 #[test]
 fn a_distinct_session_id_gets_its_own_namespace_so_two_agents_can_share_a_port() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // The `<session-id>` segment is what lets one port serve two sessions: the
     // path is the only thing separating them, so it must actually separate.
     let first = Stub::new("ui-example", "sess-1");
@@ -434,6 +487,8 @@ fn a_distinct_session_id_gets_its_own_namespace_so_two_agents_can_share_a_port()
 
 #[test]
 fn a_port_in_use_falls_back_to_the_next_one_and_the_bound_address_says_so() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // The degradation contract: the notice must name the port actually bound,
     // because a user told 8080 while the listener is on 8083 was told
     // something false.
@@ -473,6 +528,8 @@ fn a_port_in_use_falls_back_to_the_next_one_and_the_bound_address_says_so() {
 
 #[test]
 fn dropping_the_listener_frees_the_port_so_no_process_exits_with_it_bound() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // Shutdown is clean: the port is free the moment the listener is dropped,
     // which is the property that keeps a crashed or exited session from
     // leaving a socket behind for the next one to trip over.
@@ -498,6 +555,8 @@ fn dropping_the_listener_frees_the_port_so_no_process_exits_with_it_bound() {
 
 #[test]
 fn the_browser_url_carries_the_token_so_the_notice_has_one_thing_to_show() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     let (listener, _stub) = start("ui-example", "sess-1");
     let url = listener.browser_url();
     assert!(url.starts_with("http://127.0.0.1:"), "got {url}");
@@ -507,6 +566,8 @@ fn the_browser_url_carries_the_token_so_the_notice_has_one_thing_to_show() {
 
 #[test]
 fn no_port_free_reports_unavailable_instead_of_panicking_or_hanging() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // Every port in the range occupied: the capability must report a refusal
     // the caller turns into "unavailable", never panic and never block. The
     // bind is bounded, so this also proves the scan terminates.
@@ -546,6 +607,8 @@ fn no_port_free_reports_unavailable_instead_of_panicking_or_hanging() {
 
 #[test]
 fn the_refusal_vocabulary_is_the_one_the_listener_actually_uses() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     // Ties the enum to the wire: every variant that can be produced here has a
     // status a client can act on, and the two that must never be confused (a
     // scanner versus a rebinding attempt) differ in whether they are recorded.
@@ -566,6 +629,8 @@ fn the_refusal_vocabulary_is_the_one_the_listener_actually_uses() {
 /// default ports are all taken by someone else.
 #[test]
 fn the_default_port_is_reachable_on_this_machine() {
+    // One listener at a time per machine (see `serial`).
+    let _serial = serial();
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), serve_http::DEFAULT_PORT);
     let free = TcpListener::bind(addr).is_ok();
     let probes = Arc::new(AtomicU32::new(0));
