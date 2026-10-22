@@ -15,7 +15,7 @@ use lca_protocol::{StopReason, TurnOutcome, TurnStatus, Usage};
 use lca_tui::engine::alt_screen::AltScreenRenderer;
 use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::main_screen::MainScreenRenderer;
-use lca_tui::engine::terminal::{InputHandler, ProcessTerminal, ResizeHandler, Terminal};
+use lca_tui::engine::terminal::{InputHandler, ResizeHandler, Terminal};
 
 use crate::chat::Chat;
 use crate::chat_mouse::{PickerHit, ScrollbarHit};
@@ -261,44 +261,6 @@ fn copy_through_ladder(
     }
 }
 
-/// The loud report for a `keybindings.toml` that failed, overrode nothing
-/// known, or double-claims a key (gh #66): `None` when the file parsed
-/// clean (or is absent). The caller shows it on the startup notice and
-/// keeps defaults - the failure mode being killed is the silent typo.
-fn keybinding_problems(
-    load_error: Option<String>,
-    unknown: &[String],
-    invalid: &[(String, String)],
-    conflicts: &[lca_tui::engine::keybindings::KeybindingConflict],
-) -> Option<String> {
-    let mut problems = Vec::new();
-    if let Some(err) = load_error {
-        problems.push(err);
-    }
-    if !unknown.is_empty() {
-        problems.push(format!(
-            "unknown action(s): {} - keeping defaults for those",
-            unknown.join(", ")
-        ));
-    }
-    for (action, key) in invalid {
-        problems.push(format!(
-            "invalid key {key} for {action} - keeping defaults for it"
-        ));
-    }
-    for conflict in conflicts {
-        problems.push(format!(
-            "key {} claimed by {} - first match wins",
-            conflict.key,
-            conflict.keybindings.join(", ")
-        ));
-    }
-    if problems.is_empty() {
-        return None;
-    }
-    Some(format!("keybindings.toml: {}", problems.join("; ")))
-}
-
 /// Handle one raw input event (R16): capability replies, mouse, and keys.
 /// Route one normalized mouse event (gh #164, the keystone dispatch):
 /// the scrollbar owns its column (drag scrolls, steppers keep their
@@ -491,6 +453,11 @@ fn handle_input(
     terminal: &mut dyn Terminal,
     input_tx: &std::sync::mpsc::Sender<String>,
     resize_tx: &std::sync::mpsc::Sender<()>,
+    // Gh #400: when startup adopted the terminal, the loop reads the early
+    // receiver, not the channel `input_tx` feeds. The `$EDITOR` path stops and
+    // restarts the terminal, so it has to re-point at whichever stream the loop
+    // is actually draining or the session goes deaf after the editor exits.
+    early_receiver: Option<&crate::run_early_input::EarlyStream>,
     cancel_flag: &Option<lca_tools::CancelFlag>,
     aborted: &mut bool,
 ) -> InputResult {
@@ -698,11 +665,16 @@ fn handle_input(
                 screen.leave(terminal, true);
                 terminal.stop();
                 let edited = editor(&text);
-                let itx = input_tx.clone();
+                // A restarted reader must feed the stream the loop actually
+                // reads. With an adopted terminal that is the early channel;
+                // pointing it at `input_tx` instead left the session deaf once
+                // the editor exited (found as a 120 s hang in gh #121's e2e).
+                let tx =
+                    early_receiver.map_or_else(|| input_tx.clone(), |stream| stream.sender.clone());
                 let rtx = resize_tx.clone();
                 terminal.start(
                     Box::new(move |d| {
-                        let _ = itx.send(d);
+                        let _ = tx.send(d);
                     }) as InputHandler,
                     Box::new(move || {
                         let _ = rtx.send(());
@@ -733,7 +705,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     let keybindings = Arc::new(KeybindingsManager::with_user_bindings(std::mem::take(
         &mut options.keybinding_overrides,
     )));
-    let keybinding_notice = keybinding_problems(
+    let keybinding_notice = crate::run_keybindings::keybinding_problems(
         options.keybinding_error.clone(),
         &keybindings.unknown_actions(),
         keybindings.invalid_keys(),
@@ -779,19 +751,27 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             chat.queue_submit(message, lca_protocol::SubmitMode::FollowUp);
         }
     }
-    let mut terminal = ProcessTerminal::new();
+    // Gh #400 (type-while-loading): the host may have taken the terminal
+    // before the expensive startup load, so raw mode and the reader were live
+    // while extensions registered. Adopt that terminal and replay what it
+    // buffered, in arrival order, through this loop's own handler - one
+    // interpretation path, so an early key means exactly what a late one does.
+    //
+    // Without an early terminal (a test, an embedder), start one here: the old
+    // shape, unchanged.
     let (input_tx, input_rx) = std::sync::mpsc::channel::<String>();
     let (resize_tx, resize_rx) = std::sync::mpsc::channel::<()>();
-    let itx = input_tx.clone();
-    let rtx = resize_tx.clone();
-    terminal.start(
-        Box::new(move |data| {
-            let _ = itx.send(data);
-        }),
-        Box::new(move || {
-            let _ = rtx.send(());
-        }),
+    // Gh #400: adopt the terminal startup claimed before the load, replaying
+    // what it buffered - or start one here when nothing was claimed (a test, an
+    // embedder). See `run_early_input::AdoptedTerminal::take`.
+    let adopted = crate::run_early_input::AdoptedTerminal::take(
+        chat.world.options.early_input.take(),
+        &input_tx,
+        &resize_tx,
     );
+    let startup_keys = adopted.startup_keys;
+    let early_input = adopted.receiver;
+    let mut terminal = adopted.terminal;
     let mut screen = if chat.screen_mode {
         let mut alt = AltScreenRenderer::new();
         alt.enter(&mut terminal);
@@ -810,6 +790,11 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     terminal.write("\x1b]11;?\x07\x1b[?996n");
 
     let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx);
+    // Gh #400: keystrokes that arrived during the load are the first thing the
+    // editor sees, in the order they were typed.
+    for data in &startup_keys {
+        chat.handle_key(data);
+    }
     let mut dirty = true;
     // Gh #403 gap 1: the transcript generation this loop has already
     // accounted for. The seam below resets the selection whenever the
@@ -955,8 +940,14 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             dirty = false;
         }
 
-        // Input.
-        match input_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+        // Input (gh #400): when startup adopted a terminal that was already
+        // reading, its receiver *is* the input channel - the same reader thread
+        // keeps filling it, so there is one stream and no handover gap.
+        let received = match early_input.as_ref() {
+            Some(early) => early.recv_timeout(std::time::Duration::from_millis(50)),
+            None => input_rx.recv_timeout(std::time::Duration::from_millis(50)),
+        };
+        match received {
             Ok(data) => {
                 if let InputResult::Exit = handle_input(
                     &data,
@@ -965,6 +956,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                     &mut terminal,
                     &input_tx,
                     &resize_tx,
+                    early_input.as_ref(),
                     &turns.cancel,
                     &mut turns.aborted,
                 ) {

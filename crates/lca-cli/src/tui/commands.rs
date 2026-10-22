@@ -154,6 +154,10 @@ impl Ui {
             }),
             plain: config.ui_color() == ColorMode::Never,
             yolo,
+            // Gh #400: hand the pre-load terminal and its buffer to the loop
+            // exactly once; a second `options()` gets `None` and would start
+            // its own terminal, which only a bug would reach.
+            early_input: crate::lock(&self.early_input).take(),
             thinking_visibility: config
                 .thinking_visibility()
                 .and_then(lca_ui::transcript::ThinkingVisibility::parse)

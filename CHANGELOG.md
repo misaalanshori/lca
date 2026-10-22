@@ -53,6 +53,20 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **Typing works while startup finishes, and `Ctrl+C` is honoured from the
+  first frame** (gh #400, type-while-loading slice). The terminal entered raw
+  mode and started reading only *after* the extension registry, config, and
+  session had loaded, so the startup window was deaf: text typed in it was held
+  by the tty and appeared late in one lump after the header, and `Ctrl+C` did
+  nothing at all — a user trying to leave a slow start had to wait for it, then
+  press again (gh #225's armed exit meant the first press was simply spent). The
+  terminal is now claimed before the load, buffering into an ordered list the
+  interactive loop adopts and drains — same reader, same receiver, no handover
+  gap — so keystrokes typed during startup land in the editor in the order they
+  were typed, a bracketed paste stays one atomic segment, and a quit key acts.
+  `Ctrl+C` is recognised in all three spellings the terminal uses (the raw byte,
+  Kitty CSI-u, and xterm modifyOtherKeys); the two protocol forms are what a
+  real terminal actually sends once the keyboard protocol is negotiated.
 - **A project override can be seen and cleared** (gh #397, tri-state slice). A
   project override has three states, not two — the project file says nothing
   (inherit the user file or the default), says on, or says off — and the

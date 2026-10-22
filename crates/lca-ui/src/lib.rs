@@ -32,6 +32,8 @@ pub mod footer;
 pub mod render;
 pub mod resume;
 pub mod run;
+pub mod run_early_input;
+mod run_keybindings;
 mod run_selection;
 mod run_status;
 pub mod separator;

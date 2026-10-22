@@ -702,3 +702,8 @@ mod footer_git_truth;
 // `inherit` is the key's absence, and trust still gates it.
 #[path = "397-tri-state-project-override.rs"]
 mod tri_state_project_override;
+
+// Gh #400 (type-while-loading): the terminal is claimed before the startup
+// load, so typing and quit keys work from the first frame.
+#[path = "400-type-while-loading.rs"]
+mod type_while_loading;
