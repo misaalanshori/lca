@@ -92,6 +92,27 @@ authenticate it, without aliasing it to `OPENAI_API_KEY` or typing it into
 the default profile and applies to default-profile models only; a named
 profile keeps its own endpoint, environment notwithstanding.
 
+**Reasoning support follows the same "the active preset's own row" rule.**
+`provider-presets.toml` declares `supports_reasoning` per preset
+(`opencode-go` is the one that does), and the request carries a
+`reasoning_effort` field exactly when the preset the request routes to
+declares it (gh #294). It used to read a single flag fixed at startup from
+`OPENAI_SUPPORTS_REASONING`, which cannot know which profile the selected
+model routes to: the declaration was inert and every other preset
+inherited whatever the environment said. A profile whose id is not in the
+preset table still uses `OPENAI_SUPPORTS_REASONING`, because that is the
+endpoint-configured-from-the-environment path and it has no declaration to
+read. An undeclared preset never inherits the ambient answer.
+
+**Two presets reach a server on this machine, and only those.** `ollama`
+and `lmstudio` point at `http://localhost:<port>/v1`, so the manifest
+declares `net-local` for `localhost` and `127.0.0.1` (gh #294). It is
+those two literals and nothing broader — no CIDR block, no `*.local` — and
+that matters because `net` refuses a loopback address outright
+(FR-PERM-13's rebinding rule), so before the grant their model discovery
+failed before any consent could run. An internet-flavoured preset still
+reaches its host through the ad hoc `net` consent at login, as above.
+
 ## `ModelInfo.extras` keys
 
 `list-models` entries carry an `extras` map for non-structural per-model data (gh #108: the exact strings are the cross-boundary contract — a WASM guest in any language writes them, the host reads them, and a typo on either side fails silently, so the vocabulary test pins them against the `lca-protocol` constants):

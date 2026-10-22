@@ -252,10 +252,23 @@ pub fn api_key_for<C: ProviderCap + ?Sized>(
 /// `auth = "none"` preset (Ollama, LM Studio) declares an empty list and
 /// is likewise unchanged.
 fn preset_env_key<C: ProviderCap + ?Sized>(cap: &C, profile: &Profile) -> Option<String> {
-    // A named profile's id IS its preset id (`login_submit` picks the
-    // preset by `answer.choice` and names the profile after it). The
-    // default profile carries no id of its own, so the endpoint's
-    // remembered preset is what names the service the user chose.
+    active_preset(cap, profile)?
+        .env
+        .iter()
+        .find_map(|name| env_var(name))
+}
+
+/// The preset the given profile runs on, when the table names one.
+///
+/// A named profile's id IS its preset id (`login_submit` picks the preset by
+/// `answer.choice` and names the profile after it). The default profile
+/// carries no id of its own, so the endpoint's remembered `preset` credential
+/// is what names the service the user chose. A profile whose id is not in the
+/// table has **no** preset - deliberately `None` rather than a fallback to
+/// some other entry, because reading another service's row is how a stray
+/// `GROQ_API_KEY` would authenticate a DeepSeek profile (gh #292's negative
+/// case, and the reason `preset_env_key` is scoped this way too).
+pub fn active_preset<C: ProviderCap + ?Sized>(cap: &C, profile: &Profile) -> Option<crate::Preset> {
     let id = match profile {
         Some(id) => id.clone(),
         None => cap
@@ -268,8 +281,29 @@ fn preset_env_key<C: ProviderCap + ?Sized>(cap: &C, profile: &Profile) -> Option
     // diverge - only the access path differs.
     let bytes = cap.resource_read(PRESETS_RESOURCE).ok()?;
     let presets = crate::parse_presets(&String::from_utf8_lossy(&bytes));
-    let preset = presets.iter().find(|preset| preset.id == id)?;
-    preset.env.iter().find_map(|name| env_var(name))
+    presets.into_iter().find(|preset| preset.id == id)
+}
+
+/// Whether the endpoint this request is going to honors a reasoning
+/// parameter (R1).
+///
+/// The preset's own declaration decides, because the preset *is* the
+/// endpoint's row: `opencode-go` declares `supports_reasoning = true`, and
+/// every other preset leaves it off. The global `Settings` flag stays in the
+/// chain for the endpoint-read-from-environment path, where no preset names
+/// the endpoint and `OPENAI_SUPPORTS_REASONING` is the only signal. A preset
+/// that does not declare it must stay off rather than inheriting the ambient
+/// environment's answer - the same "only the active preset's row" rule that
+/// scopes `preset_env_key`.
+pub fn supports_reasoning_for<C: ProviderCap + ?Sized>(
+    cap: &C,
+    settings: &Settings,
+    profile: &Profile,
+) -> bool {
+    match active_preset(cap, profile) {
+        Some(preset) => preset.supports_reasoning,
+        None => settings.supports_reasoning,
+    }
 }
 
 /// The extension's preset table, by the name its own `resources/` bag uses.

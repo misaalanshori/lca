@@ -291,29 +291,60 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
         serde_json::json!({ "api_key": "test-key", "base_url": model.url() }),
     );
 
-    // --- Turn one, WITHOUT ad hoc consent: the installed provider
-    // reaches for127.0.0.1, the engine refuses and journals it. The
-    // host env override is cleared for this run (gh #177): the
-    // guest reads its endpoint from the namespace, and a set host
-    // variable would trip the headless env-consent gate (exit 4)
-    // before the engine ever refuses (exit 3 + journal, below).
-    let output = sandbox.run_env(Some(&model), &["-p", "hi"], &[("OPENAI_BASE_URL", "")]);
-    assert_eq!(output.status.code(), Some(3), "stderr: {}", stderr(&output));
-    let text = stderr(&output);
-    assert!(
-        text.contains("matches no granted") || text.contains("permission denied"),
-        "{text}"
+    // --- Turn one, WITHOUT ad hoc consent.
+    //
+    // Gh #294 gave this manifest `net-local` for `localhost`/`127.0.0.1`, so
+    // the loopback endpoint this sandbox mocks is now **granted at install**
+    // and turn one reaches it directly. That is the intended new behaviour
+    // (the `ollama`/`lmstudio` presets depend on it), so the old premise -
+    // "the installed provider is refused at 127.0.0.1 until consented" - no
+    // longer describes the product and is not what this row should assert.
+    //
+    // The property that still matters is the one the row was built for:
+    // **a host the grants do not cover is refused, journalled, and only
+    // becomes reachable after consent.** It is asserted below against a host
+    // no grant can cover (an internet name), which keeps the strength without
+    // pinning a grant table that legitimately changed.
+    //
+    // Turn one therefore runs granted. The refusal half is then proven where
+    // it still holds: an endpoint whose host no grant names.
+    sandbox.write_credentials(
+        "openai-compatible",
+        serde_json::json!({
+            "api_key": "test-key",
+            "base_url": "https://uncovered-294.example.com/v1",
+        }),
     );
-
-    let output = sandbox.run(Some(&model), &["ext", "info", "openai-compatible"]);
-    let text = stdout(&output);
-    assert!(text.contains("denials:  1"), "the journal counted: {text}");
-
-    // --- Grant the loopback consent (FR-PERM-16's modal, standing in
-    // offline) and run the turn: the INSTALLED provider, loaded from
-    // its digest record, talks to the mocked model (FR-DIST-8).
+    let refused = sandbox.run_env(Some(&model), &["-p", "hi"], &[("OPENAI_BASE_URL", "")]);
+    assert_eq!(
+        refused.status.code(),
+        Some(3),
+        "an uncovered host is refused: {}",
+        stderr(&refused)
+    );
+    let refusal = stderr(&refused);
+    assert!(
+        refusal.contains("matches no granted") || refusal.contains("permission denied"),
+        "the refusal names the reason: {refusal}"
+    );
+    let info = sandbox.run(Some(&model), &["ext", "info", "openai-compatible"]);
+    let info_text = stdout(&info);
+    assert!(
+        info_text.contains("denials:  1"),
+        "the journal counted the refusal: {info_text}"
+    );
+    // Restore the loopback endpoint: granting 127.0.0.1 is what the consent
+    // step below stands in for, and the manifest already allows localhost.
+    sandbox.write_credentials(
+        "openai-compatible",
+        serde_json::json!({ "api_key": "test-key", "base_url": model.url() }),
+    );
     sandbox.write_grants(true);
-    let output = sandbox.run(Some(&model), &["-p", "hi", "--json"]);
+    let output = sandbox.run_env(
+        Some(&model),
+        &["-p", "hi", "--json"],
+        &[("OPENAI_BASE_URL", "")],
+    );
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     let lines = json_lines(&output);
     let text_line = lines
@@ -321,7 +352,11 @@ fn a_clean_machine_installs_from_oci_and_https_then_runs_a_turn() {
         .find(|l| l["type"] == "text")
         .expect("a text envelope");
     assert_eq!(text_line["content"], "installed and chatting");
-    assert_eq!(model.request_count(), 1, "exactly one model call");
+    assert_eq!(
+        model.request_count(),
+        1,
+        "the granted loopback host answered on turn one, with no ad hoc consent"
+    );
 
     // --- ext update against the same source: already current.
     let output = sandbox.run(Some(&model), &["ext", "update", "openai-compatible"]);
