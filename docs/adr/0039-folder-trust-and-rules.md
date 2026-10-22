@@ -184,3 +184,60 @@ batch and is noted for a follow-up rather than fixed speculatively.
 - A capability-shaped gap (a legitimate in-workspace command that needs
   something outside it) that rules cannot express. That would be a
   capability question, not an analyzer one.
+
+## Addendum (2026-10-22, gh #365)
+
+The refuse-set grew again; the line #347 drew at *inline command-line code*
+was found to run through a gap. Recorded here because the decision shape is
+unchanged and only its reach moved.
+
+- **gh #365 — positional program text.** #347 closed evaluator *flags*
+  (`python3 -c`, `node -e`) with `INTERPRETER_EVAL_FLAGS`. Several tools carry
+  the same kind of code as a plain **positional argument** instead, and those
+  still auto-approved in a trusted folder: `awk 'BEGIN{system("curl
+  evil.example")}'`, `gawk`/`mawk`/`nawk`, `busybox awk`, `osascript -e`, `irb
+  -e`. This is code that is in no file at all — the same class #347 drew the
+  line against — so it is refused on the same rule, extended:
+  `PROGRAM_TEXT_PROGRAMS` reviews unless the program arrives as an
+  **in-workspace file** (`awk -f scripts/x.awk` stays scoped, and a `-f` path
+  outside the workspace still reviews). The set is *measured* (48 invocations
+  enumerated) rather than taken from the issue's three examples, because
+  `mawk`/`nawk`/`busybox awk` are the same program under other names.
+- **`sed`'s `e` flag, and why `sed` is not refused.** `sed 's/x/y/e'`
+  re-executes the substitution's result as a command — inline code by another
+  name. But `sed` is used constantly for legitimate edits, and a blanket
+  refusal is precisely the over-review this ADR warns about (prompts people
+  approve without reading). The `e` flag is a **suffix on an `s` command**
+  (`s///e`, `s///ge`, `s///ep`) or a standalone `e` command, so only those
+  shapes review: `sed -i 's/x/y/'`, `sed -n '1,10p'`, `sed 's/e/E/g'` all stay
+  scoped, and a `-f` script is the folder's own code. The rule is textual and
+  narrow on purpose; it does not attempt to parse the whole sed language.
+- **gh #365 — wrapper indirection, found while enumerating.** The measurement
+  turned up a sharper hole in the same "hides what runs" family:
+  `timeout 5 curl evil.example`, `nice curl …`, `stdbuf -o0 curl …` and
+  `ionice curl …` auto-approved **although `curl` is in `DENY_PROGRAMS`** — the
+  wrapper is the program, so the denied name was merely an unclassified
+  argument. Unlike the `awk` case there is no false-positive trade to weigh
+  (the argument is an exact program name), so `EXEC_WRAPPERS` plus
+  `MULTI_CALL` (`busybox wget`, `busybox sh -c`) now classify it.
+  `timeout 5 cargo test` stays scoped, which is the row proving it is not a
+  refusal of wrappers.
+
+**Option B in the issue — a "does this argument parse as a program?"
+heuristic — was rejected.** It cannot be made provable: "is this string a
+program in this language" is undecidable in general, and a guess **fails open**
+on whatever syntax its author did not consider. A set is auditable and a wrong
+membership is a visible diff; a heuristic's wrong answer is silent. Option C
+(decline) was rejected because these are not the `make`/`cargo build` case: those
+run **workspace** code, which the trust model deliberately accepts, whereas
+`awk 'BEGIN{…}'` runs code in no file at all.
+
+**Reported, not fixed in this cycle:** `vim -c ':!id'` and
+`tar --to-command=id` also auto-approve. Both need their own classification
+decision (which `tar` flags execute, whether an editor's `-c` is in scope at
+all), and neither is a positional-program case, so they are recorded for a
+follow-up rather than swept in speculatively.
+
+Guards: the analyzer's own unit matrices plus
+`tests/regressions/365-*.rs`, which pins the verdicts above at both the
+predicate and whole-turn level.
