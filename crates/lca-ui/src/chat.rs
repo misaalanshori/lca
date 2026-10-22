@@ -921,7 +921,13 @@ impl Chat {
     /// detection path.
     pub fn apply_terminal_background(&mut self, background: lca_tui::engine::colors::RgbColor) {
         self.terminal_bg = Some(background);
-        if self.theme_setting == "system" && self.theme_auto {
+        // Gh #387: `theme_auto` already means "the theme follows the
+        // terminal" for `""`/`auto`/`system` - the three spellings the default
+        // and `/theme` produce. Testing the literal `"system"` here meant the
+        // *default* theme (`auto`) never rebuilt from a probed background, so
+        // the panel derivation this issue adds would never have run on a real
+        // session. Found by driving an OSC 11 reply through `handle_input`.
+        if self.theme_auto {
             self.theme = crate::theme::Theme::system_theme(Some(background), None);
             self.theme_name = self.theme.name.clone();
             self.transcript.invalidate();
