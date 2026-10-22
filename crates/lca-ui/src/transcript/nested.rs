@@ -14,6 +14,7 @@
 //! it rather than inventing a second convention. `COLLAPSED_CHILDREN` is the
 //! budget, the marker sits **above** the kept rows, and expanding shows all.
 
+use super::{Entry, ToolStatus, Transcript};
 use crate::theme::{Role, Theme};
 use crate::transcript::render::render_key_hint;
 use lca_tui::engine::text::wrap_text_with_ansi;
@@ -235,4 +236,194 @@ pub(super) fn strip_wrapper_boilerplate(output: &str) -> String {
         .filter(|line| !is_wrapper_boilerplate(line))
         .collect();
     kept.join("\n").trim_matches('\n').to_string()
+}
+
+impl Transcript {
+    /// Record a tool call that carries a parent link (gh #404 gap 1).
+    ///
+    /// The link is kept so an **orphan** - a child whose parent card is absent -
+    /// is still drawn as a top-level card. Dropping it would make a broken
+    /// linkage silently hide a call, which is worse than the flood this cycle
+    /// fixes.
+    pub fn start_tool_with_parent(
+        &mut self,
+        name: impl Into<String>,
+        args: impl Into<String>,
+        parent_link: Option<String>,
+    ) {
+        self.start_tool_with_id(name, args, parent_link, None);
+    }
+
+    /// [`Transcript::start_tool_with_parent`], also carrying the call's own id.
+    ///
+    /// The id is what makes the suppression exact. A nested call produces a
+    /// `ToolStarted` *and* a `ToolFinished` (the turn emits both, so a headless
+    /// observer sees the pair); this transcript answers the first by adding a
+    /// checklist row and remembering the id, and the second by settling that row
+    /// instead of creating a card. Matching on "the most recent running card"
+    /// would be wrong: the parent is still running.
+    pub fn start_tool_with_id(
+        &mut self,
+        name: impl Into<String>,
+        args: impl Into<String>,
+        parent_link: Option<String>,
+        call_id: Option<String>,
+    ) {
+        let name = name.into();
+        // gh #404 gap 1: a child whose parent card is present is a checklist
+        // row, not a card. The row starts in `Running` and its `ToolFinished`
+        // settles it (see `finish_tool_with_children`). A child whose parent is
+        // **absent** falls through to a card of its own - the orphan fallback,
+        // because hiding a call entirely is worse than the flood.
+        if let Some(parent) = parent_link.clone()
+            && !parent.is_empty()
+            && self.entries.iter().any(
+                |entry| matches!(entry, Entry::Tool { call_id: Some(id), .. } if *id == parent),
+            )
+        {
+            self.invalidate_cache();
+            for entry in self.entries.iter_mut().rev() {
+                if let Entry::Tool {
+                    call_id: Some(id),
+                    children,
+                    ..
+                } = entry
+                    && *id == parent
+                {
+                    children.push(ChildCall {
+                        name: name.clone(),
+                        status: ChildStatus::Running,
+                        head: String::new(),
+                    });
+                    break;
+                }
+            }
+            // Remember the child's id so its finish settles this row rather than
+            // creating a card. The verdict rides in `suppressed`.
+            self.suppressed
+                .insert(call_id.filter(|id| !id.is_empty()), name);
+            return;
+        }
+        self.entries.push(Entry::Tool {
+            name,
+            args: args.into(),
+            status: ToolStatus::Running,
+            result: None,
+            diff: None,
+            manual: false,
+            expanded: None,
+            duration_ms: None,
+            started_at: Some(std::time::Instant::now()),
+            excluded: false,
+            children: Vec::new(),
+            parent_link,
+            call_id,
+        });
+    }
+
+    /// Attach children to the most recent running card (gh #404 gap 1).
+    ///
+    /// Used by the live path while a parent is still running - its children land
+    /// one at a time as each nested call finishes.
+    pub fn push_children(&mut self, children: Vec<ChildCall>) {
+        self.invalidate_last();
+        for entry in self.entries.iter_mut().rev() {
+            if let Entry::Tool { children: slot, .. } = entry {
+                slot.extend(children);
+                return;
+            }
+        }
+    }
+
+    /// Finish the most recent running tool call, carrying the nested calls it
+    /// made (gh #404 gap 1).
+    ///
+    /// A separate method rather than a wider `finish_tool_full`: the nested set
+    /// is only ever attached from the one place that has it (`ToolResult.nested`
+    /// on the turn event), and a caller that has no children should not have to
+    /// pass `Vec::new()`.
+    pub fn finish_tool_with_children(
+        &mut self,
+        status: ToolStatus,
+        result: Option<String>,
+        diff: Option<String>,
+        duration_ms: Option<u64>,
+        children: Vec<ChildCall>,
+    ) {
+        self.finish_tool_with_id(status, result, diff, duration_ms, children, None);
+    }
+
+    /// [`Transcript::finish_tool_with_children`] for a call whose id is known.
+    ///
+    /// gh #404 gap 1: a **suppressed** child's finish settles the checklist row
+    /// its start created, rather than creating or settling a card. Without the
+    /// id the finish would look like an ordinary result and land on the parent -
+    /// which is still running, so it would be the one amended.
+    pub fn finish_tool_with_id(
+        &mut self,
+        status: ToolStatus,
+        result: Option<String>,
+        diff: Option<String>,
+        duration_ms: Option<u64>,
+        children: Vec<ChildCall>,
+        call_id: Option<String>,
+    ) {
+        self.invalidate_cache();
+        // gh #404 gap 1: when the card already collected live child rows, the
+        // persisted set is the same rows by another route - keep the live ones.
+        let has_live_rows = self
+            .entries
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                Entry::Tool { children, .. } => Some(!children.is_empty()),
+                Entry::Assistant { .. } | Entry::User(_) => None,
+                _ => None,
+            })
+            .unwrap_or(false);
+        let children = if has_live_rows { Vec::new() } else { children };
+        // gh #404 gap 1: settle a suppressed child's checklist row.
+        if let Some(name) = self.suppressed.remove(&call_id) {
+            let child_status: ChildStatus = match status {
+                ToolStatus::Running => ChildStatus::Running,
+                ToolStatus::Ok => ChildStatus::Ok,
+                ToolStatus::Error => ChildStatus::Error,
+                ToolStatus::Denied => ChildStatus::Denied,
+                ToolStatus::Timeout => ChildStatus::Timeout,
+            };
+            let head = result.unwrap_or_default();
+            for entry in self.entries.iter_mut().rev() {
+                if let Entry::Tool { children, .. } = entry
+                    && let Some(row) = children
+                        .iter_mut()
+                        .rev()
+                        .find(|row| row.name == name && row.status == ChildStatus::Running)
+                {
+                    row.status = child_status;
+                    row.head = head;
+                    return;
+                }
+            }
+            return;
+        }
+        for entry in self.entries.iter_mut().rev() {
+            if let Entry::Tool {
+                status: s,
+                result: r,
+                diff: d,
+                duration_ms: ms,
+                children: kids,
+                ..
+            } = entry
+                && *s == ToolStatus::Running
+            {
+                *s = status;
+                *r = result;
+                *d = diff;
+                *ms = duration_ms;
+                kids.extend(children);
+                return;
+            }
+        }
+    }
 }

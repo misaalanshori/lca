@@ -474,6 +474,7 @@ fn render_tool(
         excluded,
         children,
         parent_link: _,
+        call_id: _,
     } = entry
     else {
         return;

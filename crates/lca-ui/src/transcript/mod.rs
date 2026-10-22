@@ -103,6 +103,11 @@ pub enum Entry {
         /// child whose parent card is absent - is still drawn as a top-level
         /// card rather than silently dropped (gh #404's fallback).
         parent_link: Option<String>,
+        /// The call's own id, when it has one. It is what lets a child's start
+        /// and finish be matched to the card (or to the parent that suppressed
+        /// it), because the events arrive in pairs and the transcript cannot
+        /// assume the most recent running card is the one being answered.
+        call_id: Option<String>,
     },
     /// A transient notice (command output, info).
     Notice(String),
@@ -218,6 +223,13 @@ pub struct Transcript {
     /// acceptance row for gh #410 would have passed only while the cache was
     /// cold. Cheap to keep honest: an integer compare per entry.
     cache_epoch: u64,
+    /// Nested call ids that were suppressed into a parent's checklist (gh #404
+    /// gap 1), mapped to the child's name.
+    ///
+    /// A nested call emits both a start and a finish, and the finish must settle
+    /// the checklist row rather than create a card. The id is the only exact key:
+    /// "the most recent running card" is the *parent*, which is still running.
+    suppressed: std::collections::BTreeMap<Option<String>, String>,
     /// Per-entry render cache (R15): `None` means the entry must be
     /// rendered; a streaming append invalidates only the last entry, so a
     /// long transcript is not re-rendered from scratch on every delta.
@@ -524,6 +536,7 @@ impl Transcript {
             excluded: false,
             children: Vec::new(),
             parent_link: None,
+            call_id: None,
         });
     }
 
@@ -554,86 +567,8 @@ impl Transcript {
             excluded,
             children: Vec::new(),
             parent_link: None,
+            call_id: None,
         });
-    }
-
-    /// Record a tool call that carries a parent link (gh #404 gap 1).
-    ///
-    /// The link is kept so an **orphan** - a child whose parent card is absent -
-    /// is still drawn as a top-level card. Dropping it would make a broken
-    /// linkage silently hide a call, which is worse than the flood this cycle
-    /// fixes.
-    pub fn start_tool_with_parent(
-        &mut self,
-        name: impl Into<String>,
-        args: impl Into<String>,
-        parent_link: Option<String>,
-    ) {
-        self.entries.push(Entry::Tool {
-            name: name.into(),
-            args: args.into(),
-            status: ToolStatus::Running,
-            result: None,
-            diff: None,
-            manual: false,
-            expanded: None,
-            duration_ms: None,
-            started_at: Some(std::time::Instant::now()),
-            excluded: false,
-            children: Vec::new(),
-            parent_link,
-        });
-    }
-
-    /// Attach children to the most recent running card (gh #404 gap 1).
-    ///
-    /// Used by the live path while a parent is still running - its children land
-    /// one at a time as each nested call finishes.
-    pub fn push_children(&mut self, children: Vec<ChildCall>) {
-        self.invalidate_last();
-        for entry in self.entries.iter_mut().rev() {
-            if let Entry::Tool { children: slot, .. } = entry {
-                slot.extend(children);
-                return;
-            }
-        }
-    }
-
-    /// Finish the most recent running tool call, carrying the nested calls it
-    /// made (gh #404 gap 1).
-    ///
-    /// A separate method rather than a wider `finish_tool_full`: the nested set
-    /// is only ever attached from the one place that has it (`ToolResult.nested`
-    /// on the turn event), and a caller that has no children should not have to
-    /// pass `Vec::new()`.
-    pub fn finish_tool_with_children(
-        &mut self,
-        status: ToolStatus,
-        result: Option<String>,
-        diff: Option<String>,
-        duration_ms: Option<u64>,
-        children: Vec<ChildCall>,
-    ) {
-        self.invalidate_cache();
-        for entry in self.entries.iter_mut().rev() {
-            if let Entry::Tool {
-                status: s,
-                result: r,
-                diff: d,
-                duration_ms: ms,
-                children: kids,
-                ..
-            } = entry
-                && *s == ToolStatus::Running
-            {
-                *s = status;
-                *r = result;
-                *d = diff;
-                *ms = duration_ms;
-                kids.extend(children);
-                return;
-            }
-        }
     }
 
     /// Finish the most recent running tool call.
@@ -936,6 +871,7 @@ impl Transcript {
             excluded: false,
             children: Vec::new(),
             parent_link: None,
+            call_id: None,
         });
     }
 
@@ -975,6 +911,7 @@ impl Transcript {
             excluded: false,
             children: Vec::new(),
             parent_link: None,
+            call_id: None,
         });
     }
 
