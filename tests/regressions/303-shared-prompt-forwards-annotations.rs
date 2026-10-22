@@ -429,44 +429,77 @@ fn the_only_production_prompt_still_dropping_hints_is_the_known_one() {
     );
 }
 
-/// The supply side, recorded because it is what a live receipt runs into.
+/// The supply side: **three** distinct surfaces, and only one of them supplies.
 ///
-/// `SharedPrompt` now forwards annotations, and the TUI renders whatever it
-/// receives (`SessionPrompt::ask_annotated` sends `action.display_annotated(
-/// annotations)`). But **nothing in a real tool-call path supplies them**:
+/// An earlier version of this row said "nothing in a real tool-call path
+/// supplies hints". That was too broad, and correcting it is the substance of
+/// this cycle. There are three places a permission decision is made, and the
+/// hint reaches exactly one of them:
 ///
-/// - `lca-tools`' `Capabilities` has no annotations parameter at all — every
-///   `authorize` call in that crate passes `None` — so a built-in or
-///   extension tool call reaches the modal with no hints.
-/// - The MCP bridge never calls `authorize` for a *tool call* (only for the
-///   server spawn), so an MCP tool's `destructiveHint` reaches its
-///   `ToolSpec.annotations` and then stops there.
+/// | surface | supplied? |
+/// |---|---|
+/// | the turn's gate for a **built-in** tool (`lca-core` `authorize`) | **yes** — `tool_annotations(name)` resolves the spec's hints, and `shell_prompt_shows_builtin_hints` proves the surface reads `destructive` |
+/// | anything an **extension** reaches through `Capabilities` (`fs_write`, `process`, `net`) | no — `Capabilities` has no annotations channel |
+/// | an **MCP tool call** | no — and not because the hint is dropped: `required_permission` returns `None` for a name it does not recognise, so the turn never asks for an MCP call at all |
 ///
-/// So the delegation fix is necessary and now guarded, but it is not
-/// sufficient for the user-visible outcome; wiring a hint into the capability
-/// and MCP call paths is the other half and is outside this cycle's boundary.
-/// This row fails if someone claims otherwise without changing the code — it
-/// pins the current truth so the follow-up is named rather than assumed done.
+/// So the user-visible defect is real but its cause is narrower than the issue
+/// states: a built-in's hint already shows, an MCP tool's cannot because there
+/// is no modal to show it in. This row pins all three so the follow-up is
+/// named precisely instead of repeated as folklore.
 #[test]
-fn no_capability_or_mcp_call_path_supplies_hints_yet() {
+fn only_the_builtin_turn_gate_supplies_hints() {
+    // (1) The built-in gate DOES supply them - a positive assertion, so this
+    // row fails if the join is ever removed.
+    let execute = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-core/src/turn/execute.rs"
+    ))
+    .expect("the turn source is readable");
+    assert!(
+        execute.contains("fn tool_annotations(")
+            && execute.contains("tool_annotations(&call.name)"),
+        "the turn resolves the called tool's annotations before authorize"
+    );
+    assert!(
+        execute.contains("annotations.as_ref(),"),
+        "the turn passes them to authorize"
+    );
+
+    // (2) `Capabilities` has no annotations channel, so an extension's own
+    // capability action cannot carry a hint. Every `authorize(` there passes
+    // `None`; a `Some(` would mean the channel exists and this row should
+    // become a positive one.
     let capabilities = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/crates/lca-tools/src/capabilities/mod.rs"
     ))
     .expect("capabilities source is readable");
-    // Every `authorize(` call in the capability layer passes `None` for the
-    // annotations argument. Counting is enough: a `Some(` would mean the
-    // supply side exists and this row should be replaced by a positive one.
     for (index, _) in capabilities.match_indices("authorize(") {
         let call = &capabilities[index..];
         let end = call.find(")\n").unwrap_or(call.len().min(400));
         assert!(
             !call[..end].contains("Some("),
             "a capability authorize call now supplies hints - replace this row \
-             with a positive assertion and wire the modal test"
+             with a positive assertion"
         );
     }
 
+    // (3) An MCP tool call is never gated, so no prompt exists for its hints
+    // to reach. `required_permission` recognises only built-in names.
+    let tools = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-tools/src/lib.rs"
+    ))
+    .expect("the tool executor source is readable");
+    let gate = &tools[tools
+        .find("fn required_permission(")
+        .expect("required_permission exists")..];
+    let gate_body = &gate[..gate.find("\n    }\n").unwrap_or(gate.len().min(2000))];
+    assert!(
+        !gate_body.contains("mcp__"),
+        "an MCP call is now gated - the supply question changed, so re-read this row"
+    );
+    // And the bridge itself never asks per call (it asks per spawn).
     let bridge = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/crates/lca-mcp/src/native.rs"
@@ -474,7 +507,139 @@ fn no_capability_or_mcp_call_path_supplies_hints_yet() {
     .expect("mcp bridge source is readable");
     assert!(
         !bridge.contains("authorize("),
-        "the MCP bridge now asks per tool call - the supply side landed, so \
-         this row should assert the modal shows the hint"
+        "the MCP bridge now asks per tool call - replace this row with the modal assertion"
+    );
+}
+
+/// `Some(ToolAnnotations::default())` is not `None`: default means "the tool
+/// made no claims", `None` means "nothing is known about this tool". The brief
+/// asked this be either distinguished or the flattening pinned; it is
+/// **distinguished**, because the wrapper forwards whatever it is given and
+/// `display_annotated` renders nothing for an all-`None` object — so the two
+/// arrive as different values and decide identically.
+#[test]
+fn an_all_default_annotation_object_is_not_none() {
+    let action = outside_write();
+    let empty = ToolAnnotations::default();
+    // Different values...
+    assert_ne!(
+        Some(&empty).is_some(),
+        Option::<&ToolAnnotations>::None.is_some(),
+        "`Some(default)` and `None` are different inputs"
+    );
+    // ...that render identically (no claims = nothing to show)...
+    assert_eq!(
+        action.display_annotated(Some(&empty)),
+        action.display_annotated(None),
+        "an all-default object appends no words"
+    );
+    // ...and both decide exactly as the bare action does, because the wrapper
+    // forwards rather than inspecting.
+    let (with_default, default_decision, _) =
+        through_slot("default-object", Decision::Denied, Some(&empty));
+    let (bare, bare_decision, _) = through_slot("default-bare", Decision::Denied, None);
+    assert_eq!(default_decision, bare_decision);
+    assert_eq!(default_decision, Decision::Denied);
+    // The distinction is observable at the prompt, which is the point: the
+    // recording prompt saw an annotations object in one case and none in the
+    // other, even though the rendered text matches.
+    assert!(with_default[0].1, "an object was forwarded");
+    assert!(!bare[0].1, "no object was forwarded");
+}
+
+/// The extras path (gh #78): a WIT guest crosses no annotations field in WIT,
+/// so its hints ride `ToolSpec.extras["annotations"]` as JSON and
+/// `with_annotations_from_extras` lifts them into the real field. That decode
+/// must not be duplicated - this row pins that it is the one path, and that a
+/// guest's JSON arrives as typed hints a prompt can render.
+#[test]
+fn a_guest_annotations_json_reaches_the_prompt_through_the_one_decode() {
+    use lca_protocol::ToolSpec;
+
+    let spec = ToolSpec {
+        name: "guest_tool".to_string(),
+        description: "a guest tool".to_string(),
+        parameters: serde_json::json!({"type": "object"}),
+        exposure: lca_protocol::ToolExposure::Direct,
+        namespace: None,
+        annotations: None,
+        extras: [(
+            "annotations".to_string(),
+            r#"{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}"#.to_string(),
+        )]
+        .into_iter()
+        .collect(),
+    }
+    .with_annotations_from_extras();
+    let hints = spec.annotations.expect("an object was lifted from extras");
+
+    // **Finding (gh #303 supply half, recorded not fixed):** the JSON above
+    // uses the camelCase spelling MCP servers and guests actually send
+    // (`destructiveHint`), and `ToolAnnotations` derives `Deserialize` with no
+    // `rename_all`, so serde expects `destructive_hint`. A camelCase payload
+    // therefore decodes to an all-`None` object *silently* - the guest's hints
+    // are dropped, not rejected. `lca-mcp` is unaffected because it hand-reads
+    // the camelCase keys (`crates/lca-mcp/src/lib.rs`), which is exactly why
+    // nobody noticed.
+    //
+    // So this row asserts the snake_case shape, which is what the extras path
+    // genuinely understands, and the camelCase gap is named here for the
+    // follow-up on `crates/lca-protocol` (outside this cycle's boundary).
+    assert!(
+        hints.destructive_hint.is_none() && hints.open_world_hint.is_none(),
+        "a camelCase extras payload decodes to no claims (the recorded gap)"
+    );
+    assert_eq!(
+        ToolAnnotations {
+            destructive_hint: Some(true),
+            open_world_hint: Some(true),
+            ..Default::default()
+        },
+        serde_json::from_str::<ToolAnnotations>(
+            r#"{"destructive_hint":true,"open_world_hint":true}"#
+        )
+        .expect("the snake_case shape the extras path understands"),
+        "the extras path decodes the serialized (snake_case) shape"
+    );
+
+    // And what a prompt renders for a payload it *does* understand names both.
+    let understood = serde_json::from_str::<ToolAnnotations>(
+        r#"{"destructive_hint":true,"open_world_hint":true}"#,
+    )
+    .expect("snake_case hints");
+    let rendered = outside_write().display_annotated(Some(&understood));
+    assert!(
+        rendered.contains("destructive") && rendered.contains("open-world"),
+        "the lifted hints render: {rendered}"
+    );
+
+    // An explicit annotation wins over the extras copy (no second decode).
+    let explicit = ToolSpec {
+        name: "guest_tool".to_string(),
+        description: String::new(),
+        parameters: serde_json::json!({"type": "object"}),
+        exposure: lca_protocol::ToolExposure::Direct,
+        namespace: None,
+        annotations: Some(ToolAnnotations {
+            read_only_hint: Some(true),
+            ..Default::default()
+        }),
+        extras: [(
+            "annotations".to_string(),
+            r#"{"destructiveHint":true}"#.to_string(),
+        )]
+        .into_iter()
+        .collect(),
+    }
+    .with_annotations_from_extras();
+    let kept = explicit.annotations.expect("explicit hints survive");
+    assert_eq!(
+        kept.read_only_hint,
+        Some(true),
+        "the structural field wins over the extras fallback"
+    );
+    assert_eq!(
+        kept.destructive_hint, None,
+        "the extras copy did not overwrite the structural field"
     );
 }

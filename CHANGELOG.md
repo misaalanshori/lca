@@ -7,6 +7,15 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Approval prompts name a tool's own hints** (gh #303). A tool can declare
+  what it does — `read-only`, `destructive`, `open-world` — and the permission
+  modal now shows them where the decision is made: a `shell` call's prompt reads
+  `echo hi (in /work) (destructive, open-world)`. The hints are display only. A
+  hint never approves or denies anything, and denying a hinted action still
+  denies it. Two gaps are named rather than papered over: an MCP tool call is not
+  individually consented (so it has no modal for a hint to appear in), and a
+  guest that sends its hints as camelCase JSON in `extras` gets them silently
+  dropped, because that decode expects snake_case.
 - **Approval prompts show what a tool says about itself** (gh #303). A tool can
   declare hints — `read-only`, `destructive`, `open-world` — and the permission
   prompt is meant to show them, so approving an MCP call tells you when the
