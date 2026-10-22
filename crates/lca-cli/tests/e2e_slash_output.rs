@@ -31,6 +31,13 @@ fn hotkeys_lands_in_scrollback_while_the_dock_stays_bounded() {
     let session = Tmux::new("slash-output-hotkeys");
     session.spawn(&sandbox, Some(&mock), true, &[], &[]);
     session.wait_for("[session in", std::time::Duration::from_secs(20));
+    // gh #444 (the #447 family): `[session in` is painted by the first render
+    // and does not mean the input thread is reading keys yet. On a loaded runner
+    // the send below landed in that gap and `/hotkeys` was never asked for -
+    // and output that was never requested cannot be polled for. Wait until the
+    // pane has echoed a keystroke, which can only happen through a live input
+    // path.
+    session.wait_for_input_ready(std::time::Duration::from_secs(15));
 
     session.send(&["/hotkeys", "Enter"]);
     // The table is taller than the pane: its head lives in scrollback,
@@ -47,10 +54,10 @@ fn hotkeys_lands_in_scrollback_while_the_dock_stays_bounded() {
         history.contains("keys:") && history.contains("enter"),
         "the table scrolls in the transcript:\n{history:.2000}"
     );
-    // Let the repaint settle: the history poll fires on the first
-    // appended row, possibly a frame before the dock repaints.
-    std::thread::sleep(std::time::Duration::from_millis(1200));
-    let pane = session.capture();
+    // Settle instead of sleeping (gh #447): the history poll fires on the
+    // first appended row, possibly a frame before the dock repaints. A settle
+    // waits for exactly that, and a fixed sleep only guesses at it.
+    let pane = session.wait_until_painted(std::time::Duration::from_secs(10));
     assert!(
         pane.contains("openai-compatible/test-model"),
         "the dock stays bounded (footer intact)"
@@ -82,18 +89,20 @@ fn model_picker_opens_promptly_and_fills_in() {
         "openai-compatible/test-model",
         std::time::Duration::from_secs(20),
     );
+    session.wait_for_input_ready(std::time::Duration::from_secs(15));
 
     // The frame opens promptly (the instant-open half).
     session.send(&["/model", "Enter"]);
     session.wait_for("search:", std::time::Duration::from_secs(10));
-    // The rows fill in (the background-discovery half).
-    let pane = session.wait_for("test-model", std::time::Duration::from_secs(15));
+    // The rows fill in (the background-discovery half). Settled, because the
+    // assertion below reads the row set out of one frame (gh #447).
+    let pane = session.wait_settled_for("test-model", std::time::Duration::from_secs(15));
     assert!(
         pane.contains("test-model"),
         "the catalog rows filled the picker:\n{pane:.1500}"
     );
     session.send(&["Escape"]);
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    session.wait_until_painted(std::time::Duration::from_secs(10));
     session.send(&["/exit", "Enter"]);
     // No turns ran, so no log exists for a session-end marker (gh
     // #122): the dead pane is the receipt.

@@ -33,6 +33,7 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
         "openai-compatible/test-model",
         std::time::Duration::from_secs(20),
     );
+    session.wait_for_input_ready(std::time::Duration::from_secs(15));
 
     // Two turns, then a rewind plus a third turn: the first row forks.
     // Each turn is awaited to `done`, not just first-delta: the tree
@@ -57,7 +58,13 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     // The fork paints connectors with role markers. The needle is
     // picker chrome: the questions echo in the transcript too.
     session.send(&["/tree", "Enter"]);
-    let pane = session.wait_for("Message branches", std::time::Duration::from_secs(15));
+    // gh #452 (the #447 family): this row waited for ONE needle ("Message
+    // branches", the picker header) and then asserted TWO connectors. The
+    // header is painted before the tree body, so the frame the wait returned
+    // could legitimately hold only one of them - which is exactly how this row
+    // failed on macOS while passing locally. Settle on a frame, then assert:
+    // the assertion is unchanged and a frame still missing a connector fails.
+    let pane = session.wait_settled_for("Message branches", std::time::Duration::from_secs(15));
     // SANCTIONED CHANGE (gh #394): fix 4 replaced the connector's dash
     // cell with the fold glyph, so the pair paints as `├⊟`/`└⊟` - one
     // column narrower, never `├─`/`└─`. The intent (both connector
@@ -94,7 +101,9 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
         "the folded subtree hides:\n{pane}"
     );
     session.send(&["Right"]);
-    let pane = session.wait_for("\u{2514}", std::time::Duration::from_secs(10));
+    // Same one-needle-two-glyphs shape as gh #452: wait for a settled frame
+    // that has the bottom connector, then assert the top one too.
+    let pane = session.wait_settled_for("\u{2514}", std::time::Duration::from_secs(10));
     assert!(
         pane.contains('\u{251c}'),
         "unfold restores the subtree:\n{pane}"
@@ -106,7 +115,7 @@ fn tree_navigator_folds_filters_and_selects_in_a_real_terminal() {
     session.send(&["f"]);
     session.wait_for("(user-only)", std::time::Duration::from_secs(10));
     session.send(&["f"]);
-    let pane = session.wait_for("(labeled-only)", std::time::Duration::from_secs(10));
+    let pane = session.wait_settled_for("(labeled-only)", std::time::Duration::from_secs(10));
     assert!(
         pane.contains("(no matches)"),
         "nothing is bookmarked yet:\n{pane}"

@@ -28,10 +28,19 @@ fn a_tall_settings_selector_rolls_with_frame_and_selection_on_screen() {
     let session = Tmux::new("gh226-tall-picker");
     session.spawn(&sandbox, Some(&mock), true, &[], &[]);
     session.wait_for("[session in", std::time::Duration::from_secs(20));
+    // gh #447: `[session in` is painted by the first render and says nothing
+    // about the input thread. Make the reader's attachment a fact before the
+    // scenario is typed at it, or the keys are simply lost.
+    session.wait_for_input_ready(std::time::Duration::from_secs(15));
     session.resize(80, 24);
 
     session.send(&["/settings", "Enter"]);
-    let pane = session.wait_for("key = value [source]", std::time::Duration::from_secs(15));
+    // gh #447: the frame the header appears in is not the frame the border is
+    // painted in - the selector paints its rows over several frames, so the
+    // row settled on macOS and read a `╭` that had not arrived yet. Settling
+    // first changes *when* this row reads, not what it asserts: a frame that
+    // still lacks the border after settling still fails.
+    let pane = session.wait_settled_for("key = value [source]", std::time::Duration::from_secs(15));
     assert!(pane.contains("╭"), "top border draws:\n{pane}");
     assert!(pane.contains("╰"), "bottom border draws:\n{pane}");
     assert!(pane.contains("▼"), "more below at the top:\n{pane}");
@@ -42,8 +51,10 @@ fn a_tall_settings_selector_rolls_with_frame_and_selection_on_screen() {
     for _ in 0..10 {
         session.send(&["Down"]);
     }
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    let pane = session.capture();
+    // Same class, same primitive: the indicators are repainted after the
+    // selection moves, so read a settled frame rather than one a fixed sleep
+    // hoped was late enough (gh #447).
+    let pane = session.wait_until_painted(std::time::Duration::from_secs(10));
     assert!(
         pane.contains("▲"),
         "more above after stepping down:\n{pane}"
@@ -60,8 +71,7 @@ fn a_tall_settings_selector_rolls_with_frame_and_selection_on_screen() {
     );
 
     session.send(&["End"]);
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    let pane = session.capture();
+    let pane = session.wait_until_painted(std::time::Duration::from_secs(10));
     assert!(!pane.contains("▼"), "nothing below at the end:\n{pane}");
     assert!(pane.contains("▲"), "plenty above at the end:\n{pane}");
     assert!(
@@ -70,12 +80,13 @@ fn a_tall_settings_selector_rolls_with_frame_and_selection_on_screen() {
     );
 
     // The selected row carries the highlight (raw SGR receipt): the
-    // cursor marker rides a styled row.
-    let sgr = session.capture_e();
+    // cursor marker rides a styled row. Settled in the SGR capture kind, so the
+    // receipt cannot come from a frame older than the one that settled.
+    let sgr = session.wait_until_painted_e(std::time::Duration::from_secs(10));
     assert!(sgr.contains("> "), "a cursor row is on screen in SGR");
 
     session.send(&["Escape"]);
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    session.wait_until_painted(std::time::Duration::from_secs(10));
     session.send(&["/exit", "Enter"]);
     // No turns ran, so no log exists for a session-end marker (gh
     // #122): the dead pane is the receipt.

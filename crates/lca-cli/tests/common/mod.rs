@@ -16,6 +16,13 @@
 mod sockets;
 #[cfg(unix)]
 pub use sockets::reap_stale_sockets;
+// gh #447: the readiness primitives (settle, input-ready probe, retry-once).
+// Their own module for the same ceiling reason, and so the #447 family has one
+// home rather than five rows each growing a `sleep`.
+#[cfg(unix)]
+mod readiness;
+#[cfg(unix)]
+pub use readiness::{retry_once, settle_stats};
 // The contract rows read these; most e2e binaries use only `tmux_socket`, so
 // the unused-in-this-binary warning is expected and silenced with the module's
 // own `dead_code` allowance.
@@ -750,8 +757,11 @@ impl Tmux {
     ///
     /// Scaling by the machine's load average is the honest knob: it is the
     /// quantity that actually rose, and it costs nothing when the box is idle.
-    #[cfg(unix)]
-    fn load_factor() -> u32 {
+    ///
+    /// `pub(crate)` since gh #447: the readiness primitives in the sibling
+    /// `readiness` module apply the same allowance, and two budget rules that
+    /// disagreed would be worse than either.
+    pub(crate) fn load_factor() -> u32 {
         let load = std::fs::read_to_string("/proc/loadavg")
             .ok()
             .and_then(|text| text.split_whitespace().next()?.parse::<f64>().ok())
@@ -792,42 +802,9 @@ impl Tmux {
             panic!("`{needle}` never appeared in the pane:\n{first}");
         }
         // Blank pane after a whole budget: the terminal never came up.
-        let command = self
-            .spawn_command
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        let Some(command) = command else {
-            panic!(
-                "`{needle}` never appeared and the pane is blank; this session was not \
-                 spawned through `Tmux::spawn`, so the harness cannot re-spawn it"
-            );
-        };
-        eprintln!(
-            "harness: the pane for `{}` was blank after {budget:?} (budget {timeout:?} x{} \
-             load); re-spawning the session once (empty pane = the terminal did not \
-             come up, gh #413)",
-            self.name,
-            Self::load_factor()
-        );
-        let _ = Command::new("tmux")
-            .args(["-L", tmux_socket(), "kill-session", "-t", &self.name])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        let out = Self::new_session(&self.name, &command);
-        if !out.status.success() {
-            // `kill-session` on the last session stops the server, so the
-            // re-spawn can race a socket that is going away ("server exited
-            // unexpectedly"). One more attempt is the honest repair: the
-            // second `new-session` starts a fresh server.
-            let retry = Self::new_session(&self.name, &command);
-            if !retry.status.success() {
-                panic!(
-                    "`{needle}` never appeared and the re-spawn failed: {}",
-                    String::from_utf8_lossy(&retry.stderr)
-                );
-            }
+        match self.respawn_blank(needle, budget) {
+            Some(_) => {}
+            None => panic!("`{needle}` never appeared and the re-spawn failed; see stderr"),
         }
         // The second attempt starts its own deadline (a re-spawned process
         // begins from zero). Note what this cannot fix: a WASM-bearing
@@ -859,6 +836,52 @@ impl Tmux {
             }
             std::thread::sleep(std::time::Duration::from_millis(150));
         }
+    }
+
+    /// Re-spawn this session once, because a **blank** pane at the end of a
+    /// whole budget is a terminal that never came up (gh #413) — a harness
+    /// condition, never a product one. Shared by `wait_for` and the settle
+    /// loop so there is exactly one healing path (gh #447).
+    ///
+    /// `None` means the re-spawn itself failed; the caller decides how to say
+    /// so, because the message that matters includes what *it* was waiting for.
+    fn respawn_blank(&self, what: &str, budget: std::time::Duration) -> Option<String> {
+        let command = self
+            .spawn_command
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let Some(command) = command else {
+            panic!(
+                "`{what}` never appeared and the pane is blank; this session was not \
+                 spawned through `Tmux::spawn`, so the harness cannot re-spawn it"
+            );
+        };
+        eprintln!(
+            "harness: the pane for `{}` was blank after {budget:?}; re-spawning the \
+             session once (empty pane = the terminal did not come up, gh #413)",
+            self.name
+        );
+        let _ = Command::new("tmux")
+            .args(["-L", tmux_socket(), "kill-session", "-t", &self.name])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let out = Self::new_session(&self.name, &command);
+        if !out.status.success() {
+            // `kill-session` on the last session stops the server, so the
+            // re-spawn can race a socket that is going away ("server exited
+            // unexpectedly"). One more attempt is the honest repair: the
+            // second `new-session` starts a fresh server.
+            let retry = Self::new_session(&self.name, &command);
+            if !retry.status.success() {
+                panic!(
+                    "`{what}` never appeared and the re-spawn failed: {}",
+                    String::from_utf8_lossy(&retry.stderr)
+                );
+            }
+        }
+        Some(self.capture())
     }
 
     pub fn resize(&self, cols: u32, rows: u32) -> String {

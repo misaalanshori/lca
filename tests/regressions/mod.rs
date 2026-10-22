@@ -751,6 +751,12 @@ mod description_matches_code;
 // can compare, so the read it names is actually refused.
 #[path = "261-deny-rule-actually-matches.rs"]
 mod deny_rule_actually_matches;
+
+// Gh #447: the real-terminal harness's readiness primitives exist in one place,
+// the class they close is routed through them, and their negative behaviour (a
+// pane that never settles must fail, not hang) is still pinned.
+#[path = "447-readiness-primitives.rs"]
+mod readiness_primitives;
 // GitHub #449: two `conformance_diff` rows compiled the WASM fixture more than
 // once, so they sat at ~1.6x nextest's default cap and timed out on a loaded
 // runner. The measurement put the cost in `wasmtime::component::Component::new`
