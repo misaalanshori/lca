@@ -46,6 +46,7 @@ use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 mod dispatch_hooks;
+mod driver;
 mod host_imports;
 mod instance_cache;
 mod manifest;
@@ -54,6 +55,7 @@ mod tool_hooks;
 mod transform;
 mod ui;
 
+pub use driver::{driver_exits, driver_spawns};
 use instance_cache::InstanceCache;
 pub use manifest::{LoadError, Manifest};
 use provider::{
@@ -471,6 +473,7 @@ impl ExtHost {
                 in_flight: AtomicU64::new(0),
                 interrupted: AtomicBool::new(false),
                 cache: Mutex::new(InstanceCache::default()),
+                driver: driver::Driver::new(),
                 logs: Arc::new(Mutex::new(Vec::new())),
                 cap,
                 dialogs: self.env.dialogs.clone(),
@@ -551,6 +554,9 @@ struct Inner {
     /// #103: one live guest per world (the store owning its linear
     /// memory plus the instance bound to it). See `instance_cache`.
     cache: Mutex<InstanceCache>,
+    /// Gh #286: the one long-lived thread that runs every synchronous call, so
+    /// a per-frame `render` does not spawn a thread per frame. See `driver`.
+    driver: driver::Driver,
 }
 
 impl Inner {
@@ -707,14 +713,12 @@ impl WasmExtension {
         &self,
         work: impl FnOnce(&Inner) -> Result<T, CallError> + Send + 'static,
     ) -> Result<T, CallError> {
-        let inner = self.inner.clone();
-        match std::thread::spawn(move || work(&inner)).join() {
-            Ok(result) => result,
-            Err(_) => {
-                self.inner.disable();
-                Err(CallError::Trap("host call panicked".to_string()))
-            }
-        }
+        // Gh #286: one driver thread per extension, not one thread per call.
+        // This used to be `std::thread::spawn(..).join()`, which minted and
+        // reaped a thread for every `render`/`on_event` - i.e. per TUI frame.
+        // See `driver` for why a thread is still needed and why this cannot
+        // deadlock.
+        self.inner.driver.call(&self.inner, work)
     }
 
     /// The async twin: same work on the runtime's blocking pool.
