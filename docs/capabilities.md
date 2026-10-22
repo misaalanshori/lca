@@ -132,6 +132,36 @@ On denial: the call returns a permission error. A path escape attempt is recorde
 
 Beyond the four scopes, a user can attach an additional path as an ad hoc grant, outside the vocabulary entirely, at install time or later through the extension's settings. The manifest cannot request this; it is something the user adds, deliberately, when a specific extension needs a specific path the fixed vocabulary doesn't name. The consent screen for an ad hoc grant names the exact path and mode, never a pattern, since there is no vocabulary entry to summarize it under.
 
+### env
+
+Grants read access to **named** host environment variables. The manifest lists the names; the host copies the values that are present into the extension's sandbox at instantiation.
+
+```toml
+[capabilities.env]
+keys = ["DEEPSEEK_API_KEY", "LCA_LOG_LEVEL"]
+reason = "Reads the keys its own documentation tells users to export."
+```
+
+Import interface: none of its own. A component reads the variables through `wasi:cli/environment`, which WASI already provides and which answers `NotPresent` for anything the context does not hold. That is deliberate: the grant is enforced when the host builds the `WasiCtx`, so there is no capability call an extension could reach around, and no new interface for the sandbox to carry.
+
+Exact names only. A wildcard (`FOO_*`, `*`) is refused at manifest validation, because the names *are* the consent: "Read `DEEPSEEK_API_KEY` from your environment" is a sentence a user can evaluate, while "read any variable" says nothing. This is the same rejection `net`'s bare `*` gets, for the same reason.
+
+Never the ambient environment. The host forwards only what the manifest declared plus what the user approved; not even `PATH` is included. Forwarding the environment wholesale would be both an information leak and a behavioural difference between a compiled-in extension (which sees the real environment) and a sandboxed one.
+
+**Absence is not emptiness.** A declared variable that is unset on the host is *absent* inside the extension, never an empty string. A set-but-empty variable is present and reads as empty. The distinction matters because an empty API key that looks present is how a provider sends a blank credential instead of failing honestly.
+
+**Declared is not granted.** The manifest declares the names; the user approves them at install time, and a declared name outside the approved set is absent — exactly as with every other capability. Until the install flow collects per-key approval, the declared set is the granted set, the same phase-5 note that applies to `fs` and `net`.
+
+Declared in the manifest with `keys = []` is a declaration that grants nothing, the shape an extension ships when every variable arrives by consent (the `net hosts = []` precedent, gh #302).
+
+Consent text names every key: "Read DEEPSEEK_API_KEY from your environment."
+
+On denial: the variable is simply absent. There is no error, because a component cannot distinguish "not granted" from "not set" — and should not need to.
+
+Values never enter the session log, never appear in a session export, are never written to the diagnostic log, and are not shown by `ext info` beyond their names. A granted variable is a *granted disclosure*, the same rule `credentials` follows: the extension was given the secret, so the host must not also write it down.
+
+This capability exists because a sandboxed component gets an empty environment while a native-linked extension reads the process directly (gh #170). Before it, the same provider worked compiled-in and broke as a `.wasm`, and `lca-cli` carried a hardcoded workaround for one provider's base-URL variable. See [ADR-0048](adr/0048-capability-gated-environment.md).
+
 ### credentials
 
 Grants read and write access to one namespace in the credential store. The namespace is the extension's own identity and cannot be another extension's.

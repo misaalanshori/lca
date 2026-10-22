@@ -18,6 +18,10 @@ use lca_permissions::{
 };
 use lca_protocol::{CommandEffect, HookAction, ToolCall};
 
+#[path = "conformance_diff/args.rs"]
+mod args;
+use args::{call, env_get_args, net_fetch_args, pty_args, spawn_args};
+
 const FIXTURE: &[u8] = include_bytes!("../../../extensions/conformance/fixtures/tool-world.wasm");
 const MANIFEST: &str = include_str!("../../../extensions/conformance/extension.toml");
 
@@ -153,7 +157,14 @@ impl Fixture {
                 log_limit_bytes: 4096,
             },
             self.env(),
-        );
+        )
+        // Gh #170: the env probe is set on the real process environment,
+        // because that is exactly what the comparison is about - the native
+        // twin reads `std::env::var` directly (as a compiled-in extension
+        // does), while the WASM twin reads whatever the host copied into its
+        // `WasiCtx`. Injecting a map would have hidden the divergence rather
+        // than proving it closed. The values are fixed, non-secret markers.
+        ;
         let wasm: Arc<lca_ext_host::WasmExtension> =
             Arc::new(host.load(FIXTURE, MANIFEST).expect("load wasm mode"));
         let engine = self.capabilities();
@@ -171,50 +182,19 @@ impl Fixture {
     }
 }
 
-fn call(mode_args: &str) -> ToolCall {
-    ToolCall {
-        call_id: "c1".to_string(),
-        name: "conformance".to_string(),
-        arguments: mode_args.to_string(),
-        parent_call_id: None,
-    }
-}
-
-fn spawn_args(program: &str, marker: &str) -> String {
-    if cfg!(unix) {
-        format!(r#"{{"mode":"spawn","program":"{program}","args":["{marker}"],"cwd":"workspace"}}"#)
-    } else {
-        format!(
-            r#"{{"mode":"spawn","program":"{program}","args":["/C","echo","{marker}"],"cwd":"workspace"}}"#
-        )
-    }
-}
-
-/// A `net-fetch` scenario (gh #302): the tool world's new `net` import,
-/// exercised as a whole GET so the comparison covers request, status, body
-/// and close rather than one call.
-fn net_fetch_args(url: &str) -> String {
-    format!(r#"{{"mode":"net-fetch","url":"{url}"}}"#)
-}
-
-fn pty_args(program: &str, marker: &str) -> String {
-    if cfg!(unix) {
-        format!(
-            r#"{{"mode":"pty","program":"{program}","args":["{marker}"],"cwd":"workspace","rows":24,"cols":80}}"#
-        )
-    } else {
-        format!(
-            r#"{{"mode":"pty","program":"{program}","args":["/C","echo","{marker}"],"cwd":"workspace","rows":24,"cols":80}}"#
-        )
-    }
-}
-
 // Verifies: NFR-25's substance, FR-EXT-7 (the two delivery labels
 // differ by design), and the SRDD Phase 2 exit test - the conformance
 // extension passes in native mode and WASM mode with identical
 // results.
 #[tokio::test]
 async fn native_and_wasm_modes_produce_identical_results() {
+    // Gh #170: `set_var` is `unsafe` (concurrent-reader race); these names are
+    // unique to this row and hold fixed non-secret markers.
+    unsafe {
+        std::env::set_var("LCA_CONFORMANCE_ENV", "probe-value");
+        std::env::set_var("LCA_CONFORMANCE_UNDECLARED", "must-not-be-visible");
+        std::env::remove_var("LCA_CONFORMANCE_UNSET");
+    }
     let fixture = Fixture::new("diff");
     let (wasm, native, _engine) = fixture.both_modes();
 
@@ -279,6 +259,11 @@ async fn native_and_wasm_modes_produce_identical_results() {
         net_fetch_args("https://conformance.example.com/probe"), // granted
         net_fetch_args("https://ungranted.example.com/probe"),   // denied
         net_fetch_args("https://conformance.example.com:8443/x"), // port not allowed
+        // gh #170: declared+set, declared+unset (absent, never empty), and
+        // set-but-undeclared (absent - the negative that makes this a grant).
+        env_get_args("LCA_CONFORMANCE_ENV"),
+        env_get_args("LCA_CONFORMANCE_UNSET"),
+        env_get_args("LCA_CONFORMANCE_UNDECLARED"),
     ];
     for scenario in &scenarios {
         let wasm_result = wasm.execute_tool(&call(scenario)).await.expect("wasm");
