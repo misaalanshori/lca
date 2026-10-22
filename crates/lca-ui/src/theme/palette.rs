@@ -16,7 +16,7 @@ pub struct Palette {
 impl Palette {
     /// The pi `dark.json` palette.
     pub fn dark() -> Palette {
-        Palette::from(&[
+        let mut palette = Palette::from(&[
             (Role::Accent, "#8abeb7"),
             (Role::Border, "#5f87ff"),
             (Role::BorderAccent, "#00d7ff"),
@@ -66,20 +66,18 @@ impl Palette {
             (Role::SyntaxType, "#4ec9b0"),
             (Role::SyntaxOperator, "#d4d4d4"),
             (Role::SyntaxPunctuation, "#d4d4d4"),
-            (Role::ThinkingOff, "#505050"),
-            (Role::ThinkingMinimal, "#6e6e6e"),
-            (Role::ThinkingLow, "#5f87af"),
-            (Role::ThinkingMedium, "#81a2be"),
-            (Role::ThinkingHigh, "#b294bb"),
-            (Role::ThinkingXhigh, "#d183e8"),
-            (Role::ThinkingMax, "#ff5fff"),
             (Role::BashMode, "#b5bd68"),
-        ])
+        ]);
+        // Gh #387 gap 4: the thinking border is a *ramp*, not seven literals.
+        // See `theme::thinking` - the levels are authored in OKLCH so the
+        // ordering is a property, not an accident of seven hex strings.
+        palette.apply_thinking(None, lca_tui::engine::colors::ColorScheme::Dark);
+        palette
     }
 
     /// The pi `light.json` palette.
     pub fn light() -> Palette {
-        Palette::from(&[
+        let mut palette = Palette::from(&[
             (Role::Accent, "#5a8080"),
             (Role::Border, "#547da7"),
             (Role::BorderAccent, "#5a8080"),
@@ -129,15 +127,10 @@ impl Palette {
             (Role::SyntaxType, "#267f99"),
             (Role::SyntaxOperator, "#000000"),
             (Role::SyntaxPunctuation, "#000000"),
-            (Role::ThinkingOff, "#b0b0b0"),
-            (Role::ThinkingMinimal, "#767676"),
-            (Role::ThinkingLow, "#547da7"),
-            (Role::ThinkingMedium, "#5a8080"),
-            (Role::ThinkingHigh, "#875f87"),
-            (Role::ThinkingXhigh, "#8b008b"),
-            (Role::ThinkingMax, "#af005f"),
             (Role::BashMode, "#588458"),
-        ])
+        ]);
+        palette.apply_thinking(None, lca_tui::engine::colors::ColorScheme::Light);
+        palette
     }
 
     /// Build from `(role, hex)` pairs. A malformed hex is skipped so a
@@ -165,6 +158,22 @@ impl Palette {
     /// terminal's own foreground and background over a scheme base).
     pub fn set(&mut self, role: Role, color: Color) {
         self.colors.insert(role, color);
+    }
+
+    /// Write the seven thinking roles from the heat ramp (gh #387 gap 4).
+    ///
+    /// One call per palette, and the `system` overlay calls it again with the
+    /// probed background so the ramp steps away from the terminal's own page
+    /// rather than from the scheme's nominal one.
+    pub(crate) fn apply_thinking(
+        &mut self,
+        background: Option<lca_tui::engine::colors::RgbColor>,
+        scheme: lca_tui::engine::colors::ColorScheme,
+    ) {
+        let levels = crate::theme::thinking::levels(background, scheme);
+        for (role, level) in Role::THINKING.iter().zip(levels) {
+            self.set(*role, level.color);
+        }
     }
 
     /// The `system` palette (gh #10): pi's shape with our TOML
@@ -204,6 +213,10 @@ impl Palette {
         // panels stay transparent. Leaving the base's values in place for the
         // `None` case would paint opaque bands over a translucent terminal the
         // user configured on purpose.
+        // Gh #387 gap 4: the ramp steps away from the *probed* background when
+        // there is one, so a Solarized Dark session gets a ramp anchored to its
+        // own page rather than to `dark()`'s nominal lightness.
+        palette.apply_thinking(background, scheme);
         for family in crate::theme::panels::families() {
             let derived = background
                 .and_then(|background| crate::theme::panels::panel(background, scheme, &family));

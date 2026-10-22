@@ -94,9 +94,19 @@ fn bands_card_states_and_the_separator_render_on_a_real_pane() {
         .lines()
         .find(|line| line.contains("Working"))
         .expect("the working separator is on screen");
+    // Changed by gh #387 gap 4: this row pinned `38;2;80;80;80` (#505050), the
+    // hand-picked `thinkingOff` value. The thinking colours are now a ramp
+    // authored in OKLCH, so the literal is gone; what the row is actually
+    // protecting is that the whole row carries **one** `separator_border`
+    // colour and no level is set, so it is the ramp's quietest rung.
+    let off =
+        lca_ui::theme::thinking::levels(None, lca_tui::engine::colors::ColorScheme::Dark)[0].color;
+    let lca_ui::theme::Color::Rgb(r, g, b) = off else {
+        panic!("the ramp's `off` rung is a concrete colour: {off:?}");
+    };
     assert!(
-        working_row.contains("38;2;80;80;80"),
-        "the whole row is one `separator_border` color (#505050, no level set): {working_row}"
+        working_row.contains(&format!("38;2;{r};{g};{b}")),
+        "the whole row is one `separator_border` colour (the ramp's `off` rung,          #{r:02x}{g:02x}{b:02x}, no level set): {working_row}"
     );
     assert!(
         !working_row.contains("38;2;138;190;183") && !working_row.contains("38;2;128;128;128"),

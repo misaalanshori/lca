@@ -13,6 +13,7 @@
 mod highlight;
 mod palette;
 mod scheme;
+pub mod thinking;
 
 pub use scheme::{detect_scheme, scheme_from_colorfgbg};
 pub(crate) mod panels;
@@ -52,6 +53,24 @@ macro_rules! roles {
             }
         }
     };
+}
+
+impl Role {
+    /// The thinking ramp's seven roles, from `off` to `max`.
+    ///
+    /// Declared in the enum's own order so `Palette::apply_thinking` can zip
+    /// the ladder against it; written out rather than derived from a prefix
+    /// because the ramp's order is a contract, and a prefix scan would silently
+    /// reorder it if a role were ever renamed.
+    pub const THINKING: &'static [Role] = &[
+        Role::ThinkingOff,
+        Role::ThinkingMinimal,
+        Role::ThinkingLow,
+        Role::ThinkingMedium,
+        Role::ThinkingHigh,
+        Role::ThinkingXhigh,
+        Role::ThinkingMax,
+    ];
 }
 
 roles! {

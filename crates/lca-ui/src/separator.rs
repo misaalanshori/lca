@@ -409,23 +409,45 @@ mod tests {
     // `editor.borderColor = getThinkingBorderColor(level)`), and fall back
     // to `thinkingOff` - the same darkGray `borderMuted` uses - when no
     // level is configured.
+    // Changed by gh #387 gap 4: this row used to pin two literal hex values
+    // (`#b294bb`, `#505050`) from the hand-picked thinking table. Those literals
+    // are gone - the ramp is authored in OKLCH - so pinning them would pin the
+    // old defect. It now asserts the *wiring* the brief calls for: for each of
+    // the seven levels, the SGR the border emits is the ramp's colour for that
+    // level, and the seven are in ramp order. A beautiful ramp nobody paints is
+    // not a fix, and this is the row that says it is painted.
     #[test]
     fn the_dashes_carry_the_thinking_level() {
         let theme = Theme::colored();
         let sep = Separator::new();
-        let high = sep.render(40, &theme, &separator_border(&theme, Some("high")));
-        // The style wraps the whole run, so assert on the SGR, not on a
-        // one-character wrap.
-        assert!(
-            high.contains("38;2;178;148;187"),
-            "thinkingHigh #b294bb: {high:?}"
-        );
+        let ladder =
+            crate::theme::thinking::levels(None, lca_tui::engine::colors::ColorScheme::Dark);
+        let cases = [
+            (None, 0usize),
+            (Some("off"), 0),
+            (Some("minimal"), 1),
+            (Some("low"), 2),
+            (Some("medium"), 3),
+            (Some("high"), 4),
+            (Some("xhigh"), 5),
+            (Some("max"), 6),
+        ];
+        for (level, index) in cases {
+            let rendered = sep.render(40, &theme, &separator_border(&theme, level));
+            let crate::theme::Color::Rgb(r, g, b) = ladder[index].color else {
+                panic!("a rung is a concrete colour");
+            };
+            assert!(
+                rendered.contains(&format!("38;2;{r};{g};{b}")),
+                "level {level:?} must paint rung {index} (#{r:02x}{g:02x}{b:02x}): \
+                 {rendered:?}"
+            );
+            assert_eq!(strip(&rendered), "─".repeat(40), "still one full row");
+        }
+        // An unknown level is the quietest rung, not an arbitrary colour.
+        let unknown = sep.render(40, &theme, &separator_border(&theme, Some("banana")));
         let off = sep.render(40, &theme, &separator_border(&theme, None));
-        assert!(
-            off.contains("38;2;80;80;80"),
-            "thinkingOff #505050: {off:?}"
-        );
-        assert_eq!(strip(&off), "─".repeat(40), "still one full row");
+        assert_eq!(strip(&unknown), strip(&off), "unknown levels read as `off`");
     }
 
     // Verifies: gh #249 - the editor frame's top cap rounds the

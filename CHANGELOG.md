@@ -69,6 +69,24 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **The thinking-level border is a ramp you can read** (gh #387 gap 4). The
+  seven levels are the one ambient signal of how much reasoning budget a turn is
+  spending, and they were hand-picked hex with no ordering relationship at all:
+  measured in OKLCH, the dark palette's last four steps moved 0.01–0.02 in
+  lightness and two of them had *identical* hue (318.33° → 318.24°), so `high`
+  and `xhigh` were the same colour to the eye. The light palette was worse — its
+  lightness went up and down across the seven (−0.19, +0.01, −0.01, −0.03,
+  −0.09, +0.04) and its hue reversed twice. Both now run one ladder: hue rotating
+  slate → periwinkle → violet → magenta → flame, chroma rising at every step, and
+  lightness moving *away* from the page by even amounts (a 1.2–1.3× spread
+  between the largest and smallest step, where the dark palette used to be
+  11.7×). On a light terminal the ramp steps *down*, because a ramp that got
+  lighter there would fade into the background. With `ui.theme = "system"` the
+  ladder is anchored to your terminal's reported background instead of a nominal
+  one, so a Solarized session gets a Solarized ramp. `max` ends at flame rather
+  than pi's red, which is the error colour's own hue — at `max` thinking the
+  border and an error would otherwise look identical. In the plain theme, where
+  every role is identity, the footer still names the level in text (NFR-28).
 - **`system` message and tool panels are visible, and `COLORFGBG` 7/8 is no
   longer inverted** (gh #387 gaps 1 and 2). With `ui.theme = "system"` the
   user-message band and the custom band were set *equal to* the terminal's
