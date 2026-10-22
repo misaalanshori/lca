@@ -34,7 +34,7 @@ use lca_ext_abi::host::ui::UiPre;
 use lca_ext_abi::{DeliveryMode, World};
 use lca_permissions::{
     DialogPrompt, GrantStore, OAuthSettings, PermissionPrompt, Proposals, ScopeGrant, ScopeRoots,
-    SharedDialogs,
+    ServeHttpSettings, SharedDialogs,
 };
 use lca_protocol::{
     CapabilityError, CommandEffect, CompletionRequest, DispatchError, EventSink, HookAction,

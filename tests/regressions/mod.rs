@@ -816,3 +816,18 @@ mod inline_program_text;
 // and the ambient environment is never forwarded, not even `PATH`.
 #[path = "170-env-capability.rs"]
 mod env_capability;
+// GitHub #363: an extension had no way to *receive* an HTTP request. `net` and
+// `net-local` point outward, and `oauth`'s listener exists for one redirect and
+// serves a page the host wrote, so a browser UI, a webhook receiver, or a
+// documentation viewer could not be built as a WASM extension at all. The fix
+// is a capability whose *grant is an export*: the host owns the loopback
+// listener, routes `/<session-id>/<extension-name>/`, strips the prefix, and
+// calls the extension's handler with a request record. The direction is
+// inverted relative to every other capability, which is why the obligation
+// rows here are wire-level: the bind address, the mandatory token, the `Host`
+// rebinding check, the stripping contract, the port fallback, the no-free-port
+// degradation, and clean shutdown. ADR-0049 records why loopback plus a token
+// is the minimum rather than loopback alone: a page the user already has open
+// can POST to 127.0.0.1 without a preflight.
+#[path = "363-inbound-http-capability.rs"]
+mod inbound_http_capability;

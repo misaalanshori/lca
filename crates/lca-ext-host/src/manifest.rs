@@ -44,6 +44,10 @@ pub struct Manifest {
     pub env: Vec<String>,
     /// The `env` capability was declared at all.
     pub env_declared: bool,
+    /// The `serve-http` capability's manifest parameters (gh #363,
+    /// ADR-0049), when declared. The listener itself is the host's; this is
+    /// only what the extension claimed, so the consent line can name it.
+    pub serve_http: Option<ServeHttpSettings>,
     /// The credential namespace, when declared; must equal `name`
     /// (FR-PERM-6, no cross-namespace read at any level, FR-PERM-7).
     pub credentials: bool,
@@ -213,6 +217,7 @@ impl Manifest {
         let mut parsed_oauth: Option<OAuthSettings> = None;
         let mut parsed_env: Vec<String> = Vec::new();
         let mut env_declared = false;
+        let mut parsed_serve_http: Option<ServeHttpSettings> = None;
         let mut parsed_credentials = false;
         let mut parsed_completion = false;
         let mut tools = false;
@@ -224,7 +229,7 @@ impl Manifest {
             for key in table.keys() {
                 match key.as_str() {
                     "fs" | "process" | "pty" | "net" | "net-local" | "oauth" | "credentials"
-                    | "completion" | "ui" | "tools" | "env" => {}
+                    | "completion" | "ui" | "tools" | "env" | "serve-http" => {}
                     other => {
                         return Err(LoadError::InvalidManifest(format!(
                             "unknown capability `{other}`"
@@ -294,10 +299,36 @@ impl Manifest {
             if let Some(cap) = table.get("process") {
                 reason_of(cap, "capabilities.process")?;
                 process = true;
-            }
-            if let Some(cap) = table.get("pty") {
-                reason_of(cap, "capabilities.pty")?;
-                pty = true;
+            } // Gh #363 / ADR-0049: the inbound HTTP grant. The reason is
+            // required for the same purpose it is on `process` - the consent
+            // line leads with it - and the path prefix defaults to `/`, which
+            // is the whole of the extension's own namespace in this phase.
+            if let Some(cap) = table.get("serve-http") {
+                let reason = reason_of(cap, "capabilities.serve-http")?;
+                let path_prefix = match cap.get("path_prefix") {
+                    Some(value) => value.as_str().ok_or_else(|| {
+                        LoadError::InvalidManifest(
+                            "`capabilities.serve-http.path_prefix` must be a string".into(),
+                        )
+                    })?,
+                    None => "/",
+                };
+                let websocket = match cap.get("websocket") {
+                    Some(value) => value.as_bool().ok_or_else(|| {
+                        LoadError::InvalidManifest(
+                            "`capabilities.serve-http.websocket` must be a boolean".into(),
+                        )
+                    })?,
+                    None => false,
+                };
+                parsed_serve_http = Some(
+                    ServeHttpSettings::parse(path_prefix, websocket)
+                        .map_err(|err| LoadError::InvalidManifest(err.to_string()))?,
+                );
+                // The reason is required but not stored: the consent line is
+                // rendered from the manifest text by `lca-registry`, which
+                // needs no resolved copy here. Validating it is the point.
+                let _ = reason;
             }
             if let Some(cap) = table.get("tools") {
                 reason_of(cap, "capabilities.tools")?;
@@ -462,6 +493,7 @@ impl Manifest {
             net_local: parsed_net_local,
             env: parsed_env,
             env_declared,
+            serve_http: parsed_serve_http,
             oauth: parsed_oauth,
             credentials: parsed_credentials,
             completion: parsed_completion,

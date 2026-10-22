@@ -93,6 +93,10 @@ pub enum World {
     HooksCache,
     /// Vote on project trust (`hooks-trust` world, gh #45).
     HooksTrust,
+    /// Answer HTTP requests the host's own listener accepted
+    /// (`serve-http` world, gh #363, ADR-0049). The direction is
+    /// inverted: the host calls in, the guest never binds a socket.
+    ServeHttp,
 }
 
 /// One nested tool request (gh #77): a tool calling another through
@@ -682,6 +686,11 @@ pub mod host {
     pub mod hooks_trust {
         wasmtime::component::bindgen!({ path: "../../wit", world: "hooks-trust" });
     }
+
+    /// The `serve-http` world (gh #363): the host's listener calls in.
+    pub mod serve_http {
+        wasmtime::component::bindgen!({ path: "../../wit", world: "serve-http" });
+    }
 }
 
 /// Every world's manifest spelling, in vocabulary order.
@@ -714,6 +723,7 @@ pub const WORLDS: &[(&str, World)] = &[
     ("compaction", World::Compaction),
     ("context-transform", World::ContextTransform),
     ("ui", World::Ui),
+    ("serve-http", World::ServeHttp),
 ];
 
 /// The manifest spelling of `world`.

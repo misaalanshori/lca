@@ -50,6 +50,49 @@ pub struct OAuthSettings {
     pub timeout_seconds: u64,
 }
 
+/// The `serve-http` capability's manifest parameters (ADR-0049).
+///
+/// There is no address field, and that is the whole point: the listener
+/// binds `127.0.0.1` because the host chose to, never because a manifest
+/// asked it to. A manifest that could name a routable address would be a
+/// different capability with a different consent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServeHttpSettings {
+    /// The path prefix the extension answered for, as declared. Phase A
+    /// gives every granted extension the whole of its own namespace, so
+    /// this is `/` unless a future phase narrows it; it exists now so the
+    /// consent line can name what the extension claimed.
+    pub path_prefix: String,
+    /// Whether the extension asked to receive WebSocket upgrades, which
+    /// this phase refuses cleanly rather than bridging (ADR-0049 names the
+    /// deferral). Declaring it is honest about intent even while the
+    /// answer is "not yet".
+    pub websocket: bool,
+}
+
+impl ServeHttpSettings {
+    /// Parse the manifest's `[capabilities.serve-http]` table.
+    ///
+    /// `path_prefix` must start with `/` and must not be empty: a prefix is
+    /// concatenated onto the namespace, and an empty one would make
+    /// `/<session>/<ext>` and `/<session>/<ext>/` two different routes for
+    /// the same thing.
+    pub fn parse(path_prefix: &str, websocket: bool) -> Result<ServeHttpSettings, String> {
+        if !path_prefix.starts_with('/') {
+            return Err(format!("`{path_prefix}` must start with `/`"));
+        }
+        if path_prefix.contains("..") {
+            return Err(format!(
+                "`{path_prefix}` may not contain `..`; a prefix is a mount point, not a path"
+            ));
+        }
+        Ok(ServeHttpSettings {
+            path_prefix: path_prefix.to_string(),
+            websocket,
+        })
+    }
+}
+
 /// One granted scope: a vocabulary name plus a mode (the manifest's
 /// `capabilities.fs` entry, as approved).
 #[derive(Debug, Clone, PartialEq, Eq)]

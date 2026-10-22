@@ -1,0 +1,87 @@
+package lca:ext@0.6.0;
+
+/// The `serve-http` world: answer HTTP requests the *host* accepted (gh
+/// #363, ADR-0049).
+///
+/// The direction is inverted relative to every other capability. Elsewhere
+/// the guest calls an import and the host answers; here the host owns the
+/// listener, reads a request off the wire, and calls this world's handler.
+/// The guest therefore binds no socket, holds no port, and never sees a
+/// connection — which is what keeps the sandbox promise (ADR-0007) while
+/// still letting an extension serve a browser UI.
+///
+/// There is deliberately **no new import**. The request and response are
+/// plain records crossing an export, so an extension holding this grant
+/// calls nothing the host must gate: the grant *is* the permission to be
+/// asked. `log` is imported because every world carries it.
+world serve-http {
+  import lca:host/log@0.6.0;
+  export handler;
+}
+
+/// The request as the host read it, and the response the guest returns.
+///
+/// Records rather than `wasi:http/types` resources: the standard interface
+/// carries outgoing bodies, trailers, and a `future-incoming-response` that
+/// this capability will never use, and it would let a component that merely
+/// exports `wasi:http/incoming-handler` listen on the user's machine without
+/// the manifest or the install screen ever saying so (ADR-0049's decisive
+/// argument, and the same reasoning that refuses `net`'s bare `*`).
+interface handler {
+  /// One request, already routed to this extension.
+  ///
+  /// `path` is the request's path **after** the host stripped
+  /// `/<session-id>/<extension-name>`, and it always begins with `/`. An
+  /// extension serving `index.html` and `./style.css` therefore works
+  /// without knowing where it is mounted — the stripping is the contract
+  /// that makes a static UI possible at all.
+  ///
+  /// `query` is everything after `?`, without the `?`; empty when absent.
+  /// It arrives separately rather than glued back onto `path` because a
+  /// handler that had to re-split it would re-implement parsing the host has
+  /// already done.
+  record request {
+    method: string,
+    path: string,
+    query: string,
+    /// Request headers as `(name, value)`, names lowercased by the host.
+    /// The auth token is **not** among them: the host consumes it before
+    /// the request reaches the guest, so an extension cannot see, log, or
+    /// forward the one secret that guards its own port.
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+
+  /// The guest's answer. `status` is the HTTP status code; `headers` is
+  /// sent as given apart from the host's own framing (`content-length`,
+  /// `connection`), which the host owns because it owns the socket.
+  record response {
+    status: u16,
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+
+  /// Why a request was not answered by the guest's own code.
+  ///
+  /// A guest that wants to refuse returns a `response` with a 4xx/5xx
+  /// status — that is an ordinary answer. This variant is for the cases the
+  /// host cannot express as an answer: the grant is missing, or the guest
+  /// trapped. Both produce a host-written error page rather than a
+  /// half-finished response, because a browser that receives a partial body
+  /// hangs.
+  variant error {
+    /// The extension does not hold the `serve-http` grant (NFR-13).
+    not-granted(string),
+    /// The guest trapped, ran out of fuel, or was cancelled mid-call.
+    /// The host answers 500 and records it; one bad handler must not take
+    /// the listener down (FR-EXT-3/4).
+    failed(string),
+  }
+
+  /// `base-url` is this extension's mount point (`http://127.0.0.1:<port>/
+  /// <session-id>/<extension-name>/`, trailing slash included), so an
+  /// extension that needs to build an absolute link can, without guessing
+  /// the port or reading it from the environment. The host never asks a
+  /// guest to construct one from parts.
+  handle: func(base-url: string, request: request) -> result<response, error>;
+}

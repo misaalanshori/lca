@@ -27,6 +27,7 @@ pub use rules::{RuleDecision, RuleScope, RuleSet, RuleView, wildcard_match};
 // file so this one stays under the workspace's 1,200-line ceiling.
 pub use scope::{
     FsMode, OAuthSettings, ScopeGrant, ScopeRoots, ScopeViolation, ScopeViolationKind,
+    ServeHttpSettings,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
