@@ -42,6 +42,7 @@ impl Chat {
             .or_else(|| self.handle_login_secret(data, key))
             .or_else(|| self.handle_login_grant(key))
             .or_else(|| self.handle_switch_confirm(key))
+            .or_else(|| self.handle_bug_review(key))
             .or_else(|| self.handle_permission(key))
             .or_else(|| self.handle_extension_modal(data, key))
             .or_else(|| self.handle_panel(data, key))

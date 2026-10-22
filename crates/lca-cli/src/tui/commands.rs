@@ -799,14 +799,18 @@ impl Ui {
         }
     }
 
-    /// `/bug`: the local diagnostic bundle (gh #57, pi's bug-report
-    /// without the upload). The notice names the zip; sharing it is
-    /// an explicit next step, and the transcript rides along.
-    fn command_bug(&self) -> CommandEffect {
+    /// `/bug`: the local diagnostic bundle (gh #57), scrubbed before it is
+    /// written (gh #411 gap 3).
+    ///
+    /// The **interactive** flow - stage, inspect, confirm - lives in `lca-ui`'s
+    /// own dispatcher, where the modal state and the transcript are, and reaches
+    /// the bundle through the `stage_bug` hook. This arm is the fallback a
+    /// non-interactive host uses: the same scrub, no gate.
+    fn command_bug(self: &Arc<Self>) -> CommandEffect {
         let session = self.session();
         match crate::bug::bundle(&crate::data_dir(), &self.cwd, Some(session.id()), &self.cwd) {
             Ok(path) => CommandEffect::ShowWidget(format!(
-                "wrote {} (contains the transcript; share it explicitly)",
+                "wrote {} (scrubbed; contains the transcript - share it explicitly)",
                 path.display()
             )),
             Err(err) => CommandEffect::ShowWidget(format!("bug failed: {err}")),

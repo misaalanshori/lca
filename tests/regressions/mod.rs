@@ -752,6 +752,11 @@ mod description_matches_code;
 #[path = "261-deny-rule-actually-matches.rs"]
 mod deny_rule_actually_matches;
 
+// Gh #411: the diagnostic bundle is scrubbed before it is written, and the user
+// inspects it first - while the session log on disk is never touched.
+#[path = "411-bug-bundle-redaction.rs"]
+mod bug_bundle_redaction;
+
 // Gh #410: a key hint resolves from the live keybinding manager, so a rebind
 // reaches every label - and the lying `key_text` free function is gone for good.
 #[path = "410-key-hints-resolve-live.rs"]

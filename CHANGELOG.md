@@ -7,6 +7,26 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **The `/bug` bundle is scrubbed before it is written, and you review it first**
+  (gh #411 gaps 3 and 2). `/bug`'s trust foundation was that the credential
+  *store* never enters the bundle — but a key **pasted into the chat** sat in
+  `session.jsonl` raw, and that bundle is made to be shared, so "no secrets" meant
+  "no *stored* secrets". `/bug` now stages a scrubbed **copy**, shows you what is
+  in it, and writes the zip only when you confirm. Secret-shaped strings become
+  `<redacted>`: API keys, GitHub/Slack/AWS/Google token prefixes, bearer tokens,
+  JWTs, OAuth `code=`/`access_token=` values, and any long opaque value beside a
+  word like `api_key`, `secret`, `token`, or `authorization`. The surrounding
+  sentence, roles, timestamps and tool names survive, so the bundle still debugs.
+  The inspection lists the staged path, every file with its size, and how many
+  matches of which kind were scrubbed — counts and kinds, never the values, not
+  even shortened — because a silent scrub leaves you unable to judge whether it
+  caught the thing you were worried about. `/bug` errs toward scrubbing: a false
+  redaction costs a maintainer one round-trip, a missed one leaks a credential.
+  `[n]`/`Escape` discards the staged copy entirely, and **your own session log is
+  never touched** — the bundle is a copy, so the transcript you resume from still
+  has everything. A staging or write failure is loud and removes the staging
+  directory rather than shipping a half-scrubbed bundle. The credential store is
+  still never read (gh #57's decoy row passes unchanged).
 - **Key hints name the key you actually bound** (gh #410). `key_text(action)` was
   documented as producing hints that "cannot lie when the interface is rebound" and
   built a fresh **default** keybinding manager on every call. All fourteen hint

@@ -1098,6 +1098,10 @@ mod tooltip_tests;
 mod overlay_tests;
 
 #[cfg(test)]
+#[path = "chat_bug_tests.rs"]
+mod bug_tests;
+
+#[cfg(test)]
 #[path = "chat_mcp_tests.rs"]
 mod mcp_tests;
 #[cfg(test)]

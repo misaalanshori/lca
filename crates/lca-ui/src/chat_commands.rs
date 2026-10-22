@@ -129,6 +129,23 @@ impl Chat {
                 self.push_output(help_notice(&commands));
                 return Action::Continue;
             }
+            // Gh #411 gaps 2 and 3: `/bug` stages a **scrubbed copy**, then shows
+            // the inspection screen. The zip is written only when the user
+            // confirms, and cancelling removes the staging directory. The host
+            // owns the staging and the zip; this side owns the screen and the key.
+            "bug" if self.world.options.hooks.stage_bug.is_some() => {
+                // The gate. A host with `stage_bug` can stage and write, so the
+                // inspection screen takes over; a host without it falls through to
+                // the registry below, which is how a non-interactive host still
+                // gets its one-shot bundle.
+                if let Some(stage) = self.world.options.hooks.stage_bug.clone() {
+                    match stage() {
+                        Ok(review) => self.world.bug_review = Some(review),
+                        Err(err) => self.say(crate::state::sanitize_block(&err)),
+                    }
+                }
+                return Action::Continue;
+            }
             "hotkeys" => {
                 self.push_output(crate::chat_notices::hotkeys_notice(&self.keybindings));
                 return Action::Continue;
