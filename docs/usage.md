@@ -42,7 +42,11 @@ toggles how much of a reasoning run shows (snippet, full, hidden).
 The footer tracks the folder, session, model, context share, and
 accumulated cost. The startup header names what loaded — context
 paths, extension/skill counts — so a missing resource is visible,
-not mysterious.
+not mysterious. You can start typing before the header finishes:
+the keyboard is read from the first frame, so what you type is
+buffered and lands in the editor in order rather than being lost or
+appearing late. `Ctrl+C` during that startup window is honoured too,
+so leaving a slow start does not require waiting for it.
 
 LCA does not ask before every tool call. Watch the transcript,
 review diffs, and keep credentials out of the room (see

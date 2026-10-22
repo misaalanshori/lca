@@ -136,6 +136,10 @@ pub(crate) struct Ui {
     /// #130) can swap in a fresh discovery while turns hold their own
     /// clone - a swap never disturbs a running turn.
     registry: Mutex<Arc<ExtensionRegistry>>,
+    /// The terminal taken before this load, with what was typed into it
+    /// (gh #400). Behind a lock because `options` takes `&Arc<Self>` and the
+    /// loop takes ownership exactly once.
+    early_input: Mutex<Option<lca_ui::run_early_input::EarlyInput>>,
     /// The adapter's settings cell (ADR-0035).
     settings_cell: Arc<Mutex<Vec<(String, String)>>>,
     /// The live model (`/model`).
@@ -282,6 +286,10 @@ pub fn run(
         );
         return Ok(crate::exit::USAGE);
     }
+    // Gh #400 (type-while-loading): claim the terminal **before** the load
+    // below, so the keyboard is read from the first frame. See
+    // `startup::claim_terminal` for the measured window and what it cost.
+    let early_input = startup::claim_terminal();
     let ui = Arc::new(Ui::new(
         cwd,
         resume,
@@ -294,7 +302,16 @@ pub fn run(
         session_id,
         allow_host,
         flags,
+        early_input,
     )?);
+    // Gh #400: the checkpoint. A `Ctrl+C` typed during the load above asked to
+    // leave; honour it now rather than entering a loop the user already
+    // abandoned. The terminal is restored by the drop below, exactly as a
+    // normal exit restores it.
+    if ui.quit_requested_during_startup() {
+        ui.close();
+        return Ok(crate::exit::OK);
+    }
     // Gh #160: the guard owns this session's temp dir (resolved and
     // validated inside `Ui::new`); a switch resolves the next one.
     let _temp_guard = crate::SessionTempGuard(ui.temp_dir().to_path_buf());
@@ -580,6 +597,15 @@ impl Ui {
         crate::lock(&self.registry).clone()
     }
 
+    /// Whether the user asked to quit while startup was still loading
+    /// (gh #400). Drains the buffer, so a keystroke typed during the load is
+    /// not lost to this check.
+    fn quit_requested_during_startup(&self) -> bool {
+        crate::lock(&self.early_input)
+            .as_mut()
+            .is_some_and(lca_ui::run_early_input::EarlyInput::quit_requested)
+    }
+
     /// The MCP session manager (gh #418 Phase E: the turn waits on its
     /// startup connections, bounded, before the first request).
     fn mcp_manager(&self) -> Arc<lca_mcp::manager::McpManager> {
@@ -606,6 +632,7 @@ impl Ui {
         session_id: Option<&str>,
         allow_host: &[String],
         flags: &crate::CliFlags,
+        early_input: lca_ui::run_early_input::EarlyInput,
     ) -> anyhow::Result<Ui> {
         let Opened {
             _volatile: volatile,
@@ -688,7 +715,7 @@ impl Ui {
         // Gh #160: this session's temp dir resolves here, from this
         // session - creation failures fail startup, never silently.
         let temp_dir = crate::ensure_session_temp(&session_data_root, &session_id)?;
-        let (mut registry, mcp_manager, mcp_warnings) = load_registry(
+        let (mut registry, mcp_manager, mcp_warnings) = startup::load_registry(
             cwd,
             &config,
             shared_prompt.clone(),
@@ -903,6 +930,7 @@ impl Ui {
                 agent_config,
             })),
             registry: Mutex::new(registry),
+            early_input: Mutex::new(Some(early_input)),
             settings_cell,
             model_cell: cells.model,
             label_cell: cells.label,
@@ -1085,49 +1113,6 @@ fn initial_view(
         ));
     }
     (head, read.records)
-}
-
-/// Load every extension: installed first (an installed copy shadows the
-/// bundled one), then the native-linked first-party set, then the bundled
-/// provider (ADR-0013).
-#[allow(clippy::too_many_arguments)] // one more explicit than a regroup: every arg is used once, at one call site.
-fn load_registry(
-    cwd: &Path,
-    config: &Config,
-    shared_prompt: SharedPrompt,
-    shared_dialogs: lca_permissions::SharedDialogs,
-    grants: &Arc<Mutex<GrantStore>>,
-    store: &Arc<SessionStore>,
-    session_cell: &Arc<Mutex<Session>>,
-    temp: &Path,
-    flags: &crate::CliFlags,
-) -> (
-    ExtensionRegistry,
-    Arc<lca_mcp::manager::McpManager>,
-    Vec<String>,
-) {
-    // The one assembly, shared with headless mode and `--list-models`
-    // (gh #8): only the stats source differs, and a session's own reads
-    // the session this interface is showing.
-    let stats_store = store.clone();
-    let stats_session = session_cell.clone();
-    let (registry, manager, warnings) = crate::registry::assemble(
-        cwd,
-        config,
-        shared_prompt,
-        shared_dialogs,
-        grants,
-        Arc::new(move || {
-            let session = stats_session
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone();
-            session_stats(&stats_store, &session)
-        }),
-        temp,
-        flags,
-    );
-    (registry, manager, warnings)
 }
 
 /// The configured model, or the first model *in the enabled scope* when

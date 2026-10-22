@@ -786,7 +786,7 @@ impl Ui {
             Err(err) => return fail(err.to_string()),
         };
         let trusted = crate::lock(&self.grants).is_trusted(&self.cwd);
-        let (mut fresh, mcp_manager, mcp_warnings) = super::load_registry(
+        let (mut fresh, mcp_manager, mcp_warnings) = super::startup::load_registry(
             &self.cwd,
             &config,
             self.shared_prompt.clone(),

@@ -2,6 +2,7 @@
 //! workspace's 1,200-line file ceiling. Behavior unchanged.
 
 use super::*;
+use crate::run_keybindings::keybinding_problems;
 use lca_tui::engine::terminal::FakeTerminal;
 
 // Verifies: gh #66 - the loud report names every problem class and
@@ -56,6 +57,7 @@ fn options() -> UiOptions {
         initial_messages: Vec::new(),
         open_resume_picker: false,
         yolo: false,
+        early_input: None,
         thinking_visibility: Default::default(),
         codeblock_border: Default::default(),
         plain: true,
@@ -149,6 +151,7 @@ fn ctrl_x_copies_the_last_assistant_message_through_the_ladder() {
         &mut term,
         &input_tx,
         &resize_tx,
+        None,
         &None,
         &mut false,
     );
@@ -193,6 +196,7 @@ fn a_mouse_selection_still_copies_on_release_through_the_ladder() {
             &mut term,
             &input_tx,
             &resize_tx,
+            None,
             &None,
             &mut false,
         )
@@ -236,6 +240,7 @@ fn end_returns_the_fullscreen_viewport_to_the_live_bottom() {
         &mut term,
         &input_tx,
         &resize_tx,
+        None,
         &None,
         &mut false,
     );
@@ -385,6 +390,7 @@ fn a_click_on_a_reasoning_row_toggles_the_run_through_the_loop() {
         &mut term,
         &input_tx,
         &resize_tx,
+        None,
         &None,
         &mut false,
     );
@@ -396,6 +402,7 @@ fn a_click_on_a_reasoning_row_toggles_the_run_through_the_loop() {
         &mut term,
         &input_tx,
         &resize_tx,
+        None,
         &None,
         &mut false,
     );
@@ -421,6 +428,7 @@ fn a_click_on_a_reasoning_row_toggles_the_run_through_the_loop() {
         &mut term,
         &input_tx,
         &resize_tx,
+        None,
         &None,
         &mut false,
     );
@@ -432,6 +440,7 @@ fn a_click_on_a_reasoning_row_toggles_the_run_through_the_loop() {
         &mut term,
         &input_tx,
         &resize_tx,
+        None,
         &None,
         &mut false,
     );
@@ -509,6 +518,7 @@ fn a_click_on_an_extension_button_names_its_widget_through_the_loop() {
             &mut term,
             &input_tx,
             &resize_tx,
+            None,
             &None,
             &mut false,
         );
@@ -559,6 +569,7 @@ fn wheel_over_a_panel_scrolls_through_the_loop() {
         &mut term,
         &input_tx,
         &resize_tx,
+        None,
         &None,
         &mut false,
     );
@@ -597,6 +608,7 @@ fn ctrl_x_copies_the_oauth_url_with_the_named_notice() {
         &mut term,
         &input_tx,
         &resize_tx,
+        None,
         &None,
         &mut false,
     );
