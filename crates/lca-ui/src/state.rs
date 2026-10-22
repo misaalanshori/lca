@@ -488,6 +488,49 @@ pub type ModelSave = Arc<dyn Fn(&str) -> String + Send + Sync>;
 /// allowed levels, so it clamps, writes the cell, persists the effective
 /// value, and says what actually landed.
 pub type ThinkingSetter = Arc<dyn Fn(Option<&str>) -> String + Send + Sync>;
+/// Host answer to "can this persona be applied **at all**?" (gh #412).
+///
+/// `Ok(())` means every field is reachable *in this session*: the model exists in
+/// the offered set, the thinking level is one that model accepts, and every tool in
+/// the loadout is registered. `Err(reason)` names the first field that is not -
+/// and because this runs **before** anything is applied, a refusal leaves the
+/// session exactly as it was. That ordering is the whole atomic guarantee: it is
+/// structural, not a discipline someone has to remember to follow.
+pub type PersonaCheck = Arc<dyn Fn(&PersonaBundle) -> Result<(), String> + Send + Sync>;
+
+/// Host answer to "apply this persona" (gh #412). Called only after
+/// [`PersonaCheck`] passed, and returns the notice naming what it set.
+///
+/// It writes through the same seams `/model`, `/thinking` and the tool gate use, so
+/// the footer, the thinking border ramp, and the per-model overrides are already in
+/// sync - there is no second state cell to keep in step (the gh #369 lesson).
+pub type PersonaApply = Arc<dyn Fn(&PersonaBundle) -> String + Send + Sync>;
+
+/// `/persona`'s listing: the personas this session can apply, in name order.
+pub type PersonaList = Arc<dyn Fn() -> Vec<PersonaBundle> + Send + Sync>;
+
+/// One persona as the interface sees it (gh #412): the four fields, and nothing
+/// about where they came from.
+///
+/// A neutral shape on purpose. `[personas]` is parsed in `lca-config` (which owns
+/// the settings ladder and the trust rule), and `lca-ui` does not depend on that
+/// crate - the interface owns the *screen and the transcript*, and the host owns
+/// the config. Keeping the bundle here rather than leaking a config type across the
+/// seam is also what lets a test build one without a config file at all.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PersonaBundle {
+    /// The name, for the notice and the listing.
+    pub name: String,
+    /// The model id, or empty to leave the model alone.
+    pub model: String,
+    /// The thinking level: `None` leaves it alone, `Some(None)` is the provider
+    /// default, `Some(Some(level))` names one.
+    pub thinking: Option<Option<String>>,
+    /// The tool loadout: `None` leaves it alone, `Some(vec![])` means no tools.
+    pub tools: Option<Vec<String>>,
+    /// A conversational prologue, if the persona carries one.
+    pub instructions: Option<String>,
+}
 /// The `/thinking` picker's offered levels, resolved for the current
 /// model by the host.
 pub type ThinkingOffered = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
@@ -763,6 +806,17 @@ pub struct UiHooks {
     /// `/thinking`'s Enter: clamp the chosen level to the current model's
     /// set, store it, and return the notice.
     pub set_thinking: Option<ThinkingSetter>,
+    /// `/persona`: validate a bundle against this session before applying any of it
+    /// (gh #412). Absent means the host cannot reach the model set or the tool
+    /// registry, so `/persona` refuses rather than applying blind.
+    pub persona_check: Option<PersonaCheck>,
+    /// `/persona`: apply an already-validated bundle.
+    pub persona_apply: Option<PersonaApply>,
+    /// `/persona`: every persona that applies in this session, in name order. An
+    /// untrusted project's personas are **absent** here rather than listed as
+    /// unusable - the loader does not parse an untrusted file, so there is nothing
+    /// to list (FR-PERM-9).
+    pub persona_list: Option<PersonaList>,
     /// The levels the `/thinking` picker offers (gh #41): the current
     /// model's allowed set in canonical order. Absent means every
     /// level (a host without per-model sets); unsupported levels are

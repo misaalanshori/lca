@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 mod keys;
 pub mod layers;
+pub mod persona;
 pub mod substitute;
 mod toml_layer;
 mod values;
@@ -29,6 +30,7 @@ pub use keys::{
 mod keybindings;
 
 pub use keybindings::load_keybindings_file;
+pub use persona::{Persona, PersonaSource, Personas, parse_personas};
 
 /// Where a resolved configuration value came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -236,6 +238,10 @@ pub struct Config {
     // gh #8 phase 4 (pi's `modelThinkingLevels`): per-model sets of the
     // thinking levels that model accepts; the first entry is its default.
     models_thinking_levels: BTreeMap<String, Vec<String>>,
+    /// The `[personas]` bundles in effect, with the layer each came from
+    /// (gh #412). Provenance is load-bearing: an untrusted project file's
+    /// personas must not apply (FR-PERM-9).
+    personas: persona::Personas,
     // gh #41 (pi's `thinkingBudgets`): per-level token-budget
     // overrides; empty means pi's built-in budgets (see
     // `DEFAULT_THINKING_BUDGETS`).
@@ -343,6 +349,7 @@ impl Default for Config {
             permissions_proposals: BTreeMap::new(),
             models_enabled: Vec::new(),
             models_thinking_levels: BTreeMap::new(),
+            personas: persona::Personas::default(),
             thinking_budgets: BTreeMap::new(),
             sources: BTreeMap::new(),
             substituted: BTreeSet::new(),
@@ -438,6 +445,7 @@ impl Config {
             "model",
             "models.enabled",
             "models.thinking_levels",
+            "personas",
             "thinking.budgets",
             "compaction.threshold",
             "compaction.enabled",
@@ -564,6 +572,19 @@ impl Config {
             ("models.enabled", TypedValue::List(v)) => self.models_enabled = v,
             ("models.thinking_levels", TypedValue::ThinkingLevels(v)) => {
                 self.models_thinking_levels = v
+            }
+            ("personas", TypedValue::Personas(v)) => {
+                // The layer decides precedence: a project persona replaces a
+                // same-named user persona wholesale (a persona is a bundle, and a
+                // merged bundle is one nobody wrote).
+                let layer = match source {
+                    MergeSource::ProjectFile => persona::PersonaSource::ProjectFile,
+                    // Flag and environment have no `[personas]` form (it is a
+                    // table key), so they cannot reach here; the user file and the
+                    // built-in default both mean "the user's own".
+                    _ => persona::PersonaSource::UserFile,
+                };
+                self.personas.insert_layer(layer, v);
             }
             ("thinking.budgets", TypedValue::Budgets(v)) => self.thinking_budgets = v,
             ("compaction.threshold", TypedValue::Number(v)) => self.compaction_threshold = v,

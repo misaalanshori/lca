@@ -6,6 +6,28 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+- **`/persona` sets a model, thinking level, tool loadout, and instructions in one
+  command** (gh #412). A persona is a named bundle under `[personas.<name>]` in the
+  config, so gear-shifting from "planning with read-only tools at high reasoning" to
+  "fast local model, no tools" stops costing four commands and a pasted paragraph.
+  `/persona` with no argument lists every persona with what it carries; `/persona
+  <name>` validates the **whole** bundle against the running session — the model is
+  offered, *that model* accepts that thinking level, every tool is registered — and
+  applies only if all of it holds. **A persona that fails any check applies
+  nothing**, not even the fields that would have worked: a half-applied persona
+  leaves you believing you are in one you are not in. Applying writes through the
+  same paths `/model` and `/thinking` use, so the footer, the thinking border ramp,
+  and the per-model overrides stay in sync with no second state to keep in step. A
+  project file's persona replaces a same-named user persona wholesale — a bundle,
+  not mergeable fields — and an untrusted project's personas never load at all
+  (FR-PERM-9), since a persona names a model, a loadout, and instructions and is
+  exactly the config-driven switch an untrusted file must not have. Instructions
+  ride as an attributed **conversational** message, never a `System` one (gh #299:
+  a trailing `System` message mutates the root prompt and busts the cache). The
+  word *preset* stays reserved for provider endpoint entries, so this is `/persona`
+  and `[personas]` everywhere.
+
 ### Fixed
 - **The `/bug` bundle is scrubbed before it is written, and you review it first**
   (gh #411 gaps 3 and 2). `/bug`'s trust foundation was that the credential

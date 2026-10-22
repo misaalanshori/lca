@@ -1077,72 +1077,57 @@ fn a_rebound_key_fires() {
     assert_eq!(chat.editor.text(), "a", "Ctrl+Q deleted backward");
 }
 
-#[cfg(test)]
 #[path = "chat_command_tests.rs"]
 mod command_tests;
 
-#[cfg(test)]
 #[path = "chat_dialog_tests.rs"]
 mod dialog_tests;
 
-#[cfg(test)]
 #[path = "chat_drawer_tests.rs"]
 mod drawer_tests;
 
-#[cfg(test)]
 #[path = "chat_tooltip_tests.rs"]
 mod tooltip_tests;
 
-#[cfg(test)]
 #[path = "chat_overlay_tests.rs"]
 mod overlay_tests;
 
-#[cfg(test)]
 #[path = "chat_bug_tests.rs"]
 mod bug_tests;
 
-#[cfg(test)]
+#[path = "chat_persona_tests.rs"]
+mod persona_tests;
+
 #[path = "chat_mcp_tests.rs"]
 mod mcp_tests;
-#[cfg(test)]
 #[path = "chat_picker_scroll_tests.rs"]
 mod picker_scroll_tests;
-#[cfg(test)]
 #[path = "chat_settings_filter_tests.rs"]
 mod settings_filter_tests;
 // Gh #397: the `/settings` project-override row.
-#[cfg(test)]
 #[path = "chat_project_override_tests.rs"]
 mod project_override_tests;
-#[cfg(test)]
 #[path = "chat_toast_tests.rs"]
 mod toast_tests;
 
-#[cfg(test)]
 #[path = "chat_hub_tests.rs"]
 mod hub_tests;
 
-#[cfg(test)]
 #[path = "chat_viewport_tests.rs"]
 mod viewport_tests;
 
-#[cfg(test)]
 #[path = "chat_label_tests.rs"]
 mod label_tests;
 
-#[cfg(test)]
 #[path = "chat_steering_tests.rs"]
 mod steering_tests;
 
-#[cfg(test)]
 #[path = "chat_queue_tests.rs"]
 mod queue_tests;
 
-#[cfg(test)]
 #[path = "chat_tree_tests.rs"]
 mod tree_tests;
 
-#[cfg(test)]
 #[path = "chat_extman_tests.rs"]
 mod extman_tests;
 
@@ -1185,14 +1170,11 @@ fn a_model_without_a_set_offers_every_level() {
 // Verifies: gh #225 - the first C-c clears composer text (the hint's
 // promise); empty-armed C-c exits on the second tap.
 
-#[cfg(test)]
 #[path = "chat_ctrl_c_tests.rs"]
 mod ctrl_c_tests;
 
-#[cfg(test)]
 #[path = "dock_tests.rs"]
 mod dock_tests;
 
-#[cfg(test)]
 #[path = "key_hint_tests.rs"]
 mod key_hint_tests;

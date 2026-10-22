@@ -276,6 +276,46 @@ impl Ui {
                     }
                 }))
             },
+            // Gh #412: `/persona`. Three seams, and the split is the atomic
+            // guarantee:
+            //
+            // - `persona_list` reads the config's bundles that apply here (an
+            //   untrusted project's never loaded, so they cannot be listed).
+            // - `persona_check` answers "is every field reachable **in this
+            //   session**" - the model in the offered set, the level offered by
+            //   *that* model, every tool registered. It writes nothing.
+            // - `persona_apply` runs only after a clean check, and writes through
+            //   the same paths `/model`, `/thinking` and the tool gate use.
+            persona_list: {
+                let ui = self.clone();
+                Some(Arc::new(move || {
+                    let trusted = ui.is_trusted();
+                    crate::lock(&ui.config)
+                        .personas()
+                        .available(trusted)
+                        .into_iter()
+                        .map(|(name, persona, _source)| lca_ui::state::PersonaBundle {
+                            name: name.to_string(),
+                            model: persona.model.clone(),
+                            thinking: persona.thinking.clone(),
+                            tools: persona.tools.clone(),
+                            instructions: persona.instructions.clone(),
+                        })
+                        .collect()
+                }))
+            },
+            persona_check: {
+                let ui = self.clone();
+                Some(Arc::new(move |bundle: &lca_ui::state::PersonaBundle| {
+                    ui.persona_check(bundle)
+                }))
+            },
+            persona_apply: {
+                let ui = self.clone();
+                Some(Arc::new(move |bundle: &lca_ui::state::PersonaBundle| {
+                    ui.persona_apply(bundle)
+                }))
+            },
             save_default_model: Some(Arc::new(|id: &str| {
                 // One key: `model` is the startup default
                 // (`resolve_model_id`), the provider extension is the
