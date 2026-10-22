@@ -215,6 +215,14 @@ impl Tmux {
     ///
     /// # What this does not prove
     ///
+    /// # Where this cannot be used
+    ///
+    /// **A masked field does not echo**, by design, so the probe can never be
+    /// observed there — and the primitive would fail on a correct pane. Call it
+    /// once after spawn, on the ordinary composer, before opening a `/login`
+    /// secret prompt or any other no-echo surface; the attachment it proves is
+    /// the same process-wide input path a later field uses.
+    ///
     /// It proves the pane is *echoing*, not that `lca` is the program echoing.
     /// A shell that never started the binary echoes too. Rows still wait for
     /// their product marker first; this primitive only closes the gap between

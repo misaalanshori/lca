@@ -65,14 +65,23 @@ fn the_logins_secret_prompt_masks_input_in_a_real_terminal() {
     // No key: `/login <preset>` skips the picker and asks for the secret.
     session.spawn(&sandbox, None, false, &[], &[]);
     session.wait_for("no model", std::time::Duration::from_secs(20));
+    // gh #447: prove the input path before typing at it - and do it **here**,
+    // on the normal composer, not after the masked prompt opens. A masked field
+    // deliberately does not echo (that is what masking means), so the probe
+    // cannot be observed there; the primitive's contract is an *echoing*
+    // surface, which is why it belongs at spawn rather than at the field.
+    session.wait_for_input_ready(std::time::Duration::from_secs(15));
 
     session.send(&["/login openrouter", "Enter"]);
     session.wait_for("input hidden", std::time::Duration::from_secs(15));
     let secret = "sk-super-secret-value";
     session.send(&[secret]);
-    // Give the frame a beat to render; the secret must not be visible.
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    let pane = session.capture();
+    // gh #447: "the secret is not on screen" is only meaningful on a frame that
+    // has stopped changing - read too early and the assertion passes against a
+    // frame the keystrokes had not reached, which is a silent false pass rather
+    // than a flake. Wait for the mask to grow, then read the settled frame and
+    // assert the absence.
+    let pane = session.wait_settled_for("********", std::time::Duration::from_secs(15));
     assert!(
         !pane.contains(secret),
         "the secret never appears in the frame:\n{pane}"
@@ -133,12 +142,16 @@ fn a_real_paste_into_the_secret_field_is_masked() {
     let session = Tmux::new("paste-secret");
     session.spawn(&sandbox, None, false, &[], &[]);
     session.wait_for("no model", std::time::Duration::from_secs(20));
+    // Before the mask opens: a masked field does not echo by design, so the
+    // probe can only be observed on the ordinary composer (gh #447).
+    session.wait_for_input_ready(std::time::Duration::from_secs(15));
     session.send(&["/login openrouter", "Enter"]);
     session.wait_for("input hidden", std::time::Duration::from_secs(15));
     let secret = "sk-pasted-secret-value";
     session.paste_text(secret);
-    std::thread::sleep(std::time::Duration::from_millis(700));
-    let pane = session.capture();
+    // gh #447: settle on the mask having grown, then assert. The old fixed sleep
+    // both raced the paste and made the "not dropped" assertion below a prayer.
+    let pane = session.wait_settled_for("********", std::time::Duration::from_secs(15));
     assert!(
         !pane.contains(secret),
         "the pasted secret never appears in the frame:\n{pane}"
@@ -302,13 +315,13 @@ fn the_picker_moves_to_a_local_preset_that_needs_no_key() {
         }
     }
     assert!(reached, "the walk reached a local preset");
-    // The selection is on the local preset now; let the redraw settle so
-    // the Enter below lands on the chosen row.
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    // The selection is on the local preset now; let the redraw settle so the
+    // Enter below lands on the chosen row (gh #447: a settle, not a sleep that
+    // hopes 300 ms was enough).
+    session.wait_until_painted(std::time::Duration::from_secs(10));
     // A local preset has no key step: Enter signs in without one.
     session.send(&["Enter"]);
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    let pane = session.capture();
+    let pane = session.wait_until_painted(std::time::Duration::from_secs(15));
     assert!(!pane.contains("Sign in with"), "the picker closed:\n{pane}");
     assert!(
         !pane.contains("input hidden"),
