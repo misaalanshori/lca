@@ -976,7 +976,9 @@ pub(crate) fn command_help(command: &str) -> &'static str {
         "/trust" => "trust the project folder (auto-approve in-workspace commands)",
         "/permissions" => "manage allow/deny rules (session, project, global)",
         "/grants" => "review this project's grants and rules",
-        "/mcp" => "manage MCP servers: open the manager, or run a verb (login, reconnect, enable, exposure)",
+        "/mcp" => {
+            "manage MCP servers: open the manager, or run a verb (login, reconnect, enable, exposure)"
+        }
         "/settings" => "show the merged configuration and where each value came from",
         "/session" => "show this session's tokens, cache, and cost",
         _ => "",
