@@ -437,6 +437,44 @@ impl Ui {
                             || project_extensions_wait(&cwd))
                 }))
             },
+            stage_bug: {
+                // Gh #411 gaps 2 and 3: stage a **scrubbed copy**, show the user
+                // what it contains, and write only if they confirm. The closure
+                // owns the whole plan, so the interface holds a string and a
+                // decision and never sees a secret or a zip.
+                let cwd = self.cwd.clone();
+                let session = self.session().id().to_string();
+                Some(Arc::new(move || {
+                    let data = crate::data_dir();
+                    let plan = crate::bug::stage(&data, &cwd, Some(&session), &cwd)
+                        .map_err(|err| format!("bug failed: {err}"))?;
+                    let inspection = plan.inspection();
+                    let destination = plan.destination().display().to_string();
+                    let plan = std::sync::Arc::new(plan);
+                    let resolve: lca_ui::state::BugResolve = {
+                        let plan = plan.clone();
+                        Arc::new(move |confirmed: bool| {
+                            if !confirmed {
+                                crate::bug::discard(&plan);
+                                return "bug bundle discarded; nothing was written".to_string();
+                            }
+                            match crate::bug::write(&plan) {
+                                Ok(written) => format!(
+                                    "wrote {} ({}); share it explicitly - nothing was uploaded",
+                                    written.path.display(),
+                                    written.scrubbed.summary()
+                                ),
+                                Err(err) => format!("bug failed: {err}"),
+                            }
+                        })
+                    };
+                    Ok(lca_ui::state::BugReview {
+                        inspection,
+                        destination,
+                        resolve,
+                    })
+                }))
+            },
             trust_apply: {
                 let grants = self.grants.clone();
                 let cwd = self.cwd.clone();

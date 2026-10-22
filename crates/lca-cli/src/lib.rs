@@ -27,8 +27,11 @@ pub use trust::{apply_startup_trust, load_config, load_config_flags, trust_defau
 /// #72, #38).
 mod auth;
 
-/// `lca bug` and `/bug`: the local diagnostic bundle (gh #57).
-mod bug;
+/// `lca bug` and `/bug`: the local diagnostic bundle (gh #57), staged and
+/// scrubbed before it is written (gh #411).
+pub mod bug;
+/// Secret-shaped string redaction for the bug bundle (gh #411 gap 3).
+pub mod bug_redact;
 
 /// Debug tracing setup (gh #258): `--debug` / `--debug-wire`.
 pub mod debug;

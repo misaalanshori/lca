@@ -186,6 +186,31 @@ pub struct GrantPrompt {
     pub prompt: String,
 }
 
+/// A staged `/bug` bundle waiting for the user to inspect and confirm (gh #411
+/// gap 2).
+///
+/// The inspection is the **gate**: nothing is zipped until this is answered, and
+/// cancelling removes the staging directory. Holding the plan here means the
+/// screen, the confirm, and the cancel all read one already-built artifact, so
+/// showing the user what they are about to share costs no extra I/O - and it
+/// cannot drift from what actually gets written.
+pub struct BugReview {
+    /// What the user is about to share: file list with sizes, the staged path,
+    /// and the scrub summary. Rendered by the host from the staged plan, so the
+    /// screen costs no I/O and cannot drift from what will be written.
+    pub inspection: String,
+    /// Where the zip will land, to name it after the write.
+    pub destination: String,
+    /// A handle the host gave us: `true` writes the bundle and returns the
+    /// notice, `false` discards it. The UI owns no zip logic and never sees a
+    /// secret - it holds a string and a decision.
+    pub resolve: BugResolve,
+}
+
+/// The host's answer to an inspection: `(confirmed, )` and back comes the notice
+/// to show. `false` must leave nothing on disk (gh #411 design point 4).
+pub type BugResolve = Arc<dyn Fn(bool) -> String + Send + Sync>;
+
 /// A yes/no confirm for switching to a freshly signed-in provider.
 pub struct SwitchPrompt {
     /// The provider just signed in to.
@@ -597,6 +622,10 @@ pub type TrustApply = Arc<dyn Fn(TrustChoice) -> String + Send + Sync>;
 /// Whether the project still needs a trust decision (opens the modal at
 /// startup, Pi's `hasTrustRequiringProjectResources`).
 pub type TrustNeeded = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// `/bug`: stage a bundle and return the inspection the user reviews. The host
+/// owns the staging and the zip; the interface owns the screen and the key.
+pub type StageBug = Arc<dyn Fn() -> Result<BugReview, String> + Send + Sync>;
 pub use crate::chat_models::{LabelRecord, SessionTree, TreeFilterMode, TreeRow, TreeRowKind};
 pub use crate::chat_pickers::TreeFilter;
 pub use crate::chat_tree::TreePicker;
@@ -682,6 +711,10 @@ pub type LoadAttachment = Arc<dyn Fn(&str) -> Option<(String, Vec<u8>)> + Send +
 /// so a host that wires none still gets the in-app behavior.
 #[derive(Default)]
 pub struct UiHooks {
+    /// `/bug`: stage a scrubbed bundle and hand back the inspection screen plus
+    /// the confirm/cancel decision (gh #411 gaps 2 and 3). Absent keeps the
+    /// one-shot bundle `lca bug` uses, with no gate.
+    pub stage_bug: Option<StageBug>,
     /// Run a shell command for `!`/`!!` mode; the `bool` is `true` for
     /// `!!` (excluded from the model's context). Returns the combined
     /// output to show in the transcript.

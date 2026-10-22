@@ -109,7 +109,7 @@ their own `/`-commands to the same menu.
 | Command | What it does |
 | --- | --- |
 | `/attach <path>` | attach an image file to the next message |
-| `/bug` | write a local diagnostic bundle |
+| `/bug` | write a local diagnostic bundle (scrubbed copy, reviewed before writing) |
 | `/changelog` | show the latest released changes |
 | `/clone [name]` | duplicate this session at its tip and switch |
 | `/compact` | summarize the session to free context |
@@ -199,6 +199,36 @@ works:
 
 `/bug`'s bundle contains the transcript. It is written next to your
 project, not uploaded, and sharing it is a deliberate act.
+
+### What `/bug` scrubs, and what it cannot
+
+`/bug` stages a **scrubbed copy** of the session, shows you what is in it, and
+writes the zip only when you confirm — `[y]` writes, `[n]` or `Escape` discards
+it and removes the staged copy. Nothing is uploaded.
+
+The scrub replaces **secret-shaped strings** in the copy: API keys (`sk-…`,
+`sk-ant-…`), GitHub tokens (`ghp_…`, `github_pat_…`), Slack tokens (`xox…`), AWS
+key ids (`AKIA…`), Google keys (`AIza…`), bearer tokens, JWTs, OAuth
+`code=`/`access_token=` values, and any long opaque value that sits next to a
+word like `api_key`, `secret`, `token`, `password`, or `authorization`. Each match
+becomes `<redacted>`; the surrounding sentence, the roles, the timestamps and the
+tool names are untouched, so the bundle still debugs.
+
+The inspection screen tells you **how many** and **of what kind** were scrubbed —
+never the values, not even shortened. That is deliberate: you cannot judge whether
+it caught the thing you are worried about if it stays quiet, and a summary that
+repeated the secret would be a new leak.
+
+Three honest limits:
+
+- The **scrub is a pattern match, not a proof.** A secret with no recognisable
+  shape and no label around it (a bare password inside a sentence) is out of
+  reach.
+- It **errs toward scrubbing.** A long opaque value beside `token` is replaced
+  even if it was an innocent hash. A false redaction costs a maintainer one
+  round-trip; a missed one leaks a credential.
+- **Your own session log is never touched.** The bundle is a copy, so the
+  transcript you resume from still has everything.
 
 ## Sessions, branches, and starting over
 

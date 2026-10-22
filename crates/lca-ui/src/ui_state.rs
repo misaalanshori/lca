@@ -4,7 +4,8 @@
 use std::path::PathBuf;
 
 use crate::state::{
-    DialogModal, GrantPrompt, PermissionModal, PickerPrompt, SecretPrompt, SwitchPrompt, UiOptions,
+    BugReview, DialogModal, GrantPrompt, PermissionModal, PickerPrompt, SecretPrompt, SwitchPrompt,
+    UiOptions,
 };
 /// The ui-world state: the options, the open modals, and the small flags
 /// the interface tracks across keys. No buffer, no transcript, no editing.
@@ -21,6 +22,9 @@ pub struct UiState {
     pub grant: Option<GrantPrompt>,
     /// The open provider-switch confirm, if any (`/login`, gh #177).
     pub switch_confirm: Option<SwitchPrompt>,
+    /// A staged `/bug` bundle awaiting the user's review (gh #411 gap 2): the
+    /// inspection is the gate, so nothing is zipped until this is answered.
+    pub bug_review: Option<BugReview>,
     /// A background login/identity step is running (R4); the label names
     /// it (and carries the auth URL once the provider has asked for one).
     pub login_waiting: Option<String>,
@@ -58,6 +62,7 @@ impl UiState {
             picker: None,
             grant: None,
             switch_confirm: None,
+            bug_review: None,
             login_waiting: None,
             ctrl_c_armed: false,
             panel_open: false,

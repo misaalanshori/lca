@@ -23,6 +23,9 @@ pub const BLOCKED_MODALS: &[&str] = &[
     "picker",
     "grant",
     "switch_confirm",
+    // Gh #411: the `/bug` inspection screen. Nothing is written until the user
+    // confirms, so it is a wait on the user like any other prompt.
+    "bug_review",
     "dialog",
     "modal_open",
     "login_waiting",
@@ -93,6 +96,7 @@ pub fn worlds(chat: &Chat) -> Vec<(&'static str, bool)> {
                 "picker" => chat.world.picker.is_some(),
                 "grant" => chat.world.grant.is_some(),
                 "switch_confirm" => chat.world.switch_confirm.is_some(),
+                "bug_review" => chat.world.bug_review.is_some(),
                 "dialog" => chat.world.dialog.is_some(),
                 "modal_open" => chat.world.modal_open,
                 "login_waiting" => chat.world.login_waiting.is_some(),

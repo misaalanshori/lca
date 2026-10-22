@@ -836,6 +836,22 @@ impl Chat {
                 &body,
                 &self.theme,
             );
+        } else if let Some(review) = &self.world.bug_review {
+            // Gh #411 gap 2: the inspection is the gate. The body is the host's
+            // rendered summary (file list, sizes, scrub counts), so the screen
+            // never re-reads the session and cannot drift from what will be
+            // written.
+            let mut body: Vec<String> = review.inspection.lines().map(str::to_string).collect();
+            body.push(String::new());
+            body.push("Write the bundle [y] / Cancel [n]".to_string());
+            overlay_box(
+                viewport,
+                width,
+                height,
+                "bug bundle - review before sharing",
+                &body,
+                &self.theme,
+            );
         } else if let Some(switch) = &self.world.switch_confirm {
             let body = vec![
                 switch.prompt.clone(),
