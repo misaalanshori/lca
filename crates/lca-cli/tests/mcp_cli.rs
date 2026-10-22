@@ -462,19 +462,26 @@ fn login_signs_in_against_an_identity_provider_on_another_host() {
         common::stdout(&output),
         common::stderr(&output)
     );
-    // The IdP host was actually reached, in order.
+    // The IdP host was actually reached, in order. The configured metadata
+    // document is discovered first (step 1), so the row never reaches the
+    // RFC 9728 pointer or the origin fallback - the same path on every OS
+    // (gh #467: it used to depend on which step won, which diverged by
+    // platform). The `oauth-protected-resource` document is therefore *not*
+    // fetched here; the challenge is still captured, and `oauth_multihost`
+    // covers the pointer step.
     let seen = idp.paths.lock().expect("paths").clone();
-    for needle in [
-        "oauth-protected-resource",
-        "oauth-authorization-server",
-        "/register",
-        "/token",
-    ] {
+    for needle in ["oauth-authorization-server", "/register", "/token"] {
         assert!(
             seen.iter().any(|path| path.contains(needle)),
             "{needle} ran on the IdP host: {seen:?}"
         );
     }
+    assert!(
+        !seen
+            .iter()
+            .any(|path| path.contains("oauth-protected-resource")),
+        "the configured document wins, so the RFC 9728 pointer is not followed: {seen:?}"
+    );
     // The token is stored, so a later session picks it up.
     let credentials =
         std::fs::read_to_string(sandbox.home.join(".lca/credentials/mcp.json")).unwrap_or_default();
