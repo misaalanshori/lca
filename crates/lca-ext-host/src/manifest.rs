@@ -69,7 +69,85 @@ fn reason_of(value: &toml::Value, key: &str) -> Result<String, LoadError> {
     Ok(reason.to_string())
 }
 
+/// Read and validate the `worlds` list (gh #288).
+///
+/// Every entry must name a world in [`lca_ext_abi::WORLDS`]. Three things used to
+/// slip through, and all three were silent:
+///
+/// 1. **A typo.** `worlds = ["contxt-transform"]` installed and loaded, and the
+///    dispatcher's `filter_map` dropped it, so the extension matched no world and
+///    did nothing - with a successful install and no error anywhere.
+/// 2. **A non-string.** `filter_map(|item| item.as_str())` dropped `worlds = [1]`
+///    and `worlds = ["tool", 7]` on the floor, so a malformed entry was not an
+///    error but a silently shorter list.
+/// 3. **A duplicate.** `["tool", "tool"]` was accepted and handed to the loader
+///    twice; the schema already says `uniqueItems`, so the code was the half that
+///    was wrong.
+///
+/// Refused rather than deduplicated for the duplicate case: a repeated world is
+/// almost always a copy-paste mistake in a list the author is still writing, and
+/// saying so is cheaper for them than silently getting one of the two.
+fn parse_worlds(value: &toml::Value) -> Result<Vec<String>, LoadError> {
+    let Some(items) = value.get("worlds").map(|worlds| {
+        worlds.as_array().cloned().ok_or_else(|| {
+            LoadError::InvalidManifest("`worlds` must be an array of world names".into())
+        })
+    }) else {
+        return Ok(Vec::new());
+    };
+    let items = items?;
+    let mut worlds: Vec<String> = Vec::with_capacity(items.len());
+    for item in &items {
+        let Some(name) = item.as_str() else {
+            // Say what was written, not just that it was wrong: a `worlds` array
+            // holding a number is usually a missing pair of quotes.
+            return Err(LoadError::InvalidManifest(format!(
+                "`worlds` entry {item} is not a string; each entry must be a quoted world name"
+            )));
+        };
+        if lca_ext_abi::parse_world(name).is_none() {
+            let hint = match lca_ext_abi::nearest_world(name) {
+                Some(suggestion) => format!(" - did you mean `{suggestion}`?"),
+                None => String::new(),
+            };
+            return Err(LoadError::InvalidManifest(format!(
+                "unknown world `{name}`{hint} Known worlds: {}",
+                lca_ext_abi::WORLDS
+                    .iter()
+                    .map(|(name, _)| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        if worlds.iter().any(|seen| seen == name) {
+            return Err(LoadError::InvalidManifest(format!(
+                "`worlds` lists `{name}` more than once; each world may appear once"
+            )));
+        }
+        worlds.push(name.to_string());
+    }
+    Ok(worlds)
+}
+
 impl Manifest {
+    /// Whether the manifest declares `world`.
+    ///
+    /// The loader asks this instead of comparing world strings itself (gh #288):
+    /// a `world == "ui"` literal in the linking path was a second copy of the
+    /// vocabulary, and a typo there - `"uii"` - would have been invisible,
+    /// because validation would still accept the name the author wrote while the
+    /// loader never matched it. Asking in terms of [`lca_ext_abi::World`] makes
+    /// that typo a compile error instead of a silent no-op.
+    ///
+    /// Resolves through [`lca_ext_abi::WORLDS`], so a manifest built in code (the
+    /// tests do this) is consulted the same way as a parsed one.
+    #[must_use]
+    pub fn declares(&self, world: lca_ext_abi::World) -> bool {
+        self.worlds
+            .iter()
+            .any(|declared| lca_ext_abi::parse_world(declared) == Some(world))
+    }
+
     /// Parse and validate identity and capability declarations (the
     /// schema's rules; full JSON-schema validation lands with Phase 5).
     pub fn parse(toml_text: &str) -> Result<Manifest, LoadError> {
@@ -98,16 +176,7 @@ impl Manifest {
         }
         let version = get("version")?;
         let abi = get("abi")?;
-        let worlds = value
-            .get("worlds")
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str().map(str::to_string))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let worlds = parse_worlds(&value)?;
         let resources = value
             .get("resources")
             .and_then(|v| v.as_array())

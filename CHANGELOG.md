@@ -90,6 +90,28 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **A typo in a manifest's `worlds` list is refused, not installed as an
+  extension that does nothing** (gh #288). `worlds = ["contxt-transform"]` — one
+  transposed letter — used to install successfully and load as an extension whose
+  world set matched nothing: the install reported success, no error appeared
+  anywhere, and the extension silently did nothing. Every entry is now validated
+  against the world vocabulary at parse, and the refusal names what you wrote,
+  lists the vocabulary, and suggests the nearest match (`did you mean
+  'context-transform'?`). Two adjacent holes closed with it: a non-string entry
+  (`worlds = ["tool", 7]`) used to be dropped on the floor by a `filter_map`,
+  leaving a silently shorter list, and a duplicate (`["tool", "tool"]`) was
+  accepted even though the schema already said `uniqueItems`; both are errors now.
+  The `hooks-*` names are validated as a **fixed set**, so `hooks-tpyo` is refused
+  exactly like any other typo rather than passing a prefix check. The vocabulary
+  now lives in one table (`lca_ext_abi::WORLDS`) that both the manifest validator
+  and the loader's dispatcher read — it had been three copies (a `match` in the
+  dispatcher, a `==` chain in the loader, and the schema's `enum`), which is how
+  the bug arose — and tests keep the schema, the authoring guide, and every
+  shipped `extensions/*/extension.toml` in step with it. The loader's own world
+  checks (`.any(|world| world == "ui")`, nine of them) now ask in terms of the
+  `World` enum too, because a typo there was invisible to every validation test:
+  the name the author wrote was accepted, and the loader silently never matched
+  it.
 - **A theme's missing roles fall back through a declared parent instead of
   guessing** (gh #387 gap 5). A theme file under `~/.lca/themes/` may name only
   some roles, and everything it omits used to resolve to `Text` (or to whatever

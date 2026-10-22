@@ -296,6 +296,15 @@ impl ExtHost {
         }
         let cap = Arc::new(cap);
 
+        // Which worlds the manifest declares, resolved once (gh #288) so the
+        // linking path below never compares a world *string* - a literal there
+        // was a second copy of the vocabulary and a typo in it would have been a
+        // silent no-op that validation could not catch.
+        let declared: Vec<lca_ext_abi::World> = manifest
+            .worlds
+            .iter()
+            .filter_map(|world| lca_ext_abi::parse_world(world))
+            .collect();
         // Resource limits come from the manifest, clamped to the
         // host's maxima (flows.md); a manifest without `limits` gets
         // the host's own values (the hints are optional).
@@ -344,7 +353,7 @@ impl ExtHost {
             provider_host::credentials::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
                 .expect("credentials imports");
         }
-        let declares_provider = manifest.worlds.iter().any(|world| world == "provider");
+        let declares_provider = declared.contains(&lca_ext_abi::World::Provider);
         let pre = linker
             .instantiate_pre(&component)
             .map_err(|err| LoadError::Link(err.to_string()))?;
@@ -396,25 +405,19 @@ impl ExtHost {
             "hooks-trust",
             lca_ext_abi::host::hooks_trust::HooksTrustPre::new,
         )?;
-        let tool = manifest
-            .worlds
-            .iter()
-            .any(|world| world == "tool")
+        let tool = declared
+            .contains(&lca_ext_abi::World::Tool)
             .then(|| ToolPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string())))
             .transpose()?;
-        let tool_catalog = manifest
-            .worlds
-            .iter()
-            .any(|world| world == "tool-catalog")
+        let tool_catalog = declared
+            .contains(&lca_ext_abi::World::ToolCatalog)
             .then(|| {
                 lca_ext_abi::host::tool_catalog::ToolCatalogPre::new(pre.clone())
                     .map_err(|err| LoadError::Link(err.to_string()))
             })
             .transpose()?;
-        let command = manifest
-            .worlds
-            .iter()
-            .any(|world| world == "command")
+        let command = declared
+            .contains(&lca_ext_abi::World::Command)
             .then(|| {
                 lca_ext_abi::host::command::CommandPre::new(pre.clone())
                     .map_err(|err| LoadError::Link(err.to_string()))
@@ -423,36 +426,28 @@ impl ExtHost {
         let provider = declares_provider
             .then(|| ProviderPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string())))
             .transpose()?;
-        let hooks = manifest
-            .worlds
-            .iter()
-            .any(|world| world == "hooks")
+        let hooks = declared
+            .contains(&lca_ext_abi::World::Hooks)
             .then(|| {
                 lca_ext_abi::host::hooks::HooksPre::new(pre.clone())
                     .map_err(|err| LoadError::Link(err.to_string()))
             })
             .transpose()?;
-        let compaction = manifest
-            .worlds
-            .iter()
-            .any(|world| world == "compaction")
+        let compaction = declared
+            .contains(&lca_ext_abi::World::Compaction)
             .then(|| {
                 CompactionPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string()))
             })
             .transpose()?;
-        let context_transform = manifest
-            .worlds
-            .iter()
-            .any(|world| world == "context-transform")
+        let context_transform = declared
+            .contains(&lca_ext_abi::World::ContextTransform)
             .then(|| {
                 ContextTransformPre::new(pre.clone())
                     .map_err(|err| LoadError::Link(err.to_string()))
             })
             .transpose()?;
-        let ui = manifest
-            .worlds
-            .iter()
-            .any(|world| world == "ui")
+        let ui = declared
+            .contains(&lca_ext_abi::World::Ui)
             .then(|| UiPre::new(pre).map_err(|err| LoadError::Link(err.to_string())))
             .transpose()?;
 
@@ -619,7 +614,10 @@ impl Inner {
                 dialogs: self.dialogs.clone(),
                 tools_view: self.tools_view.clone(),
                 executing_call: None,
-                tool_world_call: self.worlds.iter().any(|world| world == "tool"),
+                tool_world_call: self
+                    .worlds
+                    .iter()
+                    .any(|world| lca_ext_abi::parse_world(world) == Some(lca_ext_abi::World::Tool)),
             },
         );
         store.limiter(|state| &mut state.limits);

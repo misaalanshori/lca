@@ -23,28 +23,16 @@ impl lca_ext_abi::ExtensionDispatch for WasmExtension {
     }
 
     fn worlds(&self) -> Vec<World> {
+        // Gh #288: the string→`World` mapping is `lca_ext_abi::WORLDS`, not a
+        // `match` here. It used to be this `match`, plus a `==` chain in the
+        // loader, plus the schema's `enum` - three copies of one fact. The
+        // validator in `Manifest::parse` now refuses any name the table does not
+        // hold, so by the time a manifest reaches here every entry resolves;
+        // keeping `filter_map` is belt-and-braces for a manifest built in code.
         self.inner
             .worlds
             .iter()
-            .filter_map(|world| match world.as_str() {
-                "tool" => Some(World::Tool),
-                "tool-catalog" => Some(World::ToolCatalog),
-                "hooks-message" => Some(World::HooksMessage),
-                "hooks-tool-call" => Some(World::HooksToolCall),
-                "hooks-tool-result" => Some(World::HooksToolResult),
-                "hooks-stream" => Some(World::HooksStream),
-                "hooks-settle" => Some(World::HooksSettle),
-                "hooks-compaction" => Some(World::HooksCompaction),
-                "hooks-cache" => Some(World::HooksCache),
-                "hooks-trust" => Some(World::HooksTrust),
-                "command" => Some(World::Command),
-                "hooks" => Some(World::Hooks),
-                "provider" => Some(World::Provider),
-                "compaction" => Some(World::Compaction),
-                "context-transform" => Some(World::ContextTransform),
-                "ui" => Some(World::Ui),
-                _ => None,
-            })
+            .filter_map(|world| lca_ext_abi::parse_world(world))
             .collect()
     }
 
