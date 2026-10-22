@@ -766,3 +766,16 @@ mod shared_prompt_forwards_annotations;
 // would pass a behaviour-only row.
 #[path = "294-preset-env-and-local-discovery.rs"]
 mod preset_env_and_local_discovery;
+// GitHub #365: inline *program text* carried as a positional argument
+// auto-approved in a trusted folder. gh #347 policed flag-carried inline eval
+// (`python3 -c`) through `INTERPRETER_EVAL_FLAGS`; `awk 'BEGIN{system(...)}'`,
+// `sed 's/x/y/e'` and friends carry the same unfile-able code positionally and
+// were never classified. The refuse-set is extended the way #347 extended it -
+// a known program-text interpreter reviews unless its program arrives as an
+// in-workspace file - because a "does this parse as a program" heuristic cannot
+// be proven and fails open. Enumerating the cases also found a sharper hole in
+// the same family: a denied program behind a wrapper (`timeout 5 curl ...`)
+// auto-approved, since the wrapper is the program and `curl` was just an
+// unclassified argument.
+#[path = "365-inline-program-text.rs"]
+mod inline_program_text;
