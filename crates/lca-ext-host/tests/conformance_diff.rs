@@ -124,6 +124,26 @@ impl Fixture {
         Arc<dyn ExtensionDispatch>,
         Arc<lca_tools::Capabilities>,
     ) {
+        let (_concrete, wasm, native, engine) = self.both_modes_keeping_wasm();
+        (wasm, native, engine)
+    }
+
+    /// [`Fixture::both_modes`], also handing back the concrete WASM
+    /// handle.
+    ///
+    /// gh #449: a row that additionally asks the guest for its single-tool
+    /// schema used to call `host.load` a second (and third) time for it,
+    /// paying `Component::new` again - ~6 s per load in a test build.
+    /// `schema()` is just another call into the same component, so this is
+    /// the handle to ask rather than a reason to compile a second one.
+    fn both_modes_keeping_wasm(
+        &self,
+    ) -> (
+        Arc<lca_ext_host::WasmExtension>,
+        Arc<dyn ExtensionDispatch>,
+        Arc<dyn ExtensionDispatch>,
+        Arc<lca_tools::Capabilities>,
+    ) {
         let mut host = ExtHost::new(
             ExtensionLimits {
                 memory_bytes: 64 * 1024 * 1024,
@@ -132,18 +152,20 @@ impl Fixture {
             },
             self.env(),
         );
-        let wasm = host.load(FIXTURE, MANIFEST).expect("load wasm mode");
+        let wasm: Arc<lca_ext_host::WasmExtension> =
+            Arc::new(host.load(FIXTURE, MANIFEST).expect("load wasm mode"));
         let engine = self.capabilities();
-        let native = conformance::NativeConformance::new(engine.clone());
+        let native: Arc<dyn ExtensionDispatch> =
+            Arc::new(conformance::NativeConformance::new(engine.clone()));
         // The same registry type holds both handle kinds (FR-EXT-6: one
         // handle type, no mode branching).
         let mut registry = NativeRegistry::new();
-        registry.register(Arc::new(wasm));
-        registry.register(Arc::new(native));
+        registry.register(wasm.clone());
+        registry.register(native);
         let handles = registry.into_handles();
         // The SAME engine the native handle ran on, so its recorded
         // denials are visible to the test (FR-PERM-3).
-        (handles[0].clone(), handles[1].clone(), engine)
+        (wasm, handles[0].clone(), handles[1].clone(), engine)
     }
 }
 
@@ -813,33 +835,38 @@ fn the_dialog_verdict_agrees_across_modes() {
         );
     }
 
+    // gh #449: one load, not one per verdict. `SharedDialogs` is a live
+    // slot the store holds by handle (`build_store` clones the Arc), and
+    // the host reads `current()` per call - so installing the second
+    // scripted prompter on the *same* guest exercises exactly what a
+    // second load did, against the same component. The previous shape
+    // paid `Component::new` twice (~6 s each in a test build) to prove
+    // something the slot iteration already proves.
+    let fixture = Fixture::new("dialog");
+    let dialogs = SharedDialogs::default();
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            memory_bytes: 64 * 1024 * 1024,
+            fuel_per_call: 100_000_000,
+            log_limit_bytes: 4096,
+        },
+        Arc::new(HostEnvironment {
+            roots: fixture.roots.clone(),
+            prompt: fixture.prompt.clone(),
+            dialogs: dialogs.clone(),
+            grant_store: fixture.store.clone(),
+            project: fixture.root.join("project"),
+            proposals: None,
+            // (kept alphabetical like the constructor)
+        }),
+    );
+    let wasm: Arc<dyn ExtensionDispatch> =
+        Arc::new(host.load(FIXTURE, MANIFEST).expect("load wasm mode"));
+    let engine = fixture.capabilities();
+    let native: Arc<dyn ExtensionDispatch> =
+        Arc::new(conformance::NativeConformance::new(engine).with_dialogs(dialogs.clone()));
     for verdict in [false, true] {
-        let fixture = Fixture::new(&format!("dialog-{verdict}"));
-        let scripted = Arc::new(Mutex::new(Scripted(verdict)));
-        let dialogs = SharedDialogs::default();
-        dialogs.set(scripted);
-
-        let mut host = ExtHost::new(
-            ExtensionLimits {
-                memory_bytes: 64 * 1024 * 1024,
-                fuel_per_call: 100_000_000,
-                log_limit_bytes: 4096,
-            },
-            Arc::new(HostEnvironment {
-                roots: fixture.roots.clone(),
-                prompt: fixture.prompt.clone(),
-                dialogs: dialogs.clone(),
-                grant_store: fixture.store.clone(),
-                project: fixture.root.join("project"),
-                proposals: None,
-                // (kept alphabetical like the constructor)
-            }),
-        );
-        let wasm: Arc<dyn ExtensionDispatch> =
-            Arc::new(host.load(FIXTURE, MANIFEST).expect("load wasm mode"));
-        let engine = fixture.capabilities();
-        let native: Arc<dyn ExtensionDispatch> =
-            Arc::new(conformance::NativeConformance::new(engine).with_dialogs(dialogs));
+        dialogs.set(Arc::new(Mutex::new(Scripted(verdict))));
         ask(&wasm, &native, &format!("confirm: {verdict}"));
     }
 }
@@ -1091,7 +1118,9 @@ async fn the_new_hooks_agree_across_modes() {
 #[tokio::test]
 async fn structured_output_round_trips_in_both_modes() {
     let fixture = Fixture::new("structured");
-    let (wasm, native, _) = fixture.both_modes();
+    // gh #449: keep the concrete guest handle, so the schema assertions
+    // below reuse this one compile instead of paying for more.
+    let (concrete, wasm, native, _) = fixture.both_modes_keeping_wasm();
     for (label, args, status, text) in [
         (
             "ok",
@@ -1125,22 +1154,13 @@ async fn structured_output_round_trips_in_both_modes() {
     // The single-tool schema declares the output shape in both modes.
     // (The suite dispatch prefers catalog specs; the declaration
     // lives on the single-tool schema both twins share.)
+    //
+    // gh #449: the guest is asked for its schema on the handle loaded
+    // above, not on a third `host.load`. `schema()` is a fresh call
+    // into the same component, so a second compile proves nothing
+    // about the declaration - it only paid `Component::new` again.
     {
-        let mut host = ExtHost::new(
-            ExtensionLimits {
-                memory_bytes: 64 * 1024 * 1024,
-                fuel_per_call: 100_000_000,
-                log_limit_bytes: 4096,
-            },
-            fixture.env(),
-        );
-        let wasm = host
-            .load(
-                include_bytes!("../../../extensions/conformance/fixtures/tool-world.wasm"),
-                include_str!("../../../extensions/conformance/extension.toml"),
-            )
-            .expect("load");
-        let spec = wasm.schema().expect("schema");
+        let spec = concrete.schema().expect("wasm schema");
         assert!(
             spec.extras
                 .get("output-schema")
