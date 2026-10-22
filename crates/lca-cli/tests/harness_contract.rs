@@ -302,13 +302,38 @@ fn a_frame_that_never_settles_fails_and_shows_both_frames() {
         eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
         return;
     }
-    let session = Tmux::new("settle-negative");
-    // A new value every 100 ms: always different, never settled.
-    session.spawn_raw("sh -c 'while :; do echo tick-$RANDOM$RANDOM; sleep 0.1; done'");
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        session.wait_until_painted(std::time::Duration::from_millis(700));
-    }));
-    let err = outcome.expect_err("a pane that never settles must fail, not hang");
+    // A value that changes as fast as the shell can print it.
+    //
+    // The first version echoed `$RANDOM` every 100 ms and **flaked**: under load
+    // two 150 ms captures both landed in the same 100 ms gap, saw identical
+    // frames, and the primitive correctly declared the pane settled - so a row
+    // demanding a failure failed instead. That is the primitive's documented
+    // ceiling, but a *negative* row must not depend on the scheduler to stay
+    // negative, so the fake now prints a nanosecond clock with no sleep: any two
+    // captures a poll apart differ by construction.
+    //
+    // A second version still flaked at load average ~40, where the shell could go
+    // more than a poll interval without being scheduled at all. That is not a
+    // property this row can demand of a starved machine, so the row retries its
+    // *own precondition* (`retry_once`, the primitive it is testing) and fails
+    // loudly if the precondition misses twice - instead of turning a starved box
+    // into a red `main`, which is the exact failure this cycle exists to remove.
+    let outcome = common::retry_once(|| {
+        let session = Tmux::new("settle-negative");
+        session.spawn_raw("sh -c 'while :; do date +%s%N; done'");
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            session.wait_until_painted(std::time::Duration::from_millis(700));
+        }))
+        .err()
+    });
+    // `retry_once` yields `None` only when both attempts saw the pane settle, so
+    // a `None` here is the failure the row is watching for.
+    let Some(err) = outcome else {
+        panic!(
+            "a pane that never settles must fail, not hang: the pane settled twice \
+             (a starved box can go a whole poll interval without printing anything)"
+        );
+    };
     let message = err
         .downcast_ref::<String>()
         .cloned()
