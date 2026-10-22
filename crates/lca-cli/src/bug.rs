@@ -284,9 +284,20 @@ pub fn discard(plan: &Plan) {
 }
 
 /// A private staging directory under the process's owner-only temp root.
+///
+/// The name carries a **process-wide sequence number** as well as pid and
+/// millisecond, and that number is what makes it unique. pid+millisecond is not:
+/// two callers in one process can enter within the same millisecond, and then
+/// both stage into one directory and the first cleanup deletes the second's
+/// work. That is exactly how the bundle test failed on a loaded CI runner
+/// (5 s for a 40 ms test) while passing on an idle machine. `lca-testkit`'s
+/// `ScratchDir` fixed the same class with the same shape (gh #317); this is the
+/// production equivalent.
 fn staging_dir() -> Result<PathBuf, String> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let base = std::env::temp_dir().join(format!(
-        "lca-bug-stage-{}-{}",
+        "lca-bug-stage-{}-{}-{seq}",
         std::process::id(),
         lca_session::now_ms()
     ));
@@ -472,4 +483,25 @@ mod tests {
             staging.display()
         );
     }
+}
+
+// Verifies: two bundles built in the same process never share a staging
+// directory. A CI run on a loaded runner caught the old pid+millisecond name
+// colliding: the first cleanup deleted the second's staged transcript, so
+// `the_bundle_holds_report_transcript_and_meta_only` failed at 5 s while
+// passing in 40 ms locally. The bug is invisible on an idle machine, which
+// is why the row asserts the *names differ* rather than racing them.
+#[test]
+fn two_staging_directories_never_collide() {
+    let first = staging_dir().expect("first");
+    let second = staging_dir().expect("second");
+    assert_ne!(
+        first, second,
+        "two staging dirs in one process must differ even within the same \
+             millisecond, or one caller's cleanup deletes the other's work"
+    );
+    // And both are usable: the second was not created inside the first.
+    assert!(!second.starts_with(&first));
+    let _ = std::fs::remove_dir_all(&first);
+    let _ = std::fs::remove_dir_all(&second);
 }
