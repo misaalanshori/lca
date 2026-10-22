@@ -732,3 +732,14 @@ mod system_panels_and_scheme;
 // structural property, not a stopwatch, which would re-create the fragility).
 #[path = "449-conformance-rows-compile-once.rs"]
 mod conformance_rows_compile_once;
+// GitHub #303 (NFR-24): `SharedPrompt` is the object every capability engine
+// holds, and its `ask_annotated` was the trait default - so it dropped tool
+// hints and called plain `ask`, and a user approving an MCP call never saw the
+// server's `destructive`/`read-only` declaration. The delegation landed in
+// `ba7f7fce`; this guard covers what that row does not: a *denying* prompt
+// stays denying under every hint (ADR-0047's no-bypass line, which the landed
+// allowing-prompt row cannot prove), plus the empty slot, the `None` shape, the
+// lock discipline, and the class sweep that found `CallbackPrompt` in `lca-sdk`
+// still relying on the default.
+#[path = "303-shared-prompt-forwards-annotations.rs"]
+mod shared_prompt_forwards_annotations;

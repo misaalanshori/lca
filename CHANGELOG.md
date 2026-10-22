@@ -7,6 +7,16 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Approval prompts show what a tool says about itself** (gh #303). A tool can
+  declare hints — `read-only`, `destructive`, `open-world` — and the permission
+  prompt is meant to show them, so approving an MCP call tells you when the
+  server has called its own tool destructive. But the prompt object that every
+  capability engine holds implemented only the plain path, so the hints were
+  silently dropped on the route almost everything takes and the user saw a bare
+  action. It now forwards the hints as well; the decision is still the prompt's
+  own, and a hint never approves anything (ADR-0047). A first-class tool path
+  passes no hints and is unchanged. The one remaining prompt that still drops
+  hints is the SDK's embedder callback, which is filed as a follow-up.
 - **The conformance suite compiles its fixture once per row, not three times**
   (gh #449). Two `lca-ext-host` rows sat at ~1.6x the test harness's ceiling and
   timed out on a loaded runner: they were compiling the same WASM component two
