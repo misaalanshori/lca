@@ -1072,11 +1072,27 @@ impl TurnState {
         // A turn that ends without its `TurnEnded` event still rests the
         // separator.
         chat.separator.idle();
-        chat.fold_turn_usage(&outcome.usage); // gh #327: once, from core's turn sum
+        // Gh #327: once, from core's turn sum - into the tab that ran the
+        // turn (gh #462). The session total is per session, so a background
+        // turn's spend must land on its own tab, not on whatever the reader is
+        // looking at when the worker happens to finish.
+        let owner = chat.turn_tab.unwrap_or(chat.active_tab);
+        chat.with_tab_state(owner, |chat| chat.fold_turn_usage(&outcome.usage));
         // Gh #213: the resting badge follows the outcome (read before
         // the aborted branch below overwrites it for cancels).
         self.last_ok = Some(outcome.error.is_none());
+        // Gh #462: the turn is over, so the tab that owned it stops reporting
+        // a running marker. A turn that ended without its `TurnEnded` event (a
+        // panicking worker, an early error) never ran the event-side clear, so
+        // the settle happens here too - one place that knows the worker
+        // really stopped.
+        chat.settle_turn_tab();
         chat.turn_running = false;
+        // Gh #462: a tab switch that arrived mid-turn reaches the host here,
+        // once the worker has stopped writing. Before this point the host's
+        // current-session binding still names the session the turn ran in,
+        // which is what kept its records in the right log.
+        chat.apply_deferred_host_switch();
         chat.current_steer = None;
         // Gh #369: the taskbar spinner is now driven by the unified
         // `sync_program_status` (turn, compaction, and shell all count), so

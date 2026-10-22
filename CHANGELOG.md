@@ -90,6 +90,27 @@ Dates are UTC.
   believable ceiling would still be a lie — while a turn that measured nothing
   leaves the previous reading standing. Token counting is untouched.
 
+- **Switching tabs no longer cancels the running turn** (gh #462). #209
+  promised that a turn keeps generating when you switch away — its tab item
+  pulses, and an unread marker appears when it settles — but the shipped
+  implementation refused every tab move mid-turn instead, so a 30–120 s
+  `cargo test` held the whole interface hostage. A turn now belongs to the
+  **tab** that started it: `begin_turn` pins the owner, each tab carries its
+  own live transcript, steering queue, separator, meter, and session totals,
+  and the visible tab's copies are swapped in and out on a switch
+  (`mem::swap`, so a switch moves pointers rather than copying a
+  conversation). A background turn's deltas therefore land in its own
+  transcript and its spend lands on its own session — neither leaks into the
+  tab you are reading. Three narrower rules came out of making that safe, and
+  each is pinned: `Ctrl+C` cancels only the turn of the tab you can see (a
+  keystroke that silently kills invisible work is how twenty minutes of a
+  test run disappears); **closing** a tab whose own turn is running refuses,
+  because the stream would land in a removed row; and **opening** a tab
+  mid-turn refuses, because minting a session rewrites the host's
+  current-session cell, which the running turn worker reads — a switch can be
+  deferred to settle, a creation cannot. Tab moves are otherwise free, and
+  the tab bar finally shows the `◌` and `•` markers #209 asked for.
+
 ### Added
 - **`/persona` sets a model, thinking level, tool loadout, and instructions in one
   command** (gh #412). A persona is a named bundle under `[personas.<name>]` in the
