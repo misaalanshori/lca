@@ -18,6 +18,16 @@ world tool {
   // before it keep linking - only the exports below are the
   // byte-compatibility promise.
   import lca:host/tools@0.6.0;
+  // gh #302: the network, for tools that fetch (webfetch's WASM half
+  // had no way to reach it). Same rule as `tools` above: the host
+  // satisfies the import whether or not a guest uses it, so a guest
+  // built before this line keeps loading and running. The consent
+  // rules are the existing capability's, unchanged - `[capabilities.net]`
+  // is still required, bare `*` is still rejected at parse, an
+  // ungranted host still asks for the ad hoc grant on a
+  // user-initiated call, and a convenience request still gets the
+  // plain deny. Nothing here is webfetch-specific.
+  import lca:host/net@0.6.0;
   export tool-schema;
   export execute;
 }

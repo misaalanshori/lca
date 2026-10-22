@@ -192,3 +192,166 @@ fn conversion_handles_entities_and_ragged_html() {
     let out = convert("<div><div><p>x", webfetch::Format::Text);
     assert!(out.contains('x'), "{out}");
 }
+
+// ---------------------------------------------------------------------------
+// gh #302: one pipeline, two delivery modes (NFR-25)
+// ---------------------------------------------------------------------------
+
+/// **The point of the import.** Both halves run `fetch` → `convert` over a
+/// `NetView` their mode supplies: the native half over the capability engine,
+/// the WASM half over `lca:host/net`. This row pins that the *pipeline* is
+/// shared rather than reimplemented — the WASM half is `NetView` over the
+/// import, so given the same `NetView` behaviour it must produce the same
+/// bytes.
+///
+/// The import itself is exercised end to end (a real component, a real host,
+/// granted/denied/unlisted hosts) in
+/// `crates/lca-ext-host/tests/conformance_diff.rs`'s net matrix and in
+/// `tests/regressions/302-*.rs`; this row is the pipeline half, which is the
+/// part that could silently diverge if the guest grew its own fetch.
+#[test]
+fn the_wasm_half_reuses_the_shared_pipeline() {
+    // The guest's `NetView` impl and the native one differ only in the
+    // transport they call. Prove the pipeline agreement on a redirect and a
+    // non-2xx, the two shapes a hand-written fetch usually gets wrong.
+    struct Scripted;
+    thread_local! {
+        static CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+    impl NetView for Scripted {
+        fn request(
+            &self,
+            _method: &str,
+            url: &str,
+            _headers: &[(&str, &str)],
+        ) -> Result<u32, String> {
+            CALLS.with(|calls| calls.borrow_mut().push(url.to_string()));
+            Ok(1)
+        }
+        fn status(&self, _h: u32) -> Result<u16, String> {
+            // 302 to a second URL, then 200.
+            let seen = CALLS.with(|calls| calls.borrow().len());
+            Ok(if seen == 1 { 302 } else { 200 })
+        }
+        fn headers(&self, _h: u32) -> Result<Vec<(String, String)>, String> {
+            let seen = CALLS.with(|calls| calls.borrow().len());
+            if seen == 1 {
+                Ok(vec![(
+                    "location".to_string(),
+                    "https://docs.example/final".to_string(),
+                )])
+            } else {
+                Ok(vec![("content-type".to_string(), "text/html".to_string())])
+            }
+        }
+        fn read_body(&self, _h: u32, _max: usize) -> Result<Option<Vec<u8>>, String> {
+            Ok(Some(DOC.as_bytes().to_vec()))
+        }
+        fn close(&self, _h: u32) {}
+    }
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    let out = fetch(&request("https://docs.example/start"), &Scripted)
+        .expect("fetch follows the redirect");
+    assert!(out.contains("Tokio"), "the final document's text: {out}");
+    // The redirect was followed, and the first document is what got converted.
+    let seen = CALLS.with(|calls| calls.borrow().clone());
+    assert!(seen.len() >= 2, "the redirect was followed: {seen:?}");
+    assert_eq!(seen[0], "https://docs.example/start");
+    assert_eq!(seen[1], "https://docs.example/final");
+}
+
+// Verifies: gh #302 - a redirect is followed in the shared pipeline, so both
+// delivery modes see the final document rather than a bare 302. The net
+// capability deliberately does not chase redirects (a redirect changes the
+// host being asked, which is a consent question), so the loop lives where one
+// implementation serves both modes.
+#[test]
+fn a_redirect_is_followed_to_the_final_document() {
+    struct Redirects {
+        hops: RefCell<usize>,
+    }
+    impl NetView for Redirects {
+        fn request(&self, _m: &str, _url: &str, _h: &[(&str, &str)]) -> Result<u32, String> {
+            *self.hops.borrow_mut() += 1;
+            Ok(1)
+        }
+        fn status(&self, _h: u32) -> Result<u16, String> {
+            Ok(if *self.hops.borrow() < 3 { 302 } else { 200 })
+        }
+        fn headers(&self, _h: u32) -> Result<Vec<(String, String)>, String> {
+            if *self.hops.borrow() < 3 {
+                Ok(vec![(
+                    "location".to_string(),
+                    format!("https://docs.example/step{}", *self.hops.borrow()),
+                )])
+            } else {
+                Ok(vec![("content-type".to_string(), "text/html".to_string())])
+            }
+        }
+        fn read_body(&self, _h: u32, _max: usize) -> Result<Option<Vec<u8>>, String> {
+            Ok(Some(DOC.as_bytes().to_vec()))
+        }
+        fn close(&self, _h: u32) {}
+    }
+    let net = Redirects {
+        hops: RefCell::new(0),
+    };
+    let out = fetch(&request("https://docs.example/start"), &net).expect("follows to the document");
+    assert!(out.contains("Tokio"), "the final page's text: {out}");
+    assert_eq!(*net.hops.borrow(), 3, "two redirects, then the document");
+}
+
+// Verifies: gh #302 - a redirect chain that never resolves is refused by
+// name rather than looping, and the bound is the documented one.
+#[test]
+fn an_endless_redirect_chain_is_refused() {
+    struct Loop;
+    impl NetView for Loop {
+        fn request(&self, _m: &str, _url: &str, _h: &[(&str, &str)]) -> Result<u32, String> {
+            Ok(1)
+        }
+        fn status(&self, _h: u32) -> Result<u16, String> {
+            Ok(302)
+        }
+        fn headers(&self, _h: u32) -> Result<Vec<(String, String)>, String> {
+            Ok(vec![(
+                "location".to_string(),
+                "https://docs.example/again".to_string(),
+            )])
+        }
+        fn read_body(&self, _h: u32, _max: usize) -> Result<Option<Vec<u8>>, String> {
+            Ok(None)
+        }
+        fn close(&self, _h: u32) {}
+    }
+    let err =
+        fetch(&request("https://docs.example/start"), &Loop).expect_err("a loop cannot resolve");
+    assert!(
+        err.contains("redirecting") && err.contains(&webfetch::MAX_REDIRECTS.to_string()),
+        "names the loop and the bound: {err}"
+    );
+}
+
+// Verifies: gh #302 - a non-2xx that is *not* a redirect is refused with the
+// status, which is the shape both modes must agree on.
+#[test]
+fn a_non_2xx_status_is_refused_with_the_code() {
+    struct Failing;
+    impl NetView for Failing {
+        fn request(&self, _m: &str, _url: &str, _h: &[(&str, &str)]) -> Result<u32, String> {
+            Ok(1)
+        }
+        fn status(&self, _h: u32) -> Result<u16, String> {
+            Ok(404)
+        }
+        fn headers(&self, _h: u32) -> Result<Vec<(String, String)>, String> {
+            Ok(Vec::new())
+        }
+        fn read_body(&self, _h: u32, _max: usize) -> Result<Option<Vec<u8>>, String> {
+            Ok(None)
+        }
+        fn close(&self, _h: u32) {}
+    }
+    let err = fetch(&request("https://docs.example/gone"), &Failing).expect_err("404 refuses");
+    assert!(err.contains("404"), "names the status: {err}");
+}

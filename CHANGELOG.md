@@ -7,6 +7,22 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **`webfetch` works in the sandbox** (gh #302). The `tool` world imported
+  every capability a tool might need except the network, so a tool-world guest
+  could not fetch at all: `webfetch`'s tool existed only on the native path and
+  returned a deferral message in WASM mode. The world now carries
+  `import lca:host/net@0.6.0`, and both halves of `webfetch` run the *same*
+  `fetch` → `convert` pipeline over a `NetView` their mode supplies, so the two
+  produce identical bytes for the same input. Redirects are now followed (up to
+  five hops, in the shared pipeline, because a redirect changes the host being
+  asked and that is a consent question the capability deliberately leaves to its
+  caller) instead of failing on the 302. The import is a breaking *contract*
+  change but additive for old artifacts — the host satisfies an import whether
+  the guest calls it or not — which is proven, not asserted: a tool component
+  built before the import still loads and runs. Consent is unchanged:
+  `[capabilities.net]` is still required, an ungranted host still asks on a
+  tool-world call (the model or user chose the URL), every other world keeps the
+  plain deny so a provider probe never pops a modal, and deny rules still win.
 - **Costs and context limits now cover real models, from a real catalog**
   (gh #260). The hand-curated eight-model price table inside `lca-core` is
   gone; prices, context windows, and reasoning flags come from a

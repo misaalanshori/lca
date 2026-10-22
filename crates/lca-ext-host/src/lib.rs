@@ -166,6 +166,19 @@ struct HostState {
     /// The tool call executing on this store, when a guest calls the
     /// `tools` import: its id parents the nested call (gh #77).
     executing_call: Option<String>,
+    /// Whether this component declares the single-tool `tool` world
+    /// (gh #302). A `net` request from such a component is a
+    /// user-initiated tool call - the model chose the URL - so an
+    /// ungranted host asks for the ad hoc grant instead of dead-ending
+    /// (`net_request_asking`). Every other world keeps the plain deny:
+    /// a provider's model-discovery or login probe must never pop a
+    /// modal nobody triggered.
+    ///
+    /// This is the same manifest-driven branch the host already makes
+    /// for `provider` (`declares_provider`), not a name check: it says
+    /// which world the call came from, which is exactly what "the
+    /// model chose this" means.
+    tool_world_call: bool,
 }
 
 impl WasiView for HostState {
@@ -319,8 +332,13 @@ impl ExtHost {
         // is exactly that), so the grant does the gating, not the linker.
         {
             use lca_ext_abi::host::provider::lca::host as provider_host;
-            provider_host::net::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
-                .expect("net imports");
+            // `net` is NOT added here since gh #302: the `tool` world imports
+            // it now, so `Tool::add_to_linker` above already defines it, and
+            // adding the provider world's copy again is the same interface
+            // name registered twice ("map entry `request` defined twice").
+            // Both worlds' `net` interfaces are generated from the one
+            // `wit/deps/lca-host/capabilities.wit`, so the tool-world entry
+            // satisfies a provider-world import as well.
             provider_host::oauth::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
                 .expect("oauth imports");
             provider_host::credentials::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
@@ -601,6 +619,7 @@ impl Inner {
                 dialogs: self.dialogs.clone(),
                 tools_view: self.tools_view.clone(),
                 executing_call: None,
+                tool_world_call: self.worlds.iter().any(|world| world == "tool"),
             },
         );
         store.limiter(|state| &mut state.limits);

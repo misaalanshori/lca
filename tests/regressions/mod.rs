@@ -702,3 +702,13 @@ mod footer_git_truth;
 // `inherit` is the key's absence, and trust still gates it.
 #[path = "397-tri-state-project-override.rs"]
 mod tri_state_project_override;
+// GitHub #302 (final half): `extensions/webfetch` implemented its tool only on
+// the native path because `wit/world-tool.wit` did not import `lca:host/net` -
+// so in WASM mode the tool could not reach the network at all. The world now
+// carries that import, which is a breaking contract change but additive for
+// OLD artifacts (the host satisfies an import whether the guest calls it or
+// not, the gh #77 rule). The guard proves both halves of that claim: a tool
+// guest built before the import still loads and runs, and the import grants
+// nothing by itself - a manifest without `[capabilities.net]` still refuses.
+#[path = "302-tool-world-net-import.rs"]
+mod tool_world_net_import;
