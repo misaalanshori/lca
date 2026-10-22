@@ -89,16 +89,37 @@ impl super::Ui {
     /// on what the *previous* model allowed.
     pub(super) fn persona_apply(self: &Arc<Self>, bundle: &PersonaBundle) -> String {
         if !bundle.model.trim().is_empty() {
+            // The verdict is whether the **cell actually moved**, not what the switch
+            // said. `/model` reports success through the same `ShowWidget` a refusal
+            // uses (`model for this session: …` is a success line), so inspecting the
+            // notice - the first version of this - reported every successful switch
+            // as a failure. Found by driving a real pane.
             let effect = self.command_model(&bundle.model);
-            if let lca_protocol::CommandEffect::ShowWidget(text) = effect {
-                // A model switch that reports something is one that did not simply
-                // happen - a consent prompt, a refusal. The check already passed, so
-                // this is the host saying more; pass it through rather than claiming
-                // a success that did not occur.
-                let text = text.trim().to_string();
-                if !text.is_empty() {
-                    return format!("persona `{}` stopped at the model: {text}", bundle.name);
-                }
+            let after = self
+                .model_cell
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .id
+                .clone();
+            // A persona may name the model that is **already live** - switching to
+            // where you are is a no-op, not a failure. So the failure test cannot be
+            // "the cell did not move" (the second version of this did exactly that
+            // and reported every same-model persona as broken); it is "the cell did
+            // not move *to the model the persona asked for*".
+            let wanted = crate::models::resolve_pattern(&bundle.model, &self.offered_models())
+                .map(|resolved| resolved.id)
+                .unwrap_or_else(|_| bundle.model.clone());
+            if after != wanted {
+                // The switch did not land (a consent prompt, a grant refusal). The
+                // check passed, so this is the host saying more - pass it through
+                // rather than claiming a success that did not occur.
+                let text = match effect {
+                    lca_protocol::CommandEffect::ShowWidget(text) if !text.trim().is_empty() => {
+                        text.trim().to_string()
+                    }
+                    _ => "the model did not change".to_string(),
+                };
+                return format!("persona `{}` stopped at the model: {text}", bundle.name);
             }
         }
         if let Some(level) = &bundle.thinking {
