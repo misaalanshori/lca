@@ -91,6 +91,23 @@ pub enum Entry {
         /// The editor's `!!` run (gh #391 gap 3): output withheld from the
         /// model's context. Draws quiet where `!` draws in `bashMode`.
         excluded: bool,
+        /// The calls this one nested (gh #404 gap 1). Rendered as a checklist
+        /// **inside** this card, never as sibling cards: a tool that greps
+        /// twenty times is one card with twenty rows, not twenty-one cards.
+        ///
+        /// The data arrives on `ToolResult.nested` (gh #77), which the turn
+        /// fills where the child finishes - nested calls never become their own
+        /// records, so this is the only place they exist.
+        children: Vec<ChildCall>,
+        /// The parent link the call itself carried, kept so an **orphan** - a
+        /// child whose parent card is absent - is still drawn as a top-level
+        /// card rather than silently dropped (gh #404's fallback).
+        parent_link: Option<String>,
+        /// The call's own id, when it has one. It is what lets a child's start
+        /// and finish be matched to the card (or to the parent that suppressed
+        /// it), because the events arrive in pairs and the transcript cannot
+        /// assume the most recent running card is the one being answered.
+        call_id: Option<String>,
     },
     /// A transient notice (command output, info).
     Notice(String),
@@ -206,6 +223,13 @@ pub struct Transcript {
     /// acceptance row for gh #410 would have passed only while the cache was
     /// cold. Cheap to keep honest: an integer compare per entry.
     cache_epoch: u64,
+    /// Nested call ids that were suppressed into a parent's checklist (gh #404
+    /// gap 1), mapped to the child's name.
+    ///
+    /// A nested call emits both a start and a finish, and the finish must settle
+    /// the checklist row rather than create a card. The id is the only exact key:
+    /// "the most recent running card" is the *parent*, which is still running.
+    suppressed: std::collections::BTreeMap<Option<String>, String>,
     /// Per-entry render cache (R15): `None` means the entry must be
     /// rendered; a streaming append invalidates only the last entry, so a
     /// long transcript is not re-rendered from scratch on every delta.
@@ -510,6 +534,9 @@ impl Transcript {
             // gh #391 gap 2: a live card times itself from here.
             started_at: Some(std::time::Instant::now()),
             excluded: false,
+            children: Vec::new(),
+            parent_link: None,
+            call_id: None,
         });
     }
 
@@ -538,6 +565,9 @@ impl Transcript {
             duration_ms: None,
             started_at: Some(std::time::Instant::now()),
             excluded,
+            children: Vec::new(),
+            parent_link: None,
+            call_id: None,
         });
     }
 
@@ -754,6 +784,11 @@ impl Transcript {
                         self.finish_assistant();
                     }
                 }
+                // A nested call is never its own record (gh #77): the turn
+                // files it under the parent's result, so a replay only ever
+                // sees top-level calls here. No parent link to consult, and
+                // none needed - the checklist arrives on `ToolResult.nested`
+                // below.
                 Record::ToolCall {
                     name, arguments, ..
                 } => self.start_tool(name.clone(), arguments.clone()),
@@ -761,6 +796,7 @@ impl Transcript {
                     status,
                     content,
                     duration_ms,
+                    nested,
                     ..
                 } => {
                     let status = match status {
@@ -769,9 +805,28 @@ impl Transcript {
                         lca_protocol::ToolResultStatus::Denied => ToolStatus::Denied,
                         lca_protocol::ToolResultStatus::Timeout => ToolStatus::Timeout,
                     };
-                    // Gh #214: replays show the recorded duration;
-                    // old lines without one show no timing line.
-                    self.finish_tool_full(status, content.clone(), None, *duration_ms);
+                    // Gh #214: replays show the recorded duration; old lines
+                    // without one show no timing line.
+                    //
+                    // Gh #404 gap 1: the bounded nested record rides along, so a
+                    // resumed session shows the same checklist the live one did.
+                    // It is the *persisted* shape (a head, no id), which is all a
+                    // checklist needs.
+                    let children: Vec<ChildCall> = nested
+                        .iter()
+                        .map(|entry| ChildCall {
+                            name: entry.name.clone(),
+                            status: entry.status.into(),
+                            head: entry.content_head.clone(),
+                        })
+                        .collect();
+                    self.finish_tool_with_children(
+                        status,
+                        content.clone(),
+                        None,
+                        *duration_ms,
+                        children,
+                    );
                 }
                 Record::Compaction {
                     summary, strategy, ..
@@ -814,6 +869,9 @@ impl Transcript {
             duration_ms: None,
             started_at: Some(std::time::Instant::now()),
             excluded: false,
+            children: Vec::new(),
+            parent_link: None,
+            call_id: None,
         });
     }
 
@@ -851,6 +909,9 @@ impl Transcript {
             duration_ms: Some(duration_ms),
             started_at: None,
             excluded: false,
+            children: Vec::new(),
+            parent_link: None,
+            call_id: None,
         });
     }
 
@@ -1020,6 +1081,8 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
     format!("[image {media_type}, {dimensions}, {} bytes]", bytes.len())
 }
 
+mod nested;
+pub use nested::{COLLAPSED_CHILDREN, ChildCall, ChildStatus};
 mod preview;
 mod render;
 use render::*;
@@ -1028,6 +1091,9 @@ use render::*;
 #[cfg(test)]
 pub(crate) use render::render_key_hint;
 
+#[cfg(test)]
+#[path = "nested_tests.rs"]
+mod nested_tests;
 #[cfg(test)]
 #[path = "preview_tests.rs"]
 mod preview_tests;

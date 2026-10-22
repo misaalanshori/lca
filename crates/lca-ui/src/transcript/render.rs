@@ -472,6 +472,9 @@ fn render_tool(
         duration_ms,
         started_at,
         excluded,
+        children,
+        parent_link: _,
+        call_id: _,
     } = entry
     else {
         return;
@@ -590,6 +593,17 @@ fn render_tool(
         // one of the five tail rows, and the card's own truncation warning
         // below is the single place that fact is shown.
         let body = super::preview::strip_truncation_footer(result);
+        // gh #404 gap 1 / design point 7: a codemode parent leads with its own
+        // content, not with the wrapper's banner. Narrow by construction - see
+        // `nested::is_wrapper_boilerplate` for why only the wrapper's exact
+        // shapes are cut and author output that mentions them survives.
+        let stripped;
+        let body = if name.contains("codemode") {
+            stripped = super::nested::strip_wrapper_boilerplate(body);
+            stripped.as_str()
+        } else {
+            body
+        };
         let preview = super::preview::preview_lines(name);
         let total = body.lines().count();
         if expanded {
@@ -632,6 +646,11 @@ fn render_tool(
             ));
         }
     }
+
+    // gh #404 gap 1: this card's nested calls, as a checklist. Drawn after the
+    // parent's own result, so the card reads "what it did, then what it did it
+    // with" - and expanding the card expands the checklist with it.
+    super::nested::render_checklist(children, expanded, inner, theme, keybindings, &mut rows);
 
     // The card's background is the call's state (pi's `updateDisplay`):
     // `toolPendingBg` while the call is in flight or its output is still
